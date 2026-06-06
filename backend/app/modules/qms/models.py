@@ -1,18 +1,18 @@
 """‌⁠‍QMS ORM models.
 
 Tables (all prefixed ``oe_qms_``):
-    oe_qms_itp_plan              — Inspection & Test Plan header
-    oe_qms_itp_item              — line within an ITP
-    oe_qms_itp_template          — tenant-level reusable ITP template
-    oe_qms_inspection            — actual inspection event
-    oe_qms_inspection_signature  — multi-signature on an inspection
-    oe_qms_ncr                   — non-conformance report (QMS variant)
-    oe_qms_ncr_action            — corrective action against an NCR
-    oe_qms_punch_item            — rolling punch list entry
-    oe_qms_audit                 — quality audit (ISO 9001 style)
-    oe_qms_audit_finding         — finding within an audit
-    oe_qms_audit_log             — append-only FSM transition audit trail
-    oe_qms_calibration           — instrument calibration tracking
+    oe_qms_itp_plan              - Inspection & Test Plan header
+    oe_qms_itp_item              - line within an ITP
+    oe_qms_itp_template          - tenant-level reusable ITP template
+    oe_qms_inspection            - actual inspection event
+    oe_qms_inspection_signature  - multi-signature on an inspection
+    oe_qms_ncr                   - non-conformance report (QMS variant)
+    oe_qms_ncr_action            - corrective action against an NCR
+    oe_qms_punch_item            - rolling punch list entry
+    oe_qms_audit                 - quality audit (ISO 9001 style)
+    oe_qms_audit_finding         - finding within an audit
+    oe_qms_audit_log             - append-only FSM transition audit trail
+    oe_qms_calibration           - instrument calibration tracking
 
 External entity FKs (``project_id``, ``inspector_user_id``,
 ``raised_by``, ``assigned_to``, ``verified_by``, ``signer_user_id``,
@@ -38,8 +38,8 @@ class ITPPlan(Base):
     """‌⁠‍Inspection & Test Plan header.
 
     An ITP is the project's checklist of control points (hold points,
-    witness points, document reviews) for a specific work type — e.g.
-    "Concrete pour — slab on grade". It is the QA template against
+    witness points, document reviews) for a specific work type - e.g.
+    "Concrete pour - slab on grade". It is the QA template against
     which inspections are scheduled and signed off.
     """
 
@@ -98,6 +98,24 @@ class ITPItem(Base):
         nullable=False,
         default=1,
     )
+    # ── Spec linkage (item 12) ──────────────────────────────────────────
+    # Soft FKs to the artefacts the control point inspects. Stored without
+    # an ORM ``ForeignKey`` for the same minimal-fixture reason as the other
+    # external references above; the constraint lives in the migration.
+    boq_position_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), nullable=True)
+    csi_section_ref: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    spec_drawing_ref: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    bim_element_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # ── Hold-point sequencing (item 12) ─────────────────────────────────
+    # Self-referential predecessor: the dependent control point cannot be
+    # inspected until its predecessor's inspection has passed. SET NULL so
+    # deleting a predecessor item never orphans the dependent's FK.
+    predecessor_itp_item_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(),
+        ForeignKey("oe_qms_itp_item.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
 
     def __repr__(self) -> str:
         return f"<ITPItem {self.sequence}: {self.control_point_name} ({self.hold_witness_point})>"
@@ -146,6 +164,16 @@ class QMSInspection(Base):
         default=list,
         server_default="[]",
     )
+    # ── Evidence permanence (item 12) ───────────────────────────────────
+    # Denormalised list of document ids attached as inspection evidence,
+    # kept in sync with the richer ``oe_qms_inspection_attachment`` rows so
+    # a single inspection read returns the attachment id set without a join.
+    attachment_document_ids: Mapped[list] = mapped_column(  # type: ignore[assignment]
+        JSON,
+        nullable=False,
+        default=list,
+        server_default="[]",
+    )
 
     def __repr__(self) -> str:
         return f"<QMSInspection {self.id} ({self.status})>"
@@ -171,9 +199,73 @@ class QMSInspectionSignature(Base):
         default="electronic",
     )
     comments: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # ── Non-repudiation context (item 12) ───────────────────────────────
+    # Captured at sign time so a quality dispute can reconstruct who signed,
+    # from where and with which client. ``signature_token`` is reserved for
+    # the Phase-2 digital-signature (HMAC/JWT) work and stays NULL for now.
+    timestamp_utc: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    signer_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    signer_user_agent: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    signature_token: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     def __repr__(self) -> str:
         return f"<QMSInspectionSignature {self.signer_role} on {self.inspection_id}>"
+
+
+class QMSInspectionAttachment(Base):
+    """Evidence document linked to a :class:`QMSInspection` (item 12).
+
+    Replaces the sparse ``photos_json`` array with an auditable attachment
+    row. ``document_id`` is a *soft* FK to the documents module's
+    ``Document`` (no ORM ``ForeignKey`` so QMS stays loadable without the
+    documents module in minimal fixtures); the file is also recorded with a
+    SHA-256 hash so a later integrity check can prove the bytes never
+    changed after sign-off.
+    """
+
+    __tablename__ = "oe_qms_inspection_attachment"
+
+    inspection_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(),
+        ForeignKey("oe_qms_inspection.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    document_id: Mapped[uuid.UUID] = mapped_column(GUID(), nullable=False, index=True)
+    caption: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    file_hash_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    uploaded_by: Mapped[uuid.UUID | None] = mapped_column(GUID(), nullable=True)
+    attached_at: Mapped[str | None] = mapped_column(String(32), nullable=True)
+
+    def __repr__(self) -> str:
+        return f"<QMSInspectionAttachment doc={self.document_id} on {self.inspection_id}>"
+
+
+class QMSHoldPointRelease(Base):
+    """Record of a hold-point release against a passed :class:`QMSInspection`.
+
+    A hold point blocks downstream work until a witness signs it off. When
+    an authorised user releases the hold, exactly one row is written here
+    (the ``inspection_id`` is unique) and a ``qms.inspection.hold_point_released``
+    event fans out so dependent inspections / tasks can unblock.
+    """
+
+    __tablename__ = "oe_qms_hold_point_release"
+
+    inspection_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(),
+        ForeignKey("oe_qms_inspection.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+    released_by: Mapped[uuid.UUID | None] = mapped_column(GUID(), nullable=True)
+    released_at: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    justification: Mapped[str | None] = mapped_column(Text, nullable=True)
+    approval_route_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), nullable=True)
+
+    def __repr__(self) -> str:
+        return f"<QMSHoldPointRelease inspection={self.inspection_id}>"
 
 
 class QMSNCR(Base):
@@ -373,7 +465,7 @@ class ITPTemplate(Base):
 
     Used to seed project-level :class:`ITPPlan` rows. The template stores
     items inline as JSON so the entire library lives in a single row per
-    template — easier to import/export across tenants.
+    template - easier to import/export across tenants.
     """
 
     __tablename__ = "oe_qms_itp_template"
@@ -411,18 +503,18 @@ class QMSAuditLog(Base):
     activity.
 
     Fields:
-        tenant_id        — caller's tenant for GDPR / multi-tenant scoping
-        entity_type      — "ncr" / "inspection" / "punch" / "audit" /
+        tenant_id        - caller's tenant for GDPR / multi-tenant scoping
+        entity_type      - "ncr" / "inspection" / "punch" / "audit" /
                             "itp_plan" / "calibration"
-        entity_id        — UUID of the row that transitioned
-        action           — short verb ("created", "status_change",
+        entity_id        - UUID of the row that transitioned
+        action           - short verb ("created", "status_change",
                             "closed", "escalated", "signed", ...)
-        actor_user_id    — caller; may be NULL for system-driven events
-        old_status       — prior status; NULL on first creation
-        new_status       — new status; NULL for non-FSM events (e.g. note)
-        reason           — free-text justification (optional)
-        before_state     — JSON snapshot of changed fields before the hop
-        after_state      — JSON snapshot of the same fields after the hop
+        actor_user_id    - caller; may be NULL for system-driven events
+        old_status       - prior status; NULL on first creation
+        new_status       - new status; NULL for non-FSM events (e.g. note)
+        reason           - free-text justification (optional)
+        before_state     - JSON snapshot of changed fields before the hop
+        after_state      - JSON snapshot of the same fields after the hop
 
     Index strategy:
         ix_qms_audit_log_entity            (entity_type, entity_id)

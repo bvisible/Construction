@@ -2,13 +2,13 @@
 
 Endpoints (mounted at ``/api/v1/ai-agents/`` by the module loader):
 
-* ``GET    /agents/``            — registered agents (with allowed_tools)
-* ``GET    /tools/``             — registered tools (debugging surface)
-* ``POST   /runs/``              — start a new run (returns id immediately;
+* ``GET    /agents/``            - registered agents (with allowed_tools)
+* ``GET    /tools/``             - registered tools (debugging surface)
+* ``POST   /runs/``              - start a new run (returns id immediately;
                                     loop runs in a background task)
-* ``GET    /runs/``              — list runs (newest first; optional
+* ``GET    /runs/``              - list runs (newest first; optional
                                     project_id filter)
-* ``GET    /runs/{id}``          — full run snapshot incl. steps timeline
+* ``GET    /runs/{id}``          - full run snapshot incl. steps timeline
 """
 
 from __future__ import annotations
@@ -23,23 +23,33 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import async_session_factory
-from app.dependencies import CurrentUserId, RequirePermission, SessionDep
+from app.dependencies import CurrentUserId, CurrentUserPayload, RequirePermission, SessionDep
 from app.modules.ai_agents.schemas import (
     CUSTOM_AGENT_CATEGORIES,
     AgentDescriptor,
     AgentHealthResponse,
     AgentInsightResponse,
+    AgentMetadataResponse,
     AgentRunListItem,
     AgentRunResponse,
     AgentStepResponse,
+    AgentToolsResponse,
+    ApplyProposalsRequest,
+    ApplyProposalsResponse,
     CreateAgentRunRequest,
     CustomAgentCreateRequest,
     CustomAgentResponse,
     CustomAgentUpdateRequest,
+    EventTriggerDescriptor,
     GuidedAgentSpec,
+    RunProposalsResponse,
+    SetScheduleRequest,
+    SetToolsRequest,
+    SetTriggersRequest,
     ToolDescriptor,
+    ToolWithPermission,
 )
-from app.modules.ai_agents.service import AgentService
+from app.modules.ai_agents.service import AgentService, ToolPermissionError
 
 logger = logging.getLogger(__name__)
 
@@ -49,13 +59,13 @@ router = APIRouter(tags=["ai_agents"])
 # ── Idempotency cache ────────────────────────────────────────────────────
 # In-memory map of ``(user_id, idempotency_key) -> (run_id, created_ts)``.
 # Purpose: protect agent runs from frontend retry storms / duplicate
-# submits — each agent run costs real LLM dollars, so re-running on a
+# submits - each agent run costs real LLM dollars, so re-running on a
 # transient network blip would burn cash silently. Entries expire after
 # IDEMPOTENCY_TTL_SECONDS.
 #
 # Single-process scope is acceptable for now (single-tenant VPS deploy);
 # multi-instance prod needs Redis/DB backing so the dedupe holds across
-# workers — see needs_shared_change. Until then the cache is bounded both
+# workers - see needs_shared_change. Until then the cache is bounded both
 # by TTL and a hard entry cap so a key recorded-but-never-looked-up again
 # can't accumulate for the process lifetime.
 IDEMPOTENCY_TTL_SECONDS = 600  # 10 minutes
@@ -85,7 +95,7 @@ def _idempotency_record(user_id: str, key: str, run_id: uuid.UUID) -> None:
     """Record a key→run mapping, bounding growth by TTL sweep + size cap.
 
     Without an eviction path on *write*, keys that are recorded but never
-    looked up again (the common case — a retry rarely arrives) would
+    looked up again (the common case - a retry rarely arrives) would
     accumulate for the whole process lifetime. We sweep expired entries
     first, then enforce a hard FIFO cap so the cache can never grow
     unbounded even under a flood of unique keys.
@@ -147,7 +157,7 @@ async def list_agents_endpoint(
     user_id: CurrentUserId,
     service: AgentService = Depends(_get_service),
 ) -> list[AgentDescriptor]:
-    """List every agent the caller can run — built-ins plus their own custom agents.
+    """List every agent the caller can run - built-ins plus their own custom agents.
 
     Custom agents are flagged ``is_custom`` (with their ``custom_id``) so the UI
     can show edit/delete affordances only on the caller's own creations.
@@ -349,6 +359,208 @@ async def delete_custom_agent(
     await session.commit()
 
 
+# ── Automation: schedule + tools + triggers (Item 29) ──────────────────────
+
+
+@router.get(
+    "/triggers/",
+    response_model=list[EventTriggerDescriptor],
+    dependencies=[Depends(RequirePermission("ai_agents.read"))],
+)
+async def list_event_triggers_endpoint() -> list[EventTriggerDescriptor]:
+    """List the platform events a custom agent may subscribe to.
+
+    The catalogue is static (no DB). ``available`` is ``False`` for events whose
+    firing wiring is not yet live, so the builder can label them "coming soon".
+    """
+    from app.modules.ai_agents.triggers import list_event_triggers
+
+    return [EventTriggerDescriptor(**t) for t in list_event_triggers()]
+
+
+@router.get(
+    "/grantable-tools/",
+    response_model=list[ToolWithPermission],
+    dependencies=[Depends(RequirePermission("ai_agents.read"))],
+)
+async def list_grantable_tools_endpoint(
+    service: AgentService = Depends(_get_service),
+) -> list[ToolWithPermission]:
+    """List every runner tool plus the permission needed to grant it.
+
+    Powers the builder's tool picker before the agent has an id (the create
+    flow), so it does not require an ``agent_id`` like ``GET /custom/{id}/tools``.
+    """
+    return [ToolWithPermission(**t) for t in service.list_available_tools_with_permissions()]
+
+
+@router.get(
+    "/custom/{agent_id}/schedule",
+    response_model=AgentMetadataResponse,
+    dependencies=[Depends(RequirePermission("ai_agents.read"))],
+)
+async def get_schedule_endpoint(
+    agent_id: uuid.UUID,
+    user_id: CurrentUserId,
+    service: AgentService = Depends(_get_service),
+) -> AgentMetadataResponse:
+    """Fetch the schedule + tools + triggers for one of the caller's agents."""
+    uid = uuid.UUID(user_id)
+    meta = await service.get_agent_metadata(agent_id, uid)
+    if meta is None:
+        raise HTTPException(status_code=404, detail="Custom agent not found")
+    return AgentMetadataResponse(**meta)
+
+
+@router.post(
+    "/custom/{agent_id}/schedule",
+    response_model=AgentMetadataResponse,
+    dependencies=[Depends(RequirePermission("ai_agents.run"))],
+)
+async def set_schedule_endpoint(
+    agent_id: uuid.UUID,
+    request: SetScheduleRequest,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    service: AgentService = Depends(_get_service),
+) -> AgentMetadataResponse:
+    """Create/replace the cron schedule on one of the caller's agents.
+
+    The agent will then run automatically at the cron times (UTC). A scheduled
+    run is a normal agent run: it never auto-applies its output. 422 on a
+    malformed cron; 404 unless the agent is owned by the caller.
+    """
+    uid = uuid.UUID(user_id)
+    try:
+        meta = await service.set_schedule(
+            agent_id=agent_id,
+            user_id=uid,
+            cron_expr=request.cron_expr,
+            enabled=request.enabled,
+            schedule_input=request.schedule_input,
+            triggers=request.triggers,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    if meta is None:
+        raise HTTPException(status_code=404, detail="Custom agent not found")
+    await session.commit()
+    return AgentMetadataResponse(**meta)
+
+
+@router.delete(
+    "/custom/{agent_id}/schedule",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(RequirePermission("ai_agents.run"))],
+)
+async def delete_schedule_endpoint(
+    agent_id: uuid.UUID,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    service: AgentService = Depends(_get_service),
+) -> None:
+    """Remove the schedule (the agent stops running automatically). Tools kept."""
+    uid = uuid.UUID(user_id)
+    removed = await service.delete_schedule(agent_id, uid)
+    if not removed:
+        raise HTTPException(status_code=404, detail="Custom agent not found")
+    await session.commit()
+
+
+@router.post(
+    "/custom/{agent_id}/triggers",
+    response_model=AgentMetadataResponse,
+    dependencies=[Depends(RequirePermission("ai_agents.run"))],
+)
+async def set_triggers_endpoint(
+    agent_id: uuid.UUID,
+    request: SetTriggersRequest,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    service: AgentService = Depends(_get_service),
+) -> AgentMetadataResponse:
+    """Subscribe one of the caller's agents to platform events.
+
+    The agent then runs automatically when a subscribed event fires (e.g. an RFI
+    is created). An event-fired run is a normal run and never auto-applies its
+    output. 404 unless the agent is owned by the caller.
+    """
+    uid = uuid.UUID(user_id)
+    meta = await service.set_triggers(agent_id=agent_id, user_id=uid, triggers=request.triggers)
+    if meta is None:
+        raise HTTPException(status_code=404, detail="Custom agent not found")
+    await session.commit()
+    return AgentMetadataResponse(**meta)
+
+
+@router.get(
+    "/custom/{agent_id}/tools",
+    response_model=AgentToolsResponse,
+    dependencies=[Depends(RequirePermission("ai_agents.read"))],
+)
+async def get_tools_endpoint(
+    agent_id: uuid.UUID,
+    user_id: CurrentUserId,
+    service: AgentService = Depends(_get_service),
+) -> AgentToolsResponse:
+    """Return the full tool catalogue + the agent's current grant.
+
+    The catalogue carries each tool's ``required_permission`` so the picker can
+    grey out tools the operator cannot grant.
+    """
+    uid = uuid.UUID(user_id)
+    meta = await service.get_agent_metadata(agent_id, uid)
+    if meta is None:
+        raise HTTPException(status_code=404, detail="Custom agent not found")
+    available = [ToolWithPermission(**t) for t in service.list_available_tools_with_permissions()]
+    return AgentToolsResponse(available=available, selected=meta["allowed_tools"])
+
+
+@router.post(
+    "/custom/{agent_id}/tools",
+    response_model=AgentMetadataResponse,
+    dependencies=[Depends(RequirePermission("ai_agents.run"))],
+)
+async def set_tools_endpoint(
+    agent_id: uuid.UUID,
+    request: SetToolsRequest,
+    payload: CurrentUserPayload,
+    session: SessionDep,
+    service: AgentService = Depends(_get_service),
+) -> AgentMetadataResponse:
+    """Grant a vetted set of tools to one of the caller's agents.
+
+    Each tool the caller selects must be one they already have permission to
+    use (the agent never widens its creator's reach). 403 with the offending
+    tool + missing permission otherwise; 404 unless owned by the caller.
+    """
+    uid = uuid.UUID(str(payload.get("sub")))
+    role = str(payload.get("role", ""))
+    try:
+        meta = await service.set_tools(
+            agent_id=agent_id,
+            user_id=uid,
+            tool_names=request.allowed_tools,
+            user_role=role,
+        )
+    except ToolPermissionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "message": f"You do not have permission to grant the tool '{exc.tool_name}'.",
+                "tool": exc.tool_name,
+                "required_permission": exc.permission,
+            },
+        ) from exc
+    if meta is None:
+        raise HTTPException(status_code=404, detail="Custom agent not found")
+    await session.commit()
+    return AgentMetadataResponse(**meta)
+
+
 @router.get(
     "/health/",
     response_model=AgentHealthResponse,
@@ -395,7 +607,7 @@ async def _run_in_background(
     project_id: uuid.UUID | None,
     run_id: uuid.UUID,
 ) -> None:
-    """Background-task entry point — opens its own session.
+    """Background-task entry point - opens its own session.
 
     The FastAPI-supplied session is gone by the time the background
     task runs (the response has already been returned to the client),
@@ -507,7 +719,7 @@ async def create_run(
     Idempotency: clients may pass ``Idempotency-Key`` header to make
     retries safe. Submitting the same key within 10 minutes returns the
     original run instead of spawning a duplicate (agent runs cost real
-    LLM dollars — never let a retry storm double-spend).
+    LLM dollars - never let a retry storm double-spend).
     """
     uid = uuid.UUID(user_id)
 
@@ -588,6 +800,28 @@ async def list_runs(
 
 
 @router.get(
+    "/runs/automated",
+    response_model=list[AgentRunListItem],
+    dependencies=[Depends(RequirePermission("ai_agents.read"))],
+)
+async def list_automated_runs(
+    user_id: CurrentUserId,
+    limit: int = Query(50, ge=1, le=200),
+    service: AgentService = Depends(_get_service),
+) -> list[AgentRunListItem]:
+    """List the caller's automated runs (scheduler / event-fired), newest-first.
+
+    Powers the monitoring panel so an operator can see when their scheduled or
+    event-triggered agents ran and whether any failed - automated runs have no
+    user watching the timeline live. Registered before ``/runs/{run_id}`` so the
+    literal ``automated`` path is not captured by the UUID path parameter.
+    """
+    uid = uuid.UUID(user_id)
+    runs = await service.list_automated_runs(user_id=uid, limit=limit)
+    return [AgentRunListItem.model_validate(r) for r in runs]
+
+
+@router.get(
     "/insights",
     response_model=list[AgentInsightResponse],
     dependencies=[Depends(RequirePermission("ai_agents.read"))],
@@ -630,6 +864,92 @@ async def get_run(
     return _serialise_run(run, steps=steps)
 
 
+# ── BOQ proposals: extract + apply (human-confirmed) ──────────────────────
+
+
+@router.get(
+    "/runs/{run_id}/proposals",
+    response_model=RunProposalsResponse,
+    dependencies=[Depends(RequirePermission("ai_agents.read"))],
+)
+async def get_run_proposals(
+    run_id: uuid.UUID,
+    user_id: CurrentUserId,
+    service: AgentService = Depends(_get_service),
+) -> RunProposalsResponse:
+    """Return the structured BOQ-position proposals a completed run produced.
+
+    The drafter emits each line as a ``create_position`` observation during the
+    loop, but the run's final answer is markdown - so the proposals would
+    otherwise be lost. This recovers them so the UI can offer a real
+    "apply to BOQ" action. An empty ``proposals`` list is a valid
+    "nothing to apply" state (the run was advisory, not a draft).
+    """
+    uid = uuid.UUID(user_id)
+    payload = await service.get_run_proposals(run_id=run_id, user_id=uid)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return RunProposalsResponse(**payload)
+
+
+@router.post(
+    "/runs/{run_id}/apply",
+    response_model=ApplyProposalsResponse,
+    dependencies=[
+        Depends(RequirePermission("ai_agents.run")),
+        Depends(RequirePermission("boq.create")),
+    ],
+)
+async def apply_run_proposals(
+    run_id: uuid.UUID,
+    request: ApplyProposalsRequest,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    service: AgentService = Depends(_get_service),
+) -> ApplyProposalsResponse:
+    """Apply a completed run's BOQ proposals to a BOQ as real positions.
+
+    The human-confirmed step: the user reviewed the proposals and chose the
+    target BOQ. We create real positions through the BOQ module's own service
+    (so locking, ordinal uniqueness, totals and provenance all behave exactly
+    as a manual add) and tag each line back to the run. Currencies are never
+    blended - off-currency or un-priced lines are skipped with a reason.
+
+    403 unless the caller can access the BOQ's project; 404 when the run or BOQ
+    does not exist; 422 when the run produced no proposals.
+    """
+    uid = uuid.UUID(user_id)
+
+    # Resolve the BOQ and verify project access BEFORE doing any work, so a
+    # caller can never apply proposals into a project they cannot see.
+    from app.modules.boq.service import BOQService
+
+    boq_service = BOQService(session)
+    try:
+        boq = await boq_service.get_boq(request.boq_id)
+    except HTTPException:
+        raise
+    if boq is None:
+        raise HTTPException(status_code=404, detail="BOQ not found")
+    await _assert_project_access(session, boq.project_id, uid)
+
+    try:
+        result = await service.apply_run_proposals(
+            run_id=run_id,
+            user_id=uid,
+            boq_id=request.boq_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    if result is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    await session.commit()
+    return ApplyProposalsResponse(**result)
+
+
 # ── Serialisation helper ─────────────────────────────────────────────────
 
 
@@ -641,6 +961,7 @@ def _serialise_run(run: Any, *, steps: list[Any]) -> AgentRunResponse:
         project_id=run.project_id,
         user_id=run.user_id,
         status=run.status,
+        trigger_source=getattr(run, "trigger_source", "manual") or "manual",
         failure_reason=run.failure_reason,
         user_input=run.user_input,
         final_output=run.final_output,
@@ -654,5 +975,5 @@ def _serialise_run(run: Any, *, steps: list[Any]) -> AgentRunResponse:
     )
 
 
-# Silence "imported but unused" — kept for type imports used at runtime.
+# Silence "imported but unused" - kept for type imports used at runtime.
 _ = AsyncSession

@@ -1,13 +1,13 @@
 """‌⁠‍Risk Register API routes.
 
 Endpoints:
-    POST   /                       — Create risk item
-    GET    /?project_id=X          — List for project (with filters)
-    GET    /{id}                   — Get single risk
-    PATCH  /{id}                   — Update risk
-    DELETE /{id}                   — Delete risk
-    GET    /matrix?project_id=X    — Risk matrix data (5x5 grid)
-    GET    /summary?project_id=X   — Aggregated stats
+    POST   /                       - Create risk item
+    GET    /?project_id=X          - List for project (with filters)
+    GET    /{id}                   - Get single risk
+    PATCH  /{id}                   - Update risk
+    DELETE /{id}                   - Delete risk
+    GET    /matrix?project_id=X    - Risk matrix data (5x5 grid)
+    GET    /summary?project_id=X   - Aggregated stats
 """
 
 import logging
@@ -20,6 +20,8 @@ from app.core.bulk_ops import BulkDeleteRequest, BulkStatusRequest
 from app.dependencies import CurrentUserId, RequirePermission, SessionDep, verify_project_access
 from app.modules.risk.schemas import (
     RiskCreate,
+    RiskEscalationSweepRequest,
+    RiskEscalationSweepResult,
     RiskMatrixCell,
     RiskMatrixResponse,
     RiskResponse,
@@ -92,6 +94,10 @@ def _risk_to_response(item: object) -> RiskResponse:
         owner_user_id=getattr(item, "owner_user_id", None),
         response_cost=_as_float(item.response_cost),  # type: ignore[attr-defined]
         currency=item.currency,  # type: ignore[attr-defined]
+        escalated=bool(getattr(item, "escalated", False)),
+        escalated_at=getattr(item, "escalated_at", None),
+        escalation_trigger=getattr(item, "escalation_trigger", None),
+        escalation_threshold=getattr(item, "escalation_threshold", None),
         metadata=getattr(item, "metadata_", {}),  # type: ignore[attr-defined]
         created_at=item.created_at,  # type: ignore[attr-defined]
         updated_at=item.updated_at,  # type: ignore[attr-defined]
@@ -199,11 +205,11 @@ async def list_risks(
     return [_risk_to_response(i) for i in items]
 
 
-# ── Monte Carlo simulation (v3.11 — T1) ──────────────────────────────────
+# ── Monte Carlo simulation (v3.11 - T1) ──────────────────────────────────
 #
 # Mounted under ``/projects/{project_id}/simulate`` (not the bare
 # ``/{risk_id}`` parametric) so the parametric-collision rule does not
-# apply — FastAPI/Starlette's path router has no ambiguity between
+# apply - FastAPI/Starlette's path router has no ambiguity between
 # ``/projects/.../simulate`` and ``/{risk_id}``.
 
 
@@ -239,6 +245,48 @@ async def simulate_risks(
     return RiskSimulationResult(**data)
 
 
+# ── Auto-escalation sweep (TOP-30 #24) ───────────────────────────────────
+#
+# Manual, on-demand counterpart to the periodic sweep the central scheduler
+# runs. Mounted under ``/projects/{project_id}/escalate`` (non-parametric
+# prefix) so it does not collide with ``/{risk_id}``. Gated at
+# ``risk.escalate`` (MANAGER) because escalation drives notifications and
+# auto-creates action items - a supervisory action, not a routine edit.
+
+
+@router.post(
+    "/projects/{project_id}/escalate",
+    response_model=RiskEscalationSweepResult,
+    dependencies=[Depends(RequirePermission("risk.escalate"))],
+)
+async def escalate_project_risks(
+    project_id: uuid.UUID,
+    body: RiskEscalationSweepRequest,
+    user_id: CurrentUserId,
+    session: SessionDep,
+) -> RiskEscalationSweepResult:
+    """Run an auto-escalation sweep over one project's risks.
+
+    Escalates every not-yet-escalated risk whose severity product crosses
+    the threshold or whose next-review date has lapsed. Idempotent - risks
+    already escalated for their current trigger are skipped. Each escalation
+    flips the flag, stamps ``escalated_at``, appends a mitigation action and
+    emits ``risk.escalated``.
+    """
+    from app.modules.risk.escalation import (
+        DEFAULT_ESCALATION_THRESHOLD,
+        RiskEscalationService,
+    )
+
+    await verify_project_access(project_id, user_id, session)
+    svc = RiskEscalationService(session)
+    summary = await svc.sweep(
+        project_id=project_id,
+        default_threshold=body.threshold or DEFAULT_ESCALATION_THRESHOLD,
+    )
+    return RiskEscalationSweepResult(**summary)
+
+
 # ── Bulk operations (must come BEFORE parametric /{risk_id}) ─────────
 
 
@@ -249,7 +297,7 @@ async def _authorized_risk_ids(
 ) -> list[uuid.UUID]:
     """Return the subset of ``requested_ids`` the caller may act on.
 
-    Authorization mirrors every other risk route — ``verify_project_access``
+    Authorization mirrors every other risk route - ``verify_project_access``
     (owner **or** admin **or** project team member), not the bare
     owner-only filter the batch handlers previously used. We resolve each
     distinct project once, skip rows in projects the caller can't reach
@@ -321,7 +369,7 @@ async def batch_update_risk_status(
     from app.modules.risk.models import RiskItem
     from app.modules.risk.schemas import STATUS_VALUES
 
-    # Canonical set lives in schemas.STATUS_VALUES — the previous hardcoded
+    # Canonical set lives in schemas.STATUS_VALUES - the previous hardcoded
     # subset silently rejected the "monitoring" and "mitigated" tiers that
     # seeded risks already use, leaving bulk-update broken for them.
     allowed_statuses = set(STATUS_VALUES)
@@ -397,8 +445,8 @@ async def delete_risk(
 # ``/vector/status/`` + ``/vector/reindex/`` wired via the shared factory
 # (see the ``include_router`` call at the bottom of this file).  Risks
 # are the single highest-value collection for cross-project semantic
-# search — lessons learned reuse is why this infrastructure exists in
-# the first place — so the ``similar`` endpoint below defaults to
+# search - lessons learned reuse is why this infrastructure exists in
+# the first place - so the ``similar`` endpoint below defaults to
 # ``cross_project=true``.
 
 
@@ -415,7 +463,7 @@ async def risk_similar(
 ) -> dict[str, Any]:
     """Return risks semantically similar to the given one.
 
-    Defaults to **cross-project** search — this is the whole point of
+    Defaults to **cross-project** search - this is the whole point of
     the risk vector collection.  Estimators starting a new project want
     to instantly surface "risks like this one that we already faced on
     past jobs" so they can reuse the mitigation strategy, contingency
@@ -435,6 +483,9 @@ async def risk_similar(
     row = (await session.execute(stmt)).scalar_one_or_none()
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Risk not found")
+
+    if row.project_id is not None:
+        await verify_project_access(row.project_id, str(_user_id), session)
 
     project_id = str(row.project_id) if row.project_id is not None else None
     hits = await find_similar(

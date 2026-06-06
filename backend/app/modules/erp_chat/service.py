@@ -1,4 +1,4 @@
-"""‌⁠‍ERP Chat service — agent loop with SSE streaming and tool calling.
+"""‌⁠‍ERP Chat service - agent loop with SSE streaming and tool calling.
 
 Supports Anthropic and OpenAI APIs with tool-calling (function calling).
 Other providers fall back to plain text via the shared ai_client.call_ai().
@@ -43,7 +43,7 @@ MAX_AGENT_ROUNDS = 5
 AI_TIMEOUT = 120.0
 
 # Maximum serialized size of a single tool result re-fed to the LLM.
-# ~8000 chars ≈ 2000 tokens — keeps the agent loop from blowing up the
+# ~8000 chars ≈ 2000 tokens - keeps the agent loop from blowing up the
 # context window on large `get_boq_items`/list-style tool returns.
 MAX_TOOL_RESULT_CHARS = 8000
 
@@ -139,7 +139,7 @@ class ERPChatService:
         if cache_hit:
             self._last_turn["cache_hit"] = True
         elif prior_hit is None:
-            # First round reported a definite miss — record it; later True
+            # First round reported a definite miss - record it; later True
             # wins via the branch above.
             self._last_turn["cache_hit"] = False
         self._last_turn["latency_ms"] = (self._last_turn.get("latency_ms") or 0) + latency_ms
@@ -157,7 +157,7 @@ class ERPChatService:
             if chat_session:
                 return chat_session
 
-        # Create new session. Wrap flush() in asyncio.shield() — when the
+        # Create new session. Wrap flush() in asyncio.shield() - when the
         # caller is an SSE streaming endpoint, Starlette's BaseHTTPMiddleware
         # can cancel the request task between chunks and kill the in-flight
         # INSERT mid-flush. shield() keeps the DB write atomic from the
@@ -216,7 +216,7 @@ class ERPChatService:
         """Resolve AI provider, API key, and the user's model-id override.
 
         ``settings.preferred_model`` stores the *provider id* (e.g.
-        ``"openrouter"``), not a model name — the per-provider model the user
+        ``"openrouter"``), not a model name - the per-provider model the user
         actually typed in Settings > AI lives in
         ``model_overrides[provider]``. Returning that (via
         ``resolve_provider_key_model``) so the fallback path can pass it to
@@ -294,7 +294,7 @@ class ERPChatService:
                     elif provider == "openai":
                         result, tokens = await self._call_openai(api_key, messages, preferred_model)
                     else:
-                        # Fallback: no tool support — plain text
+                        # Fallback: no tool support - plain text
                         async for chunk in self._call_fallback(provider, api_key, request.message, preferred_model):
                             yield chunk
                         yield _sse("done", {})
@@ -302,7 +302,7 @@ class ERPChatService:
                 except ValueError as exc:
                     # Expected user-facing errors from ai_client (bad API key,
                     # rate limit, malformed image). One line at WARNING is
-                    # enough — full traceback floods the journal.
+                    # enough - full traceback floods the journal.
                     logger.warning("AI API call refused (round %d): %s", _round, exc)
                     yield _sse("error", {"message": str(exc)})
                     yield _sse("done", {})
@@ -319,7 +319,7 @@ class ERPChatService:
                 tool_calls = self._extract_tool_calls(provider, result)
 
                 if not tool_calls:
-                    # No tool calls — extract text and finish
+                    # No tool calls - extract text and finish
                     assistant_text = self._extract_text(provider, result)
                     break
 
@@ -336,7 +336,7 @@ class ERPChatService:
                     if handler:
                         # RBAC gate: write tools require manager+ on the
                         # referenced project. IDOR posture must be
-                        # preserved — non-existent / inaccessible projects
+                        # preserved - non-existent / inaccessible projects
                         # ALWAYS surface as 404-style (handler's
                         # ``_require_project_access`` does this) so we
                         # never leak project existence by returning the
@@ -358,7 +358,7 @@ class ERPChatService:
                                         user_id,
                                     )
                                 except ToolAuthError as _te:
-                                    # 404 posture — never reach the role check.
+                                    # 404 posture - never reach the role check.
                                     tool_result = _auth_error(str(_te))
                                 except Exception:
                                     logger.exception(
@@ -366,7 +366,7 @@ class ERPChatService:
                                         tool_name,
                                     )
                             if tool_result is None:
-                                # Project accessible (or no project_id —
+                                # Project accessible (or no project_id -
                                 # then the role gate alone applies). Check
                                 # manager+.
                                 try:
@@ -435,7 +435,7 @@ class ERPChatService:
                 # Add tool results to messages for next round
                 messages = self._append_tool_results(provider, messages, result, tool_results_for_round)
             else:
-                # Hit max rounds — extract whatever text we have
+                # Hit max rounds - extract whatever text we have
                 assistant_text = self._extract_text(provider, result) if result else ""  # type: ignore[possibly-undefined]
                 if not assistant_text:
                     assistant_text = "I've gathered the data above. Let me know if you need further analysis."
@@ -446,9 +446,12 @@ class ERPChatService:
                 for i in range(0, len(assistant_text), chunk_size):
                     yield _sse("text", {"content": assistant_text[i : i + chunk_size]})
 
-            # 6. Persist messages — shield so middleware cancellation can't
-            # tear down the DB write mid-flush.
-            await asyncio.shield(
+            # 6. Persist messages - shield so middleware cancellation can't
+            # tear down the DB write mid-flush. Returns the persisted
+            # assistant ChatMessage id so the client can reconcile its
+            # optimistic bubble id and submit per-turn thumbs feedback that
+            # actually lands (the T8 dashboard depends on this).
+            assistant_message_id = await asyncio.shield(
                 self._persist_messages(
                     chat_session,
                     user_id,
@@ -460,7 +463,7 @@ class ERPChatService:
                 )
             )
 
-            # Structured cost log — one INFO line per chat turn carries the
+            # Structured cost log - one INFO line per chat turn carries the
             # full per-turn observability split. Operators tail this for
             # billing / abuse-detection without joining DB tables.
             logger.info(
@@ -487,7 +490,17 @@ class ERPChatService:
                 chat_session.title = title
                 await asyncio.shield(self.session.flush())
 
-            yield _sse("done", {"session_id": str(chat_session.id), "tokens": total_tokens})
+            yield _sse(
+                "done",
+                {
+                    "session_id": str(chat_session.id),
+                    "tokens": total_tokens,
+                    # Persisted assistant-turn id. The client swaps its
+                    # optimistic bubble id for this so thumbs feedback POSTs
+                    # against a real row instead of 404-ing on a client UUID.
+                    "message_id": (str(assistant_message_id) if assistant_message_id else None),
+                },
+            )
 
         except Exception as exc:
             logger.exception("stream_response fatal error")
@@ -553,7 +566,7 @@ class ERPChatService:
         Counts persisted assistant-message ``tokens_used`` over the last
         24h. Cheap single-row aggregate on an indexed column. The caller
         is expected to short-circuit with a user-visible error when the
-        budget is exceeded — see :meth:`stream_response`.
+        budget is exceeded - see :meth:`stream_response`.
         """
         try:
             uid = uuid.UUID(user_id)
@@ -641,7 +654,7 @@ class ERPChatService:
     ) -> tuple[dict[str, Any], int]:
         """Call OpenAI ChatCompletions API with tools.
 
-        Side effect (T8 observability) — see :meth:`_call_anthropic`.
+        Side effect (T8 observability) - see :meth:`_call_anthropic`.
         """
         from app.modules.ai.ai_client import OPENAI_MODEL
 
@@ -707,7 +720,7 @@ class ERPChatService:
         message: str,
         model: str | None = None,
     ) -> AsyncGenerator[str, None]:
-        """Call a provider without tool support — yield SSE text events.
+        """Call a provider without tool support - yield SSE text events.
 
         ``model`` is the user's per-provider model id override (issue #138):
         without it, providers like OpenRouter silently used the hardcoded
@@ -831,8 +844,13 @@ class ERPChatService:
         tool_calls: list[dict[str, Any]],
         tool_results: list[dict[str, Any]],
         tokens_used: int,
-    ) -> None:
-        """Persist user message and assistant response to the database."""
+    ) -> uuid.UUID | None:
+        """Persist user message and assistant response to the database.
+
+        Returns the persisted assistant ``ChatMessage.id`` (or ``None`` on
+        failure) so the streaming endpoint can hand it to the client for
+        feedback reconciliation.
+        """
         try:
             # Save user message
             user_msg = ChatMessage(
@@ -873,7 +891,7 @@ class ERPChatService:
             await asyncio.shield(self.session.flush())
 
             # Publish standardized events so the vector indexer can react.
-            # Best-effort — failures must never break the chat persistence
+            # Best-effort - failures must never break the chat persistence
             # path.  We pass the project_id from the parent session so the
             # handler doesn't have to do an extra lookup.
             try:
@@ -901,8 +919,10 @@ class ERPChatService:
                     "Failed to publish erp_chat.message.created events",
                     exc_info=True,
                 )
+            return assistant_msg.id
         except Exception:
             logger.exception("Failed to persist chat messages")
+            return None
 
     # ── T8: Per-turn feedback + admin observability ─────────────────────
 
@@ -915,7 +935,7 @@ class ERPChatService:
     ) -> ChatTurnFeedback:
         """Upsert a thumbs up/down feedback row for ``(message_id, user_id)``.
 
-        Re-submitting on the same pair flips the rating in place — there
+        Re-submitting on the same pair flips the rating in place - there
         is at most one feedback row per user per message.
 
         Raises:
@@ -932,7 +952,7 @@ class ERPChatService:
             raise ValueError("user_id is not a valid UUID") from exc
 
         # IDOR guard: the message must belong to a session owned by the
-        # current user. Treat ownership mismatch as 404 — same convention as
+        # current user. Treat ownership mismatch as 404 - same convention as
         # the ``/messages/{id}/similar`` endpoint.
         from sqlalchemy.orm import selectinload as _selectinload
 
@@ -942,6 +962,13 @@ class ERPChatService:
             raise LookupError("Chat message not found")
         if str(message.session.user_id) != str(uid):
             raise LookupError("Chat message not found")
+
+        # Feedback is a thumbs up/down on an assistant turn only - rating a
+        # user prompt (or a tool/system row) is meaningless and would poison
+        # the admin observability rollups (top_negative_prompts joins assume
+        # the rated message is the assistant reply).
+        if message.role != "assistant":
+            raise ValueError("Feedback can only be submitted on assistant messages")
 
         # Look up an existing row first; if present, flip the rating.
         stmt = select(ChatTurnFeedback).where(
@@ -965,7 +992,7 @@ class ERPChatService:
         try:
             await asyncio.shield(self.session.flush())
         except IntegrityError:
-            # Lost a race against a concurrent submit — fetch + update.
+            # Lost a race against a concurrent submit - fetch + update.
             await self.session.rollback()
             row = (await self.session.execute(stmt)).scalar_one()
             row.rating = rating
@@ -976,7 +1003,7 @@ class ERPChatService:
     async def get_admin_stats(self, window_days: int = 30) -> dict[str, Any]:
         """Roll up T8 observability metrics over the last ``window_days``.
 
-        Counts only assistant messages — user prompts are counted via the
+        Counts only assistant messages - user prompts are counted via the
         ``top_negative_prompts`` join. ``feedback_rate_pct`` is the
         percentage of assistant messages that received any rating (up OR
         down). ``cache_hit_rate_pct`` is computed over assistant messages
@@ -1002,7 +1029,7 @@ class ERPChatService:
         )
         tin, tout = (await self.session.execute(tokens_q)).one()
 
-        # Cache hit rate — denominator = rows with non-NULL cache_hit.
+        # Cache hit rate - denominator = rows with non-NULL cache_hit.
         cache_q = select(
             func.coalesce(
                 func.sum(case((ChatMessage.cache_hit.is_(True), 1), else_=0)),
@@ -1039,6 +1066,7 @@ class ERPChatService:
                 ChatTurnFeedback.message_id == ChatMessage.id,
             )
             .where(
+                ChatMessage.role == "assistant",
                 ChatMessage.created_at >= cutoff,
             )
         )
@@ -1070,7 +1098,10 @@ class ERPChatService:
                 neg_assistant.c.downs,
             )
             .join(neg_assistant, neg_assistant.c.assistant_id == ChatMessage.id)
-            .where(ChatMessage.created_at >= cutoff)
+            .where(
+                ChatMessage.role == "assistant",
+                ChatMessage.created_at >= cutoff,
+            )
             .order_by(neg_assistant.c.downs.desc(), ChatMessage.created_at.desc())
             .limit(5)
         )
@@ -1140,7 +1171,10 @@ class ERPChatService:
                 ChatTurnFeedback,
                 ChatTurnFeedback.message_id == ChatMessage.id,
             )
-            .where(ChatMessage.created_at >= cutoff)
+            .where(
+                ChatMessage.role == "assistant",
+                ChatMessage.created_at >= cutoff,
+            )
         )
         for created_at, rating in (await self.session.execute(fb_daily_q)).all():
             if created_at is None:

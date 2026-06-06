@@ -1,4 +1,4 @@
-"""‌⁠‍DWG Takeoff service — business logic.
+"""‌⁠‍DWG Takeoff service - business logic.
 
 Stateless service layer. Handles:
 - Drawing upload, processing, and retrieval
@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import uuid
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any
 
 from fastapi import HTTPException, UploadFile, status
@@ -41,7 +42,7 @@ logger = logging.getLogger(__name__)
 
 # Strong references to in-flight background conversion tasks. asyncio only
 # keeps a WEAK reference to a task, so a detached ``create_task`` whose
-# handle is dropped can be garbage-collected mid-run — cancelling the
+# handle is dropped can be garbage-collected mid-run - cancelling the
 # conversion and leaving the drawing stuck at status=uploaded/processing
 # forever (the frontend poll of /drawings/{id} never completes). Holding
 # the task here until it finishes prevents that; the done-callback evicts
@@ -67,7 +68,7 @@ def _spawn_dwg_conversion(drawing_id: uuid.UUID, file_path: str) -> "asyncio.Tas
 
 # AutoCAD R14 (1997) is the oldest format we will hand to DDC. Older
 # versions are exotic and DDC genuinely cannot read them. Anything
-# between R14 and R18 sometimes works and sometimes does not — we
+# between R14 and R18 sometimes works and sometimes does not - we
 # used to pre-emptively reject R14-R17 to spare users a misleading
 # "empty output" error, but the 2026-05-14 bench showed several
 # R16/R17 files DO convert successfully, so we now let DDC have a
@@ -91,7 +92,7 @@ def _sniff_dwg_version(path: str) -> tuple[str | None, str]:
     """Read the 6-byte DWG magic prefix and return ``(code, label)``.
 
     Returns ``(None, "")`` for anything that doesn't match the
-    ``AC\\d{4}`` pattern — that includes:
+    ``AC\\d{4}`` pattern - that includes:
 
     * Renamed PDFs (start with ``%PDF-``)
     * Renamed ZIPs (start with ``PK\\x03\\x04``)
@@ -131,7 +132,7 @@ def _looks_like_dxf(head: bytes) -> bool:
 
     Binary DXF files start with the literal ``AutoCAD Binary DXF\\r\\n``
     sentinel (22 bytes, per the DXF reference). ASCII DXF files always
-    begin with a group code line — the very first non-whitespace token
+    begin with a group code line - the very first non-whitespace token
     is ``0`` followed by the line break and the ``SECTION`` keyword. We
     accept the broader ``0\\r?\\n\\s*SECTION`` shape because some CAD
     exporters use ``LF`` line endings on Linux and pad with spaces.
@@ -142,7 +143,7 @@ def _looks_like_dxf(head: bytes) -> bool:
     """
     if not head:
         return False
-    # Binary DXF sentinel — case-sensitive per the spec.
+    # Binary DXF sentinel - case-sensitive per the spec.
     if head.startswith(b"AutoCAD Binary DXF"):
         return True
     # ASCII DXF: skip leading whitespace, then group code "0", newline,
@@ -165,7 +166,7 @@ def _validate_cad_magic_bytes(content: bytes, file_format: str) -> tuple[bool, s
     endpoint surfaces this as a 400 so renamed PDFs / ZIPs / images never
     reach disk or the DDC subprocess.
 
-    No i18n here — the message is consumed by the existing error wrapper
+    No i18n here - the message is consumed by the existing error wrapper
     which translates at render time.
     """
     head = content[:128] if content else b""
@@ -186,7 +187,7 @@ def _validate_cad_magic_bytes(content: bytes, file_format: str) -> tuple[bool, s
                 "'AutoCAD Binary DXF' sentinel."
             )
         return True, ""
-    # Unknown format slips through — caller has already rejected by
+    # Unknown format slips through - caller has already rejected by
     # extension by the time we get here.
     return True, ""
 
@@ -212,7 +213,7 @@ def _sniff_dwg_version_bytes(head: bytes) -> tuple[str | None, str]:
 def _dwg_version_too_old(code: str | None) -> bool:
     """Return True if a sniffed DWG version code predates R18 (2010).
 
-    ``None`` is the "couldn't sniff" sentinel — we say False (not too
+    ``None`` is the "couldn't sniff" sentinel - we say False (not too
     old) so the caller's downstream "is this a real DWG at all?"
     check fires first with the friendlier error message. Non-numeric
     tails are also tolerated as forward-compat: a future AC#### we
@@ -320,8 +321,65 @@ def _get_entities_dir() -> str:
     return entities_dir
 
 
+def _extents_from_raw_entities(entities: list[dict[str, Any]]) -> dict[str, float] | None:
+    """Compute a bounding box from stored (un-normalised) entity records.
+
+    Mirrors the parser's ``expand`` pass over the stored
+    ``{entity_type, geometry_data: {…}}`` shape. Used by the lazy units
+    backfill to recover extents for legacy/seeded drawings whose version row
+    stored ``extents == {}``. Returns ``None`` when no coordinates are found.
+    """
+    min_x = min_y = float("inf")
+    max_x = max_y = float("-inf")
+    found = False
+
+    def expand(x: Any, y: Any) -> None:
+        nonlocal min_x, min_y, max_x, max_y, found
+        try:
+            fx, fy = float(x), float(y)
+        except (TypeError, ValueError):
+            return
+        min_x, min_y = min(min_x, fx), min(min_y, fy)
+        max_x, max_y = max(max_x, fx), max(max_y, fy)
+        found = True
+
+    for ent in entities:
+        gd = ent.get("geometry_data", {}) or {}
+        start = gd.get("start")
+        end = gd.get("end")
+        if isinstance(start, dict):
+            expand(start.get("x"), start.get("y"))
+        if isinstance(end, dict):
+            expand(end.get("x"), end.get("y"))
+        for v in gd.get("points", []) or []:
+            if isinstance(v, dict):
+                expand(v.get("x"), v.get("y"))
+        center = gd.get("center")
+        if isinstance(center, dict):
+            r = gd.get("radius") or gd.get("major_radius") or 0
+            try:
+                rr = float(r)
+            except (TypeError, ValueError):
+                rr = 0.0
+            expand(center.get("x", 0) - rr, center.get("y", 0) - rr)
+            expand(center.get("x", 0) + rr, center.get("y", 0) + rr)
+        for key in ("insert", "insertion_point"):
+            pt = gd.get(key)
+            if isinstance(pt, dict):
+                expand(pt.get("x"), pt.get("y"))
+
+    if not found:
+        return None
+    return {
+        "min_x": float(min_x),
+        "min_y": float(min_y),
+        "max_x": float(max_x),
+        "max_y": float(max_y),
+    }
+
+
 def _process_dxf_sync(file_path: str, entities_key: str, thumbnail_key: str) -> dict[str, Any]:
-    """Synchronous DXF processing — runs in a thread via asyncio.to_thread.
+    """Synchronous DXF processing - runs in a thread via asyncio.to_thread.
 
     Parses the DXF file, saves entities JSON, and generates SVG thumbnail.
     Returns a dict with parse results and storage keys.
@@ -345,6 +403,179 @@ def _process_dxf_sync(file_path: str, entities_key: str, thumbnail_key: str) -> 
         f.write(svg_content)
 
     return result
+
+
+# ── Revision compare (Item 17) ──────────────────────────────────────────────
+
+
+def _layer_count_map(layers: Any) -> dict[str, int]:
+    """Reduce a stored ``layers`` blob to ``{layer_name: entity_count}``.
+
+    Accepts both the canonical list-of-dicts shape and the legacy
+    dict-keyed-by-name shape (mirrors
+    ``DwgDrawingVersionResponse._normalize_layers``). A layer missing an
+    ``entity_count`` contributes 0 so a count-less layer still appears in
+    the diff as present. Never raises - a malformed blob yields ``{}`` so
+    the compare degrades to "no entity changes" rather than a 500.
+    """
+    rows: list[Any]
+    if isinstance(layers, dict):
+        rows = list(layers.values())
+    elif isinstance(layers, list):
+        rows = layers
+    else:
+        return {}
+
+    out: dict[str, int] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("name") or "").strip()
+        if not name:
+            continue
+        try:
+            count = int(row.get("entity_count") or 0)
+        except (TypeError, ValueError):
+            count = 0
+        # Sum duplicates defensively (some parsers emit one row per layout).
+        out[name] = out.get(name, 0) + count
+    return out
+
+
+def _compute_entity_diff(
+    from_layers: Any,
+    to_layers: Any,
+) -> list[dict[str, Any]]:
+    """Diff two versions' layer profiles into entity-diff rows.
+
+    Entities carry no stable cross-parse identity, so we compare the
+    per-layer entity count. A layer present only in the new version is
+    ``added``; only in the old version ``removed``; present in both with
+    a different count ``modified``; identical count ``unchanged``. Rows
+    are returned sorted by layer name for deterministic output.
+    """
+    from_map = _layer_count_map(from_layers)
+    to_map = _layer_count_map(to_layers)
+
+    rows: list[dict[str, Any]] = []
+    for layer in sorted(set(from_map) | set(to_map)):
+        old_count = from_map.get(layer, 0)
+        new_count = to_map.get(layer, 0)
+        if layer not in from_map:
+            change_type = "added"
+        elif layer not in to_map:
+            change_type = "removed"
+        elif old_count != new_count:
+            change_type = "modified"
+        else:
+            change_type = "unchanged"
+        rows.append(
+            {
+                "change_type": change_type,
+                "entity_id": layer,
+                "entity_type": "layer",
+                "layer": layer,
+                "old_count": old_count,
+                "new_count": new_count,
+                "delta": new_count - old_count,
+            }
+        )
+    return rows
+
+
+def _to_float(value: Any) -> float | None:
+    """Coerce a ``Decimal``/number/string measurement to ``float`` or None.
+
+    ``DwgAnnotation.measurement_value`` round-trips as ``Decimal`` (the
+    Numeric(18,6) column); the diff response exposes plain floats. A
+    ``None`` or unparseable value collapses to ``None`` so a value-less
+    annotation never reads as ``0`` in the diff.
+    """
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (ValueError, TypeError, InvalidOperation):
+        return None
+
+
+def _annotation_label(ann: "DwgAnnotation") -> str | None:
+    """Short human label for an annotation row in the diff table."""
+    text = (ann.text or "").strip()
+    if text:
+        return text[:120]
+    return ann.annotation_type
+
+
+def _calculate_cost_impact(
+    *,
+    old_value: float | None,
+    new_value: float | None,
+    unit_rate: str | int | float | Decimal | None,
+) -> str | None:
+    """Signed money delta ``(new - old) * unit_rate`` as a Decimal string.
+
+    Returns ``None`` when the impact cannot be computed (either value
+    missing, or the rate is unparseable / zero). The result is quantised
+    to 2 fractional digits with commercial rounding (ROUND_HALF_UP), the
+    same boundary the BOQ rollups use, and is expressed in the project's
+    base currency - the caller never blends currencies because a BOQ
+    position's ``unit_rate`` is already stored in that base currency.
+    """
+    if old_value is None or new_value is None:
+        return None
+    try:
+        rate = Decimal(str(unit_rate).strip()) if unit_rate not in (None, "") else Decimal("0")
+    except (InvalidOperation, ValueError, TypeError):
+        return None
+    if not rate.is_finite() or rate == 0:
+        return None
+    try:
+        delta = Decimal(repr(float(new_value))) - Decimal(repr(float(old_value)))
+    except (InvalidOperation, ValueError, TypeError):
+        return None
+    impact = (delta * rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    return str(impact)
+
+
+def _build_revision_narrative(
+    *,
+    entity_tally: dict[str, Any],
+    annotation_tally: dict[str, Any],
+    changed_linked_count: int,
+) -> str:
+    """Plain-text description of a revision delta for a draft variation.
+
+    Built only from the deterministic summary tallies (no AI). Reads like
+    "3 layers added, 1 removed, 2 changed; 4 annotations added, 1 removed,
+    5 changed; 2 priced (linked-to-BOQ) annotation values changed." so the
+    estimator sees what moved before they confirm the variation.
+    """
+
+    def _n(tally: dict[str, Any], key: str) -> int:
+        try:
+            return int(tally.get(key, 0) or 0)
+        except (ValueError, TypeError):
+            return 0
+
+    parts = [
+        (
+            f"{_n(entity_tally, 'added')} layers added, "
+            f"{_n(entity_tally, 'removed')} removed, "
+            f"{_n(entity_tally, 'modified')} changed"
+        ),
+        (
+            f"{_n(annotation_tally, 'added')} annotations added, "
+            f"{_n(annotation_tally, 'removed')} removed, "
+            f"{_n(annotation_tally, 'modified')} changed"
+        ),
+        f"{changed_linked_count} priced (linked-to-BOQ) annotation values changed",
+    ]
+    return (
+        "Auto-generated from a drawing revision compare. "
+        + "; ".join(parts)
+        + ". Review and confirm before submitting this variation."
+    )
 
 
 class DwgTakeoffService:
@@ -385,7 +616,7 @@ class DwgTakeoffService:
         content = await file.read()
         size_bytes = len(content)
 
-        # Magic-byte validation — reject renamed PDFs/ZIPs/images BEFORE
+        # Magic-byte validation - reject renamed PDFs/ZIPs/images BEFORE
         # writing them to disk or burning a DB row. The extension check
         # above only confirms the user typed ``.dwg`` / ``.dxf``; this
         # confirms the bytes match. Closes the class of "90+s DDC chew
@@ -437,7 +668,7 @@ class DwgTakeoffService:
 
         # Cross-link: create a Document row pointing at the same file on
         # disk so the drawing also appears in the Documents hub.  This is
-        # best-effort — failure here MUST NOT break the drawing upload.
+        # best-effort - failure here MUST NOT break the drawing upload.
         # The document is NOT a copy: ``file_path`` references the same
         # blob already persisted by the dwg_takeoff module.
         try:
@@ -471,13 +702,13 @@ class DwgTakeoffService:
 
         # Trigger processing.
         #
-        # DXF: parsed locally with ezdxf — fast (<2 s for typical
+        # DXF: parsed locally with ezdxf - fast (<2 s for typical
         # drawings), runs inline so the response carries final
         # status=ready / entity counts.
         #
         # DWG: handed to the DDC DwgExporter binary which can take
         # 30-120 s and occasionally hangs / crashes. Awaiting it
-        # inline used to exhaust the uvicorn worker pool — a single
+        # inline used to exhaust the uvicorn worker pool - a single
         # stuck conversion would queue subsequent uploads behind it
         # until they hit the client's read timeout (observed
         # 2026-05-14: one R16 crash poisoned the next 5+ uploads with
@@ -517,7 +748,7 @@ class DwgTakeoffService:
 
         Behaviour:
 
-        * **Idempotent** — if a drawing already references this document
+        * **Idempotent** - if a drawing already references this document
           (cross-link ``source_id`` / ``imported_from_document_id``) or
           points at the same blob on disk, the existing one is returned
           instead of creating a duplicate (re-clicking is a no-op).
@@ -551,7 +782,7 @@ class DwgTakeoffService:
             )
         file_format = ext.lstrip(".")
 
-        # Idempotency — never create a second drawing for the same
+        # Idempotency - never create a second drawing for the same
         # document. Two earlier rows can reference it:
         #   1. A drawing imported here before (``imported_from_document_id``).
         #   2. The drawing whose own upload created this document via the
@@ -592,7 +823,7 @@ class DwgTakeoffService:
 
         size_bytes = len(content)
 
-        # Same magic-byte gate as the direct upload path — a document
+        # Same magic-byte gate as the direct upload path - a document
         # whose name ends in .dwg/.dxf but whose bytes are a renamed
         # PDF/ZIP/image is rejected before we burn a drawing row.
         ok, reason = _validate_cad_magic_bytes(content, file_format)
@@ -642,7 +873,7 @@ class DwgTakeoffService:
             }
             self.session.add(document)
             await self.session.flush()
-        except Exception as exc:  # noqa: BLE001 — best-effort cross-link
+        except Exception as exc:  # noqa: BLE001 - best-effort cross-link
             logger.warning(
                 "Failed to back-link document %s → drawing %s: %s",
                 document_id,
@@ -714,7 +945,7 @@ class DwgTakeoffService:
             # Treat 0-entity DXFs as a user-visible failure rather than a
             # silent ``ready`` row. Without this the frontend mounts the
             # canvas, sees an empty entity list, and shows an indefinite
-            # loading spinner — there's nothing to render and no banner to
+            # loading spinner - there's nothing to render and no banner to
             # explain. Surfaced as ``empty`` so an explicit message is
             # shown ("This DXF contains no entities"). DDC- and ezdxf-
             # generated empty files (e.g. mozman/ezdxf empty_handles.dxf
@@ -740,7 +971,7 @@ class DwgTakeoffService:
                 status="empty" if is_empty else "ready",
                 thumbnail_key=thumbnail_key,
                 error_message=(
-                    "This DXF/DWG contains no drawable entities — the file is empty or contains only metadata."
+                    "This DXF/DWG contains no drawable entities - the file is empty or contains only metadata."
                     if is_empty
                     else None
                 ),
@@ -748,13 +979,13 @@ class DwgTakeoffService:
 
             if is_empty:
                 logger.warning(
-                    "Drawing %s parsed as empty (0 entities, %d layers) — surfacing status=empty to the user",
+                    "Drawing %s parsed as empty (0 entities, %d layers) - surfacing status=empty to the user",
                     drawing_id,
                     len(result["layers"]),
                 )
             else:
                 logger.info(
-                    "Drawing processed: %s — %d entities, %d layers",
+                    "Drawing processed: %s - %d entities, %d layers",
                     drawing_id,
                     result["entity_count"],
                     len(result["layers"]),
@@ -764,9 +995,9 @@ class DwgTakeoffService:
             await self.drawing_repo.update_fields(
                 drawing_id,
                 status="error",
-                error_message="ezdxf is not installed — cannot process DXF files",
+                error_message="ezdxf is not installed - cannot process DXF files",
             )
-            logger.error("ezdxf not installed — cannot process drawing %s", drawing_id)
+            logger.error("ezdxf not installed - cannot process drawing %s", drawing_id)
 
         except Exception as exc:
             await self.drawing_repo.update_fields(
@@ -832,7 +1063,7 @@ class DwgTakeoffService:
             _converter_subprocess_env = None  # type: ignore[assignment]
 
         if converter is None:
-            # Actionable install path — the previous message ("Please upload
+            # Actionable install path - the previous message ("Please upload
             # DXF format") hid the fact that DWG conversion is supported and
             # just needs a one-time install. Surfacing the Quantities-page
             # link + the GitHub manual fallback closes the support loop the
@@ -861,7 +1092,7 @@ class DwgTakeoffService:
         # DDC DwgExporter → Excel. Compose the CLI through the same
         # capability-aware builder the takeoff router uses so we don't
         # hand v18 flag-driven binaries the legacy positional shape
-        # (``<input> <output> -no-collada``) — that returns exit 15 with
+        # (``<input> <output> -no-collada``) - that returns exit 15 with
         # ``arguments were not expected: ... -no-collada``, the same root
         # cause that previously surfaced as "CAD conversion failed for
         # .rvt" in the CAD/BIM Data Explorer. Once DDC ships a v18
@@ -878,7 +1109,7 @@ class DwgTakeoffService:
                 # (the takeoff router only emits ``standard`` for RVT/IFC).
                 # build_ddc_args' v18 path emits ``-m standard`` only when
                 # ``caps.accepts_flag_mode`` is True, which currently fires
-                # for RVT — harmless on DWG should DDC adopt it later.
+                # for RVT - harmless on DWG should DDC adopt it later.
                 mode="standard",
                 include_no_dae=True,
             )
@@ -943,9 +1174,7 @@ class DwgTakeoffService:
                         "DXF is handled directly without requiring DDC."
                     )
                 else:
-                    nice_msg = (
-                        f"DDC DwgExporter produced no output (exit {rc}): {stderr_msg}"
-                    ).strip()
+                    nice_msg = (f"DDC DwgExporter produced no output (exit {rc}): {stderr_msg}").strip()
                 await self.drawing_repo.update_fields(
                     drawing_id,
                     status="error",
@@ -1016,7 +1245,7 @@ class DwgTakeoffService:
             await self.session.flush()
 
             logger.info(
-                "DWG processed via DDC: %s — %d entities, %d layers",
+                "DWG processed via DDC: %s - %d entities, %d layers",
                 drawing_id,
                 result["entity_count"],
                 len(result["layers"]),
@@ -1068,7 +1297,7 @@ class DwgTakeoffService:
         """Persist a drawing's scale denominator + mode.
 
         The frontend also mirrors this in localStorage for instant feedback,
-        but the DB value is the source of truth across devices and users —
+        but the DB value is the source of truth across devices and users -
         so a takeoff calibrated on a desktop reads correctly when the same
         drawing is opened on a tablet.
         """
@@ -1120,8 +1349,440 @@ class DwgTakeoffService:
     # ── Drawing version & entities ──────────────────────────────────────
 
     async def get_latest_version(self, drawing_id: uuid.UUID) -> DwgDrawingVersion | None:
-        """Get the latest version for a drawing."""
-        return await self.version_repo.get_latest_for_drawing(drawing_id)
+        """Get the latest version for a drawing.
+
+        Performs a one-time, fail-soft units backfill on the read path:
+        legacy/seeded drawings were stored with ``units == null`` (and
+        sometimes ``extents == {}``) which forced a 1.0 scale factor and
+        made millimetre drawings read 1000x too large (BUG-D-TKC-002c).
+        When the unit is unknown we recover extents from the stored
+        entities, infer the unit (a >=1000-unit drawing is almost certainly
+        in mm) and persist both onto the version row so the API and BOQ
+        push see real-world units thereafter.
+        """
+        version = await self.version_repo.get_latest_for_drawing(drawing_id)
+        if version is not None:
+            await self._backfill_units_if_unknown(version)
+        return version
+
+    async def _backfill_units_if_unknown(self, version: DwgDrawingVersion) -> None:
+        """Lazily infer + persist units/extents when the version has none.
+
+        Fail-soft: any error here is logged and swallowed so a read never
+        breaks. Only runs when ``units`` is unknown (null/"unitless"), so a
+        drawing whose unit was resolved at parse time is left untouched.
+        """
+        if version.units not in (None, "unitless"):
+            return
+        try:
+            from app.modules.dwg_takeoff.ddc_dwg_parser import infer_units_from_extents
+
+            extents = version.extents if isinstance(version.extents, dict) else {}
+            # Recover a bounding box from the stored entities when the row
+            # never persisted one (the flagship demo was seeded that way).
+            if not extents or not all(k in extents for k in ("min_x", "min_y", "max_x", "max_y")):
+                raw = await self._load_raw_entities(version)
+                computed = _extents_from_raw_entities(raw)
+                if computed is not None:
+                    extents = computed
+
+            inferred = infer_units_from_extents(extents)
+            updates: dict[str, object] = {}
+            if extents and extents != version.extents:
+                updates["extents"] = extents
+            if inferred is not None and inferred != version.units:
+                updates["units"] = inferred
+            if not updates:
+                return
+
+            # Persist with a bulk UPDATE that does NOT synchronize/expire the
+            # session. ``DwgDrawingVersionRepository.update_fields`` calls
+            # ``session.expire_all()``, which would also expire the router's
+            # already-loaded ``DwgDrawing`` row; a later attribute access while
+            # serializing the response would then attempt a lazy load on the
+            # sync path and raise MissingGreenlet, 500-ing the whole read
+            # (BUG-D-TKC-002d). We update in place and mirror the new values
+            # onto the live object so the response and BOQ push see them.
+            from sqlalchemy import update as sa_update
+
+            await self.session.execute(
+                sa_update(DwgDrawingVersion)
+                .where(DwgDrawingVersion.id == version.id)
+                .values(**updates)
+                .execution_options(synchronize_session=False)
+            )
+            await self.session.flush()
+            for field, value in updates.items():
+                setattr(version, field, value)
+            logger.info(
+                "Backfilled units=%s extents on drawing version %s (was unitless)",
+                version.units,
+                version.id,
+            )
+        except Exception:  # noqa: BLE001 - backfill is advisory, never break the read
+            logger.warning(
+                "Units backfill failed for drawing version %s",
+                version.id,
+                exc_info=True,
+            )
+
+    async def _load_raw_entities(self, version: DwgDrawingVersion) -> list[dict[str, Any]]:
+        """Load the stored (un-normalised) entity records for a version.
+
+        Returns the raw ``{entity_type, geometry_data: {…}}`` list straight
+        from disk (no frontend flattening) so extents can be recomputed.
+        """
+        if version.entities_key is None:
+            return []
+        entities_path = os.path.join(_get_entities_dir(), version.entities_key)
+        if not os.path.exists(entities_path):
+            return []
+        with open(entities_path, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+
+    # ── Revision compare (Item 17) ──────────────────────────────────────
+
+    async def list_drawing_versions(self, drawing_id: uuid.UUID) -> list[DwgDrawingVersion]:
+        """List all parsed versions for a drawing (newest first).
+
+        Raises 404 if the drawing does not exist so the router can gate
+        access on the resolved drawing before exposing the version list.
+        """
+        await self.get_drawing(drawing_id)
+        return await self.version_repo.list_for_drawing(drawing_id)
+
+    async def compare_drawing_versions(
+        self,
+        drawing_id: uuid.UUID,
+        from_version_id: uuid.UUID,
+        to_version_id: uuid.UUID,
+    ) -> dict[str, Any]:
+        """Compare two versions of a drawing and return the diff payload.
+
+        Computes:
+
+        * **Entity diff** - per-layer entity-count changes between the two
+          versions' stored layer profiles (entities carry no stable
+          cross-parse identity).
+        * **Annotation delta** - added / removed / modified annotations
+          keyed by ``drawing_version_id``, with a money cost impact for
+          any linked-to-BOQ annotation whose measured value changed.
+
+        Both versions must belong to ``drawing_id`` (404 otherwise) so a
+        caller cannot diff a version that lives under a foreign drawing.
+        """
+        drawing = await self.get_drawing(drawing_id)
+
+        from_version = await self.version_repo.get_by_id(from_version_id)
+        to_version = await self.version_repo.get_by_id(to_version_id)
+        for version in (from_version, to_version):
+            if version is None or version.drawing_id != drawing_id:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Drawing version not found",
+                )
+        assert from_version is not None  # noqa: S101 - narrowed by the loop above
+        assert to_version is not None  # noqa: S101
+
+        entity_rows = _compute_entity_diff(from_version.layers, to_version.layers)
+        annotation_rows = await self._compute_annotation_delta(
+            drawing.project_id,
+            from_version_id,
+            to_version_id,
+        )
+
+        # Summary counts - split entity vs annotation so the UI can show
+        # two traffic-light rows. ``unchanged`` is excluded from the headline
+        # change tallies but still returned in the rows for the "show all" view.
+        def _tally(rows: list[dict[str, Any]]) -> dict[str, int]:
+            tally = {"added": 0, "removed": 0, "modified": 0, "unchanged": 0}
+            for row in rows:
+                tally[row["change_type"]] = tally.get(row["change_type"], 0) + 1
+            return tally
+
+        # Net cost impact across all linked annotations whose value changed.
+        net_impact = Decimal("0")
+        cost_currency: str | None = None
+        has_cost = False
+        for row in annotation_rows:
+            if row.get("cost_impact") is not None:
+                has_cost = True
+                cost_currency = row.get("cost_currency") or cost_currency
+                try:
+                    net_impact += Decimal(str(row["cost_impact"]))
+                except (InvalidOperation, ValueError, TypeError):
+                    continue
+
+        summary = {
+            "entities": _tally(entity_rows),
+            "annotations": _tally(annotation_rows),
+            "net_cost_impact": str(net_impact.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)) if has_cost else None,
+            "cost_currency": cost_currency,
+            "from_entity_count": from_version.entity_count,
+            "to_entity_count": to_version.entity_count,
+        }
+
+        return {
+            "drawing_id": drawing_id,
+            "from_version_id": from_version.id,
+            "from_version_number": from_version.version_number,
+            "to_version_id": to_version.id,
+            "to_version_number": to_version.version_number,
+            "entity_rows": entity_rows,
+            "annotation_rows": annotation_rows,
+            "summary": summary,
+        }
+
+    async def _compute_annotation_delta(
+        self,
+        project_id: uuid.UUID,
+        from_version_id: uuid.UUID,
+        to_version_id: uuid.UUID,
+    ) -> list[dict[str, Any]]:
+        """Diff annotations across two versions, with BOQ cost impact.
+
+        Annotations are matched by ``metadata.compare_key`` when present
+        (a stable user/import key carried across re-draws), otherwise by
+        their own id within each version. Because a re-uploaded drawing
+        gets fresh annotation rows, the realistic match key is the
+        ``compare_key`` an importer stamps; absent that, an annotation
+        present only in one version is reported as added/removed.
+
+        For an annotation that exists in BOTH versions and is linked to a
+        BOQ position, the money impact ``(new - old) * unit_rate`` is
+        resolved in the project's base currency via the BOQ service.
+        """
+        from_annos = await self.annotation_repo.list_for_version(from_version_id)
+        to_annos = await self.annotation_repo.list_for_version(to_version_id)
+
+        def _key(ann: "DwgAnnotation") -> str:
+            meta = ann.metadata_ or {}
+            ck = meta.get("compare_key") if isinstance(meta, dict) else None
+            return str(ck).strip() if ck else f"id:{ann.id}"
+
+        from_by_key = {_key(a): a for a in from_annos}
+        to_by_key = {_key(a): a for a in to_annos}
+
+        # Lazy per-position currency/rate cache so we never re-resolve the
+        # same BOQ position (and its project FX) twice within one compare.
+        rate_cache: dict[str, tuple[str | None, str | None]] = {}
+
+        async def _rate_and_currency(position_id: str | None) -> tuple[str | None, str | None]:
+            if not position_id:
+                return None, None
+            if position_id in rate_cache:
+                return rate_cache[position_id]
+            result = await self._resolve_position_rate(position_id, project_id)
+            rate_cache[position_id] = result
+            return result
+
+        rows: list[dict[str, Any]] = []
+
+        for key in sorted(set(from_by_key) | set(to_by_key)):
+            old_ann = from_by_key.get(key)
+            new_ann = to_by_key.get(key)
+
+            if old_ann is not None and new_ann is None:
+                rows.append(
+                    {
+                        "change_type": "removed",
+                        "annotation_id": str(old_ann.id),
+                        "annotation_type": old_ann.annotation_type,
+                        "label": _annotation_label(old_ann),
+                        "layer_name": old_ann.layer_name,
+                        "old_measurement": _to_float(old_ann.measurement_value),
+                        "new_measurement": None,
+                        "measurement_unit": old_ann.measurement_unit,
+                        "linked_boq_position_id": old_ann.linked_boq_position_id,
+                        "cost_impact": None,
+                        "cost_currency": None,
+                    }
+                )
+                continue
+
+            if old_ann is None and new_ann is not None:
+                rows.append(
+                    {
+                        "change_type": "added",
+                        "annotation_id": str(new_ann.id),
+                        "annotation_type": new_ann.annotation_type,
+                        "label": _annotation_label(new_ann),
+                        "layer_name": new_ann.layer_name,
+                        "old_measurement": None,
+                        "new_measurement": _to_float(new_ann.measurement_value),
+                        "measurement_unit": new_ann.measurement_unit,
+                        "linked_boq_position_id": new_ann.linked_boq_position_id,
+                        "cost_impact": None,
+                        "cost_currency": None,
+                    }
+                )
+                continue
+
+            # Present in both - detect a measurement change and price it.
+            assert old_ann is not None and new_ann is not None  # noqa: S101
+            old_val = _to_float(old_ann.measurement_value)
+            new_val = _to_float(new_ann.measurement_value)
+            changed = old_val != new_val
+            position_id = new_ann.linked_boq_position_id or old_ann.linked_boq_position_id
+            cost_impact: str | None = None
+            cost_currency: str | None = None
+            if changed and position_id:
+                rate, cost_currency = await _rate_and_currency(position_id)
+                cost_impact = _calculate_cost_impact(
+                    old_value=old_val,
+                    new_value=new_val,
+                    unit_rate=rate,
+                )
+            rows.append(
+                {
+                    "change_type": "modified" if changed else "unchanged",
+                    "annotation_id": str(new_ann.id),
+                    "annotation_type": new_ann.annotation_type,
+                    "label": _annotation_label(new_ann),
+                    "layer_name": new_ann.layer_name,
+                    "old_measurement": old_val,
+                    "new_measurement": new_val,
+                    "measurement_unit": new_ann.measurement_unit or old_ann.measurement_unit,
+                    "linked_boq_position_id": position_id,
+                    "cost_impact": cost_impact,
+                    "cost_currency": cost_currency if cost_impact is not None else None,
+                }
+            )
+
+        return rows
+
+    async def _resolve_position_rate(
+        self,
+        position_id: str,
+        project_id: uuid.UUID,
+    ) -> tuple[str | None, str | None]:
+        """Resolve ``(unit_rate, base_currency)`` for a BOQ position.
+
+        The position must belong to ``project_id`` (cross-tenant safety:
+        a foreign-project position is treated as "no rate" so a compare
+        never prices an annotation against another tenant's estimate).
+        Best-effort: any lookup failure returns ``(None, None)`` so the
+        compare degrades to "no cost shown" rather than a 500.
+        """
+        try:
+            position_uuid = uuid.UUID(str(position_id))
+        except (ValueError, TypeError, AttributeError):
+            return None, None
+
+        try:
+            from app.modules.boq.service import BOQService
+
+            boq_service = BOQService(self.session)
+            position = await boq_service.position_repo.get_by_id(position_uuid)
+            if position is None:
+                return None, None
+            boq = await boq_service.get_boq(position.boq_id)
+            if str(boq.project_id) != str(project_id):
+                # Cross-tenant link - never price against it.
+                return None, None
+            base_currency = await boq_service._resolve_project_currency(position.boq_id)  # noqa: SLF001
+            return str(position.unit_rate), (base_currency or None)
+        except HTTPException:
+            return None, None
+        except Exception:  # noqa: BLE001 - pricing is advisory, never break the compare
+            logger.debug("Cost-impact rate lookup failed for position %s", position_id, exc_info=True)
+            return None, None
+
+    async def create_variation_from_versions(
+        self,
+        drawing_id: uuid.UUID,
+        from_version_id: uuid.UUID,
+        to_version_id: uuid.UUID,
+        *,
+        title: str | None = None,
+        user_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Turn a drawing revision delta into a draft VariationRequest.
+
+        The deterministic :meth:`compare_drawing_versions` is the single
+        source of truth - this method does NOT recompute the diff, it
+        calls compare and shapes its summary into a controlled-change
+        record. A *draft* VariationRequest is created (never submitted or
+        approved): AI/automation proposes the change, a human confirms it
+        in the variations workflow.
+
+        The variation is classified ``scope_change`` and carries the net
+        cost impact from the compare in the project's base currency.
+        Provenance (the drawing id, the version pair, the changed linked
+        annotation ids, the raw net impact) is stamped into
+        ``metadata.source = "dwg_revision_compare"`` so the handoff is
+        traceable and idempotent-friendly (the version pair is unique).
+
+        Returns ``{variation_request_id, code, estimated_cost_impact,
+        currency}``.
+        """
+        diff = await self.compare_drawing_versions(drawing_id, from_version_id, to_version_id)
+        drawing = await self.get_drawing(drawing_id)
+
+        summary = diff.get("summary") or {}
+        entity_tally = summary.get("entities") or {}
+        annotation_tally = summary.get("annotations") or {}
+        net_impact_raw = summary.get("net_cost_impact")
+        currency = summary.get("cost_currency") or ""
+
+        changed_annotation_ids = [
+            row["annotation_id"] for row in diff.get("annotation_rows", []) if row.get("change_type") == "modified"
+        ]
+
+        try:
+            estimated_cost_impact = Decimal(str(net_impact_raw)) if net_impact_raw not in (None, "") else Decimal("0")
+        except (InvalidOperation, ValueError, TypeError):
+            estimated_cost_impact = Decimal("0")
+
+        from_v = diff.get("from_version_number")
+        to_v = diff.get("to_version_number")
+        resolved_title = title or f"Drawing revision {drawing.name} v{from_v}->v{to_v}"
+        description = _build_revision_narrative(
+            entity_tally=entity_tally,
+            annotation_tally=annotation_tally,
+            changed_linked_count=len(
+                [
+                    row
+                    for row in diff.get("annotation_rows", [])
+                    if row.get("change_type") == "modified" and row.get("linked_boq_position_id")
+                ]
+            ),
+        )
+
+        # Lazy import (mirrors the BOQService import at _resolve_position_rate)
+        # so the dwg_takeoff module load never depends on the variations
+        # module being importable at import time.
+        from app.modules.variations.schemas import VariationRequestCreate
+        from app.modules.variations.service import VariationsService
+
+        vr_create = VariationRequestCreate(
+            project_id=drawing.project_id,
+            title=resolved_title[:500],
+            description=description[:20000],
+            classification="scope_change",
+            estimated_cost_impact=estimated_cost_impact,
+            estimated_schedule_days=0,
+            currency=currency[:10],
+            status="draft",
+            metadata={
+                "source": "dwg_revision_compare",
+                "drawing_id": str(drawing_id),
+                "from_version_id": str(from_version_id),
+                "to_version_id": str(to_version_id),
+                "changed_annotation_ids": changed_annotation_ids,
+                "net_cost_impact": str(estimated_cost_impact),
+            },
+        )
+        variations_service = VariationsService(self.session)
+        vr = await variations_service.create_request(vr_create, user_id=user_id)
+
+        return {
+            "variation_request_id": vr.id,
+            "code": vr.code,
+            "estimated_cost_impact": str(estimated_cost_impact),
+            "currency": currency,
+        }
 
     async def get_entities(
         self,
@@ -1314,7 +1975,7 @@ class DwgTakeoffService:
     ) -> DwgAnnotation:
         """Link an annotation to a BOQ position.
 
-        Estimation-cluster wave (2026-05-28) — opt-in ``push_quantity``.
+        Estimation-cluster wave (2026-05-28) - opt-in ``push_quantity``.
         When true, the annotation's measured value is copied into the
         target BOQ position's ``quantity`` and the position total is
         recomputed. An annotation with no usable value is a no-op.
@@ -1337,7 +1998,7 @@ class DwgTakeoffService:
         picker and the BOQ module's canonical total-recompute path. The
         ``DwgAnnotation`` ORM only carries a scalar ``measurement_value``
         (no separate volume/count columns), so we adapt it to the shape
-        the picker expects. A ``None`` picked value is a no-op — we never
+        the picker expects. A ``None`` picked value is a no-op - we never
         zero an existing BOQ quantity from an annotation with no number.
         """
         from types import SimpleNamespace
@@ -1354,7 +2015,7 @@ class DwgTakeoffService:
         value = _pick_takeoff_value(adapter)
         if value is None:
             logger.info(
-                "push_quantity: annotation %s has no usable value — leaving BOQ position %s untouched",
+                "push_quantity: annotation %s has no usable value - leaving BOQ position %s untouched",
                 annotation.id,
                 position_id,
             )
@@ -1365,18 +2026,18 @@ class DwgTakeoffService:
         try:
             position_uuid = uuid.UUID(str(position_id))
         except (ValueError, AttributeError):
-            logger.warning("push_quantity: BOQ position id %r is not a UUID — skipping", position_id)
+            logger.warning("push_quantity: BOQ position id %r is not a UUID - skipping", position_id)
             return
 
         boq_service = BOQService(self.session)
         position = await boq_service.position_repo.get_by_id(position_uuid)
         if position is None:
-            logger.warning("push_quantity: BOQ position %s not found — skipping", position_id)
+            logger.warning("push_quantity: BOQ position %s not found - skipping", position_id)
             return
 
         await boq_service.position_repo.update_fields(position.id, quantity=str(value))
         await self.session.refresh(position)
-        await boq_service._recompute_position_total(position)  # noqa: SLF001 — reuse canonical recompute path
+        await boq_service._recompute_position_total(position)  # noqa: SLF001 - reuse canonical recompute path
         logger.info("push_quantity: BOQ position %s quantity set to %s", position_id, value)
 
     # ── Pins (task/punchlist) ───────────────────────────────────────────
@@ -1470,7 +2131,7 @@ class DwgTakeoffService:
         version: str | None = None
         try:
             version = converter.name
-        except Exception:  # noqa: BLE001 — defensive: filesystem quirks
+        except Exception:  # noqa: BLE001 - defensive: filesystem quirks
             version = None
 
         return {

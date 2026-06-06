@@ -1,15 +1,17 @@
-"""‌⁠‍Reporting service — business logic for KPI snapshots, templates, and report generation.
+"""‌⁠‍Reporting service - business logic for KPI snapshots, templates, and report generation.
 
 Event publishing (slice E):
-    reporting.kpi_snapshot.created — new KPI snapshot row
-    reporting.template.created     — new custom template
-    reporting.template.scheduled   — cron schedule attached/cleared
-    reporting.report.generated     — new report rendered
+    reporting.kpi_snapshot.created - new KPI snapshot row
+    reporting.template.created     - new custom template
+    reporting.template.scheduled   - cron schedule attached/cleared
+    reporting.report.generated     - new report rendered
 """
 
+import html
 import logging
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -36,7 +38,7 @@ _logger_ev = logging.getLogger(__name__ + ".events")
 
 
 async def _safe_publish(name: str, data: dict, source_module: str = "oe_reporting") -> None:
-    """‌⁠‍Best-effort event publish — never blocks the caller on failure."""
+    """‌⁠‍Best-effort event publish - never blocks the caller on failure."""
     try:
         event_bus.publish_detached(name, data, source_module=source_module)
     except Exception:
@@ -125,6 +127,20 @@ SYSTEM_TEMPLATES: list[dict] = [
             ],
         },
     },
+    {
+        "name": "Progress Report",
+        "report_type": "progress_report",
+        "description": "Weekly/monthly field progress summary with completion metrics, milestones, and site photos.",
+        "template_data": {
+            "sections": [
+                {"id": "header", "title": "Project Overview", "fields": ["name", "status"]},
+                {"id": "progress", "title": "Field Progress", "fields": ["overall_pct", "milestone_status"]},
+                {"id": "schedule", "title": "Schedule Status", "fields": ["progress_pct"]},
+                {"id": "risk", "title": "Top Risks", "fields": ["risk_score_avg"]},
+                {"id": "photos", "title": "Site Photos", "fields": ["photo_gallery"]},
+            ],
+        },
+    },
 ]
 
 
@@ -163,9 +179,9 @@ class ReportingService:
         ``oe_reporting_kpi_snapshot`` has a UNIQUE(project_id,
         snapshot_date) constraint: a project has exactly one snapshot per
         day. A blind INSERT on a date that already had a snapshot raised an
-        unhandled ``IntegrityError`` → 500. We upsert instead — the same
+        unhandled ``IntegrityError`` → 500. We upsert instead - the same
         date-idempotent behaviour ``auto_recalculate_kpis`` already
-        implements — so re-posting a day's KPIs updates that day's row.
+        implements - so re-posting a day's KPIs updates that day's row.
         """
         from sqlalchemy import select
 
@@ -384,7 +400,7 @@ class ReportingService:
                 template.next_run_at = next_run.strftime("%Y-%m-%dT%H:%M:%SZ")
             except CronParseError:
                 logger.exception(
-                    "Template %s has invalid cron %r — pausing",
+                    "Template %s has invalid cron %r - pausing",
                     template.id,
                     template.schedule_cron,
                 )
@@ -424,7 +440,7 @@ class ReportingService:
         """Hard-delete a generated report. 404 if not found.
 
         Caller is expected to enforce project access via
-        ``verify_project_access`` before invoking this — the service layer
+        ``verify_project_access`` before invoking this - the service layer
         does not gate on the user's project ownership.
         """
         report = await self.report_repo.get_by_id(report_id)
@@ -448,7 +464,7 @@ class ReportingService:
         global storage backend, recording its key on ``report.storage_key``
         so the ``/reports/{id}/content`` endpoint can fetch it back. Before
         this wiring landed (W23 P0 audit, task #252) the row existed but
-        ``storage_key`` was always ``None`` — clicking the report in the
+        ``storage_key`` was always ``None`` - clicking the report in the
         history panel showed nothing because there was nothing to show.
 
         Rendering and storage failures are best-effort: we log them and
@@ -461,7 +477,7 @@ class ReportingService:
         # is stamped onto the row *and* into the data_snapshot so every
         # money figure in the report reads in a single, explicit currency.
         # ``override_currency`` is already shape-validated (3-letter, upper)
-        # at the schema layer, so an invalid code never reaches here — it
+        # at the schema layer, so an invalid code never reaches here - it
         # is rejected with HTTP 422 before this method runs.
         currency = await resolve_template_currency(
             session=self.session,
@@ -472,7 +488,7 @@ class ReportingService:
         # If the caller did not supply a data snapshot, assemble one
         # server-side from the project's live module state. Without this
         # the renderer falls straight through to its "No data available"
-        # notice and every report a user generates is a blank shell — the
+        # notice and every report a user generates is a blank shell - the
         # only generation path the UI exposes never sends a snapshot
         # (W2 audit, /reporting). Best-effort: a failure here degrades to
         # the empty-snapshot notice rather than failing the whole call.
@@ -497,13 +513,36 @@ class ReportingService:
         # Stamp the resolved currency into the snapshot. A caller-supplied
         # snapshot is copied (never mutated in place) so the request object
         # stays pristine, and the stamped ``currency`` key always reflects
-        # the resolved code — overriding any stale currency the caller may
+        # the resolved code - overriding any stale currency the caller may
         # have embedded. This is what guarantees a USD report never carries
         # a euro sign and vice versa: money lives under one currency code.
         if effective_snapshot is not None:
             effective_snapshot = {**effective_snapshot, "currency": currency}
         else:
             effective_snapshot = {"currency": currency}
+
+        # ── Optional AI narrative enrichment (item #15) ──────────────────
+        # Opt-in only. A progress-report template enables it by setting
+        # ``template_data["ai_narrative"] = true`` (an existing JSONB
+        # column, no migration), or a one-off run can pass
+        # ``metadata["ai_narrative"] = true``. The narrative is a
+        # SUGGESTION the human reviews (architecture guide
+        # "AI-augmented, human-confirmed"): it is stamped into the snapshot
+        # under ``ai_narrative`` and the renderer marks it AI-generated with
+        # a confidence note. Graceful: no API key -> no narrative, no error.
+        if await self._narrative_opt_in(data):
+            try:
+                narrative = await self._build_ai_narrative(effective_snapshot)
+            except Exception:
+                logger.warning(
+                    "reporting.generate_report AI narrative enrichment failed "
+                    "for project_id=%s; the report renders without a narrative.",
+                    data.project_id,
+                    exc_info=True,
+                )
+                narrative = None
+            if narrative is not None:
+                effective_snapshot = {**effective_snapshot, "ai_narrative": narrative}
 
         report = GeneratedReport(
             project_id=data.project_id,
@@ -590,7 +629,7 @@ class ReportingService:
 
         Returns ``(report, html_string)``. Raises 404 if the report is
         unknown or 410 (Gone) if the metadata row exists but the rendered
-        body is no longer reachable from the storage backend — a clearer
+        body is no longer reachable from the storage backend - a clearer
         signal than blank 200 OK.
         """
         report = await self.get_report(report_id)
@@ -612,6 +651,97 @@ class ReportingService:
             ) from exc
         return report, blob.decode("utf-8")
 
+    async def dispatch_report_email(
+        self,
+        report: GeneratedReport,
+        recipients: list[str],
+    ) -> int:
+        """Email a rendered report to the given recipients. Returns recipients reached.
+
+        ``recipients`` is the template's recipient list: entries containing
+        an ``@`` are treated as raw email addresses; bare entries are
+        treated as portal-user IDs and resolved to their email via the
+        portal repository. The rendered HTML body is fetched from storage
+        (falling back to a one-line stub when it has not been rendered).
+
+        Best-effort throughout: a missing portal user, an unrenderable
+        body, or a transport failure is logged, never raised, so a
+        scheduled or ad-hoc run is never lost just because notification
+        delivery failed. Returns the number of addresses an email was
+        dispatched to (0 when there were no usable recipients).
+        """
+        if not recipients:
+            return 0
+
+        email_addresses = [r for r in recipients if "@" in r]
+        portal_user_ids = [r for r in recipients if "@" not in r]
+
+        # Resolve portal-user IDs to email addresses (best-effort).
+        for raw_id in portal_user_ids:
+            try:
+                from app.modules.portal.repository import PortalUserRepository
+
+                pu_uuid = uuid.UUID(raw_id)
+                portal_user = await PortalUserRepository(self.session).get_by_id(pu_uuid)
+                if portal_user is not None and getattr(portal_user, "email", None):
+                    email_addresses.append(portal_user.email)
+            except Exception:
+                logger.warning(
+                    "reporting.dispatch_report_email could not resolve portal user %s",
+                    raw_id,
+                    exc_info=True,
+                )
+
+        # De-duplicate while preserving order.
+        seen: set[str] = set()
+        unique_addresses = [a for a in email_addresses if not (a in seen or seen.add(a))]
+        if not unique_addresses:
+            return 0
+
+        # Fetch the rendered body; fall back to a minimal stub if unavailable.
+        try:
+            _, html_content = await self.get_report_content(report.id)
+        except Exception:
+            logger.warning(
+                "reporting.dispatch_report_email could not load body for report %s; sending stub",
+                report.id,
+                exc_info=True,
+            )
+            html_content = f"<p>Report: {html.escape(report.title)}</p>"
+
+        from app.core.email.base import EmailMessage
+        from app.core.email.service import get_email_service
+
+        service = get_email_service()
+        subject = f"Progress Report: {report.title}"
+        sent = 0
+        for address in unique_addresses:
+            try:
+                result = await service.send(
+                    EmailMessage(
+                        to=address,
+                        subject=subject,
+                        html_body=html_content,
+                        tags=["progress_report"],
+                    )
+                )
+                if result.ok:
+                    sent += 1
+            except Exception:
+                logger.warning(
+                    "reporting.dispatch_report_email send failed for %s",
+                    address,
+                    exc_info=True,
+                )
+
+        logger.info(
+            "Dispatched report %s to %d/%d recipient(s)",
+            report.id,
+            sent,
+            len(unique_addresses),
+        )
+        return sent
+
     async def _lookup_project_name(self, project_id: uuid.UUID) -> str:
         """Best-effort lookup of a project's display name for the report header.
 
@@ -630,6 +760,68 @@ class ReportingService:
                 exc_info=True,
             )
         return str(project_id)
+
+    @staticmethod
+    def _flag_is_true(container: Any, key: str) -> bool:
+        """True iff ``container[key]`` is a truthy opt-in flag.
+
+        Accepts ``True`` or the strings ``"true"``/``"1"``/``"yes"``/``"on"``
+        (case-insensitive) so a flag set from JSON, a form, or Python all
+        read the same. Anything else (missing, ``False``, ``None``) is off.
+        """
+        if not isinstance(container, dict):
+            return False
+        value = container.get(key)
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() in {"true", "1", "yes", "on"}
+        return False
+
+    async def _narrative_opt_in(self, data: GenerateReportRequest) -> bool:
+        """Decide whether to enrich this report with an AI narrative.
+
+        Opt-in precedence (no DB migration needed for either source):
+
+        1. The request ``metadata["ai_narrative"]`` flag (one-off runs).
+        2. The bound template's ``template_data["ai_narrative"]`` flag.
+        """
+        if self._flag_is_true(data.metadata, "ai_narrative"):
+            return True
+        if data.template_id is None:
+            return False
+        try:
+            template = await self.template_repo.get_by_id(data.template_id)
+        except Exception:
+            return False
+        return template is not None and self._flag_is_true(
+            template.template_data,
+            "ai_narrative",
+        )
+
+    async def _build_ai_narrative(self, snapshot: dict | None) -> dict | None:
+        """Best-effort AI narrative for a report snapshot, or ``None``.
+
+        Delegates to the progress-reporter agent's
+        ``generate_progress_narrative``. Returns ``None`` (never raises) when
+        the agent is unavailable, no API key is configured, or the call
+        fails - the report then renders without a narrative section.
+        """
+        if not snapshot:
+            return None
+        try:
+            from app.modules.ai_agents.agents.progress_reporter import (
+                generate_progress_narrative,
+            )
+        except Exception:
+            logger.debug("Progress-reporter agent unavailable for narrative", exc_info=True)
+            return None
+
+        # No per-user AI settings exist in a system-triggered report run, so
+        # the provider/key resolver falls back to environment variables / the
+        # CLI config file. When neither carries a key the agent returns None
+        # and the report renders without a narrative.
+        return await generate_progress_narrative(snapshot, settings=None)
 
     async def _build_default_snapshot(
         self,
@@ -652,7 +844,7 @@ class ReportingService:
         and open-item counts) plus the finance dashboard (payable /
         receivable / budget / cash-flow). Money values always carry the
         report's *resolved* currency code (``currency`` arg) so the whole
-        report reads in one currency — we never blend the finance
+        report reads in one currency - we never blend the finance
         dashboard's own currency with the resolved report currency.
 
         Args:
@@ -731,7 +923,7 @@ class ReportingService:
             dash = await FinanceService(self.session).get_dashboard(project_id=project_id)
             dash_data = dash.model_dump() if hasattr(dash, "model_dump") else dict(dash)
 
-            # Money always reads in the report's *resolved* currency — never
+            # Money always reads in the report's *resolved* currency - never
             # the finance dashboard's own currency. Blending the two would
             # let a USD-override report show EUR-denominated finance figures
             # (or vice versa), which is exactly the cross-currency leak the
@@ -770,11 +962,86 @@ class ReportingService:
                 exc_info=True,
             )
 
-        # ``report_type`` is accepted for forward-compatibility (a future
-        # type-specific assembler can branch on it); today every type
-        # draws from the same KPI + finance source set above.
-        _ = report_type
+        # ── Progress data → progress / photos sections ──
+        # Only assembled for the progress_report type (item 15). Sourced
+        # from the progress module's project-level entries: the headline
+        # overall %, the current reporting period's milestone readings,
+        # and up to six site photos for the gallery. Best-effort: a
+        # failure here leaves the KPI/finance sections intact rather than
+        # failing the whole snapshot.
+        if report_type == "progress_report":
+            await self._assemble_progress_section(project_id, snapshot)
+
         return snapshot or None
+
+    async def _assemble_progress_section(
+        self,
+        project_id: uuid.UUID,
+        snapshot: dict,
+    ) -> None:
+        """Populate the ``progress`` and ``photos`` snapshot sections.
+
+        Reads the latest project-level :class:`ProgressEntry` for the
+        headline figure plus the current ISO-week reporting window for the
+        milestone summary. When no project-level entry has been recorded
+        the method falls back to the cumulative project series so a report
+        still shows a meaningful overall percentage. Mutates ``snapshot``
+        in place; never raises (failures degrade to an absent section).
+        """
+        try:
+            from app.modules.progress.repository import ProgressRepository
+
+            prog_repo = ProgressRepository(self.session)
+            overall_entry = await prog_repo.get_latest_project_entry(project_id)
+
+            progress_block: dict[str, object] = {}
+            photos: list = []
+
+            if overall_entry is not None:
+                progress_block["overall_pct"] = float(overall_entry.percent_complete)
+                recorded_at = overall_entry.recorded_at
+                progress_block["as_of_date"] = (
+                    recorded_at.isoformat() if hasattr(recorded_at, "isoformat") else str(recorded_at)
+                )
+                if overall_entry.recorded_by:
+                    progress_block["recorded_by"] = overall_entry.recorded_by
+                if isinstance(overall_entry.photos, list):
+                    photos = list(overall_entry.photos)
+            else:
+                # Fallback: derive overall % from the cumulative project
+                # series when no explicit project-level reading exists.
+                from app.modules.progress.service import ProgressService
+
+                cumulative = await ProgressService(self.session).get_cumulative(project_id)
+                if cumulative.periods:
+                    progress_block["overall_pct"] = float(cumulative.current_cumulative_pct)
+                    progress_block["as_of_date"] = cumulative.periods[-1].period_label
+                    progress_block["recorded_by"] = "Field Team"
+
+            # Current reporting window (ISO week) milestone summary.
+            period_label = datetime.now(UTC).strftime("%Y-W%V")
+            period_entries = await prog_repo.get_entries_for_period(project_id, period_label)
+            if period_entries:
+                # get_entries_for_period returns newest-first.
+                latest = period_entries[0]
+                progress_block["milestone_status"] = [
+                    {
+                        "period": period_label,
+                        "percent": float(latest.percent_complete),
+                        "entry_count": len(period_entries),
+                    }
+                ]
+
+            if progress_block:
+                snapshot["progress"] = progress_block
+            if photos:
+                snapshot["photos"] = {"photo_gallery": photos[:6]}
+        except Exception:
+            logger.debug(
+                "reporting._build_default_snapshot: progress data unavailable for %s",
+                project_id,
+                exc_info=True,
+            )
 
     # ── KPI Auto-Recalculation ───────────────────────────────────────────
 
@@ -822,7 +1089,7 @@ class ReportingService:
                         budget_consumed_pct = str(round((total_actual / total_budget) * 100, 1))
                 except Exception:
                     logger.warning(
-                        "reporting.kpi_recalc finance.get_dashboard failed for project_id=%s — "
+                        "reporting.kpi_recalc finance.get_dashboard failed for project_id=%s - "
                         "budget_consumed_pct will be null",
                         pid,
                         exc_info=True,
@@ -839,7 +1106,7 @@ class ReportingService:
                         spi = str(cm_dash["spi"])
                 except Exception:
                     logger.warning(
-                        "reporting.kpi_recalc costmodel.get_dashboard failed for project_id=%s — cpi/spi will be null",
+                        "reporting.kpi_recalc costmodel.get_dashboard failed for project_id=%s - cpi/spi will be null",
                         pid,
                         exc_info=True,
                     )
@@ -860,7 +1127,7 @@ class ReportingService:
                     open_defects = getattr(safety_stats, "total_incidents", 0)
                 except Exception:
                     logger.warning(
-                        "reporting.kpi_recalc safety.get_stats failed for project_id=%s — "
+                        "reporting.kpi_recalc safety.get_stats failed for project_id=%s - "
                         "open_defects/open_observations default to 0",
                         pid,
                         exc_info=True,
@@ -876,7 +1143,7 @@ class ReportingService:
                     open_rfis = getattr(rfi_stats, "open", 0)
                 except Exception:
                     logger.warning(
-                        "reporting.kpi_recalc rfi.get_stats failed for project_id=%s — open_rfis defaults to 0",
+                        "reporting.kpi_recalc rfi.get_stats failed for project_id=%s - open_rfis defaults to 0",
                         pid,
                         exc_info=True,
                     )
@@ -899,7 +1166,7 @@ class ReportingService:
                     open_submittals = sub_count
                 except Exception:
                     logger.warning(
-                        "reporting.kpi_recalc submittals count failed for project_id=%s — "
+                        "reporting.kpi_recalc submittals count failed for project_id=%s - "
                         "open_submittals defaults to 0",
                         pid,
                         exc_info=True,
@@ -926,7 +1193,7 @@ class ReportingService:
                             schedule_progress_pct = str(round(avg_progress, 1))
                 except Exception:
                     logger.warning(
-                        "reporting.kpi_recalc schedule.avg_progress failed for project_id=%s — "
+                        "reporting.kpi_recalc schedule.avg_progress failed for project_id=%s - "
                         "schedule_progress_pct will be null",
                         pid,
                         exc_info=True,
@@ -949,7 +1216,7 @@ class ReportingService:
                         risk_score_avg = str(round(avg_risk, 2))
                 except Exception:
                     logger.warning(
-                        "reporting.kpi_recalc risk.avg_score failed for project_id=%s — risk_score_avg will be null",
+                        "reporting.kpi_recalc risk.avg_score failed for project_id=%s - risk_score_avg will be null",
                         pid,
                         exc_info=True,
                     )
@@ -1011,7 +1278,7 @@ class ReportingService:
     # ── Seed system templates ─────────────────────────────────────────────
 
     async def seed_system_templates(self) -> int:
-        """Seed the 6 system report templates. Truly idempotent.
+        """Seed the built-in system report templates. Truly idempotent.
 
         Checks each template by name+report_type to avoid duplicates even
         when some templates were manually deleted and re-seeded.
@@ -1046,3 +1313,157 @@ class ReportingService:
             await self.session.flush()
             logger.info("Seeded %d system report templates", created)
         return created
+
+    # ── PO retainage reconciliation (Gap F) ──────────────────────────────────
+
+    async def render_po_retainage_reconciliation(
+        self,
+        project_id: uuid.UUID,
+        period_start: str,
+        period_end: str,
+    ) -> dict:
+        """Render a period-end PO retainage reconciliation report.
+
+        Aggregates every purchase order issued in ``[period_start, period_end]``
+        (inclusive, ISO ``YYYY-MM-DD`` strings compared lexicographically) that
+        carries a non-zero ``retention_percent``. Deterministic, no AI.
+
+        Currency rule: money is NEVER blended. Each PO's figures stay in the
+        PO's own ``currency_code``; the summary is broken out per currency in
+        ``summary_by_currency`` and ``currencies`` lists every currency seen.
+        ``summary`` is the convenience roll-up for the common single-currency
+        project and carries a ``mixed_currency`` flag when more than one
+        currency is present so the UI can warn instead of silently summing
+        incomparable amounts.
+
+        Returns a JSON-serialisable dict consumed by the reporting router and
+        the frontend report template.
+        """
+        from decimal import Decimal, InvalidOperation
+
+        from sqlalchemy import select
+
+        from app.modules.procurement.models import PurchaseOrder
+
+        stmt = (
+            select(PurchaseOrder)
+            .where(
+                PurchaseOrder.project_id == project_id,
+                PurchaseOrder.retention_percent > Decimal("0"),
+                PurchaseOrder.issue_date.is_not(None),
+                PurchaseOrder.issue_date >= period_start,
+                PurchaseOrder.issue_date <= period_end,
+            )
+            .order_by(PurchaseOrder.issue_date.asc())
+        )
+        result = await self.session.execute(stmt)
+        pos = list(result.scalars().all())
+
+        # Resolve vendor display names in one round trip (avoid N+1).
+        vendor_names: dict[str, str] = {}
+        vendor_ids = {po.vendor_contact_id for po in pos if po.vendor_contact_id}
+        if vendor_ids:
+            try:
+                from app.modules.contacts.models import Contact
+
+                rows = (await self.session.execute(select(Contact).where(Contact.id.in_(vendor_ids)))).scalars().all()
+                for c in rows:
+                    label = c.company_name or f"{c.first_name or ''} {c.last_name or ''}".strip() or c.email or ""
+                    vendor_names[str(c.id)] = label
+            except Exception:
+                logger.debug("Vendor-name lookup skipped for retainage report", exc_info=True)
+
+        po_rows: list[dict] = []
+        # Per-currency accumulators so we never blend currencies.
+        by_currency: dict[str, dict[str, Decimal]] = {}
+
+        for po in pos:
+            currency = po.currency_code or ""
+            committed = po.amount_total or "0"
+            try:
+                committed_dec = Decimal(str(committed))
+            except (InvalidOperation, ValueError, TypeError):
+                committed_dec = Decimal("0")
+            withheld = po.retainage_amount()
+            try:
+                released = Decimal(str(po.retainage_released_amount or "0"))
+            except (InvalidOperation, ValueError, TypeError):
+                released = Decimal("0")
+            held = max(withheld - released, Decimal("0"))
+
+            bucket = by_currency.setdefault(
+                currency,
+                {
+                    "committed": Decimal("0"),
+                    "withheld": Decimal("0"),
+                    "released": Decimal("0"),
+                    "held": Decimal("0"),
+                },
+            )
+            bucket["committed"] += committed_dec
+            bucket["withheld"] += withheld
+            bucket["released"] += released
+            bucket["held"] += held
+
+            po_rows.append(
+                {
+                    "po_id": str(po.id),
+                    "po_number": po.po_number,
+                    "vendor_name": vendor_names.get(po.vendor_contact_id or "", ""),
+                    "issue_date": po.issue_date,
+                    "status": po.status,
+                    "amount_total": str(committed_dec),
+                    "currency": currency,
+                    "retention_percent": str(po.retention_percent),
+                    "retainage_withheld": str(withheld),
+                    "retainage_released_ytd": str(released),
+                    "retainage_held": str(held),
+                }
+            )
+
+        summary_by_currency = {
+            cur: {
+                "total_committed": str(b["committed"]),
+                "total_withheld": str(b["withheld"]),
+                "total_released": str(b["released"]),
+                "total_held": str(b["held"]),
+            }
+            for cur, b in sorted(by_currency.items())
+        }
+        currencies = sorted(by_currency.keys())
+        mixed = len(currencies) > 1
+
+        # Convenience single-currency roll-up. When more than one currency is
+        # present we still emit a numeric sum (so the UI has *something*) but
+        # flag it as mixed so it can be rendered with a warning rather than as
+        # an authoritative total. This deliberately sums raw amounts only as a
+        # last resort and never zeroes a foreign value.
+        agg = {
+            "total_committed": Decimal("0"),
+            "total_withheld": Decimal("0"),
+            "total_released": Decimal("0"),
+            "total_held": Decimal("0"),
+        }
+        for b in by_currency.values():
+            agg["total_committed"] += b["committed"]
+            agg["total_withheld"] += b["withheld"]
+            agg["total_released"] += b["released"]
+            agg["total_held"] += b["held"]
+
+        summary = {k: str(v) for k, v in agg.items()}
+        summary["currency"] = currencies[0] if len(currencies) == 1 else ""
+        summary["mixed_currency"] = mixed
+
+        project_name = await self._lookup_project_name(project_id)
+
+        return {
+            "report_type": "po_retainage_reconciliation",
+            "project_id": str(project_id),
+            "project_name": project_name,
+            "period_start": period_start,
+            "period_end": period_end,
+            "currencies": currencies,
+            "summary": summary,
+            "summary_by_currency": summary_by_currency,
+            "po_rows": po_rows,
+        }

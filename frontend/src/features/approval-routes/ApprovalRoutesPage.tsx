@@ -24,6 +24,7 @@ import {
   RecoveryCard,
   SkeletonTable,
 } from '@/shared/ui';
+import { apiGet } from '@/shared/lib/api';
 import { useToastStore } from '@/stores/useToastStore';
 import {
   approvalRoutesKeys,
@@ -68,6 +69,20 @@ export function ApprovalRoutesPage() {
     staleTime: 10 * 60_000,
   });
   const targetKinds = meta?.target_kinds ?? [];
+
+  // Resolve project_id → name so project-scoped routes are distinguishable
+  // in the Scope column (shares the cached ['projects'] query the editor
+  // already uses).
+  const { data: projects = [] } = useQuery({
+    queryKey: ['projects'],
+    queryFn: () => apiGet<{ id: string; name: string }[]>('/v1/projects/'),
+    staleTime: 5 * 60_000,
+  });
+  const projectName = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const p of projects) m.set(p.id, p.name);
+    return m;
+  }, [projects]);
 
   const delMut = useMutation({
     mutationFn: (id: string) => deleteRoute(id),
@@ -215,7 +230,7 @@ export function ApprovalRoutesPage() {
               })}
               description={t('approvalRoutes.empty_desc', {
                 defaultValue:
-                  'Create your first approval route — e.g. a 2-step submittal review (engineer → manager).',
+                  'Create your first approval route - e.g. a 2-step submittal review (engineer → manager).',
               })}
               action={{
                 label: t('approvalRoutes.newRoute', { defaultValue: 'New route' }),
@@ -272,10 +287,16 @@ export function ApprovalRoutesPage() {
                             </td>
                             <td className="px-3 py-2.5 text-xs text-content-secondary">
                               {r.project_id ? (
-                                <span className="truncate">
-                                  {t('approvalRoutes.scope_project', {
-                                    defaultValue: 'Project',
-                                  })}
+                                <span
+                                  className="truncate"
+                                  title={
+                                    projectName.get(r.project_id) ?? r.project_id
+                                  }
+                                >
+                                  {projectName.get(r.project_id) ??
+                                    t('approvalRoutes.scope_project', {
+                                      defaultValue: 'Project',
+                                    })}
                                 </span>
                               ) : (
                                 <Badge variant="blue" size="sm">
@@ -333,7 +354,13 @@ export function ApprovalRoutesPage() {
           )}
         </div>
       ) : (
-        <div className="mt-3">
+        <div className="mt-3 space-y-2">
+          <p className="text-xs text-content-tertiary max-w-3xl">
+            {t('approvalRoutes.instances_intro', {
+              defaultValue:
+                'Every approval workflow started across the app. Click a row to open the step ladder and approve, reject or cancel a pending workflow without leaving this page.',
+            })}
+          </p>
           <ApprovalInstancesList />
         </div>
       )}

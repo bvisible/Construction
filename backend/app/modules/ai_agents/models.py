@@ -1,14 +1,14 @@
 """AI Agents ORM models.
 
 Tables:
-    oe_ai_agents_run    — one row per agent invocation (status, totals, output).
-    oe_ai_agents_step   — chronological steps within a run
+    oe_ai_agents_run    - one row per agent invocation (status, totals, output).
+    oe_ai_agents_step   - chronological steps within a run
                           (thought / tool_call / observation / answer / error).
-    oe_ai_agents_custom — user-authored agents (name, prompt, icon, category).
+    oe_ai_agents_custom - user-authored agents (name, prompt, icon, category).
 
 The run/step tables are append-only from a user's perspective (the runner
 writes incrementally as the loop progresses; the API only ever lets you
-create a new run or fetch existing ones — no in-place edits). Custom agents
+create a new run or fetch existing ones - no in-place edits). Custom agents
 ARE editable/deletable by their creator through the dedicated endpoints.
 """
 
@@ -21,7 +21,7 @@ from app.database import GUID, Base
 
 
 class AgentRun(Base):
-    """A single agent invocation — the ReAct loop bookkeeping row."""
+    """A single agent invocation - the ReAct loop bookkeeping row."""
 
     __tablename__ = "oe_ai_agents_run"
 
@@ -30,6 +30,19 @@ class AgentRun(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(GUID(), nullable=False, index=True)
     # running | completed | failed
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="running")
+    # How the run was initiated (Item 29). One of:
+    #   "manual"       - a user clicked Run (default; the existing path).
+    #   "schedule"     - the cron scheduler fired it.
+    #   "event:<name>" - a platform event fired it (e.g. "event:rfi_created").
+    # Lets the monitoring panel list automated runs and the audit trail show
+    # who/what initiated each automated action.
+    trigger_source: Mapped[str] = mapped_column(
+        String(40),
+        nullable=False,
+        default="manual",
+        server_default="manual",
+        index=True,
+    )
     # Free-form reason when status=failed (e.g. "iter_limit", "llm_error").
     failure_reason: Mapped[str | None] = mapped_column(String(100), nullable=True)
     user_input: Mapped[str] = mapped_column(Text, nullable=False, default="")
@@ -48,9 +61,9 @@ class AgentStep(Base):
     """One entry in a run's ReAct timeline.
 
     ``role`` values: ``thought`` (LLM reasoning text), ``tool_call``
-    (LLM asked to invoke a tool — ``content`` is ``{name, args}``),
-    ``observation`` (tool returned — ``content`` is the result or error),
-    ``answer`` (LLM emitted final text — ``content`` is ``{text}``),
+    (LLM asked to invoke a tool - ``content`` is ``{name, args}``),
+    ``observation`` (tool returned - ``content`` is the result or error),
+    ``answer`` (LLM emitted final text - ``content`` is ``{text}``),
     ``error`` (out-of-band failure: unknown tool, parse error, ...).
     """
 
@@ -122,9 +135,47 @@ class CustomAgent(Base):
     # prompt. Stored so the edit form can re-hydrate the friendly fields instead
     # of showing the compiled prompt.
     guided: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=None)  # type: ignore[type-arg]
+    # Workflow-automation envelope for the agent (Item 29). A single JSON dict
+    # so scheduling + tool-access can grow without a migration per knob. Shape:
+    #   {
+    #     "cron": "0 9 * * *" | null,        # 5-field POSIX cron, UTC
+    #     "schedule_enabled": bool,           # paused without losing the cron
+    #     "next_run_at": "<ISO8601 UTC>"|null,# computed from cron, advanced as it fires
+    #     "schedule_input": str,              # the prompt a scheduled run is fired with
+    #     "triggers": ["rfi_created", ...],   # event names (wiring deferred)
+    #     "allowed_tools": ["search_costs"],  # tool slugs the agent may call
+    #   }
+    # The Python attribute is deliberately NOT named ``metadata`` - that name is
+    # reserved by SQLAlchemy's declarative ``Base`` (the MetaData object).
+    automation: Mapped[dict] = mapped_column(  # type: ignore[type-arg]
+        JSON,
+        nullable=False,
+        default=dict,
+        server_default="{}",
+    )
 
     def __repr__(self) -> str:
         return f"<CustomAgent {self.id} user={self.user_id} name={self.display_name!r}>"
+
+    @property
+    def cron_expr(self) -> str | None:
+        """The agent's cron expression, or ``None`` when not scheduled."""
+        auto = self.automation if isinstance(self.automation, dict) else {}
+        expr = auto.get("cron")
+        return expr if isinstance(expr, str) and expr.strip() else None
+
+    @property
+    def schedule_enabled(self) -> bool:
+        """Whether the schedule is active (defaults true when a cron is set)."""
+        auto = self.automation if isinstance(self.automation, dict) else {}
+        return bool(auto.get("schedule_enabled", True))
+
+    @property
+    def allowed_tools(self) -> list[str]:
+        """Tool slugs the agent is permitted to call (empty = prompt-only)."""
+        auto = self.automation if isinstance(self.automation, dict) else {}
+        tools = auto.get("allowed_tools")
+        return [str(t) for t in tools] if isinstance(tools, list) else []
 
     @property
     def agent_name(self) -> str:

@@ -6,15 +6,15 @@ Mounted by the module loader at ``/api/v1/file-distribution``.
 
 Two sub-namespaces:
 
-* ``GET  /search/``               — cross-project ranked file search
-* ``GET  /lists/``                — list distribution lists
-* ``POST /lists/``                — create
-* ``PATCH /lists/{id}/``          — update
-* ``DELETE /lists/{id}/``         — delete
-* ``POST /lists/{id}/members/``   — add member
-* ``DELETE /lists/{lid}/members/{mid}/`` — remove member
-* ``GET  /subscriptions/``        — list user's subscriptions
-* ``POST /subscriptions/``        — subscribe to folder/kind
+* ``GET  /search/``               - cross-project ranked file search
+* ``GET  /lists/``                - list distribution lists
+* ``POST /lists/``                - create
+* ``PATCH /lists/{id}/``          - update
+* ``DELETE /lists/{id}/``         - delete
+* ``POST /lists/{id}/members/``   - add member
+* ``DELETE /lists/{lid}/members/{mid}/`` - remove member
+* ``GET  /subscriptions/``        - list user's subscriptions
+* ``POST /subscriptions/``        - subscribe to folder/kind
 * ``DELETE /subscriptions/{id}/``
 """
 
@@ -75,7 +75,7 @@ async def _resolve_accessible_project_ids(
     Mirrors ``verify_project_access`` semantics: admins see every
     project, everyone else only their own. Project membership outside
     ownership is a separate concern handled by the documents module
-    folder-permissions service — when that service is wired the
+    folder-permissions service - when that service is wired the
     callback used here can be expanded; for now ownership is the safe
     minimum.
     """
@@ -171,6 +171,13 @@ async def list_distribution_lists(
     project_id: uuid.UUID | None = Query(default=None),
 ) -> DistributionListListResponse:
     user_uuid = _user_uuid(current_user_id)
+    # IDOR guard: when scoped to a project, list_for_user returns other
+    # users' shared lists (with their member emails) in that project, so a
+    # caller who cannot access the project could enumerate them by guessing
+    # the UUID. Gate on project access first (404 on denial, matching the
+    # codebase IDOR policy and create_subscription's pattern).
+    if project_id is not None:
+        await verify_project_access(project_id, str(user_uuid), session)
     service = DistributionListService(session)
     rows = await service.list_for_user(user_id=user_uuid, project_id=project_id)
     return DistributionListListResponse(
@@ -375,7 +382,7 @@ async def create_subscription(
     user_uuid = _user_uuid(current_user_id)
     # IDOR guard: file_distribution.subscribe is a global role; without this any
     # holder could subscribe to (and receive notifications about) files in a
-    # project they cannot access — a cross-project information leak.
+    # project they cannot access - a cross-project information leak.
     await verify_project_access(payload.project_id, str(user_uuid), session)
     service = SubscriptionService(session)
     try:

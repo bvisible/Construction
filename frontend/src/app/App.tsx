@@ -46,6 +46,7 @@ import { FloatingQueuePanel } from './layout/FloatingQueuePanel';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useThemeStore } from '@/stores/useThemeStore';
 import { ddcVerifyIntegrity, ddcInjectMeta, DDC_ORIGIN } from '@/shared/lib/ddc-integrity';
+import { NavigationProgress } from '@/shared/lib/navigationProgress';
 import { useKeyboardShortcuts } from '@/shared/hooks/useKeyboardShortcuts';
 import { useTranslation } from 'react-i18next';
 import { getLanguageByCode } from './i18n';
@@ -135,6 +136,7 @@ const PdfComparePage = lazy(() =>
 const PunchListPage = lazy(() =>
   import('@/features/punchlist/PunchListPage').then((m) => ({ default: m.PunchListPage }))
 );
+const CloseoutPage = lazy(() => import('@/features/closeout/CloseoutPage'));
 const FieldReportsPage = lazy(() =>
   import('@/features/fieldreports/FieldReportsPage').then((m) => ({ default: m.FieldReportsPage }))
 );
@@ -180,6 +182,9 @@ const InspectionsPage = lazy(() =>
 const NCRPage = lazy(() =>
   import('@/features/ncr/NCRPage').then((m) => ({ default: m.NCRPage }))
 );
+const MoCPage = lazy(() =>
+  import('@/features/moc/MoCPage').then((m) => ({ default: m.MoCPage }))
+);
 const ReportingPage = lazy(() =>
   import('@/features/reporting/ReportingPage').then((m) => ({ default: m.ReportingPage }))
 );
@@ -198,6 +203,7 @@ const BIMQuantityRulesPage = lazy(() =>
 const ClashDetectionPage = lazy(() =>
   import('@/features/clash/ClashDetectionPage').then((m) => ({ default: m.ClashDetectionPage }))
 );
+const ClashProfileManager = lazy(() => import('@/features/clash/ClashProfileManager'));
 const UserManagementPage = lazy(() =>
   import('@/features/users/UserManagementPage').then((m) => ({ default: m.UserManagementPage }))
 );
@@ -247,12 +253,17 @@ const BuyerPortalPage = lazy(() =>
     default: m.BuyerPortalPage,
   }))
 );
-// Field-worker mobile shell — DESIGN-STAGE SKELETON. See
+// Field-worker mobile shell + PIN-redemption auth. See
 // docs/architecture/FIELD_WORKER_MOBILE_DESIGN.md. Lazy-loaded in its
 // own chunk so the desktop bundle is unaffected.
 const FieldShellPage = lazy(() =>
   import('@/features/field/FieldShellPage').then((m) => ({
     default: m.FieldShellPage,
+  }))
+);
+const FieldAuthPage = lazy(() =>
+  import('@/features/field/FieldAuthPage').then((m) => ({
+    default: m.FieldAuthPage,
   }))
 );
 const SnapshotsPage = lazy(() =>
@@ -282,8 +293,12 @@ const SubcontractorsPage = lazy(() =>
 const EquipmentPage = lazy(() =>
   import('@/features/equipment').then((m) => ({ default: m.EquipmentPage }))
 );
+const PayrollPage = lazy(() => import('@/features/payroll/PayrollPage'));
 const PortalPage = lazy(() =>
   import('@/features/portal').then((m) => ({ default: m.PortalPage }))
+);
+const PortalPaymentsPage = lazy(() =>
+  import('@/features/portal').then((m) => ({ default: m.PortalPaymentsPage }))
 );
 const ResourcesPage = lazy(() =>
   import('@/features/resources').then((m) => ({ default: m.ResourcesPage }))
@@ -293,8 +308,16 @@ const CapacityPlanningPage = lazy(() =>
     default: m.CapacityPlanningPage,
   }))
 );
+const ResourceLevelingPage = lazy(() =>
+  import('@/features/portfolio/ResourceLevelingPage').then((m) => ({
+    default: m.ResourceLevelingPage,
+  }))
+);
 const ContractsPage = lazy(() =>
   import('@/features/contracts').then((m) => ({ default: m.ContractsPage }))
+);
+const ProgressClaimDetailPage = lazy(() =>
+  import('@/features/contracts').then((m) => ({ default: m.ProgressClaimDetailPage }))
 );
 const CRMPage = lazy(() =>
   import('@/features/crm').then((m) => ({ default: m.CRMPage }))
@@ -377,6 +400,9 @@ const VariationsPage = lazy(() =>
 const ScheduleAdvancedPage = lazy(() =>
   import('@/features/schedule-advanced').then((m) => ({ default: m.ScheduleAdvancedPage }))
 );
+const TaktSchedulePage = lazy(() =>
+  import('@/features/schedule-advanced').then((m) => ({ default: m.TaktSchedulePage }))
+);
 const HSEAdvancedPage = lazy(() =>
   import('@/features/hse-advanced').then((m) => ({ default: m.HSEAdvancedPage }))
 );
@@ -391,6 +417,9 @@ const SupplierCatalogsPage = lazy(() =>
 );
 const BIDashboardsPage = lazy(() =>
   import('@/features/bi-dashboards').then((m) => ({ default: m.BIDashboardsPage }))
+);
+const ProjectControlsPage = lazy(() =>
+  import('@/features/project-controls').then((m) => ({ default: m.ProjectControlsPage }))
 );
 // v4.1 — three additional P1 Slice-1 features land behind dedicated routes
 // (Assembly Library was already eagerly imported by the assemblies feature
@@ -452,6 +481,9 @@ const LoginPageNext = lazy(() =>
 );
 const QuickEstimatePage = lazy(() =>
   import('@/features/ai/QuickEstimatePage').then((m) => ({ default: m.QuickEstimatePage }))
+);
+const AiEstimatorPage = lazy(() =>
+  import('@/features/ai-estimator/AiEstimatorPage').then((m) => ({ default: m.AiEstimatorPage }))
 );
 
 // Rarely-visited or heavy secondary pages — moved out of the initial
@@ -561,7 +593,14 @@ function GlobalShortcuts() {
 
   const openGlobalSearch = useGlobalSearchStore((s) => s.openModal);
   const toggleGlobalSearch = useGlobalSearchStore((s) => s.toggleModal);
+  const closeGlobalSearch = useGlobalSearchStore((s) => s.closeModal);
 
+  // The command palette (Ctrl+K, local state) and the global semantic search
+  // modal (Ctrl+Shift+K, zustand) are two separate launcher surfaces that both
+  // render at z-[60]. The palette uses createPortal to document.body and sits
+  // later in the DOM, so when both are open it paints on top of the search
+  // modal. Keep them mutually exclusive: opening one closes the other in both
+  // directions.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const mod = e.ctrlKey || e.metaKey;
@@ -575,6 +614,12 @@ function GlobalShortcuts() {
       // estimators can trigger semantic search while editing a BOQ row.
       if (mod && e.shiftKey && (e.key === 'K' || e.key === 'k')) {
         e.preventDefault();
+        // If the search is currently closed it is about to open, so close the
+        // command palette to keep the two launchers mutually exclusive. Read
+        // the live store state since toggleModal() does not return the result.
+        if (!useGlobalSearchStore.getState().open) {
+          setPaletteOpen(false);
+        }
         toggleGlobalSearch();
         return;
       }
@@ -583,16 +628,23 @@ function GlobalShortcuts() {
 
       if (mod && e.key === 'k') {
         e.preventDefault();
-        setPaletteOpen((prev) => !prev);
+        setPaletteOpen((prev) => {
+          const next = !prev;
+          // Opening the palette closes the global search modal.
+          if (next) closeGlobalSearch();
+          return next;
+        });
       }
       if (e.key === '/' && !mod) {
         e.preventDefault();
+        // Opening the palette closes the global search modal.
+        closeGlobalSearch();
         setPaletteOpen(true);
       }
     };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
-  }, [toggleGlobalSearch, openGlobalSearch]);
+  }, [toggleGlobalSearch, openGlobalSearch, closeGlobalSearch]);
 
   return (
     <>
@@ -715,6 +767,11 @@ export default function App() {
 
   return (
     <Suspense fallback={<LoadingScreen />}>
+      {/* Route-transition pending feedback: under v7_startTransition the
+          old page stays on screen while a lazy chunk loads, so this binder
+          drives the top progress bar + sidebar row spinner for the gap
+          between history push and location commit (navigationProgress.ts). */}
+      <NavigationProgress />
       <OfflineBanner />
       {isAuthenticated && <GlobalShortcuts />}
       {/* First-run product tour — 8-step spotlight walk-through. Always
@@ -742,21 +799,33 @@ export default function App() {
         {/* Public buyer-portal landing page — magic-link auth only, no app shell */}
         <Route path="/buyer-portal/:token" element={<BuyerPortalPage />} />
 
+        {/* Public subcontractor payment portal — magic-link session, no app
+            shell. ?token=<magic-link> deep-links straight to the submit form
+            after auth; a return visit reuses the stored session token. */}
+        <Route path="/portal/payments" element={<PortalPaymentsPage />} />
+
         {/* Field-worker mobile shell — bottom-nav layout, no desktop sidebar.
-            Skeleton route gated behind VITE_FIELD_PILOT until the pilot adds
-            the `/field/{token}` PIN entry and the four tab bodies. Off by
-            default so the placeholder shell is never reachable in a normal
-            build. See docs/architecture/FIELD_WORKER_MOBILE_DESIGN.md */}
-        {import.meta.env.VITE_FIELD_PILOT === '1' && (
-          <Route
-            path="/field"
-            element={
-              <Suspense fallback={<LoadingScreen />}>
-                <FieldShellPage />
-              </Suspense>
-            }
-          />
-        )}
+            `/field/{token}` is the SMS magic-link PIN-redemption screen; it
+            consumes the link and routes to `/field`, the four-tab shell.
+            Both are session-driven (no JWT) and degrade gracefully to a
+            signed-out hint when no field session is present.
+            See docs/architecture/FIELD_WORKER_MOBILE_DESIGN.md */}
+        <Route
+          path="/field/:token"
+          element={
+            <Suspense fallback={<LoadingScreen />}>
+              <FieldAuthPage />
+            </Suspense>
+          }
+        />
+        <Route
+          path="/field"
+          element={
+            <Suspense fallback={<LoadingScreen />}>
+              <FieldShellPage />
+            </Suspense>
+          }
+        />
 
         {/* //// NEOFFICE PATCH — Frappe-embedded auth bypass (4 routes).
             In embedded mode the user is already authenticated by Frappe,
@@ -799,6 +868,7 @@ export default function App() {
         />
 
         <Route path="/ai-estimate" element={<P title="AI Quick Estimate"><QuickEstimatePage /></P>} />
+        <Route path="/ai-estimator" element={<P title="AI Estimate Builder"><AiEstimatorPage /></P>} />
         <Route path="/ai-agents" element={<P title="AI Agents"><AgentsPage /></P>} />
         <Route path="/advisor" element={<P title="AI Cost Advisor"><AdvisorPage /></P>} />
         <Route path="/chat" element={<P title="AI Chat"><ERPChatPage /></P>} />
@@ -814,6 +884,8 @@ export default function App() {
             "quantity-rules" segment isn't swallowed as a UUID model id. */}
         <Route path="/bim/quantity-rules" element={<Navigate to="/bim/rules" replace />} />
         <Route path="/clash" element={<P title="Clash Detection"><ClashDetectionPage /></P>} />
+        <Route path="/clash/profiles" element={<P title="Clash Profiles"><ClashProfileManager /></P>} />
+        <Route path="/projects/:projectId/clash/profiles" element={<P title="Clash Profiles"><ClashProfileManager /></P>} />
         <Route path="/coordination" element={<P title="Model Coordination"><CoordinationHubPage /></P>} />
         <Route path="/assets" element={<P title="Asset Register"><AssetsPage /></P>} />
         <Route path="/bim/:modelId" element={<P title="BIM Viewer"><BIMPage /></P>} />
@@ -892,6 +964,7 @@ export default function App() {
         <Route path="/markups" element={<P title="Markups"><MarkupsPage /></P>} />
         <Route path="/markups/compare" element={<P title="Compare Revisions"><PdfComparePage /></P>} />
         <Route path="/punchlist" element={<P title="Punch List"><PunchListPage /></P>} />
+        <Route path="/closeout" element={<P title="Handover & Closeout"><CloseoutPage /></P>} />
         <Route path="/field-reports" element={<P title="Field Reports"><FieldReportsPage /></P>} />
 
         <Route path="/finance" element={<P title="Finance"><FinancePage /></P>} />
@@ -923,6 +996,8 @@ export default function App() {
         <Route path="/inspections" element={<P title="Inspections"><InspectionsPage /></P>} />
         <Route path="/projects/:projectId/ncr" element={<P title="NCR"><NCRPage /></P>} />
         <Route path="/ncr" element={<P title="NCR"><NCRPage /></P>} />
+        <Route path="/projects/:projectId/moc" element={<P title="Management of Change"><MoCPage /></P>} />
+        <Route path="/moc" element={<P title="Management of Change"><MoCPage /></P>} />
 
         <Route path="/users" element={<P title="User Management"><UserManagementPage /></P>} />
         <Route path="/admin/audit-log" element={<P title="Audit Log"><AuditLogPage /></P>} />
@@ -1000,6 +1075,8 @@ export default function App() {
         <Route path="/projects/:projectId/service" element={<P title="Service & Maintenance"><ServicePage /></P>} />
         <Route path="/equipment" element={<P title="Equipment & Fleet"><EquipmentPage /></P>} />
         <Route path="/projects/:projectId/equipment" element={<P title="Equipment & Fleet"><EquipmentPage /></P>} />
+        <Route path="/payroll" element={<P title="Payroll"><PayrollPage /></P>} />
+        <Route path="/projects/:projectId/payroll" element={<P title="Payroll"><PayrollPage /></P>} />
         <Route path="/daily-diary" element={<P title="Daily Diary"><DailyDiaryPage /></P>} />
         <Route path="/projects/:projectId/daily-diary" element={<P title="Daily Diary"><DailyDiaryPage /></P>} />
         <Route path="/portal" element={<P title="Subcontractor Portal"><PortalPage /></P>} />
@@ -1007,10 +1084,12 @@ export default function App() {
         <Route path="/resources" element={<P title="Resources & Crew"><ResourcesPage /></P>} />
         <Route path="/projects/:projectId/resources" element={<P title="Resources & Crew"><ResourcesPage /></P>} />
         <Route path="/portfolio/capacity" element={<P title="Capacity Planning"><CapacityPlanningPage /></P>} />
+        <Route path="/portfolio/leveling" element={<P title="Resource Leveling"><ResourceLevelingPage /></P>} />
 
         {/* 18-Modules Wave — Commercial */}
         <Route path="/contracts" element={<P title="Contracts"><ContractsPage /></P>} />
         <Route path="/projects/:projectId/contracts" element={<P title="Contracts"><ContractsPage /></P>} />
+        <Route path="/projects/:projectId/contracts/claims/:claimId" element={<P title="Progress Claim"><ProgressClaimDetailPage /></P>} />
         <Route path="/subcontractors" element={<P title="Subcontractors"><SubcontractorsPage /></P>} />
         <Route path="/projects/:projectId/subcontractors" element={<P title="Subcontractors"><SubcontractorsPage /></P>} />
         <Route path="/bid-management" element={<P title="Bid Management"><BidManagementPage /></P>} />
@@ -1057,6 +1136,8 @@ export default function App() {
         {/* 18-Modules Wave — Schedule & Quality */}
         <Route path="/schedule-advanced" element={<P title="Advanced Schedule"><ScheduleAdvancedPage /></P>} />
         <Route path="/projects/:projectId/schedule-advanced" element={<P title="Advanced Schedule"><ScheduleAdvancedPage /></P>} />
+        <Route path="/takt" element={<P title="Takt Planning"><TaktSchedulePage /></P>} />
+        <Route path="/projects/:projectId/takt" element={<P title="Takt Planning"><TaktSchedulePage /></P>} />
         <Route path="/qms" element={<P title="Quality Management"><QMSPage /></P>} />
         <Route path="/projects/:projectId/qms" element={<P title="Quality Management"><QMSPage /></P>} />
         <Route path="/hse-advanced" element={<P title="HSE Management"><HSEAdvancedPage /></P>} />
@@ -1065,6 +1146,8 @@ export default function App() {
         <Route path="/projects/:projectId/carbon" element={<P title="Carbon & ESG"><CarbonPage /></P>} />
         <Route path="/bi-dashboards" element={<P title="BI Dashboards"><BIDashboardsPage /></P>} />
         <Route path="/projects/:projectId/bi-dashboards" element={<P title="BI Dashboards"><BIDashboardsPage /></P>} />
+        <Route path="/project-controls" element={<P title="Project Controls"><ProjectControlsPage /></P>} />
+        <Route path="/projects/:projectId/project-controls" element={<P title="Project Controls"><ProjectControlsPage /></P>} />
 
         {/* Convenience route aliases — redirect to canonical paths */}
         {/* `/dashboard` renders DashboardPage directly. The earlier alias

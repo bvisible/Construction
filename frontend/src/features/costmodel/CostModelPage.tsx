@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useEffect, useRef, memo } from 'react';
+import { useState, useMemo, useCallback, useEffect, useRef, memo, Fragment } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -28,7 +28,8 @@ import {
   Loader2,
   Network,
 } from 'lucide-react';
-import { Card, CardHeader, CardContent, Button, Badge, EmptyState, Skeleton, Breadcrumb, InfoHint } from '@/shared/ui';
+import { Card, CardHeader, CardContent, Button, Badge, EmptyState, Skeleton, Breadcrumb, DismissibleInfo, IntroRichText } from '@/shared/ui';
+import { PageHeader } from '@/shared/ui/PageHeader';
 import { PlanningCrossLinks } from '@/features/schedule/PlanningCrossLinks';
 import { apiGet, apiPost, apiPatch } from '@/shared/lib/api';
 import { useToastStore } from '@/stores/useToastStore';
@@ -42,6 +43,7 @@ import {
 } from './api';
 import { CostBenchmark } from './CostBenchmark';
 import { CostSpinePanel } from './CostSpinePanel';
+import { BudgetLineThresholdEditor, parseThreshold } from './BudgetLineThresholdEditor';
 import { getIntlLocale } from '@/shared/lib/formatters';
 
 /* ── Types ─────────────────────────────────────────────────────────────── */
@@ -837,7 +839,7 @@ const EVMDashboard = memo(function EVMDashboard({
               <p className="text-xs leading-relaxed text-amber-700 dark:text-amber-400/80">
                 {t('costmodel.spi_capped_hint', {
                   defaultValue:
-                    'SPI is indicative only — the project schedule has barely started, so Planned Value is approximate and the index was clamped to a safe range.',
+                    'SPI is indicative only - the project schedule has barely started, so Planned Value is approximate and the index was clamped to a safe range.',
                 })}
               </p>
             </div>
@@ -1091,7 +1093,8 @@ function BudgetLinesEditor({
 
             if (isEditing && editForm) {
               return (
-                <tr key={line.id} className="bg-oe-blue-subtle/10">
+                <Fragment key={line.id}>
+                <tr className="bg-oe-blue-subtle/10">
                   <td className="py-2 pr-4">
                     <input
                       value={editForm.category}
@@ -1177,6 +1180,15 @@ function BudgetLinesEditor({
                     </div>
                   </td>
                 </tr>
+                <tr className="bg-oe-blue-subtle/10">
+                  <td colSpan={7} className="px-4 pb-3">
+                    <BudgetLineThresholdEditor
+                      lineId={line.id}
+                      initialThresholdPct={line.overrun_alert_threshold_pct}
+                    />
+                  </td>
+                </tr>
+                </Fragment>
               );
             }
 
@@ -1187,7 +1199,17 @@ function BudgetLinesEditor({
                 onDoubleClick={() => startEditing(line)}
               >
                 <td className="py-3.5 pr-4 font-medium text-content-primary">
-                  {line.category}
+                  <span className="flex items-center gap-1.5">
+                    {line.category}
+                    {parseThreshold(line.overrun_alert_threshold_pct) > 0 && (
+                      <Badge variant="warning" size="sm">
+                        {t('costmodel.overrun_badge', {
+                          defaultValue: 'Alert @ +{{pct}}%',
+                          pct: parseThreshold(line.overrun_alert_threshold_pct),
+                        })}
+                      </Badge>
+                    )}
+                  </span>
                 </td>
                 <td className="py-3.5 px-4 text-content-secondary text-xs">
                   {line.description || '\u2014'}
@@ -1859,7 +1881,7 @@ function MonteCarloPanel({ projectId, currency }: { projectId: string; currency:
                             isP95 ? 'bg-semantic-error' : isP80 ? 'bg-semantic-warning' : isP50 ? 'bg-oe-blue' : 'bg-oe-blue/30'
                           }`}
                           style={{ height: `${Math.max(2, pct)}%` }}
-                          title={`${fmt(bin.from)} — ${fmt(bin.to)}: ${bin.count} iterations`}
+                          title={`${fmt(bin.from)} - ${fmt(bin.to)}: ${bin.count} iterations`}
                         />
                       </div>
                     );
@@ -2469,6 +2491,7 @@ const ProjectCard = memo(function ProjectCard({
 
 export function CostModelPage() {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   // The user can explicitly return to the picker; once they do we stop
   // auto-jumping to the active project for the rest of the visit.
@@ -2549,20 +2572,34 @@ export function CostModelPage() {
   // Project detail view with 5D dashboard
   if (selectedProject) {
     return (
-      <div className="w-full animate-fade-in">
-        <PlanningCrossLinks active="5d" />
+      <div className="space-y-5 animate-fade-in">
+        <Breadcrumb
+          items={[
+            { label: selectedProject.name, to: `/projects/${selectedProject.id}` },
+            { label: t('nav.5d_cost_model', { defaultValue: '5D Cost Model' }) },
+          ]}
+        />
+        {/* Canonical top block — the module name + icon are shown by the
+            global top app bar, the project name lives in the breadcrumb, so
+            no visible in-page H1. The header carries the subtitle + the
+            back-to-portfolio action. */}
+        <PageHeader
+          srTitle={selectedProject.name}
+          subtitle={t('costmodel.dashboard_subtitle', '5D Cost Model: budget tracking, EVM, S-curves, and forecasting')}
+          actions={
+            <Button variant="secondary" size="sm" icon={<ArrowLeft size={14} />} onClick={handleBack}>
+              {t('costmodel.scope_view_all', { defaultValue: 'View all projects' })}
+            </Button>
+          }
+        />
 
-        <button
-          onClick={handleBack}
-          className="mb-4 flex items-center gap-1.5 text-sm text-content-secondary hover:text-content-primary transition-colors"
-        >
-          <ArrowLeft size={14} />
-          {t('costmodel.back_to_projects', 'Back to projects')}
-        </button>
+        {/* Cross-module navigation — below the header to keep the canonical
+            breadcrumb > header > content order. */}
+        <PlanningCrossLinks active="5d" />
 
         {/* Scope indicator — single project */}
         <div
-          className="mb-4 flex items-center gap-2 rounded-lg border border-oe-blue/30 bg-oe-blue-subtle/40 px-3 py-2"
+          className="flex items-center gap-2 rounded-lg border border-oe-blue/30 bg-oe-blue-subtle/40 px-3 py-2"
           role="status"
           aria-live="polite"
         >
@@ -2573,25 +2610,6 @@ export function CostModelPage() {
               name: selectedProject.name,
             })}
           </span>
-          <button
-            type="button"
-            onClick={handleBack}
-            className="ml-auto text-xs font-medium text-oe-blue hover:underline"
-          >
-            {t('costmodel.scope_view_all', { defaultValue: 'View all projects' })}
-          </button>
-        </div>
-
-        <div className="mb-6 flex items-start gap-4">
-          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-oe-blue-subtle text-oe-blue-text">
-            <BarChart3 size={22} />
-          </div>
-          <div>
-            <h1 className="text-2xl font-bold text-content-primary">{selectedProject.name}</h1>
-            <p className="mt-0.5 text-sm text-content-secondary">
-              {t('costmodel.dashboard_subtitle', '5D Cost Model -- Budget tracking, EVM, S-curves, and forecasting')}
-            </p>
-          </div>
         </div>
 
         <FiveDDashboard project={selectedProject} />
@@ -2601,37 +2619,57 @@ export function CostModelPage() {
 
   // Project selector view
   return (
-    <div className="w-full animate-fade-in">
-      <Breadcrumb items={[{ label: t('nav.dashboard', 'Dashboard'), to: '/' }, { label: t('nav.costmodel', { defaultValue: '5D Cost Model' }) }]} className="mb-4" />
+    <div className="space-y-5 animate-fade-in">
+      <Breadcrumb items={[{ label: t('nav.5d_cost_model', { defaultValue: '5D Cost Model' }) }]} />
 
-      {/* Cross-module navigation — connects the planning value chain */}
+      {/* Canonical top block - module name + icon come from the global top
+          bar; the page renders only its subtitle. */}
+      <PageHeader
+        srTitle={t('costmodel.title', '5D Cost Model')}
+        subtitle={t(
+          'costmodel.hero_desc',
+          'Earned Value Management with S-curves, cash flow forecasting, Monte Carlo risk simulation, and what-if scenario analysis. Transform your BOQ estimate into a living cost control dashboard.',
+        )}
+      />
+
+      {/* Cross-module navigation strip renders below the header (canon S4) */}
       <PlanningCrossLinks active="5d" />
 
-      {/* Hero header */}
-      <div className="mb-4">
-        <h1 className="text-2xl font-bold text-content-primary">
-          {t('costmodel.title', '5D Cost Model')}
-        </h1>
-        <p className="mt-2 text-sm text-content-secondary max-w-2xl leading-relaxed">
-          {t(
-            'costmodel.hero_desc',
-            'Earned Value Management with S-curves, cash flow forecasting, Monte Carlo risk simulation, and what-if scenario analysis. Transform your BOQ estimate into a living cost control dashboard.',
-          )}
-        </p>
-      </div>
-
       {/* How the 5D model connects to the rest of the platform */}
-      <InfoHint
-        className="mb-6"
-        text={t('costmodel.what_is_5d', {
-          defaultValue:
-            '5D = 3D geometry + 4D schedule time + cost. The budget is generated from your BOQ, planned value comes from the 4D Schedule, and SPI/CPI earned-value metrics need activity progress to be tracked there. Monte Carlo and What-If results inform contingency entries in the Risk Register. Workflow: BOQ → Generate Budget → track actuals → snapshot periodically → analyse (EVM / S-curve / forecast).',
+      <DismissibleInfo
+        storageKey="5d"
+        title={t('costmodel.intro_title', {
+          defaultValue: 'See where the money is really going',
         })}
-      />
+        more={
+          t('costmodel.intro_more', { defaultValue: '' })
+            ? <IntroRichText text={t('costmodel.intro_more')} />
+            : undefined
+        }
+        links={[
+          {
+            label: t('nav.boq', { defaultValue: 'Bill of Quantities' }),
+            onClick: () => navigate('/boq'),
+          },
+          {
+            label: t('finance.title', { defaultValue: 'Finance' }),
+            onClick: () => navigate('/finance'),
+          },
+          {
+            label: t('nav.schedule', { defaultValue: '4D Schedule' }),
+            onClick: () => navigate('/schedule'),
+          },
+        ]}
+      >
+        {t('costmodel.intro_body', {
+          defaultValue:
+            'Track a project against its budget with an earned-value S-curve of planned, earned and actual cost, category breakdowns of planned, committed, actual and forecast, and what-if scenarios. It draws on the BOQ, schedule progress and finance data, and can generate the control-account cost spine that ties them together.',
+        })}
+      </DismissibleInfo>
 
       {/* Feature cards grid -- always visible as intro */}
       {(!projects || projects.length === 0) && !isLoading && (
-        <div className="mb-8">
+        <div>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {featureCards.map((feat) => (
               <div key={feat.title} className="rounded-xl border border-border-light bg-surface-primary p-5 transition-colors hover:bg-surface-secondary/40">
@@ -2678,24 +2716,24 @@ export function CostModelPage() {
         <>
           {/* Scope indicator — all projects aggregated view */}
           <div
-            className="mb-6 flex items-center gap-2 rounded-lg border border-border-light bg-surface-secondary/60 px-3 py-2"
+            className="flex items-center gap-2 rounded-lg border border-oe-blue/30 bg-oe-blue-subtle/30 px-3 py-2"
             role="status"
             aria-live="polite"
           >
-            <BarChart3 size={14} className="text-content-secondary shrink-0" />
+            <BarChart3 size={14} className="text-oe-blue shrink-0" />
             <span className="text-xs font-medium text-content-primary">
               {t('costmodel.scope_all_projects', {
                 defaultValue: 'Viewing all projects ({{count}})',
                 count: projects.length,
               })}
             </span>
-            <span className="text-2xs text-content-tertiary">
+            <span className="text-2xs text-content-secondary">
               {t('costmodel.scope_all_hint', { defaultValue: 'Select a project below to drill into its cost model.' })}
             </span>
           </div>
 
           {/* Compact feature strip when projects exist */}
-          <div className="mb-6 flex flex-wrap gap-2">
+          <div className="flex flex-wrap gap-2">
             {featureCards.map((feat) => (
               <span key={feat.title} className="inline-flex items-center gap-1.5 rounded-lg bg-surface-secondary px-3 py-1.5 text-2xs font-medium text-content-secondary">
                 <span className={`flex h-5 w-5 items-center justify-center rounded ${feat.color}`}>

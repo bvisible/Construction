@@ -3,8 +3,8 @@ import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 // lucide-react icons used by sub-components (BOQToolbar, BOQGrid, etc.) — none needed directly here
-import { Database, Download, ExternalLink, X, Sparkles, AlertTriangle as WarnTriangle, Lock, Copy, Wallet, Keyboard, GitCompare, RefreshCw } from 'lucide-react';
-import { Button, Badge, Breadcrumb, ModuleHelpButton, ConfirmDialog } from '@/shared/ui';
+import { Database, Download, ExternalLink, X, Sparkles, AlertTriangle as WarnTriangle, Lock, Copy, Wallet, Keyboard, GitCompare, RefreshCw, ShieldCheck } from 'lucide-react';
+import { Button, Badge, Breadcrumb, ModuleHelpButton, ConfirmDialog, DismissibleInfo, IntroRichText } from '@/shared/ui';
 import { useConfirm } from '@/shared/hooks/useConfirm';
 import { useProgressStore } from '@/shared/ui/GlobalProgress';
 import { apiGet, apiPost, triggerDownload, extractErrorMessageFromBody } from '@/shared/lib/api';
@@ -317,7 +317,7 @@ export function BOQEditorPage() {
           }),
           message: t('boq.fx_rate_save_failed_hint', {
             defaultValue:
-              'The rate is applied on this device but was not saved to the shared project — you may not have edit access. Ask the project owner to add it under Settings → FX rates.',
+              'The rate is applied on this device but was not saved to the shared project - you may not have edit access. Ask the project owner to add it under Settings → FX rates.',
           }),
         });
       }
@@ -471,7 +471,7 @@ export function BOQEditorPage() {
           }),
           message: t('boq.reuse_code_msg', {
             defaultValue:
-              'Linked instance created — {{count}} positions share this code. Its quantity is independently editable.',
+              'Linked instance created - {{count}} positions share this code. Its quantity is independently editable.',
             count: sharedCount,
           }),
         });
@@ -719,7 +719,7 @@ export function BOQEditorPage() {
           count: result.renumbered,
         }),
         message: t('boq.renumber_done_hint', {
-          defaultValue: 'Order preserved — only ordinals were rewritten. Undo with Ctrl+Z is not supported for renumber.',
+          defaultValue: 'Order preserved - only ordinals were rewritten. Undo with Ctrl+Z is not supported for renumber.',
         }),
       });
     },
@@ -1861,7 +1861,7 @@ export function BOQEditorPage() {
       },
       {
         id: 'tip_descriptions',
-        text: t('boq.tip_autocomplete', { defaultValue: 'Fill in descriptions for all positions — start typing to see suggestions from the cost database' }),
+        text: t('boq.tip_autocomplete', { defaultValue: 'Fill in descriptions for all positions - start typing to see suggestions from the cost database' }),
         condition: 'has_empty_descriptions',
       },
     ];
@@ -2450,7 +2450,7 @@ export function BOQEditorPage() {
       if (errors.length > 0) {
         parts.push(t('boq.validation_errors', { defaultValue: '{{count}} errors found', count: errors.length }));
         // Show first 2 error messages
-        errors.slice(0, 2).forEach(e => parts.push(`  — ${e.message}`));
+        errors.slice(0, 2).forEach(e => parts.push(`  - ${e.message}`));
       }
       if (warnings.length > 0) {
         parts.push(t('boq.validation_warnings', { defaultValue: '{{count}} warnings', count: warnings.length }));
@@ -2531,7 +2531,7 @@ export function BOQEditorPage() {
           ? t('boq.recalculate_complete', { defaultValue: 'Rates updated' })
           : t('boq.recalculate_no_changes', { defaultValue: 'No changes needed' }),
         message: parts.join('. ') || t('boq.recalculate_all_manual', {
-          defaultValue: 'All positions use manual rates — add resources from cost database to enable automatic rate calculation.',
+          defaultValue: 'All positions use manual rates - add resources from cost database to enable automatic rate calculation.',
         }),
       });
       invalidateAll();
@@ -3361,7 +3361,7 @@ export function BOQEditorPage() {
           addToast({
             type: 'info',
             title: t('boq.ai_classification', { defaultValue: 'AI Classification' }),
-            message: `${top.standard.toUpperCase()}: ${top.code} — ${top.label} (${Math.round(top.confidence * 100)}%)`,
+            message: `${top.standard.toUpperCase()}: ${top.code} - ${top.label} (${Math.round(top.confidence * 100)}%)`,
           });
           updateMutation.mutate({
             id: positionId,
@@ -3562,7 +3562,7 @@ export function BOQEditorPage() {
         title: t('boq.import_started', { defaultValue: 'Importing {{name}}…', name: file.name }),
         message: isGaeb
           ? t('boq.import_started_gaeb_hint', {
-              defaultValue: 'Parsing GAEB XML — namespace-agnostic, X81/X83/X84 supported.',
+              defaultValue: 'Parsing GAEB XML - namespace-agnostic, X81/X83/X84 supported.',
             })
           : t('boq.import_started_hint', {
               defaultValue: 'Large files (PDF / CAD / 1000+ rows) may take up to 60 seconds.',
@@ -3635,7 +3635,7 @@ export function BOQEditorPage() {
           title: t('boq.import_failed', { defaultValue: 'Import failed' }),
           message: isTimeout
             ? t('boq.import_timeout', {
-                defaultValue: 'Server did not respond within 90 seconds. The file may be too large — try splitting it.',
+                defaultValue: 'Server did not respond within 90 seconds. The file may be too large - try splitting it.',
               })
             : err instanceof Error ? err.message : 'Unknown error',
         });
@@ -3899,6 +3899,27 @@ export function BOQEditorPage() {
         ]}
       />
 
+      {/* ── Info card ─────────────────────────────────────────────────────
+          Full-bleed grid editor (style guide §1 viewer exception): the
+          canonical DismissibleInfo lives in the header zone above the grid,
+          never over it. */}
+      <DismissibleInfo
+        storageKey="boq-editor"
+        className="mb-4"
+        title={t('boq_editor.intro_title', { defaultValue: 'Edit the estimate without losing the thread' })}
+        more={t('boq_editor.intro_more', { defaultValue: '' }) ? <IntroRichText text={t('boq_editor.intro_more')} /> : undefined}
+        links={[
+          { label: t('nav.assemblies', { defaultValue: 'Assemblies' }), onClick: () => navigate('/assemblies') },
+          { label: t('nav.costs', { defaultValue: 'Cost Database' }), onClick: () => navigate('/costs') },
+          { label: t('nav.validation', { defaultValue: 'Validation' }), onClick: () => navigate('/validation') },
+        ]}
+      >
+        {t('boq_editor.intro_body', {
+          defaultValue:
+            'This is the working grid where you add, renumber and price positions in a hierarchy, paste from Excel, apply assemblies and link rows to cost-database items or BIM elements. Changes recompute the total instantly and stay available to validation and the cost rollup.',
+        })}
+      </DismissibleInfo>
+
       {/* ── Header bar ─────────────────────────────────────────────────── */}
       <div className="mb-4 space-y-2">
         <div className="flex items-center gap-3 min-w-0">
@@ -3955,6 +3976,23 @@ export function BOQEditorPage() {
             >
               <RefreshCw size={14} className="mr-1" />
               {t('boq.model_review_btn', { defaultValue: 'Model sync' })}
+            </Button>
+            {/* Deep link OUT to the Validation dashboard, carrying this BOQ and
+                its project so the target lands pre-selected (2 clicks to a
+                result). The dashboard persists a server-side report; the
+                toolbar's inline Validate keeps the quick in-grid check. */}
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() =>
+                navigate(`/validation?boq_id=${boq.id}&project=${boq.project_id}`)
+              }
+              title={t('boq.validate_dashboard_hint', {
+                defaultValue: 'Open the Validation dashboard for this BOQ',
+              })}
+            >
+              <ShieldCheck size={14} className="mr-1" />
+              {t('boq.validate_dashboard_btn', { defaultValue: 'Validate' })}
             </Button>
             <Button
               variant="ghost"
@@ -4580,7 +4618,7 @@ export function BOQEditorPage() {
               className="w-full rounded-lg border border-border-light bg-surface-primary px-3 py-2 text-sm text-content-primary focus:outline-none focus:ring-2 focus:ring-oe-blue/30 focus:border-oe-blue"
             >
               <option value="">
-                {t('boq.section_parent_top', { defaultValue: '— Top level (no parent) —' })}
+                {t('boq.section_parent_top', { defaultValue: '- Top level (no parent) -' })}
               </option>
               {sectionParentChoices.map((c) => (
                 <option key={c.id} value={c.id} disabled={c.disabled}>

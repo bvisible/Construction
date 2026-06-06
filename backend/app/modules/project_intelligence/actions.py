@@ -1,4 +1,4 @@
-"""‌⁠‍Action executor — triggers operations in other modules.
+"""‌⁠‍Action executor - triggers operations in other modules.
 
 Each action_id maps to a definition describing what it does,
 which module it targets, and whether it requires confirmation.
@@ -240,7 +240,7 @@ async def _run_validation(
     Calls ``ValidationModuleService.run_validation`` with the standard
     ``din276`` + ``boq_quality`` rule sets. Persists a real report and
     returns its id + pass/warning/error counts. Never falls back to a
-    simple redirect — if the service fails, we surface the error.
+    simple redirect - if the service fails, we surface the error.
     """
     try:
         boq = await _find_project_boq(session, project_id)
@@ -336,7 +336,7 @@ async def _match_cwicr_prices(
 
         for pos in list(boq.positions):
             # Only consider leaf positions (rows that actually carry a price).
-            # Section headers typically have empty unit/description — skip.
+            # Section headers typically have empty unit/description - skip.
             if not pos.description or (pos.unit or "").strip() == "":
                 continue
             if not _is_zero_or_blank(pos.unit_rate):
@@ -368,7 +368,10 @@ async def _match_cwicr_prices(
             try:
                 qty_dec = Decimal(str(pos.quantity or "0"))
             except (InvalidOperation, ValueError):
-                qty_dec = Decimal("0")
+                # Unparseable quantity: don't silently coerce to 0 and overwrite
+                # the line (which would corrupt total -> "0"). Skip it instead.
+                count_skipped += 1
+                continue
 
             pos.unit_rate = str(rate_dec)
             pos.total = str(qty_dec * rate_dec)

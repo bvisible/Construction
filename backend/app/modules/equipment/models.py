@@ -1,16 +1,16 @@
 """‌⁠‍Equipment & Fleet ORM models.
 
 Tables:
-    oe_equipment_type                   — Catalog of equipment types
-    oe_equipment_equipment              — Equipment units
-    oe_equipment_telemetry              — Time-series telemetry readings
-    oe_equipment_maintenance_schedule   — Maintenance intervals & triggers
-    oe_equipment_work_order             — Maintenance work orders
-    oe_equipment_inspection             — Periodic inspections & certificates
-    oe_equipment_rental                 — Internal project rentals
-    oe_equipment_fuel_log               — Fuel fills with cost
-    oe_equipment_parts_log              — Replaced parts records
-    oe_equipment_damage_report          — Damage reports with auto WO
+    oe_equipment_type                   - Catalog of equipment types
+    oe_equipment_equipment              - Equipment units
+    oe_equipment_telemetry              - Time-series telemetry readings
+    oe_equipment_maintenance_schedule   - Maintenance intervals & triggers
+    oe_equipment_work_order             - Maintenance work orders
+    oe_equipment_inspection             - Periodic inspections & certificates
+    oe_equipment_rental                 - Internal project rentals
+    oe_equipment_fuel_log               - Fuel fills with cost
+    oe_equipment_parts_log              - Replaced parts records
+    oe_equipment_damage_report          - Damage reports with auto WO
 """
 
 from __future__ import annotations
@@ -327,6 +327,10 @@ class EquipmentRental(Base):
         server_default="",
     )
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
+    # Set when the rental billing has been computed and posted to the cost spine
+    # on return (Gap C). NULL means the rental has not yet been billed. Stored as
+    # an ISO timestamp string for parity with the other date columns here.
+    billing_calculated_at: Mapped[str | None] = mapped_column(String(40), nullable=True)
     metadata_: Mapped[dict] = mapped_column(  # type: ignore[assignment]
         "metadata",
         JSON,

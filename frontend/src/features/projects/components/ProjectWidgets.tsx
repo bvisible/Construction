@@ -919,7 +919,7 @@ export function PhotoStripWidget({ projectId }: { projectId: string }) {
       ) : !data || data.length === 0 ? (
         <WidgetEmpty
           message={t('project.widget.photo-strip.empty', {
-            defaultValue: 'No photos yet — upload from the Photos tab.',
+            defaultValue: 'No photos yet - upload from the Photos tab.',
           })}
         />
       ) : (
@@ -1199,7 +1199,7 @@ export function BudgetBurnWidget({
       ) : !data ? (
         <WidgetEmpty
           message={t('project.widget.budget-burn.empty', {
-            defaultValue: 'No budget data — connect a cost model.',
+            defaultValue: 'No budget data - connect a cost model.',
           })}
         />
       ) : (

@@ -244,6 +244,65 @@ export interface EquipmentDashboard {
   last_telemetry_at?: string | null;
 }
 
+/* ── Predictive maintenance / fleet analytics ──────────────────────────── */
+
+export type HealthBand = 'green' | 'amber' | 'red';
+export type MaintenanceTrend = 'improving' | 'stable' | 'deteriorating';
+
+export interface HealthAnomaly {
+  recorded_at: string;
+  metric: string;
+  value: number;
+  z_score: number;
+  reason: string;
+}
+
+export interface HealthAnalytics {
+  equipment_id: string;
+  health_score: number;
+  band: HealthBand;
+  anomaly_detected: boolean;
+  maintenance_trend: MaintenanceTrend;
+  reasons: string[];
+  anomalies: HealthAnomaly[];
+  sample_count: number;
+}
+
+export interface FailureForecast {
+  equipment_id: string;
+  predicted_failure_date?: string | null;
+  failure_confidence: number;
+  days_to_failure?: number | null;
+  basis: string;
+  daily_usage: number;
+}
+
+export interface FleetUnderutilized {
+  equipment_id: string;
+  code: string;
+  name: string;
+  utilization_pct: number;
+  estimated_idle_days: number;
+  estimated_monthly_saving: string;
+}
+
+export interface FleetMaintenanceBundle {
+  label: string;
+  equipment_ids: string[];
+  codes: string[];
+  unit_count: number;
+}
+
+export interface FleetOptimization {
+  total_units: number;
+  target_utilization_pct: number;
+  window_days: number;
+  underutilized_count: number;
+  estimated_monthly_savings: string;
+  underutilized: FleetUnderutilized[];
+  maintenance_bundles: FleetMaintenanceBundle[];
+}
+
 /* ── Equipment CRUD ────────────────────────────────────────────────────── */
 
 export function listEquipment(params?: {
@@ -284,6 +343,33 @@ export function deleteEquipment(id: string): Promise<void> {
 
 export function getEquipmentDashboard(id: string): Promise<EquipmentDashboard> {
   return apiGet<EquipmentDashboard>(`/v1/equipment/equipment/${id}/dashboard`);
+}
+
+export function getHealthAnalytics(id: string): Promise<HealthAnalytics> {
+  return apiGet<HealthAnalytics>(
+    `/v1/equipment/equipment/${id}/health-analytics`,
+  );
+}
+
+export function getFailureForecast(id: string): Promise<FailureForecast> {
+  return apiGet<FailureForecast>(
+    `/v1/equipment/equipment/${id}/failure-forecast`,
+  );
+}
+
+export function getFleetOptimization(params?: {
+  target_utilization?: number;
+  window_days?: number;
+}): Promise<FleetOptimization> {
+  const qs = new URLSearchParams();
+  if (params?.target_utilization !== undefined)
+    qs.set('target_utilization', String(params.target_utilization));
+  if (params?.window_days !== undefined)
+    qs.set('window_days', String(params.window_days));
+  const q = qs.toString();
+  return apiGet<FleetOptimization>(
+    `/v1/equipment/dashboard/fleet/optimization${q ? `?${q}` : ''}`,
+  );
 }
 
 /* ── Equipment Types ──────────────────────────────────────────────────── */

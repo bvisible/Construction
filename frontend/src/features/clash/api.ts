@@ -333,6 +333,91 @@ export interface ClashDisciplinePairStat {
   open_share: number;
 }
 
+/** Item #23 — a reusable clash-run configuration template, scoped to a
+ *  project. Snapshots every engine parameter a coordinator tunes (minus
+ *  the model selection) so the same coordination policy can be relaunched
+ *  with one click. `name` is unique per project. */
+export interface ClashProfile {
+  id: string;
+  project_id: string;
+  name: string;
+  description?: string | null;
+  clash_type: ClashType;
+  ignore_same_model: boolean;
+  tolerance_m: number;
+  clearance_m: number;
+  mode: string;
+  discipline_filter: string[][] | null;
+  set_a?: ClashSelectionSet | null;
+  set_b?: ClashSelectionSet | null;
+  rules: ClashRule[];
+  spatial_grid_mm: number;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Body for POST /projects/{pid}/profiles (save a config as a profile). */
+export interface ClashProfileCreateBody {
+  name: string;
+  description?: string | null;
+  clash_type?: ClashType;
+  ignore_same_model?: boolean;
+  tolerance_m?: number;
+  clearance_m?: number;
+  mode?: string;
+  discipline_filter?: string[][] | null;
+  set_a?: ClashSelectionSet | null;
+  set_b?: ClashSelectionSet | null;
+  rules?: ClashRule[];
+  spatial_grid_mm?: number;
+}
+
+/** Body for PATCH /profiles/{id} — every field optional (partial update). */
+export type ClashProfileUpdateBody = Partial<ClashProfileCreateBody>;
+
+/** Body for POST /profiles/{id}/apply (launch a run from the profile). */
+export interface ClashProfileApplyBody {
+  model_ids: string[];
+  name?: string;
+  carry_forward?: boolean;
+}
+
+/** Item #23 — the grouping axis the run summary can be broken down by. */
+export type ClashGroupingDimension =
+  | 'discipline_pair'
+  | 'level'
+  | 'level_discipline'
+  | 'discipline_system';
+
+/** One labelled bucket in a 1-D grouping (e.g. clashes per level). */
+export interface ClashGroupCount {
+  key: string;
+  count: number;
+  open_count: number;
+}
+
+/** A discipline×discipline matrix scoped to a single storey level. */
+export interface ClashLevelDisciplineGroup {
+  level: number;
+  cells: ClashMatrixCell[];
+}
+
+/** Item #23 — multi-dimensional grouping of a run's clashes. Exactly one
+ *  payload is populated for the requested `dimension`. */
+export interface ClashGroupedSummary {
+  dimension: ClashGroupingDimension;
+  disciplines: string[];
+  matrix: ClashMatrixCell[];
+  levels: ClashGroupCount[];
+  level_disciplines: ClashLevelDisciplineGroup[];
+  systems: string[];
+  system_matrix: ClashMatrixCell[];
+  /** Whether any clash resolved a building system — lets the UI hide the
+   *  `discipline_system` option when there is nothing to show. */
+  has_system_data: boolean;
+}
+
 /** Wave A4 — KPI dashboard projection returned by GET /runs/{id}/kpi. */
 export interface ClashKpi {
   total: number;
@@ -691,4 +776,62 @@ export const clashApi = {
   /** Wave A4 — aggregate dashboard payload for the KPI tab. */
   kpi: (projectId: string, runId: string) =>
     apiGet<ClashKpi>(`/v1/clash/projects/${projectId}/runs/${runId}/kpi`),
+
+  // ── Item #23 — persistent clash profiles ──────────────────────────
+
+  /** The project's reusable clash-run profile library (newest first). */
+  listProfiles: (projectId: string) =>
+    apiGet<ClashProfile[]>(`/v1/clash/projects/${projectId}/profiles`),
+
+  /** One profile by id (404 if not in this project). */
+  getProfile: (projectId: string, profileId: string) =>
+    apiGet<ClashProfile>(
+      `/v1/clash/projects/${projectId}/profiles/${profileId}`,
+    ),
+
+  /** Save a run configuration as a named profile (409 on a dup name). */
+  createProfile: (projectId: string, body: ClashProfileCreateBody) =>
+    apiPost<ClashProfile, ClashProfileCreateBody>(
+      `/v1/clash/projects/${projectId}/profiles`,
+      body,
+    ),
+
+  /** Patch a profile in place (only supplied fields change). */
+  updateProfile: (
+    projectId: string,
+    profileId: string,
+    body: ClashProfileUpdateBody,
+  ) =>
+    apiPatch<ClashProfile>(
+      `/v1/clash/projects/${projectId}/profiles/${profileId}`,
+      body,
+    ),
+
+  /** Delete a profile from the library. */
+  deleteProfile: (projectId: string, profileId: string) =>
+    apiDelete(`/v1/clash/projects/${projectId}/profiles/${profileId}`),
+
+  /** Launch + execute a fresh clash run using the profile as a template.
+   *  Returns the completed run (same shape as createRun). */
+  applyProfile: (
+    projectId: string,
+    profileId: string,
+    body: ClashProfileApplyBody,
+  ) =>
+    apiPost<ClashRun, ClashProfileApplyBody>(
+      `/v1/clash/projects/${projectId}/profiles/${profileId}/apply`,
+      body,
+    ),
+
+  /** Item #23 — multi-dimensional grouping of a run's clashes. */
+  groupedSummary: (
+    projectId: string,
+    runId: string,
+    dimension: ClashGroupingDimension = 'discipline_pair',
+  ) => {
+    const q = new URLSearchParams({ dimension });
+    return apiGet<ClashGroupedSummary>(
+      `/v1/clash/projects/${projectId}/runs/${runId}/summary?${q.toString()}`,
+    );
+  },
 };

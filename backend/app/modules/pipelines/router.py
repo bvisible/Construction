@@ -3,7 +3,7 @@
 """‌⁠‍Pipeline Builder REST API.
 
 Auto-mounted by the module loader at ``/api/v1/pipelines`` (kebab-case of
-the ``pipelines`` directory). The wire contract is PINNED — the frontend
+the ``pipelines`` directory). The wire contract is PINNED - the frontend
 is built against it in parallel; do not deviate.
 
 Endpoints:
@@ -108,6 +108,14 @@ async def list_pipelines(
     project_id: str | None = Query(default=None),
 ) -> list[PipelineSummary]:
     """List pipelines, optionally scoped to a project."""
+    if project_id is not None:
+        try:
+            uuid.UUID(str(project_id))
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=translate("errors.project_not_found", locale=get_locale()),
+            ) from exc
     service = PipelineService(session)
     rows = await service.list(project_id=project_id, user_id=user_id)
     return [
@@ -132,7 +140,7 @@ async def create_pipeline(
     """Create a new (unpublished) pipeline.
 
     When a ``project_id`` is supplied the caller MUST have access to that
-    project — otherwise an authenticated user could bind a pipeline (and
+    project - otherwise an authenticated user could bind a pipeline (and
     every future run + node-state output of that pipeline) to a project
     they do not own (cross-tenant write IDOR).
     """
@@ -202,7 +210,7 @@ async def delete_pipeline(pipeline_id: str, session: SessionDep, user_id: Curren
 @router.post("/{pipeline_id}/run", response_model=RunAccepted)
 async def run_pipeline(
     pipeline_id: str,
-    body: RunRequest,  # noqa: ARG001 — accepted for the pinned contract.
+    body: RunRequest,  # noqa: ARG001 - accepted for the pinned contract.
     session: SessionDep,
     user_id: CurrentUserId,
 ) -> RunAccepted:

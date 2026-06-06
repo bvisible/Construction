@@ -7,10 +7,9 @@
 
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  Camera,
   Upload,
   Search,
   X,
@@ -27,8 +26,12 @@ import {
   ChevronDown,
   Image as ImageIcon,
   CheckSquare,
+  Sparkles,
+  Check,
 } from 'lucide-react';
 import { Card, Button, Badge, ConfirmDialog, EmptyState, Breadcrumb, AuthImage, SkeletonGrid } from '@/shared/ui';
+import { PageHeader } from '@/shared/ui/PageHeader';
+import { DismissibleInfo } from '@/shared/ui/DismissibleInfo';
 import { RequiresProject } from '@/shared/auth/RequiresProject';
 import { apiGet } from '@/shared/lib/api';
 import { useConfirm } from '@/shared/hooks/useConfirm';
@@ -42,8 +45,12 @@ import {
   deletePhoto,
   getPhotoFileUrl,
   getPhotoThumbUrl,
+  getCategorySuggestion,
+  isGpsFromExif,
+  isDateFromExif,
   type PhotoItem,
   type PhotoCategory,
+  type DefectSeverity,
   type PhotoFilters,
   type PhotoTimelineGroup as _PhotoTimelineGroup,
   type PhotoUpdatePayload,
@@ -62,6 +69,12 @@ const CATEGORY_COLORS: Record<PhotoCategory, string> = {
   delivery: 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300',
   safety: 'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300',
   other: 'bg-gray-100 text-gray-700 dark:bg-gray-800/60 dark:text-gray-300',
+};
+
+const SEVERITY_COLORS: Record<DefectSeverity, string> = {
+  low: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-300',
+  medium: 'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300',
+  high: 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300',
 };
 
 type ViewMode = 'grid' | 'timeline';
@@ -276,6 +289,11 @@ function Lightbox({
                   <span className="flex items-center gap-1">
                     <MapPin size={12} />
                     {photo.gps_lat.toFixed(5)}, {photo.gps_lon.toFixed(5)}
+                    {isGpsFromExif(photo) && (
+                      <span className="ml-1 text-white/40">
+                        {t('photos.gps_auto_paren', { defaultValue: '(auto, EXIF)' })}
+                      </span>
+                    )}
                   </span>
                 )}
                 <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-2xs font-medium ${CATEGORY_COLORS[photo.category]}`}>
@@ -500,14 +518,32 @@ function PhotoCard({
   selected,
   onToggleSelect,
   selectMode,
+  onAcceptSuggestion,
 }: {
   photo: PhotoItem;
   onClick: () => void;
   selected?: boolean;
   onToggleSelect?: () => void;
   selectMode?: boolean;
+  onAcceptSuggestion?: (
+    photo: PhotoItem,
+    suggestion: ReturnType<typeof getCategorySuggestion>,
+  ) => void;
 }) {
   const { t } = useTranslation();
+
+  // AI / heuristic suggestion — only surfaced when it differs from the
+  // category the user already chose (no point suggesting what's set). The
+  // suggestion is advisory: applying it is an explicit click.
+  const suggestion = getCategorySuggestion(photo);
+  const showSuggestion =
+    !selectMode && suggestion !== null && suggestion.suggested_category !== photo.category;
+  const confidencePct =
+    suggestion?.confidence != null ? Math.round(suggestion.confidence * 100) : null;
+  // Defect severity is only meaningful for a defect suggestion.
+  const severity =
+    suggestion?.suggested_category === 'defect' ? suggestion.defect_severity : null;
+  const suggestedTags = suggestion?.suggested_tags ?? [];
 
   return (
     <div
@@ -559,12 +595,103 @@ function PhotoCard({
         </div>
       )}
 
-      {/* Category badge */}
-      <div className="absolute top-2 left-2">
+      {/* Category badge + EXIF GPS cue */}
+      <div className="absolute top-2 left-2 flex items-center gap-1">
         <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-2xs font-medium backdrop-blur-sm ${CATEGORY_COLORS[photo.category]}`}>
           {t(`photos.cat_${photo.category}`, { defaultValue: photo.category })}
         </span>
+        {isGpsFromExif(photo) && photo.gps_lat != null && photo.gps_lon != null && (
+          <span
+            className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-2xs font-medium bg-black/50 text-white/90 backdrop-blur-sm"
+            title={t('photos.gps_exif_hint', {
+              defaultValue: 'Location read from photo EXIF: {{lat}}, {{lon}}',
+              lat: photo.gps_lat.toFixed(5),
+              lon: photo.gps_lon.toFixed(5),
+            })}
+          >
+            <MapPin size={10} />
+            {t('photos.gps_auto', { defaultValue: 'GPS' })}
+          </span>
+        )}
+        {isDateFromExif(photo) && photo.taken_at && (
+          <span
+            className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-2xs font-medium bg-black/50 text-white/90 backdrop-blur-sm"
+            title={t('photos.date_exif_hint', {
+              defaultValue: 'Capture date read from photo EXIF: {{date}}',
+              date: formatDateFull(photo.taken_at),
+            })}
+          >
+            <Calendar size={10} />
+            {t('photos.date_auto', { defaultValue: 'EXIF date' })}
+          </span>
+        )}
       </div>
+
+      {/* AI-suggested category badge — user-confirmable, never auto-applied.
+          Stacks the category-apply button with an advisory severity chip
+          (defect only) and the first auto-tags the model saw. */}
+      {showSuggestion && suggestion && (
+        <div className="absolute top-2 right-2 z-10 flex flex-col items-end gap-1">
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onAcceptSuggestion?.(photo, suggestion);
+            }}
+            title={t('photos.suggestion_apply_hint', {
+              defaultValue: 'Apply suggested category "{{cat}}"',
+              cat: t(`photos.cat_${suggestion.suggested_category}`, {
+                defaultValue: suggestion.suggested_category,
+              }),
+            })}
+            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-2xs font-medium bg-violet-600/90 text-white backdrop-blur-sm shadow-sm hover:bg-violet-500 transition-colors"
+          >
+            <Sparkles size={10} />
+            {confidencePct != null
+              ? t('photos.suggested_with_conf', {
+                  defaultValue: 'AI: {{cat}} ({{pct}}%)',
+                  cat: t(`photos.cat_${suggestion.suggested_category}`, {
+                    defaultValue: suggestion.suggested_category,
+                  }),
+                  pct: confidencePct,
+                })
+              : t('photos.suggested', {
+                  defaultValue: 'Suggest: {{cat}}',
+                  cat: t(`photos.cat_${suggestion.suggested_category}`, {
+                    defaultValue: suggestion.suggested_category,
+                  }),
+                })}
+            <Check size={10} />
+          </button>
+          {severity && (
+            <span
+              className={`inline-flex items-center px-2 py-0.5 rounded-full text-2xs font-medium backdrop-blur-sm ${SEVERITY_COLORS[severity]}`}
+              title={t('photos.severity_hint', {
+                defaultValue: 'AI-rated defect severity: {{sev}}',
+                sev: t(`photos.severity_${severity}`, { defaultValue: severity }),
+              })}
+            >
+              {t('photos.severity_label', {
+                defaultValue: 'Severity: {{sev}}',
+                sev: t(`photos.severity_${severity}`, { defaultValue: severity }),
+              })}
+            </span>
+          )}
+          {suggestedTags.length > 0 && (
+            <div className="flex flex-wrap justify-end gap-1 max-w-[90%]">
+              {suggestedTags.slice(0, 3).map((tag) => (
+                <span
+                  key={tag}
+                  className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-2xs font-medium bg-violet-500/70 text-white backdrop-blur-sm"
+                >
+                  <Tag size={9} />
+                  {tag}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Bottom overlay */}
       <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 via-black/30 to-transparent p-3 pt-8 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
@@ -782,7 +909,7 @@ function UploadZone({
       </div>
       <p className="text-2xs text-content-quaternary">
         {t('photos.batch_meta_hint', {
-          defaultValue: 'Category and tags apply to every photo in this upload — you can refine each one afterwards.',
+          defaultValue: 'Category and tags apply to every photo in this upload - you can refine each one afterwards.',
         })}
       </p>
       <div
@@ -900,6 +1027,7 @@ function CategoryFilter({
 
 export function PhotoGalleryPage() {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const addToast = useToastStore((s) => s.addToast);
   const activeProjectId = useProjectContextStore((s) => s.activeProjectId);
@@ -1042,6 +1170,26 @@ export function PhotoGalleryPage() {
     updateMutation.mutate({ id, data });
   }, [updateMutation]);
 
+  // Accept an AI / heuristic category suggestion. This is the explicit
+  // human-confirm step — it PATCHes the category to the suggested value and
+  // merges any auto-tags the model saw into the photo's existing tags. The
+  // manual fields stay authoritative until the user clicks.
+  const handleAcceptSuggestion = useCallback(
+    (photo: PhotoItem, suggestion: ReturnType<typeof getCategorySuggestion>) => {
+      if (!suggestion) return;
+      const data: PhotoUpdatePayload = { category: suggestion.suggested_category };
+      if (suggestion.suggested_tags.length > 0) {
+        const merged = [...photo.tags];
+        for (const tag of suggestion.suggested_tags) {
+          if (!merged.includes(tag)) merged.push(tag);
+        }
+        data.tags = merged;
+      }
+      updateMutation.mutate({ id: photo.id, data });
+    },
+    [updateMutation],
+  );
+
   // Batch selection helpers
   const toggleSelect = useCallback((id: string) => {
     setSelectedIds((prev) => {
@@ -1121,7 +1269,7 @@ export function PhotoGalleryPage() {
 
   if (!projectId) {
     return (
-      <div className="space-y-6 p-6 max-w-7xl mx-auto">
+      <div className="space-y-6">
         <RequiresProject
           emptyHint={t('photos.select_project', {
             defaultValue: 'Select a project from the header to view its photo documentation.',
@@ -1132,69 +1280,68 @@ export function PhotoGalleryPage() {
   }
 
   return (
-    <div className="space-y-6 p-6 max-w-7xl mx-auto animate-fade-in">
-      {/* Breadcrumb */}
+    <div className="space-y-5 animate-fade-in">
+      {/* Breadcrumb — single item auto-hides; the Home icon IS the dashboard
+          link, so no literal "Dashboard" item. */}
       <Breadcrumb
         items={[
-          { label: t('nav.dashboard', { defaultValue: 'Dashboard' }), to: '/' },
           { label: t('photos.title', { defaultValue: 'Project Photos' }) },
         ]}
       />
 
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-oe-blue-subtle">
-            <Camera size={20} className="text-oe-blue" />
-          </div>
-          <div>
-            <h1 className="text-lg font-bold text-content-primary">
-              {t('photos.title', { defaultValue: 'Project Photos' })}
-            </h1>
-            <p className="text-xs text-content-tertiary">
-              {t('photos.subtitle', {
-                defaultValue: '{{count}} photos',
-                count: photoList.length,
-              })}
-            </p>
-          </div>
-        </div>
-        <p className="hidden max-w-md text-2xs leading-relaxed text-content-tertiary lg:block">
-          {t('photos.page_intro', {
-            defaultValue:
-              'Visual site documentation — progress, defects, deliveries and safety. EXIF date and GPS are read on upload so photos sort chronologically and on a timeline.',
-          })}
-        </p>
-        <div className="flex items-center gap-2 shrink-0 flex-nowrap">
-          {/* Project selector */}
-          {projects.length > 0 && (
-            <select
-              value={projectId}
-              onChange={(e) => {
-                const p = projects.find((pr) => pr.id === e.target.value);
-                if (p) useProjectContextStore.getState().setActiveProject(p.id, p.name);
-              }}
-              className="h-8 rounded-lg border border-border bg-surface-primary px-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-oe-blue/30 focus:border-oe-blue transition-colors pr-7 appearance-none cursor-pointer max-w-[180px]"
+      {/* Canonical header: subtitle + actions, srTitle for screen readers.
+          The module name lives in the top app bar; project selection is
+          global (we read the shared project context only). */}
+      <PageHeader
+        srTitle={t('photos.title', { defaultValue: 'Project Photos' })}
+        subtitle={t('photos.subtitle', {
+          defaultValue: '{{count}} photos',
+          count: photoList.length,
+        })}
+        actions={
+          <>
+            {photoList.length > 0 && !selectMode && (
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => setSelectMode(true)}
+                className="shrink-0 whitespace-nowrap"
+              >
+                <CheckSquare size={14} className="mr-1.5 shrink-0" />
+                <span className="whitespace-nowrap">{t('photos.select', { defaultValue: 'Select' })}</span>
+              </Button>
+            )}
+            <Button
+              onClick={() => setShowUpload(!showUpload)}
+              size="sm"
+              disabled={!projectId}
+              className="shrink-0 whitespace-nowrap"
             >
-              <option value="" disabled>{t('photos.select_project', { defaultValue: 'Select project...' })}</option>
-              {projects.map((p) => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-            </select>
-          )}
-          {/* Select mode toggle */}
-          {photoList.length > 0 && !selectMode && (
-            <Button variant="ghost" size="sm" onClick={() => setSelectMode(true)} className="shrink-0 whitespace-nowrap">
-              <CheckSquare size={14} className="mr-1.5 shrink-0" />
-              <span className="whitespace-nowrap">{t('photos.select', { defaultValue: 'Select' })}</span>
+              <Upload size={14} className="mr-1.5 shrink-0" />
+              <span className="whitespace-nowrap">{t('photos.upload_photos', { defaultValue: 'Upload Photos' })}</span>
             </Button>
-          )}
-          <Button onClick={() => setShowUpload(!showUpload)} size="sm" disabled={!projectId} className="shrink-0 whitespace-nowrap">
-            <Upload size={14} className="mr-1.5 shrink-0" />
-            <span className="whitespace-nowrap">{t('photos.upload_photos', { defaultValue: 'Upload Photos' })}</span>
-          </Button>
-        </div>
-      </div>
+          </>
+        }
+      />
+
+      {/* Info card (canonical, pain-named copy from MODULE_INTRO_COPY) */}
+      <DismissibleInfo
+        storageKey="photos"
+        title={t('photos.intro_title', {
+          defaultValue: 'Prove what the site looked like, when',
+        })}
+        links={[
+          {
+            label: t('nav.project_files', { defaultValue: 'Files' }),
+            onClick: () => navigate('/files'),
+          },
+        ]}
+      >
+        {t('photos.intro_body', {
+          defaultValue:
+            'Upload site photos and the gallery reads EXIF capture date and GPS on the way in, so progress, defects, deliveries and safety shots sort chronologically and on a timeline. Tag and caption in batches, and accept the suggested category when it spots a likely defect. The photos sit beside the rest of the project files in the File Manager.',
+        })}
+      </DismissibleInfo>
 
       {/* Batch selection bar */}
       {selectMode && (
@@ -1346,6 +1493,7 @@ export function PhotoGalleryPage() {
               selectMode={selectMode}
               selected={selectedIds.has(photo.id)}
               onToggleSelect={() => toggleSelect(photo.id)}
+              onAcceptSuggestion={handleAcceptSuggestion}
             />
           ))}
         </div>
@@ -1378,6 +1526,7 @@ export function PhotoGalleryPage() {
                       selectMode={selectMode}
                       selected={selectedIds.has(photo.id)}
                       onToggleSelect={() => toggleSelect(photo.id)}
+                      onAcceptSuggestion={handleAcceptSuggestion}
                     />
                   );
                 })}

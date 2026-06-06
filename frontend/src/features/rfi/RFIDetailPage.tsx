@@ -55,6 +55,7 @@ import {
   ballInCourtSide,
   daysOverdue,
 } from './RFIPage';
+import { ApprovalInstanceCard } from '@/features/approval-routes';
 
 /**
  * Decode the ``sub`` claim from the JWT — duplicated locally so the
@@ -236,7 +237,10 @@ export function RFIDetailPage() {
   // which may be EUR/BRL/GBP/… — never assume USD).
   const { data: project } = useQuery({
     queryKey: ['project', rfi?.project_id ?? null],
-    queryFn: () => apiGet<{ id: string; currency: string }>(`/v1/projects/${rfi?.project_id}`),
+    queryFn: () =>
+      apiGet<{ id: string; name: string; currency: string }>(
+        `/v1/projects/${rfi?.project_id}`,
+      ),
     enabled: !!rfi?.project_id,
     staleTime: 5 * 60_000,
   });
@@ -381,13 +385,12 @@ export function RFIDetailPage() {
 
   if (isError || !rfi) {
     return (
-      <div className="w-full animate-fade-in">
+      <div className="space-y-5 animate-fade-in">
         <Breadcrumb
           items={[
             { label: t('rfi.title', { defaultValue: 'RFIs' }), to: '/rfi' },
             { label: t('common.not_found', { defaultValue: 'Not found' }) },
           ]}
-          className="mb-4"
         />
         <EmptyState
           icon={<AlertTriangle size={28} strokeWidth={1.5} />}
@@ -428,19 +431,20 @@ export function RFIDetailPage() {
   const overdueDelta = daysOverdue(rfi.response_due_date);
 
   return (
-    <div className="w-full animate-fade-in">
+    <div className="space-y-5 animate-fade-in">
       {/* Breadcrumb */}
       <Breadcrumb
         items={[
-          { label: t('nav.dashboard', { defaultValue: 'Dashboard' }), to: '/' },
+          ...(rfi.project_id && project?.name
+            ? [{ label: project.name, to: `/projects/${rfi.project_id}` }]
+            : []),
           { label: t('rfi.title', { defaultValue: 'RFIs' }), to: '/rfi' },
           { label: `#${rfi.rfi_number}` },
         ]}
-        className="mb-4"
       />
 
       {/* Hero */}
-      <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-3 mb-2 flex-wrap">
             <span className="text-sm font-mono font-semibold text-content-tertiary">
@@ -701,6 +705,17 @@ export function RFIDetailPage() {
 
         {/* Right column — meta panel */}
         <div className="space-y-4">
+          {/* Routed approval workflow (feature 06). When the project has an
+              active "rfi" approval route the picker lets a manager start a
+              multi-step sign-off on the RFI; an approved chain re-affirms the
+              answer, a rejection reopens it. Projects with no route configured
+              keep the direct Respond / Close actions. */}
+          <ApprovalInstanceCard
+            targetKind="rfi"
+            targetId={rfi.id}
+            projectId={rfi.project_id}
+          />
+
           <Card className="p-4">
             <div className="flex items-center gap-2 mb-3">
               <User size={14} className="text-content-tertiary" />

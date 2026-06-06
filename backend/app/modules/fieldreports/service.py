@@ -1,4 +1,4 @@
-"""‌⁠‍Field Reports service — business logic for field report management.
+"""‌⁠‍Field Reports service - business logic for field report management.
 
 Stateless service layer. Handles:
 - Field report CRUD
@@ -60,7 +60,7 @@ class FieldReportService:
         workforce_data = [entry.model_dump() for entry in data.workforce]
 
         # Auto-fetch weather when coordinates are provided. Falls back to
-        # the owning project's ``address`` dict — sites typically have
+        # the owning project's ``address`` dict - sites typically have
         # fixed coordinates, so the user shouldn't need to repeat them on
         # every daily report. We accept several common key shapes the
         # frontend may emit (lat/lon, latitude/longitude, coordinates.lat).
@@ -157,7 +157,7 @@ class FieldReportService:
                 return None
             lat_f = float(raw_lat)
             lon_f = float(raw_lon)
-            # Sanity guard — match the schema's bounds so a junk address
+            # Sanity guard - match the schema's bounds so a junk address
             # doesn't poison the weather call with nonsense coords.
             if not (-90.0 <= lat_f <= 90.0):
                 return None
@@ -239,10 +239,10 @@ class FieldReportService:
         """Update field report fields. Only allowed for draft reports."""
         report = await self.get_report(report_id)
 
-        if report.status == "approved":
+        if report.status != "draft":
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Cannot edit an approved report",
+                detail=f"Cannot edit a report with status '{report.status}' - only draft reports are editable",
             )
 
         fields = data.model_dump(exclude_unset=True)
@@ -267,8 +267,18 @@ class FieldReportService:
     # ── Delete ────────────────────────────────────────────────────────────
 
     async def delete_report(self, report_id: uuid.UUID) -> None:
-        """Delete a field report."""
-        await self.get_report(report_id)  # Raises 404 if not found
+        """Delete a field report. Only draft reports can be deleted.
+
+        Once a report is submitted or approved its labour log has been
+        published downstream (cost actuals / payroll) and an audit-trail
+        entry written, so a hard delete would orphan that data.
+        """
+        report = await self.get_report(report_id)  # Raises 404 if not found
+        if report.status != "draft":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Cannot delete a report with status '{report.status}' - only draft reports can be deleted",
+            )
         await self.repo.delete(report_id)
         logger.info("Field report deleted: %s", report_id)
 
@@ -280,7 +290,7 @@ class FieldReportService:
         If the report's ``metadata.schedule_progress`` carries one or more
         progress entries, fires ``fieldreports.report.submitted`` so the
         schedule module can append matching :class:`ScheduleProgressEntry`
-        rows. Wiring lives in ``schedule/events.py`` — the publisher does
+        rows. Wiring lives in ``schedule/events.py`` - the publisher does
         not import the schedule module to keep the dependency direction
         one-way (schedule subscribes to fieldreports, not vice versa).
         """
@@ -288,11 +298,11 @@ class FieldReportService:
         if report.status != "draft":
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Cannot submit report with status '{report.status}' — must be draft",
+                detail=f"Cannot submit report with status '{report.status}' - must be draft",
             )
 
         # Snapshot the progress payload before update_fields() expires the
-        # session — the inline metadata read might MissingGreenlet otherwise.
+        # session - the inline metadata read might MissingGreenlet otherwise.
         md = report.metadata_ if isinstance(report.metadata_, dict) else {}
         schedule_progress = md.get("schedule_progress") if isinstance(md, dict) else None
         project_id_s = str(report.project_id)
@@ -316,6 +326,10 @@ class FieldReportService:
                 source_module="oe_fieldreports",
             )
 
+        # Publish the labour log so the cost model and payroll can roll up
+        # hours x rate. Best-effort: a failure here must not block submission.
+        await self._publish_labour(report, status="submitted")
+
         return report
 
     async def approve_report(self, report_id: uuid.UUID, user_id: str) -> FieldReport:
@@ -324,7 +338,7 @@ class FieldReportService:
         if report.status != "submitted":
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Cannot approve report with status '{report.status}' — must be submitted",
+                detail=f"Cannot approve report with status '{report.status}' - must be submitted",
             )
 
         prior_status = report.status
@@ -337,7 +351,7 @@ class FieldReportService:
         )
         await self.session.refresh(report)
 
-        # Epic H — universal audit trail.
+        # Epic H - universal audit trail.
         from app.core.audit_log import log_activity as _log_activity
 
         await _log_activity(
@@ -357,7 +371,127 @@ class FieldReportService:
         )
 
         logger.info("Field report approved: %s by %s", report_id, user_id)
+
+        # Re-publish the labour log on approval. Subscribers are idempotent
+        # per (report_id, status), so a submit + approve pair never
+        # double-counts the same hours into budget actuals.
+        await self._publish_labour(report, status="approved", actor_id=user_id)
+
         return report
+
+    # ── Labour log publication ──────────────────────────────────────────────
+
+    async def _collect_labour_rows(self, report: FieldReport) -> list[dict[str, Any]]:
+        """Normalise a report's workforce into payroll/cost-ready rows.
+
+        Prefers the structured :class:`SiteWorkforceLog` rows (they may carry
+        a ``resource_id`` / ``cost_rate`` in metadata); falls back to the
+        free-form ``workforce`` JSON column when no structured rows exist.
+
+        Each returned row carries at least ``worker_type`` and ``hours``
+        (a float, regular + overtime combined). ``resource_id`` / ``cost_rate``
+        / ``currency`` are surfaced when present so the cost model can apply
+        the resource rate or the snapshot rate deterministically.
+        """
+        from sqlalchemy import select
+
+        from app.modules.fieldreports.models import SiteWorkforceLog
+
+        def _to_float(value: object) -> float:
+            try:
+                f = float(str(value))
+            except (TypeError, ValueError):
+                return 0.0
+            return f if f >= 0.0 else 0.0
+
+        rows: list[dict[str, Any]] = []
+
+        stmt = select(SiteWorkforceLog).where(SiteWorkforceLog.field_report_id == report.id)
+        result = await self.session.execute(stmt)
+        structured = list(result.scalars().all())
+
+        for log in structured:
+            md = log.metadata_ if isinstance(log.metadata_, dict) else {}
+            hours = _to_float(log.hours_worked) + _to_float(log.overtime_hours)
+            row: dict[str, Any] = {
+                "worker_type": log.worker_type,
+                "company": log.company,
+                "headcount": int(log.headcount or 0),
+                "hours": round(hours, 4),
+                "overtime_hours": round(_to_float(log.overtime_hours), 4),
+                "wbs_id": log.wbs_id,
+                "cost_category": log.cost_category,
+            }
+            resource_id = md.get("resource_id")
+            if resource_id:
+                row["resource_id"] = str(resource_id)
+            if md.get("cost_rate") is not None:
+                row["cost_rate"] = str(md["cost_rate"])
+            if md.get("currency"):
+                row["currency"] = str(md["currency"])
+            rows.append(row)
+
+        if rows:
+            return rows
+
+        # Fallback: the simpler JSON ``workforce`` column (count + hours).
+        workforce = report.workforce if isinstance(report.workforce, list) else []
+        for entry in workforce:
+            if not isinstance(entry, dict):
+                continue
+            count = _to_float(entry.get("count"))
+            per_head = _to_float(entry.get("hours"))
+            total_hours = count * per_head if count else per_head
+            row = {
+                "worker_type": str(entry.get("trade") or entry.get("worker_type") or "labour"),
+                "company": entry.get("company"),
+                "headcount": int(count),
+                "hours": round(total_hours, 4),
+                "overtime_hours": 0.0,
+                "wbs_id": entry.get("wbs_id"),
+                "cost_category": entry.get("cost_category"),
+            }
+            if entry.get("resource_id"):
+                row["resource_id"] = str(entry["resource_id"])
+            if entry.get("cost_rate") is not None:
+                row["cost_rate"] = str(entry["cost_rate"])
+            if entry.get("currency"):
+                row["currency"] = str(entry["currency"])
+            rows.append(row)
+
+        return rows
+
+    async def _publish_labour(
+        self,
+        report: FieldReport,
+        *,
+        status: str,
+        actor_id: str | None = None,
+    ) -> None:
+        """Gather workforce rows and publish ``fieldreports.labour.logged``.
+
+        Swallows its own errors: the labour rollup is a downstream
+        convenience and must never break the report status transition.
+        """
+        try:
+            rows = await self._collect_labour_rows(report)
+            if not rows:
+                return
+            from app.modules.fieldreports.events import publish_labour_logged
+
+            publish_labour_logged(
+                report_id=str(report.id),
+                project_id=str(report.project_id),
+                report_date=str(report.report_date),
+                status=status,
+                rows=rows,
+                actor_id=actor_id,
+            )
+        except Exception:
+            logger.exception(
+                "Labour-log publish failed for report=%s - status transition unaffected",
+                report.id,
+            )
 
     # ── Link documents ─────────────────────────────────────────────────────
 
@@ -573,7 +707,7 @@ class FieldReportTemplateService:
         if include_builtin:
             out.extend(self._builtin_to_dict())
         customs = await self.repo.list_for_project(project_id)
-        out.extend(customs)  # ORM objects — Pydantic from_attributes handles them
+        out.extend(customs)  # ORM objects - Pydantic from_attributes handles them
         return out
 
     async def get_template(self, template_id: str, project_id: uuid.UUID) -> Any:

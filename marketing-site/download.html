@@ -36,7 +36,7 @@
   "operatingSystem": "Windows, macOS, Linux",
   "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
   "downloadUrl": "https://github.com/datadrivenconstruction/OpenConstructionERP/releases/latest",
-  "softwareVersion": "6.7.0",
+  "softwareVersion": "7.0.0",
   "license": "https://www.gnu.org/licenses/agpl-3.0.html",
   "url": "https://openconstructionerp.com/download",
   "publisher": { "@type": "Organization", "name": "DataDrivenConstruction" }
@@ -295,22 +295,22 @@ a.dl-dl.btn-primary{color:#fff;}
 
 <nav class="nav">
   <div class="nav-inner">
-    <a class="brand" href="/" aria-label="OpenConstructionERP home">
+    <a class="brand" href="/" aria-label="OpenConstructionERP home" data-i18n-aria-label="page.download.nav_brand_aria">
       <span class="brand-mark"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5 12 2"/><polyline points="2 8.5 12 15 22 8.5"/><line x1="12" y1="22" x2="12" y2="15"/></svg></span>
       <span><span>Open</span><span class="brand-seg-2">Construction</span><span class="brand-seg-3">ERP</span></span>
     </a>
     <div class="nav-right">
-      <button type="button" class="theme-toggle" id="theme-toggle" aria-label="Toggle light and dark theme">
+      <button type="button" class="theme-toggle" id="theme-toggle" aria-label="Toggle light and dark theme" data-i18n-aria-label="page.download.nav_theme_toggle_aria">
         <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
         <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3a7 7 0 0 0 9.79 9.79Z"/></svg>
       </button>
-      <a class="github-pill" href="https://github.com/datadrivenconstruction/OpenConstructionERP" target="_blank" rel="noopener" aria-label="OpenConstructionERP on GitHub">
+      <a class="github-pill" href="https://github.com/datadrivenconstruction/OpenConstructionERP" target="_blank" rel="noopener" aria-label="OpenConstructionERP on GitHub" data-i18n-aria-label="page.download.nav_github_aria">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 0.5C5.65 0.5 0.5 5.65 0.5 12a11.5 11.5 0 0 0 7.86 10.92c.58.1.79-.25.79-.56v-2c-3.2.7-3.87-1.36-3.87-1.36-.52-1.32-1.28-1.68-1.28-1.68-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.18 1.76 1.18 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.7 0-1.26.45-2.29 1.18-3.1-.12-.29-.51-1.47.11-3.05 0 0 .97-.31 3.18 1.18A11 11 0 0 1 12 6.8a11 11 0 0 1 2.9.39c2.2-1.5 3.17-1.18 3.17-1.18.63 1.58.24 2.76.12 3.05.74.81 1.18 1.84 1.18 3.1 0 4.43-2.7 5.4-5.27 5.69.42.36.78 1.07.78 2.15v3.19c0 .31.21.67.8.56A11.5 11.5 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5Z"/></svg>
         <span>GitHub</span>
       </a>
       <a class="nav-back" href="/">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg>
-        <span>Home</span>
+        <span data-i18n="page.download.nav_home">Home</span>
       </a>
     </div>
   </div>
@@ -319,9 +319,9 @@ a.dl-dl.btn-primary{color:#fff;}
 <main class="dl-main" id="dl-top">
   <!-- ===================== HERO ===================== -->
   <section class="dl-hero" aria-labelledby="dl-h1">
-    <p class="dl-eyebrow">Download</p>
-    <h1 class="dl-h1" id="dl-h1">Get the <span class="dl-serif">real</span> desktop app.</h1>
-    <p class="dl-lede">
+    <p class="dl-eyebrow" data-i18n="page.download.hero_eyebrow">Download</p>
+    <h1 class="dl-h1" id="dl-h1" data-i18n-html="page.download.hero_title">Get the <span class="dl-serif">real</span> desktop app.</h1>
+    <p class="dl-lede" data-i18n="page.download.hero_lede">
       A native build of OpenConstructionERP. No Python, no pip, no Docker, no database to set up.
       One file, run it, done. Your data stays on your machine.
     </p>
@@ -331,16 +331,16 @@ a.dl-dl.btn-primary{color:#fff;}
       <span id="dl-rec-text">Detecting your platform&hellip;</span>
     </div>
 
-    <ul class="dl-chips" aria-label="What you get">
-      <li class="dl-chip"><svg viewBox="0 0 16 16" aria-hidden="true" class="dl-chip-i"><path d="M6.5 11.2 3.3 8l-1 1 4.2 4.2 8.2-8.2-1-1z"/></svg>No Python, pip, Docker or DB</li>
-      <li class="dl-chip"><svg viewBox="0 0 16 16" aria-hidden="true" class="dl-chip-i"><path d="M8 1 2 3.4v4.1c0 3.7 2.5 6.7 6 7.5 3.5-.8 6-3.8 6-7.5V3.4zm0 1.6 4.5 1.8v3.1c0 2.8-1.9 5.2-4.5 5.9-2.6-.7-4.5-3.1-4.5-5.9V4.4z"/></svg>Data stays local</li>
-      <li class="dl-chip"><svg viewBox="0 0 16 16" aria-hidden="true" class="dl-chip-i"><path d="M8 1.5A6.5 6.5 0 1 0 14.5 8 6.5 6.5 0 0 0 8 1.5zm0 1.3A5.2 5.2 0 1 1 2.8 8 5.2 5.2 0 0 1 8 2.8zM7.4 4.6v3.8l3 1.8.6-1-2.4-1.4V4.6z"/></svg>First launch ~60s, then fast</li>
-      <li class="dl-chip"><svg viewBox="0 0 16 16" aria-hidden="true" class="dl-chip-i"><path d="M8 1.5 2 4v3.5c0 3.6 2.4 6.4 6 7.5 3.6-1.1 6-3.9 6-7.5V4zm-.7 9.3L4.8 8.3l.9-.9 1.6 1.6 3.1-3.4.9.8z"/></svg>Open source, AGPL-3.0</li>
+    <ul class="dl-chips" aria-label="What you get" data-i18n-aria-label="page.download.hero_chips_aria">
+      <li class="dl-chip" data-i18n-html="page.download.hero_chip_no_deps"><svg viewBox="0 0 16 16" aria-hidden="true" class="dl-chip-i"><path d="M6.5 11.2 3.3 8l-1 1 4.2 4.2 8.2-8.2-1-1z"/></svg>No Python, pip, Docker or DB</li>
+      <li class="dl-chip" data-i18n-html="page.download.hero_chip_local"><svg viewBox="0 0 16 16" aria-hidden="true" class="dl-chip-i"><path d="M8 1 2 3.4v4.1c0 3.7 2.5 6.7 6 7.5 3.5-.8 6-3.8 6-7.5V3.4zm0 1.6 4.5 1.8v3.1c0 2.8-1.9 5.2-4.5 5.9-2.6-.7-4.5-3.1-4.5-5.9V4.4z"/></svg>Data stays local</li>
+      <li class="dl-chip" data-i18n-html="page.download.hero_chip_fast"><svg viewBox="0 0 16 16" aria-hidden="true" class="dl-chip-i"><path d="M8 1.5A6.5 6.5 0 1 0 14.5 8 6.5 6.5 0 0 0 8 1.5zm0 1.3A5.2 5.2 0 1 1 2.8 8 5.2 5.2 0 0 1 8 2.8zM7.4 4.6v3.8l3 1.8.6-1-2.4-1.4V4.6z"/></svg>First launch ~60s, then fast</li>
+      <li class="dl-chip" data-i18n-html="page.download.hero_chip_oss"><svg viewBox="0 0 16 16" aria-hidden="true" class="dl-chip-i"><path d="M8 1.5 2 4v3.5c0 3.6 2.4 6.4 6 7.5 3.6-1.1 6-3.9 6-7.5V4zm-.7 9.3L4.8 8.3l.9-.9 1.6 1.6 3.1-3.4.9.8z"/></svg>Open source, AGPL-3.0</li>
     </ul>
   </section>
 
   <!-- ===================== PLATFORM MATRIX ===================== -->
-  <section class="dl-platforms" aria-label="Native downloads by platform">
+  <section class="dl-platforms" aria-label="Native downloads by platform" data-i18n-aria-label="page.download.platforms_aria">
     <div class="dl-grid">
 
       <!-- Windows -->
@@ -351,9 +351,9 @@ a.dl-dl.btn-primary{color:#fff;}
           </span>
           <div class="dl-card-id">
             <h2 class="dl-card-name">Windows</h2>
-            <p class="dl-card-note">Windows 10/11, 64-bit. WebView2 auto-installs.</p>
+            <p class="dl-card-note" data-i18n="page.download.win_note">Windows 10/11, 64-bit. WebView2 auto-installs.</p>
           </div>
-          <span class="dl-rec-flag" data-flag="windows">Recommended</span>
+          <span class="dl-rec-flag" data-flag="windows" data-i18n="page.download.flag_recommended">Recommended</span>
         </header>
 
         <div class="dl-badges" aria-hidden="true">
@@ -364,7 +364,7 @@ a.dl-dl.btn-primary{color:#fff;}
 
         <a class="dl-dl btn-primary" id="btn-win" href="https://github.com/datadrivenconstruction/OpenConstructionERP/releases/latest" rel="noopener">
           <svg viewBox="0 0 16 16" aria-hidden="true" class="dl-dl-i"><path d="M7.3 1v7.1L5.1 5.9l-.9.9L8 10.6l3.8-3.8-.9-.9-2.2 2.2V1zM2.5 12.2v1.3a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-1.3h-1.3v1h-8.4v-1z"/></svg>
-          <span>Download for Windows</span>
+          <span data-i18n="page.download.btn_win">Download for Windows</span>
         </a>
         <p class="dl-meta" id="meta-win"><span class="dl-meta-skel">Reading latest release&hellip;</span></p>
       </article>
@@ -377,9 +377,9 @@ a.dl-dl.btn-primary{color:#fff;}
           </span>
           <div class="dl-card-id">
             <h2 class="dl-card-name">macOS</h2>
-            <p class="dl-card-note">Apple Silicon (aarch64), macOS 10.15+.</p>
+            <p class="dl-card-note" data-i18n="page.download.mac_note">Apple Silicon (aarch64), macOS 10.15+.</p>
           </div>
-          <span class="dl-rec-flag" data-flag="macos">Recommended</span>
+          <span class="dl-rec-flag" data-flag="macos" data-i18n="page.download.flag_recommended">Recommended</span>
         </header>
 
         <div class="dl-badges" aria-hidden="true">
@@ -390,10 +390,10 @@ a.dl-dl.btn-primary{color:#fff;}
 
         <a class="dl-dl btn-primary" id="btn-mac" href="https://github.com/datadrivenconstruction/OpenConstructionERP/releases/latest" rel="noopener">
           <svg viewBox="0 0 16 16" aria-hidden="true" class="dl-dl-i"><path d="M7.3 1v7.1L5.1 5.9l-.9.9L8 10.6l3.8-3.8-.9-.9-2.2 2.2V1zM2.5 12.2v1.3a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-1.3h-1.3v1h-8.4v-1z"/></svg>
-          <span>Download for macOS</span>
+          <span data-i18n="page.download.btn_mac">Download for macOS</span>
         </a>
         <p class="dl-meta" id="meta-mac"><span class="dl-meta-skel">Reading latest release&hellip;</span></p>
-        <p class="dl-card-foot">Drag the app into your Applications folder.</p>
+        <p class="dl-card-foot" data-i18n="page.download.mac_foot">Drag the app into your Applications folder.</p>
       </article>
 
       <!-- Linux -->
@@ -404,9 +404,9 @@ a.dl-dl.btn-primary{color:#fff;}
           </span>
           <div class="dl-card-id">
             <h2 class="dl-card-name">Linux</h2>
-            <p class="dl-card-note">.deb and .AppImage, 64-bit.</p>
+            <p class="dl-card-note" data-i18n="page.download.linux_note">.deb and .AppImage, 64-bit.</p>
           </div>
-          <span class="dl-rec-flag" data-flag="linux">Recommended</span>
+          <span class="dl-rec-flag" data-flag="linux" data-i18n="page.download.flag_recommended">Recommended</span>
         </header>
 
         <div class="dl-badges" aria-hidden="true">
@@ -431,20 +431,20 @@ a.dl-dl.btn-primary{color:#fff;}
     </div>
 
     <p class="dl-allnote" id="dl-allnote">
-      <a href="https://github.com/datadrivenconstruction/OpenConstructionERP/releases/latest" rel="noopener">View all builds and checksums on GitHub</a>
+      <a href="https://github.com/datadrivenconstruction/OpenConstructionERP/releases/latest" rel="noopener" data-i18n="page.download.all_builds_link">View all builds and checksums on GitHub</a>
       <span class="dl-sep" aria-hidden="true">/</span>
       <span id="dl-version-tag" class="dl-mono"></span>
     </p>
   </section>
 
   <!-- ===================== FIRST-RUN NOTE ===================== -->
-  <section class="dl-firstrun" aria-label="First run note">
+  <section class="dl-firstrun" aria-label="First run note" data-i18n-aria-label="page.download.firstrun_aria">
     <span class="dl-firstrun-i" aria-hidden="true">
       <svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 9 9 9 9 0 0 0-9-9zm0 2a7 7 0 1 1-7 7 7 7 0 0 1 7-7zm-1 3v5l4 2.4.8-1.3-3.3-2V8z"/></svg>
     </span>
     <div>
-      <h2 class="dl-firstrun-h">An honest note about the first launch</h2>
-      <p class="dl-firstrun-p">
+      <h2 class="dl-firstrun-h" data-i18n="page.download.firstrun_title">An honest note about the first launch</h2>
+      <p class="dl-firstrun-p" data-i18n="page.download.firstrun_body">
         The first time you open the app it spends about 40 to 90 seconds setting up a local
         database. It is not frozen. Every launch after that opens fast. Nothing is sent anywhere,
         the database lives on your own machine.
@@ -455,47 +455,47 @@ a.dl-dl.btn-primary{color:#fff;}
   <!-- ===================== COMPARE ===================== -->
   <section class="dl-compare" aria-labelledby="dl-cmp-h">
     <header class="dl-section-head">
-      <p class="dl-eyebrow dl-eyebrow-sm">Which one</p>
-      <h2 class="dl-h2" id="dl-cmp-h">Native app, pip, or Docker</h2>
-      <p class="dl-sub">Most people want the native app. The other two are for developers and servers.</p>
+      <p class="dl-eyebrow dl-eyebrow-sm" data-i18n="page.download.cmp_eyebrow">Which one</p>
+      <h2 class="dl-h2" id="dl-cmp-h" data-i18n="page.download.cmp_title">Native app, pip, or Docker</h2>
+      <p class="dl-sub" data-i18n="page.download.cmp_sub">Most people want the native app. The other two are for developers and servers.</p>
     </header>
 
-    <div class="dl-cmp-wrap" role="table" aria-label="Install method comparison">
+    <div class="dl-cmp-wrap" role="table" aria-label="Install method comparison" data-i18n-aria-label="page.download.cmp_table_aria">
       <div class="dl-cmp-row dl-cmp-headrow" role="row">
         <span role="columnheader"></span>
-        <span role="columnheader" class="dl-cmp-best">Native app</span>
+        <span role="columnheader" class="dl-cmp-best" data-i18n="page.download.cmp_col_native">Native app</span>
         <span role="columnheader">pip</span>
         <span role="columnheader">Docker</span>
       </div>
       <div class="dl-cmp-row" role="row">
-        <span role="rowheader">Best for</span>
-        <span role="cell" class="dl-cmp-best">Anyone on a desktop</span>
-        <span role="cell">Python developers</span>
-        <span role="cell">Servers, teams</span>
+        <span role="rowheader" data-i18n="page.download.cmp_row_bestfor">Best for</span>
+        <span role="cell" class="dl-cmp-best" data-i18n="page.download.cmp_bestfor_native">Anyone on a desktop</span>
+        <span role="cell" data-i18n="page.download.cmp_bestfor_pip">Python developers</span>
+        <span role="cell" data-i18n="page.download.cmp_bestfor_docker">Servers, teams</span>
       </div>
       <div class="dl-cmp-row" role="row">
-        <span role="rowheader">Prerequisites</span>
-        <span role="cell" class="dl-cmp-best dl-yes">None</span>
+        <span role="rowheader" data-i18n="page.download.cmp_row_prereq">Prerequisites</span>
+        <span role="cell" class="dl-cmp-best dl-yes" data-i18n="page.download.cmp_prereq_native">None</span>
         <span role="cell">Python 3.12+</span>
         <span role="cell">Docker</span>
       </div>
       <div class="dl-cmp-row" role="row">
-        <span role="rowheader">Database setup</span>
-        <span role="cell" class="dl-cmp-best dl-yes">Automatic, local</span>
-        <span role="cell">Embedded, automatic</span>
-        <span role="cell">Volume mount</span>
+        <span role="rowheader" data-i18n="page.download.cmp_row_dbsetup">Database setup</span>
+        <span role="cell" class="dl-cmp-best dl-yes" data-i18n="page.download.cmp_dbsetup_native">Automatic, local</span>
+        <span role="cell" data-i18n="page.download.cmp_dbsetup_pip">Embedded, automatic</span>
+        <span role="cell" data-i18n="page.download.cmp_dbsetup_docker">Volume mount</span>
       </div>
       <div class="dl-cmp-row" role="row">
-        <span role="rowheader">Opens at</span>
-        <span role="cell" class="dl-cmp-best">A real window</span>
+        <span role="rowheader" data-i18n="page.download.cmp_row_opensat">Opens at</span>
+        <span role="cell" class="dl-cmp-best" data-i18n="page.download.cmp_opensat_native">A real window</span>
         <span role="cell" class="dl-mono">localhost:8080</span>
         <span role="cell" class="dl-mono">localhost:8080</span>
       </div>
       <div class="dl-cmp-row" role="row">
-        <span role="rowheader">Updates</span>
-        <span role="cell" class="dl-cmp-best">Re-download</span>
+        <span role="rowheader" data-i18n="page.download.cmp_row_updates">Updates</span>
+        <span role="cell" class="dl-cmp-best" data-i18n="page.download.cmp_updates_native">Re-download</span>
         <span role="cell" class="dl-mono">pip -U</span>
-        <span role="cell">Pull image</span>
+        <span role="cell" data-i18n="page.download.cmp_updates_docker">Pull image</span>
       </div>
     </div>
   </section>
@@ -503,12 +503,12 @@ a.dl-dl.btn-primary{color:#fff;}
   <!-- ===================== FOR DEVELOPERS ===================== -->
   <section class="dl-dev" aria-labelledby="dl-dev-h">
     <header class="dl-section-head">
-      <p class="dl-eyebrow dl-eyebrow-sm">For developers</p>
-      <h2 class="dl-h2" id="dl-dev-h">Run it from the terminal</h2>
-      <p class="dl-sub">Secondary paths. Each opens the same app in your browser at <span class="dl-mono">localhost:8080</span>.</p>
+      <p class="dl-eyebrow dl-eyebrow-sm" data-i18n="page.download.dev_eyebrow">For developers</p>
+      <h2 class="dl-h2" id="dl-dev-h" data-i18n="page.download.dev_title">Run it from the terminal</h2>
+      <p class="dl-sub" data-i18n-html="page.download.dev_sub">Secondary paths. Each opens the same app in your browser at <span class="dl-mono">localhost:8080</span>.</p>
     </header>
 
-    <div class="dl-tabs" role="tablist" aria-label="Developer install method">
+    <div class="dl-tabs" role="tablist" aria-label="Developer install method" data-i18n-aria-label="page.download.dev_tablist_aria">
       <button class="dl-tab dl-tab-on" role="tab" id="tab-pip" aria-selected="true" aria-controls="panel-pip" data-tab="pip">pip</button>
       <button class="dl-tab" role="tab" id="tab-docker" aria-selected="false" aria-controls="panel-docker" data-tab="docker" tabindex="-1">docker</button>
       <button class="dl-tab" role="tab" id="tab-source" aria-selected="false" aria-controls="panel-source" data-tab="source" tabindex="-1">source</button>
@@ -519,73 +519,73 @@ a.dl-dl.btn-primary{color:#fff;}
         <div class="dl-cmd">
           <span class="dl-cmd-pfx" aria-hidden="true">$</span>
           <code class="dl-cmd-text" id="cmd-pip-1">pip install --upgrade openconstructionerp</code>
-          <button class="dl-copy" data-copy="cmd-pip-1" aria-label="Copy install command">
+          <button class="dl-copy" data-copy="cmd-pip-1" aria-label="Copy install command" data-i18n-aria-label="page.download.copy_install_aria">
             <svg viewBox="0 0 16 16" aria-hidden="true" class="dl-copy-i"><path d="M5.5 1.5h6a1 1 0 0 1 1 1v8h-1.3V2.8H5.5zM3.5 4h6a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1h-6a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zm.3 1.3v7.4h5.4V5.3z"/></svg>
-            <span class="dl-copy-label">Copy</span>
+            <span class="dl-copy-label" data-i18n="page.download.copy_label">Copy</span>
           </button>
         </div>
         <div class="dl-cmd">
           <span class="dl-cmd-pfx" aria-hidden="true">$</span>
           <code class="dl-cmd-text" id="cmd-pip-2">openconstructionerp</code>
-          <button class="dl-copy" data-copy="cmd-pip-2" aria-label="Copy run command">
+          <button class="dl-copy" data-copy="cmd-pip-2" aria-label="Copy run command" data-i18n-aria-label="page.download.copy_run_aria">
             <svg viewBox="0 0 16 16" aria-hidden="true" class="dl-copy-i"><path d="M5.5 1.5h6a1 1 0 0 1 1 1v8h-1.3V2.8H5.5zM3.5 4h6a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1h-6a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zm.3 1.3v7.4h5.4V5.3z"/></svg>
-            <span class="dl-copy-label">Copy</span>
+            <span class="dl-copy-label" data-i18n="page.download.copy_label">Copy</span>
           </button>
         </div>
-        <p class="dl-panel-note">Then open <a class="dl-mono" href="http://localhost:8080" rel="noopener">localhost:8080</a>. On <a href="https://pypi.org/project/openconstructionerp/" rel="noopener">PyPI</a>.</p>
+        <p class="dl-panel-note" data-i18n-html="page.download.pip_note">Then open <a class="dl-mono" href="http://localhost:8080" rel="noopener">localhost:8080</a>. On <a href="https://pypi.org/project/openconstructionerp/" rel="noopener">PyPI</a>.</p>
       </div>
 
       <div class="dl-panel dl-panel-hide" id="panel-docker" role="tabpanel" aria-labelledby="tab-docker" hidden>
         <div class="dl-cmd">
           <span class="dl-cmd-pfx" aria-hidden="true">$</span>
           <code class="dl-cmd-text" id="cmd-docker-1">docker run -d -p 8080:8080 -v oe_data:/data ghcr.io/datadrivenconstruction/openconstructionerp:latest</code>
-          <button class="dl-copy" data-copy="cmd-docker-1" aria-label="Copy docker run command">
+          <button class="dl-copy" data-copy="cmd-docker-1" aria-label="Copy docker run command" data-i18n-aria-label="page.download.copy_docker_aria">
             <svg viewBox="0 0 16 16" aria-hidden="true" class="dl-copy-i"><path d="M5.5 1.5h6a1 1 0 0 1 1 1v8h-1.3V2.8H5.5zM3.5 4h6a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1h-6a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zm.3 1.3v7.4h5.4V5.3z"/></svg>
-            <span class="dl-copy-label">Copy</span>
+            <span class="dl-copy-label" data-i18n="page.download.copy_label">Copy</span>
           </button>
         </div>
-        <p class="dl-panel-note">Then open <a class="dl-mono" href="http://localhost:8080" rel="noopener">localhost:8080</a>. The named volume keeps your data between runs.</p>
+        <p class="dl-panel-note" data-i18n-html="page.download.docker_note">Then open <a class="dl-mono" href="http://localhost:8080" rel="noopener">localhost:8080</a>. The named volume keeps your data between runs.</p>
       </div>
 
       <div class="dl-panel dl-panel-hide" id="panel-source" role="tabpanel" aria-labelledby="tab-source" hidden>
         <div class="dl-cmd">
           <span class="dl-cmd-pfx" aria-hidden="true">$</span>
           <code class="dl-cmd-text" id="cmd-src-1">git clone https://github.com/datadrivenconstruction/OpenConstructionERP</code>
-          <button class="dl-copy" data-copy="cmd-src-1" aria-label="Copy clone command">
+          <button class="dl-copy" data-copy="cmd-src-1" aria-label="Copy clone command" data-i18n-aria-label="page.download.copy_clone_aria">
             <svg viewBox="0 0 16 16" aria-hidden="true" class="dl-copy-i"><path d="M5.5 1.5h6a1 1 0 0 1 1 1v8h-1.3V2.8H5.5zM3.5 4h6a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1h-6a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zm.3 1.3v7.4h5.4V5.3z"/></svg>
-            <span class="dl-copy-label">Copy</span>
+            <span class="dl-copy-label" data-i18n="page.download.copy_label">Copy</span>
           </button>
         </div>
         <div class="dl-cmd">
           <span class="dl-cmd-pfx" aria-hidden="true">$</span>
           <code class="dl-cmd-text" id="cmd-src-2">pip install -e ./backend[server]</code>
-          <button class="dl-copy" data-copy="cmd-src-2" aria-label="Copy editable install command">
+          <button class="dl-copy" data-copy="cmd-src-2" aria-label="Copy editable install command" data-i18n-aria-label="page.download.copy_editable_aria">
             <svg viewBox="0 0 16 16" aria-hidden="true" class="dl-copy-i"><path d="M5.5 1.5h6a1 1 0 0 1 1 1v8h-1.3V2.8H5.5zM3.5 4h6a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1h-6a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zm.3 1.3v7.4h5.4V5.3z"/></svg>
-            <span class="dl-copy-label">Copy</span>
+            <span class="dl-copy-label" data-i18n="page.download.copy_label">Copy</span>
           </button>
         </div>
-        <p class="dl-panel-note">Editable dev install with the server extras. Read the <a href="https://openconstructionerp.com/docs" rel="noopener">docs</a> first.</p>
+        <p class="dl-panel-note" data-i18n-html="page.download.source_note">Editable dev install with the server extras. Read the <a href="https://openconstructionerp.com/docs" rel="noopener">docs</a> first.</p>
       </div>
     </div>
   </section>
 
   <!-- ===================== HELPERS ===================== -->
-  <nav class="dl-helpers" aria-label="More resources">
+  <nav class="dl-helpers" aria-label="More resources" data-i18n-aria-label="page.download.helpers_aria">
     <a class="dl-helper" href="https://github.com/datadrivenconstruction/OpenConstructionERP/releases/latest" rel="noopener">
-      <span class="dl-helper-k">Release notes</span>
-      <span class="dl-helper-v">What changed, every version</span>
+      <span class="dl-helper-k" data-i18n="page.download.helper_release_k">Release notes</span>
+      <span class="dl-helper-v" data-i18n="page.download.helper_release_v">What changed, every version</span>
     </a>
     <a class="dl-helper" href="https://openconstructionerp.com/docs" rel="noopener">
-      <span class="dl-helper-k">Documentation</span>
-      <span class="dl-helper-v">Install, modules, API</span>
+      <span class="dl-helper-k" data-i18n="page.download.helper_docs_k">Documentation</span>
+      <span class="dl-helper-v" data-i18n="page.download.helper_docs_v">Install, modules, API</span>
     </a>
     <a class="dl-helper" href="https://github.com/datadrivenconstruction/OpenConstructionERP/issues" rel="noopener">
-      <span class="dl-helper-k">Report an issue</span>
-      <span class="dl-helper-v">Found a bug? Tell us</span>
+      <span class="dl-helper-k" data-i18n="page.download.helper_issue_k">Report an issue</span>
+      <span class="dl-helper-v" data-i18n="page.download.helper_issue_v">Found a bug? Tell us</span>
     </a>
   </nav>
 
-  <p class="dl-footline">117 modules. Estimating and BOQ, takeoff, CAD and BIM, cost databases, tendering, reporting, and more.</p>
+  <p class="dl-footline" data-i18n="page.download.footline">117 modules. Estimating and BOQ, takeoff, CAD and BIM, cost databases, tendering, reporting, and more.</p>
 
   <!-- live region for copy confirmation -->
   <div class="dl-sr-only" id="dl-live" role="status" aria-live="polite"></div>
@@ -593,11 +593,11 @@ a.dl-dl.btn-primary{color:#fff;}
 
 <footer class="pagefoot">
   <div class="wrap">
-    <div>(c) 2026 DataDrivenConstruction. Open source under AGPL-3.0.</div>
+    <div data-i18n="page.download.footer_copyright">(c) 2026 DataDrivenConstruction. Open source under AGPL-3.0.</div>
     <div>
-      <a href="/">Home</a> &middot;
-      <a href="/docs.html">Docs</a> &middot;
-      <a href="https://github.com/datadrivenconstruction/OpenConstructionERP/releases/latest" target="_blank" rel="noopener">Releases</a> &middot;
+      <a href="/" data-i18n="page.download.footer_home">Home</a> &middot;
+      <a href="/docs.html" data-i18n="page.download.footer_docs">Docs</a> &middot;
+      <a href="https://github.com/datadrivenconstruction/OpenConstructionERP/releases/latest" target="_blank" rel="noopener" data-i18n="page.download.footer_releases">Releases</a> &middot;
       <a href="https://github.com/datadrivenconstruction/OpenConstructionERP" target="_blank" rel="noopener">GitHub</a>
     </div>
   </div>
@@ -805,5 +805,6 @@ a.dl-dl.btn-primary{color:#fff;}
   });
 })();
 </script>
+<script src="/i18n/i18n.js" defer></script>
 </body>
 </html>

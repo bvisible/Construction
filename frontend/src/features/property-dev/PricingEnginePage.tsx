@@ -33,7 +33,7 @@ import {
   type ReactNode,
 } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import {
   useMutation,
   useQuery,
@@ -75,14 +75,18 @@ import {
 } from 'lucide-react';
 import {
   Badge,
+  Breadcrumb,
   Button,
   Card,
+  DismissibleInfo,
   EmptyState,
   InfoHint,
+  IntroRichText,
   MoneyDisplay,
   SideDrawer,
   SkeletonTable,
 } from '@/shared/ui';
+import { PageHeader } from '@/shared/ui/PageHeader';
 import { useTabKeyboardNav } from '@/shared/hooks/useTabKeyboardNav';
 import { useToastStore } from '@/stores/useToastStore';
 import { getErrorMessage } from '@/shared/lib/api';
@@ -136,36 +140,36 @@ const labelCls = 'block text-xs font-medium text-content-secondary mb-1';
  * Tenants can extend this via a free-form fallback (handled below).
  */
 const CURRENCY_OPTIONS: Array<{ code: string; label: string }> = [
-  { code: 'EUR', label: 'EUR — Euro' },
-  { code: 'USD', label: 'USD — US Dollar' },
-  { code: 'GBP', label: 'GBP — Pound Sterling' },
-  { code: 'CHF', label: 'CHF — Swiss Franc' },
-  { code: 'AED', label: 'AED — UAE Dirham' },
-  { code: 'SAR', label: 'SAR — Saudi Riyal' },
-  { code: 'QAR', label: 'QAR — Qatari Riyal' },
-  { code: 'KWD', label: 'KWD — Kuwaiti Dinar' },
-  { code: 'BHD', label: 'BHD — Bahraini Dinar' },
-  { code: 'OMR', label: 'OMR — Omani Rial' },
-  { code: 'TRY', label: 'TRY — Turkish Lira' },
-  { code: 'RUB', label: 'RUB — Russian Ruble' },
-  { code: 'PLN', label: 'PLN — Polish Złoty' },
-  { code: 'CZK', label: 'CZK — Czech Koruna' },
-  { code: 'NOK', label: 'NOK — Norwegian Krone' },
-  { code: 'SEK', label: 'SEK — Swedish Krona' },
-  { code: 'DKK', label: 'DKK — Danish Krone' },
-  { code: 'CAD', label: 'CAD — Canadian Dollar' },
-  { code: 'AUD', label: 'AUD — Australian Dollar' },
-  { code: 'NZD', label: 'NZD — New Zealand Dollar' },
-  { code: 'JPY', label: 'JPY — Japanese Yen' },
-  { code: 'CNY', label: 'CNY — Chinese Yuan' },
-  { code: 'HKD', label: 'HKD — Hong Kong Dollar' },
-  { code: 'SGD', label: 'SGD — Singapore Dollar' },
-  { code: 'INR', label: 'INR — Indian Rupee' },
-  { code: 'KRW', label: 'KRW — South Korean Won' },
-  { code: 'IDR', label: 'IDR — Indonesian Rupiah' },
-  { code: 'THB', label: 'THB — Thai Baht' },
-  { code: 'ZAR', label: 'ZAR — South African Rand' },
-  { code: 'BRL', label: 'BRL — Brazilian Real' },
+  { code: 'EUR', label: 'EUR - Euro' },
+  { code: 'USD', label: 'USD - US Dollar' },
+  { code: 'GBP', label: 'GBP - Pound Sterling' },
+  { code: 'CHF', label: 'CHF - Swiss Franc' },
+  { code: 'AED', label: 'AED - UAE Dirham' },
+  { code: 'SAR', label: 'SAR - Saudi Riyal' },
+  { code: 'QAR', label: 'QAR - Qatari Riyal' },
+  { code: 'KWD', label: 'KWD - Kuwaiti Dinar' },
+  { code: 'BHD', label: 'BHD - Bahraini Dinar' },
+  { code: 'OMR', label: 'OMR - Omani Rial' },
+  { code: 'TRY', label: 'TRY - Turkish Lira' },
+  { code: 'RUB', label: 'RUB - Russian Ruble' },
+  { code: 'PLN', label: 'PLN - Polish Złoty' },
+  { code: 'CZK', label: 'CZK - Czech Koruna' },
+  { code: 'NOK', label: 'NOK - Norwegian Krone' },
+  { code: 'SEK', label: 'SEK - Swedish Krona' },
+  { code: 'DKK', label: 'DKK - Danish Krone' },
+  { code: 'CAD', label: 'CAD - Canadian Dollar' },
+  { code: 'AUD', label: 'AUD - Australian Dollar' },
+  { code: 'NZD', label: 'NZD - New Zealand Dollar' },
+  { code: 'JPY', label: 'JPY - Japanese Yen' },
+  { code: 'CNY', label: 'CNY - Chinese Yuan' },
+  { code: 'HKD', label: 'HKD - Hong Kong Dollar' },
+  { code: 'SGD', label: 'SGD - Singapore Dollar' },
+  { code: 'INR', label: 'INR - Indian Rupee' },
+  { code: 'KRW', label: 'KRW - South Korean Won' },
+  { code: 'IDR', label: 'IDR - Indonesian Rupiah' },
+  { code: 'THB', label: 'THB - Thai Baht' },
+  { code: 'ZAR', label: 'ZAR - South African Rand' },
+  { code: 'BRL', label: 'BRL - Brazilian Real' },
 ];
 
 function fmtMoney(amount: string | number, currency: string): string {
@@ -708,7 +712,7 @@ function buildConflictGroups(rules: PricingRule[]): Map<string, ConflictGroup> {
     );
     if (winnersAtMinPrio.length === 1) {
       reasons.push(
-        `Lowest priority value (${minPrio}) — applied first by the engine.`,
+        `Lowest priority value (${minPrio}) - applied first by the engine.`,
       );
     } else {
       reasons.push(
@@ -718,12 +722,12 @@ function buildConflictGroups(rules: PricingRule[]): Map<string, ConflictGroup> {
     // Time-window narrowing
     if (winner.effective_to && arr.some((r) => !r.effective_to)) {
       reasons.push(
-        'Explicit end date — narrower time window beats open-ended siblings.',
+        'Explicit end date - narrower time window beats open-ended siblings.',
       );
     }
     if (winner.max_uses !== null && winner.max_uses !== undefined) {
       reasons.push(
-        `Max-uses cap (${winner.max_uses}) — once exhausted, the next-priority rule takes over.`,
+        `Max-uses cap (${winner.max_uses}) - once exhausted, the next-priority rule takes over.`,
       );
     }
     const reason = reasons.join(' ');
@@ -772,12 +776,12 @@ function ConflictBadge({
         {isWinner
           ? t(
               'propdev.pricing.conflict.winner',
-              '{{n}} rules apply — winner',
+              '{{n}} rules apply - winner',
               { n: others },
             )
           : t(
               'propdev.pricing.conflict.loser',
-              '{{n}} rules apply — superseded',
+              '{{n}} rules apply - superseded',
               { n: others },
             )}
       </button>
@@ -1172,7 +1176,7 @@ function RulesTab({ devId }: RulesTabProps): JSX.Element {
           <p className="text-xs text-content-secondary">
             {t(
               'propdev.pricing.rules_hint',
-              'Lower priority value applies first. Click the up/down arrows to reorder. Conflicting rules show a coloured badge — hover for the precedence explanation.',
+              'Lower priority value applies first. Click the up/down arrows to reorder. Conflicting rules show a coloured badge - hover for the precedence explanation.',
             )}
           </p>
         </div>
@@ -2398,7 +2402,7 @@ function QuoteHistoryTab({ devId }: { devId: string }): JSX.Element {
                           <span
                             title={t(
                               'propdev.pricing.history.snapshot_tip',
-                              'Pricing snapshotted on {{date}} — current active list differs.',
+                              'Pricing snapshotted on {{date}} - current active list differs.',
                               { date: snapDate },
                             )}
                             className="ml-1 inline-flex items-center"
@@ -2434,22 +2438,59 @@ function QuoteHistoryTab({ devId }: { devId: string }): JSX.Element {
 
 export function PricingEnginePage(): JSX.Element {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const { devId = '' } = useParams<{ devId: string }>();
   const [tab, setTab] = useState<Tab>('lists');
 
   return (
-    <div className="space-y-5">
-      <header>
-        <h1 className="text-xl font-semibold">
-          {t('propdev.pricing.title', 'Pricing engine')}
-        </h1>
-        <p className="text-sm text-content-secondary">
-          {t(
-            'propdev.pricing.subtitle',
+    <div className="space-y-5 animate-fade-in">
+      <Breadcrumb
+        items={[
+          {
+            label: t('propdev.title', { defaultValue: 'Property Development' }),
+            to: '/property-dev',
+          },
+          { label: t('propdev.pricing.title', { defaultValue: 'Pricing engine' }) },
+        ]}
+      />
+      <PageHeader
+        srTitle={t('propdev.pricing.title', { defaultValue: 'Pricing engine' })}
+        subtitle={t('propdev.pricing.subtitle', {
+          defaultValue:
             'Versioned, rule-driven sales pricing with simulator and audit history.',
-          )}
-        </p>
-      </header>
+        })}
+      />
+      <DismissibleInfo
+        storageKey="propdev-pricing"
+        title={t('propdev_pricing.intro_title', {
+          defaultValue: 'Price units by rule, not by guess',
+        })}
+        more={t('propdev_pricing.intro_more', { defaultValue: '' }) ? <IntroRichText text={t('propdev_pricing.intro_more')} /> : undefined}
+        links={[
+          {
+            label: t('propdev.title', { defaultValue: 'Property Development' }),
+            onClick: () => navigate('/property-dev'),
+          },
+          ...(devId
+            ? [
+                {
+                  label: t('propdev.inventory_map.title', {
+                    defaultValue: 'Inventory Map',
+                  }),
+                  onClick: () =>
+                    navigate(
+                      `/property-dev/developments/${devId}/inventory-map`,
+                    ),
+                },
+              ]
+            : []),
+        ]}
+      >
+        {t('propdev_pricing.intro_body', {
+          defaultValue:
+            'Set versioned sales price lists and pricing rules for a development, then run the simulator to see what a unit would quote at before you publish it. Every quote is kept in an audit history, and the prices flow into the development’s reservations and buyer quotes.',
+        })}
+      </DismissibleInfo>
       <Tabs tab={tab} setTab={setTab} />
       {tab === 'lists' && <PriceListsTab devId={devId} />}
       {tab === 'rules' && <RulesTab devId={devId} />}

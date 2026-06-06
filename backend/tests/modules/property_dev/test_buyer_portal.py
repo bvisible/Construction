@@ -673,3 +673,121 @@ async def test_issue_response_carries_correct_buyer_id(
     if expires.tzinfo is None:
         expires = expires.replace(tzinfo=UTC)
     assert expires > datetime.now(UTC)
+
+
+# ── 11. Buyer can download THEIR handover closeout package (RLS) ───────
+
+
+@pytest.mark.asyncio
+async def test_buyer_can_download_own_handover_package(
+    client: AsyncClient,
+    chain,
+):
+    """The magic-link buyer can pull their own closeout package as a ZIP,
+    and the overview advertises its availability (item #25).
+
+    RLS: the package is resolved strictly through the token's buyer →
+    their plot → that plot's handover. A buyer with no handover gets 404.
+    """
+    import io
+    import zipfile
+
+    # No handover yet → overview says unavailable + the package 404s.
+    issued = await client.post(
+        "/api/v1/property-dev/portal/issue/",
+        json={"buyer_id": chain["buyer_id"]},
+        headers=chain["headers"],
+    )
+    token = issued.json()["token"]
+
+    pre = await client.get(f"/api/v1/property-dev/portal/buyer/{token}/overview/")
+    assert pre.status_code == 200, pre.text
+    assert pre.json()["handover_package_available"] is False
+
+    missing = await client.get(
+        f"/api/v1/property-dev/portal/buyer/{token}/handover-package/",
+    )
+    assert missing.status_code == 404, missing.text
+
+    # Create a handover on the buyer's plot.
+    ho = await client.post(
+        "/api/v1/property-dev/handovers/",
+        json={"plot_id": chain["plot_id"], "scheduled_at": "2026-10-01"},
+        headers=chain["headers"],
+    )
+    assert ho.status_code == 201, ho.text
+
+    # Now the overview flips the flag and the ZIP downloads.
+    post = await client.get(f"/api/v1/property-dev/portal/buyer/{token}/overview/")
+    assert post.status_code == 200, post.text
+    assert post.json()["handover_package_available"] is True
+
+    res = await client.get(
+        f"/api/v1/property-dev/portal/buyer/{token}/handover-package/",
+    )
+    assert res.status_code == 200, res.text
+    assert res.headers["content-type"].startswith("application/zip")
+    zf = zipfile.ZipFile(io.BytesIO(res.content))
+    names = set(zf.namelist())
+    assert "MANIFEST.txt" in names
+    assert "manifest.json" in names
+
+
+@pytest.mark.asyncio
+async def test_stranger_token_cannot_download_anothers_package(
+    client: AsyncClient,
+    chain,
+):
+    """A token bound to buyer B never reaches buyer A's handover package.
+
+    Buyer B has their own plot with NO handover, so the endpoint 404s on
+    B's own (empty) scope - it can never resolve A's handover because the
+    lookup is keyed on ``ctx.buyer.plot_id``, not on any client-supplied id.
+    """
+    # Give the chain's buyer a handover.
+    ho = await client.post(
+        "/api/v1/property-dev/handovers/",
+        json={"plot_id": chain["plot_id"], "scheduled_at": "2026-10-02"},
+        headers=chain["headers"],
+    )
+    assert ho.status_code in (201, 409), ho.text  # 409 if a prior test already made one
+
+    # A second buyer (own plot, no handover) in the same development.
+    plot_b = await client.post(
+        "/api/v1/property-dev/plots/",
+        json={
+            "development_id": chain["development_id"],
+            "plot_number": f"BPB-{uuid.uuid4().hex[:4]}",
+            "area_m2": "60",
+            "price_base": "180000",
+            "currency": "EUR",
+            "status": "planned",
+        },
+        headers=chain["headers"],
+    )
+    assert plot_b.status_code == 201, plot_b.text
+
+    buyer_b = await client.post(
+        "/api/v1/property-dev/buyers/",
+        json={
+            "development_id": chain["development_id"],
+            "plot_id": plot_b.json()["id"],
+            "full_name": "Ms Stranger",
+            "email": f"strangerb-{uuid.uuid4().hex[:6]}@example.io",
+            "status": "lead",
+        },
+        headers=chain["headers"],
+    )
+    assert buyer_b.status_code == 201, buyer_b.text
+
+    issued_b = await client.post(
+        "/api/v1/property-dev/portal/issue/",
+        json={"buyer_id": buyer_b.json()["id"]},
+        headers=chain["headers"],
+    )
+    token_b = issued_b.json()["token"]
+
+    res = await client.get(
+        f"/api/v1/property-dev/portal/buyer/{token_b}/handover-package/",
+    )
+    assert res.status_code == 404, res.text

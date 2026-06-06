@@ -70,6 +70,7 @@ import {
   WideModalSection,
   ConfirmDialog,
 } from '@/shared/ui';
+import { PageHeader } from '@/shared/ui/PageHeader';
 import { useToastStore } from '@/stores/useToastStore';
 import { getErrorMessage } from '@/shared/lib/api';
 import {
@@ -229,7 +230,7 @@ export function DocumentTemplatesSettingsPage() {
   const customs = templates.filter((t) => t.is_custom);
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-5 animate-fade-in">
       <Breadcrumb
         items={[
           { label: t('nav.settings', { defaultValue: 'Settings' }) },
@@ -245,25 +246,16 @@ export function DocumentTemplatesSettingsPage() {
         ]}
       />
 
-      {/* Intro card with friendly explainer + variables modal trigger */}
-      <Card className="p-4">
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex-1">
-            <h1 className="flex items-center gap-2 text-lg font-semibold text-content-primary">
-              <FileSignature size={18} className="text-oe-blue" />
-              {t('property_dev.doc_templates.title', {
-                defaultValue: 'Document templates',
-              })}
-            </h1>
-            <p className="mt-1 text-sm text-content-secondary max-w-3xl">
-              {t('property_dev.doc_templates.intro', {
-                defaultValue:
-                  'Document templates power the PDF documents OpenConstructionERP generates for buyer journeys — reservation receipts, SPA contracts, handover protocols, warranty certificates. Pick a built-in template, preview it for your country / regulator, or upload your own .docx / .html / .pdf template.',
-              })}
-            </p>
-          </div>
+      <PageHeader
+        srTitle={t('property_dev.doc_templates.title', {
+          defaultValue: 'Document templates',
+        })}
+        subtitle={t('property_dev.doc_templates.intro', {
+          defaultValue:
+            'Document templates power the PDF documents OpenConstructionERP generates for buyer journeys, reservation receipts, SPA contracts, handover protocols, warranty certificates. Pick a built-in template, preview it for your country or regulator, or upload your own .docx / .html / .pdf template.',
+        })}
+        actions={
           <Button
-            size="sm"
             variant="ghost"
             icon={<Info size={14} />}
             onClick={() => setVariablesOpen(true)}
@@ -273,9 +265,13 @@ export function DocumentTemplatesSettingsPage() {
               defaultValue: 'Template variables',
             })}
           </Button>
-        </div>
+        }
+      />
+
+      {/* Locales / regulators meta + active-development context */}
+      <Card className="p-4">
         {dataQ.data && (
-          <div className="mt-3 space-y-2">
+          <div className="space-y-2">
             <div className="flex flex-wrap items-center gap-2">
               <div className="text-xs text-content-tertiary">
                 {t('property_dev.doc_templates.locales_supported', {
@@ -361,7 +357,7 @@ export function DocumentTemplatesSettingsPage() {
             <p className="mt-0.5 text-xs text-content-secondary max-w-2xl">
               {t('property_dev.doc_templates.editor_cta_subtitle', {
                 defaultValue:
-                  "Write HTML or Markdown directly here — no upload required. Click variable chips to insert {placeholders}, and see a live preview alongside the source.",
+                  "Write HTML or Markdown directly here - no upload required. Click variable chips to insert {placeholders}, and see a live preview alongside the source.",
               })}
             </p>
           </div>
@@ -1399,7 +1395,7 @@ function TemplateEditorModal({
           '    <h1>{development.name}</h1>\n' +
           '    <p>Buyer: {buyer.full_name}</p>\n' +
           '    <p>Unit: {plot.plot_number} ({plot.area_m2} m²)</p>\n' +
-          '    <p>Contract: {contract.contract_number} — {contract.total_value} {contract.currency}</p>\n' +
+          '    <p>Contract: {contract.contract_number} - {contract.total_value} {contract.currency}</p>\n' +
           '  </body>\n' +
           '</html>',
       );
@@ -1706,7 +1702,7 @@ function TemplateEditorModal({
                 <p className="text-[11px] text-content-tertiary">
                   {t('property_dev.doc_templates.variables_empty', {
                     defaultValue:
-                      'No variable documentation is available — load this page from a tenant with property-dev enabled.',
+                      'No variable documentation is available - load this page from a tenant with property-dev enabled.',
                   })}
                 </p>
               ) : (
@@ -1761,7 +1757,7 @@ function TemplateEditorModal({
               <div className="flex items-center justify-between text-[10px] font-medium uppercase tracking-wide text-content-tertiary mb-1">
                 <span>
                   {t('property_dev.doc_templates.editor_preview_pane', {
-                    defaultValue: 'Live preview (advisory — final render is server-side)',
+                    defaultValue: 'Live preview (advisory - final render is server-side)',
                   })}
                 </span>
               </div>
@@ -1809,7 +1805,7 @@ function VariablesModal({
           <p className="text-xs text-content-tertiary">
             {t('property_dev.doc_templates.variables_empty', {
               defaultValue:
-                'No variable documentation is available — load this page from a tenant with property-dev enabled.',
+                'No variable documentation is available - load this page from a tenant with property-dev enabled.',
             })}
           </p>
         ) : (
@@ -1874,7 +1870,7 @@ function LocaleStatusList({
                   })
                 : t('property_dev.doc_templates.locale_source_fallback', {
                     defaultValue:
-                      'No translation found — PDF falls back to English. Click to add.',
+                      'No translation found - PDF falls back to English. Click to add.',
                   });
           const label = `${s.native_name} (${s.english_name})`;
           return (
@@ -2001,7 +1997,7 @@ function LocaleEditorModal({
         type: 'success',
         title: t('common.saved', { defaultValue: 'Saved' }),
         message: t('property_dev.doc_templates.locale_saved_msg', {
-          defaultValue: 'Tenant override stored — PDFs will use it on next render.',
+          defaultValue: 'Tenant override stored - PDFs will use it on next render.',
         }),
       });
       onSaved();

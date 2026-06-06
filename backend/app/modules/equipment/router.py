@@ -11,6 +11,8 @@ Endpoints (mounted at /api/v1/equipment/):
     PATCH  /equipment/{id}                  - Update equipment
     DELETE /equipment/{id}                  - Delete equipment
     GET    /equipment/{id}/dashboard        - Per-unit dashboard
+    GET    /equipment/{id}/health-analytics - Predictive health score + anomalies
+    GET    /equipment/{id}/failure-forecast - Predicted next-service date
 
     POST   /equipment/{id}/telemetry        - Append a telemetry reading
     GET    /equipment/{id}/telemetry        - List telemetry (since=)
@@ -53,6 +55,7 @@ Endpoints (mounted at /api/v1/equipment/):
     PATCH  /damage-reports/{id}             - Update damage report
 
     GET    /dashboard/fleet                 - Fleet-wide dashboard
+    GET    /dashboard/fleet/optimization    - Fleet optimisation recommendations
 """
 
 from __future__ import annotations
@@ -79,10 +82,13 @@ from app.modules.equipment.schemas import (
     EquipmentTypeResponse,
     EquipmentTypeUpdate,
     EquipmentUpdate,
+    FailureForecastResponse,
     FleetDashboardResponse,
+    FleetOptimizationResponse,
     FuelLogCreate,
     FuelLogResponse,
     FuelLogUpdate,
+    HealthAnalyticsResponse,
     InspectionCreate,
     InspectionResponse,
     InspectionUpdate,
@@ -239,6 +245,36 @@ async def equipment_dashboard(
     service: EquipmentService = Depends(_get_service),
 ) -> EquipmentDashboardResponse:
     return await service.equipment_dashboard(equipment_id)
+
+
+# ── Predictive maintenance ───────────────────────────────────────────────
+
+
+@router.get(
+    "/equipment/{equipment_id}/health-analytics",
+    response_model=HealthAnalyticsResponse,
+)
+async def equipment_health_analytics(
+    equipment_id: uuid.UUID,
+    _perm: None = Depends(RequirePermission("equipment.read")),
+    service: EquipmentService = Depends(_get_service),
+) -> HealthAnalyticsResponse:
+    """‌⁠‍Deterministic health score (0-100), anomalies and maintenance trend
+    derived on the fly from this unit's telemetry history."""
+    return await service.health_analytics(equipment_id)
+
+
+@router.get(
+    "/equipment/{equipment_id}/failure-forecast",
+    response_model=FailureForecastResponse,
+)
+async def equipment_failure_forecast(
+    equipment_id: uuid.UUID,
+    _perm: None = Depends(RequirePermission("equipment.read")),
+    service: EquipmentService = Depends(_get_service),
+) -> FailureForecastResponse:
+    """‌⁠‍Predicted next-service date and confidence from usage / hours trend."""
+    return await service.failure_forecast(equipment_id)
 
 
 # ── Telemetry ────────────────────────────────────────────────────────────
@@ -756,3 +792,21 @@ async def fleet_dashboard(
     service: EquipmentService = Depends(_get_service),
 ) -> FleetDashboardResponse:
     return await service.fleet_dashboard()
+
+
+@router.get(
+    "/dashboard/fleet/optimization",
+    response_model=FleetOptimizationResponse,
+)
+async def fleet_optimization(
+    target_utilization: float = Query(default=70.0, ge=0, le=100),
+    window_days: int = Query(default=30, ge=1, le=365),
+    _perm: None = Depends(RequirePermission("equipment.read")),
+    service: EquipmentService = Depends(_get_service),
+) -> FleetOptimizationResponse:
+    """‌⁠‍Fleet-wide optimisation: underutilised units, maintenance bundles and
+    estimated monthly idle-cost savings."""
+    return await service.fleet_optimization(
+        target_utilization_pct=target_utilization,
+        window_days=window_days,
+    )

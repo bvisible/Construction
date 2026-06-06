@@ -1,4 +1,4 @@
-"""‌⁠‍HSE Advanced API routes — JSA, PTW, toolbox, PPE, audits, CAPA, KPI."""
+"""‌⁠‍HSE Advanced API routes - JSA, PTW, toolbox, PPE, audits, CAPA, KPI."""
 
 from __future__ import annotations
 
@@ -91,7 +91,7 @@ async def _guard_project(
     """Verify cross-project access on a HSE row's ``project_id``.
 
     Round-3 Wave F audit found that ``RequirePermission(...)`` only checks
-    role/permission scope — it does NOT prove the caller has access to the
+    role/permission scope - it does NOT prove the caller has access to the
     *specific* project the row belongs to. Without this guard, any user
     holding ``hse_advanced.update`` could PATCH / DELETE / state-transition
     a JSA / permit / audit / CAPA on a project they cannot otherwise see,
@@ -142,7 +142,7 @@ async def list_investigations(
             limit=limit,
         )
     else:
-        # No scope provided — return empty list rather than 422 so the
+        # No scope provided - return empty list rather than 422 so the
         # dashboard renders cleanly when no project is active.
         return []
     return [InvestigationResponse.model_validate(r) for r in rows]
@@ -284,7 +284,7 @@ async def submit_jsa(
     _perm: None = Depends(RequirePermission("hse_advanced.update")),
     service: HSEAdvancedService = Depends(_get_service),
 ) -> JSAResponse:
-    # R8: IDOR guard — FSM transitions were missing the project-access check
+    # R8: IDOR guard - FSM transitions were missing the project-access check
     # that PATCH/DELETE already have. Any user holding hse_advanced.update
     # could drive the state machine of a JSA on a project they cannot see.
     existing = await service.get_jsa(item_id)
@@ -421,9 +421,12 @@ async def approve_permit(
     item_id: uuid.UUID,
     payload: PermitApprovalPayload,
     user_id: CurrentUserId,
+    session: SessionDep,
     _perm: None = Depends(RequirePermission("hse_advanced.approve_permit")),
     service: HSEAdvancedService = Depends(_get_service),
 ) -> PermitResponse:
+    existing = await service.get_permit(item_id)
+    await _guard_project(existing.project_id, user_id, session)
     approver_uuid: uuid.UUID | None = None
     try:
         approver_uuid = uuid.UUID(str(user_id)) if user_id else None
@@ -436,9 +439,13 @@ async def approve_permit(
 @router.post("/permits/{item_id}/activate", response_model=PermitResponse)
 async def activate_permit(
     item_id: uuid.UUID,
+    user_id: CurrentUserId,
+    session: SessionDep,
     _perm: None = Depends(RequirePermission("hse_advanced.update")),
     service: HSEAdvancedService = Depends(_get_service),
 ) -> PermitResponse:
+    existing = await service.get_permit(item_id)
+    await _guard_project(existing.project_id, user_id, session)
     obj = await service.activate_permit(item_id)
     return PermitResponse.model_validate(obj)
 
@@ -446,9 +453,13 @@ async def activate_permit(
 @router.post("/permits/{item_id}/suspend", response_model=PermitResponse)
 async def suspend_permit(
     item_id: uuid.UUID,
+    user_id: CurrentUserId,
+    session: SessionDep,
     _perm: None = Depends(RequirePermission("hse_advanced.update")),
     service: HSEAdvancedService = Depends(_get_service),
 ) -> PermitResponse:
+    existing = await service.get_permit(item_id)
+    await _guard_project(existing.project_id, user_id, session)
     obj = await service.suspend_permit(item_id)
     return PermitResponse.model_validate(obj)
 
@@ -457,9 +468,13 @@ async def suspend_permit(
 async def close_permit(
     item_id: uuid.UUID,
     payload: PermitClosurePayload,
+    user_id: CurrentUserId,
+    session: SessionDep,
     _perm: None = Depends(RequirePermission("hse_advanced.close_permit")),
     service: HSEAdvancedService = Depends(_get_service),
 ) -> PermitResponse:
+    existing = await service.get_permit(item_id)
+    await _guard_project(existing.project_id, user_id, session)
     obj = await service.close_permit(
         item_id,
         closure_checklist_passed=payload.closure_checklist_passed,
@@ -471,9 +486,13 @@ async def close_permit(
 @router.post("/permits/{item_id}/cancel", response_model=PermitResponse)
 async def cancel_permit(
     item_id: uuid.UUID,
+    user_id: CurrentUserId,
+    session: SessionDep,
     _perm: None = Depends(RequirePermission("hse_advanced.update")),
     service: HSEAdvancedService = Depends(_get_service),
 ) -> PermitResponse:
+    existing = await service.get_permit(item_id)
+    await _guard_project(existing.project_id, user_id, session)
     obj = await service.cancel_permit(item_id)
     return PermitResponse.model_validate(obj)
 
@@ -1010,7 +1029,7 @@ async def project_kpi(
     incs = list((await session.execute(inc_stmt)).scalars().all())
 
     # OSHA 29 CFR 1904.7: a case is recordable if it involves medical
-    # treatment beyond first aid, hospitalisation or fatality — OR any
+    # treatment beyond first aid, hospitalisation or fatality - OR any
     # days away from work / restricted duty. Counting only the treatment
     # types would undercount (a lost-time case logged with no/“first_aid”
     # treatment_type is still recordable), which is mathematically
@@ -1150,9 +1169,13 @@ async def permit_prereq_status(
 async def update_permit_prereqs(
     item_id: uuid.UUID,
     payload: PermitPrerequisitesPayload,
+    user_id: CurrentUserId,
+    session: SessionDep,
     _perm: None = Depends(RequirePermission("hse_advanced.update_prereqs")),
     service: HSEAdvancedService = Depends(_get_service),
 ) -> PermitResponse:
+    existing = await service.get_permit(item_id)
+    await _guard_project(existing.project_id, user_id, session)
     obj = await service.update_permit_prerequisites(item_id, payload)
     return PermitResponse.model_validate(obj)
 
@@ -1180,7 +1203,7 @@ async def verify_effectiveness(
     _perm: None = Depends(RequirePermission("hse_advanced.verify_effectiveness")),
     service: HSEAdvancedService = Depends(_get_service),
 ) -> CAPAResponse:
-    """ISO 9001 §10.2.1 — verify a completed CAPA's effectiveness."""
+    """ISO 9001 §10.2.1 - verify a completed CAPA's effectiveness."""
     verifier: uuid.UUID | None = None
     try:
         verifier = uuid.UUID(str(user_id)) if user_id else None
@@ -1364,7 +1387,7 @@ async def list_corrective_actions(
     if project_id is not None and incident_id is None:
         await verify_project_access(project_id, user_id, session)
         # Resolve project-scope by joining via incident_id ∈ project's
-        # incidents — cheaper than a SQL join in this slim model.
+        # incidents - cheaper than a SQL join in this slim model.
         from app.modules.safety.models import SafetyIncident
 
         inc_ids = list(

@@ -1,4 +1,4 @@
-"""‌⁠‍Schedule service — business logic for 4D construction scheduling.
+"""‌⁠‍Schedule service - business logic for 4D construction scheduling.
 
 Stateless service layer. Handles:
 - Schedule CRUD with project scoping
@@ -101,67 +101,67 @@ WORK_CALENDARS: dict[str, dict] = {
         "work_days": {0, 1, 2, 3, 4},  # Mon-Fri
         "label": "Standard (Mon-Fri, 8h)",
     },
-    # 1. USA — USA_USD
+    # 1. USA - USA_USD
     "US": {
         "hours_per_day": 8,
         "work_days": {0, 1, 2, 3, 4},  # Mon-Fri
         "label": "USA (Mon-Fri, 8h)",
     },
-    # 2. UK — UK_GBP
+    # 2. UK - UK_GBP
     "UK": {
         "hours_per_day": 8,
         "work_days": {0, 1, 2, 3, 4},  # Mon-Fri
         "label": "UK (Mon-Fri, 8h)",
     },
-    # 3. Germany/DACH — DE_BERLIN
+    # 3. Germany/DACH - DE_BERLIN
     "DACH": {
         "hours_per_day": 8,
         "work_days": {0, 1, 2, 3, 4},  # Mon-Fri
         "label": "Germany/DACH (Mon-Fri, 8h)",
     },
-    # 4. Canada — ENG_TORONTO
+    # 4. Canada - ENG_TORONTO
     "CANADA": {
         "hours_per_day": 8,
         "work_days": {0, 1, 2, 3, 4},  # Mon-Fri
         "label": "Canada (Mon-Fri, 8h)",
     },
-    # 5. France — FR_PARIS
+    # 5. France - FR_PARIS
     "FRANCE": {
         "hours_per_day": 7,
         "work_days": {0, 1, 2, 3, 4},  # Mon-Fri (35h/week legal)
         "label": "France (Mon-Fri, 7h)",
     },
-    # 6. Spain — SP_BARCELONA
+    # 6. Spain - SP_BARCELONA
     "SPAIN": {
         "hours_per_day": 8,
         "work_days": {0, 1, 2, 3, 4},  # Mon-Fri
         "label": "Spain (Mon-Fri, 8h)",
     },
-    # 7. Brazil — PT_SAOPAULO
+    # 7. Brazil - PT_SAOPAULO
     "BRAZIL": {
         "hours_per_day": 8,
         "work_days": {0, 1, 2, 3, 4, 5},  # Mon-Sat (44h/week legal)
         "label": "Brazil (Mon-Sat, 8h)",
     },
-    # 8. Russia — RU_STPETERSBURG
+    # 8. Russia - RU_STPETERSBURG
     "RU": {
         "hours_per_day": 8,
         "work_days": {0, 1, 2, 3, 4},  # Mon-Fri
         "label": "Russia (Mon-Fri, 8h)",
     },
-    # 9. UAE/Gulf — AR_DUBAI
+    # 9. UAE/Gulf - AR_DUBAI
     "GULF": {
         "hours_per_day": 10,
         "work_days": {0, 1, 2, 3, 4, 5},  # Mon-Sat
         "label": "UAE/Gulf (Mon-Sat, 10h)",
     },
-    # 10. China — ZH_SHANGHAI
+    # 10. China - ZH_SHANGHAI
     "CHINA": {
         "hours_per_day": 8,
         "work_days": {0, 1, 2, 3, 4, 5},  # Mon-Sat (common in construction)
         "label": "China (Mon-Sat, 8h)",
     },
-    # 11. India — HI_MUMBAI
+    # 11. India - HI_MUMBAI
     "INDIA": {
         "hours_per_day": 8,
         "work_days": {0, 1, 2, 3, 4, 5},  # Mon-Sat
@@ -634,11 +634,11 @@ class ScheduleService:
     # Activity.dependencies (JSON) is a DERIVED mirror, always rebuilt from the
     # canonical rows. The three helpers below keep the two in lock-step inside
     # the calling transaction:
-    #   * _project_dependencies_to_relationships — write a JSON edge payload
+    #   * _project_dependencies_to_relationships - write a JSON edge payload
     #     into the canonical table (create / update / delete rows to match).
-    #   * _derive_dependencies_json — read the canonical rows for one activity
+    #   * _derive_dependencies_json - read the canonical rows for one activity
     #     and produce the JSON mirror shape stored on Activity.dependencies.
-    #   * _assert_predecessors_complete — completion guard, reads canonical
+    #   * _assert_predecessors_complete - completion guard, reads canonical
     #     predecessors only.
 
     @staticmethod
@@ -798,16 +798,14 @@ class ScheduleService:
         active_ids = {a.id for a in activities}
 
         existing_rels = await self.relationship_repo.list_for_schedule(schedule_id)
-        canonical_pairs: set[tuple[uuid.UUID, uuid.UUID]] = {
-            (r.predecessor_id, r.successor_id) for r in existing_rels
-        }
+        canonical_pairs: set[tuple[uuid.UUID, uuid.UUID]] = {(r.predecessor_id, r.successor_id) for r in existing_rels}
 
         edges_created = 0
         # 1. Promote orphan JSON edges into the canonical table.
         for act in activities:
             for pred_id, (dep_type, lag) in self._edge_payload_from_json(act.dependencies).items():
                 if pred_id not in active_ids:
-                    continue  # dangling reference to a deleted activity — drop
+                    continue  # dangling reference to a deleted activity - drop
                 pair = (pred_id, act.id)
                 if pair in canonical_pairs:
                     continue
@@ -1552,7 +1550,7 @@ class ScheduleService:
         # Access every attribute while still inside the async session context.
         positions = []
         for p in raw_positions:
-            # metadata_ uses SQL alias "metadata" — access carefully
+            # metadata_ uses SQL alias "metadata" - access carefully
             try:
                 meta = dict(p.metadata_) if p.metadata_ else {}
             except Exception:
@@ -1748,7 +1746,7 @@ class ScheduleService:
                 wbs_code=section["ordinal"],
                 start_date=section_start.isoformat(),
                 end_date=section_start.isoformat(),  # placeholder
-                duration_days=0,  # placeholder — computed from children
+                duration_days=0,  # placeholder - computed from children
                 progress_pct="0",
                 status="not_started",
                 activity_type="summary",
@@ -1900,7 +1898,7 @@ class ScheduleService:
             prev_section_summary_id = summary_id
             prev_section_duration_work_days = section_work_days_total
 
-            # Next section start: overlap via SS — section_start advances by
+            # Next section start: overlap via SS - section_start advances by
             # half the previous section's working days for partial overlap
             if children_data:
                 latest_end = max(date.fromisoformat(a["end_date"]) for a in children_data)
@@ -2250,7 +2248,7 @@ class ScheduleService:
             if is_critical:
                 critical_results.append(result)
 
-            # Update activity color + CPM metadata — persist so the frontend
+            # Update activity color + CPM metadata - persist so the frontend
             # can display ES/EF/LS/LF/float on next load without re-running CPM.
             cpm_meta = {
                 "es": es[act_id],
@@ -2412,7 +2410,7 @@ class ScheduleService:
         # Currency bug fix: the rolled-up labour/total costs are all scoped to
         # this one project, so they share a single ISO currency. Read the
         # project's real currency instead of hardcoding "EUR". Fall back to
-        # blank ("unknown") — NEVER to "EUR" — when the project has no currency.
+        # blank ("unknown") - NEVER to "EUR" - when the project has no currency.
         cur_result = await self.session.execute(_select(Project.currency).where(Project.id == project_id))
         currency = cur_result.scalar_one_or_none() or ""
 

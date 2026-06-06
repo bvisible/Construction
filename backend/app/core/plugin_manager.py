@@ -1,4 +1,4 @@
-"""‌⁠‍Module plugin manager — download, install, update, uninstall modules.
+"""‌⁠‍Module plugin manager - download, install, update, uninstall modules.
 
 Modules are distributed as zip archives with a standard structure:
     module-name/
@@ -53,6 +53,7 @@ def _version_key(version: str) -> tuple[int, ...]:
     if not match:
         return ()
     return tuple(int(part) for part in match.group(1).split("."))
+
 
 # Default community module registry
 DEFAULT_REGISTRY_URL = "https://registry.openestimate.io/api/v1"

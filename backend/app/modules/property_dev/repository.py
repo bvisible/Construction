@@ -75,7 +75,7 @@ class _BaseRepo:
         )
         await self.session.execute(stmt)
         await self.session.flush()
-        # Expire ONLY the updated row in the identity map — earlier code
+        # Expire ONLY the updated row in the identity map - earlier code
         # used session.expire_all() which nuked every loaded ORM object and
         # left siblings (Plot, Buyer, Development) with deferred columns
         # that tripped MissingGreenlet on later attribute reads under
@@ -347,7 +347,7 @@ class HandoverRepository(_BaseRepo):
     async def count_progress_for_development(self, development_id: uuid.UUID) -> tuple[int, int]:
         """Return ``(completed, scheduled_not_completed)`` handover counts.
 
-        SQL aggregate — avoids materialising every handover row just to
+        SQL aggregate - avoids materialising every handover row just to
         derive two dashboard tallies (was an N-rows-in-Python scan).
         """
         completed_expr = func.count().filter(Handover.completed_at.isnot(None))
@@ -564,7 +564,7 @@ class BuyerPipelineQueries:
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# R6 (task #137) — Lead / Reservation / SalesContract / PaymentSchedule / ContractParty
+# R6 (task #137) - Lead / Reservation / SalesContract / PaymentSchedule / ContractParty
 # ──────────────────────────────────────────────────────────────────────────
 
 
@@ -650,7 +650,16 @@ class ReservationRepository(_BaseRepo):
         return list((await self.session.execute(stmt)).scalars().all())
 
     async def next_sequence_for_plot(self, plot_id: uuid.UUID) -> int:
-        """Return next per-plot reservation sequence (max+1)."""
+        """Return next per-plot reservation sequence (max+1).
+
+        Locks the parent plot row (``SELECT ... FOR UPDATE``) before
+        counting so two concurrent reservation creates on the same plot
+        cannot read the same count and generate a duplicate
+        ``reservation_number`` (which would otherwise collide on the
+        ``uq_oe_property_dev_reservation_plot_number`` unique constraint).
+        The lock is released when the surrounding transaction commits.
+        """
+        await self.session.execute(select(Plot.id).where(Plot.id == plot_id).with_for_update())
         stmt = select(func.count()).select_from(Reservation).where(Reservation.plot_id == plot_id)
         existing = (await self.session.execute(stmt)).scalar_one()
         return int(existing) + 1
@@ -724,6 +733,17 @@ class SalesContractRepository(_BaseRepo):
         return list((await self.session.execute(stmt)).scalars().all())
 
     async def next_sequence_for_plot(self, plot_id: uuid.UUID) -> int:
+        """Return next per-plot contract sequence (max+1).
+
+        Locks the parent plot row (``SELECT ... FOR UPDATE``) before
+        counting so two concurrent SPA creates on the same plot cannot
+        read the same count and generate a duplicate ``contract_number``
+        (which would otherwise collide on the
+        ``uq_oe_property_dev_sales_contract_plot_number`` unique
+        constraint). The lock is released when the surrounding
+        transaction commits.
+        """
+        await self.session.execute(select(Plot.id).where(Plot.id == plot_id).with_for_update())
         stmt = select(func.count()).select_from(SalesContract).where(SalesContract.plot_id == plot_id)
         existing = (await self.session.execute(stmt)).scalar_one()
         return int(existing) + 1
@@ -867,7 +887,7 @@ class ContractPartyRepository(_BaseRepo):
 
 
 # ════════════════════════════════════════════════════════════════════════
-# Task #138 — Broker / Commission / Escrow / PriceMatrix / Phase / Block
+# Task #138 - Broker / Commission / Escrow / PriceMatrix / Phase / Block
 # ════════════════════════════════════════════════════════════════════════
 
 
@@ -990,7 +1010,7 @@ class CommissionAgreementRepository(_BaseRepo):
     ) -> list[CommissionAgreement]:
         """Agreements that are ``status='active'`` and effective on date.
 
-        ``on_date`` is an ISO ``YYYY-MM-DD`` string — strings compare in
+        ``on_date`` is an ISO ``YYYY-MM-DD`` string - strings compare in
         the right order across SQLite + Postgres for ISO dates.
         """
         stmt = (
@@ -1251,7 +1271,7 @@ class PriceMatrixRepository(_BaseRepo):
         return result.scalar_one_or_none()
 
 
-# ── Pricing engine — SalesPriceList / SalesPriceListEntry / SalesPricingRule ──
+# ── Pricing engine - SalesPriceList / SalesPriceListEntry / SalesPricingRule ──
 
 
 class PriceListRepository(_BaseRepo):

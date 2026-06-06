@@ -17,10 +17,10 @@ import {
   Pencil,
   Trash2,
   Save,
-  ArrowRight,
   Info,
   Tags,
   Gauge,
+  HeartPulse,
 } from 'lucide-react';
 import {
   Button,
@@ -30,9 +30,12 @@ import {
   Breadcrumb,
   SkeletonTable,
   ConfirmDialog,
+  DismissibleInfo,
+  IntroRichText,
 } from '@/shared/ui';
 import { MoneyDisplay } from '@/shared/ui/MoneyDisplay';
 import { DateDisplay } from '@/shared/ui/DateDisplay';
+import { PageHeader } from '@/shared/ui/PageHeader';
 import { useToastStore } from '@/stores/useToastStore';
 import { getErrorMessage } from '@/shared/lib/api';
 import { useTabKeyboardNav } from '@/shared/hooks/useTabKeyboardNav';
@@ -70,8 +73,15 @@ import { WorkOrderFormModal } from './modals/WorkOrderFormModal';
 import { InspectionFormModal } from './modals/InspectionFormModal';
 import { DamageReportFormModal } from './modals/DamageReportFormModal';
 import { TypeFormModal } from './modals/TypeFormModal';
+import { EquipmentHealthDashboard } from './components/EquipmentHealthDashboard';
+import { FleetOptimizationPanel } from './components/FleetOptimizationPanel';
 
-type DrawerTab = 'utilization' | 'maintenance' | 'certifications' | 'damage';
+type DrawerTab =
+  | 'utilization'
+  | 'health'
+  | 'maintenance'
+  | 'certifications'
+  | 'damage';
 const EQUIPMENT_TAB_IDS = ['assets', 'types'] as const;
 type PageTab = (typeof EQUIPMENT_TAB_IDS)[number];
 
@@ -123,84 +133,9 @@ function toNum(n: number | string | null | undefined): number {
   return typeof n === 'number' ? n : Number(n) || 0;
 }
 
-/* ── Workflow intro ──────────────────────────────────────────────────────
- *
- * Explains what the fleet register is FOR (not just an asset list) and how
- * it connects to the rest of the platform: hour-meter / fuel telemetry and
- * maintenance work-order costs roll up into project Finance, and an asset
- * with an expired inspection or non-active status is automatically blocked
- * from new resource assignments. Dismissible per-session.
- */
-function WorkflowIntro() {
-  const { t } = useTranslation();
-  const navigate = useNavigate();
-  const [dismissed, setDismissed] = useState(
-    () => sessionStorage.getItem('oe.eq.introDismissed') === '1',
-  );
-  if (dismissed) return null;
-  const dismiss = () => {
-    sessionStorage.setItem('oe.eq.introDismissed', '1');
-    setDismissed(true);
-  };
-  return (
-    <Card padding="md" className="border-oe-blue/20 bg-oe-blue-subtle/10">
-      <div className="flex items-start gap-3">
-        <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-oe-blue-subtle text-oe-blue-text">
-          <Truck size={16} />
-        </div>
-        <div className="min-w-0 flex-1">
-          <p className="text-sm font-semibold text-content-primary">
-            {t('equipment.intro_title', {
-              defaultValue: 'Track utilisation, cost and safety per asset',
-            })}
-          </p>
-          <p className="mt-1 text-xs leading-relaxed text-content-secondary">
-            {t('equipment.intro_body', {
-              defaultValue:
-                'Register every owned, rented or leased machine. Open an asset to see utilisation, fuel cost month-to-date, open maintenance work orders and certification expiry. An asset whose status is not "active", or whose required inspection has expired, is automatically blocked from new resource assignments — keeping unsafe plant off site.',
-            })}
-          </p>
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            <span className="text-2xs font-medium uppercase tracking-wide text-content-tertiary">
-              {t('equipment.intro_connects', { defaultValue: 'Connects to' })}
-            </span>
-            <button
-              type="button"
-              onClick={() => navigate('/resources')}
-              className="inline-flex items-center gap-1 rounded-full border border-border-light bg-surface-primary px-2.5 py-1 text-xs font-medium text-content-secondary transition-colors hover:border-oe-blue hover:text-oe-blue"
-            >
-              {t('equipment.intro_link_resources', {
-                defaultValue: 'Resource assignments',
-              })}
-              <ArrowRight size={11} />
-            </button>
-            <button
-              type="button"
-              onClick={() => navigate('/finance')}
-              className="inline-flex items-center gap-1 rounded-full border border-border-light bg-surface-primary px-2.5 py-1 text-xs font-medium text-content-secondary transition-colors hover:border-oe-blue hover:text-oe-blue"
-            >
-              {t('equipment.intro_link_finance', {
-                defaultValue: 'Cost & Finance',
-              })}
-              <ArrowRight size={11} />
-            </button>
-          </div>
-        </div>
-        <button
-          type="button"
-          onClick={dismiss}
-          className="shrink-0 rounded-md p-1 text-content-tertiary transition-colors hover:bg-surface-secondary hover:text-content-primary"
-          aria-label={t('common.dismiss', { defaultValue: 'Dismiss' })}
-        >
-          <X size={14} />
-        </button>
-      </div>
-    </Card>
-  );
-}
-
 export function EquipmentPage() {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const [pageTab, setPageTab] = useState<PageTab>('assets');
   const onTabKeyDown = useTabKeyboardNav<PageTab>({
     ids: EQUIPMENT_TAB_IDS,
@@ -224,6 +159,27 @@ export function EquipmentPage() {
       }),
   });
 
+  // The fleet is not single-currency; use the most common configured
+  // currency among loaded units so the Fleet Intelligence money cells render
+  // in something meaningful rather than an em-dash.
+  const fleetCurrency = useMemo(() => {
+    const items = eqQ.data ?? [];
+    const counts = new Map<string, number>();
+    for (const it of items) {
+      const c = (it.currency || '').trim();
+      if (c) counts.set(c, (counts.get(c) ?? 0) + 1);
+    }
+    let best: string | undefined;
+    let bestN = 0;
+    for (const [c, n] of counts) {
+      if (n > bestN) {
+        best = c;
+        bestN = n;
+      }
+    }
+    return best;
+  }, [eqQ.data]);
+
   const filtered = useMemo(() => {
     const items = eqQ.data ?? [];
     const s = search.toLowerCase();
@@ -243,33 +199,55 @@ export function EquipmentPage() {
       <Breadcrumb
         items={[
           {
-            label: t('equipment.title', { defaultValue: 'Equipment & Fleet' }),
+            label: t('nav.equipment', { defaultValue: 'Equipment & Fleet' }),
           },
         ]}
       />
 
-      <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div>
-          <h1 className="text-2xl font-semibold text-content-primary">
-            {t('equipment.title', { defaultValue: 'Equipment & Fleet' })}
-          </h1>
-          <p className="mt-1 text-sm text-content-secondary">
-            {t('equipment.subtitle', {
-              defaultValue:
-                'Track equipment assets, utilization, maintenance and certifications.',
-            })}
-          </p>
-        </div>
-        <Button
-          variant="primary"
-          icon={<Plus size={14} />}
-          onClick={() => setCreateOpen(true)}
-        >
-          {t('equipment.new', { defaultValue: 'New Asset' })}
-        </Button>
-      </div>
+      <PageHeader
+        srTitle={t('equipment.title', { defaultValue: 'Equipment & Fleet' })}
+        subtitle={t('equipment.subtitle', {
+          defaultValue:
+            'Track equipment assets, utilization, maintenance and certifications.',
+        })}
+        actions={
+          <Button
+            variant="primary"
+            size="sm"
+            icon={<Plus size={14} />}
+            onClick={() => setCreateOpen(true)}
+          >
+            {t('equipment.new', { defaultValue: 'New Asset' })}
+          </Button>
+        }
+      />
 
-      <WorkflowIntro />
+      <DismissibleInfo
+        storageKey="equipment"
+        title={t('equipment.intro_title', {
+          defaultValue: 'Keep unsafe plant off the site',
+        })}
+        more={
+          t('equipment.intro_more', { defaultValue: '' })
+            ? <IntroRichText text={t('equipment.intro_more')} />
+            : undefined
+        }
+        links={[
+          {
+            label: t('equipment.intro_link_resources', { defaultValue: 'Resources' }),
+            onClick: () => navigate('/resources'),
+          },
+          {
+            label: t('equipment.intro_link_finance', { defaultValue: 'Finance' }),
+            onClick: () => navigate('/finance'),
+          },
+        ]}
+      >
+        {t('equipment.intro_body', {
+          defaultValue:
+            'Register every owned, rented or leased machine, then open an asset to see utilisation, month-to-date fuel cost, open maintenance work orders and certification expiry. An asset that is not active, or whose required inspection has lapsed, is automatically blocked from new resource assignments, and its running cost flows through to Finance.',
+        })}
+      </DismissibleInfo>
 
       <div className="border-b border-border-light">
         <nav
@@ -315,6 +293,10 @@ export function EquipmentPage() {
         <TypesPage />
       ) : (
       <>
+      <FleetOptimizationPanel
+        currency={fleetCurrency}
+        onSelect={setSelectedId}
+      />
       <div className="flex flex-wrap items-center gap-2">
         <div className="relative flex-1 min-w-[200px] max-w-md">
           <Search
@@ -746,7 +728,7 @@ function DetailDrawer({ id, onClose }: { id: string; onClose: () => void }) {
                 <span>
                   {t('equipment.blocked_banner', {
                     defaultValue:
-                      'This unit is blocked from new assignments — its status is not active or a required inspection has expired.',
+                      'This unit is blocked from new assignments - its status is not active or a required inspection has expired.',
                   })}
                 </span>
               </div>
@@ -762,6 +744,13 @@ function DetailDrawer({ id, onClose }: { id: string; onClose: () => void }) {
                         defaultValue: 'Utilization',
                       }),
                       icon: Activity,
+                    },
+                    {
+                      id: 'health',
+                      label: t('equipment.tab_health', {
+                        defaultValue: 'Health & Analytics',
+                      }),
+                      icon: HeartPulse,
                     },
                     {
                       id: 'maintenance',
@@ -815,6 +804,9 @@ function DetailDrawer({ id, onClose }: { id: string; onClose: () => void }) {
                   loading={telemetryQ.isLoading}
                   dashboard={dashQ.data ?? null}
                 />
+              )}
+              {tab === 'health' && (
+                <EquipmentHealthDashboard equipmentId={eq.id} />
               )}
               {tab === 'maintenance' && (
                 <MaintenanceTab

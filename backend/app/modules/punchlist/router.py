@@ -1,15 +1,15 @@
 """‌⁠‍Punch List API routes.
 
 Endpoints:
-    POST   /items                        — Create punch item
-    GET    /items?project_id=X           — List with filters
-    GET    /items/{id}                   — Get single
-    PATCH  /items/{id}                   — Update
-    DELETE /items/{id}                   — Delete
-    POST   /items/{id}/transition        — Status transition with validation
-    GET    /summary?project_id=X         — Aggregated stats
-    POST   /items/{id}/photos            — Upload photo
-    DELETE /items/{id}/photos/{index}    — Remove photo
+    POST   /items                        - Create punch item
+    GET    /items?project_id=X           - List with filters
+    GET    /items/{id}                   - Get single
+    PATCH  /items/{id}                   - Update
+    DELETE /items/{id}                   - Delete
+    POST   /items/{id}/transition        - Status transition with validation
+    GET    /summary?project_id=X         - Aggregated stats
+    POST   /items/{id}/photos            - Upload photo
+    DELETE /items/{id}/photos/{index}    - Remove photo
 """
 
 import logging
@@ -125,7 +125,7 @@ async def create_item(
         logger.exception("Unable to create punch item")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Unable to create punch item — operation aborted",
+            detail="Unable to create punch item - operation aborted",
         )
 
 
@@ -144,6 +144,7 @@ async def list_items(
     assigned_to: str | None = Query(default=None),
     category: str | None = Query(default=None),
     trade: str | None = Query(default=None),
+    _perm: None = Depends(RequirePermission("punchlist.read")),
     service: PunchListService = Depends(_get_service),
 ) -> list[PunchItemResponse]:
     """List punch items for a project with optional filters."""
@@ -164,7 +165,7 @@ async def list_items(
 # ── Root aliases ─────────────────────────────────────────────────────────────
 #
 # Sibling modules (changeorders, tasks, meetings, fieldreports, …) expose the
-# canonical collection at ``/`` — punchlist historically only exposed it at
+# canonical collection at ``/`` - punchlist historically only exposed it at
 # ``/items/`` which trips both REST clients and the QA crawler. We keep the
 # old paths working and add ``GET /`` + ``POST /`` aliases so the module
 # follows the same shape as everything else.
@@ -182,9 +183,10 @@ async def list_items_root_alias(
     assigned_to: str | None = Query(default=None),
     category: str | None = Query(default=None),
     trade: str | None = Query(default=None),
+    _perm: None = Depends(RequirePermission("punchlist.read")),
     service: PunchListService = Depends(_get_service),
 ) -> list[PunchItemResponse]:
-    """Alias for ``GET /items/`` — see that handler for full semantics."""
+    """Alias for ``GET /items/`` - see that handler for full semantics."""
     return await list_items(
         session=session,
         project_id=project_id,
@@ -208,7 +210,7 @@ async def create_item_root_alias(
     _perm: None = Depends(RequirePermission("punchlist.create")),
     service: PunchListService = Depends(_get_service),
 ) -> PunchItemResponse:
-    """Alias for ``POST /items/`` — see that handler for full semantics."""
+    """Alias for ``POST /items/`` - see that handler for full semantics."""
     await verify_project_access(data.project_id, user_id, session)
     try:
         item = await service.create_item(data, user_id=user_id)
@@ -219,7 +221,7 @@ async def create_item_root_alias(
         logger.exception("Unable to create punch item")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Unable to create punch item — operation aborted",
+            detail="Unable to create punch item - operation aborted",
         )
 
 
@@ -231,6 +233,7 @@ async def get_item(
     item_id: uuid.UUID,
     session: SessionDep,
     user_id: CurrentUserId = None,  # type: ignore[assignment]
+    _perm: None = Depends(RequirePermission("punchlist.read")),
     service: PunchListService = Depends(_get_service),
 ) -> PunchItemResponse:
     """Get a single punch item."""
@@ -397,7 +400,7 @@ async def upload_photo(
         logger.exception("Unable to save photo for punch item %s", item_id)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Unable to save photo — storage error",
+            detail="Unable to save photo - storage error",
         )
 
     # Store relative path in the database
@@ -409,7 +412,7 @@ async def upload_photo(
     # timestamps + defaults are filled by SQLAlchemy / Base mixin and
     # the row stays in sync with the rest of the documents module if
     # its schema evolves.  Best-effort: a failure here MUST NOT break
-    # the upload — the photo itself is already persisted.
+    # the upload - the photo itself is already persisted.
     try:
         from app.modules.documents.models import Document
 
@@ -458,6 +461,7 @@ async def bulk_close(
     data: PunchBulkCloseRequest,
     user_id: CurrentUserId,
     session: SessionDep,
+    payload: CurrentUserPayload,
     _perm: None = Depends(RequirePermission("punchlist.update")),
     service: PunchListService = Depends(_get_service),
 ) -> PunchBulkCloseResponse:
@@ -469,6 +473,10 @@ async def bulk_close(
     standard ``punchlist.item.status_changed`` event.
     """
     await verify_project_access(data.project_id, user_id, session)
+    # Bulk-close drives items straight to ``closed``; mirror the elevated
+    # permission that ``transition_status`` requires for verify/close moves
+    # so the bulk path cannot bypass the punchlist.verify gate.
+    await RequirePermission("punchlist.verify")(payload)
     summary = await service.bulk_close(
         data.project_id,
         list(data.ids),
@@ -486,6 +494,7 @@ async def export_pdf(
     session: SessionDep,
     project_id: uuid.UUID = Query(...),
     user_id: CurrentUserId = None,  # type: ignore[assignment]
+    _perm: None = Depends(RequirePermission("punchlist.read")),
     service: PunchListService = Depends(_get_service),
 ) -> Response:
     """Export punch list as a PDF report."""
@@ -503,6 +512,7 @@ async def export_excel(
     session: SessionDep,
     project_id: uuid.UUID = Query(...),
     user_id: CurrentUserId = None,  # type: ignore[assignment]
+    _perm: None = Depends(RequirePermission("punchlist.read")),
     service: PunchListService = Depends(_get_service),
 ) -> Response:
     """Export punch list as an Excel spreadsheet."""

@@ -2,12 +2,12 @@
 
 Public API (import from ``app.core.email``):
 
-    - EmailMessage          — value object describing a single email
-    - DeliveryResult        — structured send outcome (never raises)
-    - EmailBackend          — ABC for custom transports
-    - EmailService          — facade used by feature modules
-    - get_email_service     — returns a process-cached ``EmailService``
-    - reset_email_service_cache — test helper
+    - EmailMessage          - value object describing a single email
+    - DeliveryResult        - structured send outcome (never raises)
+    - EmailBackend          - ABC for custom transports
+    - EmailService          - facade used by feature modules
+    - get_email_service     - returns a process-cached ``EmailService``
+    - reset_email_service_cache - test helper
 
     Template helpers (``template_*``) are re-exported from
     ``app.core.email.templates`` for convenience.
@@ -25,16 +25,16 @@ Example::
 
 Backends supported out of the box (pick via ``EMAIL_BACKEND``):
 
-    console — log to app logger at INFO (default for local dev)
-    smtp    — real SMTP delivery (production)
-    noop    — drop silently (CI)
-    memory  — capture into a list for test assertions
+    console - log to app logger at INFO (default for local dev)
+    smtp    - real SMTP delivery (production)
+    noop    - drop silently (CI)
+    memory  - capture into a list for test assertions
 
 Add a new transport by subclassing ``EmailBackend`` and wiring it into
 ``service._resolve_backend``.
 """
 
-from .base import DeliveryResult, EmailBackend, EmailMessage
+from .base import DeliveryResult, EmailAttachment, EmailBackend, EmailMessage
 from .console import ConsoleEmailBackend
 from .memory import MemoryEmailBackend
 from .noop import NoopEmailBackend
@@ -52,6 +52,7 @@ from .templates import (
 __all__ = [
     "ConsoleEmailBackend",
     "DeliveryResult",
+    "EmailAttachment",
     "EmailBackend",
     "EmailMessage",
     "EmailService",

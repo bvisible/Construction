@@ -59,7 +59,7 @@ async def _accessible_project_ids(session: SessionDep, payload: dict) -> set[str
     Mirrors the platform-wide scoping used by ``verify_project_access`` /
     ``ProjectRepository.list_for_user``: admins see every project, everyone
     else sees only projects they own or are a team member of. Used to scope
-    the BCF project list — the underlying service intentionally returns every
+    the BCF project list - the underlying service intentionally returns every
     project, so the router filters it down to the caller's tenant.
     """
     from app.modules.projects.repository import ProjectRepository
@@ -133,7 +133,7 @@ async def foundation_current_user(
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# BCF API 3.0 — Projects
+# BCF API 3.0 - Projects
 # ══════════════════════════════════════════════════════════════════════════
 
 
@@ -170,7 +170,7 @@ async def bcf_get_project(
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# BCF API 3.0 — Topics
+# BCF API 3.0 - Topics
 # ══════════════════════════════════════════════════════════════════════════
 
 
@@ -240,11 +240,11 @@ async def bcf_update_topic(
 ) -> BCFTopic:
     """Update a BCF topic (caller must be able to access the project)."""
     await verify_project_access(project_id, user_id, session)
-    return await service.update_topic(project_id, topic_guid, data)
+    return await service.update_topic(project_id, topic_guid, data, uuid.UUID(user_id))
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# BCF API 3.0 — Comments
+# BCF API 3.0 - Comments
 # ══════════════════════════════════════════════════════════════════════════
 
 
@@ -285,7 +285,7 @@ async def bcf_create_comment(
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# BCF API 3.0 — Viewpoints
+# BCF API 3.0 - Viewpoints
 # ══════════════════════════════════════════════════════════════════════════
 
 

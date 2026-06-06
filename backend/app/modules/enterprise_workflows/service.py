@@ -1,4 +1,4 @@
-"""‌⁠‍Enterprise Workflows service — business logic for approval workflows.
+"""‌⁠‍Enterprise Workflows service - business logic for approval workflows.
 
 Stateless service layer.
 
@@ -10,7 +10,7 @@ Hardening notes (2026-05-21 sweep):
   in a tight ``current_step + 1`` cycle. Enforced at create + update.
 * ``ALLOWED_ACTION_TYPES`` whitelists the per-step ``action_type`` keys
   the engine knows how to dispatch. Unknown values are rejected at
-  create / update so we never silently dispatch — and never grow into
+  create / update so we never silently dispatch - and never grow into
   a sandbox-escape vector where a step JSON node executes templated
   SQL / Python / JS.
 * ``role`` on each step must resolve to a canonical Role via
@@ -18,7 +18,7 @@ Hardening notes (2026-05-21 sweep):
   at the schema boundary rather than silently locking / unlocking
   approvals downstream.
 * Every approve / reject / cancel transition appends an ``audit_log``
-  entry to ``request.metadata_`` — who, when, what step, outcome,
+  entry to ``request.metadata_`` - who, when, what step, outcome,
   notes. This is the forensic trail; the single ``decided_by`` field
   only records the final decider, which is insufficient for
   multi-step workflows.
@@ -57,9 +57,9 @@ MAX_STEPS: int = 32
 ALLOWED_ACTION_TYPES: frozenset[str] = frozenset(
     {
         "approve",  # Standard approve / reject decision step (default)
-        "review",  # Soft review — captured but doesn't gate progression
+        "review",  # Soft review - captured but doesn't gate progression
         "sign_off",  # Final binding sign-off (e.g. director / client)
-        "notify",  # Send-and-forward — no decision required
+        "notify",  # Send-and-forward - no decision required
     }
 )
 
@@ -88,7 +88,7 @@ def _validate_steps(steps: list[dict] | None) -> None:
             detail=f"Workflow exceeds maximum of {MAX_STEPS} steps (got {len(steps)})",
         )
 
-    # Defer permissions import — keeps the module light at import time.
+    # Defer permissions import - keeps the module light at import time.
     from app.core.permissions import _resolve_role
 
     for idx, step in enumerate(steps):
@@ -170,14 +170,27 @@ class WorkflowService:
         logger.info("Workflow created: %s (%s)", workflow.name, workflow.entity_type)
         return workflow
 
-    async def get_workflow(self, workflow_id: uuid.UUID) -> ApprovalWorkflow:
-        """Get workflow by ID. Raises 404 if not found."""
+    async def get_workflow(
+        self,
+        workflow_id: uuid.UUID,
+        user_id: str | None = None,
+    ) -> ApprovalWorkflow:
+        """Get workflow by ID. Raises 404 if not found.
+
+        When *user_id* is supplied (public read path), enforce project-scoped
+        access via ``_verify_workflow_project_access`` so a caller outside the
+        workflow's project gets a 404 and never learns it exists. Internal
+        callers fetch with ``user_id=None`` and run their own access check
+        afterwards, so the helper stays a plain 404-fetch for them.
+        """
         workflow = await self.workflows.get(workflow_id)
         if workflow is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Workflow not found",
             )
+        if user_id is not None:
+            await self._verify_workflow_project_access(workflow, user_id)
         return workflow
 
     async def list_workflows(
@@ -186,10 +199,20 @@ class WorkflowService:
         project_id: uuid.UUID | None = None,
         entity_type: str | None = None,
         is_active: bool | None = None,
+        user_id: str | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> tuple[list[ApprovalWorkflow], int]:
-        """List workflows with filters."""
+        """List workflows with filters.
+
+        When a ``project_id`` filter is supplied with a *user_id* (public read
+        path), verify project-scoped access first so a caller cannot enumerate
+        workflows for a project they are not a member of (404 on denial).
+        """
+        if project_id is not None and user_id is not None:
+            from app.dependencies import verify_project_access
+
+            await verify_project_access(project_id, str(user_id), self.session)
         return await self.workflows.list(
             project_id=project_id,
             entity_type=entity_type,
@@ -262,14 +285,28 @@ class WorkflowService:
         )
         return request
 
-    async def get_request(self, request_id: uuid.UUID) -> ApprovalRequest:
-        """Get approval request by ID. Raises 404 if not found."""
+    async def get_request(
+        self,
+        request_id: uuid.UUID,
+        user_id: str | None = None,
+    ) -> ApprovalRequest:
+        """Get approval request by ID. Raises 404 if not found.
+
+        When *user_id* is supplied (public read path), load the owning
+        workflow and enforce project-scoped access so a caller outside the
+        workflow's project gets a 404 and never learns the request exists.
+        Internal callers fetch with ``user_id=None`` and run their own access
+        check afterwards.
+        """
         request = await self.requests.get(request_id)
         if request is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Approval request not found",
             )
+        if user_id is not None:
+            workflow = await self.get_workflow(request.workflow_id)
+            await self._verify_workflow_project_access(workflow, user_id)
         return request
 
     async def list_requests(
@@ -278,10 +315,20 @@ class WorkflowService:
         workflow_id: uuid.UUID | None = None,
         entity_type: str | None = None,
         request_status: str | None = None,
+        user_id: str | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> tuple[list[ApprovalRequest], int]:
-        """List approval requests with filters."""
+        """List approval requests with filters.
+
+        When a ``workflow_id`` filter is supplied with a *user_id* (public read
+        path), load the owning workflow and verify project-scoped access first
+        so a caller cannot enumerate approval requests for a workflow whose
+        project they are not a member of (404 on denial).
+        """
+        if workflow_id is not None and user_id is not None:
+            workflow = await self.get_workflow(workflow_id)
+            await self._verify_workflow_project_access(workflow, user_id)
         return await self.requests.list(
             workflow_id=workflow_id,
             entity_type=entity_type,
@@ -301,7 +348,7 @@ class WorkflowService:
     ) -> dict:
         """Append an audit-log entry to a request's metadata.
 
-        Returns the updated metadata dict — caller is responsible for
+        Returns the updated metadata dict - caller is responsible for
         persisting it via ``self.requests.update(metadata_=...)``.
         Each entry records who did what at which step, when, and the
         optional decision notes. Loses no information across step
@@ -333,7 +380,7 @@ class WorkflowService:
         (or ``assignee_id`` if explicitly assigned). Raises 403 otherwise.
 
         Steps without a role restriction stay open to anyone (legacy
-        behaviour). This guards against BUG-156 — any authenticated user
+        behaviour). This guards against BUG-156 - any authenticated user
         could previously approve a step intended for a specific role.
         """
         if not workflow_steps:
@@ -426,7 +473,7 @@ class WorkflowService:
         )
 
         if current_step < total_steps:
-            # Advance to next step — not fully approved yet
+            # Advance to next step - not fully approved yet
             await self.requests.update(
                 request_id,
                 current_step=current_step + 1,
@@ -434,7 +481,7 @@ class WorkflowService:
                 metadata_=new_metadata,
             )
         else:
-            # Final step — fully approved
+            # Final step - fully approved
             await self.requests.update(
                 request_id,
                 status="approved",
@@ -504,7 +551,7 @@ class WorkflowService:
     ) -> ApprovalRequest:
         """Withdraw a still-pending request.
 
-        Only the original requester (or an admin) may cancel — closes the
+        Only the original requester (or an admin) may cancel - closes the
         "once submitted, stuck forever" gap in the workflow engine.
         """
         from app.core.permissions import Role, _resolve_role

@@ -1,4 +1,4 @@
-"""‌⁠‍AI Estimation service — business logic for AI-powered BOQ generation.
+"""‌⁠‍AI Estimation service - business logic for AI-powered BOQ generation.
 
 Stateless service layer. Handles:
 - Per-user AI settings (get, create, update)
@@ -50,7 +50,9 @@ from app.modules.ai.schemas import (
     AISettingsUpdate,
     CreateBOQFromEstimateRequest,
     EstimateItem,
+    EstimateJobListResponse,
     EstimateJobResponse,
+    EstimateJobSummary,
     QuickEstimateRequest,
 )
 
@@ -64,7 +66,7 @@ async def _resolve_project_currency(
     """Look up the project's default currency.
 
     Returns empty string when no project_id is supplied or the project is
-    missing — callers fall back to a literal default for prompt rendering.
+    missing - callers fall back to a literal default for prompt rendering.
     Inline import keeps the AI module decoupled from projects at module level.
     """
     if project_id is None:
@@ -98,6 +100,256 @@ def _coerce_confidence(value: Any) -> float | None:
     if conf < 0.0 or conf > 1.0:
         return None
     return round(conf, 2)
+
+
+# ── Photo defect-category suggestion (Lane 7) ────────────────────────────
+#
+# The set of categories the photo gallery understands. Kept in sync with
+# ``VALID_PHOTO_CATEGORIES`` in documents/service.py - duplicated here on
+# purpose so the AI module stays import-decoupled from documents.
+PHOTO_CATEGORIES: tuple[str, ...] = ("site", "progress", "defect", "delivery", "safety", "other")
+
+# Deterministic keyword → category map used when no AI provider is
+# configured. Ordered most-specific first; the first category whose keyword
+# matches the combined text (filename + caption + tags) wins. This is a
+# transparent, explainable heuristic - never a fabricated AI score.
+_CATEGORY_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        "defect",
+        (
+            "defect",
+            "crack",
+            "damage",
+            "damaged",
+            "leak",
+            "leakage",
+            "rust",
+            "corrosion",
+            "snag",
+            "snagging",
+            "fault",
+            "broken",
+            "spall",
+            "mould",
+            "mold",
+            "stain",
+            "deficien",
+            "punch",
+            "rework",
+            "mangel",
+            "riss",
+            "schaden",
+            "defaut",
+            "fissure",
+            "defecto",
+        ),
+    ),
+    (
+        "safety",
+        (
+            "safety",
+            "hazard",
+            "ppe",
+            "helmet",
+            "harness",
+            "guardrail",
+            "scaffold",
+            "fall",
+            "fire",
+            "extinguisher",
+            "first aid",
+            "danger",
+            "warning",
+            "barrier",
+            "sicherheit",
+            "gefahr",
+            "securite",
+        ),
+    ),
+    (
+        "delivery",
+        (
+            "delivery",
+            "delivered",
+            "shipment",
+            "pallet",
+            "truck",
+            "unload",
+            "material",
+            "rebar bundle",
+            "lieferung",
+            "livraison",
+            "entrega",
+        ),
+    ),
+    (
+        "progress",
+        (
+            "progress",
+            "pour",
+            "poured",
+            "concrete",
+            "formwork",
+            "rebar",
+            "installed",
+            "erection",
+            "framing",
+            "milestone",
+            "wip",
+            "fortschritt",
+            "avancement",
+            "progreso",
+        ),
+    ),
+    (
+        "site",
+        ("site", "overview", "aerial", "general", "panorama", "baustelle", "chantier"),
+    ),
+)
+
+
+# Defect keywords ranked by how serious the visible problem usually is, so a
+# text-only heuristic can still offer an ADVISORY severity (low/medium/high)
+# when no vision model is configured. This is intentionally conservative - it
+# is a hint the user confirms, never an auto-applied rating.
+_DEFECT_SEVERITY_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        "high",
+        (
+            "structural",
+            "collapse",
+            "spall",
+            "corrosion",
+            "rust",
+            "leak",
+            "leakage",
+            "broken",
+            "schaden",
+            "fissure",
+        ),
+    ),
+    (
+        "medium",
+        ("crack", "damage", "damaged", "fault", "riss", "defaut", "defecto", "deficien"),
+    ),
+    (
+        "low",
+        ("snag", "snagging", "stain", "mould", "mold", "punch", "rework", "mangel"),
+    ),
+)
+
+
+def heuristic_photo_category(
+    *,
+    filename: str = "",
+    caption: str = "",
+    tags: list[str] | None = None,
+) -> tuple[str, float] | None:
+    """Deterministically guess a photo category from textual signals.
+
+    Returns ``(category, confidence)`` or ``None`` when nothing matches.
+    The confidence is a fixed, honest "this is a keyword match" score -
+    NOT an AI probability - so the UI can clearly label it as a heuristic.
+    """
+    parts = [filename or "", caption or ""]
+    parts.extend(tags or [])
+    text = " ".join(parts).lower()
+    if not text.strip():
+        return None
+    for category, keywords in _CATEGORY_KEYWORDS:
+        if any(kw in text for kw in keywords):
+            return category, 0.55
+    return None
+
+
+def heuristic_photo_suggestion(
+    *,
+    filename: str = "",
+    caption: str = "",
+    tags: list[str] | None = None,
+) -> dict[str, Any] | None:
+    """Richer heuristic suggestion dict, mirroring the AI path's shape.
+
+    Builds on :func:`heuristic_photo_category` and, for a ``defect`` match,
+    additionally derives an advisory ``defect_severity`` and the matched
+    keywords as ``suggested_tags`` from the same textual signal - so the
+    severity and auto-tag chips work even with no vision model configured.
+    Everything here is a hint the user confirms; nothing is auto-applied.
+
+    Returns ``{suggested_category, confidence, source="heuristic", ...}`` or
+    ``None`` when nothing matches.
+    """
+    base = heuristic_photo_category(filename=filename, caption=caption, tags=tags)
+    if base is None:
+        return None
+    category, confidence = base
+    result: dict[str, Any] = {
+        "suggested_category": category,
+        "confidence": confidence,
+        "source": "heuristic",
+    }
+    if category != "defect":
+        return result
+
+    text = " ".join([filename or "", caption or "", *(tags or [])]).lower()
+    # Auto-tags: the defect keywords actually present, normalised + de-duped.
+    defect_keywords = next((kw for cat, kw in _CATEGORY_KEYWORDS if cat == "defect"), ())
+    matched: list[str] = []
+    for kw in defect_keywords:
+        if kw in text and kw not in matched:
+            matched.append(kw)
+    if matched:
+        result["suggested_tags"] = matched[:6]
+    # Advisory severity from the highest-tier severity keyword present.
+    for severity, sev_keywords in _DEFECT_SEVERITY_KEYWORDS:
+        if any(kw in text for kw in sev_keywords):
+            result["defect_severity"] = severity
+            break
+    return result
+
+
+def _coerce_suggested_category(value: Any) -> str | None:
+    """Normalise an AI-returned category to the allowed set, else None."""
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip().lower()
+    return cleaned if cleaned in PHOTO_CATEGORIES else None
+
+
+# Defect-severity levels surfaced for ``category == "defect"`` suggestions.
+DEFECT_SEVERITIES: tuple[str, ...] = ("low", "medium", "high")
+
+
+def _coerce_defect_severity(value: Any) -> str | None:
+    """Normalise an AI-returned defect severity to the allowed set, else None."""
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip().lower()
+    return cleaned if cleaned in DEFECT_SEVERITIES else None
+
+
+def _coerce_suggested_tags(value: Any, *, limit: int = 6) -> list[str]:
+    """Normalise AI-returned auto-tags into a short, de-duplicated list.
+
+    Tags are lower-cased, stripped, capped at ``limit`` items and 40 chars
+    each. Non-list / empty input yields ``[]`` so the caller can store it
+    unconditionally. The tags are advisory only - never auto-applied.
+    """
+    if not isinstance(value, list):
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        tag = item.strip().lower()[:40]
+        if not tag or tag in seen:
+            continue
+        seen.add(tag)
+        out.append(tag)
+        if len(out) >= limit:
+            break
+    return out
 
 
 def _validate_items(raw_items: Any, currency: str = "") -> list[dict[str, Any]]:
@@ -173,7 +425,7 @@ def _validate_items(raw_items: Any, currency: str = "") -> list[dict[str, Any]]:
             "currency": currency,
         }
         # Carry a real per-item confidence only when the model supplied a
-        # usable one — never fabricate a placeholder score.
+        # usable one - never fabricate a placeholder score.
         confidence = _coerce_confidence(item.get("confidence"))
         if confidence is not None:
             item_out["confidence"] = confidence
@@ -187,7 +439,7 @@ def _build_settings_response(settings: AISettings) -> AISettingsResponse:
 
     A key is only reported as "set" when it is both present *and* decryptable
     with the current backend encryption key. If the ciphertext was written
-    under a rotated JWT_SECRET the key is functionally useless — surfacing it
+    under a rotated JWT_SECRET the key is functionally useless - surfacing it
     as "configured" would make the Settings UI show "Key configured" while
     every chat/estimate call fails with a decrypt error.
     """
@@ -315,6 +567,144 @@ def _build_job_response(job: AIEstimateJob) -> EstimateJobResponse:
         created_at=job.created_at,
         updated_at=job.updated_at,
     )
+
+
+def _build_job_summary(job: AIEstimateJob) -> EstimateJobSummary:
+    """Build a lightweight history summary (no full items payload).
+
+    Recomputes ``grand_total`` from the stored line totals and reads the
+    resolved currency from the first priced line - the same contract as
+    :func:`_build_job_response` but without echoing the per-item rows.
+    """
+    from decimal import Decimal
+
+    grand_total: Decimal = Decimal("0")
+    currency = ""
+    items_count = 0
+    if job.result and isinstance(job.result, list):
+        for item_data in job.result:
+            if not isinstance(item_data, dict):
+                continue
+            items_count += 1
+            try:
+                grand_total += Decimal(str(item_data.get("total", 0) or 0))
+            except (ValueError, ArithmeticError):
+                pass
+            if not currency:
+                cur = item_data.get("currency")
+                if isinstance(cur, str) and cur.strip():
+                    currency = cur.strip()
+
+    return EstimateJobSummary(
+        id=job.id,
+        project_id=job.project_id,
+        input_type=job.input_type,
+        input_text=job.input_text,
+        input_filename=job.input_filename,
+        status=job.status,
+        items_count=items_count,
+        currency=currency,
+        grand_total=grand_total.quantize(Decimal("0.01")),
+        model_used=job.model_used,
+        tokens_used=job.tokens_used,
+        cost_usd_estimate=Decimal(str(getattr(job, "cost_usd_estimate", 0.0) or 0.0)),
+        duration_ms=job.duration_ms,
+        error_message=job.error_message,
+        created_at=job.created_at,
+    )
+
+
+async def _match_cost_items(
+    session: AsyncSession,
+    *,
+    description: str,
+    item_unit: str,
+    region: str,
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    """Find cost-DB matches for one estimate line (vector first, text fallback).
+
+    Returns a ranked list of ``{code, description, unit, rate, currency,
+    region, score}`` dicts (best first). This is the single source of truth
+    for both the ``/enrich`` endpoint preview and the persisted
+    ``apply_enriched`` BOQ-creation path, so what the user sees matched in the
+    table is exactly what gets saved. Degrades gracefully: a missing
+    embedder / vector DB silently falls back to SQL keyword search, and any
+    error yields an empty match list rather than raising.
+    """
+    from sqlalchemy import or_, select
+
+    from app.modules.costs.models import CostItem
+
+    matches: list[dict[str, Any]] = []
+
+    # 1. Vector similarity search (best signal when the embedder is present).
+    try:
+        from app.core.vector import encode_texts, vector_search
+
+        query_vec = encode_texts([description])[0]
+        for m in vector_search(query_vec, region=region or None, limit=limit):
+            matches.append(
+                {
+                    "code": m.get("code", ""),
+                    "description": m.get("description", ""),
+                    "unit": m.get("unit", ""),
+                    "rate": float(m.get("rate", 0) or 0),
+                    "currency": m.get("currency", ""),
+                    "region": m.get("region", ""),
+                    "score": float(m.get("score", 0) or 0),
+                }
+            )
+    except Exception:
+        logger.debug("Vector search unavailable for enrich; falling back to text", exc_info=True)
+
+    # 2. Text keyword fallback (one OR query, optional region retry).
+    if not matches:
+        stop = {"the", "and", "for", "with", "from", "into", "per", "all"}
+        keywords = [w for w in description.lower().split() if len(w) > 2 and w not in stop][:5]
+        if keywords:
+            try:
+                conditions = [CostItem.description.ilike(f"%{kw}%") for kw in keywords]
+
+                async def _kw_search(use_region: bool) -> list[CostItem]:
+                    stmt = select(CostItem).where(CostItem.is_active.is_(True), or_(*conditions))
+                    if use_region and region:
+                        stmt = stmt.where(CostItem.region == region)
+                    stmt = stmt.limit(15)
+                    res = await session.execute(stmt)
+                    return list(res.scalars().all())
+
+                kw_results = await _kw_search(use_region=True)
+                if not kw_results and region:
+                    kw_results = await _kw_search(use_region=False)
+
+                for ci in kw_results:
+                    if any(m["code"] == ci.code for m in matches):
+                        continue
+                    desc_lower = (ci.description or "").lower()
+                    kw_hits = sum(1 for k in keywords if k in desc_lower)
+                    score = min(0.9, 0.3 + kw_hits * 0.15)
+                    matches.append(
+                        {
+                            "code": ci.code,
+                            "description": (ci.description or "")[:200],
+                            "unit": ci.unit or "",
+                            "rate": float(ci.rate) if ci.rate else 0.0,
+                            "currency": ci.currency or "",
+                            "region": ci.region or "",
+                            "score": score,
+                        }
+                    )
+            except Exception:
+                logger.warning("Text search failed during enrich for %r", description[:40], exc_info=True)
+
+    # 3. Prefer same-unit matches, then sort best-first and cap.
+    if item_unit:
+        for m in matches:
+            if m["unit"].lower() == item_unit.lower():
+                m["score"] = min(1.0, m["score"] + 0.05)
+    matches.sort(key=lambda m: m["score"], reverse=True)
+    return matches[:limit]
 
 
 class AIService:
@@ -531,7 +921,7 @@ class AIService:
         # Currency precedence: explicit request → project default →
         # empty string (LLM prompts tolerate a blank currency token).
         currency = request.currency or await _resolve_project_currency(self.session, request.project_id) or ""
-        # No standard fallback — empty token signals "no preferred classification"
+        # No standard fallback - empty token signals "no preferred classification"
         # so the LLM is steered by the project's explicit setting (or absence).
         standard_val = request.standard or ""
 
@@ -609,7 +999,7 @@ class AIService:
             )
             # Forward the precise, already-sanitized message from call_ai (e.g.
             # "invalid key", "model rejected", "rate limit") instead of masking
-            # it — call_ai never echoes secrets, so this is safe to show and
+            # it - call_ai never echoes secrets, so this is safe to show and
             # tells the user exactly what to fix.
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -711,9 +1101,9 @@ class AIService:
         job = await self.job_repo.create(job)
         job_id = job.id  # Save before expire_all() in update_fields
 
-        # Build prompt — currency: explicit arg → project default → blank.
+        # Build prompt - currency: explicit arg → project default → blank.
         currency_val = currency or await _resolve_project_currency(self.session, project_id) or ""
-        # No standard / location fallback — explicit-only avoids steering
+        # No standard / location fallback - explicit-only avoids steering
         # the LLM toward DIN 276 / Europe on non-DACH projects.
         standard_val = standard or ""
         location_val = location or ""
@@ -839,6 +1229,138 @@ class AIService:
 
         return _build_job_response(job)
 
+    # ── Photo defect-category suggestion (Lane 7) ────────────────────────
+
+    async def suggest_photo_category(
+        self,
+        user_id: str,
+        *,
+        image_bytes: bytes | None = None,
+        media_type: str = "image/jpeg",
+        filename: str = "",
+        caption: str = "",
+        tags: list[str] | None = None,
+    ) -> dict[str, Any] | None:
+        """Suggest a photo category (e.g. ``defect``) without ever applying it.
+
+        Resolution order:
+
+        1. If the user has a usable AI provider key AND ``image_bytes`` is
+           supplied, ask the vision model to classify the photo into one of
+           ``PHOTO_CATEGORIES`` and report a confidence. The model output is
+           strictly validated against the allowed set; anything off-list is
+           discarded (no fabricated category).
+        2. Otherwise fall back to the deterministic keyword heuristic over
+           filename / caption / tags.
+        3. If neither yields a result, return ``None`` ("no suggestion").
+
+        Returns a dict ``{suggested_category, confidence, source}`` where
+        ``source`` is ``"ai"`` or ``"heuristic"`` so the UI can label it
+        honestly. NEVER raises - a classification failure degrades to the
+        heuristic (and then to ``None``); it must not block the upload.
+        """
+        uid = uuid.UUID(user_id)
+        settings = await self.settings_repo.get_by_user_id(uid)
+
+        # 1. Try the configured AI provider (vision) when we have both a key
+        #    and image bytes to look at.
+        if image_bytes:
+            try:
+                provider, api_key, model_override = resolve_provider_key_model(settings)
+            except ValueError:
+                provider = ""
+                api_key = ""
+                model_override = None
+            if provider:
+                ai_result = await self._ai_suggest_category(
+                    provider=provider,
+                    api_key=api_key,
+                    model_override=model_override,
+                    image_bytes=image_bytes,
+                    media_type=media_type,
+                )
+                if ai_result is not None:
+                    return ai_result
+
+        # 2. Deterministic fallback - clearly labelled as a heuristic. For a
+        #    defect match this also carries an advisory severity + matched
+        #    keyword tags so those chips work without a vision model.
+        heuristic = heuristic_photo_suggestion(filename=filename, caption=caption, tags=tags)
+        if heuristic is not None:
+            return heuristic
+
+        # 3. No signal at all.
+        return None
+
+    async def _ai_suggest_category(
+        self,
+        *,
+        provider: str,
+        api_key: str,
+        model_override: str | None,
+        image_bytes: bytes,
+        media_type: str,
+    ) -> dict[str, Any] | None:
+        """Ask the vision model to classify the photo. Best-effort, never raises."""
+        prompt = (
+            "You are tagging a construction-site photo. Classify it into EXACTLY one "
+            "of these categories: site, progress, defect, delivery, safety, other.\n"
+            "- defect: visible damage, cracks, leaks, snags, deficiencies\n"
+            "- safety: PPE, hazards, scaffolding, fire/first-aid equipment, warnings\n"
+            "- delivery: materials/goods being delivered or stored on site\n"
+            "- progress: construction work in progress (pours, formwork, framing, installs)\n"
+            "- site: general site overview / context shots\n"
+            "- other: anything that fits none of the above\n\n"
+            'Also return up to 4 short lower-case tags for what is visible (e.g. "crack", '
+            '"rebar", "scaffold", "water-damage").\n'
+            'If and ONLY IF the category is "defect", also rate the defect severity as '
+            "one of: low, medium, high (low = cosmetic, medium = needs repair, high = "
+            "structural / safety risk). Omit severity for any non-defect photo.\n\n"
+            "Reply with ONLY a JSON object: "
+            '{"category": "<one>", "confidence": <0..1>, "tags": ["..."], '
+            '"severity": "<low|medium|high>"}'
+        )
+        try:
+            image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+            raw_response, _tokens = await call_ai(
+                provider=provider,
+                api_key=api_key,
+                system="You are a precise image classifier. Output JSON only.",
+                prompt=prompt,
+                image_base64=image_b64,
+                image_media_type=media_type,
+                model=model_override,
+                max_tokens=120,
+            )
+        except Exception:
+            logger.debug("AI photo-category suggestion failed; will fall back", exc_info=True)
+            return None
+
+        parsed = extract_json(raw_response)
+        if isinstance(parsed, list) and parsed:
+            parsed = parsed[0]
+        if not isinstance(parsed, dict):
+            return None
+        category = _coerce_suggested_category(parsed.get("category"))
+        if category is None:
+            return None
+        confidence = _coerce_confidence(parsed.get("confidence"))
+        result: dict[str, Any] = {
+            "suggested_category": category,
+            "confidence": confidence,
+            "source": "ai",
+        }
+        tags = _coerce_suggested_tags(parsed.get("tags"))
+        if tags:
+            result["suggested_tags"] = tags
+        # Severity is only meaningful for defect photos - discard it otherwise
+        # so a stray model value can't mislabel a non-defect photo.
+        if category == "defect":
+            severity = _coerce_defect_severity(parsed.get("severity"))
+            if severity is not None:
+                result["defect_severity"] = severity
+        return result
+
     # ── Universal file estimate ──────────────────────────────────────────
 
     async def file_estimate(
@@ -897,7 +1419,7 @@ class AIService:
 
         # Currency: explicit arg → project default → blank token.
         currency_val = currency or await _resolve_project_currency(self.session, project_id) or ""
-        # No region/standard steering — empty tokens let the LLM rely on
+        # No region/standard steering - empty tokens let the LLM rely on
         # the file's content rather than defaulting to DACH / DIN 276.
         standard_val = standard or ""
         location_val = location or ""
@@ -966,7 +1488,7 @@ class AIService:
                 cad_format = result.get("cad_format", ext)
 
                 if result.get("cad_no_converter"):
-                    # No converter installed — return helpful error
+                    # No converter installed - return helpful error
                     await self.job_repo.update_fields(
                         job_id,
                         status="failed",
@@ -1028,7 +1550,7 @@ class AIService:
                     model=model_override,
                 )
             elif image_b64:
-                # Audit AI1: filename is user-controlled — sanitize before
+                # Audit AI1: filename is user-controlled - sanitize before
                 # interpolation.
                 prompt = SMART_IMPORT_VISION_PROMPT.format(
                     filename=sanitize_user_text(filename, max_len=255),
@@ -1163,6 +1685,38 @@ class AIService:
 
         return _build_job_response(job)
 
+    # ── Estimate history (server-side job list) ──────────────────────────
+
+    async def list_estimates(
+        self,
+        user_id: str,
+        *,
+        project_id: uuid.UUID | None = None,
+        status_filter: str | None = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> EstimateJobListResponse:
+        """Return the current user's estimate jobs, newest first, paginated.
+
+        Backs the "Recent estimates" panel so a user's runs survive a reload
+        / device switch instead of living only in browser localStorage. The
+        repository always scopes by ``user_id`` so this is tenant-safe.
+        """
+        uid = uuid.UUID(user_id)
+        rows, total = await self.job_repo.list_for_user(
+            uid,
+            project_id=project_id,
+            status=status_filter,
+            limit=limit,
+            offset=offset,
+        )
+        return EstimateJobListResponse(
+            items=[_build_job_summary(j) for j in rows],
+            total=total,
+            limit=max(1, min(limit, 100)),
+            offset=max(0, offset),
+        )
+
     # ── Create BOQ from estimate ─────────────────────────────────────────
 
     async def create_boq_from_estimate(
@@ -1204,7 +1758,7 @@ class AIService:
         # without this guard a non-owner could land an AI-generated BOQ
         # inside a project they don't own (silent BOQ injection that
         # bypasses the projects-module RBAC). The shared helper returns
-        # 404 on "missing" OR "no access" — identical surface.
+        # 404 on "missing" OR "no access" - identical surface.
         from app.dependencies import verify_project_access
 
         await verify_project_access(request.project_id, user_id, self.session)
@@ -1228,19 +1782,36 @@ class AIService:
         boq_repo = BOQRepository(self.session)
         position_repo = PositionRepository(self.session)
 
+        # Resolved estimate currency (first priced line). When applying
+        # enriched rates we only fold in a CWICR match that shares this
+        # currency - never blend currencies into one persisted total (v3 §10).
+        estimate_currency = ""
+        for item_data in job.result:
+            if isinstance(item_data, dict):
+                cur = item_data.get("currency")
+                if isinstance(cur, str) and cur.strip():
+                    estimate_currency = cur.strip()
+                    break
+
         # Create the BOQ
         boq = BOQ(
             project_id=request.project_id,
             name=request.boq_name,
             description=f"Generated by AI from {job.input_type} input",
             status="draft",
-            metadata_={"ai_job_id": str(job_id), "ai_model": job.model_used or ""},
+            metadata_={
+                "ai_job_id": str(job_id),
+                "ai_model": job.model_used or "",
+                "ai_rates_enriched": bool(request.apply_enriched),
+                "ai_enrich_region": request.region or "",
+            },
         )
         boq = await boq_repo.create(boq)
 
         # Create positions from estimated items
         grand_total = 0.0
         positions_created = 0
+        enriched_count = 0
 
         for sort_idx, item_data in enumerate(job.result):
             if not isinstance(item_data, dict):
@@ -1252,6 +1823,47 @@ class AIService:
 
             quantity = float(item_data.get("quantity", 0))
             unit_rate = float(item_data.get("unit_rate", 0))
+            unit = str(item_data.get("unit", "m2"))
+            classification = dict(item_data.get("classification", {}) or {})
+            position_metadata: dict[str, Any] = {
+                "ai_job_id": str(job_id),
+                "category": str(item_data.get("category", "")),
+            }
+            position_source = "ai_estimate"
+
+            # ── Optional cost-DB enrichment: replace the AI rate with the best
+            #    same-currency CWICR match the user reviewed in the table. The
+            #    match code is recorded on the position so the persisted rate
+            #    is traceable to the catalogue, not an opaque AI guess.
+            if request.apply_enriched:
+                cost_matches = await _match_cost_items(
+                    self.session,
+                    description=description,
+                    item_unit=unit,
+                    region=request.region or "",
+                    limit=1,
+                )
+                best = cost_matches[0] if cost_matches else None
+                if best:
+                    match_currency = (best.get("currency") or "").strip()
+                    same_currency = match_currency == "" or match_currency == estimate_currency
+                    applied = bool(same_currency and best.get("rate"))
+                    position_metadata["cwicr_match"] = {
+                        "code": best.get("code", ""),
+                        "rate": best.get("rate", 0.0),
+                        "currency": match_currency,
+                        "region": best.get("region", ""),
+                        "score": round(float(best.get("score", 0) or 0), 4),
+                        "applied": applied,
+                    }
+                    if applied:
+                        unit_rate = float(best["rate"])
+                        position_source = "ai_estimate_cwicr"
+                        enriched_count += 1
+                        code = best.get("code", "")
+                        if code:
+                            classification = {**classification, "cwicr": code}
+
             total = round(quantity * unit_rate, 2)
             grand_total += total
 
@@ -1265,19 +1877,16 @@ class AIService:
                 parent_id=None,
                 ordinal=str(item_data.get("ordinal", str(sort_idx + 1))),
                 description=description,
-                unit=str(item_data.get("unit", "m2")),
+                unit=unit,
                 quantity=str(quantity),
                 unit_rate=str(unit_rate),
                 total=str(total),
-                classification=item_data.get("classification", {}),
-                source="ai_estimate",
+                classification=classification,
+                source=position_source,
                 confidence=confidence_str,
                 cad_element_ids=[],
                 validation_status="pending",
-                metadata_={
-                    "ai_job_id": str(job_id),
-                    "category": str(item_data.get("category", "")),
-                },
+                metadata_=position_metadata,
                 sort_order=sort_idx,
             )
             await position_repo.create(position)
@@ -1296,15 +1905,17 @@ class AIService:
         )
 
         logger.info(
-            "BOQ created from AI estimate: boq=%s, job=%s, positions=%d, total=%.2f",
+            "BOQ created from AI estimate: boq=%s, job=%s, positions=%d, enriched=%d, total=%.2f",
             boq.id,
             job_id,
             positions_created,
+            enriched_count,
             grand_total,
         )
 
         return {
             "boq_id": str(boq.id),
             "positions_created": positions_created,
+            "positions_enriched": enriched_count,
             "grand_total": round(grand_total, 2),
         }

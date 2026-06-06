@@ -1,16 +1,16 @@
 """‌⁠‍Enterprise Workflows API routes.
 
 Endpoints:
-    GET    /                         — List workflows
-    POST   /                         — Create workflow (auth required)
-    GET    /{id}                     — Get single workflow
-    PATCH  /{id}                     — Update workflow (auth required)
-    DELETE /{id}                     — Delete workflow (auth required)
-    GET    /requests                 — List approval requests
-    POST   /requests                 — Submit approval request (auth required)
-    GET    /requests/{id}            — Get single approval request
-    POST   /requests/{id}/approve    — Approve request (auth required)
-    POST   /requests/{id}/reject     — Reject request (auth required)
+    GET    /                         - List workflows
+    POST   /                         - Create workflow (auth required)
+    GET    /{id}                     - Get single workflow
+    PATCH  /{id}                     - Update workflow (auth required)
+    DELETE /{id}                     - Delete workflow (auth required)
+    GET    /requests                 - List approval requests
+    POST   /requests                 - Submit approval request (auth required)
+    GET    /requests/{id}            - Get single approval request
+    POST   /requests/{id}/approve    - Approve request (auth required)
+    POST   /requests/{id}/reject     - Reject request (auth required)
 """
 
 import uuid
@@ -56,6 +56,7 @@ async def list_workflows(
         project_id=project_id,
         entity_type=entity_type,
         is_active=is_active,
+        user_id=user_id,
         offset=offset,
         limit=limit,
     )
@@ -87,7 +88,7 @@ async def get_workflow(
     service: WorkflowService = Depends(_get_service),
 ) -> WorkflowResponse:
     """Get a single workflow by ID."""
-    workflow = await service.get_workflow(workflow_id)
+    workflow = await service.get_workflow(workflow_id, user_id=user_id)
     return WorkflowResponse.model_validate(workflow)
 
 
@@ -134,6 +135,7 @@ async def list_approval_requests(
         workflow_id=workflow_id,
         entity_type=entity_type,
         request_status=status,
+        user_id=user_id,
         offset=offset,
         limit=limit,
     )
@@ -165,7 +167,7 @@ async def get_approval_request(
     service: WorkflowService = Depends(_get_service),
 ) -> ApprovalRequestResponse:
     """Get a single approval request by ID."""
-    request = await service.get_request(request_id)
+    request = await service.get_request(request_id, user_id=user_id)
     return ApprovalRequestResponse.model_validate(request)
 
 
@@ -206,7 +208,7 @@ async def cancel_request(
 ) -> ApprovalRequestResponse:
     """Withdraw a pending approval request.
 
-    Only the original requester (or an admin) may cancel — closes the
+    Only the original requester (or an admin) may cancel - closes the
     "once submitted, stuck forever" gap surfaced by QA.
     """
     request = await service.cancel_request(request_id, user_id=user_id)

@@ -15,13 +15,14 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.reporting.models import ReportTemplate
+from app.modules.reporting.models import GeneratedReport, ReportTemplate
 from app.modules.reporting.schemas import ReportScheduleRequest
 from app.modules.reporting.service import ReportingService
 from tests._pg import transactional_session
@@ -245,6 +246,78 @@ class TestMarkTemplateRan:
         )
         assert updated.next_run_at is None
         assert updated.is_scheduled is False
+
+
+async def _run_scheduler_tick(service: ReportingService, as_of: datetime) -> None:
+    """Replica of the dispatch decision in ``_reports_scheduler`` (main.py).
+
+    Kept in lock-step with the worker loop body so the test asserts the
+    exact guard the scheduler uses: a due template with recipients
+    triggers ``dispatch_report_email``; one without does not. The DB
+    side-effects (generate/mark) are mocked so the unit stays focused on
+    the dispatch wiring rather than re-testing render+storage.
+    """
+    due = await service.list_due_templates(as_of)
+    for template in due:
+        if template.project_id_scope is None:
+            continue
+        report = await service.generate_report(None)
+        await service.mark_template_ran(template)
+        if template.recipients:
+            await service.dispatch_report_email(report, list(template.recipients))
+
+
+class TestScheduledDispatch:
+    @pytest.mark.asyncio
+    async def test_due_template_with_recipients_dispatches(self, session):
+        await _make_template(
+            session,
+            name="Due-With-Recipients",
+            report_type="progress_report",
+            schedule_cron="0 9 * * 1",
+            is_scheduled=True,
+            next_run_at="2026-04-01T09:00:00Z",
+            recipients=["owner@example.com"],
+            project_id_scope=uuid.uuid4(),
+        )
+        service = ReportingService(session)
+        fake_report = GeneratedReport(title="Progress")
+        service.generate_report = AsyncMock(return_value=fake_report)
+        service.mark_template_ran = AsyncMock()
+        service.dispatch_report_email = AsyncMock(return_value=1)
+
+        await _run_scheduler_tick(
+            service,
+            as_of=datetime(2026, 5, 1, 0, 0, tzinfo=UTC),
+        )
+
+        service.dispatch_report_email.assert_awaited_once()
+        _, recipients = service.dispatch_report_email.await_args.args
+        assert recipients == ["owner@example.com"]
+
+    @pytest.mark.asyncio
+    async def test_due_template_without_recipients_skips_dispatch(self, session):
+        await _make_template(
+            session,
+            name="Due-No-Recipients",
+            report_type="progress_report",
+            schedule_cron="0 9 * * 1",
+            is_scheduled=True,
+            next_run_at="2026-04-01T09:00:00Z",
+            recipients=[],
+            project_id_scope=uuid.uuid4(),
+        )
+        service = ReportingService(session)
+        service.generate_report = AsyncMock(return_value=GeneratedReport(title="Progress"))
+        service.mark_template_ran = AsyncMock()
+        service.dispatch_report_email = AsyncMock(return_value=0)
+
+        await _run_scheduler_tick(
+            service,
+            as_of=datetime(2026, 5, 1, 0, 0, tzinfo=UTC),
+        )
+
+        service.dispatch_report_email.assert_not_awaited()
 
 
 class TestListScheduledTemplates:

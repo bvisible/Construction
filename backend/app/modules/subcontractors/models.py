@@ -1,17 +1,17 @@
 """‌⁠‍Subcontractor ORM models.
 
 Tables:
-    oe_subcontractors_subcontractor              — legal entity
-    oe_subcontractors_subcontractor_contact      — point of contact (FK subcontractor)
-    oe_subcontractors_prequalification           — onboarding application
-    oe_subcontractors_certificate                — insurance / license / iso / etc.
-    oe_subcontractors_agreement                  — master contract per project
-    oe_subcontractors_work_package               — scope of work under an agreement
-    oe_subcontractors_payment_application        — periodic payment claim
-    oe_subcontractors_payment_application_line   — line under a payment application
-    oe_subcontractors_retention_ledger           — retention accrual / release entries
-    oe_subcontractors_rating                     — monthly rating rollup
-    oe_subcontractors_lien_waiver                — uploaded lien waiver / W-9 form
+    oe_subcontractors_subcontractor              - legal entity
+    oe_subcontractors_subcontractor_contact      - point of contact (FK subcontractor)
+    oe_subcontractors_prequalification           - onboarding application
+    oe_subcontractors_certificate                - insurance / license / iso / etc.
+    oe_subcontractors_agreement                  - master contract per project
+    oe_subcontractors_work_package               - scope of work under an agreement
+    oe_subcontractors_payment_application        - periodic payment claim
+    oe_subcontractors_payment_application_line   - line under a payment application
+    oe_subcontractors_retention_ledger           - retention accrual / release entries
+    oe_subcontractors_rating                     - monthly rating rollup
+    oe_subcontractors_lien_waiver                - uploaded lien waiver / W-9 form
 """
 
 from __future__ import annotations
@@ -20,7 +20,18 @@ import uuid
 from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import JSON, Boolean, Date, DateTime, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    Date,
+    DateTime,
+    ForeignKey,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import GUID, Base
@@ -440,9 +451,26 @@ class RetentionLedger(Base):
 
 
 class SubcontractorRating(Base):
-    """Monthly rating rollup for a subcontractor."""
+    """Monthly rating rollup for a subcontractor.
+
+    There is at most one row per ``(subcontractor_id, period)`` - the
+    unique constraint below is the database backstop that makes the
+    monthly-rollup compute idempotent: a double-compute of the same month
+    (e.g. a cron re-run or a manual trigger landing twice) can never
+    insert a duplicate rating row. The service still upserts via a
+    read-then-write on ``get_for_period``; this constraint catches the
+    race where two computes flush concurrently (TOP-30 #20, TC-10).
+    """
 
     __tablename__ = "oe_subcontractors_rating"
+
+    __table_args__ = (
+        UniqueConstraint(
+            "subcontractor_id",
+            "period",
+            name="uq_subcontractors_rating_period",
+        ),
+    )
 
     subcontractor_id: Mapped[uuid.UUID] = mapped_column(
         GUID(),
@@ -525,7 +553,7 @@ class LienWaiver(Base):
     )
     # Conditional / unconditional, partial / final, w9 (US), w8 (intl).
     waiver_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
-    # Document path under uploads/ — populated by the magic-byte-gated
+    # Document path under uploads/ - populated by the magic-byte-gated
     # upload endpoint, NEVER by the create-from-URL path (which would
     # let a caller smuggle a remote URL into the storage column).
     document_url: Mapped[str] = mapped_column(String(1000), nullable=False)
@@ -534,7 +562,7 @@ class LienWaiver(Base):
     mime_type: Mapped[str | None] = mapped_column(String(120), nullable=True)
     file_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
     signed_date: Mapped[date | None] = mapped_column(Date, nullable=True)
-    # Amount the waiver covers — informational; the actual money flows
+    # Amount the waiver covers - informational; the actual money flows
     # through the payment_application row. Stored as Numeric(18,2)
     # like every other money column in the module.
     amount: Mapped[Decimal] = mapped_column(
@@ -571,6 +599,6 @@ async def ocr_extract_certificate_hook(  # pragma: no cover - stub
         cert_type: Type of certificate (insurance/license/iso/safety/bond).
 
     Returns:
-        Empty dict — real implementation populates issuer / dates / numbers.
+        Empty dict - real implementation populates issuer / dates / numbers.
     """
     return {}

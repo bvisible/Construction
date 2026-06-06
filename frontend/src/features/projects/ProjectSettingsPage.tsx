@@ -10,6 +10,7 @@ import {
   Plus,
   Ruler,
   Save,
+  ShieldCheck,
   SlidersHorizontal,
   Trash2,
   X,
@@ -24,11 +25,18 @@ import {
   Input,
   Skeleton,
 } from '@/shared/ui';
+import { PageHeader } from '@/shared/ui/PageHeader';
+import { DismissibleInfo } from '@/shared/ui/DismissibleInfo';
 import { useToastStore } from '@/stores/useToastStore';
+import { getErrorMessage } from '@/shared/lib/api';
 import { projectsApi, type Project, type ProjectFxRate } from './api';
 import { CURRENCY_GROUPS, CreateProjectModal } from './CreateProjectPage';
 import { getVatRate } from '../boq/boqHelpers';
 import { TranslationSettingsTab } from '../translation';
+import {
+  listComplianceRulePacks,
+  type ComplianceRulePack,
+} from '../contracts/api';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -312,6 +320,150 @@ function FxRateModal({
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Compliance rule packs (Item #27)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Lets the project owner choose which jurisdiction compliance rule packs the
+ * contract-signature gate enforces. Toggling a pack and hitting Save calls the
+ * dedicated PATCH /{id}/compliance-rule-packs endpoint (validated server-side
+ * against the pack catalogue).
+ */
+function ComplianceRulePacksCard({ project }: { project: Project }) {
+  const { t } = useTranslation();
+  const queryClient = useQueryClient();
+  const addToast = useToastStore((s) => s.addToast);
+
+  const packsQ = useQuery<ComplianceRulePack[]>({
+    queryKey: ['compliance-rule-packs'],
+    queryFn: listComplianceRulePacks,
+    staleTime: 60 * 60 * 1000,
+  });
+
+  const [selected, setSelected] = useState<string[]>(
+    project.compliance_rule_packs ?? ['universal'],
+  );
+
+  useEffect(() => {
+    setSelected(project.compliance_rule_packs ?? ['universal']);
+  }, [project.compliance_rule_packs]);
+
+  const saveMut = useMutation({
+    mutationFn: (ids: string[]) =>
+      projectsApi.setComplianceRulePacks(project.id, ids),
+    onSuccess: (updated) => {
+      queryClient.invalidateQueries({ queryKey: ['project', project.id] });
+      setSelected(updated.compliance_rule_packs ?? ['universal']);
+      addToast({
+        type: 'success',
+        title: t('project.settings.compliance.saved', {
+          defaultValue: 'Compliance rule packs saved',
+        }),
+      });
+    },
+    onError: (err) =>
+      addToast({ type: 'error', title: getErrorMessage(err) }),
+  });
+
+  const toggle = (id: string) => {
+    setSelected((prev) =>
+      prev.includes(id) ? prev.filter((p) => p !== id) : [...prev, id],
+    );
+  };
+
+  const current = project.compliance_rule_packs ?? ['universal'];
+  const dirty =
+    selected.length !== current.length ||
+    selected.some((p) => !current.includes(p));
+
+  return (
+    <Card padding="lg" id="compliance-rule-packs">
+      <CardHeader
+        title={t('project.settings.compliance.title', {
+          defaultValue: 'Compliance rule packs',
+        })}
+        subtitle={t('project.settings.compliance.subtitle', {
+          defaultValue:
+            'Jurisdiction rule bundles enforced when a contract is signed (draft → active). A contract cannot be signed while a selected pack reports a blocking error.',
+        })}
+      />
+      <div className="mt-3 space-y-3">
+        {packsQ.isLoading ? (
+          <Skeleton className="h-20 w-full" />
+        ) : (packsQ.data ?? []).length === 0 ? (
+          <p className="text-sm text-content-tertiary italic">
+            {t('project.settings.compliance.empty', {
+              defaultValue: 'No compliance rule packs are available.',
+            })}
+          </p>
+        ) : (
+          <div className="grid gap-2 sm:grid-cols-2">
+            {(packsQ.data ?? []).map((pack) => {
+              const on = selected.includes(pack.id);
+              return (
+                <button
+                  key={pack.id}
+                  type="button"
+                  onClick={() => toggle(pack.id)}
+                  aria-pressed={on}
+                  className={
+                    'flex items-start gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors ' +
+                    (on
+                      ? 'border-oe-blue bg-oe-blue/5 ring-1 ring-inset ring-oe-blue/30'
+                      : 'border-border-light hover:bg-surface-secondary')
+                  }
+                >
+                  <ShieldCheck
+                    size={16}
+                    className={
+                      'mt-0.5 shrink-0 ' +
+                      (on ? 'text-oe-blue' : 'text-content-tertiary')
+                    }
+                  />
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium text-content-primary">
+                        {pack.name}
+                      </span>
+                      {pack.jurisdiction && (
+                        <Badge variant="neutral">{pack.jurisdiction}</Badge>
+                      )}
+                    </div>
+                    {pack.description && (
+                      <p className="mt-0.5 text-xs text-content-secondary">
+                        {pack.description}
+                      </p>
+                    )}
+                    {pack.rule_sets.length > 0 && (
+                      <p className="mt-1 font-mono text-[11px] text-content-tertiary">
+                        {pack.rule_sets.join(' · ')}
+                      </p>
+                    )}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        <div className="flex items-center justify-end">
+          <Button
+            variant="primary"
+            size="sm"
+            icon={<Save size={14} />}
+            disabled={!dirty}
+            loading={saveMut.isPending}
+            onClick={() => saveMut.mutate(selected)}
+          >
+            {t('common.save', { defaultValue: 'Save' })}
+          </Button>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Project Settings Page
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -396,7 +548,7 @@ export function ProjectSettingsPage() {
   // ── Loading / not-found states ────────────────────────────────────────
   if (isLoading) {
     return (
-      <div className="w-full space-y-4 animate-fade-in">
+      <div className="space-y-5 animate-fade-in">
         <Skeleton height={20} width={140} />
         <Skeleton height={48} className="w-full" />
         <Skeleton height={200} className="w-full" />
@@ -498,10 +650,10 @@ export function ProjectSettingsPage() {
 
   // ── Render ────────────────────────────────────────────────────────────
   return (
-    <div className="w-full space-y-4 animate-fade-in">
+    <div className="space-y-5 animate-fade-in">
       <Breadcrumb
         items={[
-          { label: t('nav.projects', { defaultValue: 'Projects' }), to: '/projects' },
+          { label: t('projects.title', { defaultValue: 'Projects' }), to: '/projects' },
           {
             label: project.name,
             to: `/projects/${project.id}`,
@@ -510,27 +662,45 @@ export function ProjectSettingsPage() {
         ]}
       />
 
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold text-content-primary">
-            {t('project.settings.title', { defaultValue: 'Project Settings' })}
-          </h1>
-          <p className="text-sm text-content-tertiary mt-0.5">
-            {t('project.settings.subtitle', {
-              defaultValue:
-                'Currencies, VAT, and custom units that apply to this project only.',
-            })}
-          </p>
-        </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          icon={<ArrowLeft size={14} />}
-          onClick={() => navigate(`/projects/${project.id}`)}
-        >
-          {t('common.back_to_project', { defaultValue: 'Back to project' })}
-        </Button>
-      </div>
+      <PageHeader
+        srTitle={t('project.settings.title', { defaultValue: 'Project Settings' })}
+        subtitle={t('project.settings.subtitle', {
+          defaultValue:
+            'Currencies, VAT, and custom units that apply to this project only.',
+        })}
+        actions={
+          <Button
+            variant="ghost"
+            size="sm"
+            icon={<ArrowLeft size={14} />}
+            onClick={() => navigate(`/projects/${project.id}`)}
+          >
+            {t('common.back_to_project', { defaultValue: 'Back to project' })}
+          </Button>
+        }
+      />
+
+      <DismissibleInfo
+        storageKey="project-settings"
+        title={t('projects.settings_intro_title', {
+          defaultValue: 'Project rules, set in one place',
+        })}
+        links={[
+          {
+            label: t('nav.validation', { defaultValue: 'Validation' }),
+            onClick: () => navigate('/validation'),
+          },
+          {
+            label: t('nav.boq', { defaultValue: 'BOQ' }),
+            onClick: () => navigate(`/projects/${project.id}/boq`),
+          },
+        ]}
+      >
+        {t('projects.settings_intro_body', {
+          defaultValue:
+            'Set the project currency, VAT, units, classification standard and compliance rule sets here, and re-run the setup wizard to change which modules are active. These choices are the source of truth that BOQ pricing, validation and reports read from, so fixing them once keeps every downstream number consistent. Compliance rule sets chosen here are enforced in Validation.',
+        })}
+      </DismissibleInfo>
 
       {/* ── Project setup (Slice 4 — re-wizard entry) ───────────────────── */}
       <Card padding="lg">
@@ -571,7 +741,7 @@ export function ProjectSettingsPage() {
           title={t('project.settings.currency.title', { defaultValue: 'Currencies' })}
           subtitle={t('project.settings.currency.subtitle', {
             defaultValue:
-              'Base currency was set when the project was created. Add additional currencies to use on individual resources — rates convert back to the base for rollup totals.',
+              'Base currency was set when the project was created. Add additional currencies to use on individual resources - rates convert back to the base for rollup totals.',
           })}
           action={
             <Button
@@ -747,7 +917,7 @@ export function ProjectSettingsPage() {
           {customUnits.length === 0 ? (
             <p className="text-sm text-content-tertiary italic">
               {t('project.settings.units.empty', {
-                defaultValue: 'No custom units yet — add one below.',
+                defaultValue: 'No custom units yet - add one below.',
               })}
             </p>
           ) : (
@@ -796,6 +966,9 @@ export function ProjectSettingsPage() {
           </form>
         </div>
       </Card>
+
+      {/* ── Compliance rule packs (Item #27) ───────────────────────────── */}
+      <ComplianceRulePacksCard project={project} />
 
       {/* ── Translation (#translation deep-link) ─────────────────────────
           Mounted as a Card section so the existing hash-pulse effect in

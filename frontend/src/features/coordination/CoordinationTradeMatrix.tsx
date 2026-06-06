@@ -13,10 +13,22 @@
  */
 
 import clsx from 'clsx';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
+import { Radar } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
+import { MoneyDisplay } from '@/shared/ui/MoneyDisplay';
 import type { CanonicalTrade, TradeMatrixResponse } from './types';
+
+/** What drives the heat-map intensity + the headline number per cell. */
+export type MatrixWeighting = 'count' | 'cost';
+
+/** Coerce the wire value (Decimal-as-string) to a finite number. */
+function toNum(v: string | number | undefined | null): number {
+  if (v == null) return 0;
+  const n = typeof v === 'number' ? v : Number.parseFloat(v);
+  return Number.isFinite(n) ? n : 0;
+}
 
 export interface CoordinationTradeMatrixProps {
   data: TradeMatrixResponse | undefined;
@@ -59,7 +71,8 @@ function textForCount(open: number, maxOpen: number): string {
   return 'text-red-900';
 }
 
-/** Discipline label palette — uses the same axes as the federations page. */
+/** English fallback labels, kept for the aria-string builder (which renders
+ *  values directly so a screen reader never reads a raw `{{key}}`). */
 const DISCIPLINE_LABELS: Record<CanonicalTrade, string> = {
   arch: 'Arch',
   struct: 'Struct',
@@ -69,6 +82,18 @@ const DISCIPLINE_LABELS: Record<CanonicalTrade, string> = {
   other: 'Other',
 };
 
+/** Localised discipline label — routes the six canonical trades through
+ *  i18next so the matrix axes translate with the rest of the page. Falls
+ *  back to the English label, then the raw key, for any unknown trade. */
+function disciplineLabel(
+  t: (key: string, opts?: Record<string, unknown>) => string,
+  trade: CanonicalTrade,
+): string {
+  return t(`coordination_hub.trade_${trade}`, {
+    defaultValue: DISCIPLINE_LABELS[trade] ?? trade,
+  });
+}
+
 export function CoordinationTradeMatrix({
   data,
   isLoading,
@@ -77,6 +102,18 @@ export function CoordinationTradeMatrix({
 }: CoordinationTradeMatrixProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  // Weight the heat-map by raw clash count (default) or by open
+  // cost-impact. The cost view answers "which discipline pair is costing
+  // money", not just "which has the most clashes" - a single Struct x MEP
+  // clash through a chiller can outweigh fifty cosmetic ones.
+  const [weighting, setWeighting] = useState<MatrixWeighting>('count');
+
+  const currency = data?.currency || '';
+  const totalCost = toNum(data?.total_cost_impact);
+  const hasCost = useMemo(
+    () => (data?.cells ?? []).some((c) => toNum(c.cost_impact) > 0),
+    [data?.cells],
+  );
 
   if (isLoading || !data) {
     return (
@@ -102,18 +139,68 @@ export function CoordinationTradeMatrix({
 
   const trades = data.trades;
   // Build a lookup so a (row, col) miss renders as zero.
-  const cellMap = new Map<string, { count: number; open: number; resolved: number }>();
+  const cellMap = new Map<string, CellAgg>();
   for (const cell of data.cells) {
     cellMap.set(`${cell.row}::${cell.col}`, {
       count: cell.count,
       open: cell.open,
       resolved: cell.resolved,
+      cost: toNum(cell.cost_impact),
     });
   }
+  // The intensity ramp scales by whichever metric the operator is
+  // weighting on, so the hottest cell is always the one that matters
+  // most under the current lens (count vs money).
+  const effectiveWeighting: MatrixWeighting =
+    weighting === 'cost' && hasCost ? 'cost' : 'count';
   const maxOpen = data.cells.reduce(
     (acc, c) => (c.open > acc ? c.open : acc),
     0,
   );
+  const maxCost = data.cells.reduce(
+    (acc, c) => (toNum(c.cost_impact) > acc ? toNum(c.cost_impact) : acc),
+    0,
+  );
+
+  // No clashes at all: a 6x6 grid of dashes is meaningless. Show a real
+  // empty state that tells the user how to populate the matrix instead.
+  const hasAnyClash = data.cells.some((c) => c.count > 0);
+  if (!hasAnyClash) {
+    const emptyBody = (
+      <div
+        data-testid="coordination-matrix-empty"
+        className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border bg-surface-secondary/30 px-6 py-10 text-center"
+      >
+        <Radar size={28} className="text-content-tertiary" strokeWidth={1.5} />
+        <p className="mt-3 text-sm font-medium text-content-secondary">
+          {t('coordination.matrix_empty_title', {
+            defaultValue: 'No clashes detected yet',
+          })}
+        </p>
+        <p className="mt-1 max-w-sm text-xs text-content-tertiary">
+          {t('coordination.matrix_empty_desc', {
+            defaultValue:
+              'Run a clash detection over your federated models to populate the discipline heat-map.',
+          })}
+        </p>
+        <button
+          type="button"
+          data-testid="coordination-matrix-empty-cta"
+          onClick={() => {
+            const params = new URLSearchParams();
+            if (projectId) params.set('project', projectId);
+            navigate(`/clash${params.toString() ? `?${params.toString()}` : ''}`);
+          }}
+          className="mt-4 inline-flex h-9 items-center justify-center rounded-md bg-oe-blue px-4 text-sm font-medium text-white transition-colors hover:bg-oe-blue/90 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+        >
+          {t('coordination.matrix_empty_cta', {
+            defaultValue: 'Run clash detection',
+          })}
+        </button>
+      </div>
+    );
+    return <div data-testid="coordination-trade-matrix">{emptyBody}</div>;
+  }
 
   const grid = (
     <div className="overflow-x-auto">
@@ -131,7 +218,7 @@ export function CoordinationTradeMatrix({
             key={`col-${col}`}
             className="text-center text-xs font-medium uppercase tracking-wide text-content-secondary"
           >
-            {DISCIPLINE_LABELS[col] ?? col}
+            {disciplineLabel(t, col)}
           </div>
         ))}
         {/* Rows */}
@@ -142,6 +229,9 @@ export function CoordinationTradeMatrix({
             trades={trades}
             cellMap={cellMap}
             maxOpen={maxOpen}
+            maxCost={maxCost}
+            weighting={effectiveWeighting}
+            currency={currency}
             navigate={navigate}
             projectId={projectId ?? null}
             t={t}
@@ -151,10 +241,82 @@ export function CoordinationTradeMatrix({
     </div>
   );
 
+  // Weighting toggle + cost caption. Only offered when the payload
+  // actually carries priced cost-impact (graceful degradation: a project
+  // with no BOQ-linked clashes never shows a money toggle that would
+  // weight everything to zero).
+  const controls = (
+    <div
+      data-testid="coordination-matrix-controls"
+      className="mb-3 flex flex-wrap items-center justify-between gap-2"
+    >
+      <div className="text-xs text-content-tertiary">
+        {effectiveWeighting === 'cost' && currency ? (
+          <span data-testid="coordination-matrix-cost-caption">
+            {t('coordination.matrix_weighted_by_cost', {
+              defaultValue: 'Weighted by open cost impact',
+            })}
+            {' · '}
+            <MoneyDisplay amount={totalCost} currency={currency} compact />
+          </span>
+        ) : (
+          <span>
+            {t('coordination.matrix_weighted_by_count', {
+              defaultValue: 'Weighted by open clash count',
+            })}
+          </span>
+        )}
+      </div>
+      {hasCost ? (
+        <div
+          role="group"
+          aria-label={t('coordination.matrix_weighting_aria', {
+            defaultValue: 'Heat-map weighting',
+          })}
+          className="inline-flex overflow-hidden rounded-lg border border-border text-xs"
+        >
+          <button
+            type="button"
+            data-testid="coordination-matrix-weight-count"
+            aria-pressed={weighting === 'count'}
+            onClick={() => setWeighting('count')}
+            className={clsx(
+              'px-3 py-1 font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400',
+              weighting === 'count'
+                ? 'bg-oe-blue text-white'
+                : 'bg-surface text-content-secondary hover:bg-surface-secondary',
+            )}
+          >
+            {t('coordination.matrix_weight_count', { defaultValue: 'Count' })}
+          </button>
+          <button
+            type="button"
+            data-testid="coordination-matrix-weight-cost"
+            aria-pressed={weighting === 'cost'}
+            onClick={() => setWeighting('cost')}
+            className={clsx(
+              'px-3 py-1 font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400',
+              weighting === 'cost'
+                ? 'bg-oe-blue text-white'
+                : 'bg-surface text-content-secondary hover:bg-surface-secondary',
+            )}
+          >
+            {t('coordination.matrix_weight_cost', { defaultValue: 'Cost' })}
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+
   // Embedded inside a GlassPanel: it already paints the card + title, so
   // we drop our own chrome to avoid a card-in-a-card with a doubled title.
   if (embedded) {
-    return <div data-testid="coordination-trade-matrix">{grid}</div>;
+    return (
+      <div data-testid="coordination-trade-matrix">
+        {controls}
+        {grid}
+      </div>
+    );
   }
 
   return (
@@ -177,16 +339,28 @@ export function CoordinationTradeMatrix({
           </p>
         </div>
       </div>
+      {controls}
       {grid}
     </div>
   );
 }
 
+/** One aggregated discipline-pair cell (lookup value). */
+interface CellAgg {
+  count: number;
+  open: number;
+  resolved: number;
+  cost: number;
+}
+
 interface RowFragmentProps {
   row: CanonicalTrade;
   trades: CanonicalTrade[];
-  cellMap: Map<string, { count: number; open: number; resolved: number }>;
+  cellMap: Map<string, CellAgg>;
   maxOpen: number;
+  maxCost: number;
+  weighting: MatrixWeighting;
+  currency: string;
   navigate: ReturnType<typeof useNavigate>;
   projectId: string | null;
   t: (key: string, opts?: Record<string, unknown>) => string;
@@ -197,6 +371,9 @@ function RowFragment({
   trades,
   cellMap,
   maxOpen,
+  maxCost,
+  weighting,
+  currency,
   navigate,
   projectId,
   t,
@@ -208,7 +385,7 @@ function RowFragment({
   return (
     <>
       <div className="text-right text-xs font-medium uppercase tracking-wide text-content-secondary">
-        {DISCIPLINE_LABELS[row] ?? row}
+        {disciplineLabel(t, row)}
       </div>
       {trades.map((col) => {
         // The server emits each pair once (row index ≤ col index). For
@@ -220,10 +397,22 @@ function RowFragment({
         const open = cell?.open ?? 0;
         const total = cell?.count ?? 0;
         const resolved = cell?.resolved ?? 0;
+        const cost = cell?.cost ?? 0;
         const isEmpty = total === 0;
-        const tint = tintForCount(open, maxOpen);
-        const fg = textForCount(open, maxOpen);
+        // Intensity + headline number follow the active weighting lens.
+        const intensity = weighting === 'cost' ? cost : open;
+        const intensityMax = weighting === 'cost' ? maxCost : maxOpen;
+        const tint = tintForCount(intensity, intensityMax);
+        const fg = textForCount(intensity, intensityMax);
         const cellKey = `${row}-${col}`;
+        // Compact money for the in-cell figure (e.g. "1.2k") so the grid
+        // stays legible; the tooltip carries the precise breakdown.
+        const costDisplay =
+          cost >= 1000
+            ? `${Math.round(cost / 100) / 10}k`
+            : String(Math.round(cost));
+        const cellValue =
+          weighting === 'cost' ? (cost > 0 ? costDisplay : '—') : open;
         const tooltipPlain = isEmpty
           ? t('coordination.matrix_tooltip_empty', { defaultValue: '—' })
           : t('coordination.matrix_tooltip', {
@@ -294,7 +483,7 @@ function RowFragment({
                   : 'hover:border-border-strong focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400',
               )}
             >
-              {isEmpty ? '—' : open}
+              {isEmpty ? '—' : cellValue}
             </button>
             {hovered === cellKey && !isEmpty ? (
               <div
@@ -303,7 +492,7 @@ function RowFragment({
                 className="pointer-events-none absolute left-1/2 top-full z-20 mt-1 -translate-x-1/2 whitespace-nowrap rounded-md border border-border bg-slate-900 px-2 py-1 text-xs font-medium text-white shadow-lg"
               >
                 <div className="font-semibold">
-                  {DISCIPLINE_LABELS[row] ?? row} × {DISCIPLINE_LABELS[col] ?? col}
+                  {disciplineLabel(t, row)} × {disciplineLabel(t, col)}
                 </div>
                 <div>
                   {t('coordination.matrix_tooltip_total', {
@@ -323,6 +512,15 @@ function RowFragment({
                   })}
                   : {resolved}
                 </div>
+                {cost > 0 && currency ? (
+                  <div data-testid={`matrix-cell-tooltip-cost-${row}-${col}`}>
+                    {t('coordination.matrix_tooltip_cost', {
+                      defaultValue: 'Open cost impact',
+                    })}
+                    :{' '}
+                    <MoneyDisplay amount={cost} currency={currency} compact />
+                  </div>
+                ) : null}
               </div>
             ) : null}
           </div>

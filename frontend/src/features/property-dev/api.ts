@@ -4,7 +4,7 @@
  * Backed by /api/v1/property-dev/ — see backend/app/modules/property_dev/router.py
  */
 
-import { apiGet, apiPost, apiPut, apiPatch, apiDelete } from '@/shared/lib/api';
+import { apiGet, apiPost, apiPut, apiPatch, apiDelete, getAuthToken } from '@/shared/lib/api';
 
 /* ── Types ─────────────────────────────────────────────────────────────── */
 
@@ -220,6 +220,41 @@ export interface Handover {
   metadata: Record<string, unknown>;
   created_at: string;
   updated_at: string;
+}
+
+export type HandoverDocType =
+  | 'warranty'
+  | 'manual'
+  | 'key_receipt'
+  | 'hs_file'
+  | 'epc'
+  | 'nhbc'
+  | 'inspection_cert'
+  | 'certificate_completion'
+  | 'insurance'
+  | 'other';
+
+export interface HandoverDoc {
+  id: string;
+  handover_id: string;
+  doc_type: HandoverDocType;
+  title: string;
+  file_url: string | null;
+  is_required: boolean;
+  is_delivered: boolean;
+  delivered_at: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface HandoverBundle {
+  handover_id: string;
+  docs: HandoverDoc[];
+  delivered_count: number;
+  required_count: number;
+  missing_required: HandoverDocType[];
+  ready_for_handover: boolean;
 }
 
 export type SnagCategory =
@@ -788,6 +823,77 @@ export function completeHandover(
   return apiPost<Handover>(`${BASE}/handovers/${id}/complete`, data);
 }
 
+/* ── Handover documents / closeout package (item #25) ─────────────────── */
+
+export function getHandoverBundle(handoverId: string): Promise<HandoverBundle> {
+  return apiGet<HandoverBundle>(`${BASE}/handovers/${handoverId}/docs`);
+}
+
+export interface CreateHandoverDocPayload {
+  handover_id: string;
+  doc_type: HandoverDocType;
+  title?: string;
+  file_url?: string | null;
+  is_required?: boolean;
+  is_delivered?: boolean;
+}
+
+export function createHandoverDoc(
+  data: CreateHandoverDocPayload,
+): Promise<HandoverDoc> {
+  return apiPost<HandoverDoc>(`${BASE}/handover-docs/`, data);
+}
+
+export interface UpdateHandoverDocPayload {
+  title?: string;
+  file_url?: string | null;
+  is_required?: boolean;
+  is_delivered?: boolean;
+}
+
+export function updateHandoverDoc(
+  id: string,
+  data: UpdateHandoverDocPayload,
+): Promise<HandoverDoc> {
+  return apiPatch<HandoverDoc>(`${BASE}/handover-docs/${id}`, data);
+}
+
+export function deleteHandoverDoc(id: string): Promise<void> {
+  return apiDelete(`${BASE}/handover-docs/${id}`);
+}
+
+/**
+ * Stream-download the closeout-package ZIP for a handover.
+ *
+ * The endpoint is HTTPBearer-guarded, so a plain ``<a href>`` would 401.
+ * Mirrors {@link downloadWarrantyClaimPdf}: authenticated ``fetch`` →
+ * Blob for the ``URL.createObjectURL`` + temp ``<a download>`` flow.
+ * Returns the Blob and the server-suggested filename.
+ */
+export async function exportHandoverPackage(
+  handoverId: string,
+): Promise<{ blob: Blob; filename: string }> {
+  // Use the shared ESM accessor. The previous CommonJS `require(...)` resolved
+  // to `undefined` at runtime under Vite/ESM, so no token was ever attached
+  // and every export 401'd.
+  const token = getAuthToken();
+  const headers: Record<string, string> = { Accept: 'application/zip' };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const res = await fetch(`/api${BASE}/handovers/${handoverId}/export`, {
+    method: 'GET',
+    headers,
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => res.statusText);
+    throw new Error(text || `HTTP ${res.status}`);
+  }
+  const disposition = res.headers.get('Content-Disposition') ?? '';
+  const match = /filename="?([^"]+)"?/.exec(disposition);
+  const filename = match?.[1] ?? `handover_${handoverId}.zip`;
+  const blob = await res.blob();
+  return { blob, filename };
+}
+
 /* ── Snags ────────────────────────────────────────────────────────────── */
 
 export function listSnags(params: {
@@ -958,17 +1064,7 @@ export function warrantyClaimPdfUrl(id: string): string {
  */
 export async function downloadWarrantyClaimPdf(id: string): Promise<Blob> {
   const url = warrantyClaimPdfUrl(id);
-  const token = (() => {
-    try {
-      // Lazy-load to avoid a circular import; the store is already
-      // initialised by the time any download is triggered.
-      // eslint-disable-next-line @typescript-eslint/no-var-requires, @typescript-eslint/no-require-imports
-      const { useAuthStore } = require('@/stores/useAuthStore');
-      return useAuthStore.getState().accessToken as string | null;
-    } catch {
-      return null;
-    }
-  })();
+  const token = getAuthToken();
   const headers: Record<string, string> = { Accept: 'application/pdf' };
   if (token) headers.Authorization = `Bearer ${token}`;
   const res = await fetch(url, { method: 'GET', headers });
@@ -2745,6 +2841,39 @@ export function previewPropDevDocument(
   );
 }
 
+export interface PropDevDocEmailParams extends PropDevDocParams {
+  recipient_email: string;
+  recipient_name?: string;
+  note?: string;
+}
+
+export interface PropDevDocEmailResult {
+  ok: boolean;
+  recipient: string;
+  backend: string;
+  doc_type: string;
+  filename: string;
+  /** False when the server fell back to the console backend (SMTP not
+   *  configured) — the message was logged, not actually delivered. */
+  delivered: boolean;
+}
+
+/**
+ * Email a generated Property-Development PDF to a recipient as an
+ * attachment. Calls ``POST /api/v1/property-dev/documents/email``; the
+ * backend renders the PDF, validates the address and hands it to the core
+ * email service. Returns the delivery outcome so the UI can show an honest
+ * toast (including the "SMTP not configured" fallback case).
+ */
+export function emailPropDevDocument(
+  params: PropDevDocEmailParams,
+): Promise<PropDevDocEmailResult> {
+  return apiPost<PropDevDocEmailResult, PropDevDocEmailParams>(
+    `${BASE}/documents/email`,
+    params,
+  );
+}
+
 /* ── Document Template catalogue (settings page) ──────────────────────── */
 
 export type CustomDocType =
@@ -2881,9 +3010,7 @@ export async function uploadCustomDocumentTemplate(opts: {
   // Multipart needs the browser to set Content-Type with its own boundary,
   // so we can't reuse the apiPost JSON wrapper — issue the fetch directly
   // and attach the JWT manually.
-  // eslint-disable-next-line @typescript-eslint/no-var-requires, @typescript-eslint/no-require-imports
-  const { useAuthStore } = require('@/stores/useAuthStore');
-  const token = useAuthStore.getState().accessToken as string | null;
+  const token = getAuthToken();
   const headers: Record<string, string> = { 'X-DDC-Client': 'OE/1.0' };
   if (token) headers.Authorization = `Bearer ${token}`;
 
@@ -3089,17 +3216,7 @@ export async function downloadPropDevDocument(
   // Bypass the JSON-parsing default of the typed helpers — the server
   // returns ``application/pdf`` here, not JSON.
   const url = `/api${BASE}/documents/${doc_type}?${qs.toString()}`;
-  const token = (() => {
-    try {
-      // Lazy-load to avoid a circular import; the store is already
-      // initialised by the time any document download is triggered.
-      // eslint-disable-next-line @typescript-eslint/no-var-requires, @typescript-eslint/no-require-imports
-      const { useAuthStore } = require('@/stores/useAuthStore');
-      return useAuthStore.getState().accessToken as string | null;
-    } catch {
-      return null;
-    }
-  })();
+  const token = getAuthToken();
   const headers: Record<string, string> = { Accept: 'application/pdf' };
   if (token) headers.Authorization = `Bearer ${token}`;
   const res = await fetch(url, { method: 'GET', headers });

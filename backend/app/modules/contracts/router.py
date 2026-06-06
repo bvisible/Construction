@@ -3,16 +3,16 @@
 Mounted at ``/api/v1/contracts/`` by the module loader.
 
 Endpoint groups:
-    /contracts                  — CRUD + status transitions
-    /contracts/{id}/lines       — SoV line CRUD + bulk insert
-    /type-configurations        — read-only type catalog
-    /retention-schedules        — CRUD
-    /fee-structures             — CRUD
-    /gainshare-configurations   — CRUD
-    /ld-clauses                 — CRUD
-    /progress-claims            — CRUD + state transitions + auto-generate
-    /progress-claim-lines       — CRUD
-    /final-accounts             — CRUD + /contracts/{id}/close shortcut
+    /contracts                  - CRUD + status transitions
+    /contracts/{id}/lines       - SoV line CRUD + bulk insert
+    /type-configurations        - read-only type catalog
+    /retention-schedules        - CRUD
+    /fee-structures             - CRUD
+    /gainshare-configurations   - CRUD
+    /ld-clauses                 - CRUD
+    /progress-claims            - CRUD + state transitions + auto-generate
+    /progress-claim-lines       - CRUD
+    /final-accounts             - CRUD + /contracts/{id}/close shortcut
 
 Every project-scoped endpoint enforces :func:`verify_project_access` so users
 cannot read/mutate contracts of projects they don't own. The catalog endpoint
@@ -26,6 +26,7 @@ import uuid
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
 
 from app.core.i18n import get_locale
 from app.core.validation.messages import translate
@@ -35,6 +36,7 @@ from app.dependencies import (
     SessionDep,
     verify_project_access,
 )
+from app.modules.contracts.compliance_packs import list_rule_packs
 from app.modules.contracts.models import (
     Contract,
     ContractLine,
@@ -56,6 +58,7 @@ from app.modules.contracts.repository import (
     RetentionScheduleRepository,
 )
 from app.modules.contracts.schemas import (
+    AIAApplicationResponse,
     AutoGenerateClaimRequest,
     ContractCloneRequest,
     ContractCreate,
@@ -80,10 +83,12 @@ from app.modules.contracts.schemas import (
     LDClauseCreate,
     LDClauseResponse,
     LDClauseUpdate,
+    ProgressClaimCommitRequest,
     ProgressClaimCreate,
     ProgressClaimLineCreate,
     ProgressClaimLineResponse,
     ProgressClaimLineUpdate,
+    ProgressClaimPopulatePreviewResponse,
     ProgressClaimResponse,
     ProgressClaimUpdate,
     RetentionScheduleCreate,
@@ -299,6 +304,67 @@ async def sign_contract(
     return _contract_to_response(contract)
 
 
+@router.get("/contracts/{contract_id}/compliance-gate")
+async def preview_compliance_gate(
+    contract_id: uuid.UUID,
+    session: SessionDep,
+    user_id: CurrentUserId,
+    _perm: None = Depends(RequirePermission("contracts.read")),
+) -> dict:
+    """Read-only preview of the compliance gate for a contract.
+
+    Runs the same validation the ``draft → active`` (sign) transition runs,
+    without mutating anything, so the ComplianceGate UI can show the user
+    whether signing will be blocked and exactly which rules fail. Returns the
+    resolved rule packs/sets, the overall status/score, and the grouped
+    error / warning lists.
+    """
+    contract = await _verify_contract_access(session, contract_id, user_id)
+    service = ContractsService(session)
+    report, pack_ids = await service.run_compliance_gate(contract)
+
+    def _serialise(r: object) -> dict:
+        return {
+            "rule_id": r.rule_id,
+            "rule_name": r.rule_name,
+            "severity": r.severity.value,
+            "message": r.message,
+            "element_ref": r.element_ref,
+            "suggestion": r.suggestion,
+        }
+
+    return {
+        "contract_id": str(contract.id),
+        "contract_status": contract.status,
+        "rule_packs": pack_ids,
+        "rule_sets": report.rule_sets_applied,
+        "status": report.status.value,
+        "score": report.score,
+        "blocked": report.has_errors,
+        "counts": {
+            "errors": len(report.errors),
+            "warnings": len(report.warnings),
+            "passed": len(report.passed_rules),
+        },
+        "errors": [_serialise(r) for r in report.errors],
+        "warnings": [_serialise(r) for r in report.warnings],
+    }
+
+
+@router.get("/compliance-rule-packs/")
+async def list_compliance_rule_packs(
+    _user: CurrentUserId,
+) -> list[dict]:
+    """List the available jurisdiction compliance rule packs.
+
+    Tenant-wide read-only catalogue metadata (id, name, description,
+    jurisdiction, the workflow gates they enforce and the validation rule
+    sets they bundle). The projects settings UI uses this to let a user pick
+    which packs a project enforces at the contract-signature gate.
+    """
+    return list_rule_packs()
+
+
 @router.post("/contracts/{contract_id}/suspend", response_model=ContractResponse)
 async def suspend_contract(
     contract_id: uuid.UUID,
@@ -354,9 +420,9 @@ async def clone_contract(
 
     Cross-tenant safety (R7):
         1. The caller must have project-level access on the **source**
-           contract — enforced via ``_verify_contract_access``.
+           contract - enforced via ``_verify_contract_access``.
         2. If ``payload.target_project_id`` is given, the caller must
-           ALSO have project-level access on the **destination** —
+           ALSO have project-level access on the **destination** -
            enforced via a second ``verify_project_access`` call.
            Without this gate, IDOR turns into cross-tenant data
            exfiltration: a manager on project A could clone project A's
@@ -498,7 +564,7 @@ async def list_type_configurations(
     _user: CurrentUserId = None,  # type: ignore[assignment]
     _perm: None = Depends(RequirePermission("contracts.read")),
 ) -> list[ContractTypeConfigurationResponse]:
-    """‌⁠‍Read-only catalog — tenant-wide metadata, no per-project access check."""
+    """‌⁠‍Read-only catalog - tenant-wide metadata, no per-project access check."""
     repo = ContractTypeConfigurationRepository(session)
     items = await repo.list_all()
     return [ContractTypeConfigurationResponse.model_validate(it) for it in items]
@@ -880,6 +946,22 @@ async def update_progress_claim(
     fields = data.model_dump(exclude_unset=True)
     if "metadata" in fields:
         fields["metadata_"] = fields.pop("metadata")
+    # Status changes must go through the lifecycle transition endpoints
+    # (submit / approve / certify / reject / mark-paid). They enforce the
+    # claim FSM and emit the events finance / dashboards subscribe to; a raw
+    # PATCH would skip both and could perform illegal jumps (e.g. submitted →
+    # paid), corrupting the audit trail.
+    if "status" in fields and fields["status"] != obj.status:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "status_not_directly_editable",
+                "message": (
+                    "Use the submit / approve / certify / reject / mark-paid endpoints to change progress claim status"
+                ),
+            },
+        )
+    fields.pop("status", None)
     if fields:
         await service.claim_repo.update_fields(claim_id, **fields)
         await session.refresh(obj)
@@ -998,6 +1080,67 @@ async def auto_generate_claim(
     return _claim_to_response(claim)
 
 
+# ── Progress bridge (Gap I): populate claim from progress observations ────
+
+
+@router.get(
+    "/progress-claims/{claim_id}/populate-from-progress",
+    response_model=ProgressClaimPopulatePreviewResponse,
+)
+async def populate_claim_from_progress(
+    claim_id: uuid.UUID,
+    session: SessionDep,
+    user_id: CurrentUserId,
+    boq_position_ids: list[uuid.UUID] | None = Query(default=None),
+    _perm: None = Depends(RequirePermission("contracts.update")),
+) -> ProgressClaimPopulatePreviewResponse:
+    """Preview claim lines derived from the latest progress observations.
+
+    Read-only: returns the line breakdown the claim WOULD get if committed, so
+    the UI can let the user deselect / tweak before saving. SoV lines that link
+    to a BOQ position with at least one progress observation are included; lines
+    that are unlinked, have no observation yet, or carry a different currency
+    than the claim are skipped and counted (so the UI can hint why). Requires
+    ``contracts.update`` and project-level access on the owning project.
+    """
+    await _verify_claim_access(session, claim_id, user_id)
+    service = ContractsService(session)
+    preview = await service.populate_claim_from_progress(
+        claim_id,
+        boq_position_ids=boq_position_ids,
+    )
+    return ProgressClaimPopulatePreviewResponse.model_validate(preview)
+
+
+@router.put(
+    "/progress-claims/{claim_id}/commit-populated-lines",
+    response_model=ProgressClaimResponse,
+)
+async def commit_populated_claim_lines(
+    claim_id: uuid.UUID,
+    payload: ProgressClaimCommitRequest,
+    session: SessionDep,
+    user_id: CurrentUserId,
+    _perm: None = Depends(RequirePermission("contracts.update")),
+) -> ProgressClaimResponse:
+    """Persist a populated / edited set of claim lines and roll up totals.
+
+    Idempotent: existing claim lines are replaced wholesale, values are
+    recomputed server-side (so a tampered total cannot inflate the claim), the
+    claim's gross / retention / prior / net are re-rolled, and
+    ``contracts.claim.populated`` is emitted. Only valid on a draft or submitted
+    claim. Requires ``contracts.update`` and project-level access.
+    """
+    await _verify_claim_access(session, claim_id, user_id)
+    service = ContractsService(session)
+    claim = await service.commit_preview_to_claim(
+        claim_id,
+        payload.lines,
+        actor_id=user_id,
+    )
+    return _claim_to_response(claim)
+
+
 # ── ProgressClaimLines ───────────────────────────────────────────────────
 
 
@@ -1050,7 +1193,13 @@ async def update_claim_line(
     obj = await repo.get_by_id(line_id)
     if obj is None:
         raise HTTPException(status_code=404, detail="Claim line not found")
-    await _verify_claim_access(session, obj.progress_claim_id, user_id)
+    claim = await _verify_claim_access(session, obj.progress_claim_id, user_id)
+    # The claim line breakdown is part of the immutable audit trail once the
+    # parent claim leaves draft / submitted (approved / certified / paid /
+    # rejected). Mirror the service guard used by the auto-generate / populate
+    # paths so a raw PATCH cannot rewrite a billed line.
+    service = ContractsService(session)
+    service._assert_claim_editable(claim)
     fields = {k: v for k, v in data.model_dump(exclude_unset=True).items() if v is not None}
     if fields:
         await repo.update_fields(line_id, **fields)
@@ -1074,6 +1223,62 @@ async def delete_claim_line(
         raise HTTPException(status_code=404, detail="Claim line not found")
     await _verify_claim_access(session, obj.progress_claim_id, user_id)
     await repo.delete(line_id)
+
+
+# ── AIA G702/G703 payment applications (US/CA/AU only) ─────────────────────
+#
+# AIA G702 (Application and Certificate for Payment) and G703 (Continuation
+# Sheet) are the standard US progress-billing documents, also adopted in CA and
+# AU. They are country-gated: the service raises 404 unless the claim's project
+# country resolves to US/CA/AU, so for every other market these endpoints behave
+# as if they do not exist (no information leak). They are an additive AIA
+# presentation layer over the existing progress-claim engine - no new claim
+# state, no duplicated retention/finance math.
+
+
+@router.get(
+    "/progress-claims/{claim_id}/aia-application",
+    response_model=AIAApplicationResponse,
+    summary="AIA G702 summary + G703 continuation for a progress claim (US/CA/AU)",
+)
+async def get_aia_application(
+    claim_id: uuid.UUID,
+    session: SessionDep,
+    user_id: CurrentUserId,
+    _perm: None = Depends(RequirePermission("contracts.read")),
+) -> AIAApplicationResponse:
+    await _verify_claim_access(session, claim_id, user_id)
+    service = ContractsService(session)
+    payload = await service.build_aia_application(claim_id)
+    return AIAApplicationResponse.model_validate(payload)
+
+
+@router.get(
+    "/progress-claims/{claim_id}/aia-application/pdf",
+    summary="Export the AIA G702/G703 application as PDF (US/CA/AU)",
+    response_description="application/pdf stream",
+)
+async def export_aia_application_pdf(
+    claim_id: uuid.UUID,
+    session: SessionDep,
+    user_id: CurrentUserId,
+    _perm: None = Depends(RequirePermission("contracts.read")),
+) -> StreamingResponse:
+    import io
+
+    from app.modules.contracts.aia_pdf import render_aia_application_pdf
+
+    await _verify_claim_access(session, claim_id, user_id)
+    service = ContractsService(session)
+    payload = await service.build_aia_application(claim_id)
+    pdf_bytes = render_aia_application_pdf(payload)
+    safe_num = "".join(c for c in str(payload.get("application_number") or "app") if c.isalnum() or c in "-_") or "app"
+    filename = f"AIA_G702_{safe_num}.pdf"
+    return StreamingResponse(
+        io.BytesIO(pdf_bytes),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 # ── FinalAccount ─────────────────────────────────────────────────────────
@@ -1252,9 +1457,9 @@ async def release_retention(
     """Release retention for a contract for the given event.
 
     Body:
-        event: str — e.g. "substantial_completion" / "punch_list_complete" /
+        event: str - e.g. "substantial_completion" / "punch_list_complete" /
             "defects_liability_end" or a key from custom_schedule.
-        custom_schedule: dict[event_name → percent] — optional override.
+        custom_schedule: dict[event_name → percent] - optional override.
     """
     await _verify_contract_access(session, contract_id, user_id)
     service = ContractsService(session)
@@ -1291,7 +1496,7 @@ async def attach_lien_waiver(
 ) -> dict:
     """Attach a lien waiver record (conditional/unconditional × partial/final)."""
     # Object-level scoping: a lien waiver carries dollar value and legal
-    # weight — only someone with access to the owning project may attach it.
+    # weight - only someone with access to the owning project may attach it.
     await _verify_claim_access(session, claim_id, user_id)
     service = ContractsService(session)
     return await service.attach_lien_waiver(claim_id, payload, actor_id=user_id)

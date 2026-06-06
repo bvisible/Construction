@@ -1,4 +1,4 @@
-"""AI Agents service — business logic for starting and inspecting runs.
+"""AI Agents service - business logic for starting and inspecting runs.
 
 The service is what wires the in-process :class:`AgentRunner` to:
     1. The DB-backed :class:`AgentRun` / :class:`AgentStep` persistence.
@@ -42,8 +42,25 @@ from app.modules.ai_agents.repository import (
     AgentStepRepository,
     CustomAgentRepository,
 )
+from app.modules.ai_agents.triggers import (
+    normalise_triggers,
+    required_permission_for_tool,
+)
 
 logger = logging.getLogger(__name__)
+
+
+class ToolPermissionError(Exception):
+    """Raised when an operator selects a tool they lack the permission for.
+
+    Carries the offending tool + the permission required so the router can
+    return a precise 403 the UI can render ("you lack ``boq.create``").
+    """
+
+    def __init__(self, tool_name: str, permission: str) -> None:
+        self.tool_name = tool_name
+        self.permission = permission
+        super().__init__(f"Missing permission '{permission}' for tool '{tool_name}'")
 
 
 # Conservative caps for user-authored agents. They are prompt-only (no tools),
@@ -115,14 +132,36 @@ def _resolve_system_prompt(
     raise ValueError(msg)
 
 
+def _runtime_allowed_tools(row: CustomAgent) -> list[str]:
+    """Resolve the custom agent's vetted tool slugs to ones the runner knows.
+
+    The operator's saved selection is intersected with the live tool registry
+    so a tool that has since been removed from the platform is silently dropped
+    (the runner would reject it anyway). An agent with no tools selected stays
+    prompt-only.
+    """
+    selected = row.allowed_tools
+    if not selected:
+        return []
+    available = set(global_tool_registry.names())
+    return [name for name in selected if name in available]
+
+
 def custom_agent_to_runtime(row: CustomAgent) -> Agent:
     """Project a DB :class:`CustomAgent` row into a runnable :class:`Agent`.
 
-    The runner only ever sees a declarative :class:`Agent`; custom agents are
-    prompt-only (``allowed_tools=[]``) so the loop returns the model's first
-    answer. The runtime ``name`` is the ``custom:<id>`` slug so the run path
-    and persisted ``AgentRun.agent_name`` round-trip unambiguously.
+    The runner only ever sees a declarative :class:`Agent`. Custom agents are
+    prompt-only by default, but an operator may grant the agent a vetted set of
+    tools (Item 29) stored in ``automation.allowed_tools``; those are surfaced
+    here so the ReAct loop can dispatch to them. Granting a tool already
+    required the operator to hold that tool's permission (enforced in
+    :meth:`AgentService.set_tools`), and the runner still re-verifies the
+    invoking user's permission inside each privileged tool - so an agent never
+    widens its creator's reach. When no tools are granted the loop returns the
+    model's first answer. The runtime ``name`` is the ``custom:<id>`` slug so
+    the run path and persisted ``AgentRun.agent_name`` round-trip unambiguously.
     """
+    tools = _runtime_allowed_tools(row)
     return Agent(
         name=row.agent_name,
         display_name=row.display_name,
@@ -132,8 +171,11 @@ def custom_agent_to_runtime(row: CustomAgent) -> Agent:
         icon=row.icon or "sparkles",
         example_prompts=list(row.example_prompts or []),
         system_prompt=row.system_prompt,
-        allowed_tools=[],
-        max_iterations=CUSTOM_AGENT_MAX_ITERATIONS,
+        allowed_tools=tools,
+        # A tool-using custom agent needs room for a few ReAct turns; a
+        # prompt-only one still returns on the first answer. Give tool-backed
+        # agents the standard built-in budget, prompt-only ones the tight cap.
+        max_iterations=8 if tools else CUSTOM_AGENT_MAX_ITERATIONS,
     )
 
 
@@ -145,7 +187,7 @@ def _iso_now() -> str:
 async def _resolve_production_llm(session: AsyncSession, user_id: uuid.UUID) -> LLMBridge | None:
     """Pull the user's AI settings and build a :class:`CallAILLM` bridge.
 
-    Returns ``None`` when no API key is configured — the caller decides
+    Returns ``None`` when no API key is configured - the caller decides
     whether that's a hard error (it is, for ``run_agent``).
     """
     try:
@@ -263,7 +305,7 @@ class AgentService:
         """Resolve a runtime :class:`Agent` by name for a given caller.
 
         ``custom:<id>`` slugs resolve from the DB (and only if the agent
-        belongs to ``user_id`` — a user cannot run another user's custom
+        belongs to ``user_id`` - a user cannot run another user's custom
         agent); everything else resolves from the built-in registry.
         """
         if agent_name.startswith(CUSTOM_AGENT_PREFIX):
@@ -348,6 +390,185 @@ class AgentService:
         await self.custom_repo.delete(row)
         return True
 
+    # ── Automation: schedule + tools + triggers (Item 29) ────────────────────
+
+    @staticmethod
+    def validate_cron(expr: str) -> str:
+        """Validate (and normalise whitespace in) a 5-field POSIX cron string.
+
+        Returns the normalised expression. Raises :class:`ValueError` on a
+        malformed expression (the router maps this to a 422). Reuses the
+        reporting module's parser so the supported grammar is identical to the
+        scheduled-reports feature - no new dependency.
+        """
+        from app.modules.reporting.cron import CronParseError, parse_cron
+
+        normalised = " ".join((expr or "").split())
+        if not normalised:
+            msg = "Cron expression is required."
+            raise ValueError(msg)
+        try:
+            parse_cron(normalised)
+        except CronParseError as exc:
+            raise ValueError(str(exc)) from exc
+        return normalised
+
+    @staticmethod
+    def _automation_dict(row: CustomAgent) -> dict[str, Any]:
+        """Return a mutable copy of the agent's automation envelope."""
+        return dict(row.automation) if isinstance(row.automation, dict) else {}
+
+    async def get_agent_metadata(self, agent_id: uuid.UUID, user_id: uuid.UUID) -> dict[str, Any] | None:
+        """Return the current schedule/tools/triggers for an owned agent, or None.
+
+        The shape mirrors :class:`schemas.AgentMetadataResponse`. Returns
+        ``None`` when the agent is not found / not owned by the caller.
+        """
+        row = await self.custom_repo.get_for_user(agent_id, user_id)
+        if row is None:
+            return None
+        auto = self._automation_dict(row)
+        return {
+            "cron": row.cron_expr,
+            "schedule_enabled": row.schedule_enabled,
+            "next_run_at": auto.get("next_run_at") if isinstance(auto.get("next_run_at"), str) else None,
+            "schedule_input": auto.get("schedule_input") if isinstance(auto.get("schedule_input"), str) else "",
+            "triggers": [str(t) for t in auto.get("triggers", []) if isinstance(t, str)],
+            "allowed_tools": row.allowed_tools,
+        }
+
+    async def set_schedule(
+        self,
+        *,
+        agent_id: uuid.UUID,
+        user_id: uuid.UUID,
+        cron_expr: str,
+        enabled: bool = True,
+        schedule_input: str = "",
+        triggers: list[str] | None = None,
+    ) -> dict[str, Any] | None:
+        """Create/replace the schedule on an owned agent. Returns metadata or None.
+
+        Validates the cron, computes ``next_run_at`` from now, and persists the
+        merged automation envelope. ``None`` when the agent is not owned/found;
+        raises :class:`ValueError` on a bad cron.
+        """
+        row = await self.custom_repo.get_for_user(agent_id, user_id)
+        if row is None:
+            return None
+        normalised = self.validate_cron(cron_expr)
+        from app.modules.ai_agents.scheduler import compute_next_run_at
+
+        auto = self._automation_dict(row)
+        auto["cron"] = normalised
+        auto["schedule_enabled"] = bool(enabled)
+        auto["schedule_input"] = (schedule_input or "").strip()
+        if triggers is not None:
+            auto["triggers"] = normalise_triggers(triggers)
+        # Only schedule a future fire when enabled; a paused schedule keeps its
+        # cron but has no pending occurrence.
+        auto["next_run_at"] = compute_next_run_at(normalised) if enabled else None
+        await self.custom_repo.update_metadata(agent_id, auto)
+        return await self.get_agent_metadata(agent_id, user_id)
+
+    async def set_triggers(
+        self,
+        *,
+        agent_id: uuid.UUID,
+        user_id: uuid.UUID,
+        triggers: list[str],
+    ) -> dict[str, Any] | None:
+        """Replace the event-trigger subscriptions on an owned agent.
+
+        Triggers fire the agent on a platform event (RFI created, document
+        uploaded) independently of any cron schedule, so they are set through
+        their own path rather than requiring a cron. Unknown trigger slugs are
+        dropped silently (a stale frontend can never persist an inert trigger).
+        ``None`` when the agent is not owned/found.
+        """
+        row = await self.custom_repo.get_for_user(agent_id, user_id)
+        if row is None:
+            return None
+        auto = self._automation_dict(row)
+        auto["triggers"] = normalise_triggers(triggers)
+        await self.custom_repo.update_metadata(agent_id, auto)
+        return await self.get_agent_metadata(agent_id, user_id)
+
+    async def delete_schedule(self, agent_id: uuid.UUID, user_id: uuid.UUID) -> bool:
+        """Remove the schedule (cron + next_run_at) from an owned agent.
+
+        Leaves any tool grant intact. Returns False when not found/owned.
+        """
+        row = await self.custom_repo.get_for_user(agent_id, user_id)
+        if row is None:
+            return False
+        auto = self._automation_dict(row)
+        auto.pop("cron", None)
+        auto.pop("next_run_at", None)
+        auto.pop("schedule_enabled", None)
+        auto.pop("schedule_input", None)
+        await self.custom_repo.update_metadata(agent_id, auto)
+        return True
+
+    async def set_tools(
+        self,
+        *,
+        agent_id: uuid.UUID,
+        user_id: uuid.UUID,
+        tool_names: list[str],
+        user_role: str,
+    ) -> dict[str, Any] | None:
+        """Grant a vetted set of tools to an owned agent. Returns metadata or None.
+
+        Each requested tool must (a) exist in the live tool registry and (b) be
+        one the operator already has permission to use - otherwise a
+        :class:`ToolPermissionError` is raised (router → 403). Unknown tools are
+        dropped silently. ``None`` when the agent is not owned/found.
+
+        Permission is checked against the live registry using the operator's
+        role, mirroring ``RequirePermission``'s stale-JWT fallback - so the
+        grant honours the operator's CURRENT role, not a cached token.
+        """
+        row = await self.custom_repo.get_for_user(agent_id, user_id)
+        if row is None:
+            return None
+
+        from app.core.permissions import permission_registry
+
+        available = set(global_tool_registry.names())
+        vetted: list[str] = []
+        seen: set[str] = set()
+        for raw in tool_names:
+            name = (raw or "").strip()
+            if not name or name in seen or name not in available:
+                continue
+            seen.add(name)
+            required = required_permission_for_tool(name)
+            if not permission_registry.role_has_permission(user_role, required):
+                raise ToolPermissionError(name, required)
+            vetted.append(name)
+
+        auto = self._automation_dict(row)
+        auto["allowed_tools"] = vetted
+        await self.custom_repo.update_metadata(agent_id, auto)
+        return await self.get_agent_metadata(agent_id, user_id)
+
+    def list_available_tools_with_permissions(self) -> list[dict[str, Any]]:
+        """List every runner tool plus the permission needed to grant it.
+
+        Powers the builder's tool picker: the frontend shows each tool with its
+        required permission so it can grey out tools the operator cannot grant.
+        """
+        return [
+            {
+                "name": t.name,
+                "description": t.description,
+                "input_schema": t.input_schema,
+                "required_permission": required_permission_for_tool(t.name),
+            }
+            for t in global_tool_registry.all()
+        ]
+
     def list_registered_tools(self) -> list[dict[str, Any]]:
         return [
             {
@@ -369,14 +590,26 @@ class AgentService:
         project_id: uuid.UUID | None = None,
         llm: LLMBridge | None = None,
         tool_registry: ToolRegistry | None = None,
+        trigger_source: str = "manual",
     ) -> AgentRun:
         """Create the run row, execute the loop synchronously, and persist steps.
 
         "Background task" wiring (``BackgroundTasks.add_task``) lives in
-        the router — here we just run the loop. The router can choose to
+        the router - here we just run the loop. The router can choose to
         ``await`` us inline (tests do) or schedule us for later.
+
+        Resolves built-ins from the in-memory registry AND the caller's own
+        custom agents (``custom:<id>`` slugs) from the DB, so the scheduler can
+        fire a scheduled custom agent through this same path. Ownership for
+        custom slugs is enforced in :meth:`resolve_agent`.
+
+        ``trigger_source`` records how the run was initiated ("manual",
+        "schedule", or "event:<name>") so the monitoring panel and audit trail
+        can tell automated runs apart from user-initiated ones.
         """
         agent = get_agent(agent_name)
+        if agent is None:
+            agent = await self.resolve_agent(agent_name, user_id)
         if agent is None:
             msg = f"Unknown agent: {agent_name}"
             raise ValueError(msg)
@@ -390,6 +623,7 @@ class AgentService:
             iterations=0,
             total_tokens=0,
             started_at=_iso_now(),
+            trigger_source=trigger_source,
         )
         run = await self.run_repo.create(run)
         run_id = run.id
@@ -455,9 +689,56 @@ class AgentService:
             total_tokens=result.total_tokens,
             finished_at=_iso_now(),
         )
+        # An automated run (scheduler/event) has no user watching the page, so
+        # surface a failure through the notifications module - otherwise a
+        # silently-failing schedule is invisible. Manual runs already show the
+        # failure inline on the timeline, so they are not notified.
+        if trigger_source != "manual" and result.status == "failed":
+            await self._notify_automated_failure(
+                user_id=user_id,
+                run_id=run_id,
+                agent_name=agent_name,
+                trigger_source=trigger_source,
+                failure_reason=result.failure_reason,
+            )
         refreshed = await self.run_repo.get_by_id(run_id)
         assert refreshed is not None  # noqa: S101
         return refreshed
+
+    async def _notify_automated_failure(
+        self,
+        *,
+        user_id: uuid.UUID,
+        run_id: uuid.UUID,
+        agent_name: str,
+        trigger_source: str,
+        failure_reason: str | None,
+    ) -> None:
+        """Best-effort in-app notification when an automated run fails.
+
+        Reuses the existing notifications module (no new channel). Swallows all
+        errors: a notification hiccup must never break the run-recording path or
+        wedge the scheduler tick.
+        """
+        try:
+            from app.modules.notifications.service import NotificationService
+
+            await NotificationService(self.session).create(
+                user_id=user_id,
+                notification_type="ai_agent_run_failed",
+                title_key="notifications.ai_agent.run_failed.title",
+                body_key="notifications.ai_agent.run_failed.body",
+                body_context={
+                    "agent": _humanize_agent(agent_name),
+                    "reason": failure_reason or "unknown",
+                    "trigger": trigger_source,
+                },
+                entity_type="ai_agent_run",
+                entity_id=str(run_id),
+                action_url=f"/ai-agents?run={run_id}",
+            )
+        except Exception:  # noqa: BLE001 - notification is best-effort
+            logger.warning("Failed to notify automated-run failure for run %s", run_id, exc_info=True)
 
     # ── Read ─────────────────────────────────────────────────────────────
 
@@ -479,6 +760,15 @@ class AgentService:
             project_id=project_id,
             limit=limit,
         )
+
+    async def list_automated_runs(self, *, user_id: uuid.UUID, limit: int = 50) -> list[AgentRun]:
+        """Return the caller's automated (scheduler/event) runs, newest-first.
+
+        Powers the AI-agents monitoring panel: which scheduled / event-fired
+        runs happened, with their status, so a silently-failing schedule is
+        visible.
+        """
+        return await self.run_repo.list_automated(user_id=user_id, limit=limit)
 
     async def project_insights(
         self,
@@ -507,3 +797,97 @@ class AgentService:
             if len(insights) >= limit:
                 break
         return insights
+
+    # ── BOQ proposals: extract + apply (human-confirmed) ──────────────────────
+
+    async def get_run_proposals(
+        self,
+        *,
+        run_id: uuid.UUID,
+        user_id: uuid.UUID,
+    ) -> dict[str, Any] | None:
+        """Return the structured BOQ-position proposals a run produced.
+
+        The BOQ-drafter emits each line as a ``create_position`` observation
+        during the loop, but the run's final answer is markdown - so the
+        proposals would otherwise be lost. This recovers them from the persisted
+        steps (with a JSON-final-output fallback) so the UI can offer a real
+        "apply to BOQ" action instead of asking the user to re-type every line.
+
+        Returns ``None`` when the run does not exist or is not owned by the
+        caller (the router maps that to 404/403). When the run has no proposals
+        the ``proposals`` list is empty - a valid "nothing to apply" state.
+        """
+        from app.modules.ai_agents.proposals import extract_proposals, proposal_currencies
+
+        run = await self.run_repo.get_by_id(run_id)
+        if run is None or str(run.user_id) != str(user_id):
+            return None
+        steps = await self.step_repo.list_for_run(run_id)
+        proposals = extract_proposals(steps, run.final_output)
+        currencies = sorted(proposal_currencies(proposals))
+        return {
+            "run_id": str(run_id),
+            "project_id": str(run.project_id) if run.project_id else None,
+            "count": len(proposals),
+            "currencies": currencies,
+            "mixed_currency": len(currencies) > 1,
+            "proposals": [p.to_dict() for p in proposals],
+        }
+
+    async def apply_run_proposals(
+        self,
+        *,
+        run_id: uuid.UUID,
+        user_id: uuid.UUID,
+        boq_id: uuid.UUID,
+    ) -> dict[str, Any] | None:
+        """Apply a run's BOQ-position proposals to ``boq_id`` as real positions.
+
+        The human-confirmed half of the drafter flow: the user reviewed the
+        proposals and chose a BOQ, so we create real positions through the BOQ
+        module's own ``add_position`` (every invariant honoured) and tag each
+        line back to the run. Currencies are never blended - an off-currency or
+        un-priced line is skipped with a reason.
+
+        Returns ``None`` when the run is not found / not owned by the caller.
+        Raises :class:`ValueError` when the run has no proposals to apply (the
+        router maps that to 422). The caller (router) is responsible for
+        verifying the user's access to the target BOQ's project and for the
+        commit.
+        """
+        from app.modules.ai_agents.proposals import (
+            apply_proposals_to_boq,
+            extract_proposals,
+        )
+        from app.modules.boq.service import BOQService
+
+        run = await self.run_repo.get_by_id(run_id)
+        if run is None or str(run.user_id) != str(user_id):
+            return None
+
+        steps = await self.step_repo.list_for_run(run_id)
+        proposals = extract_proposals(steps, run.final_output)
+        if not proposals:
+            msg = "This run produced no BOQ position proposals to apply."
+            raise ValueError(msg)
+
+        boq_service = BOQService(self.session)
+        project_currency = (await boq_service._resolve_project_currency(boq_id)) or ""  # noqa: SLF001
+
+        outcome = await apply_proposals_to_boq(
+            session=self.session,
+            proposals=proposals,
+            boq_id=boq_id,
+            run_id=run_id,
+            project_currency=project_currency,
+        )
+        return {
+            "run_id": str(run_id),
+            "boq_id": str(boq_id),
+            "created": outcome.created,
+            "skipped": outcome.skipped,
+            "currency": outcome.currency,
+            "created_ordinals": outcome.created_ordinals,
+            "skipped_reasons": outcome.skipped_reasons,
+        }

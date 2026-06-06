@@ -21,6 +21,7 @@ import {
   UserX,
   AlertOctagon,
   Globe2,
+  LineChart,
 } from 'lucide-react';
 import {
   Button,
@@ -30,10 +31,14 @@ import {
   Breadcrumb,
   RecoveryCard,
   SkeletonTable,
+  IntroRichText,
 } from '@/shared/ui';
 import { RequiresProject } from '@/shared/auth/RequiresProject';
 import { DateDisplay } from '@/shared/ui/DateDisplay';
+import { PageHeader } from '@/shared/ui/PageHeader';
 import { SectionIntro } from '@/features/validation';
+import { SafetyTrendsChart } from './SafetyTrendsChart';
+import { SafetyThresholdWidget } from './SafetyThresholdWidget';
 import { apiGet, apiPost, triggerDownload, extractErrorMessageFromBody } from '@/shared/lib/api';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { useAuthStore } from '@/stores/useAuthStore';
@@ -115,7 +120,7 @@ function normaliseObservation(o: ObservationWire): Observation {
 
 /* ── Constants ────────────────────────────────────────────────────────── */
 
-const SAFETY_TAB_IDS = ['incidents', 'observations'] as const;
+const SAFETY_TAB_IDS = ['incidents', 'observations', 'trends'] as const;
 type SafetyTab = (typeof SAFETY_TAB_IDS)[number];
 
 // Keyed on the backend incident_type enum
@@ -402,17 +407,17 @@ function QualityDashboardSummary({ projectId }: { projectId: string }) {
     : 0;
 
   return (
-    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
       <Card padding="none">
         <div className="p-3">
-          <div className="text-2xs text-content-tertiary uppercase">
+          <div className="text-2xs uppercase tracking-wide text-content-tertiary">
             {t('safety.dash_open_incidents', { defaultValue: 'Open Incidents' })}
           </div>
           {safetyStatsError ? (
             <div
               className="flex items-center gap-1 text-sm font-semibold text-semantic-error"
               title={t('safety.stats_load_error', {
-                defaultValue: 'Could not load safety data — figure not confirmed',
+                defaultValue: 'Could not load safety data, figure not confirmed',
               })}
             >
               <AlertTriangle size={14} />
@@ -420,13 +425,13 @@ function QualityDashboardSummary({ projectId }: { projectId: string }) {
             </div>
           ) : (
             <>
-              <div className="text-xl font-bold text-content-primary">{openIncidents}</div>
+              <div className="text-lg font-semibold text-content-primary">{openIncidents}</div>
               {safetyDataUnreliable && (
                 <div
                   className="mt-0.5 flex items-center gap-1 text-2xs text-semantic-error"
                   title={t('safety.dates_unparseable_hint', {
                     defaultValue:
-                      'Some incidents have unreadable dates — "days without incident" cannot be confirmed.',
+                      'Some incidents have unreadable dates - "days without incident" cannot be confirmed.',
                   })}
                 >
                   <AlertTriangle size={11} />
@@ -439,26 +444,26 @@ function QualityDashboardSummary({ projectId }: { projectId: string }) {
       </Card>
       <Card padding="none">
         <div className="p-3">
-          <div className="text-2xs text-content-tertiary uppercase">
+          <div className="text-2xs uppercase tracking-wide text-content-tertiary">
             {t('safety.dash_pending_inspections', { defaultValue: 'Pending Inspections' })}
           </div>
-          <div className="text-xl font-bold text-content-primary">{pendingInspections}</div>
+          <div className="text-lg font-semibold text-content-primary">{pendingInspections}</div>
         </div>
       </Card>
       <Card padding="none">
         <div className="p-3">
-          <div className="text-2xs text-content-tertiary uppercase">
+          <div className="text-2xs uppercase tracking-wide text-content-tertiary">
             {t('safety.dash_open_ncrs', { defaultValue: 'Open NCRs' })}
           </div>
-          <div className="text-xl font-bold text-content-primary">{openNCRs}</div>
+          <div className="text-lg font-semibold text-content-primary">{openNCRs}</div>
         </div>
       </Card>
       <Card padding="none">
         <div className="p-3">
-          <div className="text-2xs text-content-tertiary uppercase">
+          <div className="text-2xs uppercase tracking-wide text-content-tertiary">
             {t('safety.dash_open_defects', { defaultValue: 'Open Defects' })}
           </div>
-          <div className="text-xl font-bold text-content-primary">{openDefects}</div>
+          <div className="text-lg font-semibold text-content-primary">{openDefects}</div>
         </div>
       </Card>
     </div>
@@ -500,54 +505,61 @@ export function SafetyPage() {
       label: t('safety.observations', { defaultValue: 'Observations' }),
       icon: <Eye size={15} />,
     },
+    {
+      key: 'trends',
+      label: t('safety.trends', { defaultValue: 'Trends' }),
+      icon: <LineChart size={15} />,
+    },
   ];
 
   return (
-    <div className="w-full animate-fade-in">
+    <div className="space-y-5 animate-fade-in">
       <Breadcrumb
         items={[
-          { label: t('nav.dashboard', 'Dashboard'), to: '/' },
           ...(projectName
             ? [{ label: projectName, to: `/projects/${projectId}` }]
             : []),
           { label: t('safety.title', { defaultValue: 'Safety' }) },
         ]}
-        className="mb-4"
       />
 
       {/* Header */}
-      <div className="mb-6 flex items-start justify-between gap-4 flex-wrap">
-        <div>
-          <h1 className="text-2xl font-bold text-content-primary">
-            {t('safety.title', { defaultValue: 'Safety' })}
-          </h1>
-          <p className="mt-1 text-sm text-content-secondary">
-            {t('safety.subtitle', {
-              defaultValue: 'Report incidents, record observations, and monitor site safety compliance',
-            })}
-          </p>
-        </div>
-        {projectId && (
-          <button
-            type="button"
-            onClick={() => navigate(`/projects/${projectId}/geo`)}
-            className="inline-flex items-center gap-1.5 rounded-md border border-border-light bg-surface-primary px-2.5 py-1.5 text-xs font-medium text-content-secondary hover:bg-surface-secondary hover:text-oe-blue focus:outline-none focus:ring-2 focus:ring-oe-blue/40 shrink-0"
-            title={t('geo_hub.view_on_map', { defaultValue: 'View on map' })}
-            aria-label={t('geo_hub.view_on_map', { defaultValue: 'View on map' })}
-            data-testid="safety-view-on-map"
-          >
-            <Globe2 size={13} />
-            {t('geo_hub.view_on_map', { defaultValue: 'View on map' })}
-          </button>
-        )}
-      </div>
+      <PageHeader
+        srTitle={t('safety.title', { defaultValue: 'Safety' })}
+        subtitle={t('safety.subtitle', {
+          defaultValue: 'Report incidents, record observations, and monitor site safety compliance',
+        })}
+        actions={
+          projectId && (
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={<Globe2 size={14} />}
+              onClick={() => navigate(`/projects/${projectId}/geo`)}
+              title={t('geo_hub.view_on_map', { defaultValue: 'View on map' })}
+              data-testid="safety-view-on-map"
+            >
+              {t('geo_hub.view_on_map', { defaultValue: 'View on map' })}
+            </Button>
+          )
+        }
+      />
 
       <SectionIntro
         storageKey="safety"
         title={t('safety.intro_title', {
-          defaultValue: 'Incidents vs. observations',
+          defaultValue: 'Catch the hazard before the injury',
         })}
+        more={
+          t('safety.intro_more', { defaultValue: '' }) ? (
+            <IntroRichText text={t('safety.intro_more')} />
+          ) : undefined
+        }
         links={[
+          {
+            label: t('safety.intro_link_hse', { defaultValue: 'HSE Advanced' }),
+            onClick: () => navigate('/hse-advanced'),
+          },
           {
             label: t('safety.link_inspections', { defaultValue: 'Inspections' }),
             onClick: () => navigate('/inspections'),
@@ -556,15 +568,11 @@ export function SafetyPage() {
             label: t('safety.link_punchlist', { defaultValue: 'Punch List' }),
             onClick: () => navigate('/punchlist'),
           },
-          {
-            label: t('safety.intro_link_hse', { defaultValue: 'HSE Advanced' }),
-            onClick: () => navigate('/hse-advanced'),
-          },
         ]}
       >
         {t('safety.intro_body', {
           defaultValue:
-            'Log Incidents for things that happened (injury, near-miss, property damage, fire, environmental) — they feed the “days without incident” compliance metric. Log Observations for hazards spotted before harm; their Severity × Likelihood risk score can prompt a follow-up inspection. For formal 5-Whys investigations, permits-to-work and CAPA tracking, use HSE Advanced.',
+            'Log Incidents for things that already happened (injury, near-miss, property damage, fire, environmental) and Observations for hazards spotted before harm, scored by severity times likelihood. The records drive the days-without-incident metric and the safety rollup tiles, and a serious event escalates into HSE Advanced for root-cause investigation while a flagged hazard can open an inspection or punch item.',
         })}
       </SectionIntro>
 
@@ -579,7 +587,7 @@ export function SafetyPage() {
       >
         {/* Tab Bar */}
         <div
-          className="flex items-center gap-1 mb-6 border-b border-border-light"
+          className="flex items-center gap-1 mb-5 border-b border-border-light"
           role="tablist"
           aria-label={t('safety.tabs_aria', { defaultValue: 'Safety sections' })}
           onKeyDown={onTabKeyDown}
@@ -622,6 +630,12 @@ export function SafetyPage() {
           )}
           {activeTab === 'observations' && projectId && (
             <ObservationsTab projectId={projectId} />
+          )}
+          {activeTab === 'trends' && projectId && (
+            <div className="space-y-4">
+              <SafetyThresholdWidget projectId={projectId} />
+              <SafetyTrendsChart projectId={projectId} />
+            </div>
           )}
         </div>
       </RequiresProject>

@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useMemo, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useParams } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import {
   Plus,
   Trash2,
@@ -21,9 +21,10 @@ import {
   Briefcase,
   Boxes,
   ChevronDown,
+  Info,
 } from 'lucide-react';
 import clsx from 'clsx';
-import { Button, Badge, Card, Input, Breadcrumb, ConfirmDialog } from '@/shared/ui';
+import { Button, Badge, Card, Input, Breadcrumb, ConfirmDialog, DismissibleInfo } from '@/shared/ui';
 import { useConfirm } from '@/shared/hooks/useConfirm';
 import { apiGet, triggerDownload } from '@/shared/lib/api';
 import { getIntlLocale } from '@/shared/lib/formatters';
@@ -44,6 +45,7 @@ const UNITS = ['m', 'm2', 'm3', 'kg', 't', 'pcs', 'lsum', 'h', 'set', 'lm'];
 
 export function AssemblyEditorPage() {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const { assemblyId } = useParams<{ assemblyId: string }>();
   const queryClient = useQueryClient();
 
@@ -278,27 +280,48 @@ export function AssemblyEditorPage() {
   }
 
   const components = assembly.components ?? [];
-  // Backend serialises Decimal columns as strings (Decimal-as-string pattern).
-  // Cast explicitly so the footer totals do not display NaN.
+  // //// NEOFFICE PATCH — cast every Decimal-as-string value with Number()
+  // so neither the fallback sum nor the headline ever becomes NaN through
+  // string concatenation (backend serialises Decimal columns as strings).
   const computedTotal = components.reduce(
     (sum, c) => sum + (Number(c.total ?? 0) || 0),
     0,
   );
-  const adjustedTotal = computedTotal * (Number(assembly.bid_factor ?? 1) || 1);
+  // Prefer the server-persisted total_rate for the headline figure: it already
+  // reflects the bid factor AND any per-type typed-formula adjustments
+  // (waste / burden / fuel) that the naive client-side sum does not mirror.
+  // Fall back to the local sum only when the server hasn't rolled up a rate
+  // yet (e.g. a freshly created assembly with no persisted total).
+  const localAdjustedTotal = computedTotal * (Number(assembly.bid_factor ?? 1) || 1);
+  const serverRate = Number(assembly.total_rate ?? 0) || 0;
+  const adjustedTotal = serverRate > 0 ? serverRate : localAdjustedTotal;
 
   return (
-    <div className="w-full animate-fade-in">
+    <div className="space-y-5 animate-fade-in">
       {/* Breadcrumb */}
       <Breadcrumb
-        className="mb-4"
         items={[
-          { label: t('assemblies.title', 'Assemblies'), to: '/assemblies' },
+          { label: t('nav.assemblies', 'Assemblies'), to: '/assemblies' },
           { label: assembly.name },
         ]}
       />
 
+      <DismissibleInfo
+        storageKey="assembly-detail"
+        title={t('assembly_detail.intro_title', { defaultValue: 'Build the rate component by component' })}
+        links={[
+          { label: t('nav.catalog', { defaultValue: 'Resource Catalog' }), onClick: () => navigate('/catalog') },
+          { label: t('nav.assemblies', { defaultValue: 'Assemblies' }), onClick: () => navigate('/assemblies') },
+        ]}
+      >
+        {t('assembly_detail.intro_body', {
+          defaultValue:
+            'Add, reorder and edit the material, labour and equipment lines of an assembly, each with its factor and unit, and watch the composite rate and the material, labour and equipment split recompute. The finished assembly is reusable across every BOQ.',
+        })}
+      </DismissibleInfo>
+
       {/* Header */}
-      <div className="mb-6 flex items-start justify-between gap-4">
+      <div className="flex items-start justify-between gap-4">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-3">
             <h1 className="text-2xl font-bold text-content-primary truncate">
@@ -458,7 +481,7 @@ export function AssemblyEditorPage() {
 
       {/* Tags Editor */}
       {showTagEditor && (
-        <Card className="mb-4">
+        <Card>
           <div className="flex items-center gap-2 flex-wrap">
             <Tag size={14} className="text-violet-500 shrink-0" />
             {(assembly.tags ?? []).map((tag) => (
@@ -524,7 +547,24 @@ export function AssemblyEditorPage() {
                   {t('assemblies.type', { defaultValue: 'Type' })}
                 </th>
                 <th className="px-4 py-3 font-medium text-content-secondary w-24 text-right">
-                  {t('assemblies.factor', { defaultValue: 'Factor' })}
+                  <span className="inline-flex items-center justify-end gap-1">
+                    {t('assemblies.factor', { defaultValue: 'Factor' })}
+                    <Info
+                      size={12}
+                      className="text-content-tertiary cursor-help shrink-0"
+                      aria-label={t('assemblies.factor_hint', {
+                        defaultValue:
+                          'Consumption per 1 unit of the assembly (e.g. 0.12 t rebar per m3 of concrete). Multiplied by Qty and Unit Cost to give the line total.',
+                      })}
+                    >
+                      <title>
+                        {t('assemblies.factor_hint', {
+                          defaultValue:
+                            'Consumption per 1 unit of the assembly (e.g. 0.12 t rebar per m3 of concrete). Multiplied by Qty and Unit Cost to give the line total.',
+                        })}
+                      </title>
+                    </Info>
+                  </span>
                 </th>
                 <th className="px-4 py-3 font-medium text-content-secondary w-24 text-right">
                   {t('boq.quantity', { defaultValue: 'Qty' })}
@@ -996,7 +1036,7 @@ function ComponentRow({
               }
               className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold cursor-pointer border-none outline-none focus:ring-1 focus:ring-oe-blue/40 ${RESOURCE_TYPE_STYLES[resType] ?? RESOURCE_TYPE_STYLES.material}`}
               title={t('assemblies.type_change_hint', {
-                defaultValue: 'Change resource type — recomputes the line total',
+                defaultValue: 'Change resource type - recomputes the line total',
               })}
             >
               <option value="material">{t('assemblies.type_material', { defaultValue: 'Mat' })}</option>
@@ -1128,7 +1168,7 @@ function ComponentRow({
                 <DetailField
                   label={t('assemblies.field_waste', { defaultValue: 'Waste %' })}
                   hint={t('assemblies.field_waste_hint', {
-                    defaultValue: 'Adds to the line total — e.g. 10 = +10%.',
+                    defaultValue: 'Adds to the line total - e.g. 10 = +10%.',
                   })}
                   type="number"
                   value={meta.waste_pct ?? ''}
@@ -1153,7 +1193,7 @@ function ComponentRow({
                 <DetailField
                   label={t('assemblies.field_hours', { defaultValue: 'Hours' })}
                   hint={t('assemblies.field_hours_hint', {
-                    defaultValue: 'Informational — use the Qty column to drive the total.',
+                    defaultValue: 'Informational - use the Qty column to drive the total.',
                   })}
                   type="number"
                   value={meta.hours ?? ''}
@@ -1162,7 +1202,7 @@ function ComponentRow({
                 <DetailField
                   label={t('assemblies.field_burden', { defaultValue: 'Burden %' })}
                   hint={t('assemblies.field_burden_hint', {
-                    defaultValue: 'Benefits / overhead uplift — e.g. 30 = +30%.',
+                    defaultValue: 'Benefits / overhead uplift - e.g. 30 = +30%.',
                   })}
                   type="number"
                   value={meta.burden_pct ?? ''}

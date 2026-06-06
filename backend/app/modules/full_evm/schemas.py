@@ -1,4 +1,4 @@
-"""‌⁠‍Full EVM Pydantic schemas — request/response models."""
+"""‌⁠‍Full EVM Pydantic schemas - request/response models."""
 
 from datetime import datetime
 from typing import Any
@@ -43,6 +43,8 @@ class EVMForecastResponse(BaseModel):
     confidence_range_low: str | None = None
     confidence_range_high: str | None = None
     notes: str | None = None
+    alert_status: str | None = None
+    triggered_at: datetime | None = None
     metadata: dict[str, Any] = Field(default_factory=dict, validation_alias="metadata_")
     created_at: datetime
     updated_at: datetime

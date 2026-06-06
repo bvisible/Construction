@@ -1,5 +1,5 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
-"""‌⁠‍Clash detection API routes — mounted by the loader at ``/api/v1/clash``.
+"""‌⁠‍Clash detection API routes - mounted by the loader at ``/api/v1/clash``.
 
 Endpoints
     GET    /projects/{project_id}/models                 → models picker
@@ -49,9 +49,14 @@ from app.modules.clash.schemas import (
     ClashCategoryItem,
     ClashClusterRead,
     ClashCompareResponse,
+    ClashGroupedSummary,
     ClashIssuePage,
     ClashIssueRead,
     ClashKpiResponse,
+    ClashProfileApplyRequest,
+    ClashProfileCreate,
+    ClashProfileRead,
+    ClashProfileUpdate,
     ClashPropertyFacet,
     ClashResultPage,
     ClashResultResponse,
@@ -70,7 +75,7 @@ from app.modules.clash.service import ClashService
 
 _MAX_EXPORT_ROWS = 25_000
 # Upper bound on the BCF import payload. 100 MiB matches the BCF
-# module's own gate and the BCFReader default — federated coordination
+# module's own gate and the BCFReader default - federated coordination
 # packages with hundreds of viewpoints can legitimately exceed 25 MiB.
 _MAX_BCF_UPLOAD_BYTES = 100 * 1024 * 1024
 
@@ -139,7 +144,7 @@ async def list_categories(
     ``group_by`` selects the parameter the Set A/B lists are faceted by:
     one of the built-ins ``discipline | type | category | ifc_entity``
     *or* the open-ended ``property:<key>`` form (the literal
-    ``property:`` prefix + a raw element-property key — Starlette has
+    ``property:`` prefix + a raw element-property key - Starlette has
     already URL-decoded it by the time it reaches here). All facets are
     sourced from every clashable element's ``element_type`` /
     ``discipline`` column and its source-native ``properties``. Scoped
@@ -155,7 +160,7 @@ async def list_categories(
     """
     await _require_project_access(session, project_id, user_id)
     if group_by.startswith(CLASH_PROPERTY_GROUP_PREFIX):
-        # ``property:`` with an empty/blank key is meaningless — degrade
+        # ``property:`` with an empty/blank key is meaningless - degrade
         # to the safe default rather than 422 (same forgiving contract
         # the unknown-built-in branch already uses).
         if not group_by[len(CLASH_PROPERTY_GROUP_PREFIX) :].strip():
@@ -249,6 +254,147 @@ async def delete_run(
     await service.delete_run(project_id, run_id)
 
 
+# ── Persistent clash profiles (item #23) ──────────────────────────────────
+
+
+@router.get(
+    "/projects/{project_id}/profiles",
+    response_model=list[ClashProfileRead],
+    dependencies=[Depends(RequirePermission("clash.read"))],
+)
+async def list_profiles(
+    project_id: uuid.UUID,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    service: ClashService = Depends(_get_service),
+) -> list[ClashProfileRead]:
+    """The project's reusable clash-run profile library (newest first)."""
+    await _require_project_access(session, project_id, user_id)
+    profiles = await service.list_profiles(project_id)
+    return [ClashProfileRead.model_validate(p) for p in profiles]
+
+
+@router.post(
+    "/projects/{project_id}/profiles",
+    response_model=ClashProfileRead,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(RequirePermission("clash.create"))],
+)
+async def create_profile(
+    project_id: uuid.UUID,
+    data: ClashProfileCreate,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    service: ClashService = Depends(_get_service),
+) -> ClashProfileRead:
+    """Save a run configuration as a named profile (409 on a duplicate name)."""
+    await _require_project_access(session, project_id, user_id)
+    profile = await service.create_profile(project_id, data, str(user_id))
+    return ClashProfileRead.model_validate(profile)
+
+
+@router.get(
+    "/projects/{project_id}/profiles/{profile_id}",
+    response_model=ClashProfileRead,
+    dependencies=[Depends(RequirePermission("clash.read"))],
+)
+async def get_profile(
+    project_id: uuid.UUID,
+    profile_id: uuid.UUID,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    service: ClashService = Depends(_get_service),
+) -> ClashProfileRead:
+    await _require_project_access(session, project_id, user_id)
+    profile = await service.get_profile(project_id, profile_id)
+    return ClashProfileRead.model_validate(profile)
+
+
+@router.patch(
+    "/projects/{project_id}/profiles/{profile_id}",
+    response_model=ClashProfileRead,
+    dependencies=[Depends(RequirePermission("clash.update"))],
+)
+async def update_profile(
+    project_id: uuid.UUID,
+    profile_id: uuid.UUID,
+    data: ClashProfileUpdate,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    service: ClashService = Depends(_get_service),
+) -> ClashProfileRead:
+    """Patch a profile in place (only supplied fields change)."""
+    await _require_project_access(session, project_id, user_id)
+    profile = await service.update_profile(project_id, profile_id, data, str(user_id))
+    return ClashProfileRead.model_validate(profile)
+
+
+@router.delete(
+    "/projects/{project_id}/profiles/{profile_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(RequirePermission("clash.delete"))],
+)
+async def delete_profile(
+    project_id: uuid.UUID,
+    profile_id: uuid.UUID,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    service: ClashService = Depends(_get_service),
+) -> None:
+    await _require_project_access(session, project_id, user_id)
+    await service.delete_profile(project_id, profile_id)
+
+
+@router.post(
+    "/projects/{project_id}/profiles/{profile_id}/apply",
+    response_model=ClashRunResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(RequirePermission("clash.create"))],
+)
+async def apply_profile(
+    project_id: uuid.UUID,
+    profile_id: uuid.UUID,
+    data: ClashProfileApplyRequest,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    service: ClashService = Depends(_get_service),
+) -> ClashRunResponse:
+    """Launch + execute a fresh clash run using the profile as a template."""
+    await _require_project_access(session, project_id, user_id)
+    run = await service.apply_profile_to_new_run(project_id, profile_id, data, str(user_id))
+    return ClashRunResponse.model_validate(run)
+
+
+@router.get(
+    "/projects/{project_id}/runs/{run_id}/summary",
+    response_model=ClashGroupedSummary,
+    dependencies=[Depends(RequirePermission("clash.read"))],
+)
+async def grouped_summary(
+    project_id: uuid.UUID,
+    run_id: uuid.UUID,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    service: ClashService = Depends(_get_service),
+    dimension: str = Query(
+        default="discipline_pair",
+        description=(
+            "Grouping axis: discipline_pair | level | level_discipline | "
+            "discipline_system. An unknown value degrades to discipline_pair."
+        ),
+    ),
+) -> ClashGroupedSummary:
+    """Multi-dimensional grouping of the run's clashes for the review table.
+
+    Exactly one payload is populated for the requested ``dimension``;
+    ``has_system_data`` reports whether the ``discipline_system`` axis has
+    anything to show (so the UI hides it otherwise). IDOR-guarded.
+    """
+    await _require_project_access(session, project_id, user_id)
+    payload = await service.grouped_summary(project_id, run_id, dimension)
+    return ClashGroupedSummary.model_validate(payload)
+
+
 @router.get(
     "/projects/{project_id}/runs/{run_id}/results",
     response_model=ClashResultPage,
@@ -268,7 +414,7 @@ async def list_results(
         description=(
             "Filter for clashes whose discipline pair includes this value. "
             "When combined with ``discipline_b`` the row must match the "
-            "(a,b) pair in either order — symmetric pair filter."
+            "(a,b) pair in either order - symmetric pair filter."
         ),
     ),
     discipline_b: str | None = Query(default=None),
@@ -584,7 +730,7 @@ async def unwatch_result(
     return ClashWatchResponse(watchers=watchers, watching=watching)
 
 
-# ── Wave A4 — clusters / rules / suggestions / KPI ────────────────────────
+# ── Wave A4 - clusters / rules / suggestions / KPI ────────────────────────
 
 
 @router.get(
@@ -604,7 +750,7 @@ async def list_clusters(
     Empty list when the run pre-dates the cluster pass, has no clashes,
     or had every clash classified as DBSCAN noise. Each entry carries
     its derived heuristic label, member size, dominant discipline pair
-    and dominant storey — exactly what the frontend chip group needs.
+    and dominant storey - exactly what the frontend chip group needs.
     """
     await _require_project_access(session, project_id, user_id)
     rows = await service.list_clusters(project_id, run_id)
@@ -627,7 +773,7 @@ async def list_rule_suggestions(
 
     Empty when no discipline pair has crossed the suggestion threshold,
     or every candidate pair already has a rule. The UI hides the banner
-    in either case — no special-case empty response.
+    in either case - no special-case empty response.
     """
     await _require_project_access(session, project_id, user_id)
     suggestions = await service.rule_suggestions(project_id, run_id)
@@ -652,7 +798,7 @@ async def apply_rule_suggestion(
     Adds the proposed :class:`ClashRule` to ``run.rules`` (unless the
     pair already has one) and flips any hard clash on the pair whose
     measured penetration now sits at or below ``tolerance_m`` to
-    ``status='ignored'`` — with a history audit-trail entry so the
+    ``status='ignored'`` - with a history audit-trail entry so the
     Activity tab shows the change.
     """
     await _require_project_access(session, project_id, user_id)
@@ -714,7 +860,7 @@ async def replace_rules(
     return [ClashRule.model_validate(r) for r in rules]
 
 
-# ── v41 — Smart-issue + signature endpoints ──────────────────────────────
+# ── v41 - Smart-issue + signature endpoints ──────────────────────────────
 
 
 @router.get(
@@ -772,7 +918,7 @@ async def suppress_issue(
     session: SessionDep,
     service: ClashService = Depends(_get_service),
 ) -> ClashIssueRead:
-    """Suppress a smart issue's signature — flip it to ``ignored``.
+    """Suppress a smart issue's signature - flip it to ``ignored``.
 
     Adds a :class:`ClashSuppression` row scoped to the issue's project
     (per-project isolation) and flips the issue's status to ``ignored``.
@@ -801,7 +947,7 @@ async def unsuppress_issue(
     session: SessionDep,
     service: ClashService = Depends(_get_service),
 ) -> ClashIssueRead:
-    """Lift a suppression — flip the issue from ``ignored`` back to ``persisted``."""
+    """Lift a suppression - flip the issue from ``ignored`` back to ``persisted``."""
     raw = (await session.execute(_select(_IssueModel).where(_IssueModel.id == issue_id))).scalar_one_or_none()
     if raw is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Clash issue not found")
@@ -849,7 +995,7 @@ async def get_kpi(
 ) -> ClashKpiResponse:
     """Aggregate dashboard projection for the KPI tab.
 
-    Computed in-memory from the run's results — one query, no extra
+    Computed in-memory from the run's results - one query, no extra
     joins. ``mttr_hours`` is ``None`` when no row has resolved yet (the
     UI hides that tile rather than showing ``0``).
     """

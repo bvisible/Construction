@@ -11,8 +11,8 @@ Professional BOQ, 4D scheduling, 5D cost model, and tendering - all in one open-
 [▶ Watch the 12-min walkthrough](https://www.youtube.com/watch?v=X06cIaroAeI) · [Demo](https://openconstructionerp.com) · [Documentation](https://openconstructionerp.com/docs) · [Discussions](https://t.me/datadrivenconstruction) · [Report Bug](https://github.com/datadrivenconstruction/OpenConstructionERP/issues)
 
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
-[![Version](https://img.shields.io/github/v/release/datadrivenconstruction/OpenConstructionERP?label=version&color=green&v=6.7.0)](https://github.com/datadrivenconstruction/OpenConstructionERP/releases/latest)
-[![PyPI](https://img.shields.io/pypi/v/openconstructionerp?color=informational&label=pypi&v=6.7.0)](https://pypi.org/project/openconstructionerp/)
+[![Version](https://img.shields.io/github/v/release/datadrivenconstruction/OpenConstructionERP?label=version&color=green&v=7.0.0)](https://github.com/datadrivenconstruction/OpenConstructionERP/releases/latest)
+[![PyPI](https://img.shields.io/pypi/v/openconstructionerp?color=informational&label=pypi&v=7.0.0)](https://pypi.org/project/openconstructionerp/)
 [![Downloads (pepy · per month)](https://static.pepy.tech/personalized-badge/openconstructionerp?period=month&units=international_system&left_color=grey&right_color=blue&left_text=downloads%20(pepy%20%C2%B7%20per%20month))](https://pepy.tech/project/openconstructionerp)
 [![Stars](https://img.shields.io/github/stars/datadrivenconstruction/OpenConstructionERP?style=flat&logo=github)](https://github.com/datadrivenconstruction/OpenConstructionERP/stargazers)
 <br/>
@@ -20,7 +20,7 @@ Professional BOQ, 4D scheduling, 5D cost model, and tendering - all in one open-
 ![Languages](https://img.shields.io/badge/languages-27-orange)
 ![Cost Items](https://img.shields.io/badge/cost_items-55%2C000%2B-red)
 
-<img src="docs/screenshots/hero-overview.jpg" alt="OpenConstructionERP - Dashboard Overview" width="800" />
+<img src="docs/screenshots/hero-overview.png" alt="OpenConstructionERP - open-source construction ERP for BOQ, BIM takeoff, DWG/PDF quantification and 5D cost modeling" width="800" />
 
 <video src="https://github.com/user-attachments/assets/20b9b585-93ac-4829-a3dc-0ede9ca9e2fc" controls width="800" playsinline>
   <a href="https://github.com/datadrivenconstruction/OpenConstructionERP/releases/download/v2.0.0/oce_full_demo.mp4">▶ 1-minute teaser (your browser can't inline this - click for full 12-min walkthrough)</a>

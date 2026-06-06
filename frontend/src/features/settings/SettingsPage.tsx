@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useMemo } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { getIntlLocale } from '@/shared/lib/formatters';
 import { TranslationManager } from './TranslationManager';
@@ -35,7 +35,8 @@ import {
   Wrench,
   LayoutGrid,
 } from 'lucide-react';
-import { Card, CardHeader, CardContent, CardFooter, Button, Badge, InfoHint, Skeleton, Breadcrumb } from '@/shared/ui';
+import { Card, CardHeader, CardContent, CardFooter, Button, Badge, InfoHint, Skeleton, Breadcrumb, DismissibleInfo, IntroRichText } from '@/shared/ui';
+import { PageHeader } from '@/shared/ui/PageHeader';
 import { useTabKeyboardNav } from '@/shared/hooks/useTabKeyboardNav';
 import { DashboardLayoutManager } from '@/features/dashboard/DashboardLayoutManager';
 import { UpdateNotification } from '@/shared/ui/UpdateChecker';
@@ -79,7 +80,7 @@ const AI_PROVIDERS: ProviderInfo[] = [
     id: 'anthropic',
     name: 'Anthropic Claude',
     description: 'settings.ai_desc_anthropic',
-    descriptionDefault: 'Claude Sonnet / Opus — best for construction estimation and analysis',
+    descriptionDefault: 'Claude Sonnet / Opus - best for construction estimation and analysis',
     keyPrefix: 'sk-ant-',
     docsUrl: 'https://console.anthropic.com/settings/keys',
     recommended: true,
@@ -89,7 +90,7 @@ const AI_PROVIDERS: ProviderInfo[] = [
     id: 'openai',
     name: 'OpenAI GPT-4',
     description: 'settings.ai_desc_openai',
-    descriptionDefault: 'GPT-4o / o1 — strong general-purpose AI with broad knowledge',
+    descriptionDefault: 'GPT-4o / o1 - strong general-purpose AI with broad knowledge',
     keyPrefix: 'sk-',
     docsUrl: 'https://platform.openai.com/api-keys',
     region: 'global',
@@ -98,7 +99,7 @@ const AI_PROVIDERS: ProviderInfo[] = [
     id: 'gemini',
     name: 'Google Gemini',
     description: 'settings.ai_desc_gemini',
-    descriptionDefault: 'Gemini Pro — multimodal AI with Google ecosystem integration',
+    descriptionDefault: 'Gemini Pro - multimodal AI with Google ecosystem integration',
     keyPrefix: 'AI',
     docsUrl: 'https://aistudio.google.com/app/apikey',
     region: 'global',
@@ -107,7 +108,7 @@ const AI_PROVIDERS: ProviderInfo[] = [
     id: 'openrouter',
     name: 'OpenRouter',
     description: 'settings.ai_desc_openrouter',
-    descriptionDefault: 'Aggregator — access many AI models through a single API key',
+    descriptionDefault: 'Aggregator - access many AI models through a single API key',
     keyPrefix: 'sk-or-',
     docsUrl: 'https://openrouter.ai/keys',
     region: 'global',
@@ -116,7 +117,7 @@ const AI_PROVIDERS: ProviderInfo[] = [
     id: 'mistral',
     name: 'Mistral AI',
     description: 'settings.ai_desc_mistral',
-    descriptionDefault: 'Mistral Large — European AI with strong multilingual support',
+    descriptionDefault: 'Mistral Large - European AI with strong multilingual support',
     keyPrefix: '',
     docsUrl: 'https://console.mistral.ai/api-keys',
     region: 'global',
@@ -134,7 +135,7 @@ const AI_PROVIDERS: ProviderInfo[] = [
     id: 'deepseek',
     name: 'DeepSeek',
     description: 'settings.ai_desc_deepseek',
-    descriptionDefault: 'DeepSeek V3 — cost-effective AI with strong reasoning',
+    descriptionDefault: 'DeepSeek V3 - cost-effective AI with strong reasoning',
     keyPrefix: 'sk-',
     docsUrl: 'https://platform.deepseek.com/api_keys',
     region: 'global',
@@ -143,7 +144,7 @@ const AI_PROVIDERS: ProviderInfo[] = [
     id: 'together',
     name: 'Together AI',
     description: 'settings.ai_desc_together',
-    descriptionDefault: 'Open-source model hosting — Llama, Qwen, and more',
+    descriptionDefault: 'Open-source model hosting - Llama, Qwen, and more',
     keyPrefix: '',
     docsUrl: 'https://api.together.ai/settings/api-keys',
     region: 'global',
@@ -179,7 +180,7 @@ const AI_PROVIDERS: ProviderInfo[] = [
     id: 'ai21',
     name: 'AI21 Labs (Jamba)',
     description: 'settings.ai_desc_ai21',
-    descriptionDefault: 'Jamba — efficient large language model for enterprise use',
+    descriptionDefault: 'Jamba - efficient large language model for enterprise use',
     keyPrefix: '',
     docsUrl: 'https://studio.ai21.com/account/api-key',
     region: 'global',
@@ -188,7 +189,7 @@ const AI_PROVIDERS: ProviderInfo[] = [
     id: 'xai',
     name: 'xAI (Grok)',
     description: 'settings.ai_desc_xai',
-    descriptionDefault: 'Grok — AI model with real-time knowledge',
+    descriptionDefault: 'Grok - AI model with real-time knowledge',
     keyPrefix: 'xai-',
     docsUrl: 'https://console.x.ai/',
     region: 'global',
@@ -197,7 +198,7 @@ const AI_PROVIDERS: ProviderInfo[] = [
     id: 'zhipu',
     name: 'Zhipu AI (GLM)',
     description: 'settings.ai_desc_zhipu',
-    descriptionDefault: 'GLM-4 — leading Chinese AI model for enterprise applications',
+    descriptionDefault: 'GLM-4 - leading Chinese AI model for enterprise applications',
     keyPrefix: '',
     docsUrl: 'https://open.bigmodel.cn/usercenter/apikeys',
     region: 'global',
@@ -206,7 +207,7 @@ const AI_PROVIDERS: ProviderInfo[] = [
     id: 'yandex',
     name: 'Yandex GPT',
     description: 'settings.ai_desc_yandex',
-    descriptionDefault: 'YandexGPT — multilingual AI model with strong language understanding',
+    descriptionDefault: 'YandexGPT - multilingual AI model with strong language understanding',
     keyPrefix: '',
     docsUrl: 'https://console.yandex.cloud/folders',
     region: 'global',
@@ -215,7 +216,7 @@ const AI_PROVIDERS: ProviderInfo[] = [
     id: 'baidu',
     name: 'Baidu (ERNIE Bot)',
     description: 'settings.ai_desc_baidu',
-    descriptionDefault: 'ERNIE Bot — Baidu AI for Chinese language and enterprise tasks',
+    descriptionDefault: 'ERNIE Bot - Baidu AI for Chinese language and enterprise tasks',
     keyPrefix: '',
     docsUrl: 'https://console.bce.baidu.com/qianfan/ais/console/applicationConsole/application',
     region: 'global',
@@ -224,7 +225,7 @@ const AI_PROVIDERS: ProviderInfo[] = [
     id: 'ollama',
     name: 'Ollama (Local)',
     description: 'settings.ai_desc_ollama',
-    descriptionDefault: 'Ollama — run local LLMs via OpenAI-compatible API. No API key required.',
+    descriptionDefault: 'Ollama - run local LLMs via OpenAI-compatible API. No API key required.',
     keyPrefix: '',
     docsUrl: 'https://ollama.ai/',
     region: 'global',
@@ -233,7 +234,7 @@ const AI_PROVIDERS: ProviderInfo[] = [
     id: 'kimi',
     name: 'Kimi (Moonshot AI)',
     description: 'settings.ai_desc_kimi',
-    descriptionDefault: 'Kimi 2.6 — Moonshot AI with strong reasoning and long context for construction documents.',
+    descriptionDefault: 'Kimi 2.6 - Moonshot AI with strong reasoning and long context for construction documents.',
     keyPrefix: 'sk-',
     docsUrl: 'https://platform.moonshot.cn/console/api-keys',
     region: 'global',
@@ -242,7 +243,7 @@ const AI_PROVIDERS: ProviderInfo[] = [
     id: 'vllm',
     name: 'vLLM (Local)',
     description: 'settings.ai_desc_vllm',
-    descriptionDefault: 'vLLM — high-throughput local LLM inference server with OpenAI-compatible API. No API key required by default.',
+    descriptionDefault: 'vLLM - high-throughput local LLM inference server with OpenAI-compatible API. No API key required by default.',
     keyPrefix: '',
     docsUrl: 'https://docs.vllm.ai/',
     region: 'global',
@@ -1089,7 +1090,7 @@ const TABS: readonly TabDef[] = [
   { id: 'dashboard',    labelKey: 'settings.tab_dashboard',    defaultLabel: 'Dashboard',    icon: LayoutGrid, descKey: 'settings.tab_dashboard_desc',  descDefault: 'Reorder, show or hide dashboard sections' },
   { id: 'account',      labelKey: 'settings.tab_account',      defaultLabel: 'Account',      icon: User,     descKey: 'settings.tab_account_desc',      descDefault: 'Password and sign out' },
   { id: 'regional',     labelKey: 'settings.tab_regional',     defaultLabel: 'Regional',     icon: Globe,    descKey: 'settings.tab_regional_desc',     descDefault: 'Language, timezone, and formats' },
-  { id: 'converters',   labelKey: 'settings.tab_converters',   defaultLabel: 'Converters',  icon: Layers,   descKey: 'settings.tab_converters_desc',   descDefault: 'DDC converters — installed versions and GitHub sources' },
+  { id: 'converters',   labelKey: 'settings.tab_converters',   defaultLabel: 'Converters',  icon: Layers,   descKey: 'settings.tab_converters_desc',   descDefault: 'DDC converters - installed versions and GitHub sources' },
   { id: 'ai',           labelKey: 'settings.tab_ai',           defaultLabel: 'AI',           icon: Sparkles, descKey: 'settings.tab_ai_desc',           descDefault: 'AI provider and semantic search' },
   { id: 'integrations', labelKey: 'settings.tab_integrations', defaultLabel: 'Integrations', icon: Plug,     descKey: 'settings.tab_integrations_desc', descDefault: 'Slack, Teams, Telegram, webhooks' },
   { id: 'advanced',     labelKey: 'settings.tab_advanced',     defaultLabel: 'Advanced',     icon: Wrench,   descKey: 'settings.tab_advanced_desc',     descDefault: 'Backup, databases, setup wizard' },
@@ -1099,6 +1100,7 @@ const TABS: readonly TabDef[] = [
 
 export function SettingsPage() {
   const { t, i18n } = useTranslation();
+  const navigate = useNavigate();
   const logout = useAuthStore((s) => s.logout);
   const setTokens = useAuthStore((s) => s.setTokens);
   const queryClient = useQueryClient();
@@ -1194,28 +1196,53 @@ export function SettingsPage() {
   const ActiveIcon = activeTabDef.icon;
 
   return (
-    <div className="w-full animate-fade-in">
-      <Breadcrumb
-        items={[
-          { label: t('nav.dashboard', 'Dashboard'), to: '/' },
-          { label: t('nav.settings', 'Settings') },
-        ]}
-        className="mb-4"
-      />
-
+    <div className="space-y-5 animate-fade-in">
       {/* Update notification — surfaced in Settings so users see new
-          versions even if they dismissed the sidebar widget for the session. */}
-      <div className="-mx-4 sm:-mx-7 mb-6">
+          versions even if they dismissed the sidebar widget for the session.
+          Rendered FIRST so that when UpdateNotification returns null (the
+          common no-update case) it is the leading space-y child and reserves
+          no phantom margin (audit: settings-top). Full-bleed when shown. */}
+      <div className="-mx-4 sm:-mx-7 empty:hidden">
         <UpdateNotification forceShow hideDismiss />
       </div>
 
+      <Breadcrumb items={[{ label: t('nav.settings', 'Settings') }]} />
+
       {/* Page header */}
-      <div className="mb-6 animate-card-in">
-        <h1 className="text-2xl font-bold text-content-primary">{t('nav.settings', 'Settings')}</h1>
-        <p className="mt-1 text-sm text-content-secondary">
-          {t('settings.subtitle', { defaultValue: 'Manage your account and preferences' })}
-        </p>
-      </div>
+      <PageHeader
+        className="animate-card-in"
+        srTitle={t('nav.settings', 'Settings')}
+        subtitle={t('settings.subtitle', { defaultValue: 'Manage your account and preferences' })}
+      />
+
+      {/* Canonical module intro — pain-named, copy from MODULE_INTRO_COPY. */}
+      <DismissibleInfo
+        storageKey="settings"
+        title={t('settings.intro_title', {
+          defaultValue: 'Set the platform up once for your team',
+        })}
+        more={
+          t('settings.intro_more', { defaultValue: '' })
+            ? <IntroRichText text={t('settings.intro_more')} />
+            : undefined
+        }
+        links={[
+          {
+            label: t('nav.setup_databases', { defaultValue: 'Databases & Resources' }),
+            onClick: () => navigate('/setup/databases'),
+          },
+          {
+            label: t('nav.integrations', { defaultValue: 'Integrations' }),
+            onClick: () => navigate('/integrations'),
+          },
+          { label: t('nav.modules', { defaultValue: 'Modules' }), onClick: () => navigate('/modules') },
+        ]}
+      >
+        {t('settings.intro_body', {
+          defaultValue:
+            'Connect an AI provider key, choose language, timezone and number formats, manage DDC converter versions, and wire integrations like Slack, Teams, Telegram and webhooks from one place. The Advanced tab holds backup, restore and the database setup wizard, so the choices made here flow into every module for this workspace.',
+        })}
+      </DismissibleInfo>
 
       {/* ── Two-column layout: sidebar nav + content ──────────────────── */}
       <div className="grid grid-cols-1 lg:grid-cols-[240px_minmax(0,1fr)] gap-6 lg:gap-8">
@@ -1725,7 +1752,7 @@ function ConverterStatusPanel() {
         title={t('settings.converters_title', { defaultValue: 'Converters' })}
         subtitle={t('settings.converters_subtitle', {
           defaultValue:
-            'DDC cad2data pipeline — installed bridges and the latest source available on GitHub.',
+            'DDC cad2data pipeline - installed bridges and the latest source available on GitHub.',
         })}
         action={
           <button
@@ -1788,7 +1815,7 @@ function ConverterStatusPanel() {
                 <div className="opacity-80">
                   {t('settings.converters_error_hint', {
                     defaultValue:
-                      'The backend could not reach GitHub. Installed converters still work — only the up-to-date check is unavailable.',
+                      'The backend could not reach GitHub. Installed converters still work - only the up-to-date check is unavailable.',
                   })}
                 </div>
               </div>

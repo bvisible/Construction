@@ -6,19 +6,19 @@ responsive during the typical 100–500 ms round-trip.
 
 Configuration comes from ``app.config.Settings``:
 
-    ``smtp_host``     — required; empty disables the backend (returns a
+    ``smtp_host``     - required; empty disables the backend (returns a
                         structured "not configured" ``DeliveryResult``).
-    ``smtp_port``     — 587 for STARTTLS, 465 for implicit TLS (we use
+    ``smtp_port``     - 587 for STARTTLS, 465 for implicit TLS (we use
                         STARTTLS via ``smtp_tls=True``).
-    ``smtp_user``     — optional; when set we LOGIN before sending.
-    ``smtp_password`` — optional; pairs with ``smtp_user``.
-    ``smtp_from``     — default ``From:`` address.
-    ``smtp_tls``      — enable STARTTLS upgrade.
+    ``smtp_user``     - optional; when set we LOGIN before sending.
+    ``smtp_password`` - optional; pairs with ``smtp_user``.
+    ``smtp_from``     - default ``From:`` address.
+    ``smtp_tls``      - enable STARTTLS upgrade.
 
 The backend builds a multipart/alternative message with both a plain-text
 and HTML part so inbox-provider scoring stays reasonable (pure-HTML
 emails are often flagged as spam).  The plain-text fallback is a very
-rough strip of HTML tags — good enough for receipts and resets.
+rough strip of HTML tags - good enough for receipts and resets.
 """
 
 from __future__ import annotations
@@ -27,6 +27,7 @@ import asyncio
 import logging
 import re
 import smtplib
+from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
@@ -60,18 +61,18 @@ class SmtpEmailBackend(EmailBackend):
 
     async def send(self, message: EmailMessage) -> DeliveryResult:
         if not self._configured():
-            # Surface the gap loudly — silent failure made this endpoint
+            # Surface the gap loudly - silent failure made this endpoint
             # look healthy while users never received reset emails
             # (observed during the v2.3.1 audit).
             logger.warning(
-                "[email:smtp] dropping message to %s — SMTP not configured (set SMTP_HOST to enable the smtp backend)",
+                "[email:smtp] dropping message to %s - SMTP not configured (set SMTP_HOST to enable the smtp backend)",
                 message.to,
             )
             return DeliveryResult.failure(self.name, reason="smtp not configured")
 
         try:
             return await asyncio.to_thread(self._send_sync, message)
-        except Exception:  # noqa: BLE001 — we must convert any exception to a structured result
+        except Exception:  # noqa: BLE001 - we must convert any exception to a structured result
             logger.exception("[email:smtp] unexpected failure delivering to %s", message.to)
             return DeliveryResult.failure(self.name, reason="unexpected error")
 
@@ -79,7 +80,28 @@ class SmtpEmailBackend(EmailBackend):
         settings = self._settings
         from_addr = message.from_addr or settings.smtp_from
 
-        mime = MIMEMultipart("alternative")
+        # Body is always multipart/alternative (plain + HTML). When the
+        # message carries attachments we wrap that body in a multipart/mixed
+        # envelope so MUAs render the text and offer the files for download.
+        body = MIMEMultipart("alternative")
+        body.attach(MIMEText(_html_to_text(message.html_body), "plain", "utf-8"))
+        body.attach(MIMEText(message.html_body, "html", "utf-8"))
+
+        if message.attachments:
+            mime = MIMEMultipart("mixed")
+            mime.attach(body)
+            for att in message.attachments:
+                subtype = (att.content_type.split("/", 1) or ["application", "octet-stream"])[-1]
+                part = MIMEApplication(att.content, _subtype=subtype)
+                part.add_header(
+                    "Content-Disposition",
+                    "attachment",
+                    filename=att.filename,
+                )
+                mime.attach(part)
+        else:
+            mime = body
+
         mime["From"] = from_addr
         mime["To"] = message.to
         mime["Subject"] = message.subject
@@ -87,8 +109,6 @@ class SmtpEmailBackend(EmailBackend):
             mime["Reply-To"] = message.reply_to
         for k, v in message.headers.items():
             mime[k] = v
-        mime.attach(MIMEText(_html_to_text(message.html_body), "plain", "utf-8"))
-        mime.attach(MIMEText(message.html_body, "html", "utf-8"))
 
         try:
             server = smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=15)
@@ -104,7 +124,7 @@ class SmtpEmailBackend(EmailBackend):
                 try:
                     server.quit()
                 except smtplib.SMTPException:
-                    # Connection may already be closed by the server — fine.
+                    # Connection may already be closed by the server - fine.
                     pass
             logger.info(
                 "[email:smtp] sent to=%s subject=%r tags=%s",

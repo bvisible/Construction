@@ -54,10 +54,13 @@ import { projectsApi, type Project } from '@/features/projects/api';
 import { Button } from '@/shared/ui/Button';
 import { Card } from '@/shared/ui/Card';
 import { BIMModelPicker } from '@/shared/ui/BIMModelPicker';
+import { DismissibleInfo, Breadcrumb } from '@/shared/ui';
+import { PageHeader } from '@/shared/ui/PageHeader';
 
 import {
   matchElementsApi,
   CONSTRUCTION_STAGES,
+  type ApplyPositionPreview,
   type ConstructionStage,
   type GroupSummary,
   type MatchSession,
@@ -97,10 +100,14 @@ type StageId =
 interface StageDef {
   id: StageId;
   index: number;
-  /** Short rail label. */
-  title: string;
-  /** One-line "what & why" shown in the rail + panel header. */
-  blurb: string;
+  /** i18n key for the short rail label. */
+  titleKey: string;
+  /** English fallback for the rail label (defaultValue). */
+  titleDefault: string;
+  /** i18n key for the one-line "what & why" shown in the rail + panel header. */
+  blurbKey: string;
+  /** English fallback for the blurb (defaultValue). */
+  blurbDefault: string;
   Icon: typeof Layers;
 }
 
@@ -108,50 +115,64 @@ const STAGES: readonly StageDef[] = [
   {
     id: 'model',
     index: 1,
-    title: 'Source model',
-    blurb: 'Pick the BIM/CAD model whose elements get priced.',
+    titleKey: 'match.stage_model_title',
+    titleDefault: 'Source model',
+    blurbKey: 'match.stage_model_blurb',
+    blurbDefault: 'Pick the BIM/CAD model whose elements get priced.',
     Icon: Boxes,
   },
   {
     id: 'catalogue',
     index: 2,
-    title: 'Cost catalogue',
-    blurb: 'Confirm the rate catalogue and vector search are ready.',
+    titleKey: 'match.stage_catalogue_title',
+    titleDefault: 'Cost catalogue',
+    blurbKey: 'match.stage_catalogue_blurb',
+    blurbDefault: 'Confirm the rate catalogue and vector search are ready.',
     Icon: Database,
   },
   {
     id: 'scope',
     index: 3,
-    title: 'Scope & rules',
-    blurb: 'Set construction stage, quantities and auto-confirm.',
+    titleKey: 'match.stage_scope_title',
+    titleDefault: 'Scope & rules',
+    blurbKey: 'match.stage_scope_blurb',
+    blurbDefault: 'Set construction stage, quantities and auto-confirm.',
     Icon: SlidersHorizontal,
   },
   {
     id: 'grouping',
     index: 4,
-    title: 'Grouping',
-    blurb: 'See how elements roll up into estimable groups.',
+    titleKey: 'match.stage_grouping_title',
+    titleDefault: 'Grouping',
+    blurbKey: 'match.stage_grouping_blurb',
+    blurbDefault: 'See how elements roll up into estimable groups.',
     Icon: Layers,
   },
   {
     id: 'run',
     index: 5,
-    title: 'Run match',
-    blurb: 'Embed every group and rank cost candidates.',
+    titleKey: 'match.stage_run_title',
+    titleDefault: 'Run match',
+    blurbKey: 'match.stage_run_blurb',
+    blurbDefault: 'Embed every group and rank cost candidates.',
     Icon: PlayCircle,
   },
   {
     id: 'review',
     index: 6,
-    title: 'Review',
-    blurb: 'Inspect candidates, adjust and confirm matches.',
+    titleKey: 'match.stage_review_title',
+    titleDefault: 'Review',
+    blurbKey: 'match.stage_review_blurb',
+    blurbDefault: 'Inspect candidates, adjust and confirm matches.',
     Icon: Search,
   },
   {
     id: 'apply',
     index: 7,
-    title: 'Apply & finish',
-    blurb: 'Preview the BOQ rollup and write it to the project.',
+    titleKey: 'match.stage_apply_title',
+    titleDefault: 'Apply & finish',
+    blurbKey: 'match.stage_apply_blurb',
+    blurbDefault: 'Preview the BOQ rollup and write it to the project.',
     Icon: Rocket,
   },
 ] as const;
@@ -233,10 +254,10 @@ function StageRail({
                     isCurrent ? 'text-oe-blue' : 'text-content-primary',
                   )}
                 >
-                  {s.index}. {s.title}
+                  {s.index}. {t(s.titleKey, { defaultValue: s.titleDefault })}
                 </span>
                 <span className="block text-xs text-content-secondary leading-snug">
-                  {s.blurb}
+                  {t(s.blurbKey, { defaultValue: s.blurbDefault })}
                 </span>
               </span>
             </button>
@@ -248,6 +269,7 @@ function StageRail({
 }
 
 function PanelHeader({ stage }: { stage: StageDef }) {
+  const { t } = useTranslation();
   const Icon = stage.Icon;
   return (
     <div className="flex items-start gap-3 border-b border-border-light pb-4">
@@ -256,10 +278,18 @@ function PanelHeader({ stage }: { stage: StageDef }) {
       </span>
       <div>
         <div className="text-xs font-medium uppercase tracking-wide text-content-tertiary">
-          Step {stage.index} of {STAGES.length}
+          {t('match.wizard.step_counter', {
+            defaultValue: 'Step {{n}} of {{total}}',
+            n: stage.index,
+            total: STAGES.length,
+          })}
         </div>
-        <h2 className="text-xl font-semibold text-content-primary">{stage.title}</h2>
-        <p className="mt-0.5 text-sm text-content-secondary">{stage.blurb}</p>
+        <h2 className="text-xl font-semibold text-content-primary">
+          {t(stage.titleKey, { defaultValue: stage.titleDefault })}
+        </h2>
+        <p className="mt-0.5 text-sm text-content-secondary">
+          {t(stage.blurbKey, { defaultValue: stage.blurbDefault })}
+        </p>
       </div>
     </div>
   );
@@ -342,6 +372,7 @@ export function MatchWizardFlow() {
     count: number;
     total: number;
     currency: string | null;
+    positions: ApplyPositionPreview[];
   } | null>(null);
 
   // Clearing the picked model / live session / progress / results when
@@ -440,7 +471,7 @@ export function MatchWizardFlow() {
         project_id: projectId!,
         source: 'bim',
         bim_model_id: modelId,
-        name: `${project?.name ?? 'Match'} — ${new Date().toLocaleDateString()}`,
+        name: `${project?.name ?? 'Match'} - ${new Date().toLocaleDateString()}`,
         construction_stage: stageHint || null,
         use_net_quantities: useNet,
         auto_confirm_threshold: autoThreshold,
@@ -518,6 +549,7 @@ export function MatchWizardFlow() {
         count: r.positions_created,
         total: r.grand_total,
         currency: r.currency,
+        positions: r.positions ?? [],
       });
       if (!dryRun) {
         addToast({
@@ -739,31 +771,34 @@ export function MatchWizardFlow() {
 
   // ─────────────────────────────────────────────────────────────────────
   return (
-    <div className="mx-auto max-w-[1600px] px-4 py-6">
-      {/* Title */}
-      <div className="mb-4 flex items-center gap-3">
-        <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-br from-oe-blue to-indigo-600 text-white shadow-sm">
-          <Sparkles className="h-5 w-5" />
-        </span>
-        <div>
-          <h1 className="text-2xl font-bold text-content-primary">
-            {t('match.wizard.title', { defaultValue: 'Match Elements to Cost' })}
-          </h1>
-          <p className="text-sm text-content-secondary">
-            {t('match.wizard.subtitle', {
-              defaultValue:
-                'A guided flow that turns a BIM model into a priced bill of quantities.',
-            })}
-          </p>
-        </div>
-      </div>
+    <div className="space-y-5 animate-fade-in">
+      {/* Canonical top block - module name + icon live in the global top app
+          bar; the page renders only its subtitle on the left. */}
+      <Breadcrumb items={[{ label: t('nav.match_elements', { defaultValue: 'Match Elements → Costs' }) }]} />
+      <PageHeader
+        srTitle={t('match.wizard.title', { defaultValue: 'Match Elements to Cost' })}
+        subtitle={t('match.wizard.subtitle', {
+          defaultValue:
+            'A guided flow that turns a BIM model into a priced bill of quantities.',
+        })}
+      />
+
+      <DismissibleInfo
+        storageKey="match-elements"
+        title={t('info.match-elements.title', { defaultValue: 'Match elements to cost' })}
+      >
+        {t('info.match-elements.body', {
+          defaultValue:
+            'Price a BIM or CAD model by matching its elements against a regional cost catalogue, then write the result straight into the project as a bill of quantities. The wizard groups elements, ranks cost candidates with semantic search, and lets you confirm matches before they become real BOQ positions with quantities and rates.',
+        })}
+      </DismissibleInfo>
 
       {/* Beta · feedback-wanted banner. /match-elements is the newest
           top-level feature and still has rough edges (catalogue install
           retries, occasional stale-cache shape mismatches, ranker
           tuning). The banner sets the right expectation and gives a
           1-click path to file an issue against the public repo. */}
-      <div className="mb-3 flex flex-wrap items-center gap-2.5 rounded-xl border border-amber-200/60 bg-gradient-to-r from-amber-50/80 via-white to-white px-3 py-2 shadow-sm dark:border-amber-800/40 dark:from-amber-950/20 dark:via-surface-primary dark:to-surface-primary">
+      <div className="flex flex-wrap items-center gap-2.5 rounded-xl border border-amber-200/60 bg-gradient-to-r from-amber-50/80 via-white to-white px-3 py-2 shadow-sm dark:border-amber-800/40 dark:from-amber-950/20 dark:via-surface-primary dark:to-surface-primary">
         <span className="inline-flex shrink-0 items-center gap-1 rounded border border-amber-300/60 bg-amber-100/80 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-amber-900 dark:border-amber-700/40 dark:bg-amber-900/40 dark:text-amber-100">
           <Sparkles className="h-2.5 w-2.5" />
           {t('match_elements.beta_badge', { defaultValue: 'Beta' })}
@@ -771,7 +806,7 @@ export function MatchWizardFlow() {
         <p className="min-w-0 flex-1 text-xs leading-snug text-content-secondary">
           {t('match_elements.beta_blurb', {
             defaultValue:
-              'Match Elements is a new section and still has rough edges. Found a bug or have an idea? Please file an issue — every report tightens the next release.',
+              'Match Elements is a new section and still has rough edges. Found a bug or have an idea? Please file an issue - every report tightens the next release.',
           })}
         </p>
         <a
@@ -791,9 +826,7 @@ export function MatchWizardFlow() {
           QdrantHealthCard self-hides when Qdrant is healthy (stage 3
           carries the green confirmation) and renders the actionable
           one-click installer card the moment it is unreachable. */}
-      <div className="mb-3">
-        <QdrantHealthCard />
-      </div>
+      <QdrantHealthCard />
 
       {/* Setup & tools — dead_button fix. These panels were built and
           tested but never reachable from the route: the embedder install
@@ -803,11 +836,11 @@ export function MatchWizardFlow() {
           tenant-scoped template library. Collapsed by default so the
           first-screen wizard stays tidy; one click reveals every
           previously-orphaned control. */}
-      <details className="group mb-3 rounded-xl border border-border-light bg-surface-primary">
+      <details className="group rounded-xl border border-border-light bg-surface-primary">
         <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-sm font-medium text-content-primary">
           <Wrench className="h-4 w-4 shrink-0 text-oe-blue" />
           {t('match.wizard.setupTools', {
-            defaultValue: 'Setup & tools — language model, catalogues, analytics, templates',
+            defaultValue: 'Setup & tools - language model, catalogues, analytics, templates',
           })}
           <ChevronRight className="ml-auto h-4 w-4 text-content-tertiary transition-transform group-open:rotate-90" />
         </summary>
@@ -835,11 +868,11 @@ export function MatchWizardFlow() {
 
       {/* Plain-language "how it works" — collapsed by default to keep the
           first-screen wizard tidy; one click opens the full 8-stage tour. */}
-      <details className="group mb-5 rounded-xl border border-border-light bg-surface-primary">
+      <details className="group rounded-xl border border-border-light bg-surface-primary">
         <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-sm font-medium text-content-primary">
           <Info className="h-4 w-4 shrink-0 text-oe-blue" />
           {t('match.wizard.howItWorks', {
-            defaultValue: 'How matching works — read this first',
+            defaultValue: 'How matching works - read this first',
           })}
           <ChevronRight className="ml-auto h-4 w-4 text-content-tertiary transition-transform group-open:rotate-90" />
         </summary>
@@ -857,9 +890,11 @@ export function MatchWizardFlow() {
                   {s.index}
                 </span>
                 <span>
-                  <span className="font-medium text-content-primary">{s.title}</span>
-                  {' — '}
-                  {s.blurb}
+                  <span className="font-medium text-content-primary">
+                    {t(s.titleKey, { defaultValue: s.titleDefault })}
+                  </span>
+                  {' - '}
+                  {t(s.blurbKey, { defaultValue: s.blurbDefault })}
                 </span>
               </li>
             ))}
@@ -867,7 +902,7 @@ export function MatchWizardFlow() {
           <p className="text-xs text-content-tertiary">
             {t('match.wizard.howItWorksVector', {
               defaultValue:
-                'Semantic search needs a running vector database (Qdrant). If it is offline, matching still works using keyword + rule-based scoring — accuracy is just lower. The status above tells you which mode you are in.',
+                'Semantic search needs a running vector database (Qdrant). If it is offline, matching still works using keyword + rule-based scoring - accuracy is just lower. The status above tells you which mode you are in.',
             })}
           </p>
         </div>
@@ -985,7 +1020,12 @@ export function MatchWizardFlow() {
                           })}
                         </option>
                         {loadedCatalogues.map((c) => (
-                          <option key={c.collection} value={c.region}>
+                          // Key on region+collection: several regions can map
+                          // to the same shared collection (e.g. all English
+                          // regions bind to cwicr_en_v3), so c.collection
+                          // alone collided and triggered React duplicate-key
+                          // warnings. The option value stays c.region.
+                          <option key={`${c.region}:${c.collection}`} value={c.region}>
                             {c.city ? `${c.city}, ` : ''}
                             {c.region.toUpperCase()} — {c.language} · {c.currency}
                           </option>
@@ -1000,7 +1040,7 @@ export function MatchWizardFlow() {
                           : loadedCatalogues.length === 0
                             ? t('match.wizard.catalogueNoneLoaded', {
                                 defaultValue:
-                                  'No catalogues loaded yet — install one from the Cost catalogues panel on /match-elements home.',
+                                  'No catalogues loaded yet - install one from the Cost catalogues panel on /match-elements home.',
                               })
                             : t('match.wizard.catalogueHelpInline', {
                                 defaultValue:
@@ -1079,7 +1119,7 @@ export function MatchWizardFlow() {
                   <div className="rounded-lg border border-border-light bg-surface-muted p-4 text-sm text-content-secondary">
                     {t('match.wizard.catalogueNote', {
                       defaultValue:
-                        'If your region has no dedicated catalogue, pick a multilingual one (e.g. EN) — the search model is multilingual and still returns real candidates.',
+                        'If your region has no dedicated catalogue, pick a multilingual one (e.g. EN) - the search model is multilingual and still returns real candidates.',
                     })}
                   </div>
                 </div>
@@ -1111,7 +1151,17 @@ export function MatchWizardFlow() {
                       </option>
                       {CONSTRUCTION_STAGES.map((cs) => (
                         <option key={cs} value={cs}>
-                          {cs.replace(/^\d+_/, '').replace(/([a-z])([A-Z])/g, '$1 $2')}
+                          {/* Reuse the already-translated 12-stage taxonomy
+                              labels (aiest.stage_*). The match-elements enum
+                              tokens are identical to the ai_estimator ones, so
+                              the keys map 1:1 and stay translated in all 27
+                              locales. Fall back to a humanised token only if a
+                              key is somehow missing. */}
+                          {t(`aiest.stage_${cs}`, {
+                            defaultValue: cs
+                              .replace(/^\d+_/, '')
+                              .replace(/([a-z])([A-Z])/g, '$1 $2'),
+                          })}
                         </option>
                       ))}
                     </select>
@@ -1200,7 +1250,7 @@ export function MatchWizardFlow() {
                   <p className="text-sm text-content-secondary">
                     {t('match.wizard.runHelp', {
                       defaultValue:
-                        'Each group is embedded with a multilingual model and ranked against the cost catalogue. This can take a minute on large models — progress is live below.',
+                        'Each group is embedded with a multilingual model and ranked against the cost catalogue. This can take a minute on large models - progress is live below.',
                     })}
                   </p>
                   {!sessionId ? (
@@ -1352,7 +1402,9 @@ export function MatchWizardFlow() {
                                       : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300',
                                 )}
                               >
-                                {g.status}
+                                {t(`match.group_status_${g.status}`, {
+                                  defaultValue: g.status,
+                                })}
                               </span>
                             </td>
                             <td className="px-3 py-2 text-right">
@@ -1424,6 +1476,119 @@ export function MatchWizardFlow() {
                           tone={applyResult.written ? 'good' : 'default'}
                         />
                       </div>
+
+                      {/* Line-by-line preview of the BOQ rollup. The backend
+                          returns the full position list (description, unit,
+                          qty, rate, line total, classification + resource
+                          sub-rows); surfacing it here is what makes the
+                          "Preview the bill of quantities" promise real -
+                          before, the user only saw three aggregate tiles and
+                          had to write blind. Zero-rate lines (unit-mismatch
+                          gate, or a TBD/custom line at 0) are flagged so the
+                          estimator can fix them before writing. */}
+                      {applyResult.positions.length > 0 && (
+                        <div className="rounded-lg border border-border-light overflow-hidden">
+                          <div className="flex items-center justify-between gap-2 border-b border-border-light bg-surface-muted px-3 py-2">
+                            <div className="text-sm font-medium text-content-primary">
+                              {t('match.wizard.previewLines', {
+                                defaultValue: '{{n}} positions',
+                                n: applyResult.positions.length,
+                              })}
+                            </div>
+                            {applyResult.positions.some((p) => Number(p.unit_rate) === 0) && (
+                              <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800 dark:bg-amber-900/40 dark:text-amber-200">
+                                {t('match.wizard.zeroRateWarning', {
+                                  defaultValue:
+                                    '{{n}} line(s) have no rate yet',
+                                  n: applyResult.positions.filter(
+                                    (p) => Number(p.unit_rate) === 0,
+                                  ).length,
+                                })}
+                              </span>
+                            )}
+                          </div>
+                          <div className="max-h-80 overflow-auto">
+                            <table className="w-full text-sm">
+                              <thead className="sticky top-0 bg-surface-primary">
+                                <tr className="border-b border-border-light text-left text-xs uppercase tracking-wide text-content-tertiary">
+                                  <th className="px-3 py-2 font-medium">
+                                    {t('match.wizard.colDescription', {
+                                      defaultValue: 'Description',
+                                    })}
+                                  </th>
+                                  <th className="px-3 py-2 font-medium">
+                                    {t('match.wizard.colUnit', { defaultValue: 'Unit' })}
+                                  </th>
+                                  <th className="px-3 py-2 text-right font-medium">
+                                    {t('match.wizard.colQty', { defaultValue: 'Qty' })}
+                                  </th>
+                                  <th className="px-3 py-2 text-right font-medium">
+                                    {t('match.wizard.colRate', { defaultValue: 'Rate' })}
+                                  </th>
+                                  <th className="px-3 py-2 text-right font-medium">
+                                    {t('match.wizard.colTotal', { defaultValue: 'Total' })}
+                                  </th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {applyResult.positions.map((p, i) => {
+                                  const zeroRate = Number(p.unit_rate) === 0;
+                                  return (
+                                    <tr
+                                      key={`${p.group_key}-${i}`}
+                                      className="border-b border-border-light/60 last:border-0 align-top"
+                                    >
+                                      <td className="px-3 py-2">
+                                        <div className="text-content-primary">
+                                          {p.description}
+                                        </div>
+                                        {p.section_path.length > 0 && (
+                                          <div className="mt-0.5 text-[11px] text-content-tertiary">
+                                            {p.section_path.join(' · ')}
+                                          </div>
+                                        )}
+                                        {p.resources.length > 0 && (
+                                          <div className="mt-0.5 text-[11px] text-content-tertiary">
+                                            {t('match.wizard.resourceCount', {
+                                              defaultValue: '{{n}} resource sub-rows',
+                                              n: p.resources.length,
+                                            })}
+                                          </div>
+                                        )}
+                                      </td>
+                                      <td className="px-3 py-2 text-content-secondary">
+                                        {p.unit}
+                                      </td>
+                                      <td className="px-3 py-2 text-right tabular-nums text-content-secondary">
+                                        {Number(p.quantity).toLocaleString(undefined, {
+                                          maximumFractionDigits: 3,
+                                        })}
+                                      </td>
+                                      <td
+                                        className={clsx(
+                                          'px-3 py-2 text-right tabular-nums',
+                                          zeroRate
+                                            ? 'text-amber-700 dark:text-amber-300'
+                                            : 'text-content-secondary',
+                                        )}
+                                      >
+                                        {zeroRate
+                                          ? t('match.wizard.noRate', {
+                                              defaultValue: 'no rate',
+                                            })
+                                          : fmtMoney(Number(p.unit_rate), p.currency)}
+                                      </td>
+                                      <td className="px-3 py-2 text-right tabular-nums font-medium text-content-primary">
+                                        {fmtMoney(Number(p.line_total), p.currency)}
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      )}
 
                       {!applyResult.written ? (
                         <div className="flex flex-wrap gap-2">

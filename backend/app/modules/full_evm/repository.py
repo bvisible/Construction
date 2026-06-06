@@ -1,8 +1,10 @@
 """‌⁠‍Full EVM data access layer.
 
 All database queries for EVM forecast entities live here.
-No business logic — pure data access.
+No business logic - pure data access.
 """
+
+from __future__ import annotations
 
 import uuid
 
@@ -42,6 +44,37 @@ class EVMForecastRepository:
         items = list(result.scalars().all())
 
         return items, total
+
+    async def get_latest(self, project_id: uuid.UUID) -> EVMForecast | None:
+        """Return the most recent forecast for a project, or None.
+
+        Ordered by ``forecast_date`` (an ISO ``YYYY-MM-DD`` string, so
+        lexical order == chronological order) then by ``created_at`` as a
+        tie-break when several forecasts share the same date.
+        """
+        stmt = (
+            select(EVMForecast)
+            .where(EVMForecast.project_id == project_id)
+            .order_by(EVMForecast.forecast_date.desc(), EVMForecast.created_at.desc())
+            .limit(1)
+        )
+        return (await self.session.execute(stmt)).scalar_one_or_none()
+
+    async def list_active_alerts(self, project_id: uuid.UUID) -> list[EVMForecast]:  # noqa: A003
+        """Return forecasts whose alert is still actionable for a project.
+
+        "Active" means ``alert_status`` is ``triggered`` or ``snoozed`` -
+        ``acknowledged`` rows are resolved and ``NULL`` rows never alerted.
+        Snoozed rows are included so the UI can show a countdown; the
+        router decides whether a snooze has lapsed.
+        """
+        stmt = (
+            select(EVMForecast)
+            .where(EVMForecast.project_id == project_id)
+            .where(EVMForecast.alert_status.in_(("triggered", "snoozed")))
+            .order_by(EVMForecast.triggered_at.desc())
+        )
+        return list((await self.session.execute(stmt)).scalars().all())
 
     async def create(self, forecast: EVMForecast) -> EVMForecast:
         """Insert a new EVM forecast."""

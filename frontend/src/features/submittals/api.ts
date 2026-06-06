@@ -41,6 +41,7 @@ export interface Submittal {
   date_submitted: string | null;
   date_required: string | null;
   description: string | null;
+  review_notes: string | null;
   created_by: string | null;
   created_at: string;
   updated_at: string;
@@ -54,6 +55,7 @@ export interface SubmittalFilters {
 export interface CreateSubmittalPayload {
   project_id: string;
   title: string;
+  description?: string;
   spec_section?: string;
   submittal_type: SubmittalType;
   date_required?: string;
@@ -61,6 +63,7 @@ export interface CreateSubmittalPayload {
 
 export interface UpdateSubmittalPayload {
   title?: string;
+  description?: string;
   spec_section?: string;
   submittal_type?: SubmittalType;
   date_required?: string;
@@ -89,6 +92,7 @@ type SubmittalWire = Omit<Submittal, 'type' | 'revision'> & {
   revision?: number;
   current_revision?: number;
   description?: string | null;
+  review_notes?: string | null;
   ball_in_court_name?: string | null;
 };
 
@@ -101,6 +105,7 @@ function normaliseSubmittal(s: SubmittalWire): Submittal {
     revision,
     spec_section: s.spec_section ?? null,
     description: s.description ?? null,
+    review_notes: s.review_notes ?? null,
     ball_in_court_name: s.ball_in_court_name ?? null,
   } as Submittal;
 }
@@ -137,13 +142,18 @@ export async function reviewSubmittal(id: string, data: ReviewSubmittalPayload):
 }
 
 /**
- * Final approval. The backend ``/approve/`` endpoint takes no body and
- * unconditionally forces ``status='approved'`` (it is MANAGER-gated and
- * rate-limited), so this helper sends nothing. Non-approve decisions
- * (reject / revise / approve-as-noted) must go through {@link reviewSubmittal}.
+ * Final approval. The backend ``/approve/`` endpoint is MANAGER-gated and
+ * rate-limited and unconditionally forces ``status='approved'``. It accepts
+ * an optional body carrying the approver's ``notes`` so comments entered in
+ * the approve modal are persisted (into metadata.review_notes) instead of
+ * being silently dropped. Non-approve decisions (reject / revise /
+ * approve-as-noted) must go through {@link reviewSubmittal}.
  */
-export async function approveSubmittal(id: string): Promise<Submittal> {
-  const row = await apiPost<SubmittalWire>(`/v1/submittals/${id}/approve/`);
+export async function approveSubmittal(id: string, notes?: string): Promise<Submittal> {
+  const row = await apiPost<SubmittalWire, { notes?: string }>(
+    `/v1/submittals/${id}/approve/`,
+    notes ? { notes } : {},
+  );
   return normaliseSubmittal(row);
 }
 
@@ -158,7 +168,7 @@ export async function submitReviewDecision(
   data: ApproveSubmittalPayload,
 ): Promise<Submittal> {
   if (data.status === 'approved') {
-    return approveSubmittal(id);
+    return approveSubmittal(id, data.comments);
   }
   return reviewSubmittal(id, { status: data.status, notes: data.comments });
 }

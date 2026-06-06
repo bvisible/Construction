@@ -27,10 +27,12 @@ import {
   Breadcrumb,
   SkeletonTable,
   ConfirmDialog,
+  DismissibleInfo,
+  IntroRichText,
 } from '@/shared/ui';
+import { PageHeader } from '@/shared/ui/PageHeader';
 import { useConfirm } from '@/shared/hooks/useConfirm';
 import { DateDisplay } from '@/shared/ui/DateDisplay';
-import { SectionIntro } from '@/features/validation';
 import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { apiGet, getErrorMessage } from '@/shared/lib/api';
@@ -134,7 +136,6 @@ export function CarbonPage() {
   const navigate = useNavigate();
   const [tab, setTab] = useState<Tab>('inventory');
   const activeProjectId = useProjectContextStore((s) => s.activeProjectId);
-  const [projectId, setProjectId] = useState<string>('');
   const [inventoryDrawerId, setInventoryDrawerId] = useState<string | null>(null);
   const [createInvOpen, setCreateInvOpen] = useState(false);
   const [createTargetOpen, setCreateTargetOpen] = useState(false);
@@ -147,76 +148,87 @@ export function CarbonPage() {
     staleTime: 5 * 60_000,
   });
   const projects = projectsQ.data ?? [];
-  // Prefer an explicit in-page selection; otherwise fall back to the globally
-  // selected active project, and only then to the first project in the list.
-  const effectiveProjectId = projectId || activeProjectId || projects[0]?.id || '';
+  // Project selection lives in the global top-bar selector. Fall back to the
+  // first project only when nothing is active yet.
+  const effectiveProjectId = activeProjectId || projects[0]?.id || '';
+  const effectiveProject = projects.find((p) => p.id === effectiveProjectId);
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-5 animate-fade-in">
       <Breadcrumb
-        items={[{ label: t('carbon.title', { defaultValue: 'Carbon & Sustainability' }) }]}
+        items={[
+          ...(effectiveProject
+            ? [{ label: effectiveProject.name, to: `/projects/${effectiveProject.id}` }]
+            : []),
+          { label: t('nav.carbon', { defaultValue: 'Carbon & ESG' }) },
+        ]}
       />
 
-      <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div>
-          <h1 className="text-2xl font-semibold text-content-primary">
-            {t('carbon.title', { defaultValue: 'Carbon & Sustainability' })}
-          </h1>
-          <p className="mt-1 text-sm text-content-secondary">
-            {t('carbon.subtitle', {
-              defaultValue:
-                'Embodied + scope 1/2/3 emissions, EPDs, reduction targets and GHG reports.',
-            })}
-          </p>
-        </div>
-        <div className="flex gap-2">
-          {tab === 'inventory' && (
-            <Button
-              variant="primary"
-              icon={<Plus size={14} />}
-              onClick={() => setCreateInvOpen(true)}
-              disabled={!effectiveProjectId}
-            >
-              {t('carbon.new_inventory', { defaultValue: 'New Inventory' })}
-            </Button>
-          )}
-          {tab === 'targets' && (
-            <Button
-              variant="primary"
-              icon={<Plus size={14} />}
-              onClick={() => setCreateTargetOpen(true)}
-              disabled={!effectiveProjectId}
-            >
-              {t('carbon.new_target', { defaultValue: 'New Target' })}
-            </Button>
-          )}
-          {tab === 'epds' && (
-            <Button
-              variant="primary"
-              icon={<Plus size={14} />}
-              onClick={() => setCreateEpdOpen(true)}
-            >
-              {t('carbon.new_epd', { defaultValue: 'New EPD' })}
-            </Button>
-          )}
-          {tab === 'reports' && (
-            <Button
-              variant="primary"
-              icon={<FileText size={14} />}
-              onClick={() => setGenerateReportOpen(true)}
-              disabled={!effectiveProjectId}
-            >
-              {t('carbon.generate_report', { defaultValue: 'Generate Report' })}
-            </Button>
-          )}
-        </div>
-      </div>
+      <PageHeader
+        srTitle={t('nav.carbon', { defaultValue: 'Carbon & ESG' })}
+        subtitle={t('carbon.subtitle', {
+          defaultValue:
+            'Embodied + scope 1/2/3 emissions, EPDs, reduction targets and GHG reports.',
+        })}
+        actions={
+          <>
+            {tab === 'inventory' && (
+              <Button
+                variant="primary"
+                size="sm"
+                icon={<Plus size={14} />}
+                onClick={() => setCreateInvOpen(true)}
+                disabled={!effectiveProjectId}
+              >
+                {t('carbon.new_inventory', { defaultValue: 'New Inventory' })}
+              </Button>
+            )}
+            {tab === 'targets' && (
+              <Button
+                variant="primary"
+                size="sm"
+                icon={<Plus size={14} />}
+                onClick={() => setCreateTargetOpen(true)}
+                disabled={!effectiveProjectId}
+              >
+                {t('carbon.new_target', { defaultValue: 'New Target' })}
+              </Button>
+            )}
+            {tab === 'epds' && (
+              <Button
+                variant="primary"
+                size="sm"
+                icon={<Plus size={14} />}
+                onClick={() => setCreateEpdOpen(true)}
+              >
+                {t('carbon.new_epd', { defaultValue: 'New EPD' })}
+              </Button>
+            )}
+            {tab === 'reports' && (
+              <Button
+                variant="primary"
+                size="sm"
+                icon={<FileText size={14} />}
+                onClick={() => setGenerateReportOpen(true)}
+                disabled={!effectiveProjectId}
+              >
+                {t('carbon.generate_report', { defaultValue: 'Generate Report' })}
+              </Button>
+            )}
+          </>
+        }
+      />
 
-      <SectionIntro
+      <DismissibleInfo
         storageKey="carbon"
         title={t('carbon.intro_title', {
           defaultValue: 'Where carbon numbers come from',
         })}
+        more={
+          t('carbon.intro_more', { defaultValue: '' })
+            ? <IntroRichText text={t('carbon.intro_more')} />
+            : undefined
+        }
         links={[
           {
             label: t('carbon.intro_link_boq', { defaultValue: 'Open BOQ editor' }),
@@ -230,35 +242,9 @@ export function CarbonPage() {
       >
         {t('carbon.intro_body', {
           defaultValue:
-            'Embodied carbon is derived from your Bill of Quantities: each priced position is multiplied by a material carbon factor (sourced from EPDs — Ökobaudat, ICE, EC3 — or manual overrides). Open an inventory, then assign factors to BOQ positions to roll up A1–D embodied emissions. Scope 1/2/3 cover operational fuel, electricity and value-chain activity. Targets track reduction against a baseline year; reports package it all as GHG Protocol / GRI / ISSB output.',
+            'Embodied carbon comes from your Bill of Quantities: each priced position is multiplied by a material carbon factor from EPD sources such as Okobaudat, ICE and EC3, or a manual override. Open an inventory and assign factors to positions to roll up A1 to D embodied emissions, track Scope 1, 2 and 3 operational carbon and reduction targets, then package it all as GHG Protocol, GRI or ISSB reports.',
         })}
-      </SectionIntro>
-
-      {/* Project picker */}
-      <div className="flex flex-wrap items-end gap-3">
-        <div className="min-w-[260px] max-w-md flex-1">
-          <label className={labelCls}>
-            {t('carbon.project', { defaultValue: 'Project' })}
-          </label>
-          <select
-            value={effectiveProjectId}
-            onChange={(e) => setProjectId(e.target.value)}
-            className={inputCls}
-            disabled={projectsQ.isLoading}
-          >
-            <option value="">
-              {projectsQ.isLoading
-                ? t('common.loading', { defaultValue: 'Loading…' })
-                : t('carbon.select_project', { defaultValue: '— Select project —' })}
-            </option>
-            {projects.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-        </div>
-      </div>
+      </DismissibleInfo>
 
       {/* Tabs */}
       <div className="border-b border-border-light">
@@ -310,7 +296,7 @@ export function CarbonPage() {
           title={t('carbon.pick_project', { defaultValue: 'Pick a project' })}
           description={t('carbon.pick_project_desc', {
             defaultValue:
-              'Carbon inventories, targets and reports are scoped to a single project.',
+              'Carbon inventories, targets and reports are scoped to a single project. Use the project selector in the top bar to choose one.',
           })}
         />
       )}
@@ -1339,7 +1325,7 @@ function InventoryDrawer({
                     <p className="rounded-md bg-surface-secondary/60 p-3 text-xs text-content-tertiary">
                       {t('carbon.no_entries_hint', {
                         defaultValue:
-                          'No embodied entries yet — assign material carbon factors to BOQ positions to populate this inventory.',
+                          'No embodied entries yet - assign material carbon factors to BOQ positions to populate this inventory.',
                       })}
                     </p>
                   ) : (
@@ -1414,7 +1400,7 @@ function InventoryDrawer({
                 {/* Scope 1 / 2 / 3 — full management */}
                 <ScopeSection
                   title={t('carbon.scope1_entries', {
-                    defaultValue: 'Scope 1 — direct fuel',
+                    defaultValue: 'Scope 1 - direct fuel',
                   })}
                   rows={s1Q.data ?? []}
                   describe={(e) => {
@@ -1429,7 +1415,7 @@ function InventoryDrawer({
                 />
                 <ScopeSection
                   title={t('carbon.scope2_entries', {
-                    defaultValue: 'Scope 2 — purchased energy',
+                    defaultValue: 'Scope 2 - purchased energy',
                   })}
                   rows={s2Q.data ?? []}
                   describe={(e) => {
@@ -1444,7 +1430,7 @@ function InventoryDrawer({
                 />
                 <ScopeSection
                   title={t('carbon.scope3_entries', {
-                    defaultValue: 'Scope 3 — value chain',
+                    defaultValue: 'Scope 3 - value chain',
                   })}
                   rows={s3Q.data ?? []}
                   describe={(e) => {
@@ -2210,7 +2196,7 @@ function GenerateReportModal({
         </div>
         <div>
           <label className={labelCls}>
-            {t('carbon.area_m2', { defaultValue: 'Project area (m²) — optional' })}
+            {t('carbon.area_m2', { defaultValue: 'Project area (m²) - optional' })}
           </label>
           <input
             type="number"
@@ -2550,7 +2536,7 @@ function ScopeEntryModal({
 
   return (
     <ModalShell
-      title={`${isEdit ? t('common.edit', { defaultValue: 'Edit' }) : t('common.create', { defaultValue: 'Create' })} — ${title}`}
+      title={`${isEdit ? t('common.edit', { defaultValue: 'Edit' }) : t('common.create', { defaultValue: 'Create' })} - ${title}`}
       onClose={onClose}
     >
       <div className="space-y-3">

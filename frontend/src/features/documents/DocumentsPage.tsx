@@ -36,6 +36,7 @@ interface DocItem {
   tags: string[];
   created_at: string;
   cde_state?: 'wip' | 'shared' | 'published' | 'archived' | null;
+  suitability_code?: string | null;
   metadata?: {
     source_module?: string;
     source_id?: string;
@@ -55,6 +56,37 @@ const CDE_STATE_COLORS: Record<string, 'warning' | 'blue' | 'success' | 'neutral
 };
 
 /* ── Helpers ─────────────────────────────────────────────────────────── */
+
+/**
+ * Map a raw backend error message for a blocked ISO 19650 CDE transition
+ * onto a clear, translatable i18n key.
+ *
+ * The Documents PATCH path enforces the same forward-only lifecycle and
+ * role/signature gates as the dedicated CDE-container endpoint, so a
+ * promotion that the rules reject comes back as an English ``detail``
+ * string ("Invalid CDE state transition: ...", "Insufficient role: ...",
+ * "Gate B (SHARED -> PUBLISHED) requires approver_signature",
+ * "Suitability code 'A1' is not allowed in state 'shared' ..."). Rather
+ * than dump that raw string in a toast, classify it so the user sees a
+ * localized, actionable message. Returns ``null`` when the error is not a
+ * CDE-transition error so the caller can fall back to the generic toast.
+ */
+function cdeTransitionErrorKey(message: string): string | null {
+  const m = message.toLowerCase();
+  if (m.includes('not allowed in state') || m.includes('suitability code')) {
+    return 'documents.cde_suitability_invalid';
+  }
+  if (m.includes('requires approver_signature') || m.includes('approver signature')) {
+    return 'documents.cde_signature_required';
+  }
+  if (m.includes('insufficient role') || m.includes('cannot pass gate')) {
+    return 'documents.cde_role_denied';
+  }
+  if (m.includes('invalid cde state transition') || m.includes('is not allowed. allowed')) {
+    return 'documents.cde_transition_blocked';
+  }
+  return null;
+}
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -772,7 +804,7 @@ export function DocumentsPage() {
 
   // Edit properties mutation
   const editMutation = useMutation({
-    mutationFn: ({ id, ...fields }: { id: string; category?: string; description?: string; tags?: string[] }) =>
+    mutationFn: ({ id, ...fields }: { id: string; category?: string; description?: string; tags?: string[]; cde_state?: string; suitability_code?: string }) =>
       apiPatch<unknown, Record<string, unknown>>(`/v1/documents/${id}`, fields),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['documents'] });
@@ -780,6 +812,15 @@ export function DocumentsPage() {
       setEditDoc(null);
     },
     onError: (err: Error) => {
+      // A rejected ISO 19650 CDE state change (forward-only lifecycle, role
+      // gate, signature gate, or out-of-state suitability code) comes back as
+      // a 400 with an English detail string. Classify it so the user sees a
+      // clear, localized reason instead of the raw backend text.
+      const cdeKey = cdeTransitionErrorKey(err.message);
+      if (cdeKey) {
+        addToast({ type: 'error', title: t('documents.cde_transition_title', { defaultValue: 'Transition not allowed' }), message: t(cdeKey, { defaultValue: err.message }) });
+        return;
+      }
       addToast({ type: 'error', title: t('documents.save_failed', { defaultValue: 'Failed to save document properties' }), message: err.message });
     },
   });
@@ -838,7 +879,7 @@ export function DocumentsPage() {
         <div>
           <h1 className="text-2xl font-bold text-content-primary">{t('documents.title', { defaultValue: 'Documents' })}</h1>
           <p className="mt-1 text-sm text-content-secondary">
-            {t('documents.subtitle', { defaultValue: 'Upload and manage project files — drawings, contracts, specifications' })}
+            {t('documents.subtitle', { defaultValue: 'Upload and manage project files - drawings, contracts, specifications' })}
           </p>
         </div>
         <div className="flex items-center gap-3 shrink-0">
@@ -919,7 +960,7 @@ export function DocumentsPage() {
             : t('documents.drop_hint', { defaultValue: 'Drag & drop files here' })}
         </p>
         <p className="text-xs text-content-tertiary mt-1">
-          {t('documents.supported_types', { defaultValue: 'PDF, images, Excel, DWG, IFC — any file type' })}
+          {t('documents.supported_types', { defaultValue: 'PDF, images, Excel, DWG, IFC - any file type' })}
         </p>
         <div className="flex items-center justify-center gap-2 mt-3">
           <span className="text-[10px] font-mono px-2 py-1 rounded-md bg-red-500/8 text-red-500 border border-red-500/15 font-semibold">.pdf</span>
@@ -1196,7 +1237,7 @@ export function DocumentsPage() {
           <EmptyState
             icon={<FolderOpen size={28} strokeWidth={1.5} />}
             title={t('documents.empty', { defaultValue: 'No documents yet' })}
-            description={t('documents.empty_hint', { defaultValue: 'Upload your first file — drawings, contracts, photos, or any project document.' })}
+            description={t('documents.empty_hint', { defaultValue: 'Upload your first file - drawings, contracts, photos, or any project document.' })}
           />
         )
       ) : (
@@ -1250,6 +1291,18 @@ export function DocumentsPage() {
                         <Badge variant={CDE_STATE_COLORS[doc.cde_state] ?? 'neutral'} size="sm">
                           {doc.cde_state.toUpperCase()}
                         </Badge>
+                      )}
+                      {doc.suitability_code && (
+                        <span
+                          className="inline-flex"
+                          title={t('documents.suitability_code_label', {
+                            defaultValue: 'ISO 19650 suitability code',
+                          })}
+                        >
+                          <Badge variant="neutral" size="sm">
+                            {doc.suitability_code}
+                          </Badge>
+                        </span>
                       )}
                       {previewKind && (
                         <span className="flex items-center gap-0.5 text-[10px] text-oe-blue opacity-0 group-hover:opacity-100 transition-opacity">

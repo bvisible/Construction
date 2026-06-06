@@ -1,5 +1,6 @@
 import { useState, useMemo, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import {
@@ -26,6 +27,9 @@ import {
   FileDown,
   Loader2,
   LayoutTemplate,
+  CloudSun,
+  Lock,
+  Info,
 } from 'lucide-react';
 import {
   Button,
@@ -39,7 +43,10 @@ import {
   WideModalSection,
   WideModalField,
   SkeletonGrid,
+  DismissibleInfo,
+  IntroRichText,
 } from '@/shared/ui';
+import { PageHeader } from '@/shared/ui/PageHeader';
 import { RequiresProject } from '@/shared/auth/RequiresProject';
 import { useConfirm } from '@/shared/hooks/useConfirm';
 import { useToastStore } from '@/stores/useToastStore';
@@ -58,6 +65,8 @@ import {
   importFieldReportsFile,
   exportFieldReports,
   downloadFieldReportsTemplate,
+  fetchWeather,
+  weatherConditionFromDescription,
 } from './api';
 import type {
   FieldReport,
@@ -77,6 +86,8 @@ import {
   type TemplateFieldValues,
 } from './ReportTemplateFields';
 import { ManageTemplatesModal } from './ManageTemplatesModal';
+import { SiteLogEditor } from './SiteLogEditor';
+import { SignaturePad } from './SignaturePad';
 
 declare global {
   interface Window {
@@ -146,6 +157,57 @@ function todayStr(): string {
   return todayLocalISO();
 }
 
+/* ── Week start (locale-aware) ─────────────────────────────────────────── */
+
+// Returns the first day of the week for the active locale: 0 = Sunday,
+// 1 = Monday. Uses Intl.Locale.weekInfo where supported (Chromium/modern
+// engines) and falls back to a small region map so DACH/EU users (the
+// stated primary market) get Monday-first calendars while US/CA keep
+// Sunday-first. Defaults to Monday — the ISO-8601 / most-of-the-world norm.
+function localeWeekStart(locale: string | undefined): 0 | 1 {
+  const lc = locale || 'en';
+  try {
+    const info = (new Intl.Locale(lc) as unknown as { weekInfo?: { firstDay?: number } })
+      .weekInfo;
+    if (info?.firstDay != null) {
+      // Intl reports 1=Mon … 7=Sun; we only distinguish Sun vs Mon start.
+      return info.firstDay === 7 ? 0 : 1;
+    }
+  } catch {
+    /* Intl.Locale.weekInfo not available — fall through to the region map. */
+  }
+  const norm = lc.toLowerCase();
+  const lang = norm.split('-')[0] ?? '';
+  // Languages/regions that conventionally start the week on Sunday.
+  const sundayFirstLangs = ['ja', 'ko', 'he', 'ar'];
+  const sundayFirstLocales = ['en-us', 'en-ca', 'es-mx', 'zh-cn'];
+  if (sundayFirstLangs.includes(lang)) return 0;
+  if (sundayFirstLocales.includes(norm)) return 0;
+  return 1;
+}
+
+const WEEKDAYS: ReadonlyArray<{ key: string; label: string }> = [
+  { key: 'sun', label: 'Sun' },
+  { key: 'mon', label: 'Mon' },
+  { key: 'tue', label: 'Tue' },
+  { key: 'wed', label: 'Wed' },
+  { key: 'thu', label: 'Thu' },
+  { key: 'fri', label: 'Fri' },
+  { key: 'sat', label: 'Sat' },
+];
+
+// Rotated weekday headers for a given week start (0=Sun, 1=Mon). Returns a
+// 7-element array — never indexes a tuple by an unprovable number, so it
+// stays clean under noUncheckedIndexedAccess.
+function rotatedWeekdays(weekStart: 0 | 1): Array<{ key: string; label: string }> {
+  const out: Array<{ key: string; label: string }> = [];
+  for (let i = 0; i < 7; i++) {
+    const entry = WEEKDAYS[(i + weekStart) % 7];
+    if (entry) out.push(entry);
+  }
+  return out;
+}
+
 /* ── Compute total workforce from entries ──────────────────────────────── */
 
 function totalWorkforce(workforce: WorkforceEntry[]): { workers: number; hours: number } {
@@ -163,7 +225,9 @@ function totalWorkforce(workforce: WorkforceEntry[]): { workers: number; hours: 
    ══════════════════════════════════════════════════════════════════════════ */
 
 export function FieldReportsPage() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const navigate = useNavigate();
+  const weekStart = localeWeekStart(i18n.language);
   const queryClient = useQueryClient();
   const addToast = useToastStore((s) => s.addToast);
   const activeProjectId = useProjectContextStore((s) => s.activeProjectId);
@@ -338,7 +402,10 @@ export function FieldReportsPage() {
 
   const calendarDays = useMemo(() => {
     const firstDay = new Date(calYear, calMonth - 1, 1);
-    const startDow = firstDay.getDay(); // 0=Sun
+    // Leading blank cells before day 1, rotated for the locale's week start
+    // (0 = Sunday, 1 = Monday). For a Monday-first calendar, Sunday (getDay()
+    // === 0) sits at the end of the week, so it needs 6 leading cells.
+    const startDow = (firstDay.getDay() - weekStart + 7) % 7;
     const daysInMonth = new Date(calYear, calMonth, 0).getDate();
 
     // Map reports by date string
@@ -362,7 +429,7 @@ export function FieldReportsPage() {
     }
 
     return cells;
-  }, [calYear, calMonth, calendarReports]);
+  }, [calYear, calMonth, calendarReports, weekStart]);
 
   // ── Handlers ─────────────────────────────────────────────────────────
 
@@ -389,17 +456,25 @@ export function FieldReportsPage() {
     [deleteMut, t, confirm],
   );
 
-  // Project gate
-
-  if (!projectId) {
-    return (
-      <div className="p-6">
-        <RequiresProject
-          emptyHint={t('fieldreports.no_project_desc', { defaultValue: 'Choose a project from the sidebar to view field reports.' })}
-        >{null}</RequiresProject>
-      </div>
-    );
-  }
+  // Approval is irreversible (the backend rejects edits once approved), so
+  // gate it behind a confirm dialog. Returns whether it proceeded so callers
+  // can close the modal only on a real approval.
+  const handleApprove = useCallback(
+    async (id: string): Promise<boolean> => {
+      const ok = await confirm({
+        title: t('fieldreports.confirm_approve_title', { defaultValue: 'Approve this report?' }),
+        message: t('fieldreports.confirm_approve', {
+          defaultValue:
+            'Approving locks the report permanently. Once approved it can no longer be edited. Continue?',
+        }),
+      });
+      if (ok) {
+        approveMut.mutate(id);
+      }
+      return ok;
+    },
+    [approveMut, t, confirm],
+  );
 
   // ── Month label ─────────────────────────────────────────────────────
 
@@ -409,32 +484,26 @@ export function FieldReportsPage() {
   });
 
   return (
-    <div className="flex flex-col gap-6 p-6 animate-fade-in">
+    <div className="space-y-5 animate-fade-in">
       {/* Breadcrumb */}
       <Breadcrumb
         items={[
-          { label: t('nav.dashboard', { defaultValue: 'Dashboard' }), to: '/' },
-          { label: t('fieldreports.title', { defaultValue: 'Field Reports' }) },
+          ...(activeProjectName
+            ? [{ label: activeProjectName, to: `/projects/${projectId}` }]
+            : []),
+          { label: t('nav.field_reports', { defaultValue: 'Field Reports' }) },
         ]}
       />
 
       {/* Header */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
-            <ClipboardList size={22} />
-          </div>
-          <div>
-            <h1 className="text-xl font-semibold text-content-primary">
-              {t('fieldreports.title', { defaultValue: 'Field Reports' })}
-            </h1>
-            <p className="text-sm text-content-tertiary">
-              {activeProjectName}
-            </p>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-2">
+      <PageHeader
+        srTitle={t('fieldreports.title', { defaultValue: 'Field Reports' })}
+        subtitle={t('fieldreports.subtitle', {
+          defaultValue:
+            'Log the daily site diary - weather, workforce, work performed, delays and safety incidents.',
+        })}
+        actions={
+          <>
           {/* View toggle */}
           <div className="flex rounded-lg border border-border-light bg-surface-primary p-0.5">
             <button
@@ -502,20 +571,55 @@ export function FieldReportsPage() {
           <Button variant="primary" size="sm" onClick={handleOpenNew} className="shrink-0 whitespace-nowrap" icon={<Plus size={14} />}>
             {t('fieldreports.new_report', { defaultValue: 'New Report' })}
           </Button>
-        </div>
-      </div>
+          </>
+        }
+      />
 
-      {/* Purpose intro */}
-      <p className="-mt-2 max-w-3xl text-xs leading-relaxed text-content-tertiary">
-        {t('fieldreports.page_intro', {
-          defaultValue:
-            'Field reports are the daily site diary — weather, workforce, work performed, delays and safety incidents. Each report flows Draft → Submitted → Approved. Click a calendar day to log that day; days with reports show a colored dot per report. Export to Excel/PDF for the owner.',
+      {/* Info block */}
+      <DismissibleInfo
+        storageKey="field-reports"
+        title={t('fieldreports.intro_title', {
+          defaultValue: 'A defensible record of each site day',
         })}
-      </p>
+        more={
+          t('fieldreports.intro_more', { defaultValue: '' })
+            ? <IntroRichText text={t('fieldreports.intro_more')} />
+            : undefined
+        }
+        links={[
+          {
+            label: t('fieldreports.intro_link_daily_diary', { defaultValue: 'Daily Diary' }),
+            onClick: () => navigate('/daily-diary'),
+          },
+          {
+            label: t('fieldreports.intro_link_payroll', { defaultValue: 'Payroll' }),
+            onClick: () => navigate('/payroll'),
+          },
+        ]}
+      >
+        {t('fieldreports.intro_body', {
+          defaultValue:
+            'Capture daily, inspection, safety and concrete-pour reports with weather, workforce hours by trade, work performed and delays, then move each from draft to submitted to approved with a signature. Reports roll up workforce hours for payroll and progress, and unlike the legally sealed Daily Diary they are structured, templated forms you can export to PDF or Excel.',
+        })}
+      </DismissibleInfo>
+
+      {/* Project gate: keep the canonical top block above, then show the
+          select-a-project empty state as a rhythm child (instead of a
+          full-page short-circuit that dropped the breadcrumb / header). */}
+      {!projectId ? (
+        <Card className="py-12">
+          <RequiresProject
+            emptyHint={t('fieldreports.no_project_desc', {
+              defaultValue: 'Choose a project from the sidebar to view field reports.',
+            })}
+          >{null}</RequiresProject>
+        </Card>
+      ) : (
+        <>
 
       {/* Stats cards */}
       {summary && (
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-5">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
           <StatCard
             label={t('fieldreports.stat_total', { defaultValue: 'Total Reports' })}
             value={summary.total}
@@ -571,14 +675,14 @@ export function FieldReportsPage() {
               </button>
             </div>
 
-            {/* Day headers */}
+            {/* Day headers — rotated for the active locale's week start */}
             <div className="grid grid-cols-7 gap-px mb-1">
-              {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d) => (
+              {rotatedWeekdays(weekStart).map((d) => (
                 <div
-                  key={d}
+                  key={d.key}
                   className="py-2 text-center text-xs font-medium uppercase text-content-tertiary"
                 >
-                  {t(`fieldreports.day_${d.toLowerCase()}`, { defaultValue: d })}
+                  {t(`fieldreports.day_${d.key}`, { defaultValue: d.label })}
                 </div>
               ))}
             </div>
@@ -638,8 +742,8 @@ export function FieldReportsPage() {
                               'h-2.5 w-2.5 rounded-full ring-offset-1 transition-transform hover:scale-125 hover:ring-1 hover:ring-oe-blue',
                               STATUS_DOT_COLOR[r.status],
                             )}
-                            title={`${t(`fieldreports.type_${r.report_type}`, { defaultValue: r.report_type })} — ${t(`fieldreports.status_${r.status}`, { defaultValue: r.status })}`}
-                            aria-label={`${t(`fieldreports.type_${r.report_type}`, { defaultValue: r.report_type })} — ${t(`fieldreports.status_${r.status}`, { defaultValue: r.status })}`}
+                            title={`${t(`fieldreports.type_${r.report_type}`, { defaultValue: r.report_type })} - ${t(`fieldreports.status_${r.status}`, { defaultValue: r.status })}`}
+                            aria-label={`${t(`fieldreports.type_${r.report_type}`, { defaultValue: r.report_type })} - ${t(`fieldreports.status_${r.status}`, { defaultValue: r.status })}`}
                           />
                         ))}
                       </div>
@@ -820,9 +924,9 @@ export function FieldReportsPage() {
                             )}
                             {report.status === 'submitted' && (
                               <button
-                                onClick={() => approveMut.mutate(report.id)}
+                                onClick={() => void handleApprove(report.id)}
                                 className="rounded p-1.5 text-semantic-success hover:bg-semantic-success-bg"
-                                title={t('fieldreports.approve', { defaultValue: 'Approve' })}
+                                title={t('fieldreports.approve_hint', { defaultValue: 'Approve (locks the report permanently)' })}
                                 aria-label={t('fieldreports.approve', { defaultValue: 'Approve' })}
                               >
                                 <CheckCircle2 size={15} />
@@ -876,10 +980,12 @@ export function FieldReportsPage() {
             setShowModal(false);
             setEditingReport(null);
           }}
-          onApprove={(id) => {
-            approveMut.mutate(id);
-            setShowModal(false);
-            setEditingReport(null);
+          onApprove={async (id) => {
+            const ok = await handleApprove(id);
+            if (ok) {
+              setShowModal(false);
+              setEditingReport(null);
+            }
           }}
           loading={createMut.isPending || updateMut.isPending}
         />
@@ -904,6 +1010,8 @@ export function FieldReportsPage() {
         />
       )}
       <ConfirmDialog {...confirmProps} />
+        </>
+      )}
     </div>
   );
 }
@@ -1016,6 +1124,12 @@ function ImportFieldReportsModal({
             <FileDown size={13} />
             {t('fieldreports.download_template', { defaultValue: 'Download import template' })}
           </button>
+          <p className="text-xs text-content-tertiary">
+            {t('fieldreports.import_scope_hint', {
+              defaultValue:
+                'Only the "Field Reports" sheet is imported. Add detailed workforce and equipment logs per report in the app after import.',
+            })}
+          </p>
 
           {/* Error */}
           {error && (
@@ -1138,10 +1252,11 @@ function ReportModal({
   onCreate: (data: CreateFieldReportPayload) => void;
   onUpdate: (id: string, data: UpdateFieldReportPayload) => void;
   onSubmit: (id: string) => void;
-  onApprove: (id: string) => void;
+  onApprove: (id: string) => void | Promise<unknown>;
   loading: boolean;
 }) {
   const { t } = useTranslation();
+  const addToast = useToastStore((s) => s.addToast);
   const isEdit = report != null;
 
   // Prefill date from calendar click
@@ -1173,6 +1288,24 @@ function ReportModal({
   const [visitors, setVisitors] = useState(report?.visitors ?? '');
   const [deliveries, setDeliveries] = useState(report?.deliveries ?? '');
   const [notes, setNotes] = useState(report?.notes ?? '');
+
+  // Equipment-on-site and materials-used are persisted string lists that
+  // surface in the PDF/Excel exports; they had no UI before. Edited as a
+  // newline-separated textarea (one item per line) for simplicity.
+  const [equipmentOnSite, setEquipmentOnSite] = useState<string>(
+    (report?.equipment_on_site ?? []).join('\n'),
+  );
+  const [materialsUsed, setMaterialsUsed] = useState<string>(
+    (report?.materials_used ?? []).join('\n'),
+  );
+  const [signatureBy, setSignatureBy] = useState(report?.signature_by ?? '');
+  const [signatureData, setSignatureData] = useState<string | null>(
+    report?.signature_data ?? null,
+  );
+
+  // Weather auto-fetch (uses the existing GET /weather/ endpoint via the
+  // browser geolocation API; the endpoint needs OPENWEATHERMAP_API_KEY).
+  const [weatherBusy, setWeatherBusy] = useState(false);
 
   // Template state. Existing reports carry their template id + filled
   // values inside metadata (the report table itself is untouched).
@@ -1230,8 +1363,113 @@ function ReportModal({
     [],
   );
 
+  const handleFetchWeather = useCallback(() => {
+    if (!('geolocation' in navigator)) {
+      addToast({
+        type: 'error',
+        title: t('common.error', { defaultValue: 'Error' }),
+        message: t('fieldreports.geo_unsupported', {
+          defaultValue: 'Geolocation is not available in this browser.',
+        }),
+      });
+      return;
+    }
+    setWeatherBusy(true);
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        try {
+          const wx = await fetchWeather(pos.coords.latitude, pos.coords.longitude);
+          if (!wx.available) {
+            addToast({
+              type: 'info',
+              title: t('fieldreports.weather', { defaultValue: 'Weather Conditions' }),
+              message:
+                wx.error ||
+                t('fieldreports.weather_unavailable', {
+                  defaultValue: 'Live weather is not configured on this server.',
+                }),
+            });
+            return;
+          }
+          setWeatherCondition(weatherConditionFromDescription(wx.description, wx.icon));
+          if (wx.temperature_c != null) setTemperatureC(String(Math.round(wx.temperature_c)));
+          if (wx.humidity_pct != null) setHumidity(String(Math.round(wx.humidity_pct)));
+          if (wx.wind_speed_ms != null) {
+            const kmh = Math.round(wx.wind_speed_ms * 3.6);
+            setWindSpeed(`${kmh} km/h${wx.wind_direction ? ` ${wx.wind_direction}` : ''}`);
+          }
+          if (wx.precipitation_mm != null && wx.precipitation_mm > 0) {
+            setPrecipitation(`${wx.precipitation_mm} mm`);
+          }
+          addToast({
+            type: 'success',
+            title: '',
+            message: t('fieldreports.weather_filled', {
+              defaultValue: 'Weather filled from current location',
+            }),
+          });
+        } catch (err: unknown) {
+          addToast({
+            type: 'error',
+            title: t('common.error', { defaultValue: 'Error' }),
+            message:
+              err instanceof Error
+                ? err.message
+                : t('fieldreports.weather_fetch_failed', { defaultValue: 'Weather fetch failed' }),
+          });
+        } finally {
+          setWeatherBusy(false);
+        }
+      },
+      (geoErr) => {
+        setWeatherBusy(false);
+        addToast({
+          type: 'error',
+          title: t('common.error', { defaultValue: 'Error' }),
+          message:
+            geoErr.code === geoErr.PERMISSION_DENIED
+              ? t('fieldreports.geo_denied', {
+                  defaultValue: 'Location permission denied. Enter weather manually below.',
+                })
+              : t('fieldreports.geo_failed', {
+                  defaultValue: 'Could not determine your location. Enter weather manually below.',
+                }),
+        });
+      },
+      { timeout: 10000, maximumAge: 600000 },
+    );
+  }, [addToast, t]);
+
   const handleSave = useCallback(() => {
+    // Enforce required template fields so the template "required" flag is
+    // meaningful (previously a "required" field could be left blank with no
+    // warning). Only validate against the resolved template's definitions.
+    if (selectedTemplate && selectedTemplate.id === templateId) {
+      const missing = selectedTemplate.fields.filter((f) => {
+        if (!f.required) return false;
+        const v = templateValues[f.key];
+        if (f.type === 'checkbox') return v !== true;
+        return v == null || String(v).trim() === '';
+      });
+      if (missing.length > 0) {
+        addToast({
+          type: 'error',
+          title: t('fieldreports.required_fields_title', { defaultValue: 'Required fields missing' }),
+          message: t('fieldreports.required_fields_msg', {
+            defaultValue: 'Please fill the required template fields: {{fields}}',
+            fields: missing.map((f) => f.label).join(', '),
+          }),
+        });
+        return;
+      }
+    }
+
     const cleanWorkforce = workforce.filter((e) => e.trade.trim() !== '');
+    const splitLines = (s: string): string[] =>
+      s
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => line !== '');
     // Preserve any pre-existing metadata keys; only (re)write the
     // template binding so nothing else (e.g. imported flags) is lost.
     const baseMeta = { ...reportMeta } as Record<string, unknown>;
@@ -1251,6 +1489,8 @@ function ReportModal({
       precipitation: precipitation || null,
       humidity: humidity ? parseInt(humidity, 10) : null,
       workforce: cleanWorkforce,
+      equipment_on_site: splitLines(equipmentOnSite),
+      materials_used: splitLines(materialsUsed),
       work_performed: workPerformed,
       delays: delays || null,
       delay_hours: parseFloat(delayHours) || 0,
@@ -1258,6 +1498,8 @@ function ReportModal({
       visitors: visitors || null,
       deliveries: deliveries || null,
       notes: notes || null,
+      signature_by: signatureBy || null,
+      signature_data: signatureData || null,
       metadata: baseMeta,
     };
 
@@ -1278,6 +1520,8 @@ function ReportModal({
     precipitation,
     humidity,
     workforce,
+    equipmentOnSite,
+    materialsUsed,
     workPerformed,
     delays,
     delayHours,
@@ -1285,9 +1529,14 @@ function ReportModal({
     visitors,
     deliveries,
     notes,
+    signatureBy,
+    signatureData,
     reportMeta,
     templateId,
     templateValues,
+    selectedTemplate,
+    addToast,
+    t,
     onCreate,
     onUpdate,
   ]);
@@ -1315,16 +1564,44 @@ function ReportModal({
         <>
           <div className="mr-auto flex items-center gap-2">
             {isEdit && report?.status === 'draft' && (
-              <Button size="sm" variant="secondary" onClick={() => onSubmit(report.id)} className="shrink-0 whitespace-nowrap">
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => onSubmit(report.id)}
+                className="shrink-0 whitespace-nowrap"
+                title={t('fieldreports.submit_hint', {
+                  defaultValue: 'Submitting sends the report for approval.',
+                })}
+              >
                 <Send size={14} className="mr-1.5 shrink-0" />
                 <span className="whitespace-nowrap">{t('fieldreports.submit', { defaultValue: 'Submit for Approval' })}</span>
               </Button>
             )}
             {isEdit && report?.status === 'submitted' && (
-              <Button size="sm" variant="secondary" onClick={() => onApprove(report.id)} className="shrink-0 whitespace-nowrap">
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => onApprove(report.id)}
+                className="shrink-0 whitespace-nowrap"
+                title={t('fieldreports.approve_hint', {
+                  defaultValue: 'Approve (locks the report permanently)',
+                })}
+              >
                 <CheckCircle2 size={14} className="mr-1.5 shrink-0" />
                 <span className="whitespace-nowrap">{t('fieldreports.approve', { defaultValue: 'Approve' })}</span>
               </Button>
+            )}
+            {isEdit && (report?.status === 'draft' || report?.status === 'submitted') && (
+              <span className="hidden items-center gap-1 text-xs text-content-tertiary sm:flex">
+                <Info size={12} className="shrink-0" />
+                {report?.status === 'draft'
+                  ? t('fieldreports.submit_hint', {
+                      defaultValue: 'Submitting sends the report for approval.',
+                    })
+                  : t('fieldreports.approve_lock_hint', {
+                      defaultValue: 'Approving locks the report permanently.',
+                    })}
+              </span>
             )}
           </div>
           <Button size="sm" variant="ghost" onClick={onClose} disabled={loading}>
@@ -1340,6 +1617,18 @@ function ReportModal({
         </>
       }
     >
+      {isEdit && report?.status === 'approved' && (
+        <div className="mb-5 flex items-start gap-2 rounded-lg border border-border-light bg-surface-secondary/50 p-3 text-xs text-content-secondary">
+          <Lock size={14} className="mt-0.5 shrink-0 text-content-tertiary" />
+          <span>
+            {t('fieldreports.approved_locked', {
+              defaultValue:
+                'This report is approved and locked. It can be viewed and exported but no longer edited.',
+            })}
+          </span>
+        </div>
+      )}
+
       <WideModalSection columns={2}>
         <TemplatePicker
           projectId={projectId}
@@ -1408,6 +1697,32 @@ function ReportModal({
         title={t('fieldreports.weather', { defaultValue: 'Weather Conditions' })}
         columns={2}
       >
+        <WideModalField
+          label={t('fieldreports.weather', { defaultValue: 'Weather Conditions' })}
+          span={2}
+          className="sm:[&>label]:hidden"
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={handleFetchWeather}
+              disabled={weatherBusy}
+              className="flex items-center gap-1.5 rounded-lg border border-border-light px-3 py-1.5 text-sm text-content-secondary hover:bg-surface-secondary disabled:opacity-50 transition-colors"
+            >
+              {weatherBusy ? (
+                <Loader2 size={14} className="animate-spin" />
+              ) : (
+                <CloudSun size={14} />
+              )}
+              {t('fieldreports.fetch_weather', { defaultValue: 'Fetch current weather' })}
+            </button>
+            <span className="text-xs text-content-tertiary">
+              {t('fieldreports.fetch_weather_hint', {
+                defaultValue: 'Uses your current location; falls back to manual entry below.',
+              })}
+            </span>
+          </div>
+        </WideModalField>
         <WideModalField label={t('fieldreports.condition', { defaultValue: 'Condition' })}>
           <select
             value={weatherCondition}
@@ -1538,6 +1853,43 @@ function ReportModal({
         </WideModalField>
       </WideModalSection>
 
+      <WideModalSection
+        title={t('fieldreports.equipment_materials', { defaultValue: 'Equipment & Materials' })}
+        description={t('fieldreports.equipment_materials_help', {
+          defaultValue: 'One item per line. These appear in the PDF and Excel exports.',
+        })}
+        columns={2}
+      >
+        <WideModalField
+          label={t('fieldreports.equipment_on_site', { defaultValue: 'Equipment on site' })}
+          hint={t('fieldreports.one_per_line', { defaultValue: 'One item per line' })}
+        >
+          <textarea
+            value={equipmentOnSite}
+            onChange={(e) => setEquipmentOnSite(e.target.value)}
+            rows={3}
+            placeholder={t('fieldreports.equipment_on_site_placeholder', {
+              defaultValue: 'Tower crane\nExcavator CAT 320\nConcrete pump',
+            })}
+            className={textareaCls}
+          />
+        </WideModalField>
+        <WideModalField
+          label={t('fieldreports.materials_used', { defaultValue: 'Materials used' })}
+          hint={t('fieldreports.one_per_line', { defaultValue: 'One item per line' })}
+        >
+          <textarea
+            value={materialsUsed}
+            onChange={(e) => setMaterialsUsed(e.target.value)}
+            rows={3}
+            placeholder={t('fieldreports.materials_used_placeholder', {
+              defaultValue: 'C30/37 concrete 12 m³\nRebar 1.8 t\nFormwork panels',
+            })}
+            className={textareaCls}
+          />
+        </WideModalField>
+      </WideModalSection>
+
       <WideModalSection columns={2}>
         <WideModalField
           label={t('fieldreports.work_performed', { defaultValue: 'Work Performed' })}
@@ -1619,6 +1971,38 @@ function ReportModal({
               defaultValue: 'Additional notes or observations...',
             })}
             className={textareaCls}
+          />
+        </WideModalField>
+      </WideModalSection>
+
+      {/* Structured workforce / equipment logs — only for saved reports, since
+          the rows attach to an existing report id. These drive the detailed
+          CRUD endpoints that feed the labour-cost rollup. */}
+      {isEdit && report && (
+        <SiteLogEditor reportId={report.id} disabled={report.status === 'approved'} />
+      )}
+
+      <WideModalSection
+        title={t('fieldreports.signature', { defaultValue: 'Signature' })}
+        columns={2}
+      >
+        <WideModalField label={t('fieldreports.signature_by', { defaultValue: 'Signed by' })}>
+          <input
+            type="text"
+            value={signatureBy}
+            onChange={(e) => setSignatureBy(e.target.value)}
+            placeholder={t('fieldreports.signature_by_placeholder', {
+              defaultValue: 'Name of site representative',
+            })}
+            className={inputCls}
+            disabled={isEdit && report?.status === 'approved'}
+          />
+        </WideModalField>
+        <WideModalField label={t('fieldreports.signature', { defaultValue: 'Signature' })} span={2}>
+          <SignaturePad
+            value={signatureData}
+            onChange={setSignatureData}
+            disabled={isEdit && report?.status === 'approved'}
           />
         </WideModalField>
       </WideModalSection>

@@ -1,4 +1,4 @@
-"""‌⁠‍Collaboration Pydantic schemas — request/response models."""
+"""‌⁠‍Collaboration Pydantic schemas - request/response models."""
 
 from datetime import datetime
 from typing import Any
@@ -119,4 +119,11 @@ class CommentListResponse(BaseModel):
     """Paginated list of comments."""
 
     items: list[CommentResponse]
+    total: int
+
+
+class ViewpointListResponse(BaseModel):
+    """Paginated list of viewpoints."""
+
+    items: list[ViewpointResponse]
     total: int

@@ -64,6 +64,45 @@ export interface ITPItem {
   hold_witness_point: 'hold' | 'witness' | 'review';
   responsible_role: string | null;
   signatories_required: number;
+  boq_position_id: string | null;
+  csi_section_ref: string | null;
+  spec_drawing_ref: string | null;
+  bim_element_id: string | null;
+  predecessor_itp_item_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface HoldPointStatus {
+  inspection_id: string;
+  itp_item_id: string | null;
+  is_hold_point: boolean;
+  predecessor_itp_item_id: string | null;
+  predecessor_passed: boolean;
+  blocked: boolean;
+  blocking_reason: string | null;
+  released: boolean;
+}
+
+export interface InspectionAttachment {
+  id: string;
+  inspection_id: string;
+  document_id: string;
+  caption: string | null;
+  file_hash_sha256: string | null;
+  uploaded_by: string | null;
+  attached_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface HoldPointRelease {
+  id: string;
+  inspection_id: string;
+  released_by: string | null;
+  released_at: string | null;
+  justification: string | null;
+  approval_route_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -81,6 +120,7 @@ export interface Inspection {
   drawing_ref: string | null;
   notes: string | null;
   photos_json: Array<Record<string, unknown>>;
+  attachment_document_ids: string[];
   created_at: string;
   updated_at: string;
 }
@@ -93,6 +133,9 @@ export interface InspectionSignature {
   signed_at: string | null;
   signature_method: 'electronic' | 'wet' | 'biometric';
   comments: string | null;
+  timestamp_utc: string | null;
+  signer_ip: string | null;
+  signer_user_agent: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -218,6 +261,30 @@ export interface CreateITPItemPayload {
   hold_witness_point?: 'hold' | 'witness' | 'review';
   responsible_role?: string;
   signatories_required?: number;
+  boq_position_id?: string;
+  csi_section_ref?: string;
+  spec_drawing_ref?: string;
+  bim_element_id?: string;
+  predecessor_itp_item_id?: string;
+}
+
+export interface LinkITPItemSpecPayload {
+  boq_position_id?: string | null;
+  csi_section_ref?: string | null;
+  spec_drawing_ref?: string | null;
+  bim_element_id?: string | null;
+  predecessor_itp_item_id?: string | null;
+}
+
+export interface AttachEvidencePayload {
+  document_id: string;
+  caption?: string;
+  file_hash_sha256?: string;
+}
+
+export interface ReleaseHoldPointPayload {
+  justification: string;
+  approval_route_id?: string;
 }
 
 export interface CreateInspectionPayload {
@@ -339,6 +406,17 @@ export function addITPItem(
   return apiPost<ITPItem>(`/v1/qms/itp-plans/${planId}/items`, data);
 }
 
+export function linkITPItemToSpec(
+  planId: string,
+  itemId: string,
+  data: LinkITPItemSpecPayload,
+): Promise<ITPItem> {
+  return apiPatch<ITPItem>(
+    `/v1/qms/itp-plans/${planId}/items/${itemId}/link-spec`,
+    data,
+  );
+}
+
 export function activateITPPlan(planId: string): Promise<ITPPlan> {
   return apiPost<ITPPlan>(`/v1/qms/itp-plans/${planId}/activate`, {});
 }
@@ -401,6 +479,155 @@ export function updateInspection(
   data: Partial<CreateInspectionPayload> & { status?: InspectionStatus },
 ): Promise<Inspection> {
   return apiPatch<Inspection>(`/v1/qms/inspections/${inspectionId}`, data);
+}
+
+/* ── Hold points + evidence (item 12) ──────────────────────────────────── */
+
+export function checkHoldPointStatus(
+  inspectionId: string,
+): Promise<HoldPointStatus> {
+  return apiGet<HoldPointStatus>(
+    `/v1/qms/inspections/${inspectionId}/hold-point-status`,
+  );
+}
+
+export function listInspectionEvidence(
+  inspectionId: string,
+): Promise<InspectionAttachment[]> {
+  return apiGet<InspectionAttachment[]>(
+    `/v1/qms/inspections/${inspectionId}/evidence`,
+  );
+}
+
+export function attachInspectionEvidence(
+  inspectionId: string,
+  data: AttachEvidencePayload,
+): Promise<InspectionAttachment> {
+  return apiPost<InspectionAttachment>(
+    `/v1/qms/inspections/${inspectionId}/attach-evidence`,
+    data,
+  );
+}
+
+export function releaseHoldPoint(
+  inspectionId: string,
+  data: ReleaseHoldPointPayload,
+): Promise<HoldPointRelease> {
+  return apiPost<HoldPointRelease>(
+    `/v1/qms/inspections/${inspectionId}/release`,
+    data,
+  );
+}
+
+export function getHoldPointRelease(
+  inspectionId: string,
+): Promise<HoldPointRelease> {
+  return apiGet<HoldPointRelease>(
+    `/v1/qms/inspections/${inspectionId}/release`,
+  );
+}
+
+/* ── Quality-gate enforcement + compliance export (item 12) ────────────── */
+
+export interface ITPItemGateStatus {
+  itp_item_id: string;
+  is_hold_point: boolean;
+  satisfied: boolean;
+  reason: string | null;
+}
+
+/**
+ * Resolve whether a control point's hold point blocks downstream work.
+ * Used to render the gate traffic-light next to each control point and to
+ * explain why dependent work cannot proceed yet.
+ */
+export function fetchITPItemGateStatus(
+  planId: string,
+  itemId: string,
+): Promise<ITPItemGateStatus> {
+  return apiGet<ITPItemGateStatus>(
+    `/v1/qms/itp-plans/${planId}/items/${itemId}/gate-status`,
+  );
+}
+
+export interface ComplianceSignature {
+  signer_user_id: string;
+  signer_role: string;
+  signed_at: string | null;
+  signature_method: string;
+  timestamp_utc: string | null;
+  signer_ip: string | null;
+  comments: string | null;
+}
+
+export interface ComplianceEvidence {
+  document_id: string;
+  caption: string | null;
+  file_hash_sha256: string | null;
+  uploaded_by: string | null;
+  attached_at: string | null;
+}
+
+export interface ComplianceRecord {
+  inspection_id: string;
+  project_id: string;
+  status: string;
+  scheduled_at: string | null;
+  performed_at: string | null;
+  location_ref: string | null;
+  control_point_name: string | null;
+  hold_witness_point: string | null;
+  responsible_role: string | null;
+  acceptance_criteria: string | null;
+  csi_section_ref: string | null;
+  spec_drawing_ref: string | null;
+  boq_position_id: string | null;
+  bim_element_id: string | null;
+  signatures: ComplianceSignature[];
+  evidence: ComplianceEvidence[];
+  released: boolean;
+  released_by: string | null;
+  released_at: string | null;
+  release_justification: string | null;
+}
+
+export interface PlanComplianceExport {
+  plan_id: string;
+  project_id: string;
+  name: string;
+  work_type: string;
+  status: string;
+  generated_at: string;
+  records: ComplianceRecord[];
+}
+
+export function fetchInspectionComplianceRecord(
+  inspectionId: string,
+): Promise<ComplianceRecord> {
+  return apiGet<ComplianceRecord>(
+    `/v1/qms/inspections/${inspectionId}/compliance-export${buildQs({ format: 'json' })}`,
+  );
+}
+
+export function fetchPlanComplianceExport(
+  planId: string,
+): Promise<PlanComplianceExport> {
+  return apiGet<PlanComplianceExport>(
+    `/v1/qms/itp-plans/${planId}/compliance-export${buildQs({ format: 'json' })}`,
+  );
+}
+
+/**
+ * Absolute-relative URL for the CSV compliance export of an ITP plan. The
+ * caller opens this in a new tab / triggers a download; the browser carries
+ * the auth cookie so no extra fetch wiring is needed.
+ */
+export function planComplianceCsvUrl(planId: string): string {
+  return `/api/v1/qms/itp-plans/${planId}/compliance-export?format=csv`;
+}
+
+export function inspectionComplianceCsvUrl(inspectionId: string): string {
+  return `/api/v1/qms/inspections/${inspectionId}/compliance-export?format=csv`;
 }
 
 /* ── NCRs ──────────────────────────────────────────────────────────────── */

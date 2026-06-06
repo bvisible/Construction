@@ -1,4 +1,4 @@
-"""‌⁠‍Contracts Pydantic schemas — request / response models."""
+"""‌⁠‍Contracts Pydantic schemas - request / response models."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 # ── Contract ─────────────────────────────────────────────────────────────
 
-CONTRACT_TYPES = "lump_sum|gmp|cost_plus|tm|unit_price|design_build|combination"
+CONTRACT_TYPES = "lump_sum|gmp|cost_plus|tm|unit_price|design_build|combination|remeasurement"
 COUNTERPARTY_TYPES = "client|subcontractor"
 CONTRACT_STATUSES = "draft|active|suspended|completed|terminated"
 RETENTION_RELEASE_EVENTS = "practical_completion|final_account|handover"
@@ -171,18 +171,18 @@ class ContractCloneRequest(BaseModel):
     signature on the new instrument.
 
     Body fields:
-        target_project_id: destination project — defaults to the source
+        target_project_id: destination project - defaults to the source
             contract's project. When supplied, the caller must have
             project-level access on the DESTINATION (else 404), in
             addition to read access on the SOURCE (also 404).
-        new_code: contract code for the clone — required and must be
+        new_code: contract code for the clone - required and must be
             unique (``oe_contracts_contract.code`` is a UNIQUE column).
         new_title: human title; defaults to ``"<source.title> (clone)"``.
         include_lines: copy all Schedule-of-Values lines (default True).
         copy_subconfigs: copy retention schedule / fee structure /
             gainshare config / LD clauses (default True). Progress
             claims, final accounts, lien waivers and retention-release
-            audit entries are NEVER cloned — those belong to the
+            audit entries are NEVER cloned - those belong to the
             original contract's payment history.
     """
 
@@ -468,6 +468,83 @@ class AutoGenerateClaimRequest(BaseModel):
     )
 
 
+# ── Progress-claim bridge (Gap I) ────────────────────────────────────────
+
+
+class ProgressClaimPopulatePreviewItem(BaseModel):
+    """One previewed claim line derived from a progress observation.
+
+    The preview is read-only: it shows what the claim line WOULD become if the
+    user commits, so the UI can let the user deselect / tweak before saving.
+    All monetary values are Decimal-as-string in the claim's currency.
+    """
+
+    contract_line_id: UUID
+    contract_line_code: str = ""
+    contract_line_description: str = ""
+    boq_position_id: UUID
+    unit: str | None = None
+    contract_quantity: Decimal = Field(default=Decimal("0"))
+    contract_line_value: Decimal = Field(default=Decimal("0"))
+    # Latest observed percent-complete for the linked BOQ position (0-100).
+    observed_pct: Decimal = Field(default=Decimal("0"))
+    period_label: str | None = None
+    recorded_at: datetime | None = None
+    # Derived figures at the observed percent.
+    period_completed_qty: Decimal = Field(default=Decimal("0"))
+    period_completed_value: Decimal = Field(default=Decimal("0"))
+    cumulative_completed_value: Decimal = Field(default=Decimal("0"))
+
+
+class ProgressClaimPopulatePreviewResponse(BaseModel):
+    """Preview payload for ``GET /populate-from-progress``.
+
+    ``items`` are the populatable lines (SoV lines that link to a BOQ position
+    which has at least one progress observation). ``skipped_unlinked`` counts
+    SoV lines with no BOQ-position link, ``skipped_no_progress`` counts linked
+    lines that have no observation yet - both surfaced so the UI can hint why a
+    line is absent. ``currency`` is the claim currency the values are expressed
+    in (never a blend).
+    """
+
+    claim_id: UUID
+    contract_id: UUID
+    currency: str = ""
+    items: list[ProgressClaimPopulatePreviewItem] = Field(default_factory=list)
+    skipped_unlinked: int = 0
+    skipped_no_progress: int = 0
+    skipped_foreign_currency: int = 0
+    gross: Decimal = Field(default=Decimal("0"))
+    retention: Decimal = Field(default=Decimal("0"))
+    prior_claims_total: Decimal = Field(default=Decimal("0"))
+    net_due: Decimal = Field(default=Decimal("0"))
+
+
+class ProgressClaimCommitLine(BaseModel):
+    """One line the client commits back after editing the preview.
+
+    The client echoes the contract_line_id and the (possibly user-adjusted)
+    value/percent it wants persisted. Quantities/values are recomputed and
+    re-rolled-up server-side, so a tampered total cannot inflate the claim
+    beyond the contract line value.
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    contract_line_id: UUID
+    period_completed_pct: Decimal = Field(default=Decimal("0"), ge=0, le=100)
+    # Optional explicit value override; when omitted the value is derived from
+    # the percent × contract line value. When supplied it is clamped to the
+    # contract line value so the claim line can never exceed the SoV line.
+    period_completed_value: Decimal | None = None
+
+
+class ProgressClaimCommitRequest(BaseModel):
+    """Body for ``PUT /commit-populated-lines``."""
+
+    lines: list[ProgressClaimCommitLine] = Field(default_factory=list)
+
+
 # ── FinalAccount ─────────────────────────────────────────────────────────
 
 
@@ -580,3 +657,64 @@ class ContractDashboardResponse(BaseModel):
     change_orders_count: int
     gainshare_estimate: Decimal | None = None
     status: str
+
+
+# ── AIA G702/G703 (US/CA/AU only) ──────────────────────────────────────────
+
+
+class AIAG703Line(BaseModel):
+    """One G703 continuation-sheet row."""
+
+    line_number: int
+    item_number: str
+    description: str
+    scheduled_value: Decimal
+    previous_value: Decimal
+    this_period_value: Decimal
+    materials_stored: Decimal
+    total_completed_stored: Decimal
+    percent_complete: Decimal
+    balance_to_finish: Decimal
+    retainage: Decimal
+
+
+class AIAG702Summary(BaseModel):
+    """G702 certificate-face summary."""
+
+    original_contract_sum: Decimal
+    change_orders_net: Decimal
+    contract_sum_to_date: Decimal
+    total_completed_stored: Decimal
+    retainage: Decimal
+    total_earned_less_retainage: Decimal
+    previous_certificates_total: Decimal
+    current_payment_due: Decimal
+    balance_to_finish: Decimal
+
+
+class AIACertification(BaseModel):
+    """Architect / owner certification block stamped on the application."""
+
+    architect_certified_at: str | None = None
+    architect_certified_by: str | None = None
+    owner_certified_at: str | None = None
+    owner_certified_by: str | None = None
+    certified_amount: Decimal | None = None
+
+
+class AIAApplicationResponse(BaseModel):
+    """Full AIA G702 + G703 payment-application view for one progress claim."""
+
+    claim_id: UUID
+    contract_id: UUID
+    project_id: UUID
+    application_number: str
+    period_start: str | None = None
+    period_end: str | None = None
+    claim_date: str | None = None
+    currency: str
+    claim_status: str
+    retainage_percent: Decimal
+    summary: AIAG702Summary
+    lines: list[AIAG703Line]
+    certification: AIACertification

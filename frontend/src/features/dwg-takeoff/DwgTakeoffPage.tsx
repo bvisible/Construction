@@ -53,8 +53,9 @@ import {
   Ruler,
   FileDown,
   RotateCcw,
+  GitCompare,
 } from 'lucide-react';
-import { Badge, ConfirmDialog, ElementInfoPopover, type DWGElementPayload } from '@/shared/ui';
+import { Badge, ConfirmDialog, DismissibleInfo, ElementInfoPopover, type DWGElementPayload } from '@/shared/ui';
 import { useConfirm } from '@/shared/hooks/useConfirm';
 import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
@@ -98,6 +99,10 @@ import { exportCanvasToPdf } from './lib/pdf-export';
 import { ToolPalette, type DwgTool } from './components/ToolPalette';
 import { CalibrationDialog, type CalibrationStep } from './components/CalibrationDialog';
 import { SheetStrip } from './components/SheetStrip';
+import {
+  DwgDrawingCompareDrawer,
+  type DwgCompareOverlayState,
+} from './DwgDrawingCompareDrawer';
 import {
   deriveScale as deriveCalibration,
   type CalibrationState,
@@ -478,7 +483,7 @@ function OfflineReadyBadge({
   const readyTooltip = localOnly
     ? t('dwg_takeoff.offline_ready_tooltip_local', {
         defaultValue:
-          'This tool works fully offline — conversions run on your machine.',
+          'This tool works fully offline - conversions run on your machine.',
       })
     : t('dwg_takeoff.offline_ready_tooltip_server', {
         defaultValue:
@@ -663,6 +668,12 @@ export function DwgTakeoffPage() {
 
   // State
   const [selectedDrawingId, setSelectedDrawingId] = useState<string | null>(null);
+  // Revision compare (Item 17) — drawer visibility + onion-skin overlay hint.
+  const [showCompare, setShowCompare] = useState(false);
+  const [compareOverlay, setCompareOverlay] = useState<DwgCompareOverlayState>({
+    enabled: false,
+    opacity: 0.5,
+  });
   const [activeTool, setActiveTool] = useState<DwgTool>('select');
   const [activeColor, setActiveColor] = useState('#ef4444');
 
@@ -883,14 +894,6 @@ export function DwgTakeoffPage() {
     enabled: !!projectId,
   });
 
-  // Raw DXF unit → real metres factor. Combined with ``drawingScale`` (paper
-  // ratio) produces ``effectiveScale``, the single number every measurement
-  // multiplies by. Without it mm-unit files read as "12 000 m walls".
-  const unitFactor = useMemo(() => {
-    const d = drawings.find((x) => x.id === selectedDrawingId);
-    return unitFactorToMetres(d?.units ?? null);
-  }, [drawings, selectedDrawingId]);
-  const effectiveScale = drawingScale * unitFactor;
 
   /**
    * Layers to request from the backend. While `visibleLayers` is empty the
@@ -939,11 +942,16 @@ export function DwgTakeoffPage() {
     () => drawings.find((d) => d.id === selectedDrawingId),
     [drawings, selectedDrawingId],
   );
-  const isStatusKnownReady = (selectedDrawingFromList?.status ?? null) === 'ready';
   const { data: liveDrawing } = useQuery({
     queryKey: ['dwg-drawing', selectedDrawingId],
     queryFn: () => fetchDrawing(selectedDrawingId!),
-    enabled: !!selectedDrawingId && !isStatusKnownReady,
+    // Always fetch the single drawing (not just while converting): the
+    // /drawings LIST response never carries the resolved unit, so the
+    // single-drawing fetch (which embeds latest_version.units) is the only
+    // place the frontend learns the drawing's unit and can apply the
+    // mm→m factor. The refetchInterval below stops polling once the status
+    // is terminal, so a ready drawing is fetched exactly once.
+    enabled: !!selectedDrawingId,
     refetchInterval: (q) => {
       const s = (q.state.data as { status?: string } | undefined)?.status;
       // Stop polling once the backend has reached a terminal state.
@@ -959,6 +967,64 @@ export function DwgTakeoffPage() {
     staleTime: 0,
     gcTime: 0,
   });
+
+  // Raw DXF unit → real metres factor. Combined with ``drawingScale`` (paper
+  // ratio) it produces ``effectiveScale``, the single number every
+  // measurement multiplies by. Without it mm-unit files read as "12 000 m
+  // walls".
+  //
+  // Unit resolution order:
+  //   1. The single-drawing fetch (``liveDrawing.latest_version.units``) —
+  //      the only response that carries the backend-resolved/backfilled unit
+  //      (the /drawings LIST never serialises it).
+  //   2. The cached list row (kept for the rare first-paint window before the
+  //      single-drawing fetch resolves).
+  //   3. Belt-and-suspenders: when the unit is still unknown/"unitless",
+  //      guess from the drawing's own extent. A plan whose largest extent is
+  //      >= 1000 raw units is almost certainly authored in millimetres (the
+  //      same heuristic the backend uses), so fall back to the mm factor.
+  const knownUnits =
+    liveDrawing?.latest_version?.units ??
+    selectedDrawingFromList?.units ??
+    null;
+  /** Largest extent of the loaded entities, in raw drawing units. Used only
+   *  for the units guess; ``0`` while entities are still loading. */
+  const entitiesMaxDim = useMemo(() => {
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    const expand = (x: number, y: number): void => {
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+    };
+    for (const e of entities) {
+      if (e.start) expand(e.start.x, e.start.y);
+      if (e.end) expand(e.end.x, e.end.y);
+      if (e.vertices) {
+        for (const v of e.vertices) expand(v.x, v.y);
+      }
+      if (e.start && typeof e.radius === 'number') {
+        expand(e.start.x - e.radius, e.start.y - e.radius);
+        expand(e.start.x + e.radius, e.start.y + e.radius);
+      }
+    }
+    if (!Number.isFinite(minX) || !Number.isFinite(maxX)) return 0;
+    return Math.max(maxX - minX, maxY - minY);
+  }, [entities]);
+  const unitFactor = useMemo(() => {
+    const normalised = (knownUnits ?? '').toLowerCase();
+    // Honour an explicitly known unit (do NOT override the user's data).
+    if (normalised && normalised !== 'unitless') {
+      return unitFactorToMetres(knownUnits);
+    }
+    // Unknown unit → extents-based guess (mm for large drawings).
+    if (entitiesMaxDim >= 1000) return 0.001;
+    return unitFactorToMetres(knownUnits);
+  }, [knownUnits, entitiesMaxDim]);
+  const effectiveScale = drawingScale * unitFactor;
   /** Effective backend status. A terminal status (ready/error/empty) from
    *  EITHER the live poll or the cached drawings list wins, so a stale
    *  "processing" left over in one source after the other has already reached
@@ -1242,7 +1308,7 @@ export function DwgTakeoffPage() {
         addToast({
           type: 'error',
           title: t('dwg_takeoff.cal_error_generic', {
-            defaultValue: 'Calibration failed — try clicking two distinct points.',
+            defaultValue: 'Calibration failed - try clicking two distinct points.',
           }) as string,
         });
       }
@@ -1731,7 +1797,7 @@ export function DwgTakeoffPage() {
             defaultValue: 'Annotation could not be saved',
           }),
           message: t('dwg_takeoff.no_project_context', {
-            defaultValue: 'No active project — open this drawing from its project first.',
+            defaultValue: 'No active project - open this drawing from its project first.',
           }),
         });
         return;
@@ -1882,8 +1948,8 @@ export function DwgTakeoffPage() {
 
   /** Σ area / Σ perimeter / Σ length for the current selection. */
   const selectionAggregate = useMemo(
-    () => aggregateEntities(selectedEntities),
-    [selectedEntities],
+    () => aggregateEntities(selectedEntities, effectiveScale),
+    [selectedEntities, effectiveScale],
   );
 
   /**
@@ -1893,8 +1959,8 @@ export function DwgTakeoffPage() {
    * 12 m² to the drawing totals.
    */
   const summaryAggregate = useMemo(
-    () => aggregateEntities(filteredEntities),
-    [filteredEntities],
+    () => aggregateEntities(filteredEntities, effectiveScale),
+    [filteredEntities, effectiveScale],
   );
 
   /**
@@ -1921,10 +1987,18 @@ export function DwgTakeoffPage() {
       }
       buckets.set(e.layer, entry);
     }
+    // Convert raw DXF units to real metres (area × scale², length × scale)
+    // so the per-layer totals match the canvas labels and Σ panels.
+    const areaScale = effectiveScale * effectiveScale;
     return Array.from(buckets.entries())
-      .map(([layer, v]) => ({ layer, ...v }))
+      .map(([layer, v]) => ({
+        layer,
+        count: v.count,
+        area: v.area * areaScale,
+        length: v.length * effectiveScale,
+      }))
       .sort((a, b) => (b.area || b.length || b.count) - (a.area || a.length || a.count));
-  }, [filteredEntities]);
+  }, [filteredEntities, effectiveScale]);
 
   /** Breakdown by DXF entity type, already computed by ``aggregateEntities``. */
   const summaryByType = useMemo(() => {
@@ -2507,7 +2581,7 @@ export function DwgTakeoffPage() {
         name: groupName,
       });
 
-      const agg = aggregateEntities(selectedEntities);
+      const agg = aggregateEntities(selectedEntities, effectiveScale);
       const prefersArea = agg.area > 0 && agg.length === 0;
       const quantity = prefersArea ? agg.area : agg.length > 0 ? agg.length : agg.perimeter;
       const unit = prefersArea ? 'm2' : 'm';
@@ -2547,6 +2621,7 @@ export function DwgTakeoffPage() {
     selectedDrawingId,
     selectedEntityIds,
     selectedEntities,
+    effectiveScale,
     queryClient,
     addToast,
     t,
@@ -2693,6 +2768,19 @@ export function DwgTakeoffPage() {
               </div>
 
               <div className="relative z-10 max-w-7xl mx-auto pt-20 pb-4 w-full">
+                <DismissibleInfo
+                  storageKey="dwg-takeoff"
+                  title={t('dwg_takeoff.intro_title', { defaultValue: 'Measure straight off the 2D drawing' })}
+                  links={[
+                    { label: t('dwg_takeoff.intro_link_boq', { defaultValue: 'Open BOQ' }), onClick: () => navigate('/boq') },
+                    { label: t('dwg_takeoff.intro_link_bim', { defaultValue: 'BIM viewer' }), onClick: () => navigate('/bim') },
+                  ]}
+                >
+                  {t('dwg_takeoff.intro_body', {
+                    defaultValue:
+                      'Upload DWG or DXF drawings to view their entities, toggle layers, and measure areas, lengths and counts directly on the plan. Link measurements to BOQ positions so the quantities flow into your cost estimate alongside BIM and the canonical model.',
+                  })}
+                </DismissibleInfo>
                 <div className="grid grid-cols-1 md:grid-cols-[1.4fr_1fr] gap-8 items-stretch">
                   {/* LEFT · Upload card (gets the larger half) */}
                   <div className="flex flex-col">
@@ -2887,6 +2975,20 @@ export function DwgTakeoffPage() {
                 }}
               />
 
+              {/* Onion-skin overlay (Item 17) — a dim wash over the current
+                  revision while the compare drawer's overlay toggle is on,
+                  so the user gets a visual "what changed" hint without us
+                  reaching into the canvas render loop. Pointer-events none so
+                  it never steals clicks from the viewer. */}
+              {compareOverlay.enabled && (
+                <div
+                  aria-hidden="true"
+                  data-testid="dwg-onion-skin"
+                  className="pointer-events-none absolute inset-0 z-[5] bg-oe-blue/20 mix-blend-multiply transition-opacity"
+                  style={{ opacity: compareOverlay.opacity }}
+                />
+              )}
+
               {/* Two-click calibration dialog. Step 0 = hidden. Steps 1/2
                   render a non-blocking banner; step 3 is a centered modal. */}
               <CalibrationDialog
@@ -3035,6 +3137,26 @@ export function DwgTakeoffPage() {
               <div className="absolute top-3 right-3 z-10 flex items-center gap-2">
                 <button
                   type="button"
+                  onClick={() => setShowCompare(true)}
+                  disabled={!selectedDrawingId}
+                  className={clsx(
+                    'inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-semibold',
+                    'border border-white/60 bg-white/85 dark:bg-white/90 backdrop-blur-md',
+                    'shadow-xl shadow-black/30 ring-1 ring-black/5 transition-colors',
+                    selectedDrawingId
+                      ? 'text-slate-800 hover:bg-white'
+                      : 'text-slate-400 cursor-not-allowed',
+                  )}
+                  title={t('dwg_compare.compare_revisions', {
+                    defaultValue: 'Compare revisions with cost delta',
+                  })}
+                  data-testid="dwg-compare-button"
+                >
+                  <GitCompare size={14} />
+                  <span>{t('dwg_compare.compare_short', { defaultValue: 'Compare' })}</span>
+                </button>
+                <button
+                  type="button"
                   onClick={handleDownloadCanvasPdf}
                   disabled={!selectedDrawingId}
                   className={clsx(
@@ -3178,7 +3300,7 @@ export function DwgTakeoffPage() {
                       <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-100">
                         <Link2 size={13} className="text-blue-400" />
                         {alreadyLinked
-                          ? t('dwg_takeoff.relink_title', { defaultValue: 'Linked — pick new' })
+                          ? t('dwg_takeoff.relink_title', { defaultValue: 'Linked - pick new' })
                           : t('dwg_takeoff.link_to_boq_title', { defaultValue: 'Link to BOQ position' })}
                       </div>
                       <button
@@ -3234,7 +3356,7 @@ export function DwgTakeoffPage() {
                           className="text-[11px] rounded-sm border border-[#3a3a3a] bg-[#262626] px-1.5 py-1 text-slate-100"
                         >
                           <option value="">
-                            {t('dwg_takeoff.pick_project', { defaultValue: '— project —' })}
+                            {t('dwg_takeoff.pick_project', { defaultValue: '- project -' })}
                           </option>
                           {linkPickerProjects.map((p) => (
                             <option key={p.id} value={p.id}>{p.name}</option>
@@ -3249,7 +3371,7 @@ export function DwgTakeoffPage() {
                           <option value="">
                             {linkBoqsLoading
                               ? t('common.loading', 'Loading...')
-                              : t('dwg_takeoff.pick_boq', { defaultValue: '— BOQ —' })}
+                              : t('dwg_takeoff.pick_boq', { defaultValue: '- BOQ -' })}
                           </option>
                           {linkPickerBoqs.map((b) => (
                             <option key={b.id} value={b.id}>{b.name}</option>
@@ -3303,7 +3425,7 @@ export function DwgTakeoffPage() {
                         ) : linkBoqPositions.filter((p) => p.unit).length === 0 ? (
                           <p className="text-[11px] text-slate-400 py-2 text-center">
                             {t('dwg_takeoff.link_boq_empty', {
-                              defaultValue: 'BOQ is empty — switch to "Create new".',
+                              defaultValue: 'BOQ is empty - switch to "Create new".',
                             })}
                           </p>
                         ) : (
@@ -3541,24 +3663,41 @@ export function DwgTakeoffPage() {
 
             {/* Summary bar — totals across current drawing */}
             {(entities.length > 0 || annotations.length > 0) && (() => {
-              const areaSum = annotations
-                .filter((a) => a.type === 'area' && a.measurement_value != null)
-                .reduce((s, a) => s + (a.measurement_value ?? 0), 0);
-              const distSum = annotations
-                .filter((a) => a.type === 'distance' && a.measurement_value != null)
-                .reduce((s, a) => s + (a.measurement_value ?? 0), 0);
+              // Persisted measurement_value is in raw DXF units; convert to
+              // real metres (area × scale², distance × scale) so the totals
+              // match the canvas labels.
+              const areaSum =
+                annotations
+                  .filter((a) => a.type === 'area' && a.measurement_value != null)
+                  .reduce((s, a) => s + (a.measurement_value ?? 0), 0) *
+                effectiveScale *
+                effectiveScale;
+              const distSum =
+                annotations
+                  .filter((a) => a.type === 'distance' && a.measurement_value != null)
+                  .reduce((s, a) => s + (a.measurement_value ?? 0), 0) * effectiveScale;
               const handleExportCsv = () => {
                 const rows = [
                   ['type', 'text', 'value', 'unit', 'linked_boq_position_id'].join(','),
-                  ...annotations.map((a) =>
-                    [
+                  ...annotations.map((a) => {
+                    // Export real-metre values (raw DXF units × effectiveScale)
+                    // so the CSV's m / m² columns are meaningful.
+                    const isArea = (a.measurement_unit ?? '').includes('²');
+                    const scaled =
+                      a.measurement_value == null
+                        ? ''
+                        : (
+                            a.measurement_value *
+                            (isArea ? effectiveScale * effectiveScale : effectiveScale)
+                          ).toFixed(3);
+                    return [
                       a.type,
                       JSON.stringify(a.text ?? ''),
-                      a.measurement_value ?? '',
+                      scaled,
                       a.measurement_unit ?? '',
                       a.linked_boq_position_id ?? '',
-                    ].join(','),
-                  ),
+                    ].join(',');
+                  }),
                 ];
                 const blob = new Blob([rows.join('\n')], { type: 'text/csv;charset=utf-8' });
                 const url = URL.createObjectURL(blob);
@@ -3952,7 +4091,7 @@ export function DwgTakeoffPage() {
                   calibrationPixels={calibrationPixels}
                   onStartCalibration={handleStartCalibration}
                   onCancelCalibration={handleCancelCalibration}
-                  dxfUnits={drawings.find((d) => d.id === selectedDrawingId)?.units ?? null}
+                  dxfUnits={knownUnits}
                   effectiveScale={effectiveScale}
                 />
               )}
@@ -4242,7 +4381,7 @@ export function DwgTakeoffPage() {
                         }),
                         message: t('dwg_takeoff.upload_started_hint', {
                           defaultValue:
-                            'Progress continues in the dock — you can navigate away.',
+                            'Progress continues in the dock - you can navigate away.',
                         }),
                       });
                       closeUploadModal();
@@ -4283,6 +4422,19 @@ export function DwgTakeoffPage() {
 
       {/* Delete annotation confirmation */}
       <ConfirmDialog {...annotDeleteConfirmProps} />
+
+      {/* Revision compare with cost delta (Item 17) */}
+      {selectedDrawingId && (
+        <DwgDrawingCompareDrawer
+          open={showCompare}
+          onClose={() => setShowCompare(false)}
+          drawingId={selectedDrawingId}
+          drawingName={
+            selectedDrawingFromList?.name || selectedDrawingFromList?.filename || ''
+          }
+          onOverlayChange={setCompareOverlay}
+        />
+      )}
 
       {/* Inline cross-module link modals — mirror the BIM page pattern.
           Each one POSTs/PATCHes the relevant module and invalidates
@@ -4826,7 +4978,7 @@ function ScaleTab({
           <p className="text-[11px] text-muted-foreground leading-relaxed">
             {t('dwg_takeoff.scale_calibrate_explainer', {
               defaultValue:
-                'Click a Distance measurement on the drawing between two points whose real length you know. Type the real length below, then press Apply — the scale is computed automatically.',
+                'Click a Distance measurement on the drawing between two points whose real length you know. Type the real length below, then press Apply - the scale is computed automatically.',
             })}
           </p>
 
@@ -4858,7 +5010,7 @@ function ScaleTab({
                 onClick={onCancelCalibration}
                 className="inline-flex items-center justify-center gap-1.5 h-7 rounded-md text-[11px] font-semibold text-content-primary bg-surface-tertiary hover:bg-surface-primary transition-colors"
               >
-                {t('dwg_takeoff.scale_calibrate_cancel', { defaultValue: 'Cancel — click two points on the drawing' })}
+                {t('dwg_takeoff.scale_calibrate_cancel', { defaultValue: 'Cancel - click two points on the drawing' })}
               </button>
             )}
           </div>
@@ -4908,7 +5060,7 @@ function ScaleTab({
           <p className="text-[11px] text-muted-foreground leading-relaxed">
             {t('dwg_takeoff.scale_per_annotation_explainer', {
               defaultValue:
-                'Use when one sheet mixes scales (e.g. a 1:100 plan with a 1:20 detail window). Every new annotation you draw carries the scale below until you change it — older annotations keep their own stored scale.',
+                'Use when one sheet mixes scales (e.g. a 1:100 plan with a 1:20 detail window). Every new annotation you draw carries the scale below until you change it - older annotations keep their own stored scale.',
             })}
           </p>
 
@@ -5378,7 +5530,7 @@ function ConversionProgressCard({
       }),
       hint: t('dwg_takeoff.conv_step_convert_hint', {
         defaultValue:
-          'DDC cad2data is parsing your drawing. This is the slow step — usually 3-8 minutes for a medium DWG, longer for large architectural sets.',
+          'DDC cad2data is parsing your drawing. This is the slow step - usually 3-8 minutes for a medium DWG, longer for large architectural sets.',
       }),
     },
     {
@@ -5519,7 +5671,7 @@ function ConversionProgressCard({
         <div className="mt-5 rounded-lg bg-amber-500/5 border border-amber-500/20 px-3 py-2.5 text-[11px] text-amber-700 dark:text-amber-300 leading-relaxed">
           {t('dwg_takeoff.conv_note', {
             defaultValue:
-              'You can safely navigate to other pages — conversion runs on the server. The drawing will be ready here when you come back.',
+              'You can safely navigate to other pages - conversion runs on the server. The drawing will be ready here when you come back.',
           })}
         </div>
 
@@ -5535,7 +5687,7 @@ function ConversionProgressCard({
               className="text-[11px] font-medium text-content-tertiary hover:text-red-500 transition-colors underline-offset-2 hover:underline"
             >
               {t('dwg_takeoff.conv_cancel', {
-                defaultValue: 'Cancel — remove this drawing',
+                defaultValue: 'Cancel - remove this drawing',
               })}
             </button>
           </div>
@@ -5654,7 +5806,7 @@ function InstallDwgConverterCTA({
       <p className="mt-1.5 text-[10px] text-content-tertiary">
         {t('dwg_takeoff.conv_install_hint', {
           defaultValue:
-            'Downloads ~150 MB to ~/.openestimator/converters/ — Windows only. Takes 30-90 seconds.',
+            'Downloads ~150 MB to ~/.openestimator/converters/ - Windows only. Takes 30-90 seconds.',
         })}
       </p>
     </div>
@@ -5705,7 +5857,7 @@ function ConversionErrorCard({
               {isMissingConverter
                 ? t('dwg_takeoff.conv_missing_message', {
                     defaultValue:
-                      'OpenConstructionERP needs the DDC DwgExporter to read DWG files. Install it once — works for every DWG you upload after.',
+                      'OpenConstructionERP needs the DDC DwgExporter to read DWG files. Install it once - works for every DWG you upload after.',
                   })
                 : message ||
                   t('dwg_takeoff.conv_error_default', {
@@ -5729,7 +5881,7 @@ function ConversionErrorCard({
                           defaultValue: 'Re-upload after install',
                         })
                       : t('dwg_takeoff.conv_retry', {
-                          defaultValue: 'Retry — upload again',
+                          defaultValue: 'Retry - upload again',
                         })}
                   </button>
                 )}

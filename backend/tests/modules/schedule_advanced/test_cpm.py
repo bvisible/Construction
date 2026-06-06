@@ -232,6 +232,167 @@ def test_resource_leveling_respects_ceiling() -> None:
     assert max(timeline.values()) <= 1
 
 
+# ── Link-type network (SS / FF / SF + lag) ────────────────────────────────
+#
+# A mixed network exercising every PDM link type plus lags. Hand-computed
+# below; durations in working days, lags in working days.
+#
+#     A (4d)  ── SS lag 2 ──→ B (3d) ── FS lag 0 ──→ D (3d)
+#       │
+#       ├────── FF lag 1 ──→ C (2d)
+#       │
+#       └────── SF lag 8 ──→ E (2d)
+#
+# Forward pass:
+#     A: ES=0, EF=4                       (no predecessors)
+#     B: SS → ES >= A.ES+2 = 2            ES=2, EF=5
+#     C: FF → EF >= A.EF+1 = 5 → ES=5-2   ES=3, EF=5
+#     D: FS → ES >= B.EF+0 = 5            ES=5, EF=8
+#     E: SF → EF >= A.ES+8 = 8 → ES=8-2   ES=6, EF=8
+#
+# Component finish (single weakly-connected island) = max EF = 8.
+#
+# Backward pass (sinks C, D, E pinned to finish 8):
+#     D: sink → LF=8, LS=5
+#     E: sink → LF=8, LS=6
+#     C: sink → LF=8, LS=6
+#     B: FS to D → LF <= D.LS-0 = 5       LF=5, LS=2
+#     A: SS to B → LF <= B.LS-2+4 = 4
+#        FF to C → LF <= C.LF-1   = 7
+#        SF to E → LF <= E.LF-8+4 = 4
+#        → LF = min(4,7,4) = 4, LS=0
+#
+# Total float = LS - ES:
+#     A: 0  (critical)   B: 0 (critical)   C: 3   D: 0 (critical)   E: 0 (critical)
+#
+# Critical path = A → B → D, with E a standalone critical sink: [A, B, D, E].
+
+
+def _link_type_network() -> TaskNetwork:
+    return TaskNetwork(
+        [
+            Activity(id="A", duration=4, predecessors=[]),
+            Activity(id="B", duration=3, predecessors=[("A", "SS", 2)]),
+            Activity(id="C", duration=2, predecessors=[("A", "FF", 1)]),
+            Activity(id="D", duration=3, predecessors=[("B", "FS", 0)]),
+            Activity(id="E", duration=2, predecessors=[("A", "SF", 8)]),
+        ],
+    )
+
+
+def test_link_types_forward_pass_es_ef() -> None:
+    """SS / FF / SF / FS with lag produce the hand-computed ES/EF."""
+    results = compute_cpm(_link_type_network())
+    expected = {
+        "A": (0, 4),
+        "B": (2, 5),  # SS from A, lag 2
+        "C": (3, 5),  # FF from A, lag 1
+        "D": (5, 8),  # FS from B, lag 0
+        "E": (6, 8),  # SF from A, lag 8
+    }
+    for aid, (es, ef) in expected.items():
+        assert results[aid].es == es, f"{aid}.es expected {es}, got {results[aid].es}"
+        assert results[aid].ef == ef, f"{aid}.ef expected {ef}, got {results[aid].ef}"
+
+
+def test_link_types_backward_pass_ls_lf() -> None:
+    """Backward pass mirrors each link type to the hand-computed LS/LF."""
+    results = compute_cpm(_link_type_network())
+    expected = {
+        "A": (0, 4),
+        "B": (2, 5),
+        "C": (6, 8),
+        "D": (5, 8),
+        "E": (6, 8),
+    }
+    for aid, (ls, lf) in expected.items():
+        assert results[aid].ls == ls, f"{aid}.ls expected {ls}, got {results[aid].ls}"
+        assert results[aid].lf == lf, f"{aid}.lf expected {lf}, got {results[aid].lf}"
+
+
+def test_link_types_total_float_and_critical() -> None:
+    """Total float + critical marking across mixed link types."""
+    results = compute_cpm(_link_type_network())
+    expected_float = {"A": 0, "B": 0, "C": 3, "D": 0, "E": 0}
+    for aid, tf in expected_float.items():
+        assert results[aid].total_float == tf, f"{aid}.total_float expected {tf}, got {results[aid].total_float}"
+
+    assert results["A"].is_critical is True
+    assert results["B"].is_critical is True
+    assert results["C"].is_critical is False
+    assert results["D"].is_critical is True
+    assert results["E"].is_critical is True
+
+
+def test_link_types_free_float() -> None:
+    """Free float respects link type.
+
+    C (FF lag 1 from A) is a terminal sink; its only constraint is the
+    component finish (8). C.EF=5 → free float = 8 - 5 = 3. A drives B (SS),
+    C (FF) and E (SF) at their earliest; A cannot slip without pushing one
+    of them, so A's free float is 0.
+    """
+    results = compute_cpm(_link_type_network())
+    assert results["C"].free_float == 3
+    assert results["A"].free_float == 0
+    # B feeds D (FS) at D.ES=5 exactly off B.EF=5 → no free float.
+    assert results["B"].free_float == 0
+
+
+def test_link_types_critical_path() -> None:
+    """Critical path threads through SS and FS links, plus the SF sink E."""
+    network = _link_type_network()
+    cp = critical_path(network)
+    assert cp == ["A", "B", "D", "E"]
+
+
+def test_negative_lag_lead_time_ss() -> None:
+    """A negative SS lag (lead) lets the successor start before its predecessor.
+
+    A (5d) ── SS lag -2 ──→ B (4d)
+        B.ES >= A.ES + (-2) = -2, clamped to 0 by the project-start floor
+        (no candidate is negative here because A.ES=0 → -2, but ES is the
+        max of candidates and 0 is the implicit floor only when there are
+        no predecessors). With a single SS(-2) candidate of -2, B.ES = -2.
+
+    To keep indices non-negative and exercise a meaningful lead, anchor B
+    behind a second predecessor. Here we use a clean positive case:
+
+    A (5d) ── SS lag -2 ──→ B (4d) with a parallel FS driver C.
+    """
+    network = TaskNetwork(
+        [
+            Activity(id="A", duration=5, predecessors=[]),
+            # B can start 2 days before A starts (lead). The only candidate
+            # is A.ES + (-2) = -2, so B.ES = -2, B.EF = 2.
+            Activity(id="B", duration=4, predecessors=[("A", "SS", -2)]),
+        ],
+    )
+    results = compute_cpm(network)
+    assert results["A"].es == 0
+    assert results["A"].ef == 5
+    assert results["B"].es == -2  # 2-day lead via negative SS lag
+    assert results["B"].ef == 2
+
+
+def test_ff_lag_drives_successor_finish() -> None:
+    """FF lag forces the successor to finish ``lag`` days after the predecessor.
+
+    A (6d) ── FF lag 3 ──→ B (2d)
+        B.EF >= A.EF + 3 = 9 → B.ES = 9 - 2 = 7, B.EF = 9.
+    """
+    network = TaskNetwork(
+        [
+            Activity(id="A", duration=6, predecessors=[]),
+            Activity(id="B", duration=2, predecessors=[("A", "FF", 3)]),
+        ],
+    )
+    results = compute_cpm(network)
+    assert results["A"].ef == 6
+    assert results["B"].es == 7
+    assert results["B"].ef == 9
+
+
 def test_ppc_calculation() -> None:
     """PPC = actual / planned, clamped to [0, 1].
 

@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""Approval Routes Pydantic schemas — request/response models."""
+"""Approval Routes Pydantic schemas - request/response models."""
 
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ TargetKindLiteral = Literal[
     "variation",
     "invoice",
     "purchase_order",
+    "qms_hold_point",
 ]
 StepModeLiteral = Literal["all", "any", "majority"]
 InstanceStatusLiteral = Literal["pending", "approved", "rejected", "cancelled"]

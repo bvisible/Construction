@@ -18,10 +18,13 @@ from app.modules.schedule_advanced.models import (
     Calendar,
     Commitment,
     Constraint,
+    Location,
     LookAheadPlan,
     MasterSchedule,
     PhasePlan,
     ReasonForNonCompletion,
+    TaktActivity,
+    TaktSchedule,
     WeeklyWorkPlan,
 )
 
@@ -394,3 +397,82 @@ class CalendarRepository(_BaseRepo):
         stmt = select(Calendar).where(Calendar.project_id == project_id).where(Calendar.is_default.is_(True)).limit(1)
         result = await self.session.execute(stmt)
         return result.scalars().first()
+
+
+# ── Takt / line-of-balance repositories ────────────────────────────────────
+
+
+class TaktScheduleRepository(_BaseRepo):
+    """CRUD for :class:`TaktSchedule`."""
+
+    model = TaktSchedule
+
+    async def list_for_master(
+        self,
+        master_schedule_id: uuid.UUID,
+    ) -> list[TaktSchedule]:
+        stmt = (
+            select(TaktSchedule)
+            .where(TaktSchedule.master_schedule_id == master_schedule_id)
+            .order_by(desc(TaktSchedule.created_at))
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+
+class LocationRepository(_BaseRepo):
+    """CRUD for :class:`Location`."""
+
+    model = Location
+
+    async def list_for_takt(
+        self,
+        takt_schedule_id: uuid.UUID,
+    ) -> list[Location]:
+        stmt = (
+            select(Location)
+            .where(Location.takt_schedule_id == takt_schedule_id)
+            .order_by(Location.sequence_order.asc())
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def list_for_takts(
+        self,
+        takt_schedule_ids: list[uuid.UUID],
+    ) -> dict[uuid.UUID, list[Location]]:
+        """Fetch locations for many takt schedules in one query.
+
+        Returns a mapping of ``takt_schedule_id -> ordered locations`` so
+        callers can hydrate a list of schedules without an N+1 fan-out.
+        """
+        if not takt_schedule_ids:
+            return {}
+        stmt = (
+            select(Location)
+            .where(Location.takt_schedule_id.in_(takt_schedule_ids))
+            .order_by(Location.sequence_order.asc())
+        )
+        result = await self.session.execute(stmt)
+        grouped: dict[uuid.UUID, list[Location]] = {tid: [] for tid in takt_schedule_ids}
+        for loc in result.scalars().all():
+            grouped.setdefault(loc.takt_schedule_id, []).append(loc)
+        return grouped
+
+
+class TaktActivityRepository(_BaseRepo):
+    """CRUD for :class:`TaktActivity`."""
+
+    model = TaktActivity
+
+    async def list_for_takt(
+        self,
+        takt_schedule_id: uuid.UUID,
+    ) -> list[TaktActivity]:
+        stmt = (
+            select(TaktActivity)
+            .where(TaktActivity.takt_schedule_id == takt_schedule_id)
+            .order_by(TaktActivity.sequence_order.asc(), TaktActivity.created_at.asc())
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())

@@ -1,14 +1,14 @@
-"""‌⁠‍Equipment service — business logic for fleet, maintenance, rentals, and damage.
+"""‌⁠‍Equipment service - business logic for fleet, maintenance, rentals, and damage.
 
 Key features:
-    * record_telemetry — append reading + bump Equipment counters if newer.
-    * compute_next_due — pure scheduler helper for hours/km/date triggers.
-    * generate_due_work_orders — auto-create WO stubs for schedules near threshold.
-    * check_inspection_compliance / is_blocked_from_assignment — assignment gate.
-    * assign_to_project — creates a rental; raises if blocked. Emits event.
-    * compute_rental_billing — pure rate × period helper (hours preferred over days).
-    * depreciation_value_at — linear/straight-line depreciation; extension point.
-    * record_damage — DamageReport + auto MaintenanceWorkOrder.
+    * record_telemetry - append reading + bump Equipment counters if newer.
+    * compute_next_due - pure scheduler helper for hours/km/date triggers.
+    * generate_due_work_orders - auto-create WO stubs for schedules near threshold.
+    * check_inspection_compliance / is_blocked_from_assignment - assignment gate.
+    * assign_to_project - creates a rental; raises if blocked. Emits event.
+    * compute_rental_billing - pure rate × period helper (hours preferred over days).
+    * depreciation_value_at - linear/straight-line depreciation; extension point.
+    * record_damage - DamageReport + auto MaintenanceWorkOrder.
 """
 
 from __future__ import annotations
@@ -56,8 +56,14 @@ from app.modules.equipment.schemas import (
     EquipmentRentalCreate,
     EquipmentTypeCreate,
     EquipmentUpdate,
+    FailureForecastResponse,
     FleetDashboardResponse,
+    FleetMaintenanceBundleResponse,
+    FleetOptimizationResponse,
+    FleetUnderutilizedResponse,
     FuelLogCreate,
+    HealthAnalyticsResponse,
+    HealthAnomalyResponse,
     InspectionCreate,
     MaintenanceScheduleCreate,
     MaintenanceWorkOrderCreate,
@@ -160,11 +166,11 @@ def depreciation_value_at(
       (rate = 2 / useful_life). The rate can be overridden by passing
       ``declining_balance_rate`` (e.g. Decimal("0.15") for 15%/yr). Switches
       to straight-line for the final year so the unit hits ``residual_value``
-      exactly at the end of its life — this is the GAAP / IFRS practice for
+      exactly at the end of its life - this is the GAAP / IFRS practice for
       DB methods.
 
     Returns ``Decimal("0")`` if any of ``purchase_value``,
-    ``useful_life_years``, ``purchase_date`` is missing — caller should
+    ``useful_life_years``, ``purchase_date`` is missing - caller should
     treat this as "unknown", not "zero NBV".
     """
     method = (equipment.depreciation_method or "linear").lower()
@@ -288,7 +294,7 @@ class EquipmentService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Equipment type not found",
             )
-        # Block delete when any Equipment still points at this type's code —
+        # Block delete when any Equipment still points at this type's code -
         # otherwise we'd orphan the FK reference (it's a string code, not a
         # DB-level FK).
         ref_count = await self.session.scalar(
@@ -356,7 +362,7 @@ class EquipmentService:
             3. If the new hour-meter or odometer crosses any active maintenance
                schedule's ``next_due_meter`` threshold (within the standard
                50-hour lookahead), a maintenance work order is auto-created
-               via :meth:`generate_due_work_orders` — so the operator
+               via :meth:`generate_due_work_orders` - so the operator
                recording field hours never has to chase the maintenance team.
         """
         equipment = await self.get_equipment(equipment_id)
@@ -752,7 +758,7 @@ class EquipmentService:
                 detail="Rental has already been returned",
             )
         end_iso = end_date or date.today().isoformat()
-        # The rental cannot end before it started — guard against a caller
+        # The rental cannot end before it started - guard against a caller
         # passing an end_date earlier than start_date, which would make
         # compute_rental_billing silently return 0 for the whole period.
         if rental.start_date and end_iso < rental.start_date:
@@ -760,12 +766,54 @@ class EquipmentService:
                 status_code=status.HTTP_409_CONFLICT,
                 detail=(f"Return date {end_iso} is before the rental start date {rental.start_date}"),
             )
+
+        # ── Gap C: compute rental billing and post it to the cost spine ──────
+        # Snapshot every attribute we need BEFORE update_fields() expires the
+        # ORM row (reading rental.* afterwards would re-issue a sync SELECT and
+        # raise MissingGreenlet on the async session).
+        project_id = rental.project_id
+        start_date = rental.start_date
+        rate_per_day = rental.internal_rate_per_day
+        rate_per_hour = rental.internal_rate_per_hour
+        currency = rental.currency
+        # Hours-based billing is opt-in: a rental gains an hourly charge only
+        # when actual hours are recorded against it (metadata.hours_logged). No
+        # hours -> day-rate billing over the [start, end] window.
+        md = rental.metadata_ if isinstance(rental.metadata_, dict) else {}
+        hours_logged = md.get("hours_logged")
+
+        billing_amount = compute_rental_billing(rental, start_date, end_iso, hours_logged)
+        billing_type = "hourly" if (hours_logged is not None and Decimal(str(rate_per_hour or 0)) > 0) else "daily"
+        calculated_at = datetime.now(UTC).isoformat()
+
         await self.rental_repo.update_fields(
             rental_id,
             status="returned",
             end_date=end_iso,
+            billing_calculated_at=calculated_at,
         )
         await self.session.refresh(rental)
+
+        # Emit the rollup trigger only when there is a non-zero charge to post.
+        # The subscriber is idempotent on ``rental:{rental_id}`` anyway, but
+        # skipping a zero charge avoids creating an empty equipment budget line.
+        if billing_amount > 0:
+            event_bus.publish_detached(
+                "equipment.rental_returned",
+                {
+                    "rental_id": str(rental_id),
+                    "project_id": str(project_id) if project_id else None,
+                    "equipment_id": str(rental.equipment_id),
+                    "start_date": start_date,
+                    "end_date": end_iso,
+                    "internal_rate_per_day": str(rate_per_day or 0),
+                    "internal_rate_per_hour": str(rate_per_hour or 0),
+                    "billing_amount": str(billing_amount),
+                    "billing_type": billing_type,
+                    "currency": currency,
+                },
+                source_module="equipment",
+            )
         return rental
 
     # ── Fuel & Parts ─────────────────────────────────────────────────────
@@ -795,7 +843,7 @@ class EquipmentService:
             if rental.end_date and rental.end_date < ref:
                 continue
             return rental.project_id
-        return rentals[0].project_id
+        return None
 
     async def create_fuel_log(self, data: FuelLogCreate) -> FuelLog:
         """Record a fuel fill and emit ``equipment.fuel_logged``.
@@ -894,7 +942,7 @@ class EquipmentService:
         )
         await self.workorder_repo.create(wo)
 
-        # Capture PKs BEFORE update_fields() — its trailing expire_all()
+        # Capture PKs BEFORE update_fields() - its trailing expire_all()
         # detaches every attribute on ``damage`` and ``wo``. ``wo`` is never
         # refreshed afterwards, so a later ``wo.id`` access would trigger an
         # illegal *synchronous* lazy-load on the async session and 500 the
@@ -995,6 +1043,87 @@ class EquipmentService:
             active_rentals=active_rentals,
         )
 
+    # ── Predictive maintenance / fleet analytics ─────────────────────────
+
+    async def health_analytics(
+        self,
+        equipment_id: uuid.UUID,
+    ) -> HealthAnalyticsResponse:
+        """Predictive health assessment for one unit (validates existence)."""
+        from app.modules.equipment.predictive_service import EquipmentPredictiveService
+
+        await self.get_equipment(equipment_id)
+        predictive = EquipmentPredictiveService(self.session)
+        assessment = await predictive.analyze_equipment_health(equipment_id)
+        return HealthAnalyticsResponse(
+            equipment_id=equipment_id,
+            health_score=assessment.health_score,
+            band=assessment.band,
+            anomaly_detected=assessment.anomaly_detected,
+            maintenance_trend=assessment.maintenance_trend,
+            reasons=assessment.reasons,
+            anomalies=[
+                HealthAnomalyResponse(
+                    recorded_at=a.recorded_at,
+                    metric=a.metric,
+                    value=a.value,
+                    z_score=a.z_score,
+                    reason=a.reason,
+                )
+                for a in assessment.anomalies
+            ],
+            sample_count=assessment.sample_count,
+        )
+
+    async def failure_forecast(
+        self,
+        equipment_id: uuid.UUID,
+    ) -> FailureForecastResponse:
+        """Predicted next-service date + confidence for one unit."""
+        from app.modules.equipment.predictive_service import EquipmentPredictiveService
+
+        await self.get_equipment(equipment_id)
+        predictive = EquipmentPredictiveService(self.session)
+        forecast = await predictive.forecast_maintenance_need(equipment_id)
+        return FailureForecastResponse(
+            equipment_id=equipment_id,
+            predicted_failure_date=forecast.predicted_failure_date,
+            failure_confidence=forecast.failure_confidence,
+            days_to_failure=forecast.days_to_failure,
+            basis=forecast.basis,
+            daily_usage=forecast.daily_usage,
+        )
+
+    async def fleet_optimization(
+        self,
+        *,
+        target_utilization_pct: float = 70.0,
+        window_days: int = 30,
+    ) -> FleetOptimizationResponse:
+        """Fleet-wide optimisation recommendations."""
+        from app.modules.equipment.predictive_service import EquipmentPredictiveService
+
+        predictive = EquipmentPredictiveService(self.session)
+        data = await predictive.fleet_optimization_recommendations(
+            target_utilization_pct=target_utilization_pct,
+            window_days=window_days,
+        )
+        return FleetOptimizationResponse(
+            total_units=int(data.get("total_units", 0)),  # type: ignore[arg-type]
+            target_utilization_pct=float(data.get("target_utilization_pct", target_utilization_pct)),  # type: ignore[arg-type]
+            window_days=int(data.get("window_days", window_days)),  # type: ignore[arg-type]
+            underutilized_count=int(data.get("underutilized_count", 0)),  # type: ignore[arg-type]
+            estimated_monthly_savings=str(data.get("estimated_monthly_savings", "0")),
+            underutilized=[
+                FleetUnderutilizedResponse(**u)  # type: ignore[arg-type]
+                for u in data.get("underutilized", [])  # type: ignore[union-attr]
+            ],
+            maintenance_bundles=[
+                FleetMaintenanceBundleResponse(**b)  # type: ignore[arg-type]
+                for b in data.get("maintenance_bundles", [])  # type: ignore[union-attr]
+            ],
+        )
+
 
 # ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -1004,3 +1133,367 @@ def _ensure_aware(dt: datetime) -> datetime:
     if dt.tzinfo is None:
         return dt.replace(tzinfo=UTC)
     return dt
+
+
+# ── Equipment actuals (fuel / parts / rental / work-order -> budget) ────────────
+
+
+# Marker used to find/track the single auto-maintained equipment budget line per
+# project, and to record which (source_kind, source_ref) pairs have already been
+# folded into ``actual_amount`` so a re-fired event never double-counts.
+_EQUIPMENT_LINE_MARKER = "equipment_actuals_auto"
+
+# Cost categories a posting can carry. Equipment costs always land on the single
+# project-level ``category="equipment"`` budget line (the cost_category argument
+# is recorded in the posting trail for audit, not used to fan out rows).
+_EQUIPMENT_BUDGET_CATEGORY = "equipment"
+
+
+def _to_decimal_nonneg(value: object) -> Decimal:
+    """Coerce ``value`` to a finite, non-negative Decimal (else 0).
+
+    Used for cost inputs (fuel/parts/rental amounts) that must never poison the
+    rollup with a NaN/negative. Mirrors the labour-actuals ``_to_decimal``
+    guard so the two cost sinks share identical numeric hygiene.
+    """
+    if value is None:
+        return Decimal("0")
+    try:
+        d = Decimal(str(value))
+    except (ValueError, ArithmeticError, TypeError):
+        return Decimal("0")
+    return d if d.is_finite() and d >= 0 else Decimal("0")
+
+
+class EquipmentActualsService:
+    """Roll equipment costs (fuel, parts, rental billing, work orders) into budget.
+
+    Owns the Gap C shared cost-spine interface for equipment. For each posting it
+    converts the native cost to the project base currency via the shared
+    :func:`_amount_in_base` FX helper and idempotently accumulates the total onto
+    a single auto-maintained ``category="equipment"`` budget line per project.
+
+    The line is found / created idempotently per project (tagged via
+    ``metadata.kind == _EQUIPMENT_LINE_MARKER``), and each posting is applied at
+    most once: the ``"{source_kind}:{source_ref}"`` key is recorded in
+    ``metadata.applied_events`` so a re-fired event is a no-op.
+
+    FX is never blended: a cost's own currency is converted to the project base
+    via the project ``fx_rates`` using :func:`_amount_in_base`. A missing rate
+    keeps the value in its own units (never zeroed) so a forgotten rate surfaces
+    as a visibly-wrong total rather than silently dropping money.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+        # Imported lazily-by-reference here (top of module would create an import
+        # cycle: costmodel.service -> ... is unrelated, but keeping the import
+        # local mirrors the labour subscriber and avoids importing costmodel at
+        # equipment module-load time).
+        from app.modules.costmodel.repository import BudgetLineRepository
+
+        self.budget_repo = BudgetLineRepository(session)
+
+    async def _compute_fx_context(self, project_id: uuid.UUID) -> tuple[str, dict[str, str]]:
+        """Resolve the project's ``(base_currency, fx_rates)`` for conversion."""
+        return await self.budget_repo._project_fx_context(project_id)
+
+    async def _amount_in_base(
+        self,
+        amount_native: Decimal,
+        currency: str,
+        project_id: uuid.UUID,
+    ) -> Decimal:
+        """Convert a native cost amount into the project base currency.
+
+        Thin wrapper over the shared :func:`_amount_in_base` helper so every
+        equipment posting shares one set of FX semantics with the rest of the
+        cost domain (BOQ, budget, labour).
+        """
+        from app.modules.costmodel.repository import _amount_in_base
+
+        base, fx = await self._compute_fx_context(project_id)
+        return _amount_in_base(str(amount_native), (currency or "").strip().upper(), base, fx)
+
+    async def _get_or_create_equipment_line(self, project_id: uuid.UUID):
+        """Find (or create) the single auto-maintained equipment budget line."""
+        from app.modules.costmodel.models import BudgetLine
+
+        lines, _ = await self.budget_repo.list_for_project(
+            project_id,
+            category=_EQUIPMENT_BUDGET_CATEGORY,
+            limit=1000,
+        )
+        for line in lines:
+            md = line.metadata_ if isinstance(line.metadata_, dict) else {}
+            if md.get("kind") == _EQUIPMENT_LINE_MARKER:
+                return line
+
+        # New auto-line. Inherit the project base currency (empty string when
+        # the project has none - the dashboard renders a currency-less number
+        # rather than mislabelling, see CostModelService._get_project_currency).
+        from app.modules.costmodel.service import CostModelService
+
+        currency = await CostModelService(self.session)._get_project_currency(project_id)
+        line = BudgetLine(
+            project_id=project_id,
+            category=_EQUIPMENT_BUDGET_CATEGORY,
+            description="Equipment cost (auto)",
+            planned_amount="0",
+            committed_amount="0",
+            actual_amount="0",
+            forecast_amount="0",
+            currency=currency,
+            metadata_={"kind": _EQUIPMENT_LINE_MARKER, "applied_events": []},
+        )
+        return await self.budget_repo.create(line)
+
+    async def post_actual_to_budget_line(
+        self,
+        project_id: uuid.UUID,
+        cost_category: str,
+        amount_native: Decimal,
+        currency: str,
+        source_kind: str,
+        source_ref: str,
+        logged_at: str | None = None,
+    ) -> Decimal:
+        """Idempotently post an equipment cost onto the equipment budget line.
+
+        Gap C shared cost-spine interface for equipment. Converts ``amount_native``
+        (in ``currency``) to the project base via ``fx_rates`` and accumulates it
+        onto the single ``category="equipment"`` budget line's ``actual_amount``.
+
+        Idempotency: the ``"{source_kind}:{source_ref}"`` key is recorded in
+        ``metadata.applied_events``; re-posting the same source returns 0 and
+        leaves the actual unchanged. ``cost_category`` and ``logged_at`` are
+        recorded in the posting trail for audit only.
+
+        Args:
+            project_id: Owning project.
+            cost_category: Fine-grained source category recorded for audit
+                (``equipment:rental`` / ``equipment:fuel`` / ``equipment:parts``
+                / ``equipment:work_order``). The budget line itself is always
+                ``category="equipment"``.
+            amount_native: Cost amount in ``currency`` (native units).
+            currency: ISO currency of ``amount_native``.
+            source_kind: Posting source family (``fuel_log`` / ``parts_log`` /
+                ``rental`` / ``work_order``).
+            source_ref: Stable unique reference within the source family
+                (typically the source row's UUID as a string).
+            logged_at: Optional ISO timestamp recorded in the posting trail.
+
+        Returns:
+            The Decimal amount applied in base currency (``Decimal("0")`` when the
+            posting was skipped: a zero/negative cost, or an already-applied
+            (source_kind, source_ref)).
+        """
+        native = _to_decimal_nonneg(amount_native)
+        if native <= 0:
+            return Decimal("0")
+
+        amount = await self._amount_in_base(native, currency, project_id)
+        amount = _to_decimal_nonneg(amount)
+        if amount <= 0:
+            return Decimal("0")
+        amount = amount.quantize(Decimal("0.01"))
+
+        line = await self._get_or_create_equipment_line(project_id)
+
+        # Snapshot every attribute we need BEFORE update_fields() calls
+        # expire_all(): reading line.* afterwards would re-issue a sync SELECT
+        # and raise MissingGreenlet under the async session.
+        line_id = line.id
+        md = dict(line.metadata_) if isinstance(line.metadata_, dict) else {}
+        applied = md.get("applied_events")
+        if not isinstance(applied, list):
+            applied = []
+        event_key = f"{source_kind}:{source_ref}"
+        if event_key in applied:
+            return Decimal("0")  # already counted
+
+        prior = _to_decimal_nonneg(line.actual_amount)
+        new_actual = (prior + amount).quantize(Decimal("0.01"))
+        applied = [*applied, event_key]
+        md["applied_events"] = applied
+        if md.get("kind") is None:
+            md["kind"] = _EQUIPMENT_LINE_MARKER
+
+        # Keep an append-only posting trail for audit (mirrors the spine).
+        postings = md.get("postings")
+        if not isinstance(postings, list):
+            postings = []
+        postings = [
+            *postings,
+            {
+                "source_kind": source_kind,
+                "source_ref": source_ref,
+                "cost_category": cost_category,
+                "amount": str(amount),
+                "currency": (currency or "").strip().upper(),
+                "logged_at": logged_at,
+                "posted_at": datetime.now(UTC).isoformat(),
+            },
+        ]
+        md["postings"] = postings
+
+        await self.budget_repo.update_fields(
+            line_id,
+            actual_amount=str(new_actual),
+            metadata_=md,
+        )
+        logger.info(
+            "Equipment actuals: project=%s kind=%s ref=%s +%s -> %s",
+            project_id,
+            source_kind,
+            source_ref,
+            amount,
+            new_actual,
+        )
+        return amount
+
+
+# ── Detached event subscribers (Gap C) ─────────────────────────────────────────
+
+
+def _coerce_project_id(raw: object) -> uuid.UUID | None:
+    """Parse a project_id from an event payload, or None when absent/invalid."""
+    if not raw:
+        return None
+    try:
+        return uuid.UUID(str(raw))
+    except (ValueError, AttributeError, TypeError):
+        return None
+
+
+async def _post_equipment_cost(
+    *,
+    project_id: uuid.UUID,
+    cost_category: str,
+    amount_native: Decimal,
+    currency: str,
+    source_kind: str,
+    source_ref: str,
+    logged_at: str | None,
+    log_label: str,
+) -> None:
+    """Open a fresh session and fold one equipment cost into budget actuals.
+
+    The publisher is still inside its own request transaction, so this opens an
+    independent session (mirroring the labour subscriber). Errors are swallowed
+    and logged so a cost-rollup failure never breaks the fuel/parts/rental
+    submission that triggered it.
+    """
+    from app.database import async_session_factory
+
+    try:
+        async with async_session_factory() as session:
+            service = EquipmentActualsService(session)
+            await service.post_actual_to_budget_line(
+                project_id=project_id,
+                cost_category=cost_category,
+                amount_native=amount_native,
+                currency=currency,
+                source_kind=source_kind,
+                source_ref=source_ref,
+                logged_at=logged_at,
+            )
+            await session.commit()
+    except Exception:
+        logger.exception(
+            "Equipment actuals rollup failed for %s - source submission unaffected",
+            log_label,
+        )
+
+
+async def _on_fuel_logged(event: object) -> None:
+    """Detached subscriber: roll a fuel cost into the equipment budget line."""
+    data = getattr(event, "data", None) or {}
+    project_id = _coerce_project_id(data.get("project_id"))
+    fuel_log_id = str(data.get("fuel_log_id") or "")
+    if project_id is None or not fuel_log_id:
+        return
+    amount = _to_decimal_nonneg(data.get("cost"))
+    if amount <= 0:
+        return
+    await _post_equipment_cost(
+        project_id=project_id,
+        cost_category="equipment:fuel",
+        amount_native=amount,
+        currency=str(data.get("currency") or ""),
+        source_kind="fuel_log",
+        source_ref=fuel_log_id,
+        logged_at=str(data.get("logged_at")) if data.get("logged_at") else None,
+        log_label=f"fuel_log={fuel_log_id}",
+    )
+
+
+async def _on_parts_logged(event: object) -> None:
+    """Detached subscriber: roll a parts cost into the equipment budget line.
+
+    Prefers the publisher-computed ``line_total`` (quantity x unit_cost); falls
+    back to multiplying ``quantity`` by ``unit_cost`` if it is absent.
+    """
+    data = getattr(event, "data", None) or {}
+    project_id = _coerce_project_id(data.get("project_id"))
+    parts_log_id = str(data.get("parts_log_id") or "")
+    if project_id is None or not parts_log_id:
+        return
+
+    line_total_raw = data.get("line_total")
+    if line_total_raw is not None:
+        amount = _to_decimal_nonneg(line_total_raw)
+    else:
+        amount = _to_decimal_nonneg(data.get("quantity")) * _to_decimal_nonneg(data.get("unit_cost"))
+    if amount <= 0:
+        return
+
+    await _post_equipment_cost(
+        project_id=project_id,
+        cost_category="equipment:parts",
+        amount_native=amount,
+        currency=str(data.get("currency") or ""),
+        source_kind="parts_log",
+        source_ref=parts_log_id,
+        logged_at=str(data.get("logged_at")) if data.get("logged_at") else None,
+        log_label=f"parts_log={parts_log_id}",
+    )
+
+
+async def _on_rental_returned(event: object) -> None:
+    """Detached subscriber: roll the rental billing into the equipment budget line.
+
+    The router computes the billing amount on return and emits it in the event
+    payload; this subscriber posts it (idempotent on ``rental:{rental_id}``).
+    """
+    data = getattr(event, "data", None) or {}
+    project_id = _coerce_project_id(data.get("project_id"))
+    rental_id = str(data.get("rental_id") or "")
+    if project_id is None or not rental_id:
+        return
+    amount = _to_decimal_nonneg(data.get("billing_amount"))
+    if amount <= 0:
+        return
+    await _post_equipment_cost(
+        project_id=project_id,
+        cost_category="equipment:rental",
+        amount_native=amount,
+        currency=str(data.get("currency") or ""),
+        source_kind="rental",
+        source_ref=rental_id,
+        logged_at=str(data.get("end_date")) if data.get("end_date") else None,
+        log_label=f"rental={rental_id}",
+    )
+
+
+# Register the Gap C subscribers at import time. The module loader imports
+# ``equipment`` (its ``on_startup`` calls ``register_equipment_subscribers``,
+# which imports this module), so binding here keeps the wiring inside an allowed
+# file. Guard against double-registration on repeated imports (test reload, etc.).
+for _evt_name, _handler in (
+    ("equipment.fuel_logged", _on_fuel_logged),
+    ("equipment.parts_logged", _on_parts_logged),
+    ("equipment.rental_returned", _on_rental_returned),
+):
+    if _handler not in event_bus._handlers.get(_evt_name, []):
+        event_bus.subscribe(_evt_name, _handler)

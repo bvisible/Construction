@@ -1,4 +1,4 @@
-"""‌⁠‍Submittals Pydantic schemas — request/response models."""
+"""‌⁠‍Submittals Pydantic schemas - request/response models."""
 
 from datetime import datetime
 from typing import Any
@@ -14,6 +14,7 @@ class SubmittalCreate(BaseModel):
 
     project_id: UUID
     title: str = Field(..., min_length=1, max_length=500)
+    description: str | None = Field(default=None, max_length=5000)
     spec_section: str | None = Field(default=None, max_length=100)
     submittal_type: str = Field(
         ...,
@@ -47,6 +48,7 @@ class SubmittalUpdate(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
     title: str | None = Field(default=None, min_length=1, max_length=500)
+    description: str | None = Field(default=None, max_length=5000)
     spec_section: str | None = Field(default=None, max_length=100)
     submittal_type: str | None = Field(
         default=None,
@@ -84,6 +86,25 @@ class SubmittalReviewRequest(BaseModel):
     notes: str | None = Field(default=None, max_length=5000)
 
 
+class SubmittalApproveRequest(BaseModel):
+    """Optional request body for final approval.
+
+    The body is optional (a bare ``POST /approve/`` still works), but when
+    present it carries the approver's ``notes`` so an approval with comments
+    persists them into the submittal metadata instead of dropping them.
+    """
+
+    notes: str | None = Field(default=None, max_length=5000)
+
+
+class StartApprovalRequest(BaseModel):
+    """Request body for starting a routed approval workflow (feature 06)."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    route_id: UUID
+
+
 class SubmittalResponse(BaseModel):
     """Submittal returned from the API."""
 
@@ -108,5 +129,11 @@ class SubmittalResponse(BaseModel):
     linked_boq_item_ids: list[str] = Field(default_factory=list)
     created_by: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict, validation_alias="metadata_")
+    # Description and reviewer notes are persisted inside ``metadata`` (the
+    # Submittal model has no dedicated columns and we add no migration). They
+    # are surfaced as top-level convenience fields by ``_to_response`` so the
+    # frontend does not have to dig into the metadata blob.
+    description: str | None = None
+    review_notes: str | None = None
     created_at: datetime
     updated_at: datetime

@@ -1,7 +1,7 @@
 """‌⁠‍5D Cost Model data access layer.
 
 All database queries for cost snapshots, budget lines, and cash flow entries
-live here.  No business logic — pure data access — *except* for the
+live here.  No business logic - pure data access - *except* for the
 currency-aware rollup helpers added by the R5 audit (May 2026): mixing
 USD and EUR row totals via raw SQL ``SUM`` poisoned the dashboard /
 EVM / budget summary for any multi-currency project, so the aggregators
@@ -47,7 +47,7 @@ def _amount_in_base(
     - foreign currency with NO configured rate → kept in its own units
       (NEVER zeroed) so a forgotten rate surfaces as a visibly-wrong
       total instead of silently dropping money. The cost dashboard
-      remains deterministic — flapping silent zeroes were the worst
+      remains deterministic - flapping silent zeroes were the worst
       possible degradation here.
 
     All math is Decimal end-to-end so a million-line BAC doesn't drift
@@ -69,7 +69,7 @@ def _amount_in_base(
 
     rate_raw = fx_rates.get(code)
     if rate_raw is None:
-        # No FX rate configured — keep in its own units rather than zero.
+        # No FX rate configured - keep in its own units rather than zero.
         return amount
     try:
         rate = Decimal(str(rate_raw))
@@ -138,7 +138,7 @@ class SnapshotRepository:
         ``wif:<short-id>:YYYY-MM`` period (so they cannot collide with the
         ``(project_id, period)`` unique index introduced in migration
         v3108). Those scenario rows must NEVER masquerade as the latest
-        real snapshot — otherwise the dashboard SPI/CPI flips to scenario
+        real snapshot - otherwise the dashboard SPI/CPI flips to scenario
         values the moment someone runs a what-if. Filter them out.
         """
         stmt = (
@@ -238,7 +238,7 @@ class BudgetLineRepository:
         return lines, total
 
     async def _list_lines_for_rollup(self, project_id: uuid.UUID) -> list[BudgetLine]:
-        """Return every budget line for ``project_id`` — used by the
+        """Return every budget line for ``project_id`` - used by the
         currency-aware aggregators below. Extracted into its own method
         so unit tests can stub it without monkey-patching SQLAlchemy.
         """
@@ -393,11 +393,45 @@ class BudgetLineRepository:
         await self.session.flush()
         return lines
 
+    async def find_for_actual_posting(
+        self,
+        project_id: uuid.UUID,
+        *,
+        cost_line_id: uuid.UUID | None,
+        category: str | None,
+    ) -> BudgetLine | None:
+        """Find the single budget line that an actual-cost posting targets.
+
+        Used by ``CostSpineService.post_actual_to_budget_line`` to locate (or
+        decide to create) the row that accumulates ``actual_amount`` for a
+        given ``(project_id, cost_line_id, cost_category)`` triple. The
+        ``category`` column is NOT NULL (default ``""``), so a ``None`` /
+        uncategorised posting is matched against the empty-string sentinel
+        rather than SQL NULL - a headerless invoice posting therefore lands on
+        one stable "uncategorised" row instead of fanning out new rows.
+        ``cost_line_id`` is genuinely nullable and matched with ``IS NULL``.
+
+        When several rows somehow share the triple (legacy data) the oldest by
+        ``created_at`` wins so repeated postings stay deterministic and land on
+        the same row.
+        """
+        stmt = select(BudgetLine).where(
+            BudgetLine.project_id == project_id,
+            BudgetLine.category == (category or ""),
+        )
+        if cost_line_id is None:
+            stmt = stmt.where(BudgetLine.cost_line_id.is_(None))
+        else:
+            stmt = stmt.where(BudgetLine.cost_line_id == cost_line_id)
+        stmt = stmt.order_by(BudgetLine.created_at.asc()).limit(1)
+        result = await self.session.execute(stmt)
+        return result.scalars().first()
+
     async def existing_position_ids(self, project_id: uuid.UUID) -> set[uuid.UUID]:
         """Return the set of BOQ position IDs already wired to a budget line.
 
         Used by ``generate_budget_from_boq`` to make the auto-generation
-        endpoint idempotent — re-running it must not silently double the
+        endpoint idempotent - re-running it must not silently double the
         BAC by re-creating lines for the same positions.
         """
         stmt = select(BudgetLine.boq_position_id).where(

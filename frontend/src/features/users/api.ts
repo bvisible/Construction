@@ -62,7 +62,11 @@ export async function updateUser(id: string, data: UserAdminUpdate): Promise<Use
 }
 
 export async function inviteUser(data: InviteUserPayload): Promise<User> {
-  return apiPost<User>('/v1/users/auth/register/', data);
+  // Admin-create endpoint (POST /v1/users/, gated by users.create) honors the
+  // chosen role. The previous target /auth/register is the OPEN self-signup
+  // flow, which ignores `role` and always lands the user as viewer, so the
+  // role picker in the invite modal was a silent no-op.
+  return apiPost<User>('/v1/users/', data);
 }
 
 export async function getUserModuleAccess(userId: string): Promise<UserModuleAccessPayload> {

@@ -46,10 +46,8 @@ import {
   Loader2,
   Boxes,
   ArrowUpRight,
-  ExternalLink,
   FolderOpen,
   MessageSquare,
-  MessageSquarePlus,
   CalendarClock,
   User,
   GitCompareArrows,
@@ -65,6 +63,8 @@ import {
   Filter,
   Link2,
   ArrowRightCircle,
+  Bookmark,
+  Save,
 } from 'lucide-react';
 import { Card } from '@/shared/ui/Card';
 import { Button } from '@/shared/ui/Button';
@@ -72,6 +72,8 @@ import { Badge } from '@/shared/ui/Badge';
 import { EmptyState } from '@/shared/ui/EmptyState';
 import { MiniGeometryPreview } from '@/shared/ui/MiniGeometryPreview';
 import { ConfirmDialog } from '@/shared/ui/ConfirmDialog';
+import { DismissibleInfo, BetaBanner, Breadcrumb } from '@/shared/ui';
+import { PageHeader } from '@/shared/ui/PageHeader';
 import { useConfirm } from '@/shared/hooks/useConfirm';
 import { useTabKeyboardNav } from '@/shared/hooks/useTabKeyboardNav';
 import { useToastStore } from '@/stores/useToastStore';
@@ -90,6 +92,9 @@ import {
   type ClashSeverity,
   type ClashComment,
   type ClashHistoryEntry,
+  type ClashProfile,
+  type ClashGroupingDimension,
+  type ClashMatrixCell,
 } from './api';
 import { buildClashBimLink } from './clashBimLink';
 import {
@@ -494,6 +499,15 @@ export function ClashDetectionPage() {
   // "category" / "ifc_entity" only when the selected models carry them.
   const [groupBy, setGroupBy] = useState<ClashGroupBy>('type');
 
+  // ── Persistent profiles (item #23) ─────────────────────────────────
+  // The currently selected profile in the config-form picker (or '' for
+  // "no profile"). Selecting one pre-populates every engine parameter; the
+  // user is still free to tweak before launching. The Save-as-profile
+  // dialog is opened from the active run.
+  const [profileId, setProfileId] = useState<string>('');
+  const [saveProfileName, setSaveProfileName] = useState('');
+  const [showSaveProfile, setShowSaveProfile] = useState(false);
+
   // Result filters (all client-side).
   const [fStatus, setFStatus] = useState<Set<string>>(new Set());
   const [fType, setFType] = useState<'all' | 'hard' | 'clearance'>('all');
@@ -818,6 +832,64 @@ export function ClashDetectionPage() {
           }),
         });
       }
+    },
+    onError: (e: Error) => addToast({ type: 'error', title: e.message }),
+  });
+
+  // ── Profiles (item #23): list for the picker + save-as mutation ──────
+  const profilesQ = useQuery({
+    queryKey: ['clash-profiles', projectId],
+    queryFn: () => clashApi.listProfiles(projectId),
+    enabled: !!projectId,
+  });
+  const profiles = profilesQ.data ?? [];
+
+  // Load a profile into the run-config form (pre-populate). Mirrors the
+  // exact column set a profile snapshots; model selection is never touched.
+  const applyProfileToForm = useCallback(
+    (p: ClashProfile) => {
+      setClashType(p.clash_type);
+      setIgnoreSameModel(p.ignore_same_model);
+      setToleranceMm(Math.round(p.tolerance_m * 1000));
+      setClearanceMm(Math.round(p.clearance_m * 1000));
+      setMode(p.mode);
+      setSetA(p.set_a ?? EMPTY_SET);
+      setSetB(p.set_b ?? EMPTY_SET);
+    },
+    [],
+  );
+
+  const onPickProfile = useCallback(
+    (id: string) => {
+      setProfileId(id);
+      const p = profiles.find((x) => x.id === id);
+      if (p) applyProfileToForm(p);
+    },
+    [profiles, applyProfileToForm],
+  );
+
+  const saveProfileMut = useMutation({
+    mutationFn: () =>
+      clashApi.createProfile(projectId, {
+        name: saveProfileName.trim(),
+        clash_type: clashType,
+        ignore_same_model: multiModelScope ? ignoreSameModel : false,
+        tolerance_m: toleranceMm / 1000,
+        clearance_m: clearanceMm / 1000,
+        mode,
+        ...(mode === 'selection_sets' ? { set_a: setA, set_b: setB } : {}),
+      }),
+    onSuccess: (created) => {
+      qc.invalidateQueries({ queryKey: ['clash-profiles', projectId] });
+      setShowSaveProfile(false);
+      setSaveProfileName('');
+      setProfileId(created.id);
+      addToast({
+        type: 'success',
+        title: t('clash.profile_saved', {
+          defaultValue: 'Configuration saved as profile',
+        }),
+      });
     },
     onError: (e: Error) => addToast({ type: 'error', title: e.message }),
   });
@@ -1724,9 +1796,9 @@ export function ClashDetectionPage() {
   // (a new project) to run coordination on.
   if (!projectId) {
     return (
-      <div className="w-full animate-fade-in">
+      <div className="space-y-5 animate-fade-in">
         <Header />
-        <Card className="mt-6">
+        <Card>
           <EmptyState
             icon={<Upload className="h-10 w-10" />}
             title={t('clash.no_project_title', {
@@ -1756,64 +1828,79 @@ export function ClashDetectionPage() {
   }
 
   return (
-    <div className="w-full animate-fade-in">
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <Header />
-        {/* ── Project actions ─────────────────────────────────────────────
-              No descriptive/summary panel — the selectable CAD-BIM model
-              cards below ARE the project's data surface. Keep only the
-              working deep-links into the 3D viewer / element matcher /
-              project overview. */}
-        <div className="flex flex-wrap items-center gap-2">
-          <Button
-            variant="secondary"
-            size="sm"
-            icon={<Box className="h-3.5 w-3.5" />}
-            disabled={!projectId}
-            onClick={() => {
-              // Target the first model that actually has parsed
-              // geometry so the viewer opens on valid data, not an
-              // empty/unparsed model. Falls back to the global viewer.
-              const m =
-                modelsQ.data?.find((x) => (x.element_count ?? 0) > 0) ??
-                modelsQ.data?.[0];
-              navigate(
-                m
-                  ? `/projects/${projectId}/bim/${m.id}`
-                  : projectId
-                    ? `/projects/${projectId}/bim`
-                    : '/bim',
-              );
-            }}
-          >
-            {t('clash.open_bim_viewer', {
-              defaultValue: 'Open BIM 3D Viewer',
-            })}
-          </Button>
-          <Button
-            variant="secondary"
-            size="sm"
-            icon={<ArrowUpRight className="h-3.5 w-3.5" />}
-            disabled={!projectId}
-            onClick={() => navigate(`/match-elements?project=${projectId}`)}
-          >
-            {t('clash.match_elements', {
-              defaultValue: 'Match / Analyze elements',
-            })}
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            icon={<FolderOpen className="h-3.5 w-3.5" />}
-            disabled={!projectId}
-            onClick={() => navigate(`/projects/${projectId}`)}
-          >
-            {t('clash.project_overview', {
-              defaultValue: 'Project overview',
-            })}
-          </Button>
-        </div>
-      </div>
+    <div className="space-y-5 animate-fade-in">
+      {/* Canonical top block: PageHeader (subtitle + actions) then the Beta
+            banner, via the shared Header. Project actions are the working
+            deep-links into the 3D viewer / element matcher / project
+            overview - the selectable CAD-BIM model cards below ARE the
+            project's data surface, so there is no separate summary panel. */}
+      <Header
+        projectId={projectId}
+        projectName={ctxProjectName}
+        actions={
+          <>
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={<Box className="h-3.5 w-3.5" />}
+              disabled={!projectId}
+              onClick={() => {
+                // Target the first model that actually has parsed
+                // geometry so the viewer opens on valid data, not an
+                // empty/unparsed model. Falls back to the global viewer.
+                const m =
+                  modelsQ.data?.find((x) => (x.element_count ?? 0) > 0) ??
+                  modelsQ.data?.[0];
+                navigate(
+                  m
+                    ? `/projects/${projectId}/bim/${m.id}`
+                    : projectId
+                      ? `/projects/${projectId}/bim`
+                      : '/bim',
+                );
+              }}
+            >
+              {t('clash.open_bim_viewer', {
+                defaultValue: 'Open BIM 3D Viewer',
+              })}
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={<ArrowUpRight className="h-3.5 w-3.5" />}
+              disabled={!projectId}
+              onClick={() => navigate(`/match-elements?project=${projectId}`)}
+            >
+              {t('clash.match_elements', {
+                defaultValue: 'Match / Analyze elements',
+              })}
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              icon={<FolderOpen className="h-3.5 w-3.5" />}
+              disabled={!projectId}
+              onClick={() => navigate(`/projects/${projectId}`)}
+            >
+              {t('clash.project_overview', {
+                defaultValue: 'Project overview',
+              })}
+            </Button>
+          </>
+        }
+      />
+
+      <DismissibleInfo
+        storageKey="clash"
+        title={t('info.clash.title', {
+          defaultValue: 'Clash detection',
+        })}
+      >
+        {t('info.clash.body', {
+          defaultValue:
+            'Run geometric interference and clearance checks across the canonical BIM models in this project, then triage each clash by discipline, status and severity. Resolved issues link straight into the 3D viewer and export to BCF for coordination with the rest of the platform.',
+        })}
+      </DismissibleInfo>
 
       {/* ── Selectable CAD-BIM model cards ──────────────────────────────
             One card per BIM model in the project. Clicking a card toggles
@@ -1857,10 +1944,48 @@ export function ClashDetectionPage() {
           )}
         >
           <Card padding="md">
-            <h2 className="flex items-center gap-2 text-sm font-semibold text-content-primary">
-              <Radar className="h-4 w-4 text-oe-blue" />
-              {t('clash.new_run', { defaultValue: 'New clash run' })}
-            </h2>
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="flex items-center gap-2 text-sm font-semibold text-content-primary">
+                <Radar className="h-4 w-4 text-oe-blue" />
+                {t('clash.new_run', { defaultValue: 'New clash run' })}
+              </h2>
+              <Link
+                to={`/clash/profiles${ctxProjectId ? '' : `?project=${projectId}`}`}
+                className="flex items-center gap-1 text-2xs font-medium text-oe-blue hover:underline"
+              >
+                <Bookmark className="h-3.5 w-3.5" />
+                {t('clash.manage_profiles', {
+                  defaultValue: 'Manage profiles',
+                })}
+              </Link>
+            </div>
+
+            {/* ── Profile picker (item #23) — pre-populate the form from a
+                saved configuration template. Optional; an empty pick keeps
+                whatever the user has set. ─────────────────────────────── */}
+            {profiles.length > 0 && (
+              <label className="mt-3 block text-xs font-medium text-content-secondary">
+                {t('clash.load_profile', {
+                  defaultValue: 'Load a saved profile',
+                })}
+                <select
+                  value={profileId}
+                  onChange={(e) => onPickProfile(e.target.value)}
+                  className="mt-1 w-full rounded-md border border-border bg-surface-primary px-2 py-1.5 text-sm"
+                >
+                  <option value="">
+                    {t('clash.no_profile', {
+                      defaultValue: '- No profile (custom) -',
+                    })}
+                  </option>
+                  {profiles.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
             <div
               className={clsx(
                 'mt-3',
@@ -1913,7 +2038,7 @@ export function ClashDetectionPage() {
                   <p className="text-2xs leading-snug text-content-tertiary">
                     {t('clash.sets_hint', {
                       defaultValue:
-                        'Only pairs where one element is in Set A and the other in Set B are tested — e.g. all Walls (A) against all Pipes (B).',
+                        'Only pairs where one element is in Set A and the other in Set B are tested - e.g. all Walls (A) against all Pipes (B).',
                     })}
                   </p>
 
@@ -2031,13 +2156,13 @@ export function ClashDetectionPage() {
                   </option>
                   <option value="hard">
                     {t('clash.ct_hard', {
-                      defaultValue: 'Hard only — true interpenetration',
+                      defaultValue: 'Hard only - true interpenetration',
                     })}
                   </option>
                   <option value="clearance">
                     {t('clash.ct_clearance', {
                       defaultValue:
-                        'Clearance only — proximity, no overlap',
+                        'Clearance only - proximity, no overlap',
                     })}
                   </option>
                 </select>
@@ -2176,7 +2301,7 @@ export function ClashDetectionPage() {
                     <span className="mt-0.5 block text-2xs leading-snug text-content-tertiary">
                       {t('clash.ignore_same_model_hint', {
                         defaultValue:
-                          'Only report pairs whose two elements come from different BIM models — strips the intra-model self-clash noise from a federated coordination run.',
+                          'Only report pairs whose two elements come from different BIM models - strips the intra-model self-clash noise from a federated coordination run.',
                       })}
                     </span>
                   </span>
@@ -2202,7 +2327,7 @@ export function ClashDetectionPage() {
                     value={runName}
                     onChange={(e) => setRunName(e.target.value)}
                     placeholder={t('clash.run_name_ph', {
-                      defaultValue: 'e.g. Struct vs MEP — L3 coordination',
+                      defaultValue: 'e.g. Struct vs MEP - L3 coordination',
                     })}
                     className="mt-1 w-full rounded-md border border-border bg-surface-primary px-2 py-1 text-sm"
                   />
@@ -2230,14 +2355,14 @@ export function ClashDetectionPage() {
 
               <div
                 className={clsx(
-                  !compactLayout &&
-                    'flex items-end md:col-span-2 xl:col-span-4',
+                  'flex items-end gap-2',
+                  !compactLayout && 'md:col-span-2 xl:col-span-4',
                 )}
               >
                 <Button
                   variant="primary"
                   size="sm"
-                  className="w-full"
+                  className="flex-1"
                   loading={runMut.isPending}
                   disabled={
                     selModels.length === 0 ||
@@ -2249,9 +2374,101 @@ export function ClashDetectionPage() {
                 >
                   {t('clash.run', { defaultValue: 'Run clash detection' })}
                 </Button>
+                {/* Save-as-profile (item #23): snapshot the current config
+                    as a reusable named profile. Disabled when the config is
+                    invalid (same gate as Run, minus the model requirement —
+                    a profile carries no models). */}
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={!selectionSetsValid || clearanceMisconfigured}
+                  icon={<Bookmark className="h-4 w-4" />}
+                  onClick={() => {
+                    setSaveProfileName(runName.trim());
+                    setShowSaveProfile(true);
+                  }}
+                  title={t('clash.save_as_profile', {
+                    defaultValue: 'Save configuration as a profile',
+                  })}
+                >
+                  {t('clash.save_profile', { defaultValue: 'Save profile' })}
+                </Button>
               </div>
             </div>
           </Card>
+
+          {/* Save-as-profile dialog (item #23). */}
+          {showSaveProfile && (
+            <div
+              className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+              role="dialog"
+              aria-modal="true"
+              onClick={() => setShowSaveProfile(false)}
+            >
+              <div
+                className="w-full max-w-md rounded-2xl border border-border-subtle bg-surface-0 shadow-xl"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="flex items-center justify-between border-b border-border-subtle px-5 py-4">
+                  <h2 className="flex items-center gap-2 text-base font-semibold text-content-primary">
+                    <Bookmark className="h-4 w-4 text-oe-blue" />
+                    {t('clash.save_as_profile', {
+                      defaultValue: 'Save configuration as a profile',
+                    })}
+                  </h2>
+                  <button
+                    type="button"
+                    onClick={() => setShowSaveProfile(false)}
+                    aria-label={t('common.close', { defaultValue: 'Close' })}
+                    className="flex h-7 w-7 items-center justify-center rounded text-content-tertiary hover:text-content-primary"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+                <div className="px-5 py-4">
+                  <label className="block text-xs font-medium text-content-secondary">
+                    {t('clash.profile_name', { defaultValue: 'Profile name' })}
+                    <input
+                      type="text"
+                      maxLength={255}
+                      value={saveProfileName}
+                      onChange={(e) => setSaveProfileName(e.target.value)}
+                      placeholder={t('clash.profile_name_ph', {
+                        defaultValue: 'e.g. MEP × Structural - tight',
+                      })}
+                      className="mt-1 w-full rounded-md border border-border bg-surface-primary px-2 py-1.5 text-sm"
+                    />
+                  </label>
+                  <p className="mt-2 text-2xs text-content-tertiary">
+                    {t('clash.save_profile_hint', {
+                      defaultValue:
+                        'Saves the tolerance, clearance, type, mode and selection sets above. Models are not part of a profile.',
+                    })}
+                  </p>
+                </div>
+                <div className="flex items-center justify-end gap-2 border-t border-border-subtle px-5 py-4">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => setShowSaveProfile(false)}
+                  >
+                    {t('common.cancel', { defaultValue: 'Cancel' })}
+                  </Button>
+                  <Button
+                    size="sm"
+                    loading={saveProfileMut.isPending}
+                    disabled={
+                      !saveProfileName.trim() || saveProfileMut.isPending
+                    }
+                    icon={<Save className="h-4 w-4" />}
+                    onClick={() => saveProfileMut.mutate()}
+                  >
+                    {t('common.save', { defaultValue: 'Save' })}
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
 
           <Card padding="md">
             <h2 className="text-sm font-semibold text-content-primary">
@@ -2382,7 +2599,7 @@ export function ClashDetectionPage() {
                   <p className="text-xs text-content-tertiary">
                     {t('clash.running_desc', {
                       defaultValue:
-                        'Testing element geometry for interferences. This can take up to ~30s on large models — please keep this tab open.',
+                        'Testing element geometry for interferences. This can take up to ~30s on large models - please keep this tab open.',
                     })}
                   </p>
                 </div>
@@ -2601,7 +2818,7 @@ export function ClashDetectionPage() {
                   <h2 className="text-sm font-semibold text-content-primary">
                     {t('clash.matrix_title', {
                       defaultValue:
-                        'Clash matrix — discipline × discipline',
+                        'Clash matrix - discipline × discipline',
                     })}
                   </h2>
                   {fPair && (
@@ -2621,7 +2838,7 @@ export function ClashDetectionPage() {
                   <p className="mt-3 text-sm text-content-tertiary">
                     {t('clash.no_clashes', {
                       defaultValue:
-                        'No clashes — the models are clean.',
+                        'No clashes - the models are clean.',
                     })}
                   </p>
                 ) : (
@@ -2691,6 +2908,11 @@ export function ClashDetectionPage() {
                   </div>
                 )}
               </Card>
+
+              {/* ── Multi-dimensional grouping (item #23) ─────────────── */}
+              {runId && disciplines.length > 0 && (
+                <ClashGroupingPanel projectId={projectId} runId={runId} />
+              )}
 
               {/* ── Review workspace ──────────────────────────────── */}
               <Card padding="none">
@@ -3122,7 +3344,7 @@ export function ClashDetectionPage() {
                         : '') ||
                       t('clash.results_error_desc', {
                         defaultValue:
-                          'The clash results could not be loaded. This does not mean the models are clean — please retry.',
+                          'The clash results could not be loaded. This does not mean the models are clean - please retry.',
                       })
                     }
                     action={
@@ -3147,7 +3369,7 @@ export function ClashDetectionPage() {
                     })}
                     description={t('clash.no_clashes', {
                       defaultValue:
-                        'No clashes — the models are clean.',
+                        'No clashes - the models are clean.',
                     })}
                   />
                 ) : sorted.length === 0 ? (
@@ -3186,7 +3408,7 @@ export function ClashDetectionPage() {
                         <span>
                           {t('clash.capped_notice', {
                             defaultValue:
-                              'Showing the first {{loaded}} of {{total}} clashes — refine the filters to narrow the review set.',
+                              'Showing the first {{loaded}} of {{total}} clashes - refine the filters to narrow the review set.',
                             loaded: allResults.length,
                             total: loadedTotal,
                           })}
@@ -3819,49 +4041,302 @@ export function ClashDetectionPage() {
 
 /* ── Sub-components ───────────────────────────────────────────────────── */
 
-function Header() {
+/** A small discipline×discipline (or system×system) heat grid, reused by
+ *  the grouping panel for every matrix-shaped dimension. */
+function GroupMatrix({
+  axes,
+  cells,
+}: {
+  axes: string[];
+  cells: ClashMatrixCell[];
+}) {
   const { t } = useTranslation();
-  return (
-    <div>
-      <h1 className="flex items-center gap-2 text-2xl font-bold text-content-primary">
-        <Radar className="h-6 w-6 text-oe-blue" />
-        {t('clash.title', { defaultValue: 'Clash Detection' })}
-      </h1>
-      <p className="mt-1 text-sm text-content-secondary">
-        {t('clash.subtitle', {
-          defaultValue:
-            'Geometric interference & clearance coordination across federated BIM models — with a clash matrix and BCF export.',
+  const lookup = useMemo(() => {
+    const m = new Map<string, ClashMatrixCell>();
+    for (const c of cells) m.set(`${c.a}|${c.b}`, c);
+    return m;
+  }, [cells]);
+  const maxCell = useMemo(
+    () => Math.max(1, ...cells.map((c) => c.count)),
+    [cells],
+  );
+  if (axes.length === 0) {
+    return (
+      <p className="text-sm text-content-tertiary">
+        {t('clash.no_clashes', {
+          defaultValue: 'No clashes - the models are clean.',
         })}
       </p>
-
-      {/* Beta · feedback-wanted banner. Clash Detection is a new module
-          and still has rough edges (engine tuning, grouping facets,
-          viewer edge cases). Sets the right expectation and gives a
-          1-click path to file an issue against the public repo —
-          mirrors the /match-elements banner for consistency. */}
-      <div className="mt-3 flex flex-wrap items-center gap-2.5 rounded-xl border border-amber-200/60 bg-gradient-to-r from-amber-50/80 via-white to-white px-3 py-2 shadow-sm dark:border-amber-800/40 dark:from-amber-950/20 dark:via-surface-primary dark:to-surface-primary">
-        <span className="inline-flex shrink-0 items-center gap-1 rounded border border-amber-300/60 bg-amber-100/80 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-amber-900 dark:border-amber-700/40 dark:bg-amber-900/40 dark:text-amber-100">
-          <Sparkles className="h-2.5 w-2.5" />
-          {t('clash.beta_badge', { defaultValue: 'Beta' })}
-        </span>
-        <p className="min-w-0 flex-1 text-xs leading-snug text-content-secondary">
-          {t('clash.beta_blurb', {
-            defaultValue:
-              'Clash Detection is a new module and may still have inaccuracies. Found a bug or have an idea? Please file an issue — every report tightens the next release.',
-          })}
-        </p>
-        <a
-          href="https://github.com/datadrivenconstruction/OpenConstructionERP/issues/new?labels=clash&template=bug_report.yml"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex shrink-0 items-center gap-1 rounded-full border border-amber-300/60 bg-white/90 px-2.5 py-1 text-[11px] font-semibold text-amber-900 shadow-sm transition-all hover:-translate-y-px hover:bg-amber-50 dark:border-amber-700/40 dark:bg-surface-primary/80 dark:text-amber-100 dark:hover:bg-amber-900/30"
-        >
-          <MessageSquarePlus className="h-3 w-3" />
-          {t('clash.beta_cta', { defaultValue: 'Open an issue' })}
-          <ExternalLink className="h-2.5 w-2.5 opacity-70" />
-        </a>
-      </div>
+    );
+  }
+  return (
+    <div className="overflow-auto">
+      <table className="border-collapse text-xs">
+        <thead>
+          <tr>
+            <th className="p-2" />
+            {axes.map((d) => (
+              <th
+                key={d}
+                className="p-2 font-medium text-content-secondary"
+              >
+                {d}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {axes.map((row) => (
+            <tr key={row}>
+              <th className="p-2 text-right font-medium text-content-secondary">
+                {row}
+              </th>
+              {axes.map((col) => {
+                const [a, b] = row < col ? [row, col] : [col, row];
+                const cell = lookup.get(`${a}|${b}`);
+                const c = cell?.count ?? 0;
+                return (
+                  <td key={col} className="p-1">
+                    <div
+                      className={clsx(
+                        'flex h-12 w-16 flex-col items-center justify-center rounded-md font-semibold',
+                        heat(c, maxCell),
+                      )}
+                      title={`${a} ↔ ${b}: ${c}`}
+                    >
+                      <span>{c || '·'}</span>
+                      {cell && cell.open_count > 0 && (
+                        <span className="text-[10px] font-normal opacity-80">
+                          {t('clash.matrix_open', {
+                            defaultValue: '{{n}} open',
+                            n: cell.open_count,
+                          })}
+                        </span>
+                      )}
+                    </div>
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
+  );
+}
+
+/** Item #23 — multi-dimensional grouping of a run's clashes. A selector
+ *  switches the run summary between the discipline×discipline matrix
+ *  (default), a per-level breakdown, a discipline matrix per level, and a
+ *  discipline·system grid. Data is fetched on demand from the grouped
+ *  summary endpoint and cached per (run, dimension). The discipline_system
+ *  option is hidden until at least one clash carries system metadata. */
+function ClashGroupingPanel({
+  projectId,
+  runId,
+}: {
+  projectId: string;
+  runId: string;
+}) {
+  const { t } = useTranslation();
+  const [dimension, setDimension] =
+    useState<ClashGroupingDimension>('discipline_pair');
+
+  const groupedQ = useQuery({
+    queryKey: ['clash-grouped', projectId, runId, dimension],
+    queryFn: () => clashApi.groupedSummary(projectId, runId, dimension),
+    enabled: !!projectId && !!runId,
+  });
+
+  // Whether the run has system metadata — derived from any fetched payload
+  // so we can hide the discipline_system option when there is no data. We
+  // probe via the active payload (every dimension returns has_system_data).
+  const data = groupedQ.data;
+  const hasSystemData = data?.has_system_data ?? false;
+
+  const DIMENSIONS: Array<{
+    value: ClashGroupingDimension;
+    label: string;
+  }> = [
+    {
+      value: 'discipline_pair',
+      label: t('clash.group_discipline_pair', {
+        defaultValue: 'Discipline × Discipline',
+      }),
+    },
+    {
+      value: 'level',
+      label: t('clash.group_level', { defaultValue: 'By level' }),
+    },
+    {
+      value: 'level_discipline',
+      label: t('clash.group_level_discipline', {
+        defaultValue: 'Level × Discipline',
+      }),
+    },
+    ...(hasSystemData || dimension === 'discipline_system'
+      ? [
+          {
+            value: 'discipline_system' as ClashGroupingDimension,
+            label: t('clash.group_discipline_system', {
+              defaultValue: 'Discipline · System',
+            }),
+          },
+        ]
+      : []),
+  ];
+
+  return (
+    <Card padding="md">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="flex items-center gap-2 text-sm font-semibold text-content-primary">
+          <Layers className="h-4 w-4 text-oe-blue" />
+          {t('clash.grouping_title', {
+            defaultValue: 'Group clashes by',
+          })}
+        </h2>
+        <select
+          value={dimension}
+          onChange={(e) =>
+            setDimension(e.target.value as ClashGroupingDimension)
+          }
+          className="rounded-md border border-border bg-surface-primary px-2 py-1.5 text-sm"
+        >
+          {DIMENSIONS.map((d) => (
+            <option key={d.value} value={d.value}>
+              {d.label}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <div className="mt-3">
+        {groupedQ.isLoading ? (
+          <div className="flex items-center gap-2 py-4 text-sm text-content-tertiary">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            {t('common.loading', { defaultValue: 'Loading…' })}
+          </div>
+        ) : !data ? (
+          <p className="text-sm text-content-tertiary">
+            {t('clash.no_clashes', {
+              defaultValue: 'No clashes - the models are clean.',
+            })}
+          </p>
+        ) : dimension === 'discipline_pair' ? (
+          <GroupMatrix axes={data.disciplines} cells={data.matrix} />
+        ) : dimension === 'discipline_system' ? (
+          <GroupMatrix axes={data.systems} cells={data.system_matrix} />
+        ) : dimension === 'level' ? (
+          data.levels.length === 0 ? (
+            <p className="text-sm text-content-tertiary">
+              {t('clash.no_level_data', {
+                defaultValue:
+                  'No level data - the model has no resolved storeys.',
+              })}
+            </p>
+          ) : (
+            <div className="space-y-1.5">
+              {data.levels.map((lvl) => (
+                <div
+                  key={lvl.key}
+                  className="flex items-center justify-between gap-3 rounded-md border border-border-subtle px-3 py-2 text-sm"
+                >
+                  <span className="font-medium text-content-primary">
+                    {lvl.key === '(no level)'
+                      ? t('clash.no_level', { defaultValue: '(no level)' })
+                      : t('clash.level_n', {
+                          defaultValue: 'Level {{n}}',
+                          n: lvl.key,
+                        })}
+                  </span>
+                  <span className="flex items-center gap-3 text-content-secondary">
+                    <span>
+                      {t('clash.level_total', {
+                        defaultValue: '{{n}} total',
+                        n: lvl.count,
+                      })}
+                    </span>
+                    {lvl.open_count > 0 && (
+                      <Badge variant="warning" size="sm">
+                        {t('clash.matrix_open', {
+                          defaultValue: '{{n}} open',
+                          n: lvl.open_count,
+                        })}
+                      </Badge>
+                    )}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )
+        ) : data.level_disciplines.length === 0 ? (
+          <p className="text-sm text-content-tertiary">
+            {t('clash.no_level_data', {
+              defaultValue:
+                'No level data - the model has no resolved storeys.',
+            })}
+          </p>
+        ) : (
+          <div className="space-y-4">
+            {data.level_disciplines.map((grp) => {
+              const axes = Array.from(
+                new Set(grp.cells.flatMap((c) => [c.a, c.b])),
+              ).sort();
+              return (
+                <div key={grp.level}>
+                  <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-content-tertiary">
+                    {t('clash.level_n', {
+                      defaultValue: 'Level {{n}}',
+                      n: grp.level,
+                    })}
+                  </h3>
+                  <GroupMatrix axes={axes} cells={grp.cells} />
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+function Header({
+  actions,
+  projectId,
+  projectName,
+}: {
+  actions?: React.ReactNode;
+  projectId?: string;
+  projectName?: string | null;
+}) {
+  const { t } = useTranslation();
+  // Canonical top block (MODULE_STYLE_GUIDE.md §2): Breadcrumb (project ->
+  // module, hidden when it has no depth), the shared BetaBanner, then the
+  // shared PageHeader - the same order /bim/federations and the EIR matrix
+  // use, so the three coordination pages read identically. The module name +
+  // icon live in the global top app bar, so the page renders only its
+  // subtitle (srTitle for a11y) - never an in-page H1.
+  return (
+    <>
+      <Breadcrumb
+        items={[
+          ...(projectId && projectName
+            ? [{ label: projectName, to: `/projects/${projectId}` }]
+            : []),
+          { label: t('nav.clash_detection', { defaultValue: 'Clash Detection' }) },
+        ]}
+      />
+      <BetaBanner moduleKey="clash" />
+      <PageHeader
+        srTitle={t('clash.title', { defaultValue: 'Clash Detection' })}
+        subtitle={t('clash.subtitle', {
+          defaultValue:
+            'Geometric interference and clearance coordination across federated BIM models, with a clash matrix and BCF export.',
+        })}
+        actions={actions}
+      />
+    </>
   );
 }
 
@@ -4045,7 +4520,7 @@ function StatusWorkflow({
                 s: t(`clash.status.${next}`, { defaultValue: next }),
               })
             : t('clash.status_terminal', {
-                defaultValue: 'At terminal status — pick from menu',
+                defaultValue: 'At terminal status - pick from menu',
               })
         }
         className={clsx(
@@ -4115,7 +4590,7 @@ function BulkActionsBar({
     <div className="flex flex-wrap items-center gap-2 border-t border-oe-blue/30 bg-oe-blue/[0.05] p-3 text-xs">
       <span className="font-semibold text-oe-blue">
         {t('clash.bulk_selected', {
-          defaultValue: '{{n}} selected — apply to all:',
+          defaultValue: '{{n}} selected - apply to all:',
           n: count,
         })}
       </span>
@@ -4579,7 +5054,7 @@ function SelectionSetPicker({
         {!loading && groups.length === 0 && (
           <p className="px-1 py-2 text-2xs text-content-tertiary">
             {t('clash.set_empty', {
-              defaultValue: 'No elements — select a parsed model first.',
+              defaultValue: 'No elements - select a parsed model first.',
             })}
           </p>
         )}
@@ -4686,7 +5161,7 @@ function ModelCardPicker({
         <h2 className="flex items-center gap-2 text-sm font-semibold text-content-primary">
           <Boxes className="h-4 w-4 text-oe-blue" />
           {t('clash.models_title', {
-            defaultValue: 'CAD-BIM models — pick what to coordinate',
+            defaultValue: 'CAD-BIM models - pick what to coordinate',
           })}
           {selectable.length > 0 && (
             <span className="rounded-full bg-surface-secondary px-1.5 text-2xs font-medium text-content-secondary">
@@ -5157,7 +5632,7 @@ function ClashDetailPanel({
                 <p className="text-2xs text-content-tertiary">
                   {t('clash.preview_unavailable', {
                     defaultValue:
-                      'Preview unavailable — open the full viewer.',
+                      'Preview unavailable - open the full viewer.',
                   })}
                 </p>
               </div>
@@ -5812,7 +6287,7 @@ function CompareSection({
               bucketKey="new"
               tone="new"
               title={t('clash.cmp_new_title', {
-                defaultValue: 'New clashes — need attention',
+                defaultValue: 'New clashes - need attention',
               })}
               count={data.new.length}
               collapsed={collapsed.has('new')}

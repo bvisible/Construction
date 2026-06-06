@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍Match Elements orchestrator service — Phase A core wiring.
+"""‌⁠‍Match Elements orchestrator service - Phase A core wiring.
 
 The service stitches together the source adapters and matchers behind
 a single API surface the router calls. Stateless: every method takes
@@ -81,7 +81,7 @@ logger = logging.getLogger(__name__)
 def _to_session_read(row: MatchSession) -> schemas.SessionRead:
     # Catalogue id is either a legacy CostDatabase UUID (stored on the
     # ``catalogue_id`` column) or a CWICR v3 region string like
-    # ``"DE_BERLIN"`` (stashed in ``metadata_["catalogue_region"]`` —
+    # ``"DE_BERLIN"`` (stashed in ``metadata_["catalogue_region"]`` -
     # the column itself is typed UUID and rejects region strings).
     # Surface whichever is set so the wizard's "Catalogue" pill on
     # subsequent reads matches what the user picked.
@@ -193,7 +193,7 @@ def _human_group_label(
 # falls back to MasterFormat (the most widely accepted CSI-aligned
 # tender format for global exports).
 _COUNTRY_TO_STANDARD: dict[str, str] = {
-    # DACH — DIN-276 cost-group hierarchy
+    # DACH - DIN-276 cost-group hierarchy
     "DE": "din276",
     "AT": "din276",
     "CH": "din276",
@@ -215,17 +215,17 @@ _COUNTRY_TO_STANDARD: dict[str, str] = {
     "US": "masterformat",
     "USA": "masterformat",
     "CA": "masterformat",
-    # Romance — native systems
+    # Romance - native systems
     "FR": "untec",
     "IT": "voci",
     "ES": "bc3",
-    # Asia — native systems
+    # Asia - native systems
     "CN": "gb50500",
     "JP": "sekisan",
     "KR": "kbim",
-    # Slavic / CIS — GESN family
+    # Slavic / CIS - GESN family
     "RU": "gesn",
-    # Türkiye — Birim Fiyat
+    # Türkiye - Birim Fiyat
     "TR": "birimfiyat",
 }
 
@@ -233,7 +233,7 @@ _COUNTRY_TO_STANDARD: dict[str, str] = {
 # encode but estimators routinely set as ``project.region``. We need
 # these so a project keyed to ``DACH`` / ``LATAM`` / ``RU_MOSCOW``
 # resolves to the same standard as its representative country. The
-# entries here are NOT a duplicate of the heuristic — they only add
+# entries here are NOT a duplicate of the heuristic - they only add
 # macro-region keys that map to a country already in
 # ``_COUNTRY_TO_STANDARD``.
 _MACRO_REGION_TO_COUNTRY: dict[str, str] = {
@@ -256,7 +256,7 @@ _MACRO_REGION_TO_COUNTRY: dict[str, str] = {
     "LT": "DE",
     "LV": "DE",
     "EE": "DE",
-    "MA": "DE",  # Morocco — French DTU-aligned, DIN-276 nearest export
+    "MA": "DE",  # Morocco - French DTU-aligned, DIN-276 nearest export
     "TN": "DE",
     "DZ": "DE",
     # Nordic cluster (DIN-276 nearest hierarchy)
@@ -291,7 +291,7 @@ _MACRO_REGION_TO_COUNTRY: dict[str, str] = {
     "BH": "US",
     "OM": "US",
     "EG": "US",
-    # Asia-Pacific — CSI export defaults for non-native-mapped countries
+    # Asia-Pacific - CSI export defaults for non-native-mapped countries
     "ASIA_PAC": "US",
     "TW": "US",
     "ID": "US",
@@ -308,7 +308,7 @@ _MACRO_REGION_TO_COUNTRY: dict[str, str] = {
     "KZ": "RU",
 }
 
-# Legacy display labels — always present so the section-path renderer
+# Legacy display labels - always present so the section-path renderer
 # never KeyErrors on a brand-new standard introduced by a catalogue.
 _CLASSIFICATION_STANDARD_LABELS: dict[str, str] = {
     "din276": "DIN276",
@@ -373,7 +373,7 @@ def _derive_standards_from_catalogues() -> tuple[tuple[str, ...], dict[str, str]
         from app.modules.costs.cwicr_v3_catalogue import (
             CWICR_V3_CATALOGUES,
         )
-    except Exception as exc:  # pragma: no cover — defensive
+    except Exception as exc:  # pragma: no cover - defensive
         logger.warning(
             "match_elements: CWICR catalogue import failed (%s); falling back to hardcoded standards",
             exc,
@@ -401,7 +401,7 @@ def _derive_standards_from_catalogues() -> tuple[tuple[str, ...], dict[str, str]
     # wins over the seed (it shouldn't disagree, but if it does the
     # catalogue is the source of truth). The full catalogue region id
     # ("DE_BERLIN") always lands; the bare country ISO ("NL") only
-    # lands when the country is explicitly in the heuristic table —
+    # lands when the country is explicitly in the heuristic table -
     # otherwise step 3's macro-region bridge gets a chance to map it
     # (e.g. NL → DACH cluster → din276 instead of falling to the
     # masterformat default that hides the cluster intent).
@@ -444,7 +444,7 @@ def _resolve_classification_order(
 
     1. Explicit ``project.classification_standard`` if it names a
        standard we render.
-    2. Region-derived default (``_REGION_PREFERRED_STANDARD``) — a US
+    2. Region-derived default (``_REGION_PREFERRED_STANDARD``) - a US
        project gets MasterFormat first, UK gets NRM, DACH gets DIN-276,
        LATAM and Iberia get MasterFormat (their catalogues align with
        CSI more than DIN).
@@ -469,7 +469,7 @@ def _resolve_classification_order(
             head = _REGION_PREFERRED_STANDARD.get(region.split("_", 1)[0])
 
     if head is None:
-        head = "din276"  # global default — non-empty for any catalogue
+        head = "din276"  # global default - non-empty for any catalogue
 
     rest = tuple(s for s in _KNOWN_CLASSIFICATION_STANDARDS if s != head)
     return (head,) + rest
@@ -495,10 +495,10 @@ def _aggregate_quantities(elements: list[SourceElement]) -> dict[str, float]:
 # catalogue rows for elements that should be priced by area or volume.
 #
 # Values follow industry pricing convention:
-#   m3  — bulk concrete / earthworks elements priced by volume
-#   m2  — surface elements priced by area (slabs, roofs, coverings)
-#   m   — linear elements priced by length (beams, columns, pipes)
-#   pcs — discrete elements priced per unit (doors, windows, furniture)
+#   m3  - bulk concrete / earthworks elements priced by volume
+#   m2  - surface elements priced by area (slabs, roofs, coverings)
+#   m   - linear elements priced by length (beams, columns, pipes)
+#   pcs - discrete elements priced per unit (doors, windows, furniture)
 #
 # A class missing from the table returns None so the caller can keep its
 # own default. Stem matching ("IfcWallStandardCase" → "IfcWall") keeps
@@ -538,7 +538,7 @@ _IFC_NATURAL_UNIT: dict[str, str] = {
 def _ifc_natural_unit(ifc_class: str | None) -> str | None:
     """Return the typical pricing unit for an IFC class, or None if unknown.
 
-    Falls back to a stem match — ``IfcWallStandardCase`` → ``IfcWall`` —
+    Falls back to a stem match - ``IfcWallStandardCase`` → ``IfcWall`` -
     so subtype variants resolve without a table entry each.
     """
     if not ifc_class:
@@ -582,7 +582,7 @@ def _pick_unit(quantities: dict[str, float], *, ifc_class: str | None = None) ->
         try:
             if float(v) > 0:
                 # Don't trust ``count`` when the class is normally priced
-                # by surface or volume — the dimension-less default would
+                # by surface or volume - the dimension-less default would
                 # land on per-piece rates instead of per-m².
                 if unit == "pcs":
                     fallback = _ifc_natural_unit(ifc_class)
@@ -617,7 +617,7 @@ def _split_unit_multiplier(unit: str | None) -> tuple[float, str]:
     """Decompose a catalogue unit string into (multiplier, base_unit).
 
     Several CWICR locales encode a quantity multiplier in the unit
-    column — ``"100 м3"``, ``"10 шт"``, ``"1000 кг"`` — meaning the
+    column - ``"100 м3"``, ``"10 шт"``, ``"1000 кг"`` - meaning the
     rate is per N of the base unit. To compute a per-base-unit rate
     we peel off the leading numeric token. ``"m3"`` returns
     ``(1.0, "m3")`` so callers can treat both forms uniformly.
@@ -691,7 +691,7 @@ _UNIT_LOCALE_MAP: dict[str, str] = {
     "no": "pcs",
     "no.": "pcs",
     "nr": "pcs",
-    "lf": "m",  # linear foot — close enough for dim
+    "lf": "m",  # linear foot - close enough for dim
     "sf": "m2",
     "sq.ft": "m2",
     "sqft": "m2",
@@ -738,11 +738,11 @@ async def _record_pick_to_search_log(
 
     The match-search-log table is append-only by design, and matchers
     can run multiple times per group (re-run with different filters).
-    The hook updates the latest row only — the historical ones stay
+    The hook updates the latest row only - the historical ones stay
     immutable so the analytics audit trail of "what was suggested at
     the time of this confirmation" survives. If no log row exists
     (older sessions, unit-test fixtures, log INSERT failed) the hook
-    is a no-op — match confirmation must never fail because of an
+    is a no-op - match confirmation must never fail because of an
     analytics-only side effect.
     """
     if session_id is None:
@@ -763,7 +763,7 @@ async def _record_pick_to_search_log(
 
     if log_row is None:
         # Older sessions confirmed before v2934 landed have no log row.
-        # Nothing to backfill — mute and move on.
+        # Nothing to backfill - mute and move on.
         return
 
     log_row.picked_rate_code = picked_rate_code or None
@@ -781,7 +781,7 @@ def _derive_picked_rank_and_code(
     ``methods[chosen_method]``, plus the matching ``rate_code``.
 
     Returns ``(None, None)`` when the candidate isn't found in the
-    stored method list — happens for manual overrides where the user
+    stored method list - happens for manual overrides where the user
     typed a rate that wasn't suggested. The ``picked_rate_code`` field
     on the search_log stays NULL in that case so analytics can
     distinguish "picked from suggestions" vs "manual override".
@@ -824,7 +824,7 @@ def _envelope_from_group(
     (just a name) still produces a useful envelope and a dense one
     (Revit family with full Pset) carries every dimensioning hint into
     the embedder. The previous implementation joined every attribute
-    value into one string — that pollutes the embedding with GUIDs and
+    value into one string - that pollutes the embedding with GUIDs and
     layer names and caps recall. This composition is selective.
     """
     if not elements:
@@ -854,34 +854,45 @@ def _envelope_from_group(
         return None
 
     parts: list[str] = []
-    # 1. Human category (translated IFC label) — anchors the embedding.
+    # 1. Human category (translated IFC label) - anchors the embedding.
+    # ``ifc_labels.lookup`` aliases a raw Revit OST category ("Walls") to
+    # its canonical IFC class meta, so an RVT group inherits the right
+    # label + din276 / masterformat / nrm hints. Genuine IFC and non-BIM
+    # placeholder categories are unaffected.
     ifc_meta = ifc_labels.lookup(sample.category)
     category_label = ifc_meta.en_label
     # For free-text / BoQ sources the category is a placeholder
-    # ("Text" / generic IFC fallback) and carries no signal — skip it
+    # ("Text" / generic IFC fallback) and carries no signal - skip it
     # so the embedding query is dominated by the actual ``raw_text`` /
     # description rather than a noise word.
     if source not in {"text", "boq"}:
         parts.append(category_label)
-    # 2. Type / family name — usually the most discriminating signal.
+    # 2. Type / family name - usually the most discriminating signal.
     # For text / boq sources the ``raw_text`` / ``description`` IS the
-    # user query — include it verbatim so vector search sees the line
+    # user query - include it verbatim so vector search sees the line
     # the user actually wrote ("Concrete C30/37 wall, 240mm") instead
     # of a collapsed group label.
     raw_text = _attr("raw_text", "description")
     if source in {"text", "boq"} and raw_text:
         parts.append(raw_text)
-    type_name = _attr("type_name", "Type", "Family", "name")
+    # ``type_name`` carries the discriminating Revit family/type
+    # ("Exterior - Brick on Mtl. Stud" / "Generic 150mm"). Prefer a real
+    # family/type over the bare category word: the BIM adapter already
+    # surfaces the RVT ``family`` as ``type_name``, but we also probe
+    # ``family`` here so a group keyed straight off the family attribute
+    # still feeds it into the dense query. Never let it collapse to the
+    # category label (that adds no signal beyond ``category_label`` above).
+    type_name = _attr("type_name", "family", "Family", "Type", "name")
     if type_name and type_name != category_label:
         parts.append(type_name)
     # 3. Material.
     material = _attr("material", "Material", "primary_material")
     if material:
         parts.append(material)
-    # 4. Geometry hints — thickness/diameter/etc.
+    # 4. Geometry hints - thickness/diameter/etc.
     thickness_mm = _num("thickness_mm", "Thickness", "thickness")
     if thickness_mm:
-        # Accept both raw mm (240) and m (0.24) — normalise to mm.
+        # Accept both raw mm (240) and m (0.24) - normalise to mm.
         if thickness_mm < 5:
             thickness_mm = thickness_mm * 1000.0
         parts.append(f"thickness {int(round(thickness_mm))}mm")
@@ -908,7 +919,7 @@ def _envelope_from_group(
     unit = _pick_unit(quantities, ifc_class=sample.category)
     unit_hint_map = {"m3": "m3", "m2": "m2", "m": "m", "kg": "kg", "pcs": "pcs"}
 
-    # Only forward small primitive properties — the matcher uses these
+    # Only forward small primitive properties - the matcher uses these
     # for boost lookups, not for embedding text.
     ranking_props: dict[str, Any] = {
         k: v
@@ -944,17 +955,20 @@ def _envelope_from_group(
     elif diameter_mm:
         nominal_size_mm = int(round(diameter_mm))
 
-    # Forward ``ifc_class`` only when it's an actual IFC class — BIM
-    # extractors set ``sample.category="IfcWall"`` / ``IfcSlab``, but BoQ /
-    # text / image adapters synthesise placeholders (``"BoQ"``, ``"Text"``)
-    # that aren't valid IFC identifiers. Promoting those to the v3
-    # SearchPlan's ``ifc_class`` hard filter eliminates every Qdrant hit
-    # (CWICR rates carry empty / IfcCovering / etc. for non-BIM rows) and
-    # collapses the search to the metadata-only fallback (score ≈ 0.0002).
-    # An explicit ``Ifc`` prefix is the cheapest, most defensive check —
-    # callers who know the IFC class for a BoQ row can put it in
+    # Forward ``ifc_class`` only when it's an actual IFC class - BIM
+    # extractors set ``sample.category="IfcWall"`` / ``IfcSlab`` (and the
+    # adapter now crosswalks a Revit OST category into a canonical
+    # ``IfcXxx`` stored in ``attributes["ifc_class"]``), but BoQ / text /
+    # image adapters synthesise placeholders (``"BoQ"``, ``"Text"``) that
+    # aren't valid IFC identifiers. Promoting those to the v3 SearchPlan's
+    # ``ifc_class`` hard filter eliminates every Qdrant hit (CWICR rates
+    # carry empty / IfcCovering / etc. for non-BIM rows) and collapses the
+    # search to the metadata-only fallback (score ≈ 0.0002). An explicit
+    # ``Ifc`` prefix (case-insensitive) is the cheapest, most defensive
+    # check - callers who know the IFC class for a BoQ row can put it in
     # ``attributes["ifc_class"]`` (the BoqAdapter forwards that key
-    # verbatim).
+    # verbatim). Reading the normalized attribute first is what lets RVT
+    # groups now forward a real IFC class.
     raw_cat = (sample.category or "").strip()
     attr_ifc_class = _attr("ifc_class", "IfcClass")
     forwarded_ifc_class: str | None = None
@@ -962,6 +976,19 @@ def _envelope_from_group(
         forwarded_ifc_class = attr_ifc_class
     elif raw_cat.lower().startswith("ifc"):
         forwarded_ifc_class = raw_cat
+
+    # Material bucket for the x1.3 soft boost. Prefer an explicit material
+    # property. When a Revit model carries the material inside the family
+    # name instead ("Exterior - Brick on Mtl. Stud"), fall back to the
+    # type/family string so a confident bucket ("brick") still fires. The
+    # bucketiser is conservative (returns ``None`` when unsure), so this
+    # never invents a material - it only recovers one the property layer
+    # missed. The type-name fallback is scoped to non-IFC (Revit) inputs
+    # so a genuine IFC envelope's ``material_class`` stays exactly as
+    # before (IFC elements always carry their material as a property).
+    material_class = _normalise_material_class(material)
+    if material_class is None and not raw_cat.lower().startswith("ifc"):
+        material_class = _normalise_material_class(type_name)
 
     return ElementEnvelope(
         source=source,
@@ -973,8 +1000,12 @@ def _envelope_from_group(
         classifier_hint=classifier_hint,
         ifc_class=forwarded_ifc_class,
         ifc_predefined_type=_attr("ifc_predefined_type", "PredefinedType"),
-        ost_category=_attr("ost_category", "Category", "OST_Category"),
-        material_class=_normalise_material_class(material),
+        # The Revit OST category drives the x1.5 ``ost_category`` soft
+        # boost. The BIM adapter records it under both ``ost_category``
+        # and ``revit_category`` for any non-IFC (Revit) source, so it
+        # fires for RVT models that previously had no OST hint at all.
+        ost_category=_attr("ost_category", "revit_category", "Category", "OST_Category"),
+        material_class=material_class,
         nominal_size_mm=nominal_size_mm,
         is_external=_parse_tri_bool(is_external_raw),
         is_loadbearing=_parse_tri_bool(load_bearing_raw),
@@ -983,11 +1014,11 @@ def _envelope_from_group(
         # not derivable from BIM attributes alone. Forwarded as a hard
         # filter via SearchPlan when set.
         construction_stage_hint=construction_stage or None,
-        # MAPPING_PROCESS.md §4.1.5 — when the upstream BoQ extractor
+        # MAPPING_PROCESS.md §4.1.5 - when the upstream BoQ extractor
         # populated ``attributes["exact_code"]`` from the row's ``Code``
         # column, forward it so the ranker can short-circuit Qdrant.
         # Forwarded for any source (BoQ, manual override, future API
-        # ingestors) — the BoQ adapter is the primary producer today.
+        # ingestors) - the BoQ adapter is the primary producer today.
         exact_code=_attr("exact_code", "rate_code", "code"),
         # Project-context pass-through for currency-aware candidate
         # filtering (lexical) and locale-aware Qdrant collection picking
@@ -1017,18 +1048,18 @@ def _parse_tri_bool(raw: str | None) -> bool | None:
     return None
 
 
-# Material bucket markers — coarse keywords across the languages we
+# Material bucket markers - coarse keywords across the languages we
 # ship a CWICR catalogue for. Order: English, German/Dutch/Nordic,
 # Romance (FR/ES/IT/PT), Slavic (RU/PL/CZ), MENA (Arabic/Turkish),
 # CJK (Chinese/Japanese/Korean), Indian (Hindi). Keeping all 30
 # language families covered means the soft material-class boost
 # fires for any catalogue we can plausibly load.
 #
-# The matcher is a substring check on the lowercased input — adding
+# The matcher is a substring check on the lowercased input - adding
 # a word here is non-destructive (won't shadow another bucket because
 # the iteration is ordered: first match wins). When in doubt about
 # whether a marker belongs to one bucket vs another, prefer leaving
-# it out — a missed boost beats a wrong boost.
+# it out - a missed boost beats a wrong boost.
 _MATERIAL_BUCKETS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "concrete",
@@ -1087,7 +1118,7 @@ _MATERIAL_BUCKETS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "iron",
             "eisen",
             "fer ",
-            # Steel grades — European, US, Indian, Brazilian, Japanese, Chinese
+            # Steel grades - European, US, Indian, Brazilian, Japanese, Chinese
             "s235",
             "s355",
             "s275",
@@ -1303,7 +1334,7 @@ def _normalise_material_class(raw: str | None) -> str | None:
     """Collapse a free-form material string onto a coarse v3 bucket.
 
     Returns one of the keys in :data:`_MATERIAL_BUCKETS` or ``None``
-    when no bucket fits. The buckets are intentionally narrow — when
+    when no bucket fits. The buckets are intentionally narrow - when
     the source's text looks like ``"Concrete C30/37"`` we're confident
     enough to call it ``"concrete"`` and feed the soft boost; when it
     says ``"Generic 200mm"`` we'd rather not guess.
@@ -1327,6 +1358,29 @@ def _to_decimal(s: str | None, default: float = 0.0) -> float:
         return float(Decimal(str(s)))
     except (InvalidOperation, TypeError, ValueError):
         return default
+
+
+# v3 §10 - write-boundary quantum for persisted Position money fields.
+# Mirrors boq.service: per-line storage stays at 4dp so the q×r identity
+# is preserved and aggregate drift cannot compound across thousands of
+# lines. Aggregate read boundaries snap to 2dp separately.
+_Q4 = Decimal("0.0001")
+
+
+def _decimal_or_zero(value: object) -> Decimal:
+    """Coerce a catalogue value to an exact ``Decimal``, falling back to 0.
+
+    Used at the BOQ write boundary so monetary rates never round-trip
+    through a lossy float before being stringified into ``Position``.
+    Non-finite / unparseable input collapses to ``Decimal('0')``.
+    """
+    if value is None:
+        return Decimal("0")
+    try:
+        d = value if isinstance(value, Decimal) else Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        return Decimal("0")
+    return d if d.is_finite() else Decimal("0")
 
 
 # ── Service ──────────────────────────────────────────────────────────────
@@ -1391,7 +1445,7 @@ class MatchElementsService:
         created_by: uuid.UUID | None = None,
     ) -> schemas.SessionRead:
         # Auto-bind a CWICR catalogue to project match settings if none
-        # is bound yet — without this the vector matcher short-circuits
+        # is bound yet - without this the vector matcher short-circuits
         # with status="no_catalog_selected" and the user sees zero hits
         # despite having installed catalogue data.
         try:
@@ -1400,20 +1454,20 @@ class MatchElementsService:
             )
 
             await auto_bind_dominant_catalogue(db, spec.project_id)
-        except Exception as exc:  # noqa: BLE001 — best-effort
+        except Exception as exc:  # noqa: BLE001 - best-effort
             logger.info(
                 "match_elements: auto-bind catalogue skipped for %s: %s",
                 spec.project_id,
                 exc,
             )
 
-        # Default group-by — source-aware:
+        # Default group-by - source-aware:
         #
         # * BIM / DWG / image: ``["ifc_class", "type_name"]`` produces
         #   stable, estimable groups across BIM authors (rows that share
         #   IfcClass + family name nearly always carry the same rate).
         # * text / boq: each free-form line / row is semantically its
-        #   own thing — collapsing them under one ``ifc_class:Text``
+        #   own thing - collapsing them under one ``ifc_class:Text``
         #   bucket would discard every distinct query and run vector
         #   search on the meaningless rolled-up label, returning zero
         #   useful matches. Group by ``raw_text`` / ``description``
@@ -1434,7 +1488,7 @@ class MatchElementsService:
         else:
             excluded = list(spec.excluded_categories)
 
-        # MAPPING_PROCESS.md §4.1.5/§4.1.6 — text/BoQ sources persist
+        # MAPPING_PROCESS.md §4.1.5/§4.1.6 - text/BoQ sources persist
         # their input data into ``metadata_`` so the session-scoped
         # adapter (TextAdapter / BoqAdapter) can read it later. We
         # silently ignore the fields when ``source`` doesn't match so a
@@ -1449,7 +1503,7 @@ class MatchElementsService:
             # session-creation time. Read back by :class:`PdfAdapter`.
             metadata["pdf_rows"] = list(spec.pdf_rows)
         elif spec.source in ("image", "photo") and spec.image:
-            # MAPPING_PROCESS.md §3.1/§4.1.4 — single uploaded photo or
+            # MAPPING_PROCESS.md §3.1/§4.1.4 - single uploaded photo or
             # drawing snapshot. Persist as ``{"path"|"data_b64", "mime",
             # "filename"?, "image_id"?}``; the ImageSourceAdapter reads
             # this back on iter_elements.
@@ -1512,7 +1566,7 @@ class MatchElementsService:
             from fastapi import HTTPException
 
             raise HTTPException(status_code=404, detail=translate("errors.session_not_found", locale=get_locale()))
-        # Track whether the patch changed anything that affects grouping —
+        # Track whether the patch changed anything that affects grouping -
         # group_by, scope filters, excluded categories, BIM model binding,
         # or net/gross. If yes, regroup at the end so the chip-bar feels
         # interactive ("click → table re-groups") instead of "click → save
@@ -1538,7 +1592,7 @@ class MatchElementsService:
             row.use_net_quantities = patch.use_net_quantities
             regroup = True
         if patch.catalogue_id is not None:
-            # Same UUID-or-region routing as create_session — see comment
+            # Same UUID-or-region routing as create_session - see comment
             # there. Empty string clears the binding (both UUID + region).
             md = dict(row.metadata_ or {})
             md.pop("catalogue_region", None)
@@ -1553,7 +1607,7 @@ class MatchElementsService:
             row.metadata_ = md
         if patch.is_archived is not None:
             row.is_archived = patch.is_archived
-        # v3-P10b: stage flips don't trigger regroup — they only affect
+        # v3-P10b: stage flips don't trigger regroup - they only affect
         # the SearchPlan hard filter at run-match time, not the
         # element grouping itself. Use ``model_fields_set`` so the user
         # can explicitly clear the pin with ``{"construction_stage": null}``;
@@ -1591,8 +1645,8 @@ class MatchElementsService:
 
         Returns sessions ordered by ``last_active_at`` desc with
         per-session aggregate stats (group_count, confirmed, applied,
-        total_value) so the picker can show "Boylston Crossing — RVT
-        — 24 confirmed · €312k applied" without N+1 round-trips.
+        total_value) so the picker can show "Boylston Crossing - RVT
+        - 24 confirmed · €312k applied" without N+1 round-trips.
         """
         stmt = select(MatchSession).where(
             MatchSession.project_id == project_id,
@@ -1618,7 +1672,7 @@ class MatchElementsService:
         for sid, status, n in (await db.execute(stat_stmt)).all():
             per_session.setdefault(sid, {})[status] = int(n)
 
-        # Applied total value — sum applied groups' chosen unit_rate × qty
+        # Applied total value - sum applied groups' chosen unit_rate × qty
         # across linked CostItems. We pull the CostItem rate once per
         # candidate id.
         from app.modules.boq.service import _project_fx_map
@@ -1636,7 +1690,7 @@ class MatchElementsService:
         if cost_ids:
             ci_stmt = select(CostItem.id, CostItem.rate, CostItem.currency).where(CostItem.id.in_(cost_ids))
             for cid, rate, ccy in (await db.execute(ci_stmt)).all():
-                # Don't paper over a missing currency — leave it empty
+                # Don't paper over a missing currency - leave it empty
                 # so the rollup downstream can either pick the dominant
                 # currency from siblings or surface the gap explicitly.
                 # Hard-defaulting to EUR mis-stamps non-EUR rates (e.g.
@@ -1647,7 +1701,7 @@ class MatchElementsService:
         # project's currency, NOT the first matched candidate's currency.
         # A USD project that happens to have an applied row pointing at
         # an EUR-stamped CostItem must NOT show "1.9 B EUR" in the
-        # session picker — that's confusing and wrong. We fetch project
+        # session picker - that's confusing and wrong. We fetch project
         # currency once and convert per-row via FX before summing so the
         # total shown to the user is in the currency the operator sees
         # everywhere else (BOQ totals, dashboards, exports).
@@ -1658,40 +1712,50 @@ class MatchElementsService:
             project_ccy = (getattr(proj, "currency", "") or "").strip().upper()
             try:
                 fx_map = _project_fx_map(proj) or {}
-            except Exception:  # noqa: BLE001 — defensive, fx is optional
+            except Exception:  # noqa: BLE001 - defensive, fx is optional
                 fx_map = {}
 
-        def _convert(amount: float, src_ccy: str) -> tuple[float, bool]:
+        def _convert(amount: Decimal, src_ccy: str) -> tuple[Decimal, bool]:
             """Return (amount_in_project_ccy, ok). ``ok`` is False when FX
-            is missing — caller drops the row rather than stamping a
-            misleading project-currency label on a foreign amount."""
+            is missing - caller drops the row rather than stamping a
+            misleading project-currency label on a foreign amount.
+
+            v3 §10 - money flows through ``Decimal`` end-to-end so cents
+            never drift through float intermediates (mirrors the rollup in
+            ``apply_to_boq``)."""
             if not amount:
-                return 0.0, True
+                return Decimal("0"), True
             if not project_ccy:
-                # No project currency known — pass through raw amount;
+                # No project currency known - pass through raw amount;
                 # caller stamps with row's own currency.
                 return amount, True
             if not src_ccy or src_ccy == project_ccy:
                 return amount, True
             factor = fx_map.get(src_ccy)
-            if factor is None or factor <= 0:
-                # No FX rate — refuse to silently mis-label.
-                return 0.0, False
-            return amount * float(factor), True
+            if factor is None:
+                # No FX rate - refuse to silently mis-label.
+                return Decimal("0"), False
+            try:
+                factor_dec = Decimal(str(factor))
+            except (InvalidOperation, TypeError, ValueError):
+                return Decimal("0"), False
+            if not factor_dec.is_finite() or factor_dec <= 0:
+                return Decimal("0"), False
+            return amount * factor_dec, True
 
-        totals: dict[uuid.UUID, tuple[float, str | None]] = dict.fromkeys(sids, (0.0, None))
+        totals: dict[uuid.UUID, tuple[Decimal, str | None]] = dict.fromkeys(sids, (Decimal("0"), None))
         for sid, cid, qty_raw, unit in applied_rows:
             if cid is None or cid not in cost_lookup:
                 continue
             rate, ccy = cost_lookup[cid]
             qty = _quantity_for_unit(qty_raw or {}, unit or "pcs")
-            row_total, ok = _convert(rate * qty, ccy)
+            row_total, ok = _convert(Decimal(str(rate)) * Decimal(str(qty)), ccy)
             if not ok:
                 # Drop rows we can't FX-convert into the project
-                # currency. The session is still shown — just with a
-                # smaller (or zero) total — which is honest.
+                # currency. The session is still shown - just with a
+                # smaller (or zero) total - which is honest.
                 continue
-            cur, prev_ccy = totals.get(sid, (0.0, None))
+            cur, prev_ccy = totals.get(sid, (Decimal("0"), None))
             # When project currency is known, every row converts into
             # it, so the stamp is unambiguous. When it isn't, we fall
             # back to whichever currency the first applied row carried
@@ -1702,7 +1766,7 @@ class MatchElementsService:
         out: list[schemas.SessionSummary] = []
         for s in sessions:
             counts = per_session.get(s.id, {})
-            tot, ccy = totals.get(s.id, (0.0, None))
+            tot, ccy = totals.get(s.id, (Decimal("0"), None))
             out.append(
                 schemas.SessionSummary(
                     id=s.id,
@@ -1716,7 +1780,7 @@ class MatchElementsService:
                     group_count=sum(counts.values()),
                     confirmed_count=counts.get("confirmed", 0),
                     applied_count=counts.get("applied", 0),
-                    total_value=round(tot, 2),
+                    total_value=tot.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
                     currency=ccy,
                 )
             )
@@ -1762,7 +1826,7 @@ class MatchElementsService:
             )
         )
 
-        # Existing confirmed/applied groups — preserve, only refresh
+        # Existing confirmed/applied groups - preserve, only refresh
         # element_ids/quantities so they track BIM re-imports. The
         # unmatched/suggested rows were just deleted above, so this
         # query naturally scopes to the survivor set (typically a
@@ -1794,7 +1858,7 @@ class MatchElementsService:
                 # Refresh chosen_unit when geometry catches up. A group
                 # first seen with only count (CV/photo source pre-OCR)
                 # would otherwise stay locked on `pcs` even after a
-                # later BIM enrichment populates volume/area — and that
+                # later BIM enrichment populates volume/area - and that
                 # routes the group through the wrong dimensional gate
                 # in apply_to_boq.
                 if not existing_row.chosen_unit:
@@ -1855,7 +1919,7 @@ class MatchElementsService:
         # mapping below picks the first three available names per group.
         # BIM is the only source that has element rows; for boq/text/etc.
         # adapters the lookup yields no hits and ``sample_names`` falls
-        # through as []. Any failure is swallowed — the count-table is
+        # through as []. Any failure is swallowed - the count-table is
         # the load-bearing piece, not the names.
         names_by_id: dict[str, str] = {}
         try:
@@ -1884,7 +1948,7 @@ class MatchElementsService:
             unit = r.chosen_unit or _pick_unit(qty, ifc_class=ifc_class)
             primary = _quantity_for_unit(qty, unit)
 
-            # Gross/net pair — only meaningful for area/volume units.
+            # Gross/net pair - only meaningful for area/volume units.
             gross_q = net_q = None
             opening_warning = False
             if unit == "m3":
@@ -1894,7 +1958,7 @@ class MatchElementsService:
                 gross_q = qty.get("gross_area_m2")
                 net_q = qty.get("net_area_m2")
             if gross_q is not None and net_q is not None and gross_q > 0:
-                # Catch the Revit IFC export bug — host has openings but
+                # Catch the Revit IFC export bug - host has openings but
                 # gross == net suggests the deduction never happened.
                 opening_warning = abs(gross_q - net_q) < 0.01
 
@@ -2025,8 +2089,8 @@ class MatchElementsService:
     # SQLite (the dev / single-VPS backend) any concurrent write to
     # ``MatchSession`` would contend for the global write lock,
     # deadlocking the server against the collab-lock sweeper and
-    # Qdrant writers. A module-level dict is process-local — same as
-    # the existing rate-limit + tenant caches — which is fine for the
+    # Qdrant writers. A module-level dict is process-local - same as
+    # the existing rate-limit + tenant caches - which is fine for the
     # single-worker dev deploy and the typical 1-worker uvicorn prod
     # install. Multi-worker deploys would degrade to "no progress
     # poll" gracefully (FE falls back to its legacy spinner); a
@@ -2050,12 +2114,12 @@ class MatchElementsService:
 
         Stages mirror the runner's loop boundaries:
 
-        * ``init``      — session loaded, project context fetched
-        * ``elements``  — source adapter iterating BIM/Excel/text rows
-        * ``ranking``   — per-group vector search + boost + rerank
-        * ``save``      — flushing results / auto-confirms to DB
-        * ``done``      — finished cleanly
-        * ``error``     — exception bubbled out of the runner
+        * ``init``      - session loaded, project context fetched
+        * ``elements``  - source adapter iterating BIM/Excel/text rows
+        * ``ranking``   - per-group vector search + boost + rerank
+        * ``save``      - flushing results / auto-confirms to DB
+        * ``done``      - finished cleanly
+        * ``error``     - exception bubbled out of the runner
 
         ``groups_done`` / ``groups_total`` populate the per-stage
         counter rendered in the FE timeline.
@@ -2086,7 +2150,7 @@ class MatchElementsService:
     ) -> dict[str, Any]:
         """Read the latest progress snapshot for a match session.
 
-        Reads from the in-memory ``_progress`` dict — see
+        Reads from the in-memory ``_progress`` dict - see
         :meth:`_write_progress` for the design rationale (SQLite
         write-lock contention vs. the long-running match transaction).
         Returns a stable shape even when no match has ever been
@@ -2098,7 +2162,7 @@ class MatchElementsService:
         ``db`` is kept on the signature for symmetry with the rest of
         the service even though the body doesn't touch it.
         """
-        del db  # see docstring — kept for signature symmetry
+        del db  # see docstring - kept for signature symmetry
         progress = dict(self._progress.get(str(session_id)) or {})
         return {
             "stage": progress.get("stage", "idle"),
@@ -2124,12 +2188,12 @@ class MatchElementsService:
 
             raise HTTPException(status_code=404, detail=translate("errors.session_not_found", locale=get_locale()))
 
-        # Stamp the initial progress snapshot before any work begins —
+        # Stamp the initial progress snapshot before any work begins -
         # the wizard's MatchProgressCard polls /progress every ~800ms and
-        # needs an authoritative "stage 1 / 5 — Loading" row to render
+        # needs an authoritative "stage 1 / 5 - Loading" row to render
         # the timeline even while we're still doing the project-context
         # fetch. Wrapped in a flush so the next poll sees the change.
-        import time as _time  # noqa: PLC0415 — local import keeps top-of-file clean
+        import time as _time  # noqa: PLC0415 - local import keeps top-of-file clean
 
         run_started = _time.perf_counter()
         started_iso = datetime.now(UTC).isoformat()
@@ -2143,7 +2207,7 @@ class MatchElementsService:
 
         # Load project context once so envelopes/matchers can scope
         # candidate search by the project's expected currency and region
-        # without per-group lookups. Failure here is non-fatal — empty
+        # without per-group lookups. Failure here is non-fatal - empty
         # strings mean "no preference" and matchers fall back to the
         # global oe_cost_items table.
         from app.modules.projects.models import Project  # noqa: PLC0415
@@ -2159,7 +2223,7 @@ class MatchElementsService:
 
         # Auto-bind catalogue late: existing sessions created before this
         # check landed don't trigger the create_session path again, so we
-        # repeat the bind here. Idempotent — no-op when already bound.
+        # repeat the bind here. Idempotent - no-op when already bound.
         bound_catalogue_id: str | None = None
         if spec.method == "vector":
             try:
@@ -2218,7 +2282,7 @@ class MatchElementsService:
             if not bound_catalogue_id or (rows_in_bound == 0 and _vec_cnt == 0):
                 logger.warning(
                     "match_elements.run_match: bound catalogue has no "
-                    "data — session=%s project=%s catalogue=%r "
+                    "data - session=%s project=%s catalogue=%r "
                     "sql=%d vec=%d",
                     session_id,
                     sess.project_id,
@@ -2252,7 +2316,7 @@ class MatchElementsService:
             if _vec_cnt == 0:
                 logger.warning(
                     "match_elements.run_match: bound catalogue has no "
-                    "vectors — session=%s project=%s catalogue=%r "
+                    "vectors - session=%s project=%s catalogue=%r "
                     "sql=%d vec=0",
                     session_id,
                     sess.project_id,
@@ -2305,14 +2369,14 @@ class MatchElementsService:
         )
         by_id = {e.id: e for e in all_elements}
 
-        # Auto-rebuild groups on first run for this session — same guard
+        # Auto-rebuild groups on first run for this session - same guard
         # ``list_groups`` uses. Without this, the wizard's "create →
         # immediately run match" path returns an empty result list
         # because ``create_session`` doesn't seed any :class:`MatchGroup`
         # rows: it persists the session metadata, then the FE fires
         # ``POST /sessions/{id}/match`` straight away, the SELECT below
         # finds zero rows, and the for-loop never executes. Symptom is
-        # exactly what users report — "matching is fast but produces
+        # exactly what users report - "matching is fast but produces
         # nothing" / "matching does nothing on TOP / Any stage". Mirrors
         # ``list_groups``' behaviour at L1502-1508 so the two entry
         # points are now consistent. Idempotent on subsequent runs
@@ -2337,7 +2401,7 @@ class MatchElementsService:
         rows = (await db.execute(stmt)).scalars().all()
 
         # Stage 3: per-group ranking. The for-loop below dominates wall
-        # time on real matches — each iteration runs one Qdrant vector
+        # time on real matches - each iteration runs one Qdrant vector
         # search + sparse fusion + region/unit boost + (sometimes) BGE
         # cross-encoder rerank. Counter updates every group so the FE
         # bar advances visibly even on small (5-10 group) sessions.
@@ -2379,10 +2443,10 @@ class MatchElementsService:
                 # type wasn't in :data:`SourceType` (Literal narrows to a
                 # closed set), or a structured field violated its
                 # constraint. Either way, skipping is safer than crashing
-                # the whole match run — but log so we notice if it
+                # the whole match run - but log so we notice if it
                 # regresses.
                 logger.warning(
-                    "run_match: skip group %s — envelope build failed: %s",
+                    "run_match: skip group %s - envelope build failed: %s",
                     grow.group_key,
                     exc,
                 )
@@ -2394,7 +2458,7 @@ class MatchElementsService:
                     catalogue_id=sess.catalogue_id,
                     top_k=spec.top_k,
                 )
-            except Exception as exc:  # noqa: BLE001 — log + degrade per group
+            except Exception as exc:  # noqa: BLE001 - log + degrade per group
                 logger.warning(
                     "Matcher %s failed for group %s: %s",
                     spec.method,
@@ -2460,14 +2524,14 @@ class MatchElementsService:
                 )
             )
 
-            # In-memory only counter update — we deliberately avoid
+            # In-memory only counter update - we deliberately avoid
             # ``await db.flush()`` here. On SQLite, flushing per group
             # holds the write lock open across the next group's read
             # of MatchGroup, which deadlocks against the BIM hub's
             # Qdrant + DB writes happening concurrently. The progress
             # poll reads the session row via a separate transaction
             # so the in-memory mutation isn't visible until the final
-            # flush below — but the per-stage transitions (init →
+            # flush below - but the per-stage transitions (init →
             # elements → ranking → save → done) already give the FE
             # enough signal at the boundaries that matter. The
             # counter inside ranking advances atomically with the
@@ -2499,7 +2563,7 @@ class MatchElementsService:
             sess.last_active_at = datetime.now(UTC)
         await db.flush()
 
-        # Stage 5: terminal — the FE polling card watches for this to
+        # Stage 5: terminal - the FE polling card watches for this to
         # fade out and reveal the results pane.
         self._write_progress(
             session_id,
@@ -2510,12 +2574,12 @@ class MatchElementsService:
             started_at=started_iso,
             status="done",
         )
-        # One observable log line per match run — element_count is the
+        # One observable log line per match run - element_count is the
         # source-side fanout, candidate_count is what came back from the
         # ranker stack across all groups, hits_groups tracks how many of
         # those groups got *any* candidate (a 15-group run that returns
         # 0 for every group is the user's "матчинг никакой не происходит"
-        # symptom). total_ms is wall-clock — slow runs jump out
+        # symptom). total_ms is wall-clock - slow runs jump out
         # immediately when grepping logs.
         total_ms = int((_time.perf_counter() - run_started) * 1000)
         logger.info(
@@ -2552,7 +2616,7 @@ class MatchElementsService:
 
             raise HTTPException(status_code=404, detail=translate("errors.group_not_found", locale=get_locale()))
         # candidate_id is now properly nullable both in the schema and the
-        # FK column. None means "manual override / no library row" — the
+        # FK column. None means "manual override / no library row" - the
         # group is still recorded as confirmed and the apply step writes
         # a custom Position with whatever description the user chose.
         cid = spec.candidate_id
@@ -2566,7 +2630,7 @@ class MatchElementsService:
         if spec.signature_fields_override is not None:
             row.signature_fields = list(spec.signature_fields_override)
 
-        # MAPPING_PROCESS.md §10 — backfill the user-feedback columns on
+        # MAPPING_PROCESS.md §10 - backfill the user-feedback columns on
         # the matching search_log row so the §10 alerts can fire
         # ("user_picked_rank > 4 for >20% of requests" → re-train).
         # Best-effort: never fail the confirm because of an analytics
@@ -2586,10 +2650,10 @@ class MatchElementsService:
                 picked_rank=picked_rank,
                 picked_at=confirmed_at,
             )
-        except Exception as exc:  # pragma: no cover — defensive
+        except Exception as exc:  # pragma: no cover - defensive
             logger.debug("confirm: search_log backfill skipped: %s", exc)
 
-        # Cross-project library — write a template row when requested.
+        # Cross-project library - write a template row when requested.
         # Only meaningful when we have a real cost-item id to link to.
         if spec.save_to_template_library and row.signature and cid is not None:
             existing = (
@@ -3075,7 +3139,7 @@ class MatchElementsService:
         #   1. project.currency if set (operator's choice).
         #   2. Currency stamped on the project's region row in
         #      `_REGION_CURRENCY` (e.g. RU_STPETERSBURG → RUB).
-        #   3. Empty string — downstream knows to pick the dominant
+        #   3. Empty string - downstream knows to pick the dominant
         #      applied-rate currency rather than mis-stamping a default.
         # Defaulting to EUR for non-Eurozone projects (BR, RU, JP, …)
         # was the source of the BRL totals showing "€" headers in v2.8.x.
@@ -3117,7 +3181,7 @@ class MatchElementsService:
                     project_label = getattr(project, "name", None) or f"Project {str(sess.project_id)[:8]}"
                     new_boq = BOQ(
                         project_id=sess.project_id,
-                        name=f"{project_label} — {sess.source.upper()}",
+                        name=f"{project_label} - {sess.source.upper()}",
                         description=(
                             f"Auto-created by Match Elements module (session {str(sess.id)[:8]}, source={sess.source})"
                         ),
@@ -3173,6 +3237,73 @@ class MatchElementsService:
             qty = _quantity_for_unit(g.quantities or {}, unit)
             ci = cost_items.get(g.chosen_candidate_id) if g.chosen_candidate_id else None
 
+            # ── Custom (no-catalogue-match) line ─────────────────────────
+            # When the estimator chose "Create custom position" for a group
+            # that no catalogue rate fit, the typed description / unit / rate
+            # live in metadata_["custom_position"]. If they did not also save
+            # it to their catalogue (ci is None) we build the Position
+            # straight from that spec - this is the line the old stub
+            # silently dropped. The dimensional gate is intentionally skipped
+            # here: the estimator already decided the unit and rate.
+            custom_spec = None
+            meta = g.metadata_ if isinstance(g.metadata_, dict) else {}
+            if ci is None and isinstance(meta.get("custom_position"), dict):
+                custom_spec = meta["custom_position"]
+            if custom_spec is not None:
+                position_unit = str(custom_spec.get("unit") or unit or "pcs")
+                description = str(custom_spec.get("description") or g.group_key)
+                unit_rate = _decimal_or_zero(custom_spec.get("rate"))
+                currency = base_currency
+                classification = {}
+                section_path = ["Custom"]
+                resource_previews = []
+                positions_preview.append(
+                    schemas.ApplyPositionPreview(
+                        group_key=g.group_key,
+                        section_path=section_path,
+                        description=description,
+                        unit=position_unit,
+                        quantity=qty,
+                        unit_rate=unit_rate,
+                        currency=currency,
+                        resources=resource_previews,
+                    )
+                )
+                if not spec.dry_run and boq_id is not None:
+                    max_ord += 1
+                    ordinal = f"{max_ord:04d}"
+                    metadata: dict[str, Any] = {
+                        "match_session_id": str(session_id),
+                        "match_group_key": g.group_key,
+                        "match_signature": g.signature or "",
+                        "match_method": "custom",
+                        "match_confidence": g.confidence or "",
+                        "custom_position": True,
+                    }
+                    pos = Position(
+                        boq_id=boq_id,
+                        parent_id=None,
+                        ordinal=ordinal,
+                        description=description,
+                        unit=position_unit,
+                        quantity=f"{qty:.4f}",
+                        unit_rate=f"{unit_rate.quantize(_Q4, rounding=ROUND_HALF_UP)}",
+                        total=f"{(Decimal(str(qty)) * unit_rate).quantize(_Q4, rounding=ROUND_HALF_UP)}",
+                        classification={},
+                        source="manual",
+                        confidence=g.confidence or "",
+                        cad_element_ids=list(g.element_ids or []),
+                        validation_status="pending",
+                        metadata_=metadata,
+                        sort_order=max_ord,
+                    )
+                    db.add(pos)
+                    await db.flush()
+                    g.boq_position_id = pos.id
+                    g.status = "applied"
+                    positions_created += 1
+                continue
+
             description = ci.description if ci else g.group_key
             # CWICR catalogues sometimes encode a multiplier into the
             # unit string ("100 м3 @ 5,311,861.57 EUR" → 53,118.62
@@ -3180,12 +3311,16 @@ class MatchElementsService:
             # dimensionally honest.
             raw_unit = (ci.unit if ci else unit) or unit
             mult, position_unit = _split_unit_multiplier(raw_unit)
-            raw_rate = _to_decimal(ci.rate, 0.0) if ci else 0.0
-            unit_rate = (raw_rate / mult) if mult > 0 else raw_rate
+            # v3 §10 - keep the rate as Decimal from the catalogue value so
+            # the stored Position.unit_rate / .total never round-trip
+            # through a lossy float (mirrors boq.service._compute_total).
+            raw_rate = _decimal_or_zero(ci.rate) if ci else Decimal("0")
+            mult_dec = Decimal(str(mult))
+            unit_rate = (raw_rate / mult_dec) if mult_dec > 0 else raw_rate
 
             # Dimensional gate: if the catalog row is priced in m³ but
             # the group quantity is `pcs`, the line total is meaningless.
-            # Zero the rate rather than apply it — the row still appears
+            # Zero the rate rather than apply it - the row still appears
             # in the BOQ preview so the estimator can see the mismatch
             # and pick a different match manually. We fold cyrillic /
             # german / spanish units onto the canonical set first so the
@@ -3195,13 +3330,13 @@ class MatchElementsService:
             env_dim = _DIMENSION_GROUP.get(env_unit_canon, "")
             cand_dim = _DIMENSION_GROUP.get(cand_unit_canon, "")
             if env_dim and cand_dim and env_dim != cand_dim:
-                unit_rate = 0.0
+                unit_rate = Decimal("0")
 
             currency = (ci.currency if ci else base_currency) or base_currency
             classification = ci.classification if ci else {}
             section_path = []
             if isinstance(classification, dict):
-                # Pick classification-standard preference universally —
+                # Pick classification-standard preference universally -
                 # explicit project.classification_standard wins, else
                 # fall back to the region-preferred standard so US/UK/
                 # LATAM projects get the right taxonomy without per-
@@ -3269,8 +3404,8 @@ class MatchElementsService:
                     description=description,
                     unit=position_unit,
                     quantity=f"{qty:.4f}",
-                    unit_rate=f"{unit_rate:.4f}",
-                    total=f"{qty * unit_rate:.4f}",
+                    unit_rate=f"{unit_rate.quantize(_Q4, rounding=ROUND_HALF_UP)}",
+                    total=f"{(Decimal(str(qty)) * unit_rate).quantize(_Q4, rounding=ROUND_HALF_UP)}",
                     classification=classification if isinstance(classification, dict) else {},
                     source="cad_import",
                     confidence=g.confidence or "",
@@ -3297,7 +3432,7 @@ class MatchElementsService:
         # untouched. Resource sub-rows are likewise summed in base via
         # _resource_total_in_base so the position breakdown stays
         # consistent with the headline.
-        # v3 §10 — money rollup uses Decimal end-to-end so cents never
+        # v3 §10 - money rollup uses Decimal end-to-end so cents never
         # drift through float intermediates. p.unit_rate / p.line_total
         # / grand_total are all Decimal on the schema; p.quantity stays
         # float (measurement, not money).
@@ -3349,23 +3484,182 @@ class MatchElementsService:
             raise HTTPException(status_code=404, detail=translate("errors.group_not_found", locale=get_locale()))
         if spec.action == "tbd":
             row.status = "tbd"
-            row.notes = "Pending — no good catalogue match"
+            row.notes = "Pending - no good catalogue match"
         elif spec.action == "custom":
-            # Phase A.9 will write a Position with custom rate; for now
-            # we just flag the group and stash the spec in metadata.
-            row.status = "tbd"
-            row.notes = (
-                f"Custom: {spec.custom_description or '(no description)'} "
-                f"@ {spec.custom_rate or 0} per {spec.custom_unit or 'pcs'}"
-            )
-            row.metadata_ = {
-                **(row.metadata_ or {}),
-                "custom_position": spec.model_dump(mode="json"),
-            }
+            await self._apply_custom_position(db, session_id, row, spec)
         elif spec.action == "rfq":
             await self._raise_rfq_for_group(db, session_id, row, spec)
         await db.flush()
         return await self.get_group_detail(db, session_id, spec.group_key)
+
+    async def _apply_custom_position(
+        self,
+        db: AsyncSession,
+        session_id: uuid.UUID,
+        row: MatchGroup,
+        spec: schemas.NoMatchRequest,
+    ) -> None:
+        """Turn a "no catalogue match" group into a real custom BOQ line.
+
+        This used to be a stub that only parked the group as ``tbd`` with a
+        note - the line the estimator typed (description / unit / rate) never
+        reached the bill of quantities. Now the custom spec is persisted on
+        the group and the group is marked ``confirmed`` with
+        ``chosen_method="custom"`` so the standard ``apply_to_boq`` pass picks
+        it up and writes a Position priced at the user's rate. ``apply_to_boq``
+        reads ``metadata_["custom_position"]`` when there is no
+        ``chosen_candidate_id``.
+
+        When ``save_to_my_catalogue`` is set we also persist the line as a
+        reusable :class:`CostItem` (``source="custom"``, scoped to the
+        project's region) and link the group to it via
+        ``chosen_candidate_id`` so future projects in the same region can
+        match against it. Catalogue persistence is best-effort: if it fails,
+        the project-only custom line still applies and the note says why.
+        """
+        # Normalise the typed inputs. An empty description is allowed but we
+        # fall back to the human group label so the BOQ row is never blank.
+        description = (spec.custom_description or "").strip() or (
+            _human_group_label(row.group_key, None) or row.group_key
+        )
+        unit = (spec.custom_unit or row.chosen_unit or "pcs").strip() or "pcs"
+        rate = spec.custom_rate if spec.custom_rate is not None else Decimal("0")
+
+        # Persist the custom spec so apply_to_boq can rebuild the line.
+        custom_payload = {
+            "description": description,
+            "unit": unit,
+            "rate": str(rate),
+        }
+        row.chosen_unit = unit
+        row.chosen_method = "custom"
+        # A custom line is, by definition, the estimator's own decision -
+        # full confidence so it isn't filtered out of confident-only views.
+        row.confidence = "1.0000"
+        row.confirmed_at = datetime.now(UTC)
+        row.status = "confirmed"
+
+        saved_to_catalogue = False
+        catalogue_code: str | None = None
+        if spec.save_to_my_catalogue:
+            try:
+                cost_item = await self._save_custom_cost_item(
+                    db,
+                    session_id,
+                    description=description,
+                    unit=unit,
+                    rate=rate,
+                )
+            except Exception as exc:  # noqa: BLE001 - catalogue write is optional
+                logger.warning(
+                    "match_elements.custom: catalogue save failed for group %s: %s",
+                    row.group_key,
+                    exc,
+                )
+                cost_item = None
+            if cost_item is not None:
+                saved_to_catalogue = True
+                catalogue_code = cost_item.code
+                # Link the group to the catalogue row so apply uses the
+                # CostItem path (and the group reads as a normal match).
+                row.chosen_candidate_id = cost_item.id
+
+        row.metadata_ = {
+            **(row.metadata_ or {}),
+            "custom_position": custom_payload,
+            "custom_saved_to_catalogue": saved_to_catalogue,
+        }
+        if catalogue_code:
+            row.metadata_["custom_catalogue_code"] = catalogue_code
+
+        note = f"Custom: {description} @ {rate} {unit}"
+        if saved_to_catalogue:
+            note += f" (saved to catalogue as {catalogue_code})"
+        row.notes = note
+
+    async def _save_custom_cost_item(
+        self,
+        db: AsyncSession,
+        session_id: uuid.UUID,
+        *,
+        description: str,
+        unit: str,
+        rate: Decimal,
+    ):
+        """Persist a custom estimator rate as a reusable CostItem.
+
+        The item is region-scoped (the ``oe_costs_item`` unique key is
+        ``(code, region)``) and tagged ``source="custom"`` so it shows up in
+        the catalogue browser under the user's own rates rather than mixed
+        into CWICR. The code is a stable, collision-resistant slug derived
+        from the description so re-saving the same line updates the rate
+        instead of creating duplicates.
+        """
+        import hashlib
+
+        from app.modules.costs.models import CostItem  # noqa: PLC0415
+        from app.modules.projects.models import Project  # noqa: PLC0415
+
+        sess = await db.get(MatchSession, session_id)
+        project = await db.get(Project, sess.project_id) if sess else None
+        region = (getattr(project, "region", "") or "").strip() or None
+
+        # Currency: project currency, else region default, else empty (the
+        # apply step folds blanks onto the project base currency).
+        currency = ""
+        if project and getattr(project, "currency", None):
+            currency = str(project.currency).upper()
+        if not currency and region:
+            try:
+                from app.modules.costs.router import _REGION_CURRENCY  # noqa: PLC0415
+
+                currency = _REGION_CURRENCY.get(region.upper(), "")
+            except Exception:  # noqa: BLE001 - best-effort
+                currency = ""
+
+        slug = hashlib.sha1(description.lower().strip().encode("utf-8")).hexdigest()[:10]
+        code = f"CUSTOM-{slug}"
+
+        # Upsert by (code, region): re-saving the same description in the
+        # same region refreshes the rate rather than violating the unique key.
+        existing = (
+            await db.execute(select(CostItem).where(CostItem.code == code, CostItem.region == region))
+        ).scalar_one_or_none()
+        if existing is not None:
+            existing.description = description
+            existing.unit = unit
+            existing.rate = str(rate)
+            if currency:
+                existing.currency = currency
+            existing.is_active = True
+            existing.metadata_ = {
+                **(existing.metadata_ or {}),
+                "custom_source": "match_elements",
+                "last_session_id": str(session_id),
+            }
+            await db.flush()
+            return existing
+
+        item = CostItem(
+            code=code,
+            description=description,
+            unit=unit,
+            rate=str(rate),
+            currency=currency,
+            source="custom",
+            classification={},
+            components=[],
+            tags=["custom", "match-elements"],
+            region=region,
+            is_active=True,
+            metadata_={
+                "custom_source": "match_elements",
+                "last_session_id": str(session_id),
+            },
+        )
+        db.add(item)
+        await db.flush()
+        return item
 
     async def _raise_rfq_for_group(
         self,

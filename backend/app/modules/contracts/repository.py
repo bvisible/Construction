@@ -6,6 +6,7 @@ import uuid
 from decimal import Decimal
 from typing import Any
 
+from sqlalchemy import delete as sa_delete
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -284,13 +285,65 @@ class ProgressClaimLineRepository(_CRUDBase):
         await self.session.flush()
         return lines
 
+    async def delete_for_claim(self, claim_id: uuid.UUID) -> int:
+        """Delete every claim line belonging to ``claim_id``.
+
+        Returns the number of rows removed. Used by the Gap I progress bridge
+        when committing a freshly-populated set of lines: the existing draft
+        lines are wiped in one statement (instead of an N+1 per-row delete)
+        before the new breakdown is inserted, so re-running the populate +
+        commit is idempotent and never accumulates stale duplicate lines.
+        """
+        stmt = sa_delete(ProgressClaimLine).where(
+            ProgressClaimLine.progress_claim_id == claim_id,
+        )
+        result = await self.session.execute(stmt)
+        await self.session.flush()
+        return int(result.rowcount or 0)
+
+    async def prior_period_value_by_line(
+        self,
+        contract_id: uuid.UUID,
+        *,
+        exclude_claim_id: uuid.UUID | None = None,
+    ) -> dict[uuid.UUID, Decimal]:
+        """Sum of ``period_completed_value`` per contract line across prior claims.
+
+        Used to maintain the running ``cumulative_completed_value`` on each new
+        claim line: the cumulative for a line is every recognised period value
+        billed against it so far (this contract's non-rejected claims) plus the
+        current period. Rejected claims are excluded because they were never
+        recognised as work-in-place; the claim currently being (re)generated is
+        excluded via ``exclude_claim_id`` so a re-run does not double-count its
+        own previous lines. Returns ``{contract_line_id: Decimal}``.
+        """
+        stmt = (
+            select(
+                ProgressClaimLine.contract_line_id,
+                func.coalesce(func.sum(ProgressClaimLine.period_completed_value), 0),
+            )
+            .join(
+                ProgressClaim,
+                ProgressClaim.id == ProgressClaimLine.progress_claim_id,
+            )
+            .where(
+                ProgressClaim.contract_id == contract_id,
+                ProgressClaim.status != "rejected",
+            )
+            .group_by(ProgressClaimLine.contract_line_id)
+        )
+        if exclude_claim_id is not None:
+            stmt = stmt.where(ProgressClaimLine.progress_claim_id != exclude_claim_id)
+        result = await self.session.execute(stmt)
+        return {row[0]: Decimal(str(row[1] or 0)) for row in result.all()}
+
     async def lines_with_status_for_contract(
         self,
         contract_id: uuid.UUID,
     ) -> list[tuple[ProgressClaimLine, str]]:
         """‌⁠‍All claim lines for a contract + their parent claim status.
 
-        Single JOIN query — replaces an N+1 (one claim-line query per
+        Single JOIN query - replaces an N+1 (one claim-line query per
         progress claim) in the SoV-status rollup.
         """
         stmt = (

@@ -25,7 +25,9 @@ from app.modules.qms.models import (
     QMSAuditFinding,
     QMSAuditLog,
     QMSCalibration,
+    QMSHoldPointRelease,
     QMSInspection,
+    QMSInspectionAttachment,
     QMSInspectionSignature,
     QMSNCRAction,
     QMSPunchItem,
@@ -84,6 +86,23 @@ class QMSRepository:
         await self.session.flush()
         return item
 
+    async def update_itp_item_fields(self, item_id: uuid.UUID, **fields: Any) -> None:
+        stmt = update(ITPItem).where(ITPItem.id == item_id).values(**fields)
+        await self.session.execute(stmt)
+        await self.session.flush()
+
+    async def list_inspections_for_itp_item(
+        self,
+        itp_item_id: uuid.UUID,
+    ) -> list[QMSInspection]:
+        """All inspections scheduled against one ITP item, oldest first."""
+        result = await self.session.execute(
+            select(QMSInspection)
+            .where(QMSInspection.itp_item_id == itp_item_id)
+            .order_by(QMSInspection.created_at.asc())
+        )
+        return list(result.scalars().all())
+
     # ── Inspection ─────────────────────────────────────────────────────
 
     async def get_inspection(self, inspection_id: uuid.UUID) -> QMSInspection | None:
@@ -136,6 +155,54 @@ class QMSRepository:
         self.session.add(sig)
         await self.session.flush()
         return sig
+
+    # ── Inspection attachment (evidence permanence, item 12) ────────────
+
+    async def create_inspection_attachment(
+        self,
+        attachment: QMSInspectionAttachment,
+    ) -> QMSInspectionAttachment:
+        self.session.add(attachment)
+        await self.session.flush()
+        return attachment
+
+    async def get_inspection_attachment(
+        self,
+        attachment_id: uuid.UUID,
+    ) -> QMSInspectionAttachment | None:
+        return await self.session.get(QMSInspectionAttachment, attachment_id)
+
+    async def list_inspection_attachments(
+        self,
+        inspection_id: uuid.UUID,
+    ) -> list[QMSInspectionAttachment]:
+        result = await self.session.execute(
+            select(QMSInspectionAttachment)
+            .where(QMSInspectionAttachment.inspection_id == inspection_id)
+            .order_by(QMSInspectionAttachment.created_at.asc())
+        )
+        return list(result.scalars().all())
+
+    # ── Hold-point release (item 12) ────────────────────────────────────
+
+    async def create_hold_point_release(
+        self,
+        release: QMSHoldPointRelease,
+    ) -> QMSHoldPointRelease:
+        self.session.add(release)
+        await self.session.flush()
+        return release
+
+    async def get_hold_point_release(
+        self,
+        inspection_id: uuid.UUID,
+    ) -> QMSHoldPointRelease | None:
+        result = await self.session.execute(
+            select(QMSHoldPointRelease).where(
+                QMSHoldPointRelease.inspection_id == inspection_id,
+            )
+        )
+        return result.scalar_one_or_none()
 
     # ── NCR ────────────────────────────────────────────────────────────
 
@@ -291,7 +358,7 @@ class QMSRepository:
         """‌⁠‍Sum cost_impact_amount for non-cancelled NCRs in a project.
 
         .. deprecated::
-            Sums across mixed currencies — callers that build a COPQ total
+            Sums across mixed currencies - callers that build a COPQ total
             must use :meth:`sum_ncr_cost_impact_by_currency` and FX-convert
             instead. Retained only for legacy single-currency call sites.
         """

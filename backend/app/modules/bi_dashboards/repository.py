@@ -24,7 +24,7 @@ from app.modules.bi_dashboards.models import (
 
 
 class BIDashboardsRepository:
-    """‌⁠‍Single repository per module — entity-typed methods stay grouped."""
+    """‌⁠‍Single repository per module - entity-typed methods stay grouped."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -218,6 +218,33 @@ class BIDashboardsRepository:
         )
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
+    async def get_latest_snapshots_for_widgets(
+        self,
+        widget_ids: list[uuid.UUID],
+    ) -> dict[uuid.UUID, DashboardWidgetSnapshot]:
+        """Batch-load the latest snapshot per widget in a single query.
+
+        Avoids the N+1 of calling :meth:`get_latest_snapshot` once per
+        widget when rendering a dashboard. Uses PostgreSQL ``DISTINCT ON``
+        to pick the most-recent (``computed_at`` desc, ``id`` desc as a
+        deterministic same-instant tie-breaker) row per ``widget_id``.
+        Returns ``{}`` for an empty ``widget_ids`` (no SQL issued).
+        """
+        if not widget_ids:
+            return {}
+        stmt = (
+            select(DashboardWidgetSnapshot)
+            .where(DashboardWidgetSnapshot.widget_id.in_(widget_ids))
+            .distinct(DashboardWidgetSnapshot.widget_id)
+            .order_by(
+                DashboardWidgetSnapshot.widget_id.asc(),
+                DashboardWidgetSnapshot.computed_at.desc(),
+                DashboardWidgetSnapshot.id.desc(),
+            )
+        )
+        rows = (await self.session.execute(stmt)).scalars().all()
+        return {row.widget_id: row for row in rows}
+
     async def write_snapshot(
         self,
         *,
@@ -312,6 +339,26 @@ class BIDashboardsRepository:
                 (ReportSchedule.next_run_at.is_(None)) | (ReportSchedule.next_run_at <= due_before),
             )
         stmt = stmt.order_by(ReportSchedule.next_run_at.asc().nullsfirst())
+        return list((await self.session.execute(stmt)).scalars().all())
+
+    async def list_schedules_for_reports(
+        self,
+        report_ids: list[uuid.UUID],
+    ) -> list[ReportSchedule]:
+        """Return every schedule (enabled or not) for the given reports.
+
+        Unlike :meth:`list_schedules` - which is the scheduler's
+        due-soon picker and is restricted to ``enabled`` rows - this
+        returns the full set so the UI can show paused schedules too.
+        Returns an empty list for an empty ``report_ids`` (no SQL issued).
+        """
+        if not report_ids:
+            return []
+        stmt = (
+            select(ReportSchedule)
+            .where(ReportSchedule.report_definition_id.in_(report_ids))
+            .order_by(ReportSchedule.next_run_at.asc().nullslast())
+        )
         return list((await self.session.execute(stmt)).scalars().all())
 
     async def get_schedule(
@@ -451,7 +498,7 @@ class BIDashboardsRepository:
         The selection picks the newest ``limit`` rows (``period_start``
         descending, ``computed_at`` descending as a deterministic
         tie-breaker for same-day persists), then reverses them so callers
-        — trend lists, sparklines, ``changed_by_more_than`` deltas —
+        - trend lists, sparklines, ``changed_by_more_than`` deltas -
         receive points in chronological order. Returning them newest-first
         previously flipped every trend chart and inverted the
         period-over-period delta in the UI.

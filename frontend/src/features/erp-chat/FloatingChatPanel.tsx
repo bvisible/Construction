@@ -19,7 +19,6 @@ import {
   useState,
   type ChangeEvent,
   type KeyboardEvent,
-  type FC,
 } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -47,19 +46,10 @@ import { fetchChatSessions } from './api';
 import type { ChatMessage, ChatSession, ToolCallInfo } from './types';
 
 // Reuse the full-page renderer registry so the tool-result cards inside the
-// floating panel look identical to /chat. Importing the components directly
-// (not the router) lets us render them inline below each tool call.
-import {
-  ProjectsGridRenderer,
-  BOQRenderer,
-  ScheduleRenderer,
-  ValidationRenderer,
-  CostModelRenderer,
-  RiskMatrixRenderer,
-  CompareRenderer,
-  CWICRRenderer,
-  GenericTableRenderer,
-} from './full-page/right/renderers';
+// floating panel look identical to /chat. The single shared RENDERER_REGISTRY
+// is the source of truth - it maps every backend renderer name (and legacy
+// aliases) to a component, so the two surfaces can never drift again.
+import { RENDERER_REGISTRY } from './full-page/right/renderers';
 
 import './full-page/chat-tokens.css';
 
@@ -94,17 +84,7 @@ const SANITIZE_CONFIG = {
   ADD_ATTR: ['target', 'rel'],
 };
 
-const RENDERERS: Record<string, FC<{ data: unknown }>> = {
-  projects_grid: ProjectsGridRenderer,
-  boq_table: BOQRenderer,
-  schedule_gantt: ScheduleRenderer,
-  validation_list: ValidationRenderer,
-  cost_model: CostModelRenderer,
-  risk_matrix: RiskMatrixRenderer,
-  compare_table: CompareRenderer,
-  cwicr_results: CWICRRenderer,
-  generic_table: GenericTableRenderer,
-};
+const RENDERERS = RENDERER_REGISTRY;
 
 const SOFT_LIMIT = 3000;
 const HARD_LIMIT = 4000;
@@ -493,7 +473,7 @@ function EmptyState({
       >
         {t('chat.panel.empty_state', {
           defaultValue:
-            'Ask anything about your projects — BOQs, validation, clashes, costs — or run an action like "create RFI for clash 32".',
+            'Ask anything about your projects - BOQs, validation, clashes, costs - or run an action like "create RFI for clash 32".',
         })}
       </div>
 
@@ -1102,7 +1082,7 @@ export function FloatingChatPanel() {
           ts: new Date(),
           errorText: t('chat.panel.error_card.api_key', {
             defaultValue:
-              'AI provider needs a key — configure it in Settings to keep chatting.',
+              'AI provider needs a key - configure it in Settings to keep chatting.',
           }),
           lastUserPrompt: trimmed,
         };
@@ -1165,7 +1145,7 @@ export function FloatingChatPanel() {
             } catch {
               // Plain-text body — keep as-is.
             }
-            const finalMsg = `${response.status} — ${humanized}`;
+            const finalMsg = `${response.status} - ${humanized}`;
             setMessages((prev) =>
               prev.map((m) =>
                 m.id === aiMsgId ? { ...m, errorText: finalMsg } : m,
@@ -1703,7 +1683,7 @@ export function FloatingChatPanel() {
               }}
             >
               {overHard
-                ? t('chat.panel.token_over', { defaultValue: 'Too long — please shorten' })
+                ? t('chat.panel.token_over', { defaultValue: 'Too long - please shorten' })
                 : overSoft
                 ? t('chat.panel.token_warn', { defaultValue: 'Long message' })
                 : `${charCount}/${HARD_LIMIT}`}
@@ -1760,7 +1740,7 @@ export function FloatingChatPanel() {
             to   { transform: translateX(0);   opacity: 1;   }
           }
           .animate-slide-in-right {
-            /* Material standard easing — 220ms slide for the floating chat panel */
+            /* Material standard easing - 220ms slide for the floating chat panel */
             animation: slide-in-right 220ms cubic-bezier(0.4, 0, 0.2, 1);
           }
           @keyframes fade-in {

@@ -167,86 +167,86 @@ export const CURRENCY_GROUPS: OptionGroup[] = [
   {
     group: 'Europe',
     options: [
-      { value: 'EUR', label: 'EUR (€) — Euro' },
-      { value: 'GBP', label: 'GBP (£) — British Pound' },
-      { value: 'CHF', label: 'CHF (Fr.) — Swiss Franc' },
-      { value: 'SEK', label: 'SEK (kr) — Swedish Krona' },
-      { value: 'NOK', label: 'NOK (kr) — Norwegian Krone' },
-      { value: 'DKK', label: 'DKK (kr) — Danish Krone' },
-      { value: 'PLN', label: 'PLN (zł) — Polish Zloty' },
-      { value: 'CZK', label: 'CZK (Kč) — Czech Koruna' },
-      { value: 'TRY', label: 'TRY (₺) — Turkish Lira' },
-      { value: 'RUB', label: 'RUB (₽) — Russian Ruble' },
-      { value: 'HUF', label: 'HUF (Ft) — Hungarian Forint' },
-      { value: 'RON', label: 'RON (lei) — Romanian Leu' },
-      { value: 'BGN', label: 'BGN (лв) — Bulgarian Lev' },
-      { value: 'HRK', label: 'HRK (kn) — Croatian Kuna' },
-      { value: 'ISK', label: 'ISK (kr) — Icelandic Krona' },
+      { value: 'EUR', label: 'EUR (€) - Euro' },
+      { value: 'GBP', label: 'GBP (£) - British Pound' },
+      { value: 'CHF', label: 'CHF (Fr.) - Swiss Franc' },
+      { value: 'SEK', label: 'SEK (kr) - Swedish Krona' },
+      { value: 'NOK', label: 'NOK (kr) - Norwegian Krone' },
+      { value: 'DKK', label: 'DKK (kr) - Danish Krone' },
+      { value: 'PLN', label: 'PLN (zł) - Polish Zloty' },
+      { value: 'CZK', label: 'CZK (Kč) - Czech Koruna' },
+      { value: 'TRY', label: 'TRY (₺) - Turkish Lira' },
+      { value: 'RUB', label: 'RUB (₽) - Russian Ruble' },
+      { value: 'HUF', label: 'HUF (Ft) - Hungarian Forint' },
+      { value: 'RON', label: 'RON (lei) - Romanian Leu' },
+      { value: 'BGN', label: 'BGN (лв) - Bulgarian Lev' },
+      { value: 'HRK', label: 'HRK (kn) - Croatian Kuna' },
+      { value: 'ISK', label: 'ISK (kr) - Icelandic Krona' },
     ],
   },
   {
     group: 'Americas',
     options: [
-      { value: 'USD', label: 'USD ($) — US Dollar' },
-      { value: 'CAD', label: 'CAD (C$) — Canadian Dollar' },
-      { value: 'BRL', label: 'BRL (R$) — Brazilian Real' },
-      { value: 'MXN', label: 'MXN (Mex$) — Mexican Peso' },
-      { value: 'ARS', label: 'ARS (AR$) — Argentine Peso' },
-      { value: 'CLP', label: 'CLP (CL$) — Chilean Peso' },
-      { value: 'PEN', label: 'PEN (S/) — Peruvian Sol' },
-      { value: 'COP', label: 'COP (COL$) — Colombian Peso' },
+      { value: 'USD', label: 'USD ($) - US Dollar' },
+      { value: 'CAD', label: 'CAD (C$) - Canadian Dollar' },
+      { value: 'BRL', label: 'BRL (R$) - Brazilian Real' },
+      { value: 'MXN', label: 'MXN (Mex$) - Mexican Peso' },
+      { value: 'ARS', label: 'ARS (AR$) - Argentine Peso' },
+      { value: 'CLP', label: 'CLP (CL$) - Chilean Peso' },
+      { value: 'PEN', label: 'PEN (S/) - Peruvian Sol' },
+      { value: 'COP', label: 'COP (COL$) - Colombian Peso' },
     ],
   },
   {
     group: 'Asia & Middle East',
     options: [
-      { value: 'CNY', label: 'CNY (¥) — Chinese Yuan' },
-      { value: 'JPY', label: 'JPY (¥) — Japanese Yen' },
-      { value: 'KRW', label: 'KRW (₩) — South Korean Won' },
-      { value: 'INR', label: 'INR (₹) — Indian Rupee' },
-      { value: 'AED', label: 'AED (د.إ) — UAE Dirham' },
-      { value: 'SAR', label: 'SAR (﷼) — Saudi Riyal' },
-      { value: 'QAR', label: 'QAR (﷼) — Qatari Riyal' },
-      { value: 'BHD', label: 'BHD (BD) — Bahraini Dinar' },
-      { value: 'KWD', label: 'KWD (د.ك) — Kuwaiti Dinar' },
-      { value: 'OMR', label: 'OMR (ر.ع.) — Omani Rial' },
-      { value: 'SGD', label: 'SGD (S$) — Singapore Dollar' },
-      { value: 'MYR', label: 'MYR (RM) — Malaysian Ringgit' },
-      { value: 'THB', label: 'THB (฿) — Thai Baht' },
-      { value: 'IDR', label: 'IDR (Rp) — Indonesian Rupiah' },
-      { value: 'PHP', label: 'PHP (₱) — Philippine Peso' },
-      { value: 'VND', label: 'VND (₫) — Vietnamese Dong' },
-      { value: 'HKD', label: 'HKD (HK$) — Hong Kong Dollar' },
-      { value: 'TWD', label: 'TWD (NT$) — Taiwan Dollar' },
-      { value: 'ILS', label: 'ILS (₪) — Israeli Shekel' },
-      { value: 'JOD', label: 'JOD (JD) — Jordanian Dinar' },
-      { value: 'LBP', label: 'LBP (ل.ل) — Lebanese Pound' },
-      { value: 'PKR', label: 'PKR (₨) — Pakistani Rupee' },
-      { value: 'BDT', label: 'BDT (৳) — Bangladeshi Taka' },
-      { value: 'LKR', label: 'LKR (Rs) — Sri Lankan Rupee' },
+      { value: 'CNY', label: 'CNY (¥) - Chinese Yuan' },
+      { value: 'JPY', label: 'JPY (¥) - Japanese Yen' },
+      { value: 'KRW', label: 'KRW (₩) - South Korean Won' },
+      { value: 'INR', label: 'INR (₹) - Indian Rupee' },
+      { value: 'AED', label: 'AED (د.إ) - UAE Dirham' },
+      { value: 'SAR', label: 'SAR (﷼) - Saudi Riyal' },
+      { value: 'QAR', label: 'QAR (﷼) - Qatari Riyal' },
+      { value: 'BHD', label: 'BHD (BD) - Bahraini Dinar' },
+      { value: 'KWD', label: 'KWD (د.ك) - Kuwaiti Dinar' },
+      { value: 'OMR', label: 'OMR (ر.ع.) - Omani Rial' },
+      { value: 'SGD', label: 'SGD (S$) - Singapore Dollar' },
+      { value: 'MYR', label: 'MYR (RM) - Malaysian Ringgit' },
+      { value: 'THB', label: 'THB (฿) - Thai Baht' },
+      { value: 'IDR', label: 'IDR (Rp) - Indonesian Rupiah' },
+      { value: 'PHP', label: 'PHP (₱) - Philippine Peso' },
+      { value: 'VND', label: 'VND (₫) - Vietnamese Dong' },
+      { value: 'HKD', label: 'HKD (HK$) - Hong Kong Dollar' },
+      { value: 'TWD', label: 'TWD (NT$) - Taiwan Dollar' },
+      { value: 'ILS', label: 'ILS (₪) - Israeli Shekel' },
+      { value: 'JOD', label: 'JOD (JD) - Jordanian Dinar' },
+      { value: 'LBP', label: 'LBP (ل.ل) - Lebanese Pound' },
+      { value: 'PKR', label: 'PKR (₨) - Pakistani Rupee' },
+      { value: 'BDT', label: 'BDT (৳) - Bangladeshi Taka' },
+      { value: 'LKR', label: 'LKR (Rs) - Sri Lankan Rupee' },
     ],
   },
   {
     group: 'Africa',
     options: [
-      { value: 'ZAR', label: 'ZAR (R) — South African Rand' },
-      { value: 'EGP', label: 'EGP (E£) — Egyptian Pound' },
-      { value: 'NGN', label: 'NGN (₦) — Nigerian Naira' },
-      { value: 'KES', label: 'KES (KSh) — Kenyan Shilling' },
-      { value: 'MAD', label: 'MAD (د.م.) — Moroccan Dirham' },
-      { value: 'TND', label: 'TND (DT) — Tunisian Dinar' },
-      { value: 'GHS', label: 'GHS (GH₵) — Ghanaian Cedi' },
-      { value: 'TZS', label: 'TZS (TSh) — Tanzanian Shilling' },
-      { value: 'UGX', label: 'UGX (USh) — Ugandan Shilling' },
-      { value: 'ETB', label: 'ETB (Br) — Ethiopian Birr' },
+      { value: 'ZAR', label: 'ZAR (R) - South African Rand' },
+      { value: 'EGP', label: 'EGP (E£) - Egyptian Pound' },
+      { value: 'NGN', label: 'NGN (₦) - Nigerian Naira' },
+      { value: 'KES', label: 'KES (KSh) - Kenyan Shilling' },
+      { value: 'MAD', label: 'MAD (د.م.) - Moroccan Dirham' },
+      { value: 'TND', label: 'TND (DT) - Tunisian Dinar' },
+      { value: 'GHS', label: 'GHS (GH₵) - Ghanaian Cedi' },
+      { value: 'TZS', label: 'TZS (TSh) - Tanzanian Shilling' },
+      { value: 'UGX', label: 'UGX (USh) - Ugandan Shilling' },
+      { value: 'ETB', label: 'ETB (Br) - Ethiopian Birr' },
     ],
   },
   {
     group: 'Oceania',
     options: [
-      { value: 'AUD', label: 'AUD (A$) — Australian Dollar' },
-      { value: 'NZD', label: 'NZD (NZ$) — New Zealand Dollar' },
-      { value: 'FJD', label: 'FJD (FJ$) — Fijian Dollar' },
+      { value: 'AUD', label: 'AUD (A$) - Australian Dollar' },
+      { value: 'NZD', label: 'NZD (NZ$) - New Zealand Dollar' },
+      { value: 'FJD', label: 'FJD (FJ$) - Fijian Dollar' },
     ],
   },
   {
@@ -753,7 +753,7 @@ export function CreateProjectModal({
         addToast({
           type: 'warning',
           title: t('project_wizard.profile_apply_failed', {
-            defaultValue: 'Project created, but the module setup could not be applied — you can re-run it from Project Settings.',
+            defaultValue: 'Project created, but the module setup could not be applied - you can re-run it from Project Settings.',
           }),
         });
       }
@@ -962,7 +962,7 @@ export function CreateProjectModal({
                     })
                   : mode === 'classic'
                     ? t('project_wizard.classic_subtitle', {
-                        defaultValue: 'Quick create — just the essentials',
+                        defaultValue: 'Quick create - just the essentials',
                       })
                     : t('project_wizard.step_of', {
                         defaultValue: 'Step {{n}} of {{total}} · {{title}}',
@@ -1047,7 +1047,7 @@ export function CreateProjectModal({
             mode === 'choose'
               ? t('project_wizard.choose_subtitle', { defaultValue: 'Choose how you want to set this project up' })
               : mode === 'classic'
-                ? t('project_wizard.classic_subtitle', { defaultValue: 'Quick create — just the essentials' })
+                ? t('project_wizard.classic_subtitle', { defaultValue: 'Quick create - just the essentials' })
                 : STEP_TITLES[step - 1]
           }
           className="overflow-y-auto px-6 pb-6 flex-1 outline-none"
@@ -1064,36 +1064,10 @@ export function CreateProjectModal({
               />
               <button
                 type="button"
-                onClick={() => { setMode('wizard'); setStep(1); setMaxStep(1); }}
-                className="group w-full text-left rounded-xl border border-border-light hover:border-oe-blue hover:bg-oe-blue/5 transition-all p-4 flex items-start gap-3.5"
-              >
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-oe-blue/10 text-oe-blue">
-                  <Wand2 size={20} />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-semibold text-content-primary">
-                      {t('project_wizard.choose_wizard_title', { defaultValue: 'Guided setup' })}
-                    </span>
-                    <span className="rounded-full bg-oe-blue/10 px-2 py-0.5 text-[10px] font-semibold text-oe-blue">
-                      {t('common.recommended', { defaultValue: 'Recommended' })}
-                    </span>
-                  </div>
-                  <p className="mt-1 text-xs leading-relaxed text-content-tertiary">
-                    {t('project_wizard.choose_wizard_blurb', {
-                      defaultValue:
-                        '5 short steps — region, project type and scope. Pre-selects the right modules and a focused sidebar for the work you do.',
-                    })}
-                  </p>
-                </div>
-                <ArrowRight size={16} className="mt-1 shrink-0 text-content-quaternary transition-transform group-hover:translate-x-0.5 group-hover:text-oe-blue" />
-              </button>
-              <button
-                type="button"
                 onClick={() => { setMode('classic'); setStep(1); }}
                 className="group w-full text-left rounded-xl border border-border-light hover:border-oe-blue hover:bg-oe-blue/5 transition-all p-4 flex items-start gap-3.5"
               >
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-surface-secondary text-content-secondary">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-oe-blue/10 text-oe-blue">
                   <Zap size={20} />
                 </div>
                 <div className="min-w-0 flex-1">
@@ -1103,7 +1077,28 @@ export function CreateProjectModal({
                   <p className="mt-1 text-xs leading-relaxed text-content-tertiary">
                     {t('project_wizard.choose_classic_blurb', {
                       defaultValue:
-                        'Every project setting on one screen — name, region, currency, address, client, dates and budget. Only the name is required; everything else is optional and editable later.',
+                        'Every project setting on one screen - name, region, currency, address, client, dates and budget. Only the name is required; everything else is optional and editable later.',
+                    })}
+                  </p>
+                </div>
+                <ArrowRight size={16} className="mt-1 shrink-0 text-content-quaternary transition-transform group-hover:translate-x-0.5 group-hover:text-oe-blue" />
+              </button>
+              <button
+                type="button"
+                onClick={() => { setMode('wizard'); setStep(1); setMaxStep(1); }}
+                className="group w-full text-left rounded-xl border border-border-light hover:border-oe-blue hover:bg-oe-blue/5 transition-all p-4 flex items-start gap-3.5"
+              >
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-surface-secondary text-content-secondary">
+                  <Wand2 size={20} />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <span className="text-sm font-semibold text-content-primary">
+                    {t('project_wizard.choose_wizard_title', { defaultValue: 'Guided setup' })}
+                  </span>
+                  <p className="mt-1 text-xs leading-relaxed text-content-tertiary">
+                    {t('project_wizard.choose_wizard_blurb', {
+                      defaultValue:
+                        '5 short steps - region, project type and scope. Pre-selects the right modules and a focused sidebar for the work you do.',
                     })}
                   </p>
                 </div>
@@ -1122,7 +1117,7 @@ export function CreateProjectModal({
               <InfoHint
                 text={t('projects.create.required_hint', {
                   defaultValue:
-                    'Only the project name is required — everything else is optional and can be edited later in Project Settings.',
+                    'Only the project name is required - everything else is optional and can be edited later in Project Settings.',
                 })}
               />
 
@@ -1206,7 +1201,7 @@ export function CreateProjectModal({
                         {t('projects.create.grp_description_title', { defaultValue: 'Description & notes' })}
                       </p>
                       <p className="text-[11px] text-content-tertiary">
-                        {t('projects.create.grp_description_sub', { defaultValue: 'Scope, context — anything useful later. Optional.' })}
+                        {t('projects.create.grp_description_sub', { defaultValue: 'Scope, context - anything useful later. Optional.' })}
                       </p>
                     </div>
                   </div>
@@ -1231,7 +1226,7 @@ export function CreateProjectModal({
                         {t('projects.create.grp_localization_title', { defaultValue: 'Classification & localization' })}
                       </p>
                       <p className="text-[11px] text-content-tertiary">
-                        {t('projects.create.grp_localization_sub', { defaultValue: 'Region, standard, currency and language. Optional — editable later.' })}
+                        {t('projects.create.grp_localization_sub', { defaultValue: 'Region, standard, currency and language. Optional - editable later.' })}
                       </p>
                     </div>
                   </div>
@@ -1337,7 +1332,7 @@ export function CreateProjectModal({
                         {t('projects.create.grp_identification_title', { defaultValue: 'Identification' })}
                       </p>
                       <p className="text-[11px] text-content-tertiary">
-                        {t('projects.create.grp_identification_sub', { defaultValue: 'Code, type and client. Optional — auto-filled where possible.' })}
+                        {t('projects.create.grp_identification_sub', { defaultValue: 'Code, type and client. Optional - auto-filled where possible.' })}
                       </p>
                     </div>
                   </div>
@@ -1404,7 +1399,7 @@ export function CreateProjectModal({
                         {t('projects.address', { defaultValue: 'Site address' })}
                       </p>
                       <p className="text-[11px] text-content-tertiary">
-                        {t('projects.address_hint', { defaultValue: 'Optional — enables the location map and weather forecast' })}
+                        {t('projects.address_hint', { defaultValue: 'Optional - enables the location map and weather forecast' })}
                       </p>
                     </div>
                   </div>
@@ -1707,7 +1702,7 @@ export function CreateProjectModal({
           {/* Step 3 — Project type (preset) */}
           {mode === 'wizard' && step === 3 && (
             <div className="space-y-3">
-              <InfoHint text={t('project_wizard.type_hint', { defaultValue: 'Pick the closest match. This pre-selects the modules and route for your project — nothing is locked, you can refine on the next step.' })} />
+              <InfoHint text={t('project_wizard.type_hint', { defaultValue: 'Pick the closest match. This pre-selects the modules and route for your project - nothing is locked, you can refine on the next step.' })} />
               {presetsLoading && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                   {Array.from({ length: 6 }).map((_, i) => (
@@ -1796,7 +1791,7 @@ export function CreateProjectModal({
           {/* Step 4 — Scope (activity / phases / focus) */}
           {mode === 'wizard' && step === 4 && (
             <div className="space-y-5">
-              <InfoHint text={t('project_wizard.scope_hint', { defaultValue: 'These refine which modules are emphasised. Defaults come from the project type you picked — adjust only if needed.' })} />
+              <InfoHint text={t('project_wizard.scope_hint', { defaultValue: 'These refine which modules are emphasised. Defaults come from the project type you picked - adjust only if needed.' })} />
               <div>
                 <p className="text-sm font-semibold text-content-primary mb-2">
                   {t('project_wizard.activities', { defaultValue: 'What will you do on this project?' })}
@@ -1856,7 +1851,7 @@ export function CreateProjectModal({
                     {t('projects.address', { defaultValue: 'Site address' })}
                   </label>
                   <span className="text-[10px] text-content-quaternary">
-                    {t('projects.address_hint', { defaultValue: 'Optional — enables the location map and weather forecast' })}
+                    {t('projects.address_hint', { defaultValue: 'Optional - enables the location map and weather forecast' })}
                   </span>
                 </div>
                 {/* Address autocomplete (all-on-one variant) — same

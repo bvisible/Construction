@@ -1,20 +1,20 @@
 """‌⁠‍Requirements & Quality Gates API routes.
 
 Endpoints:
-    POST   /                                          — Create requirement set
-    GET    /?project_id=X                             — List sets for project
-    GET    /{set_id}                                  — Get set with requirements
-    DELETE /{set_id}                                  — Delete set
-    GET    /{set_id}/export                           — Export requirements (CSV/JSON)
-    POST   /{set_id}/requirements                     — Add requirement
-    PATCH  /{set_id}/requirements/{req_id}            — Update requirement
-    DELETE /{set_id}/requirements/{req_id}            — Delete requirement
-    POST   /{set_id}/requirements/bulk                — Bulk add requirements
-    POST   /{set_id}/gates/{gate_number}/run          — Run quality gate
-    GET    /{set_id}/gates                            — List gate results
-    POST   /{set_id}/requirements/{req_id}/link/{pos} — Link to BOQ position
-    POST   /{set_id}/import/text                      — Import from text
-    GET    /stats?project_id=X                        — Requirement statistics
+    POST   /                                          - Create requirement set
+    GET    /?project_id=X                             - List sets for project
+    GET    /{set_id}                                  - Get set with requirements
+    DELETE /{set_id}                                  - Delete set
+    GET    /{set_id}/export                           - Export requirements (CSV/JSON)
+    POST   /{set_id}/requirements                     - Add requirement
+    PATCH  /{set_id}/requirements/{req_id}            - Update requirement
+    DELETE /{set_id}/requirements/{req_id}            - Delete requirement
+    POST   /{set_id}/requirements/bulk                - Bulk add requirements
+    POST   /{set_id}/gates/{gate_number}/run          - Run quality gate
+    GET    /{set_id}/gates                            - List gate results
+    POST   /{set_id}/requirements/{req_id}/link/{pos} - Link to BOQ position
+    POST   /{set_id}/import/text                      - Import from text
+    GET    /stats?project_id=X                        - Requirement statistics
 """
 
 import csv
@@ -239,7 +239,7 @@ async def create_set(
         logger.exception("Unable to create requirement set")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Unable to create requirement set — operation aborted",
+            detail="Unable to create requirement set - operation aborted",
         )
 
 
@@ -260,7 +260,7 @@ async def list_sets(
     """List requirement sets for a project."""
     # IDOR guard: the global requirements.read role is not project-scoped, so
     # verify the caller can access this project before listing its sets
-    # (names/descriptions/statuses) — cross-tenant leak otherwise.
+    # (names/descriptions/statuses) - cross-tenant leak otherwise.
     await verify_project_access(project_id, str(user_id), session)
     items, _ = await service.list_sets(
         project_id,
@@ -460,7 +460,7 @@ async def import_requirements_file(
 
     # Bound the upload size in-memory. v2.9.12 removed the global file-size
     # cap, so a 500 MB CSV would OOM the worker before we even start parsing.
-    # 50 MB is generous for requirement spreadsheets — typical real-world
+    # 50 MB is generous for requirement spreadsheets - typical real-world
     # files are <2 MB. Streaming + chunked parse is a future improvement.
     MAX_IMPORT_BYTES = 50 * 1024 * 1024  # 50 MB
     payload = await file.read()
@@ -476,7 +476,7 @@ async def import_requirements_file(
 
     name = (file.filename or "").lower()
 
-    # Magic-byte sniff — filename is hostile-supplied. Reject any payload
+    # Magic-byte sniff - filename is hostile-supplied. Reject any payload
     # whose first bytes don't match the declared format before we hand the
     # buffer to openpyxl / csv.reader. Mirrors the contacts importer.
     head = payload[:8]
@@ -558,7 +558,7 @@ async def update_set(
     type, or update the workflow status without having to delete and
     recreate (which would lose history and any BIM/BOQ links the set's
     requirements own).  Project re-assignment is intentionally NOT
-    supported here — sets are project-scoped at creation.
+    supported here - sets are project-scoped at creation.
     """
     existing = await service.get_set(set_id)
     await verify_project_access(existing.project_id, str(user_id), session)
@@ -610,7 +610,7 @@ async def bulk_delete_requirements(
     """Delete every requirement whose id is in the list (single transaction).
 
     Ids that do not exist OR belong to a different set are silently
-    skipped — the response carries the actual delete count and skipped
+    skipped - the response carries the actual delete count and skipped
     count so the UI can show "deleted N of M" if there is a mismatch.
     Each successful delete fires the standard
     ``requirements.requirement.deleted`` event so vector indexes stay
@@ -769,7 +769,7 @@ async def run_gate(
         logger.exception("Unable to run gate %d for set %s", gate_number, set_id)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Unable to run quality gate — evaluation incomplete",
+            detail="Unable to run quality gate - evaluation incomplete",
         )
 
 
@@ -840,7 +840,7 @@ async def import_from_text(
         logger.exception("Unable to import requirements from text")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Unable to import requirements from text — parsing incomplete",
+            detail="Unable to import requirements from text - parsing incomplete",
         )
 
 
@@ -869,7 +869,7 @@ async def link_requirement_to_bim(
     """Pin a requirement to one or more BIM elements.
 
     By default the new ids are merged with whatever was there
-    previously (additive linking — no accidental data loss).  Pass
+    previously (additive linking - no accidental data loss).  Pass
     ``replace=true`` to overwrite the array entirely.
 
     The link is stored under ``metadata_["bim_element_ids"]`` so we
@@ -891,20 +891,24 @@ async def link_requirement_to_bim(
     response_model=list[RequirementResponse],
 )
 async def list_requirements_by_bim_element(
-    _user_id: CurrentUserId,
+    user_id: CurrentUserId,
+    session: SessionDep,
     _perm: None = Depends(RequirePermission("requirements.read")),
     service: RequirementsService = Depends(_get_service),
     bim_element_id: str = Query(..., description="UUID of the BIM element"),
-    project_id: uuid.UUID | None = Query(default=None),
+    project_id: uuid.UUID = Query(..., description="Project scope for the search"),
 ) -> list[RequirementResponse]:
     """Reverse query: every requirement that pins ``bim_element_id``.
 
     Used by the BIM viewer's element details panel and the AI advisor's
     structured project state to surface requirements relevant to the
-    currently selected element.  Pass ``project_id`` to scope the
-    candidate set; otherwise all requirements the caller has access to
-    are scanned (slower but works for tenant-wide queries).
+    currently selected element.  ``project_id`` is required and the caller
+    must have access to it: requirements.read is a global role, so a
+    tenant-wide scan without a project gate would let any holder enumerate
+    every requirement across all projects (IDOR). This mirrors the sibling
+    schedule module's ``/activities/by-bim-element/`` endpoint.
     """
+    await verify_project_access(project_id, str(user_id), session)
     rows = await service.list_by_bim_element(bim_element_id, project_id=project_id)
     return [_req_to_response(r) for r in rows]
 
@@ -1002,7 +1006,7 @@ async def requirement_similar(
 ) -> dict[str, Any]:
     """Return requirements semantically similar to the given one.
 
-    Defaults to **cross-project** — that's the highest-value use case
+    Defaults to **cross-project** - that's the highest-value use case
     for the requirements module: estimators want to find how a similar
     constraint was handled on past projects so they can reuse the
     spec text and the linked BOQ rate.
@@ -1078,12 +1082,18 @@ def _deliverable_to_response(item: object) -> DeliverableResponse:
 )
 async def list_requirement_deliverables(
     requirement_id: uuid.UUID,
-    _user_id: CurrentUserId,
+    user_id: CurrentUserId,
+    session: SessionDep,
     _perm: None = Depends(RequirePermission("requirements.read")),
     deliverable_type: str | None = Query(default=None, max_length=64),
     service: RequirementsService = Depends(_get_service),
 ) -> list[DeliverableResponse]:
     """List EIR deliverables attached to a requirement."""
+    # IDOR guard: gate on the requirement's real project (requirements.read is a
+    # global role, so without this any holder could list deliverables for any
+    # requirement by UUID).
+    project_id = await service.get_requirement_project_id(requirement_id)
+    await verify_project_access(project_id, str(user_id), session)
     items = await service.list_deliverables(requirement_id, deliverable_type=deliverable_type)
     return [_deliverable_to_response(i) for i in items]
 
@@ -1152,11 +1162,17 @@ async def delete_requirement_deliverable(
 )
 async def get_requirement_deliverable_coverage(
     requirement_id: uuid.UUID,
-    _user_id: CurrentUserId,
+    user_id: CurrentUserId,
+    session: SessionDep,
     _perm: None = Depends(RequirePermission("requirements.read")),
     service: RequirementsService = Depends(_get_service),
 ) -> DeliverableCoverage:
     """Coverage % roll-up for one requirement's EIR deliverables."""
+    # IDOR guard: gate on the requirement's real project (requirements.read is a
+    # global role, so without this any holder could read coverage for any
+    # requirement by UUID).
+    project_id = await service.get_requirement_project_id(requirement_id)
+    await verify_project_access(project_id, str(user_id), session)
     payload = await service.get_deliverable_coverage(requirement_id)
     by_type = {t: DeliverableTypeCoverage(**bucket) for t, bucket in payload.get("by_type", {}).items()}
     return DeliverableCoverage(

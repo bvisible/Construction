@@ -1,5 +1,5 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
-"""‌⁠‍Customer & Partner Portal — business logic.
+"""‌⁠‍Customer & Partner Portal - business logic.
 
 Pure-function helpers (token gen, hashing, permission predicate) plus a
 :class:`PortalService` that wraps the repositories with idempotent operations
@@ -50,7 +50,7 @@ logger = logging.getLogger(__name__)
 MAGIC_LINK_TTL = timedelta(hours=24)
 SESSION_TTL = timedelta(days=7)
 
-# Permission rank — higher number satisfies all lower-number requirements.
+# Permission rank - higher number satisfies all lower-number requirements.
 _PERMISSION_RANK: dict[str, int] = {
     "view": 1,
     "comment": 2,
@@ -71,7 +71,7 @@ def generate_token() -> str:
     """‌⁠‍Generate a random 64-hex-char token (32 bytes of entropy).
 
     Used for both magic-link tokens and session tokens. The plaintext is
-    shown to the caller exactly once — only ``hash_token(plain)`` is stored.
+    shown to the caller exactly once - only ``hash_token(plain)`` is stored.
     """
     return secrets.token_hex(32)
 
@@ -157,7 +157,7 @@ class PortalService:
         else:
             user = existing
             # Refresh the invitation window. Don't downgrade a confirmed
-            # account back to "invited" — that would break access checks.
+            # account back to "invited" - that would break access checks.
             if user.status == "expired":
                 await self.user_repo.update_fields(user.id, status="invited")
                 user.status = "invited"
@@ -275,7 +275,7 @@ class PortalService:
 
         Raises HTTPException 400 on expired / consumed / wrong-purpose tokens
         and 401 on unknown tokens (no plaintext-token comparison hits the DB
-        — only the sha256 hash).
+        - only the sha256 hash).
 
         Returns ``(user, session, plain_session_token, session_expires_at)``.
         """
@@ -321,7 +321,7 @@ class PortalService:
 
         # Snapshot scalars BEFORE any repo write. Every repo's
         # ``update_fields`` ends with ``session.expire_all()``, which detaches
-        # *all* attributes on every loaded ORM instance — including ``user``
+        # *all* attributes on every loaded ORM instance - including ``user``
         # and ``link``. Touching ``user.status`` / ``user.id`` after that
         # point triggers an illegal *synchronous* lazy-load on the async
         # session (MissingGreenlet → 500). The PKs/status are stable, so
@@ -330,8 +330,18 @@ class PortalService:
         user_id = user.id
         user_status = user.status
 
-        # Mark link consumed.
-        await self.magic_repo.update_fields(link_id, consumed_at=now)
+        # Mark link consumed - atomically. The ``link.consumed_at is not None``
+        # check above is only a fast-path for the common already-consumed case;
+        # the actual one-time-use guarantee comes from this conditional
+        # ``UPDATE ... WHERE consumed_at IS NULL``. Under two concurrent
+        # requests both can pass the read-check (TOCTOU), but only the one whose
+        # row was still NULL flips it - the loser gets rowcount 0 and is
+        # rejected here, so exactly one session is ever opened per link.
+        if not await self.magic_repo.consume(link_id, consumed_at=now):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Magic link already consumed",
+            )
 
         # Activate first-login users.
         if user_status == "invited":
@@ -360,7 +370,7 @@ class PortalService:
         session_id = sess.id
         session_expires_at = sess.expires_at
 
-        # Re-load ``user`` as a live, fully-populated instance — the router
+        # Re-load ``user`` as a live, fully-populated instance - the router
         # serialises it via ``PortalUserResponse.model_validate(user)`` and
         # the expire_all() chain above left every attribute detached.
         await self.session.refresh(user)
@@ -529,6 +539,27 @@ class PortalService:
             out.append(r.resource_id)
         return out
 
+    async def list_accessible_projects(
+        self,
+        portal_user_id: uuid.UUID,
+    ) -> list[Any]:
+        """Return the projects (id, name, code) the caller can currently see.
+
+        Resolves the caller's non-expired ``project`` access rules to real
+        :class:`Project` rows so the portal can render a project picker by
+        name. A rule pointing at a project that no longer exists is silently
+        skipped.
+        """
+        from sqlalchemy import select as _select
+
+        from app.modules.projects.models import Project
+
+        accessible = await self.list_accessible_resources(portal_user_id, "project")
+        if not accessible:
+            return []
+        stmt = _select(Project).where(Project.id.in_(accessible)).order_by(Project.name)
+        return list((await self.session.execute(stmt)).scalars().all())
+
     async def enforce_rls(
         self,
         portal_user_id: uuid.UUID,
@@ -655,6 +686,235 @@ class PortalService:
             await self.notif_repo.update_fields(notif.id, read_at=now_utc())
             await self.session.refresh(notif)
         return notif
+
+    # ── Subcontractor payment applications ────────────────────────────────
+    #
+    # RLS model: a subcontractor portal user is granted access to one or more
+    # ``agreement`` resources (resource_type="agreement"). They may list / read
+    # only payment applications under those agreements, and may only submit
+    # against an agreement they hold ``submit`` permission on. Every read filters
+    # on the accessible-agreement set; every miss returns ``None`` so the router
+    # can answer 404 (never 403) on a cross-tenant or unknown id.
+
+    async def list_payment_applications_for_user(
+        self,
+        portal_user_id: uuid.UUID,
+        *,
+        agreement_id: uuid.UUID | None = None,
+        status_filter: str | None = None,
+        offset: int = 0,
+        limit: int = 50,
+    ) -> tuple[list[Any], int]:
+        """List payment applications visible to a portal user.
+
+        Filtered to the agreements the user can access. When ``agreement_id``
+        is supplied it must be in that set, otherwise the result is empty (an
+        inaccessible agreement is indistinguishable from one with no rows).
+        """
+        from sqlalchemy import func as _func
+        from sqlalchemy import select as _select
+
+        from app.modules.subcontractors.models import PaymentApplication
+
+        accessible = await self.list_accessible_resources(portal_user_id, "agreement")
+        if not accessible:
+            return [], 0
+        if agreement_id is not None:
+            if agreement_id not in accessible:
+                return [], 0
+            scope = [agreement_id]
+        else:
+            scope = accessible
+
+        base = _select(PaymentApplication).where(PaymentApplication.agreement_id.in_(scope))
+        if status_filter is not None:
+            base = base.where(PaymentApplication.status == status_filter)
+
+        count_stmt = _select(_func.count()).select_from(base.subquery())
+        total = int((await self.session.execute(count_stmt)).scalar_one())
+
+        stmt = base.order_by(PaymentApplication.submitted_at.desc().nullslast()).offset(offset).limit(limit)
+        rows = list((await self.session.execute(stmt)).scalars().all())
+        return rows, total
+
+    async def get_payment_application_for_user(
+        self,
+        portal_user_id: uuid.UUID,
+        payment_application_id: uuid.UUID,
+    ) -> Any | None:
+        """Return a payment application iff the user can see its agreement.
+
+        Returns ``None`` on a missing id OR on one whose agreement the caller
+        cannot access - the router maps both to 404, so a portal user cannot
+        probe for the existence of another subcontractor's application.
+        """
+        from sqlalchemy import select as _select
+
+        from app.modules.subcontractors.models import PaymentApplication
+
+        stmt = _select(PaymentApplication).where(PaymentApplication.id == payment_application_id)
+        pa = (await self.session.execute(stmt)).scalar_one_or_none()
+        if pa is None:
+            return None
+        accessible = await self.list_accessible_resources(portal_user_id, "agreement")
+        if pa.agreement_id not in accessible:
+            return None
+        return pa
+
+    async def list_payment_application_lines(
+        self,
+        payment_application_id: uuid.UUID,
+    ) -> list[Any]:
+        """Return the raw line rows for a payment application (no RLS - the
+        caller has already resolved access to the parent application).
+        """
+        from sqlalchemy import select as _select
+
+        from app.modules.subcontractors.models import PaymentApplicationLine
+
+        stmt = _select(PaymentApplicationLine).where(
+            PaymentApplicationLine.payment_application_id == payment_application_id,
+        )
+        return list((await self.session.execute(stmt)).scalars().all())
+
+    async def work_package_names_for_agreement(
+        self,
+        agreement_id: uuid.UUID,
+    ) -> dict[uuid.UUID, tuple[str, Any]]:
+        """Map ``{work_package_id: (name, planned_value)}`` for an agreement."""
+        from sqlalchemy import select as _select
+
+        from app.modules.subcontractors.models import WorkPackage
+
+        stmt = _select(WorkPackage).where(WorkPackage.agreement_id == agreement_id)
+        rows = (await self.session.execute(stmt)).scalars().all()
+        return {wp.id: (wp.name, wp.planned_value) for wp in rows}
+
+    async def list_submittable_agreements_for_user(
+        self,
+        portal_user_id: uuid.UUID,
+    ) -> list[Any]:
+        """Return the agreements (with work packages) the user can submit against.
+
+        Backs the submit-form picker: only agreements the portal user holds a
+        non-expired ``agreement`` rule on, and only those currently claimable
+        (status active / completed). Each row carries its work packages so the
+        client can render the line grid without a second round trip.
+        """
+        from sqlalchemy import select as _select
+
+        from app.modules.subcontractors.models import SubcontractAgreement, WorkPackage
+
+        accessible = await self.list_accessible_resources(portal_user_id, "agreement")
+        if not accessible:
+            return []
+
+        stmt = _select(SubcontractAgreement).where(
+            SubcontractAgreement.id.in_(accessible),
+            SubcontractAgreement.status.in_(("active", "completed")),
+        )
+        agreements = list((await self.session.execute(stmt)).scalars().all())
+        if not agreements:
+            return []
+
+        wp_stmt = _select(WorkPackage).where(
+            WorkPackage.agreement_id.in_([a.id for a in agreements]),
+        )
+        wp_rows = (await self.session.execute(wp_stmt)).scalars().all()
+        by_agreement: dict[uuid.UUID, list[Any]] = {}
+        for wp in wp_rows:
+            by_agreement.setdefault(wp.agreement_id, []).append(wp)
+
+        result = []
+        for agr in agreements:
+            result.append((agr, by_agreement.get(agr.id, [])))
+        return result
+
+    async def submit_payment_application_for_user(
+        self,
+        portal_user_id: uuid.UUID,
+        *,
+        agreement_id: uuid.UUID,
+        period_start: Any | None,
+        period_end: Any | None,
+        lines: list[Any],
+        client_ip: str | None = None,
+    ) -> Any:
+        """Submit a payment application on behalf of a portal subcontractor.
+
+        Enforces ``submit`` RLS on the target agreement. The work packages on
+        every line must belong to that agreement (else 404 - we never leak that
+        a foreign work-package id exists). Delegates the actual retention /
+        application-number / ledger / event work to the subcontractors service
+        so the portal path and the internal path stay byte-for-byte consistent.
+        Currency is taken from the agreement; never accepted from the client.
+        """
+        # RLS: submit permission on this agreement, else 404 (not 403).
+        if not await self.enforce_rls(portal_user_id, "agreement", agreement_id, required="submit"):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Payment application not found",
+            )
+
+        # Validate every line's work package belongs to this agreement.
+        wp_map = await self.work_package_names_for_agreement(agreement_id)
+        for line in lines:
+            if line.work_package_id not in wp_map:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Payment application not found",
+                )
+
+        from decimal import Decimal as _Decimal
+
+        from app.modules.subcontractors.schemas import (
+            PaymentApplicationCreate,
+            PaymentApplicationLineCreate,
+        )
+        from app.modules.subcontractors.service import SubcontractorService
+
+        gross = sum((_Decimal(str(line.claimed_amount)) for line in lines), _Decimal("0"))
+        create = PaymentApplicationCreate(
+            agreement_id=agreement_id,
+            period_start=period_start,
+            period_end=period_end,
+            gross_amount=gross,
+            # Leave currency empty so the service falls back to the agreement
+            # currency - the portal client must never set it.
+            currency="",
+            lines=[
+                PaymentApplicationLineCreate(
+                    work_package_id=line.work_package_id,
+                    claimed_amount=_Decimal(str(line.claimed_amount)),
+                )
+                for line in lines
+            ],
+        )
+        svc = SubcontractorService(self.session)
+        pa = await svc.submit_payment_application(create, user_id=str(portal_user_id))
+
+        # Record provenance for the audit trail without a schema change.
+        meta = dict(pa.metadata_ or {})
+        meta.update(
+            {
+                "submitted_via_portal": True,
+                "portal_user_id": str(portal_user_id),
+                "submitted_ip": client_ip,
+            },
+        )
+        await self.session.refresh(pa)
+        pa.metadata_ = meta
+
+        event_bus.publish_detached(
+            "portal.payment_application.submitted",
+            {
+                "payment_application_id": str(pa.id),
+                "agreement_id": str(agreement_id),
+                "portal_user_id": str(portal_user_id),
+            },
+            source_module="portal",
+        )
+        return pa
 
 
 # ── Re-exports for cross-module use ───────────────────────────────────────

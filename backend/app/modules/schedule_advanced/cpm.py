@@ -1,24 +1,37 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍Pure-Python Critical Path Method (CPM) engine — Slice 1.
+"""‌⁠‍Pure-Python Critical Path Method (CPM) engine - Slice 1.
 
 This module is intentionally self-contained: no SQLAlchemy, no FastAPI,
 no third-party deps (no scipy / networkx). Everything is plain ``dataclass``
 + ``list`` / ``dict`` so the engine can be unit-tested in isolation and
 also imported by services that want to run "what-if" scheduling.
 
-Slice 1 scope:
+Scope:
     * Activities with integer ``duration`` (working days).
-    * **FS (Finish-to-Start) dependencies only** with optional integer lag.
-      SS / FF / SF are accepted in the dataclass shape but ignored by the
-      forward / backward pass — marked TODO below.
+    * All four PDM dependency types with optional integer lag (may be
+      negative for lead time):
+
+      ====  ==================  =============================================
+      Code  Name                Forward-pass constraint on successor ``s``
+      ====  ==================  =============================================
+      FS    Finish-to-Start     ``s.ES >= p.EF + lag``
+      SS    Start-to-Start      ``s.ES >= p.ES + lag``
+      FF    Finish-to-Finish    ``s.EF >= p.EF + lag``
+      SF    Start-to-Finish     ``s.EF >= p.ES + lag``
+      ====  ==================  =============================================
+
+      The backward pass mirrors each constraint to bound the predecessor's
+      late dates (see :func:`compute_cpm`).
     * Forward pass → ES / EF.
     * Backward pass → LS / LF.
     * Total float = LS − ES (== LF − EF).
-    * Free float  = min(ES of successors) − EF (0 for terminal nodes).
-    * Critical path marking (total_float == 0).
+    * Free float  = max slip from early dates before any successor's early
+      dates move, computed per link type (0 for terminal nodes when at the
+      component finish).
+    * Critical path marking (total_float <= 0).
     * Cycle detection via DFS (raises :class:`CycleError`).
-    * Disconnected sub-networks supported — every weakly-connected
+    * Disconnected sub-networks supported - every weakly-connected
       component is scheduled independently from t=0.
 
 The existing ``service.cpm_forward_backward_pass`` helper that powers the
@@ -32,11 +45,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-# Dependency type codes. FS is the only one honoured in Slice 1.
-# TODO(Slice 2): support SS (Start-to-Start), FF (Finish-to-Finish),
-#   SF (Start-to-Finish) — both in the forward pass (replace
-#   ``ef[pred] + lag`` with the matching start/finish source) and the
-#   backward pass. UI must NOT expose the picker yet.
+# Dependency type codes - all four PDM link types are honoured in both
+# the forward pass (ES/EF) and the backward pass (LS/LF).
 DepType = Literal["FS", "SS", "FF", "SF"]
 
 
@@ -64,14 +74,14 @@ class Activity:
     """One scheduled activity.
 
     Attributes:
-        id: Unique identifier (any hashable — typically a UUID string or
+        id: Unique identifier (any hashable - typically a UUID string or
             a short code like ``"A"``).
         duration: Working-day duration. Coerced to ``max(0, int(duration))``
-            at network-build time — negative durations behave like
+            at network-build time - negative durations behave like
             milestones.
         predecessors: List of ``(predecessor_id, dep_type, lag_days)``
-            triples. ``dep_type`` is "FS" / "SS" / "FF" / "SF"; Slice 1
-            only honours "FS". ``lag_days`` may be negative (lead time).
+            triples. ``dep_type`` is "FS" / "SS" / "FF" / "SF" (all four
+            are honoured). ``lag_days`` may be negative (lead time).
         required_resources: Mapping of resource code → integer count
             consumed by this activity for its full duration. Used by
             :mod:`leveling`. Empty dict means "no resource constraints".
@@ -174,7 +184,7 @@ class TaskNetwork:
         for root in self._order:
             if colour[root] != WHITE:
                 continue
-            # Iterative DFS — (node, iterator-over-children)
+            # Iterative DFS - (node, iterator-over-children)
             stack: list[tuple[Any, list[tuple[Any, DepType, int]]]] = [(root, list(self._succs[root]))]
             colour[root] = GREY
             while stack:
@@ -197,7 +207,7 @@ class TaskNetwork:
                     # out of the path (producing A → B → A instead of the
                     # correct A → B → C → A when A was the root). We now
                     # stop when we either reach `child_id` again OR exhaust
-                    # the parent chain — the closing ``child_id`` appended
+                    # the parent chain - the closing ``child_id`` appended
                     # below always completes the ring regardless.
                     cycle = [child_id]
                     cur = node
@@ -209,7 +219,7 @@ class TaskNetwork:
                     cycle.append(child_id)
                     cycle.reverse()
                     return cycle
-                # BLACK: already fully explored — skip.
+                # BLACK: already fully explored - skip.
         return None
 
 
@@ -217,7 +227,7 @@ class TaskNetwork:
 
 
 def _topological_order(network: TaskNetwork) -> list[Any]:
-    """Kahn's algorithm — assumes the network is acyclic (caller's job)."""
+    """Kahn's algorithm - assumes the network is acyclic (caller's job)."""
     indeg: dict[Any, int] = {aid: len(network.predecessors(aid)) for aid in network.ids()}
     # Use a list as a FIFO; the network is small so O(n) pop(0) is fine.
     queue: list[Any] = [aid for aid in network.ids() if indeg[aid] == 0]
@@ -255,6 +265,15 @@ def compute_cpm(network: TaskNetwork) -> dict[Any, CPMResult]:
         return {}
 
     # ── Forward pass: ES, EF ─────────────────────────────────────────────
+    # Each predecessor link yields a lower bound on this activity's ES.
+    # Constraints that naturally bound the FINISH (FF / SF) are converted
+    # to an ES bound by subtracting this activity's own duration, since
+    # EF = ES + duration:
+    #
+    #     FS: s.ES >= p.EF + lag                      → es_bound = ef[p] + lag
+    #     SS: s.ES >= p.ES + lag                      → es_bound = es[p] + lag
+    #     FF: s.EF >= p.EF + lag → s.ES >= p.EF+lag-d → es_bound = ef[p] + lag - dur
+    #     SF: s.EF >= p.ES + lag → s.ES >= p.ES+lag-d → es_bound = es[p] + lag - dur
     durations: dict[Any, int] = {}
     es: dict[Any, int] = {}
     ef: dict[Any, int] = {}
@@ -265,11 +284,17 @@ def compute_cpm(network: TaskNetwork) -> dict[Any, CPMResult]:
         durations[aid] = dur
         candidates: list[int] = []
         for p_id, dep_type, lag in network.predecessors(aid):
-            if dep_type != "FS":
-                # TODO(Slice 2): handle SS / FF / SF.
+            if p_id not in es:
                 continue
-            if p_id in ef:
-                candidates.append(ef[p_id] + int(lag))
+            lag = int(lag)
+            if dep_type == "SS":
+                candidates.append(es[p_id] + lag)
+            elif dep_type == "FF":
+                candidates.append(ef[p_id] + lag - dur)
+            elif dep_type == "SF":
+                candidates.append(es[p_id] + lag - dur)
+            else:  # FS (default)
+                candidates.append(ef[p_id] + lag)
         es[aid] = max(candidates) if candidates else 0
         ef[aid] = es[aid] + dur
 
@@ -301,6 +326,15 @@ def compute_cpm(network: TaskNetwork) -> dict[Any, CPMResult]:
             component_finish[root] = ef[aid]
 
     # ── Backward pass: LF, LS ────────────────────────────────────────────
+    # Mirror of the forward pass: each successor link yields an UPPER bound
+    # on this predecessor's LF. Constraints that naturally bound the
+    # predecessor's START (SS / SF) are converted to an LF bound by adding
+    # this activity's own duration, since LF = LS + duration:
+    #
+    #     FS: p.LF <= s.LS - lag                      → lf_bound = ls[s] - lag
+    #     FF: p.LF <= s.LF - lag                      → lf_bound = lf[s] - lag
+    #     SS: p.LS <= s.LS - lag → p.LF <= s.LS-lag+d → lf_bound = ls[s] - lag + dur
+    #     SF: p.LS <= s.LF - lag → p.LF <= s.LF-lag+d → lf_bound = lf[s] - lag + dur
     lf: dict[Any, int] = {}
     ls: dict[Any, int] = {}
     for aid in reversed(order):
@@ -309,11 +343,17 @@ def compute_cpm(network: TaskNetwork) -> dict[Any, CPMResult]:
         dur = durations[aid]
         succ_candidates: list[int] = []
         for s_id, dep_type, lag in network.successors(aid):
-            if dep_type != "FS":
-                # TODO(Slice 2): mirror SS/FF/SF in backward pass.
+            if s_id not in ls:
                 continue
-            if s_id in ls:
-                succ_candidates.append(ls[s_id] - int(lag))
+            lag = int(lag)
+            if dep_type == "SS":
+                succ_candidates.append(ls[s_id] - lag + dur)
+            elif dep_type == "FF":
+                succ_candidates.append(lf[s_id] - lag)
+            elif dep_type == "SF":
+                succ_candidates.append(lf[s_id] - lag + dur)
+            else:  # FS (default)
+                succ_candidates.append(ls[s_id] - lag)
         if succ_candidates:
             lf[aid] = min(succ_candidates)
         else:
@@ -325,14 +365,27 @@ def compute_cpm(network: TaskNetwork) -> dict[Any, CPMResult]:
     results: dict[Any, CPMResult] = {}
     for aid in order:
         total_float = ls[aid] - es[aid]
-        # Free float: how long this activity can slip before delaying any
-        # immediate successor's ES. For a sink it's the slack to its
-        # component finish.
-        fs_succs = [
-            es[s_id] - int(lag) for s_id, dep_type, lag in network.successors(aid) if dep_type == "FS" and s_id in es
-        ]
-        if fs_succs:
-            free_float = min(fs_succs) - ef[aid]
+        # Free float: how long this activity can slip from its EARLY dates
+        # before pushing the early dates of any immediate successor. Each
+        # link type imposes a slack on this activity's EF (mirrors the
+        # forward pass with successors' early dates). For a sink it's the
+        # slack to its own component finish.
+        dur_aid = durations[aid]
+        slack_bounds: list[int] = []
+        for s_id, dep_type, lag in network.successors(aid):
+            if s_id not in es:
+                continue
+            lag = int(lag)
+            if dep_type == "SS":
+                slack_bounds.append((es[s_id] - lag + dur_aid) - ef[aid])
+            elif dep_type == "FF":
+                slack_bounds.append((ef[s_id] - lag) - ef[aid])
+            elif dep_type == "SF":
+                slack_bounds.append((ef[s_id] - lag + dur_aid) - ef[aid])
+            else:  # FS (default)
+                slack_bounds.append((es[s_id] - lag) - ef[aid])
+        if slack_bounds:
+            free_float = min(slack_bounds)
         else:
             free_float = component_finish[_find(aid)] - ef[aid]
         results[aid] = CPMResult(
@@ -383,8 +436,9 @@ def critical_path(
                 path.append(cur)
                 seen.add(cur)
                 next_cur: Any = None
-                for s_id, dep_type, _lag in network.successors(cur):
-                    if dep_type == "FS" and s_id in critical_ids and s_id not in seen:
+                # Follow any critical successor regardless of link type.
+                for s_id, _dep_type, _lag in network.successors(cur):
+                    if s_id in critical_ids and s_id not in seen:
                         next_cur = s_id
                         break
                 cur = next_cur

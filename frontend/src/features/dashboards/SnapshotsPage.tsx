@@ -6,17 +6,19 @@
  * frozen parquet dataset that later tasks (T02 auto-chart, T03
  * autocomplete, T04 filters, …) analyse.
  */
-import { useCallback, useState } from 'react';
+import { useCallback, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import {
   Plus,
-  Layers,
   Trash2,
   FolderOpen,
   FileSpreadsheet,
   Boxes,
+  List,
+  GitCompare,
+  History,
 } from 'lucide-react';
 
 import {
@@ -27,6 +29,8 @@ import {
   EmptyState,
   Skeleton,
 } from '@/shared/ui';
+import { PageHeader } from '@/shared/ui/PageHeader';
+import { DismissibleInfo, IntroRichText } from '@/shared/ui/DismissibleInfo';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { useToastStore } from '@/stores/useToastStore';
 
@@ -37,6 +41,10 @@ import {
   type SnapshotSummary,
 } from './api';
 import { SnapshotCreateModal } from './SnapshotCreateModal';
+import { SnapshotTimeline } from './SnapshotTimeline';
+import { SnapshotDiffView } from './SnapshotDiffView';
+
+type DashboardsView = 'list' | 'timeline' | 'diff';
 
 function formatNumber(n: number): string {
   return new Intl.NumberFormat('en-US').format(n);
@@ -58,12 +66,17 @@ function formatDate(iso: string): string {
 
 export function SnapshotsPage() {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const activeProjectId = useProjectContextStore((s) => s.activeProjectId);
   const activeProjectName = useProjectContextStore((s) => s.activeProjectName);
   const toast = useToastStore((s) => s.addToast);
 
   const [createOpen, setCreateOpen] = useState(false);
+  const [view, setView] = useState<DashboardsView>('list');
+  // Diff view: the two snapshots the user wants to compare (older A, newer B).
+  const [diffA, setDiffA] = useState<string>('');
+  const [diffB, setDiffB] = useState<string>('');
 
   const snapshotsQuery = useQuery({
     queryKey: ['dashboards-snapshots', activeProjectId],
@@ -111,7 +124,7 @@ export function SnapshotsPage() {
 
   if (!activeProjectId) {
     return (
-      <div className="space-y-4 p-4">
+      <div className="space-y-5 animate-fade-in">
         <EmptyState
           icon={<FolderOpen className="h-10 w-10 text-neutral-500" />}
           title={t('dashboards.no_project_title', { defaultValue: 'Select a project first' })}
@@ -132,32 +145,159 @@ export function SnapshotsPage() {
   const snapshots = snapshotsQuery.data?.items ?? [];
 
   return (
-    <div className="space-y-4 p-4" data-testid="dashboards-snapshots-page">
+    <div className="space-y-5 animate-fade-in" data-testid="dashboards-snapshots-page">
       <Breadcrumb
         items={[
-          { label: t('common.dashboard', { defaultValue: 'Dashboard' }), to: '/' },
-          { label: t('dashboards.snapshots', { defaultValue: 'Dashboards' }) },
+          ...(activeProjectName
+            ? [{ label: activeProjectName, to: `/projects/${activeProjectId}` }]
+            : []),
+          { label: t('nav.snapshots', { defaultValue: 'Snapshots' }) },
         ]}
       />
 
-      <header className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="flex items-center gap-2 text-lg font-semibold text-neutral-100">
-            <Layers className="h-5 w-5 text-oe-blue" />
-            {t('dashboards.snapshots_title', { defaultValue: 'Data snapshots' })}
-          </h1>
-          <p className="text-sm text-neutral-400">
-            {activeProjectName || activeProjectId}
-          </p>
+      {/* Header — module name + icon live in the global top bar; this page
+          renders only the muted subtitle + actions (canon §2). */}
+      <PageHeader
+        srTitle={t('dashboards.snapshots_title', { defaultValue: 'Data snapshots' })}
+        subtitle={t('dashboards.snapshots_subtitle', {
+          defaultValue:
+            'Freeze a parquet dataset from your CAD/BIM files, then compare snapshots over time.',
+        })}
+        actions={
+          <>
+            <div className="flex rounded-lg border border-border-light p-0.5" role="tablist">
+              <ViewTab
+                active={view === 'list'}
+                onClick={() => setView('list')}
+                icon={<List className="h-3.5 w-3.5" />}
+                label={t('dashboards.view_list', { defaultValue: 'Snapshots' })}
+                testId="dashboards-view-list"
+              />
+              <ViewTab
+                active={view === 'timeline'}
+                onClick={() => setView('timeline')}
+                icon={<History className="h-3.5 w-3.5" />}
+                label={t('dashboards.view_timeline', { defaultValue: 'Timeline' })}
+                testId="dashboards-view-timeline"
+              />
+              <ViewTab
+                active={view === 'diff'}
+                onClick={() => setView('diff')}
+                icon={<GitCompare className="h-3.5 w-3.5" />}
+                label={t('dashboards.view_diff', { defaultValue: 'Compare' })}
+                testId="dashboards-view-diff"
+              />
+            </div>
+            {view === 'list' && (
+              <Button
+                size="sm"
+                icon={<Plus className="h-3.5 w-3.5" />}
+                onClick={() => setCreateOpen(true)}
+                data-testid="dashboards-new-snapshot-btn"
+              >
+                {t('dashboards.new_snapshot', { defaultValue: 'New snapshot' })}
+              </Button>
+            )}
+          </>
+        }
+      />
+
+      <DismissibleInfo
+        storageKey="dashboards"
+        title={t('dashboards.intro_title', {
+          defaultValue: 'Freeze the model so changes are provable',
+        })}
+        more={
+          t('dashboards.intro_more', { defaultValue: '' })
+            ? <IntroRichText text={t('dashboards.intro_more')} />
+            : undefined
+        }
+        links={[
+          {
+            label: t('nav.data_explorer', { defaultValue: 'Data Explorer' }),
+            onClick: () => navigate('/data-explorer'),
+          },
+          {
+            label: t('nav.bim', { defaultValue: 'BIM' }),
+            onClick: () => navigate('/bim'),
+          },
+        ]}
+      >
+        {t('dashboards.intro_body', {
+          defaultValue:
+            'Pick a project, then freeze its uploaded IFC, RVT, DWG or DGN files into a dated parquet snapshot of every element and category. Compare two snapshots side by side to see exactly what changed between model revisions, and use the timeline to track growth over time. The frozen dataset is what later charts and the Data Explorer query.',
+        })}
+      </DismissibleInfo>
+
+      {view === 'timeline' && (
+        <SnapshotTimeline projectId={activeProjectId} />
+      )}
+
+      {view === 'diff' && (
+        <div className="space-y-3">
+          <Card>
+            <div className="grid gap-3 p-4 sm:grid-cols-2">
+              <label className="space-y-1">
+                <span className="text-xs font-medium text-neutral-400">
+                  {t('dashboards.diff_pick_a', { defaultValue: 'Older snapshot (A)' })}
+                </span>
+                <select
+                  value={diffA}
+                  onChange={(e) => setDiffA(e.target.value)}
+                  data-testid="dashboards-diff-a"
+                  className="w-full rounded-lg border border-border-light bg-surface-primary px-2 py-1.5 text-sm text-content-primary"
+                >
+                  <option value="">
+                    {t('dashboards.diff_pick_placeholder', { defaultValue: 'Select a snapshot…' })}
+                  </option>
+                  {snapshots.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="space-y-1">
+                <span className="text-xs font-medium text-neutral-400">
+                  {t('dashboards.diff_pick_b', { defaultValue: 'Newer snapshot (B)' })}
+                </span>
+                <select
+                  value={diffB}
+                  onChange={(e) => setDiffB(e.target.value)}
+                  data-testid="dashboards-diff-b"
+                  className="w-full rounded-lg border border-border-light bg-surface-primary px-2 py-1.5 text-sm text-content-primary"
+                >
+                  <option value="">
+                    {t('dashboards.diff_pick_placeholder', { defaultValue: 'Select a snapshot…' })}
+                  </option>
+                  {snapshots.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          </Card>
+          {diffA && diffB && diffA !== diffB ? (
+            <SnapshotDiffView snapshotAId={diffA} snapshotBId={diffB} />
+          ) : (
+            <EmptyState
+              icon={<GitCompare className="h-10 w-10 text-neutral-500" />}
+              title={t('dashboards.diff_pick_two_title', {
+                defaultValue: 'Pick two snapshots to compare',
+              })}
+              description={t('dashboards.diff_pick_two_desc', {
+                defaultValue:
+                  'Select an older and a newer snapshot above to see the schema-level changes between them.',
+              })}
+            />
+          )}
         </div>
-        <Button
-          onClick={() => setCreateOpen(true)}
-          data-testid="dashboards-new-snapshot-btn"
-        >
-          <Plus className="mr-1 h-4 w-4" />
-          {t('dashboards.new_snapshot', { defaultValue: 'New snapshot' })}
-        </Button>
-      </header>
+      )}
+
+      {view === 'list' && (
+        <>
 
       {snapshotsQuery.isLoading && (
         <div className="grid gap-3 md:grid-cols-2">
@@ -211,6 +351,8 @@ export function SnapshotsPage() {
           ))}
         </div>
       )}
+        </>
+      )}
 
       {createOpen && (
         <SnapshotCreateModal
@@ -220,6 +362,34 @@ export function SnapshotsPage() {
         />
       )}
     </div>
+  );
+}
+
+interface ViewTabProps {
+  active: boolean;
+  onClick: () => void;
+  icon: ReactNode;
+  label: string;
+  testId: string;
+}
+
+function ViewTab({ active, onClick, icon, label, testId }: ViewTabProps) {
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={active}
+      onClick={onClick}
+      data-testid={testId}
+      className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+        active
+          ? 'bg-oe-blue text-white'
+          : 'text-neutral-400 hover:bg-neutral-800/60 hover:text-neutral-200'
+      }`}
+    >
+      {icon}
+      {label}
+    </button>
   );
 }
 

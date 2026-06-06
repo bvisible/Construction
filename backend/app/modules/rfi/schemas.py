@@ -1,4 +1,4 @@
-"""‌⁠‍RFI Pydantic schemas — request/response models."""
+"""‌⁠‍RFI Pydantic schemas - request/response models."""
 
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
@@ -86,7 +86,7 @@ class RFICreate(BaseModel):
     priority: str | None = Field(
         default=None,
         pattern=r"^(low|normal|high|critical)$",
-        description="Priority — low | normal | high | critical.",
+        description="Priority - low | normal | high | critical.",
     )
     discipline: str | None = Field(default=None, max_length=50)
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -128,7 +128,7 @@ class RFIUpdate(BaseModel):
     priority: str | None = Field(
         default=None,
         pattern=r"^(low|normal|high|critical)$",
-        description="Priority — low | normal | high | critical.",
+        description="Priority - low | normal | high | critical.",
     )
     discipline: str | None = Field(default=None, max_length=50)
     metadata: dict[str, Any] | None = None
@@ -143,6 +143,14 @@ class RFIRespondRequest(BaseModel):
     @classmethod
     def _sanitise(cls, v: str) -> str:
         return _sanitise_rfi_text(v) or ""
+
+
+class StartApprovalRequest(BaseModel):
+    """Request body for starting a routed approval workflow (feature 06)."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    route_id: UUID
 
 
 class RFIResponse(BaseModel):

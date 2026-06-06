@@ -42,7 +42,14 @@ from app.dependencies import (
     SessionDep,
     verify_project_access,
 )
+from app.modules.approval_routes.schemas import (
+    InstanceResponse,
+    StepStateResponse,
+)
+from app.modules.approval_routes.service import ApprovalRouteService
 from app.modules.submittals.schemas import (
+    StartApprovalRequest,
+    SubmittalApproveRequest,
     SubmittalCreate,
     SubmittalResponse,
     SubmittalReviewRequest,
@@ -54,7 +61,7 @@ router = APIRouter(tags=["submittals"])
 logger = logging.getLogger(__name__)
 
 # Magic-byte allow-list for direct submittal-attachment uploads.
-# Submittals are shop drawings, product data, samples, test reports —
+# Submittals are shop drawings, product data, samples, test reports -
 # the realistic format set is PDFs, vector CAD (DWG/DXF/IFC/GLB), Office
 # ZIP containers, and site photos. ``xml`` is excluded deliberately: the
 # stdlib detector tolerates ``<html>...`` as XML and HTML payloads have
@@ -83,7 +90,7 @@ _ALLOWED_ATTACHMENT_TYPES = frozenset(
 # already covers it; created lazily on first upload.
 ATTACHMENTS_DIR = Path("uploads/submittals/attachments")
 
-# Per-file upload cap — submittal attachments occasionally include large
+# Per-file upload cap - submittal attachments occasionally include large
 # RVT exports / BIM glTF files. 50 MB matches the documents-module cap
 # in v4.2.3 and bounds memory at a couple of attachments per request.
 _MAX_UPLOAD_BYTES = 50 * 1024 * 1024
@@ -128,6 +135,7 @@ async def _fetch_user_names(
 def _to_response(item: object, name_map: dict[str, str] | None = None) -> SubmittalResponse:
     names = name_map or {}
     ball = str(item.ball_in_court) if item.ball_in_court else None  # type: ignore[attr-defined]
+    meta = getattr(item, "metadata_", {}) or {}
     return SubmittalResponse(
         id=item.id,  # type: ignore[attr-defined]
         project_id=item.project_id,  # type: ignore[attr-defined]
@@ -147,7 +155,9 @@ def _to_response(item: object, name_map: dict[str, str] | None = None) -> Submit
         date_returned=item.date_returned,  # type: ignore[attr-defined]
         linked_boq_item_ids=item.linked_boq_item_ids or [],  # type: ignore[attr-defined]
         created_by=item.created_by,  # type: ignore[attr-defined]
-        metadata=getattr(item, "metadata_", {}),
+        metadata=meta,
+        description=meta.get("description"),
+        review_notes=meta.get("review_notes"),
         created_at=item.created_at,  # type: ignore[attr-defined]
         updated_at=item.updated_at,  # type: ignore[attr-defined]
     )
@@ -301,12 +311,14 @@ async def approve_submittal(
     submittal_id: uuid.UUID,
     user_id: CurrentUserId,
     session: SessionDep,
+    body: SubmittalApproveRequest | None = None,
     _perm: None = Depends(RequirePermission("submittals.update")),
     service: SubmittalService = Depends(_get_service),
 ) -> SubmittalResponse:
     """Final approval of a submittal.
 
-    Requires the ``manager`` role (or higher).
+    Requires the ``manager`` role (or higher). An optional body may carry the
+    approver's ``notes``, which are persisted into the submittal metadata.
     """
     allowed, _ = approval_limiter.is_allowed(str(user_id))
     if not allowed:
@@ -316,18 +328,90 @@ async def approve_submittal(
         )
     existing = await service.get_submittal(submittal_id)
     await verify_project_access(existing.project_id, str(user_id), session)
-    submittal = await service.approve_submittal(submittal_id, approver_id=user_id)
+    submittal = await service.approve_submittal(submittal_id, approver_id=user_id, notes=body.notes if body else None)
     name_map = await _fetch_user_names(session, [submittal.ball_in_court])
     return _to_response(submittal, name_map)
+
+
+# ── Approval workflow (feature 06) ─────────────────────────────────────────
+#
+# Thin convenience surface that resolves the submittal's project scope and
+# delegates to the generic approval-routes engine, so a caller never has to
+# know the submittal's project id or juggle two modules. The decide / cancel
+# actions stay on the generic ``/approval-routes/instances/{id}`` endpoints
+# (the frontend already calls them and they carry the engine's race guard).
+
+
+async def _instance_to_response(
+    instance: object,
+    engine: ApprovalRouteService,
+) -> InstanceResponse:
+    """Serialise an engine instance + its step states (mirror of the engine router)."""
+    states = await engine.list_step_states(instance.id)  # type: ignore[attr-defined]
+    payload = InstanceResponse.model_validate(instance)
+    payload.step_states = [StepStateResponse.model_validate(s) for s in states]
+    return payload
+
+
+@router.post(
+    "/{submittal_id}/route/",
+    response_model=InstanceResponse,
+    status_code=201,
+    # Both verbs: starting a routed sign-off touches the submittal (it moves
+    # the FSM into review) and creates an approval instance. Requiring both
+    # keeps RBAC consistent with the engine surface, mirroring the RFI
+    # create-variation double-permission pattern.
+    dependencies=[
+        Depends(RequirePermission("submittals.update")),
+        Depends(RequirePermission("approval_routes.write")),
+    ],
+)
+async def start_submittal_approval(
+    submittal_id: uuid.UUID,
+    body: StartApprovalRequest,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    service: SubmittalService = Depends(_get_service),
+) -> InstanceResponse:
+    """Start a routed approval workflow against a submittal.
+
+    Resolves project scope from the submittal (IDOR-safe), then delegates to
+    the approval-routes engine. The engine rejects a second pending workflow
+    on the same submittal with 409.
+    """
+    submittal = await service.get_submittal(submittal_id)
+    await verify_project_access(submittal.project_id, str(user_id), session)
+    instance = await service.start_approval(submittal_id, body.route_id, started_by=user_id)
+    return await _instance_to_response(instance, ApprovalRouteService(session))
+
+
+@router.get(
+    "/{submittal_id}/route/",
+    response_model=InstanceResponse | None,
+    dependencies=[Depends(RequirePermission("submittals.read"))],
+)
+async def get_submittal_approval(
+    submittal_id: uuid.UUID,
+    session: SessionDep,
+    user_id: CurrentUserId = None,  # type: ignore[assignment]
+    service: SubmittalService = Depends(_get_service),
+) -> InstanceResponse | None:
+    """Return the latest approval instance on a submittal, or null if none."""
+    submittal = await service.get_submittal(submittal_id)
+    await verify_project_access(submittal.project_id, str(user_id), session)
+    instance = await service.get_latest_approval(submittal_id)
+    if instance is None:
+        return None
+    return await _instance_to_response(instance, ApprovalRouteService(session))
 
 
 # ── Attachments ──────────────────────────────────────────────────────────
 #
 # Two flavours of attachment:
-#   * Direct upload (``POST /attachments/upload/``) — raw bytes pass through
+#   * Direct upload (``POST /attachments/upload/``) - raw bytes pass through
 #     the magic-byte gate before they are written to disk. New in R4+R5,
 #     mirroring correspondence / compliance_docs / punchlist gates.
-#   * Document link (``POST /attachments/``) — references an already-
+#   * Document link (``POST /attachments/``) - references an already-
 #     uploaded ``Document`` row by id. Retained for backwards compat with
 #     existing front-end flows; the magic-byte gate runs in the documents
 #     module at the original upload site.
@@ -414,13 +498,13 @@ async def upload_submittal_attachment(
     """
     from datetime import UTC, datetime
 
-    # IDOR gate must run BEFORE we read any bytes — a caller without
+    # IDOR gate must run BEFORE we read any bytes - a caller without
     # project access never causes us to touch the disk or learn whether
     # the submittal exists.
     submittal = await service.get_submittal(submittal_id)
     await verify_project_access(submittal.project_id, str(user_id), session)
 
-    # Reject closed submittals — they're terminal and should not accept
+    # Reject closed submittals - they're terminal and should not accept
     # late attachments. ``draft`` and the active FSM states are fine.
     if submittal.status == "closed":
         raise HTTPException(
@@ -428,7 +512,7 @@ async def upload_submittal_attachment(
             detail="Cannot attach files to a closed submittal",
         )
 
-    # Snapshot row attributes BEFORE update_fields — that helper expires
+    # Snapshot row attributes BEFORE update_fields - that helper expires
     # the ORM row so a later lazy-attribute access (project_id, status)
     # would trigger MissingGreenlet under async context.
     project_id_s = str(submittal.project_id)
@@ -485,7 +569,7 @@ async def upload_submittal_attachment(
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Unable to save attachment — storage error",
+            detail="Unable to save attachment - storage error",
         ) from exc
 
     relative_path = f"submittals/attachments/{safe_name}"
@@ -543,7 +627,7 @@ async def add_submittal_attachment(
 
     The Document must already exist (upload via ``POST /api/documents/``);
     this endpoint creates the association and stores it inside the
-    submittal's metadata — no new table required.
+    submittal's metadata - no new table required.
     """
     from datetime import UTC, datetime
 
@@ -560,7 +644,7 @@ async def add_submittal_attachment(
     meta = dict(getattr(submittal, "metadata_", {}) or {})
     attachments: list[dict] = list(meta.get("attachments", []) or [])
 
-    # Reject duplicates — idempotency for retry-safe clients.
+    # Reject duplicates - idempotency for retry-safe clients.
     if any(str(a.get("document_id")) == str(data.document_id) for a in attachments if isinstance(a, dict)):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -598,7 +682,7 @@ async def remove_submittal_attachment(
 ) -> None:
     """Remove a document attachment reference from a submittal.
 
-    Does not delete the underlying Document — use
+    Does not delete the underlying Document - use
     ``DELETE /api/documents/{id}`` for that.
     """
     submittal = await service.get_submittal(submittal_id)

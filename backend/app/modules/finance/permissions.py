@@ -10,12 +10,12 @@ def register_finance_permissions() -> None:
         Three new permission keys split off from the generic
         ``finance.update`` so financial commitments require MANAGER:
 
-        * ``finance.approve`` — invoice approval (draft → sent). The
+        * ``finance.approve`` - invoice approval (draft → sent). The
           legacy route used ``finance.update`` (EDITOR), which let any
           estimator move an invoice to a payable state.
-        * ``finance.pay`` — mark invoice paid. Same rationale: paying
+        * ``finance.pay`` - mark invoice paid. Same rationale: paying
           an invoice is a binding financial action, not a CRUD edit.
-        * ``finance.record_payment`` — recording a payment row against
+        * ``finance.record_payment`` - recording a payment row against
           an invoice. EDITOR can no longer fabricate ledger entries.
     """
     permission_registry.register_module_permissions(
@@ -29,6 +29,11 @@ def register_finance_permissions() -> None:
             "finance.approve": Role.MANAGER,
             "finance.pay": Role.MANAGER,
             "finance.record_payment": Role.MANAGER,
+            # Gap E (Wave 6): manually raising the receivable from a certified
+            # claim is a financial commitment (it books revenue against the
+            # client), so it sits at MANAGER alongside approve/pay. The event
+            # subscriber path is system-driven and bypasses the permission gate.
+            "finance.invoice_from_claim": Role.MANAGER,
             # TOP-30 #4: ERP / accounting connectors. Reading the catalogue
             # and sync history is VIEWER; managing configs (which touch
             # encrypted credentials) and triggering a live sync (which mutates

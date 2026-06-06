@@ -5,12 +5,12 @@
 Holds the two sub-feature services side by side so the router stays
 thin:
 
-* :class:`CrossProjectSearchService` — ranked file search across every
+* :class:`CrossProjectSearchService` - ranked file search across every
   project the caller can read. Optional ``oe_file_search`` integration
   via soft import.
-* :class:`DistributionListService` — CRUD for distribution lists +
+* :class:`DistributionListService` - CRUD for distribution lists +
   members.
-* :class:`SubscriptionService` — CRUD for per-project/kind subs.
+* :class:`SubscriptionService` - CRUD for per-project/kind subs.
 
 Per the architecture guide §"no hard import" we never ``import`` the optional
 ``oe_file_search`` module at module-load time. Instead the search
@@ -28,6 +28,7 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.dependencies import verify_project_access
 from app.modules.file_distribution.models import (
     FileDistributionList,
     FileDistributionMember,
@@ -42,7 +43,7 @@ from app.modules.file_distribution.schemas import (
     SubscriptionCreate,
 )
 
-if TYPE_CHECKING:  # pragma: no cover — typing only
+if TYPE_CHECKING:  # pragma: no cover - typing only
     pass
 
 logger = logging.getLogger(__name__)
@@ -88,7 +89,7 @@ class CrossProjectSearchService:
         Two checks needed because a clean install may have the Python
         module shipped but the DB table not yet created (e.g. fresh
         SQLite that hasn't run create_all). We treat either failure
-        as "no content index — fall back".
+        as "no content index - fall back".
         """
         if self._content_index_available is not None:
             return self._content_index_available
@@ -100,11 +101,11 @@ class CrossProjectSearchService:
             from app.modules.file_search.models import (  # noqa: F401
                 FileSearchIndex,
             )
-        except Exception:  # noqa: BLE001 — broad on purpose
+        except Exception:  # noqa: BLE001 - broad on purpose
             self._content_index_available = False
             return False
 
-        # Smoke probe the table — even ``SELECT 1`` against a missing
+        # Smoke probe the table - even ``SELECT 1`` against a missing
         # table raises in SQLite, so the failure path here also
         # disables the index gracefully on clean installs.
         try:
@@ -136,7 +137,7 @@ class CrossProjectSearchService:
             else {"document", "sheet", "photo"}
         )
         # Restrict to kinds the canonical-name search actually backs.
-        # Everything else is silently dropped — the caller already
+        # Everything else is silently dropped - the caller already
         # picked from a fixed dropdown so a bad value is impossible
         # from the UI but we don't want to 500 on a hand-rolled probe.
         kinds_set &= {"document", "sheet", "photo"}
@@ -295,7 +296,7 @@ class CrossProjectSearchService:
                             ),
                         )
                 used_content_index = True
-            except Exception:  # noqa: BLE001 — fall back if anything blows up
+            except Exception:  # noqa: BLE001 - fall back if anything blows up
                 logger.exception(
                     "file_search content index probe failed; falling back to canonical_name-only search",
                 )
@@ -534,7 +535,7 @@ class SubscriptionService:
         """Subscriptions belonging to the calling user in ``project_id``.
 
         We deliberately scope to the caller's own user_id / email here
-        — a sub authored by user A and pointing at user B's email is
+        - a sub authored by user A and pointing at user B's email is
         still A's resource. The cross-project search and the
         subscription manager UI both want "what does this user
         receive?" so per-user filtering is the natural answer.
@@ -588,7 +589,7 @@ class SubscriptionService:
             file_kind=payload.file_kind or "*",
             subscriber_email=payload.subscriber_email.strip().lower(),
             # Default to the calling user when the payload didn't
-            # carry an explicit user id — that's the overwhelmingly
+            # carry an explicit user id - that's the overwhelmingly
             # common "subscribe me" case.
             subscriber_user_id=payload.subscriber_user_id or user_id,
             notify_on=list(payload.notify_on),
@@ -615,6 +616,13 @@ class SubscriptionService:
         )
         if row is None:
             raise DistributionNotFoundError(str(subscription_id))
+        # IDOR guard: file_distribution.subscribe is a global role and an
+        # external-only subscription has subscriber_user_id IS NULL, so the
+        # subscriber-ownership check below would let any permission holder
+        # delete subs in projects they cannot access. Mirror create()'s
+        # verify_project_access gate (raises 404 on denial, matching the
+        # codebase IDOR policy) before touching the row.
+        await verify_project_access(row.project_id, str(user_id), self.session)
         if row.subscriber_user_id is not None and row.subscriber_user_id != user_id:
             # Only the subscriber themselves (or, indirectly via
             # cascade, the project owner) can delete a sub.
@@ -645,7 +653,7 @@ async def on_file_new_revision(
     in-app notification via :class:`NotificationService`.
 
     External-only subscribers (those with ``subscriber_user_id IS
-    NULL``) are not notified here — the email digest channel owns that
+    NULL``) are not notified here - the email digest channel owns that
     side of the fan-out and lives outside this module. Returns the
     count of notifications created so callers / tests can assert on
     delivery.
@@ -658,7 +666,7 @@ async def on_file_new_revision(
     # Skip the ``"updated"`` event branch entirely when subscriptions
     # explicitly opt out of it via ``notify_on``. We treat a new
     # revision as ``"updated"`` because the file identity (project
-    # scope + canonical name) is unchanged — only the contents
+    # scope + canonical name) is unchanged - only the contents
     # changed. Subs that asked only for ``"created"`` get nothing.
     stmt = select(FileDistributionSubscription).where(
         FileDistributionSubscription.project_id == project_id,
@@ -673,7 +681,7 @@ async def on_file_new_revision(
     if not subs:
         return 0
 
-    # Per-sub ``notify_on`` filter — keep only subs that opted into
+    # Per-sub ``notify_on`` filter - keep only subs that opted into
     # ``"updated"`` (our model for "new revision posted").
     matching: list[FileDistributionSubscription] = []
     for sub in subs:
@@ -700,7 +708,7 @@ async def on_file_new_revision(
     created = 0
     for sub in matching:
         if sub.subscriber_user_id is None:
-            # External-only subscriber — out of scope here; email
+            # External-only subscriber - out of scope here; email
             # digest channel handles those.
             continue
         try:

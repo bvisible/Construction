@@ -90,17 +90,17 @@ increment, not a fake "done" on the XL items.
 | 11 | Change Order AI draft + impact simulator | DONE | 3 | deterministic what-if simulator on CO detail (budget before/after, finish-date shift, EVM BAC/EAC/VAC/SPI/CPI recomputed, BOQ preview, cost/days overrides + re-run, save-scenario to audit trail) + AI/heuristic draft-from-notes modal (AI when a key is set, deterministic figure-parsing fallback otherwise, human reviews before create). FX-correct, no LLM required for the simulator. Metadata-stored provenance/scenarios so no migration (single head v3154). 16 unit tests; browser-verified end to end (c921fb805) |
 | 12 | ITP workflow with hold points | triaging | 5 | |
 | 13 | LTIFR/TRIR computation | DONE | - | safety/service.py:488-503 |
-| 14 | Native offline-first mobile app | triaging | 4 | FieldShellPage stub |
-| 15 | Auto client/owner progress report | triaging | 6 | |
+| 14 | Native offline-first mobile app | PARTIAL | 4 | offline slice shipped (v6.8.0): shared/lib/offline mutation queue + connectivity + field service worker + useFieldSync; field app keeps working offline and syncs on reconnect. Full native mobile shell still a stub (FieldShellPage) |
+| 15 | Auto client/owner progress report | PARTIAL | 6 | progress-claim invoicing shipped (v6.8.0): auto-generate by contract type (lump sum / cost plus / T&M / unit price) with retention + draft->submitted->approved->certified->paid lifecycle; contracts router /progress-claims + ProgressClaimDetailPage + line table + test. NOT shipped: the owner-facing progress *report* document (photo galleries, narrative, scheduled email distribution to portal) from the design doc |
 | 16 | Semantic AI assistant over docs | triaging | 5 | |
 | 17 | Auto drawing/BIM revision compare + cost | triaging | 5 | |
-| 18 | ML quantity extraction / symbol recog | triaging | 5 | |
-| 19 | Predictive schedule/cost risk analytics | triaging | 5 | |
-| 20 | Vendor/sub scorecards + prequal gating | PARTIAL | 3 | prequalification award gate done: blocked/rejected/suspended sub cannot have an agreement activated or be paid (409), award-eligibility endpoint + drawer banner. NCR-driven scorecard auto-decrement still open (no NCR<->sub link exists yet) |
+| 18 | ML quantity extraction / symbol recog | DONE | 5 | symbol-signature match shipped (v6.8.0): match_elements/symbol_signature.py + signature_match_service.py learn a symbol's geometric signature and suggest recurrences across a drawing set; SymbolSuggestionPanel UI; unit + component tests |
+| 19 | Predictive schedule/cost risk analytics | DONE | 5 | project_intelligence forecast.py + service.py (deterministic cost/schedule forecast) and risk/escalation.py (slip->risk escalation path); ForecastInsightsPanel UI; unit + DB tests (v6.8.0) |
+| 20 | Vendor/sub scorecards + prequal gating | DONE | 3 | prequal award gate (blocked/rejected/suspended sub cannot activate an agreement or be paid, 409) plus event-driven scorecard auto-decrement now closed (v6.8.0): subcontractors/events.py subscribers on NCR / HSE incident / schedule slip call bump_rating_from_event, idempotent monthly rollup (migration v3158 unique (sub, period)); test_scorecards + test_subs_rating_event_wiring. No scorecard display UI yet |
 | 21 | ISO 19650 CDE suitability propagation | triaging | 6 | |
-| 22 | Subcontractor portal invoice submission | triaging | 6 | |
+| 22 | Subcontractor portal invoice submission | PARTIAL | 6 | AR side shipped (v6.8.0): finance create_receivable_from_claim raises an invoice from a certified claim; ClaimInvoicePreview + PaymentModal record payment with retainage withholding; internal subcontractor PaymentApplication CRUD exists. NOT shipped: the actual portal self-submission path (no /portal payment-application endpoints, no portal-facing form, no RLS for a sub submitting their own application) |
 | 23 | Persistent clash profiles + grouping | triaging | 5 | |
-| 24 | Risk<->task + schedule-slip<->risk auto | triaging | 1 | |
+| 24 | Risk<->task + schedule-slip<->risk auto | DONE | 1 | risk/escalation.py wires schedule-slip events to risk auto-escalation (v6.8.0) |
 | 25 | Digital handover / closeout package | triaging | 6 | |
 | 26 | Equipment predictive maintenance | triaging | 4 | |
 | 27 | Compliance rule engine enforced at gates | triaging | 6 | |
@@ -339,3 +339,20 @@ increment, not a fake "done" on the XL items.
   crash, editor role got 403, delete 204), tsc 0 errors + production build OK,
   ruff clean, and a Playwright browser pass over the Connectors tab with zero
   console errors. Wave 3 (#9, #10, #11, #4) complete. NEXT: Waves 4-6.
+- 2026-06-04: WAVES 4-6 + LEFTOVER SHIPPED AND PUBLISHED as v6.8.0 (commit
+  89238c030, tag v6.8.0, single migration head v3159). Live on PyPI
+  (openconstructionerp 6.8.0), Docker GHCR (6.8.0 / 6.8 / latest all pullable)
+  and a GitHub Release. Status table updated above with honest per-item
+  verdicts after a read-only verification pass:
+  #18 symbol-signature match DONE, #19 predictive cost/risk forecast + risk
+  escalation DONE, #20 sub scorecard event auto-decrement DONE (gap closed),
+  #24 schedule-slip->risk DONE, #5 resource leveling page added, #14 offline
+  slice PARTIAL (queue + service worker + sync; native shell still stub),
+  #15 PARTIAL (progress-claim invoicing shipped; owner progress *report* with
+  photos + scheduled email NOT shipped), #22 PARTIAL (AR invoice-from-claim +
+  retainage payment shipped; the subcontractor *portal self-submission* path is
+  not built). Also in this release: DWG/PDF takeoff real-metre fix and the
+  full i18n backlog (~22k strings across 26 locales). REMAINING for a clean
+  close of #15/#22: build the owner progress-report document + scheduled
+  distribution (#15) and the /portal payment-application submission endpoints +
+  form with RLS (#22).

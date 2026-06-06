@@ -2,12 +2,13 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { Search, ChevronDown, ChevronRight, LogOut, User, Settings, Menu, MessageSquarePlus, FolderOpen, CheckCircle2, XCircle, Bug, BookOpen, Loader2, Upload, HelpCircle, Mail, ExternalLink, Github, Sun, Moon, Monitor } from 'lucide-react';
+import { Search, ChevronDown, ChevronRight, LogOut, User, Settings, Menu, MessageSquarePlus, FolderOpen, CheckCircle2, XCircle, Bug, BookOpen, Loader2, Upload, HelpCircle, Mail, ExternalLink, Github, Sun, Moon, Monitor, Info } from 'lucide-react';
 import clsx from 'clsx';
 import { SUPPORTED_LANGUAGES, getLanguageByCode } from '../i18n';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useUploadQueueStore } from '@/stores/useUploadQueueStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
+import { useModuleInfoStore } from '@/stores/useModuleInfoStore';
 import { useThemeStore } from '@/stores/useThemeStore';
 import { CountryFlag, PartnerLogoBadge } from '@/shared/ui';
 import { usePartnerPack } from '@/shared/hooks/usePartnerPack';
@@ -25,6 +26,7 @@ import { useToastStore } from '@/stores/useToastStore';
 import { useI18nReady } from '@/shared/lib/useI18nReady';
 import { SupportUsButton } from './SupportUsButton';
 import { SubscribeButton } from './SubscribeButton';
+import { getRouteIcon } from './routeIcons';
 
 /**
  * Map the English page titles passed from App.tsx routes to i18n keys.
@@ -135,6 +137,7 @@ const TITLE_I18N_MAP: Record<string, string> = {
   'Procurement': 'procurement.title',
   // Analytics
   'Reports': 'nav.reports',
+  'Project Controls': 'nav.project_controls',
   'BI Dashboards': 'nav.bi_dashboards',
   'Dashboards': 'nav.snapshots',
   'Reporting Dashboards': 'nav.reporting_dashboards',
@@ -182,9 +185,15 @@ export function Header({ title, onMenuClick }: HeaderProps) {
   // every operator. The chip sits in a flex-1 column that yields space, so it
   // never has to push the action buttons into icon-only mode to fit.
   const packActive = usePartnerPack().data?.active === true;
+  const location = useLocation();
   const translatedTitle = title
     ? t(TITLE_I18N_MAP[title] ?? title, { defaultValue: title })
     : undefined;
+  // Icon for the active module, mirroring the matching sidebar row. Shown as
+  // a small chip before the top-bar title so each module is identifiable at
+  // the very top. `null` when the route has no sidebar entry (then nothing
+  // renders and the layout is unchanged).
+  const RouteIcon = getRouteIcon(location.pathname);
   const currentLang = getLanguageByCode(i18n.language) ?? { code: 'en', name: 'English', flag: '', country: 'gb' };
   const openCommandPalette = useCallback(() => {
     // Dispatch Ctrl+K to open the CommandPalette managed by App.tsx
@@ -230,9 +239,34 @@ export function Header({ title, onMenuClick }: HeaderProps) {
               className="hidden lg:block shrink-0 text-content-quaternary/60"
               aria-hidden
             />
-            <h1 className="hidden lg:block text-base font-semibold text-content-primary truncate sm:text-lg">{translatedTitle}</h1>
+            {/* text-base until xl: at lg widths the right cluster + project
+                pill left too little room and module names truncated to
+                "Estima..." (uniformity sweep S5 follow-up). */}
+            <h1 className="hidden lg:flex items-center gap-2 min-w-0 text-base font-semibold text-content-primary xl:text-lg">
+              {/* Module icon — mirrors the active route's sidebar icon so the
+                  top title is visually tied to the module. Decorative
+                  (aria-hidden); absent (no layout shift) when the route has
+                  no sidebar entry. */}
+              {RouteIcon && (
+                <RouteIcon
+                  size={18}
+                  strokeWidth={1.75}
+                  className="shrink-0 text-content-secondary"
+                  aria-hidden
+                />
+              )}
+              <span className="truncate">{translatedTitle}</span>
+            </h1>
           </>
         )}
+
+        {/* Collapsed module-info re-opener. When the page's DismissibleInfo
+            card is collapsed it vanishes from the page entirely (founder
+            decision 2026-06-06) and registers here: project pill › module
+            name › THIS icon. One click re-expands the card in the page.
+            Visible at every breakpoint - on mobile the in-page card is the
+            only other surface, so this is the sole way back. */}
+        <ModuleInfoReopener />
       </div>
 
       {/* ── Partner co-brand chip (center column) ───────────────────────
@@ -279,7 +313,9 @@ export function Header({ title, onMenuClick }: HeaderProps) {
             'text-sm text-content-tertiary shadow-sm',
             'transition-colors duration-fast ease-oe',
             'hover:border-content-quaternary/40 hover:bg-white dark:hover:bg-surface-primary hover:text-content-secondary',
-            'w-40 md:w-44 lg:w-56',
+            // w-56 only at xl: at lg the wide search box squeezed the left
+            // workspace zone and truncated the module title.
+            'w-40 md:w-44 xl:w-56',
           )}
         >
           <Search size={14} strokeWidth={1.75} className="shrink-0" />
@@ -328,6 +364,31 @@ export function Header({ title, onMenuClick }: HeaderProps) {
         <UserMenu />
       </div>
     </header>
+  );
+}
+
+/* ── Module info re-opener (top bar) ──────────────────────────────────── */
+
+/** Small info icon after the module title, shown ONLY while the page's
+ *  DismissibleInfo card is collapsed. Clicking it re-expands the card
+ *  (and this icon disappears, because the card unregisters itself). */
+function ModuleInfoReopener() {
+  const { t } = useTranslation();
+  const hasCollapsed = useModuleInfoStore((s) => s.entries.length > 0);
+  const expandAll = useModuleInfoStore((s) => s.expandAll);
+  if (!hasCollapsed) return null;
+  const label = t('common.module_info', { defaultValue: 'Module information' });
+  return (
+    <button
+      type="button"
+      onClick={expandAll}
+      aria-label={label}
+      title={label}
+      data-testid="header-module-info"
+      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-content-tertiary transition-colors hover:bg-surface-secondary hover:text-content-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
+    >
+      <Info size={15} strokeWidth={1.75} />
+    </button>
   );
 }
 
@@ -460,10 +521,10 @@ function BugReportMenu() {
   const handleEmail = () => {
     setOpen(false);
     const { body, title } = buildBugReportUrl(t);
-    const subject = `OpenConstructionERP Issue — ${title}`;
+    const subject = `OpenConstructionERP Issue - ${title}`;
     // mailto bodies are also length-limited (~2000 chars in Chrome),
     // so we trim aggressively. The downloaded log JSON is the long form.
-    const safeBody = body.length > 1500 ? `${body.slice(0, 1500)}\n\n_[truncated — attach the JSON log if needed]_` : body;
+    const safeBody = body.length > 1500 ? `${body.slice(0, 1500)}\n\n_[truncated - attach the JSON log if needed]_` : body;
     const href = `mailto:info@datadrivenconstruction.io?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(safeBody)}`;
     window.location.href = href;
   };
@@ -592,7 +653,7 @@ function BugReportMenu() {
             </div>
             <p className="mt-1 text-2xs text-content-tertiary leading-snug">
               {t('bug.menu_subheading', {
-                defaultValue: 'Pick where to send it — every channel includes the same diagnostic payload.',
+                defaultValue: 'Pick where to send it - every channel includes the same diagnostic payload.',
               })}
             </p>
           </div>
@@ -610,7 +671,7 @@ function BugReportMenu() {
               <p className="mt-1 text-2xs text-amber-700/90 dark:text-amber-300/90 leading-snug">
                 {t('bug.network_only_desc', {
                   defaultValue:
-                    'Recent errors look like the backend was unreachable (offline, restarting, or VPN dropped). Check your connection and reload — if the problem persists, you can still file a report.',
+                    'Recent errors look like the backend was unreachable (offline, restarting, or VPN dropped). Check your connection and reload - if the problem persists, you can still file a report.',
                 })}
               </p>
               <button
@@ -1084,7 +1145,7 @@ function buildBugReportUrl(
     // Keep the head; truncation marker tells the maintainer to ask for the
     // full JSON via "Report Issue" if they need more.
     const trimmed = safeBody.slice(0, Math.floor(safeBody.length * (MAX_BODY_BYTES / encoded.length)) - 64);
-    safeBody = trimmed + '\n\n_[truncated — attach the full JSON via the Report Issue button if needed]_';
+    safeBody = trimmed + '\n\n_[truncated - attach the full JSON via the Report Issue button if needed]_';
     encoded = encodeURIComponent(safeBody);
   }
 
@@ -1342,7 +1403,10 @@ function ProjectSwitcher() {
           chrome — this is the breadcrumb root, it should anchor the eye. */}
       <div
         className={clsx(
-          'flex items-stretch rounded-lg border transition-all max-w-[260px] overflow-hidden',
+          // Audit fix S5 (2026-06-06): cap the pill tighter on lg so the
+          // MODULE NAME next to it stops truncating to "Carbo…"/"Takt Pl…"
+          // at 1280-1440px; the pill gets its full 260px back on xl+.
+          'flex items-stretch rounded-lg border transition-all max-w-[180px] xl:max-w-[260px] overflow-hidden',
           activeProjectId
             ? 'bg-oe-blue-subtle border-oe-blue/30 hover:bg-oe-blue/10 hover:border-oe-blue/50 shadow-[0_1px_2px_rgba(0,122,255,0.05)]'
             : 'border-dashed border-oe-blue/40 bg-oe-blue/[0.04] hover:bg-oe-blue/[0.08] hover:border-oe-blue/60',

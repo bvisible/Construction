@@ -1,4 +1,4 @@
-"""‌⁠‍Contracts service — business logic for the Contract Types Engine.
+"""‌⁠‍Contracts service - business logic for the Contract Types Engine.
 
 The service centralises:
     * Type-specific term validation (validate_contract_terms)
@@ -22,7 +22,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.events import event_bus
 from app.core.i18n import get_locale
+from app.core.validation.engine import ValidationReport, validation_engine
 from app.core.validation.messages import translate
+from app.modules.contracts.compliance_packs import (
+    DEFAULT_PACK_ID,
+    WORKFLOW_CONTRACT_SIGNATURE,
+    resolve_rule_sets,
+)
+from app.modules.contracts.events import CLAIM_POPULATED
 from app.modules.contracts.models import (
     Contract,
     ContractLine,
@@ -209,7 +216,7 @@ def compute_contract_total(lines: list[ContractLine | Any]) -> Decimal:
     total = DEC_ZERO
     for ln in lines:
         if getattr(ln, "id", None) in parent_ids:
-            # This line has children — skip to avoid double-counting.
+            # This line has children - skip to avoid double-counting.
             continue
         total += compute_line_total(ln)
     return total
@@ -237,6 +244,76 @@ def compute_progress_claim_total(
     if net < DEC_ZERO:
         net = DEC_ZERO
     return {"gross": gross, "retention": retention, "net": net}
+
+
+#: Key under which a SoV ``ContractLine.metadata_`` stores the id of the BOQ
+#: position it bills against. The progress bridge reads the latest observation
+#: for this position; lines without it are skipped (additive, no DDL needed).
+BOQ_POSITION_META_KEY = "boq_position_id"
+
+
+def boq_position_id_for_line(line: ContractLine | Any) -> uuid.UUID | None:
+    """Return the BOQ position a SoV line bills against, or ``None``.
+
+    The link lives in ``ContractLine.metadata_["boq_position_id"]`` (a string
+    UUID). Returns ``None`` when the line is unlinked or the stored value is not
+    a parseable UUID, so a malformed metadata entry degrades to "skip this
+    line" rather than raising.
+    """
+    meta = getattr(line, "metadata_", None) or {}
+    if not isinstance(meta, dict):
+        return None
+    raw = meta.get(BOQ_POSITION_META_KEY)
+    if raw in (None, ""):
+        return None
+    if isinstance(raw, uuid.UUID):
+        return raw
+    try:
+        return uuid.UUID(str(raw))
+    except (ValueError, AttributeError, TypeError):
+        return None
+
+
+def compute_progress_claim_line(
+    line: ContractLine | Any,
+    observed_pct: Decimal | float | int,
+    *,
+    value_override: Decimal | float | int | None = None,
+) -> dict[str, Decimal]:
+    """Pure: derive one claim line's figures from a SoV line + observed pct.
+
+    The percent is clamped to [0, 100]. ``period_completed_value`` defaults to
+    ``contract_line_value × pct / 100`` (rounded to 0.0001). When
+    ``value_override`` is supplied (the user tweaked the value in the preview),
+    it is used instead but clamped to the contract line value so a claim line
+    can never bill more than the SoV line it sits against. Quantity progress is
+    ``contract_quantity × pct / 100``.
+
+    Returns ``{period_completed_qty, period_completed_value,
+    period_completed_pct, cumulative_completed_value}`` (all Decimal).
+    """
+    pct = Decimal(str(observed_pct or 0))
+    if pct < DEC_ZERO:
+        pct = DEC_ZERO
+    if pct > DEC_HUNDRED:
+        pct = DEC_HUNDRED
+    line_value = Decimal(str(getattr(line, "total_value", 0) or 0))
+    qty = Decimal(str(getattr(line, "quantity", 0) or 0))
+    if value_override is not None:
+        value = Decimal(str(value_override or 0))
+        if value < DEC_ZERO:
+            value = DEC_ZERO
+        if value > line_value:
+            value = line_value
+    else:
+        value = (line_value * pct / DEC_HUNDRED).quantize(Decimal("0.0001"))
+    qty_progress = (qty * pct / DEC_HUNDRED).quantize(Decimal("0.0001"))
+    return {
+        "period_completed_qty": qty_progress,
+        "period_completed_value": value,
+        "period_completed_pct": pct.quantize(Decimal("0.0001")),
+        "cumulative_completed_value": value,
+    }
 
 
 def compute_gmp_gainshare(
@@ -345,7 +422,7 @@ def generate_lump_sum_claim(
         Decimal(str(getattr(contract, "retention_percent", 0) or 0)),
         prior_paid,
     )
-    # The synthesised objects above lose attribute access — recompute gross
+    # The synthesised objects above lose attribute access - recompute gross
     # directly off the dicts to be safe.
     gross = sum(
         (c["period_completed_value"] for c in claim_lines),
@@ -613,7 +690,7 @@ class ContractsService:
     #: Commercial terms that must not change once a contract is no longer a
     #: draft. Mutating contract value / retention / currency / type on a
     #: signed contract silently rewrites the agreed deal and breaks the
-    #: audit trail — value changes must go through change orders, status
+    #: audit trail - value changes must go through change orders, status
     #: through the transition endpoints.
     _LOCKED_FINANCIAL_FIELDS = (
         "total_value",
@@ -622,7 +699,7 @@ class ContractsService:
         "contract_type",
         "retention_release_event",
         # Type-specific terms (gmp_cap, target_cost, tm_nte_cap, ld_per_day…)
-        # are commercial terms too — freezing total_value but letting the
+        # are commercial terms too - freezing total_value but letting the
         # GMP cap be rewritten on a live contract would defeat the lock.
         "terms",
     )
@@ -702,7 +779,7 @@ class ContractsService:
               method is called.
             * Write access on the **destination** project is verified by
               the router via :func:`verify_project_access` before this
-              method is called — so a manager on project A cannot
+              method is called - so a manager on project A cannot
               ``clone --target_project_id=<project_B_id>`` and copy
               project A's commercial terms into project B.
             * Manager-or-higher RBAC is enforced at the route level
@@ -711,11 +788,11 @@ class ContractsService:
         Lifecycle invariants:
             * Clone is always materialised in ``draft`` status with
               ``signed_at=None`` regardless of the source's lifecycle
-              stage — a cloned contract is a brand-new instrument that
+              stage - a cloned contract is a brand-new instrument that
               must be re-signed.
             * Payment history (progress claims, claim lines, final
               accounts, lien-waiver attachments, retention-release
-              audit entries) is **never** copied — that ledger belongs
+              audit entries) is **never** copied - that ledger belongs
               to the original contract.
         """
         source = await self.get_contract(source_contract_id)
@@ -789,7 +866,7 @@ class ContractsService:
                 )
                 new_line = await self.line_repo.create(new_line)
                 id_map[ln.id] = new_line.id
-            # Pass 2 — wire up parent_line_id translations.
+            # Pass 2 - wire up parent_line_id translations.
             for ln in src_lines:
                 if ln.parent_line_id is None:
                     continue
@@ -877,13 +954,187 @@ class ContractsService:
         )
         return clone
 
+    # ── Compliance gate (draft → active) ─────────────────────────────────
+
+    async def _resolve_compliance_rule_packs(
+        self,
+        project_id: uuid.UUID,
+    ) -> list[str]:
+        """Resolve the compliance rule-pack ids enforced for a project.
+
+        Reads ``Project.compliance_rule_packs`` (a JSON list). Falls back to
+        the single default pack when the project row, the column, or the
+        value is missing - so the gate always has at least one pack to run
+        and never silently no-ops. Best-effort: a lookup failure degrades to
+        the default pack rather than blocking the transition on infra error.
+        """
+        try:
+            from app.modules.projects.models import Project  # noqa: PLC0415
+
+            project = await self.session.get(Project, project_id)
+        except Exception:
+            logger.debug("Compliance gate: project lookup failed for %s", project_id)
+            project = None
+        packs = list(getattr(project, "compliance_rule_packs", None) or [])
+        # Keep only string ids; guard against a malformed JSON payload.
+        packs = [p for p in packs if isinstance(p, str) and p]
+        return packs or [DEFAULT_PACK_ID]
+
+    def _contract_lines_as_positions(
+        self,
+        lines: list[ContractLine],
+    ) -> list[dict[str, Any]]:
+        """Map SoV ``ContractLine`` rows onto the BOQ-position shape the
+        validation engine's ``boq_quality`` / classification rules consume.
+
+        The engine reads ``{"positions": [{id, ordinal, description, unit,
+        quantity, unit_rate, total, classification, parent_id, type}]}``.
+        Schedule-of-values lines carry exactly that data, so the contract's
+        commercial breakdown is validated with the same battle-tested rules
+        the BOQ uses - no parallel rule implementation. Parent (roll-up)
+        rows are tagged ``type="section"`` via the parent graph so the
+        leaf-only rules don't false-positive on header rows.
+        """
+        parent_ids = {ln.parent_line_id for ln in lines if ln.parent_line_id is not None}
+        positions: list[dict[str, Any]] = []
+        for ln in lines:
+            classification = {}
+            meta = getattr(ln, "metadata_", None) or {}
+            if isinstance(meta, dict) and isinstance(meta.get("classification"), dict):
+                classification = meta["classification"]
+            positions.append(
+                {
+                    "id": str(ln.id),
+                    "ordinal": ln.code or "",
+                    "description": ln.description or "",
+                    "unit": ln.unit,
+                    "quantity": str(ln.quantity if ln.quantity is not None else 0),
+                    "unit_rate": str(ln.unit_rate if ln.unit_rate is not None else 0),
+                    "total": str(ln.total_value if ln.total_value is not None else 0),
+                    "classification": classification,
+                    "parent_id": str(ln.parent_line_id) if ln.parent_line_id else None,
+                    "type": "section" if ln.id in parent_ids else "position",
+                }
+            )
+        return positions
+
+    async def run_compliance_gate(
+        self,
+        contract: Contract,
+        *,
+        workflow: str = WORKFLOW_CONTRACT_SIGNATURE,
+    ) -> tuple[ValidationReport, list[str]]:
+        """Run the compliance validation gate for a contract.
+
+        Resolves the project's rule packs → the union of their validation
+        rule sets → runs the :class:`ValidationEngine` against the contract's
+        schedule of values. Returns ``(report, pack_ids)``. Deterministic and
+        side-effect free: callers decide whether to block or persist based on
+        ``report.has_errors``.
+        """
+        pack_ids = await self._resolve_compliance_rule_packs(contract.project_id)
+        rule_sets = resolve_rule_sets(pack_ids, workflow=workflow)
+        lines = await self.line_repo.list_for_contract(contract.id)
+        positions = self._contract_lines_as_positions(lines)
+        report = await validation_engine.validate(
+            data={"positions": positions},
+            rule_sets=rule_sets,
+            target_type="contract",
+            target_id=str(contract.id),
+            project_id=str(contract.project_id),
+            metadata={"locale": get_locale(), "workflow": workflow},
+        )
+        return report, pack_ids
+
+    @staticmethod
+    def _compliance_audit_entry(
+        report: ValidationReport,
+        pack_ids: list[str],
+        *,
+        actor_id: str | None,
+        blocked: bool,
+    ) -> dict[str, Any]:
+        """Build the audit-trail block stored on ``contract.metadata_``."""
+        from datetime import UTC
+        from datetime import datetime as _dt
+
+        def _serialise(r: Any) -> dict[str, Any]:
+            return {
+                "rule_id": r.rule_id,
+                "rule_name": r.rule_name,
+                "severity": r.severity.value,
+                "message": r.message,
+                "element_ref": r.element_ref,
+                "suggestion": r.suggestion,
+            }
+
+        return {
+            "checked_at": _dt.now(UTC).isoformat(),
+            "checked_by": actor_id,
+            "workflow": WORKFLOW_CONTRACT_SIGNATURE,
+            "rule_packs": pack_ids,
+            "rule_sets": report.rule_sets_applied,
+            "status": report.status.value,
+            "score": report.score,
+            "blocked": blocked,
+            "counts": {
+                "errors": len(report.errors),
+                "warnings": len(report.warnings),
+                "passed": len(report.passed_rules),
+            },
+            "errors": [_serialise(r) for r in report.errors],
+            "warnings": [_serialise(r) for r in report.warnings],
+        }
+
+    def _compliance_http_detail(
+        self,
+        report: ValidationReport,
+        pack_ids: list[str],
+    ) -> dict[str, Any]:
+        """Structured 422 body the ComplianceGate UI renders verbatim."""
+
+        def _serialise(r: Any) -> dict[str, Any]:
+            return {
+                "rule_id": r.rule_id,
+                "rule_name": r.rule_name,
+                "severity": r.severity.value,
+                "message": r.message,
+                "element_ref": r.element_ref,
+                "suggestion": r.suggestion,
+            }
+
+        return {
+            "error": "compliance_gate_failed",
+            "message": ("Compliance gate failed: resolve the blocking issues below before signing this contract."),
+            "rule_packs": pack_ids,
+            "rule_sets": report.rule_sets_applied,
+            "status": report.status.value,
+            "score": report.score,
+            "counts": {
+                "errors": len(report.errors),
+                "warnings": len(report.warnings),
+                "passed": len(report.passed_rules),
+            },
+            "errors": [_serialise(r) for r in report.errors],
+            "warnings": [_serialise(r) for r in report.warnings],
+        }
+
     async def transition_contract(
         self,
         contract_id: uuid.UUID,
         target_status: str,
         actor_id: str | None = None,
     ) -> Contract:
-        """Apply a status transition with state-machine validation."""
+        """Apply a status transition with state-machine + compliance validation.
+
+        Signing a contract (``draft → active``) first runs the compliance
+        gate: the project's rule packs are resolved to validation rule sets
+        and the engine evaluates the contract's schedule of values. Any
+        blocking ERROR raises HTTP 422 with a structured violation list and
+        the transition does not happen. The validation outcome (pass or
+        block) is always recorded on ``contract.metadata_["compliance_validation"]``
+        so the gate decision is auditable.
+        """
         contract = await self.get_contract(contract_id)
         try:
             assert_contract_transition(contract.status, target_status)
@@ -896,6 +1147,67 @@ class ContractsService:
         if target_status == "active" and contract.status == "draft":
             from datetime import UTC, datetime
 
+            # ── Compliance gate ──────────────────────────────────────
+            report, pack_ids = await self.run_compliance_gate(contract)
+            blocked = report.has_errors
+            audit_entry = self._compliance_audit_entry(
+                report,
+                pack_ids,
+                actor_id=actor_id,
+                blocked=blocked,
+            )
+            if blocked:
+                # Persist the blocking outcome so the failed attempt is
+                # auditable, then raise a structured 422 the ComplianceGate UI
+                # renders verbatim.
+                #
+                # The audit is written in a SEPARATE, independent session that
+                # commits on its own. Committing the *request* session here and
+                # then raising used to corrupt the request lifecycle: the
+                # ``get_session`` dependency rolls back on the raised
+                # HTTPException, and rolling back a request session whose
+                # transaction was already explicitly committed left the
+                # connection in a state where the unwind raised a *second*
+                # exception. That secondary error hit the catch-all handler and
+                # the client saw a misleading ``500 Internal server error``
+                # instead of the 422 violation list (even though the sign was,
+                # correctly, blocked). Using an isolated session keeps the
+                # request transaction untouched so the HTTPException reaches the
+                # client cleanly.
+                meta = dict(contract.metadata_ or {})
+                meta["compliance_validation"] = audit_entry
+                try:
+                    from app.database import async_session_factory
+
+                    async with async_session_factory() as audit_session:
+                        await ContractRepository(audit_session).update_fields(
+                            contract_id,
+                            metadata_=meta,
+                        )
+                        await audit_session.commit()
+                except Exception:
+                    # The audit trail is best-effort: never let a failure to
+                    # record the blocked attempt mask the real reason (the 422).
+                    logger.warning(
+                        "Failed to persist compliance-gate audit for contract %s",
+                        contract.code,
+                        exc_info=True,
+                    )
+                logger.info(
+                    "Compliance gate BLOCKED contract %s (%d errors, packs=%s)",
+                    contract.code,
+                    len(report.errors),
+                    pack_ids,
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=self._compliance_http_detail(report, pack_ids),
+                )
+
+            # Gate passed - stamp the audit trail onto the contract metadata.
+            meta = dict(contract.metadata_ or {})
+            meta["compliance_validation"] = audit_entry
+            fields["metadata_"] = meta
             fields["signed_at"] = datetime.now(UTC).isoformat()
             event_bus.publish_detached(
                 "contracts.contract.signed",
@@ -904,6 +1216,8 @@ class ContractsService:
                     "code": contract.code,
                     "project_id": str(contract.project_id),
                     "signed_by": actor_id,
+                    "compliance_score": report.score,
+                    "compliance_rule_packs": pack_ids,
                 },
                 source_module="contracts",
             )
@@ -1161,7 +1475,7 @@ class ContractsService:
                 ) from exc
             result["claim_lines"] = []
         else:
-            # GMP / design_build / combination — default to lump-sum semantics
+            # GMP / design_build / combination - default to lump-sum semantics
             result = generate_lump_sum_claim(
                 contract,
                 lines,
@@ -1173,17 +1487,27 @@ class ContractsService:
         existing = await self.claim_line_repo.list_for_claim(claim_id)
         for ex in existing:
             await self.claim_line_repo.delete(ex.id)
+        # Running total: per SoV line, cumulative = sum of period values already
+        # billed on prior (non-rejected) claims + this period. Downstream
+        # consumers (costmodel claimed-to-date) read cumulative_completed_value
+        # as the running total, so it must net prior claims, not just this one.
+        prior_by_line = await self.claim_line_repo.prior_period_value_by_line(
+            contract.id,
+            exclude_claim_id=claim_id,
+        )
         new_lines: list[ProgressClaimLine] = []
         for cl in result.get("claim_lines", []) or []:
+            period_value = Decimal(str(cl["period_completed_value"]))
+            prior_value = prior_by_line.get(cl["contract_line_id"], DEC_ZERO)
             new_lines.append(
                 ProgressClaimLine(
                     progress_claim_id=claim_id,
                     contract_line_id=cl["contract_line_id"],
                     period_completed_qty=Decimal(str(cl["period_completed_qty"])),
-                    period_completed_value=Decimal(str(cl["period_completed_value"])),
+                    period_completed_value=period_value,
                     period_completed_pct=Decimal(str(cl["period_completed_pct"])),
-                    cumulative_completed_value=Decimal(
-                        str(cl["cumulative_completed_value"]),
+                    cumulative_completed_value=(prior_value + period_value).quantize(
+                        Decimal("0.0001"),
                     ),
                 )
             )
@@ -1199,6 +1523,247 @@ class ContractsService:
             net_due=Decimal(str(result["net"])),
         )
         await self.session.refresh(claim)
+        return claim
+
+    # ── Progress bridge (Gap I) ──────────────────────────────────────────
+
+    #: Claim statuses whose line breakdown may still be edited. A submitted
+    #: claim is still owner-editable before approval (a re-measure is common
+    #: mid-review); once approved / certified / paid / rejected the breakdown
+    #: is part of the immutable audit trail.
+    _CLAIM_EDITABLE_STATUSES = frozenset({"draft", "submitted"})
+
+    def _assert_claim_editable(self, claim: ProgressClaim) -> None:
+        """Raise HTTP 422 unless the claim is in a line-editable status."""
+        if claim.status not in self._CLAIM_EDITABLE_STATUSES:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "error": "claim_not_editable",
+                    "message": (
+                        "Progress lines can only be populated / committed on a "
+                        f"draft or submitted claim; this claim is {claim.status!r}."
+                    ),
+                    "claim_status": claim.status,
+                },
+            )
+
+    async def populate_claim_from_progress(
+        self,
+        claim_id: uuid.UUID,
+        *,
+        boq_position_ids: list[uuid.UUID] | None = None,
+    ) -> dict[str, Any]:
+        """Preview claim lines derived from the latest progress observations.
+
+        Read-only: builds the line breakdown the claim WOULD get if committed,
+        without persisting anything, so the UI can let the user deselect / tweak
+        first. For every SoV line that links to a BOQ position
+        (``ContractLine.metadata_["boq_position_id"]``) the latest
+        ``ProgressEntry`` for that position is read and its percent-complete is
+        applied to the line value (same currency as the claim - currencies are
+        never blended; a SoV line in a different currency than the claim is
+        skipped and counted).
+
+        Args:
+            claim_id: target progress claim.
+            boq_position_ids: optional filter - only preview lines whose linked
+                BOQ position is in this set.
+
+        Raises:
+            HTTPException 404 if the claim is missing; 422 if it is not in a
+            line-editable status.
+        """
+        claim = await self.claim_repo.get_by_id(claim_id)
+        if claim is None:
+            raise HTTPException(status_code=404, detail=translate("errors.claim_not_found", locale=get_locale()))
+        self._assert_claim_editable(claim)
+        contract = await self.get_contract(claim.contract_id)
+        claim_currency = claim.currency or contract.currency or ""
+
+        position_filter: set[uuid.UUID] | None = set(boq_position_ids) if boq_position_ids else None
+
+        from app.modules.progress.repository import ProgressRepository  # noqa: PLC0415
+
+        progress_repo = ProgressRepository(self.session)
+
+        lines = await self.line_repo.list_for_contract(contract.id)
+        # Roll-up / parent rows are summed from children - never bill them
+        # directly, exactly as the auto-generate path does.
+        parent_ids = {ln.parent_line_id for ln in lines if getattr(ln, "parent_line_id", None) is not None}
+
+        items: list[dict[str, Any]] = []
+        skipped_unlinked = 0
+        skipped_no_progress = 0
+        skipped_foreign_currency = 0
+
+        for ln in lines:
+            if getattr(ln, "id", None) in parent_ids:
+                continue
+            pos_id = boq_position_id_for_line(ln)
+            if pos_id is None:
+                skipped_unlinked += 1
+                continue
+            if position_filter is not None and pos_id not in position_filter:
+                continue
+            # Never blend currencies: a SoV line whose own currency differs
+            # from the claim currency cannot be summed into this claim's gross.
+            ln_meta = getattr(ln, "metadata_", None)
+            line_currency = ln_meta.get("currency") if isinstance(ln_meta, dict) else None
+            if line_currency and claim_currency and str(line_currency).upper() != claim_currency.upper():
+                skipped_foreign_currency += 1
+                continue
+            entry = await progress_repo.get_latest_for_position(contract.project_id, pos_id)
+            if entry is None:
+                skipped_no_progress += 1
+                continue
+            observed_pct = Decimal(str(entry.percent_complete or 0))
+            derived = compute_progress_claim_line(ln, observed_pct)
+            items.append(
+                {
+                    "contract_line_id": ln.id,
+                    "contract_line_code": ln.code or "",
+                    "contract_line_description": ln.description or "",
+                    "boq_position_id": pos_id,
+                    "unit": ln.unit,
+                    "contract_quantity": Decimal(str(ln.quantity or 0)),
+                    "contract_line_value": Decimal(str(ln.total_value or 0)),
+                    "observed_pct": derived["period_completed_pct"],
+                    "period_label": entry.period_label,
+                    "recorded_at": entry.recorded_at,
+                    "period_completed_qty": derived["period_completed_qty"],
+                    "period_completed_value": derived["period_completed_value"],
+                    "cumulative_completed_value": derived["cumulative_completed_value"],
+                }
+            )
+
+        prior_paid = await self.claim_repo.paid_total(contract.id)
+        gross = sum((it["period_completed_value"] for it in items), DEC_ZERO)
+        pct = Decimal(str(contract.retention_percent or 0))
+        retention = (gross * pct / DEC_HUNDRED).quantize(Decimal("0.0001"))
+        net = gross - retention - prior_paid
+        if net < DEC_ZERO:
+            net = DEC_ZERO
+        return {
+            "claim_id": claim.id,
+            "contract_id": contract.id,
+            "currency": claim_currency,
+            "items": items,
+            "skipped_unlinked": skipped_unlinked,
+            "skipped_no_progress": skipped_no_progress,
+            "skipped_foreign_currency": skipped_foreign_currency,
+            "gross": gross,
+            "retention": retention,
+            "prior_claims_total": prior_paid,
+            "net_due": net,
+        }
+
+    async def commit_preview_to_claim(
+        self,
+        claim_id: uuid.UUID,
+        lines_data: list[Any],
+        *,
+        actor_id: str | None = None,
+    ) -> ProgressClaim:
+        """Persist a populated / edited set of claim lines and roll up totals.
+
+        Idempotent: every existing line on the claim is deleted first, then the
+        submitted ``lines_data`` is written, so committing the same preview
+        twice yields one set of lines (never duplicates). Each line's value is
+        recomputed server-side (percent × contract line value, or the supplied
+        override clamped to the line value) so a tampered total cannot inflate
+        the claim. The claim's gross / retention / prior / net are then re-rolled
+        and ``contracts.claim.populated`` is emitted.
+
+        Raises:
+            HTTPException 404 if the claim or a referenced contract line is
+            missing; 422 if the claim is not line-editable.
+        """
+        claim = await self.claim_repo.get_by_id(claim_id)
+        if claim is None:
+            raise HTTPException(status_code=404, detail=translate("errors.claim_not_found", locale=get_locale()))
+        self._assert_claim_editable(claim)
+        contract = await self.get_contract(claim.contract_id)
+
+        # Resolve + validate every referenced contract line belongs to this
+        # claim's contract BEFORE mutating anything (no partial writes).
+        contract_lines = await self.line_repo.list_for_contract(contract.id)
+        line_by_id = {ln.id: ln for ln in contract_lines}
+        resolved: list[tuple[Any, dict[str, Decimal]]] = []
+        for item in lines_data or []:
+            cl_id = item.contract_line_id
+            sov_line = line_by_id.get(cl_id)
+            if sov_line is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail={
+                        "error": "contract_line_not_found",
+                        "message": (f"Contract line {cl_id} does not belong to contract {contract.id}"),
+                        "contract_line_id": str(cl_id),
+                    },
+                )
+            derived = compute_progress_claim_line(
+                sov_line,
+                getattr(item, "period_completed_pct", 0),
+                value_override=getattr(item, "period_completed_value", None),
+            )
+            resolved.append((sov_line, derived))
+
+        # Idempotent replace: wipe existing lines, then write the new set.
+        await self.claim_line_repo.delete_for_claim(claim_id)
+        # Running total: cumulative = prior non-rejected period values on this
+        # SoV line + this period. costmodel reads cumulative_completed_value as
+        # the running claimed-to-date total, so it must net prior claims.
+        prior_by_line = await self.claim_line_repo.prior_period_value_by_line(
+            contract.id,
+            exclude_claim_id=claim_id,
+        )
+        new_lines: list[ProgressClaimLine] = [
+            ProgressClaimLine(
+                progress_claim_id=claim_id,
+                contract_line_id=sov_line.id,
+                period_completed_qty=derived["period_completed_qty"],
+                period_completed_value=derived["period_completed_value"],
+                period_completed_pct=derived["period_completed_pct"],
+                cumulative_completed_value=(
+                    prior_by_line.get(sov_line.id, DEC_ZERO) + derived["period_completed_value"]
+                ).quantize(Decimal("0.0001")),
+            )
+            for sov_line, derived in resolved
+        ]
+        if new_lines:
+            await self.claim_line_repo.bulk_create(new_lines)
+
+        prior_paid = await self.claim_repo.paid_total(contract.id)
+        gross = sum((ln.period_completed_value for ln in new_lines), DEC_ZERO)
+        pct = Decimal(str(contract.retention_percent or 0))
+        retention = (gross * pct / DEC_HUNDRED).quantize(Decimal("0.0001"))
+        net = gross - retention - prior_paid
+        if net < DEC_ZERO:
+            net = DEC_ZERO
+        await self.claim_repo.update_fields(
+            claim_id,
+            gross_amount=gross,
+            retention_amount=retention,
+            prior_claims_total=prior_paid,
+            net_due=net,
+        )
+        await self.session.refresh(claim)
+        event_bus.publish_detached(
+            CLAIM_POPULATED,
+            data={
+                "claim_id": str(claim.id),
+                "contract_id": str(contract.id),
+                "claim_number": claim.claim_number,
+                "line_count": len(new_lines),
+                "gross": str(gross),
+                "retention": str(retention),
+                "net_due": str(net),
+                "currency": claim.currency or contract.currency or "",
+                "actor": actor_id,
+            },
+            source_module="contracts",
+        )
         return claim
 
     # ── Gainshare ────────────────────────────────────────────────────────
@@ -1254,7 +1819,7 @@ class ContractsService:
         Change orders are only valid on commercially-live contracts (``active``
         or ``suspended``). Applying a change order to a ``terminated`` or
         ``completed`` contract would silently rewrite the final agreed value,
-        corrupt the audit trail, and — for ``terminated`` contracts — partially
+        corrupt the audit trail, and - for ``terminated`` contracts - partially
         resurrect a dead instrument. Value adjustments after close-out must
         go through a final-account amendment instead.
         """
@@ -1298,7 +1863,7 @@ class ContractsService:
         payload: Any,
         actor_id: str | None = None,
     ) -> FinalAccount:
-        """Close a contract — create / update the FinalAccount + flip status."""
+        """Close a contract - create / update the FinalAccount + flip status."""
         contract = await self.get_contract(contract_id)
         existing = await self.final_account_repo.get_for_contract(contract_id)
         fields: dict[str, Any] = {
@@ -1400,7 +1965,7 @@ class ContractsService:
         # released twice. Pre-fix the audit log was append-only but never
         # consulted to dedupe, so each call would compute net_held = held -
         # already_released and re-release the configured percentage of
-        # whatever was left — asymptotically draining retention to zero
+        # whatever was left - asymptotically draining retention to zero
         # regardless of the schedule's stated intent.
         if any(r.get("event") == event for r in prior_releases):
             raise HTTPException(
@@ -1608,8 +2173,112 @@ class ContractsService:
             "status": contract.status,
         }
 
+    # ── AIA G702/G703 (US/CA/AU only) ────────────────────────────────────
+
+    async def assert_contract_aia_eligible(self, contract: Contract) -> Any:
+        """Raise 404 unless the contract's project is AIA-eligible.
+
+        AIA G702/G703 is country-gated to US/CA/AU. A non-eligible project must
+        behave as if the AIA endpoints do not exist, so we raise 404 (not 403)
+        to avoid leaking that the feature exists for other tenants. Returns the
+        loaded ``Project`` for callers that need its country/currency.
+        """
+        from app.modules.contracts.aia import is_aia_eligible  # noqa: PLC0415
+        from app.modules.projects.models import Project  # noqa: PLC0415
+
+        project = await self.session.get(Project, contract.project_id)
+        eligible = project is not None and is_aia_eligible(
+            getattr(project, "country_code", None),
+            getattr(project, "address", None),
+        )
+        if not eligible:
+            raise HTTPException(
+                status_code=404,
+                detail="AIA payment applications are only available for US/CA/AU projects",
+            )
+        return project
+
+    async def build_aia_application(self, claim_id: uuid.UUID) -> dict[str, Any]:
+        """Assemble the AIA G702 summary + G703 continuation for one claim.
+
+        Reuses the existing SoV lines (``ContractLine``) and the claim's lines
+        (``ProgressClaimLine``); does not recompute the claim FSM or retention
+        accrual. Country-gated by the caller via
+        :meth:`assert_contract_aia_eligible`. Single-currency by construction
+        (the claim inherits the contract currency); no currency is ever blended.
+        """
+        from app.modules.contracts.aia import (  # noqa: PLC0415
+            DEC_ZERO,
+            build_g702_summary,
+            build_g703,
+        )
+
+        claim = await self.claim_repo.get_by_id(claim_id)
+        if claim is None:
+            raise HTTPException(
+                status_code=404,
+                detail=translate("errors.claim_not_found", locale=get_locale()),
+            )
+        contract = await self.get_contract(claim.contract_id)
+        await self.assert_contract_aia_eligible(contract)
+
+        contract_lines = await self.line_repo.list_for_contract(contract.id)
+        claim_lines = await self.claim_line_repo.list_for_claim(claim_id)
+        by_contract_line = {cl.contract_line_id: cl for cl in claim_lines}
+
+        retainage_percent = Decimal(str(contract.retention_percent or 0))
+        g703 = build_g703(
+            contract_lines,
+            by_contract_line,
+            retainage_percent=retainage_percent,
+        )
+
+        # Previous certificates = prior recognised claim value on this contract
+        # (everything billed before this claim), read from the existing
+        # per-line prior aggregation so the G702 line 7 ties to the ledger.
+        prior_by_line = await self.claim_line_repo.prior_period_value_by_line(
+            contract.id,
+            exclude_claim_id=claim_id,
+        )
+        previous_certificates_total = sum(prior_by_line.values(), DEC_ZERO)
+
+        # Net change orders, if the contract tracks them in terms/metadata.
+        change_orders_net = Decimal(str((contract.terms or {}).get("change_orders_net", 0) or 0))
+        original_contract_sum = Decimal(str(contract.total_value or 0)) - change_orders_net
+
+        g702 = build_g702_summary(
+            g703,
+            original_contract_sum=original_contract_sum,
+            change_orders_net=change_orders_net,
+            previous_certificates_total=previous_certificates_total,
+        )
+
+        cert = (claim.metadata_ or {}).get("aia_certification", {}) or {}
+        return {
+            "claim_id": claim.id,
+            "contract_id": contract.id,
+            "project_id": contract.project_id,
+            "application_number": claim.claim_number or "",
+            "period_start": claim.period_start,
+            "period_end": claim.period_end,
+            "claim_date": claim.claim_date,
+            "currency": claim.currency or contract.currency or "",
+            "claim_status": claim.status,
+            "retainage_percent": retainage_percent.quantize(Decimal("0.01")),
+            "summary": g702,
+            "lines": g703,
+            "certification": {
+                "architect_certified_at": cert.get("architect_certified_at"),
+                "architect_certified_by": cert.get("architect_certified_by"),
+                "owner_certified_at": cert.get("owner_certified_at"),
+                "owner_certified_by": cert.get("owner_certified_by"),
+                "certified_amount": cert.get("certified_amount"),
+            },
+        }
+
 
 __all__ = [
+    "BOQ_POSITION_META_KEY",
     "ContractsService",
     "InvalidTransitionError",
     "NTECapExceededError",
@@ -1621,10 +2290,12 @@ __all__ = [
     "assert_claim_transition",
     "assert_contract_transition",
     "assert_final_account_transition",
+    "boq_position_id_for_line",
     "compute_contract_total",
     "compute_gmp_gainshare",
     "compute_ld_amount",
     "compute_line_total",
+    "compute_progress_claim_line",
     "compute_progress_claim_total",
     "generate_cost_plus_claim",
     "generate_lump_sum_claim",
@@ -1765,10 +2436,10 @@ def plan_retention_release(
 
     Custom schedule:
         ``{"substantial_completion": 50, "punch_list_complete": 30,
-        "defects_liability_end": 20}`` — values are percentages of
+        "defects_liability_end": 20}`` - values are percentages of
         the *original* retention to release at each event.
 
-    Returns ``{event, percent_released, amount_released, remaining}`` —
+    Returns ``{event, percent_released, amount_released, remaining}`` -
     callers persist this onto the contract / final account.
     """
     held = Decimal(str(total_retention_held or 0))
@@ -1842,7 +2513,7 @@ def validate_lien_waiver_payload(payload: dict[str, Any]) -> tuple[bool, list[st
 
 CONTRACT_CLAUSE_TEMPLATES: dict[str, dict[str, Any]] = {
     "fidic_red_1999": {
-        "name": "FIDIC Red Book (1999) — Conditions of Contract for Construction",
+        "name": "FIDIC Red Book (1999) - Conditions of Contract for Construction",
         "family": "fidic",
         "key_clauses": {
             "14": "Contract Price and Payment",
@@ -1858,7 +2529,7 @@ CONTRACT_CLAUSE_TEMPLATES: dict[str, dict[str, Any]] = {
         "retention_release_event": "performance_certificate",
     },
     "fidic_yellow_1999": {
-        "name": "FIDIC Yellow Book (1999) — Plant and Design-Build",
+        "name": "FIDIC Yellow Book (1999) - Plant and Design-Build",
         "family": "fidic",
         "key_clauses": {
             "14": "Contract Price and Payment",
@@ -1871,7 +2542,7 @@ CONTRACT_CLAUSE_TEMPLATES: dict[str, dict[str, Any]] = {
         "retention_release_event": "performance_certificate",
     },
     "fidic_silver_1999": {
-        "name": "FIDIC Silver Book (1999) — EPC / Turnkey",
+        "name": "FIDIC Silver Book (1999) - EPC / Turnkey",
         "family": "fidic",
         "key_clauses": {
             "14": "Contract Price and Payment",
@@ -1919,7 +2590,7 @@ CONTRACT_CLAUSE_TEMPLATES: dict[str, dict[str, Any]] = {
         "retention_release_event": "practical_completion",
     },
     "nec4_ecc_option_a": {
-        "name": "NEC4 Engineering and Construction Contract — Option A (Priced)",
+        "name": "NEC4 Engineering and Construction Contract - Option A (Priced)",
         "family": "nec",
         "key_clauses": {
             "5": "Payment",
@@ -1930,7 +2601,7 @@ CONTRACT_CLAUSE_TEMPLATES: dict[str, dict[str, Any]] = {
         "retention_release_event": "completion",
     },
     "nec4_ecc_option_c": {
-        "name": "NEC4 ECC — Option C (Target Contract)",
+        "name": "NEC4 ECC - Option C (Target Contract)",
         "family": "nec",
         "key_clauses": {
             "5": "Payment",
@@ -1940,7 +2611,7 @@ CONTRACT_CLAUSE_TEMPLATES: dict[str, dict[str, Any]] = {
         "retention_release_event": "completion",
     },
     "aia_a201_2017": {
-        "name": "AIA A201-2017 — General Conditions",
+        "name": "AIA A201-2017 - General Conditions",
         "family": "aia",
         "key_clauses": {
             "9.3": "Applications for Payment",
@@ -1954,7 +2625,7 @@ CONTRACT_CLAUSE_TEMPLATES: dict[str, dict[str, Any]] = {
         "retention_release_event": "substantial_completion",
     },
     "aia_a102_2017": {
-        "name": "AIA A102-2017 — Owner & Contractor (Cost-Plus, GMP)",
+        "name": "AIA A102-2017 - Owner & Contractor (Cost-Plus, GMP)",
         "family": "aia",
         "key_clauses": {
             "5": "Compensation",
@@ -1965,7 +2636,7 @@ CONTRACT_CLAUSE_TEMPLATES: dict[str, dict[str, Any]] = {
         "retention_release_event": "substantial_completion",
     },
     "consensusdocs_200": {
-        "name": "ConsensusDocs 200 — Standard Owner / Constructor (Lump Sum)",
+        "name": "ConsensusDocs 200 - Standard Owner / Constructor (Lump Sum)",
         "family": "consensusdocs",
         "key_clauses": {
             "9": "Payment",

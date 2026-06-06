@@ -15,11 +15,10 @@
  * than showing zeros against an undefined id.
  */
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import {
-  LayoutDashboard,
   RefreshCw,
   Radar,
   Layers,
@@ -27,27 +26,51 @@ import {
   Eye,
   Sparkles,
   Activity,
-  AlertTriangle,
-  CheckCircle2,
   FolderOpen,
+  Download,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 
+import { useToastStore } from '@/stores/useToastStore';
+
 import { DateDisplay } from '@/shared/ui/DateDisplay';
-import { BetaBanner, EmptyState, RecoveryCard } from '@/shared/ui';
+import { BetaBanner, Breadcrumb, DismissibleInfo, EmptyState, IntroRichText, RecoveryCard } from '@/shared/ui';
+import { PageHeader } from '@/shared/ui/PageHeader';
 import { useActiveProjectProfile } from '@/features/projects/useProjectProfile';
 import { projectsApi } from '@/features/projects/api';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
+import { useAuthStore } from '@/stores/useAuthStore';
 import {
+  downloadCoordinationSnapshot,
   fetchCoordinationDashboard,
+  fetchCoordinationThresholds,
   fetchCoordinationTimeline,
   fetchTradeMatrix,
 } from './api';
 import { CoordinationKPICards } from './CoordinationKPICards';
 import { CoordinationTimeline } from './CoordinationTimeline';
 import { CoordinationTradeMatrix } from './CoordinationTradeMatrix';
-import type { CoordinationDashboard } from './types';
+import {
+  ThresholdAlertBanner,
+  ThresholdEditorModal,
+} from './CoordinationThresholds';
+
+/** Roles that satisfy ``coordination.write`` (EDITOR and above, plus the
+ *  EDITOR/ADMIN role aliases the backend permission registry maps). Used
+ *  only to decide whether to OFFER the threshold editor — the PUT is still
+ *  authoritatively gated server-side. */
+const WRITE_ROLES = new Set([
+  'admin',
+  'manager',
+  'editor',
+  'estimator',
+  'quantity_surveyor',
+  'qs',
+  'user',
+  'superuser',
+  'owner',
+]);
 
 /** Pull a numeric HTTP status off any thrown value (ApiError uses ``status``;
  *  other shapes occasionally surface ``response.status``). Returns
@@ -110,90 +133,6 @@ function GlassPanel({
       </div>
       <div className="relative p-5">{children}</div>
     </section>
-  );
-}
-
-/** Project-health banner shown directly above KPI cards. Reads the
- *  dashboard payload and decides traffic-light tone:
- *    • green   — no open clashes
- *    • amber   — some open clashes but under threshold
- *    • rose    — open clashes >= 50 (matches the default open-clash
- *                threshold shipped by coordination_hub)
- *
- *  NOTE: the rule-pack "fail" count is the number of DISABLED rules
- *  (an ``is_active`` configuration flag), not the result of a real
- *  evaluation engine. We deliberately exclude it from the health
- *  threshold so toggling a rule off never paints the banner red. */
-function HealthBanner({ data }: { data: CoordinationDashboard | undefined }) {
-  const { t } = useTranslation();
-  if (!data) return null;
-  const open = data.clashes.open_count;
-  const isWarn = open >= 1;
-  const isError = open >= 50;
-
-  const tone = isError ? 'rose' : isWarn ? 'amber' : 'emerald';
-  const palette = {
-    emerald: {
-      ring: 'ring-emerald-400/20',
-      bg: 'from-emerald-50 to-teal-50/40 dark:from-emerald-500/10 dark:to-teal-500/5',
-      icon: 'text-emerald-600 dark:text-emerald-400',
-      Icon: CheckCircle2,
-      title: t('coordination.health_ok_title', { defaultValue: 'All clear' }),
-      msg: t('coordination.health_ok_msg_v2', {
-        defaultValue: 'No open clashes on this project.',
-      }),
-    },
-    amber: {
-      ring: 'ring-amber-400/20',
-      bg: 'from-amber-50 to-orange-50/40 dark:from-amber-500/10 dark:to-orange-500/5',
-      icon: 'text-amber-600 dark:text-amber-400',
-      Icon: Activity,
-      title: t('coordination.health_attention_title', {
-        defaultValue: 'Coordination in progress',
-      }),
-      msg: t('coordination.health_attention_msg_v2', {
-        defaultValue:
-          '{{open}} open clash(es). Within threshold - keep iterating.',
-        open,
-      }),
-    },
-    rose: {
-      ring: 'ring-rose-400/30',
-      bg: 'from-rose-50 to-orange-50/50 dark:from-rose-500/10 dark:to-orange-500/5',
-      icon: 'text-rose-600 dark:text-rose-400',
-      Icon: AlertTriangle,
-      title: t('coordination.health_alert_title', {
-        defaultValue: 'Attention required',
-      }),
-      msg: t('coordination.health_alert_msg_v2', {
-        defaultValue:
-          '{{open}} open clash(es). Above standard threshold - schedule a coordination meeting.',
-        open,
-      }),
-    },
-  }[tone];
-
-  const Icon = palette.Icon;
-
-  return (
-    <div
-      data-testid="coordination-health-banner"
-      className={`relative overflow-hidden rounded-2xl border border-white/40 bg-gradient-to-br ${palette.bg} ring-1 ${palette.ring} px-5 py-4 backdrop-blur-xl dark:border-white/5`}
-    >
-      <div className="flex items-center gap-3">
-        <div
-          className={`flex h-10 w-10 items-center justify-center rounded-xl bg-white/70 backdrop-blur dark:bg-slate-900/60 ${palette.icon}`}
-        >
-          <Icon size={20} />
-        </div>
-        <div>
-          <h3 className="text-sm font-semibold text-content-primary">
-            {palette.title}
-          </h3>
-          <p className="text-xs text-content-secondary">{palette.msg}</p>
-        </div>
-      </div>
-    </div>
   );
 }
 
@@ -280,6 +219,7 @@ export function CoordinationHubPage() {
   const navigate = useNavigate();
   const { projectId } = useActiveProjectProfile();
   const clearProject = useProjectContextStore((s) => s.clearProject);
+  const projectName = useProjectContextStore((s) => s.activeProjectName);
 
   const dashboardQuery = useQuery({
     queryKey: ['coordination-dashboard', projectId],
@@ -297,13 +237,63 @@ export function CoordinationHubPage() {
     retry: false,
   });
 
+  // Activity-window selector. The timeline endpoint already accepts
+  // ``?days=N`` (1-365) but the UI previously pinned it to 30 with no
+  // control. Lift it into state so the operator can widen / narrow the
+  // lookback; the query key includes the window so React Query caches
+  // each separately.
+  const TIMELINE_WINDOWS = [7, 30, 90] as const;
+  const [timelineDays, setTimelineDays] = useState<number>(30);
   const timelineQuery = useQuery({
-    queryKey: ['coordination-timeline', projectId, 30],
-    queryFn: () => fetchCoordinationTimeline(projectId as string, 30),
+    queryKey: ['coordination-timeline', projectId, timelineDays],
+    queryFn: () => fetchCoordinationTimeline(projectId as string, timelineDays),
     enabled: !!projectId,
     staleTime: 30_000,
     retry: false,
   });
+
+  // Configurable alert thresholds — feed the health banner above the KPI
+  // cards and the editor modal. A failure here must never take the page
+  // down: the banner degrades to a "loading thresholds" / open-clash hint
+  // until the evaluation lands, so we don't fold this into ``hasError``.
+  const thresholdsQuery = useQuery({
+    queryKey: ['coordination-thresholds', projectId],
+    queryFn: () => fetchCoordinationThresholds(projectId as string),
+    enabled: !!projectId,
+    staleTime: 30_000,
+    retry: false,
+  });
+
+  const userRole = useAuthStore((s) => s.userRole);
+  const canEditThresholds = !!userRole && WRITE_ROLES.has(userRole);
+  const [thresholdEditorOpen, setThresholdEditorOpen] = useState(false);
+
+  // CSV snapshot export - one attachable artefact for a coordination
+  // meeting. Read-only so every authenticated member can pull it.
+  const addToast = useToastStore((s) => s.addToast);
+  const [exporting, setExporting] = useState(false);
+  const handleExport = async () => {
+    if (!projectId || exporting) return;
+    setExporting(true);
+    try {
+      await downloadCoordinationSnapshot(projectId);
+      addToast({
+        type: 'success',
+        title: t('coordination.export_started', {
+          defaultValue: 'Coordination snapshot exported',
+        }),
+      });
+    } catch {
+      addToast({
+        type: 'error',
+        title: t('coordination.export_failed', {
+          defaultValue: 'Could not export the coordination snapshot',
+        }),
+      });
+    } finally {
+      setExporting(false);
+    }
+  };
 
   // Stale-project detection. The user's `oe_active_project` localStorage
   // entry can outlive the project itself (deleted on the server, fresh
@@ -388,6 +378,7 @@ export function CoordinationHubPage() {
     dashboardQuery.refetch();
     matrixQuery.refetch();
     timelineQuery.refetch();
+    thresholdsQuery.refetch();
   };
 
   // ``hasError`` keeps the legacy "every fan-out failed" full-page card
@@ -421,30 +412,23 @@ export function CoordinationHubPage() {
       />
 
       <div className="space-y-5 px-4 py-5 lg:px-6 lg:py-6">
-        {/* Hero header — glass pill with title, subtitle, refresh */}
-        <header className="relative overflow-hidden rounded-2xl border border-white/40 bg-white/60 px-5 py-4 backdrop-blur-xl shadow-lg shadow-slate-900/[0.04] dark:border-white/5 dark:bg-slate-900/40">
-          <div
-            aria-hidden
-            className="pointer-events-none absolute -top-16 right-1/4 h-40 w-40 rounded-full bg-gradient-radial from-sky-400/20 to-transparent blur-3xl"
-          />
-          <div className="relative flex flex-wrap items-start justify-between gap-3">
-            <div className="flex items-start gap-3">
-              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-sky-500 to-blue-600 text-white shadow-md shadow-sky-500/25">
-                <LayoutDashboard size={22} />
-              </div>
-              <div>
-                <h1 className="text-xl font-bold tracking-tight text-content-primary">
-                  {t('coordination.title', { defaultValue: 'Model Coordination' })}
-                </h1>
-                <p className="mt-0.5 text-sm text-content-secondary">
-                  {t('coordination.subtitle', {
-                    defaultValue:
-                      'Federations, clashes, rule packs and BCF activity in one view.',
-                  })}
-                </p>
-              </div>
-            </div>
-            <div className="flex items-center gap-3">
+        <Breadcrumb
+          items={[
+            ...(projectName
+              ? [{ label: projectName, to: `/projects/${projectId}` }]
+              : []),
+            { label: t('nav.coordination_hub', { defaultValue: 'Coordination Hub' }) },
+          ]}
+        />
+        {/* Header */}
+        <PageHeader
+          srTitle={t('coordination.title', { defaultValue: 'Model Coordination' })}
+          subtitle={t('coordination.subtitle', {
+            defaultValue:
+              'Federations, clashes, rule packs and BCF activity in one view.',
+          })}
+          actions={
+            <>
               {dashboardQuery.data ? (
                 <span
                   data-testid="coordination-as-of"
@@ -457,6 +441,29 @@ export function CoordinationHubPage() {
                   />
                 </span>
               ) : null}
+              {canEditThresholds ? (
+                <button
+                  data-testid="coordination-configure-thresholds"
+                  type="button"
+                  onClick={() => setThresholdEditorOpen(true)}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-white/40 bg-white/50 px-3 py-1.5 text-xs font-medium text-content-secondary backdrop-blur transition hover:border-oe-blue/40 hover:bg-white/80 hover:text-content-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 dark:border-white/5 dark:bg-slate-800/50 dark:hover:bg-slate-700/50"
+                >
+                  <SlidersHorizontal size={13} />
+                  {t('coordination_hub.configure_thresholds', {
+                    defaultValue: 'Thresholds',
+                  })}
+                </button>
+              ) : null}
+              <button
+                data-testid="coordination-export"
+                type="button"
+                onClick={handleExport}
+                disabled={exporting}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-white/40 bg-white/50 px-3 py-1.5 text-xs font-medium text-content-secondary backdrop-blur transition hover:border-oe-blue/40 hover:bg-white/80 hover:text-content-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 disabled:cursor-not-allowed disabled:opacity-60 dark:border-white/5 dark:bg-slate-800/50 dark:hover:bg-slate-700/50"
+              >
+                <Download size={13} />
+                {t('coordination.export_csv', { defaultValue: 'Export CSV' })}
+              </button>
               <button
                 data-testid="coordination-refresh"
                 type="button"
@@ -466,9 +473,40 @@ export function CoordinationHubPage() {
                 <RefreshCw size={13} />
                 {t('coordination.refresh', { defaultValue: 'Refresh' })}
               </button>
-            </div>
-          </div>
-        </header>
+            </>
+          }
+        />
+
+        <DismissibleInfo
+          storageKey="coordination"
+          title={t('coordination.intro_title', {
+            defaultValue: 'One health view across every federated model',
+          })}
+          more={
+            t('coordination.intro_more', { defaultValue: '' })
+              ? <IntroRichText text={t('coordination.intro_more')} />
+              : undefined
+          }
+          links={[
+            {
+              label: t('nav.clash_detection', { defaultValue: 'Clash Detection' }),
+              onClick: () => navigate('/clash'),
+            },
+            {
+              label: t('nav.bim_federations', { defaultValue: 'BIM Federations' }),
+              onClick: () => navigate('/bim/federations'),
+            },
+            {
+              label: t('nav.bim_rules', { defaultValue: 'Rule Packs' }),
+              onClick: () => navigate('/bim/rules'),
+            },
+          ]}
+        >
+          {t('coordination.intro_body', {
+            defaultValue:
+              'This dashboard rolls up your federated BIM models, clash results, rule-pack checks and BCF activity for the active project into a single status view. Use the quick actions to triage clashes, manage federations or run compliance rules, with every number traced back to the canonical model.',
+          })}
+        </DismissibleInfo>
 
         {hasError ? (
           <div data-testid="coordination-error">
@@ -488,7 +526,12 @@ export function CoordinationHubPage() {
               </div>
             ) : (
               <>
-                <HealthBanner data={dashboardQuery.data} />
+                <ThresholdAlertBanner
+                  data={thresholdsQuery.data}
+                  fallbackOpenClashes={
+                    dashboardQuery.data?.clashes.open_count ?? 0
+                  }
+                />
                 <CoordinationKPICards
                   data={dashboardQuery.data}
                   isLoading={dashboardQuery.isLoading}
@@ -590,13 +633,43 @@ export function CoordinationHubPage() {
             <GlassPanel
               testId="coordination-timeline-panel"
               icon={<Activity size={16} />}
-              title={t('coordination.timeline_title', {
-                defaultValue: 'Recent activity (30 days)',
+              title={t('coordination.timeline_title_window', {
+                defaultValue: 'Recent activity ({{days}} days)',
+                days: timelineDays,
               })}
               subtitle={t('coordination.timeline_subtitle', {
                 defaultValue:
                   'Clash runs, federations, rule pack checks and BCF topics',
               })}
+              action={
+                <div
+                  role="group"
+                  aria-label={t('coordination.timeline_window_aria', {
+                    defaultValue: 'Activity lookback window',
+                  })}
+                  className="inline-flex overflow-hidden rounded-lg border border-border text-xs"
+                >
+                  {TIMELINE_WINDOWS.map((d) => (
+                    <button
+                      key={d}
+                      type="button"
+                      data-testid={`coordination-timeline-window-${d}`}
+                      aria-pressed={timelineDays === d}
+                      onClick={() => setTimelineDays(d)}
+                      className={
+                        timelineDays === d
+                          ? 'bg-oe-blue px-3 py-1 font-medium text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400'
+                          : 'bg-surface px-3 py-1 font-medium text-content-secondary transition-colors hover:bg-surface-secondary focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400'
+                      }
+                    >
+                      {t('coordination.timeline_window_days', {
+                        defaultValue: '{{n}}d',
+                        n: d,
+                      })}
+                    </button>
+                  ))}
+                </div>
+              }
             >
               {timelineQuery.isError ? (
                 <div data-testid="coordination-timeline-error">
@@ -616,6 +689,17 @@ export function CoordinationHubPage() {
           </>
         )}
       </div>
+
+      {/* Threshold editor — write-gated; mounted at page level so it
+          overlays everything. Seeded from the live thresholds payload. */}
+      {canEditThresholds ? (
+        <ThresholdEditorModal
+          open={thresholdEditorOpen}
+          onClose={() => setThresholdEditorOpen(false)}
+          projectId={projectId}
+          rows={thresholdsQuery.data?.thresholds ?? []}
+        />
+      ) : null}
     </div>
   );
 }

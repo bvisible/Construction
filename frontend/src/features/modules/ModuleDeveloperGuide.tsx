@@ -6,7 +6,7 @@
 
 import { useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import {
   Package,
   Server,
@@ -33,7 +33,8 @@ import {
   RefreshCw,
   Power,
 } from 'lucide-react';
-import { Card, Badge, Breadcrumb } from '@/shared/ui';
+import { Card, Badge, Breadcrumb, DismissibleInfo, IntroRichText } from '@/shared/ui';
+import { PageHeader } from '@/shared/ui/PageHeader';
 
 interface StepProps {
   number: number;
@@ -83,6 +84,7 @@ function Inline({ children }: { children: React.ReactNode }) {
 
 export function ModuleDeveloperGuide() {
   const { t } = useTranslation();
+  const navigate = useNavigate();
 
   // Deep-link support: when the page is opened with a #hash (e.g. the
   // Partner Packs tab links to #partner-packs), scroll that section into
@@ -94,43 +96,56 @@ export function ModuleDeveloperGuide() {
   }, []);
 
   return (
-    <div className="max-w-4xl mx-auto animate-fade-in">
+    <div className="space-y-5 animate-fade-in">
       <Breadcrumb
         items={[
-          { label: t('nav.dashboard', 'Dashboard'), to: '/' },
           { label: t('nav.modules', 'Modules'), to: '/modules' },
           { label: t('modules.dev_guide', 'Developer guide') },
         ]}
-        className="mb-4"
       />
 
       {/* Header */}
-      <div className="mb-6">
-        <div className="flex items-center gap-3 mb-2">
-          <div className="h-11 w-11 rounded-xl bg-gradient-to-br from-oe-blue to-blue-700 text-white flex items-center justify-center shadow-sm">
-            <Package size={20} />
-          </div>
-          <div>
-            <h1 className="text-2xl font-bold text-content-primary">
-              {t('modules.dev_guide_title', { defaultValue: 'Build your own module' })}
-            </h1>
-            <p className="text-sm text-content-secondary">
-              {t('modules.dev_guide_subtitle', {
-                defaultValue:
-                  'A practical, 10-minute walkthrough for adding business features to OpenConstructionERP.',
-              })}
-            </p>
-          </div>
-        </div>
-        <Link
-          to="/modules"
-          className="inline-flex items-center gap-1 text-xs text-content-tertiary hover:text-oe-blue transition-colors"
-        >
-          <ArrowLeft size={12} />
-          {t('modules.back_to_modules', { defaultValue: 'Back to Modules & Marketplace' })}
-        </Link>
-      </div>
+      <PageHeader
+        srTitle={t('modules.dev_guide_title', { defaultValue: 'Build your own module' })}
+        subtitle={t('modules.dev_guide_subtitle', {
+          defaultValue:
+            'A practical, 10-minute walkthrough for adding business features to OpenConstructionERP.',
+        })}
+        actions={
+          <Link
+            to="/modules"
+            className="inline-flex items-center gap-1 text-xs text-content-tertiary hover:text-oe-blue transition-colors"
+          >
+            <ArrowLeft size={12} />
+            {t('modules.back_to_modules', { defaultValue: 'Back to Modules & Marketplace' })}
+          </Link>
+        }
+      />
 
+      {/* Canonical module intro — pain-named, copy from MODULE_INTRO_COPY. */}
+      <DismissibleInfo
+        storageKey="modules-developer-guide"
+        title={t('modules_developer_guide.intro_title', {
+          defaultValue: 'Build your own module without leaving the app',
+        })}
+        more={
+          t('modules_developer_guide.intro_more', { defaultValue: '' })
+            ? <IntroRichText text={t('modules_developer_guide.intro_more')} />
+            : undefined
+        }
+        links={[
+          { label: t('nav.modules', { defaultValue: 'Modules' }), onClick: () => navigate('/modules') },
+        ]}
+      >
+        {t('modules_developer_guide.intro_body', {
+          defaultValue:
+            'Read the step-by-step workflow for scaffolding a module, manifest, models, schemas, router, service and tests, rendered natively so you never have to dig through the repo. When the package is ready you install and enable it from the Modules page like any marketplace item.',
+        })}
+      </DismissibleInfo>
+
+      {/* Content — keeps its own mb-5 card rhythm inside this wrapper so the
+          page-root space-y-5 governs only the canonical top block. */}
+      <div>
       {/* Partner Packs - create & share your own */}
       <Card id="partner-packs" className="mb-5 scroll-mt-24">
         <div className="p-6">
@@ -187,7 +202,7 @@ export function ModuleDeveloperGuide() {
               <p>
                 {t('modules.dev_pack_step_create_body', {
                   defaultValue:
-                    'The CLI scaffolds a ready-to-edit folder with a valid manifest, a placeholder logo, an onboarding script and a README. Edit the placeholders and you are done — no code to write.',
+                    'The CLI scaffolds a ready-to-edit folder with a valid manifest, a placeholder logo, an onboarding script and a README. Edit the placeholders and you are done - no code to write.',
                 })}
               </p>
               <Code lang="bash">
@@ -251,7 +266,7 @@ export function ModuleDeveloperGuide() {
                 <span>
                   {t('modules.dev_pack_step_install_drop', {
                     defaultValue:
-                      'Drop the folder (or a .zip of it) into your install’s data directory under packs/ — by default ~/.openestimate/packs/, next to the database — then open the Partner Packs tab and click Rescan. No restart needed.',
+                      'Drop the folder (or a .zip of it) into your install’s data directory under packs/ - by default ~/.openestimate/packs/, next to the database - then open the Partner Packs tab and click Rescan. No restart needed.',
                   })}
                 </span>
               </p>
@@ -276,7 +291,7 @@ export function ModuleDeveloperGuide() {
                 <span>
                   {t('modules.dev_pack_step_activate_body_v2', {
                     defaultValue:
-                      'Open Modules → Partner Packs, find your pack and press Activate. It applies the currency, language, validation standards, module visibility and branding, and can install a demo project. Activation is reversible — Deactivate restores the previous state any time.',
+                      'Open Modules → Partner Packs, find your pack and press Activate. It applies the currency, language, validation standards, module visibility and branding, and can install a demo project. Activation is reversible - Deactivate restores the previous state any time.',
                   })}
                 </span>
               </p>
@@ -1568,6 +1583,7 @@ openconstructionerp module install ~/my-module-0.1.0.zip
           </div>
         </div>
       </Card>
+      </div>
     </div>
   );
 }

@@ -1,4 +1,4 @@
-"""‌⁠‍Email service facade — the public seam the rest of the app talks to.
+"""‌⁠‍Email service facade - the public seam the rest of the app talks to.
 
 Responsibilities:
 
@@ -15,7 +15,7 @@ backend instance, letting tests inject a ``MemoryEmailBackend`` without
 monkey-patching settings.
 
 Why a facade instead of passing the backend directly?  Call sites
-outnumber backends roughly 20:1 — keeping a single ``get_email_service``
+outnumber backends roughly 20:1 - keeping a single ``get_email_service``
 entry point means adding a new provider (SES, SendGrid) is a two-file
 change (``base.py`` + the new backend) rather than a sweep across
 modules/users, modules/integrations, and any future consumer.
@@ -28,12 +28,12 @@ from functools import lru_cache
 
 from app.config import Settings, get_settings
 
-from .base import BackendName, DeliveryResult, EmailBackend, EmailMessage
+from .base import BackendName, DeliveryResult, EmailAttachment, EmailBackend, EmailMessage
 from .console import ConsoleEmailBackend
 from .memory import MemoryEmailBackend
 from .noop import NoopEmailBackend
 from .smtp import SmtpEmailBackend
-from .templates import template_password_reset
+from .templates import template_password_reset, wrap
 
 logger = logging.getLogger(__name__)
 
@@ -45,14 +45,14 @@ def _resolve_backend(settings: Settings) -> EmailBackend:
     developer who ticked ``EMAIL_BACKEND=smtp`` in .env but forgot to
     fill in credentials still sees reset emails in the log instead of a
     silent drop.  Production deployments should set ``EMAIL_BACKEND=smtp``
-    AND provide host/credentials — the SMTP backend logs a warning when
+    AND provide host/credentials - the SMTP backend logs a warning when
     host is missing so operators notice immediately.
     """
     name: BackendName = settings.email_backend
     if name == "smtp":
         if not settings.smtp_host:
             logger.warning(
-                "EMAIL_BACKEND=smtp but SMTP_HOST is empty — falling back to console backend. "
+                "EMAIL_BACKEND=smtp but SMTP_HOST is empty - falling back to console backend. "
                 "Set SMTP_HOST to enable real delivery.",
             )
             return ConsoleEmailBackend()
@@ -63,7 +63,7 @@ def _resolve_backend(settings: Settings) -> EmailBackend:
         return NoopEmailBackend()
     if name == "memory":
         return MemoryEmailBackend()
-    # Defensive — Pydantic's Literal type narrows ``name`` to the four
+    # Defensive - Pydantic's Literal type narrows ``name`` to the four
     # values above, so this branch is only reachable if an upstream
     # version adds a new backend without updating the resolver.
     raise ValueError(f"Unknown email backend: {name!r}")
@@ -80,7 +80,7 @@ class EmailService:
         return self._backend.name
 
     async def send(self, message: EmailMessage) -> DeliveryResult:
-        """Low-level send — use the typed helpers below when possible."""
+        """Low-level send - use the typed helpers below when possible."""
         result = await self._backend.send(message)
         if not result.ok:
             logger.warning(
@@ -102,7 +102,7 @@ class EmailService:
         """Send a password-reset email. Returns the delivery result.
 
         ``reset_url`` must already embed the signed token as a query
-        parameter.  Never log the URL at INFO — the token is sensitive.
+        parameter.  Never log the URL at INFO - the token is sensitive.
         """
         subject, html = template_password_reset(
             recipient_name=recipient_name,
@@ -115,6 +115,56 @@ class EmailService:
             EmailMessage(to=to, subject=subject, html_body=html, tags=["password_reset"]),
         )
 
+    async def send_document(
+        self,
+        to: str,
+        *,
+        subject: str,
+        document_name: str,
+        attachment: EmailAttachment,
+        recipient_name: str | None = None,
+        sender_name: str | None = None,
+        note: str | None = None,
+    ) -> DeliveryResult:
+        """Email a generated document (PDF) as an attachment.
+
+        Used by feature modules that produce a PDF on the fly (Property
+        Development receipts / contracts / certificates) and want to send
+        it straight to a buyer or counterparty. The body is a short cover
+        note; the document itself rides as ``attachment``.
+        """
+        greeting = f"Hi {recipient_name}," if recipient_name else "Hello,"
+        from_line = f" from {sender_name}" if sender_name else ""
+        note_html = (
+            f"<blockquote style='border-left:3px solid #0071e3; padding-left:12px; "
+            f"margin:12px 0; color:#1d1d1f;'>{note}</blockquote>"
+            if note
+            else ""
+        )
+        body = (
+            f"<p>{greeting}</p>"
+            f"<p>Please find attached your <strong>{document_name}</strong>{from_line}.</p>"
+            f"{note_html}"
+            f"<p style='font-size:13px; color:#6e6e73;'>The document is attached to this "
+            f"email as a PDF.</p>"
+        )
+        html = wrap(document_name, body)
+        logger.info(
+            "sending document email to=%s document=%r via %s",
+            to,
+            document_name,
+            self._backend.name,
+        )
+        return await self.send(
+            EmailMessage(
+                to=to,
+                subject=subject,
+                html_body=html,
+                tags=["document", document_name],
+                attachments=[attachment],
+            ),
+        )
+
 
 @lru_cache(maxsize=4)
 def _cached_service(settings_id: int) -> EmailService:
@@ -125,7 +175,7 @@ def _cached_service(settings_id: int) -> EmailService:
     in practice we get exactly one service per process.
     """
     settings = get_settings()  # Trust the global singleton.
-    # ``settings_id`` is the cache key; we ignore it in the body — its only
+    # ``settings_id`` is the cache key; we ignore it in the body - its only
     # job is to give lru_cache a distinct entry per Settings instance.
     _ = settings_id
     return EmailService(_resolve_backend(settings))
@@ -145,5 +195,5 @@ def get_email_service(backend: EmailBackend | None = None) -> EmailService:
 
 
 def reset_email_service_cache() -> None:
-    """Drop the cached service — used by tests that mutate settings."""
+    """Drop the cached service - used by tests that mutate settings."""
     _cached_service.cache_clear()

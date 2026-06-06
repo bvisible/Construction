@@ -1,10 +1,10 @@
-"""‌⁠‍QMS service — business logic for the unified quality module.
+"""‌⁠‍QMS service - business logic for the unified quality module.
 
 Status transitions are guarded by explicit allow-lists. Illegal moves
 raise :class:`ValueError`; HTTP-layer translation happens in the router.
 
 Cross-module communication is fire-and-forget via
-:meth:`EventBus.publish_detached` — never await a subscriber while
+:meth:`EventBus.publish_detached` - never await a subscriber while
 holding a write session on SQLite.
 """
 
@@ -27,7 +27,9 @@ from app.modules.qms.models import (
     QMSAudit,
     QMSAuditFinding,
     QMSCalibration,
+    QMSHoldPointRelease,
     QMSInspection,
+    QMSInspectionAttachment,
     QMSInspectionSignature,
     QMSNCRAction,
     QMSPunchItem,
@@ -39,10 +41,13 @@ from app.modules.qms.schemas import (
     AuditUpdate,
     CalibrationCreate,
     CalibrationUpdate,
+    HoldPointReleaseCreate,
+    InspectionAttachmentCreate,
     InspectionCreate,
     InspectionSignatureCreate,
     InspectionUpdate,
     ITPItemCreate,
+    ITPItemLinkSpec,
     ITPPlanCreate,
     ITPPlanUpdate,
     ITPTemplateCloneRequest,
@@ -104,6 +109,23 @@ _AUDIT_STATUS_TRANSITIONS: dict[str, set[str]] = {
     "closed": set(),
 }
 
+# ── Signer-role authority ladder (item 12) ────────────────────────────────
+# Ranks the inspection sign-off roles so a signer can satisfy a control
+# point that names a *lower or equal* authority. A control point that
+# requires a "subcontractor" sign-off can therefore also be signed by a GC,
+# inspector, designer or client, but a control point that requires a "client"
+# sign-off cannot be satisfied by a subcontractor alone. ``responsible_role``
+# on the ITP item is free-form; only values that map here are gated, anything
+# else (or an empty role) is treated as "any role may sign" so legacy plans
+# never lock out their inspectors.
+_SIGNER_ROLE_RANK: dict[str, int] = {
+    "subcontractor": 1,
+    "inspector": 2,
+    "designer": 2,
+    "GC": 3,
+    "client": 4,
+}
+
 
 def _utc_now_iso() -> str:
     """‌⁠‍Return current UTC time as an ISO-8601 string for the String(32) columns."""
@@ -117,7 +139,7 @@ def _to_utc_iso(value: datetime | None) -> str | None:
     ``>=`` / ``<`` range comparisons that only preserve chronology when every
     value carries the **same** UTC offset. A naive client datetime produces an
     offset-less string (``"...T10:00:00"``) that sorts *before* an offset-bearing
-    one (``"...T10:00:00+00:00"``), silently corrupting the ordering — on both
+    one (``"...T10:00:00+00:00"``), silently corrupting the ordering - on both
     SQLite and PostgreSQL, but it bites harder on PG where this is the only
     ordering the planner has. Coercing every write to UTC-with-offset here keeps
     lexical order == chronological order regardless of what the client sent.
@@ -208,6 +230,15 @@ class QMSService:
             raise ValueError(
                 f"Cannot add item to ITP plan in status '{plan.status}'",
             )
+        # A predecessor must be an existing item in the SAME plan. This keeps
+        # the hold-point dependency graph inside one plan and prevents a
+        # cross-plan FK that the release/guard logic can't reason about.
+        if data.predecessor_itp_item_id is not None:
+            pred = await self.repo.get_itp_item(data.predecessor_itp_item_id)
+            if pred is None or pred.itp_plan_id != plan_id:
+                raise ValueError(
+                    "predecessor_itp_item_id must reference an item in the same ITP plan",
+                )
         item = ITPItem(
             itp_plan_id=plan_id,
             sequence=data.sequence,
@@ -219,8 +250,47 @@ class QMSService:
             hold_witness_point=data.hold_witness_point,
             responsible_role=data.responsible_role,
             signatories_required=data.signatories_required,
+            boq_position_id=data.boq_position_id,
+            csi_section_ref=data.csi_section_ref,
+            spec_drawing_ref=data.spec_drawing_ref,
+            bim_element_id=data.bim_element_id,
+            predecessor_itp_item_id=data.predecessor_itp_item_id,
         )
         item = await self.repo.create_itp_item(item)
+        return item
+
+    async def link_itp_item_to_spec(
+        self,
+        itp_item_id: uuid.UUID,
+        data: ITPItemLinkSpec,
+    ) -> ITPItem:
+        """Link an ITP control point to its spec sources / predecessor.
+
+        Only the fields supplied in the request are written (PATCH
+        semantics). A ``predecessor_itp_item_id`` must reference an item in
+        the same plan and may not point at the item itself (self-cycle) nor
+        create a direct 2-cycle with a predecessor that already points back.
+        """
+        item = await self.repo.get_itp_item(itp_item_id)
+        if item is None:
+            raise ValueError(f"ITP item {itp_item_id} not found")
+        fields: dict[str, Any] = data.model_dump(exclude_unset=True)
+        pred_id = fields.get("predecessor_itp_item_id")
+        if pred_id is not None:
+            if pred_id == itp_item_id:
+                raise ValueError("An ITP item cannot be its own predecessor")
+            pred = await self.repo.get_itp_item(pred_id)
+            if pred is None or pred.itp_plan_id != item.itp_plan_id:
+                raise ValueError(
+                    "predecessor_itp_item_id must reference an item in the same ITP plan",
+                )
+            if pred.predecessor_itp_item_id == itp_item_id:
+                raise ValueError(
+                    "Circular hold-point dependency: that item already depends on this one",
+                )
+        if fields:
+            await self.repo.update_itp_item_fields(itp_item_id, **fields)
+            await self.session.refresh(item)
         return item
 
     async def activate_itp_plan(self, plan_id: uuid.UUID) -> ITPPlan:
@@ -336,19 +406,46 @@ class QMSService:
         )
         return inspection
 
+    @staticmethod
+    def validate_signer_role(required_role: str | None, signer_role: str) -> None:
+        """Gate a sign-off by the control point's ``responsible_role`` (item 12).
+
+        The signer's role must rank *at or above* the role the ITP control
+        point names. Unknown / empty required roles are treated as "any role
+        may sign" so free-form legacy plans never lock out inspectors. Raises
+        :class:`ValueError` when the signer has insufficient authority.
+        """
+        if not required_role:
+            return
+        required_rank = _SIGNER_ROLE_RANK.get(required_role)
+        if required_rank is None:
+            # Required role is not on the authority ladder - cannot gate it.
+            return
+        signer_rank = _SIGNER_ROLE_RANK.get(signer_role, 0)
+        if signer_rank < required_rank:
+            raise ValueError(
+                f"Signer role '{signer_role}' is below the control point's required authority '{required_role}'",
+            )
+
     async def add_signature(
         self,
         inspection_id: uuid.UUID,
         data: InspectionSignatureCreate,
         *,
         default_signer_user_id: uuid.UUID | None = None,
+        signer_ip: str | None = None,
+        signer_user_agent: str | None = None,
     ) -> QMSInspectionSignature:
         """Record a sign-off against an inspection.
 
         The signer is resolved as ``data.signer_user_id`` when supplied
         (sign on behalf of another member), otherwise ``default_signer_user_id``
-        — the authenticated caller. This lets the UI "sign as me" without
+        - the authenticated caller. This lets the UI "sign as me" without
         hand-typing a UUID.
+
+        ``signer_ip`` / ``signer_user_agent`` capture non-repudiation context
+        from the HTTP request (item 12); both are optional so service-level
+        callers and tests can omit them.
         """
         inspection = await self.repo.get_inspection(inspection_id)
         if inspection is None:
@@ -360,6 +457,12 @@ class QMSService:
         signer_user_id = data.signer_user_id or default_signer_user_id
         if signer_user_id is None:
             raise ValueError("signer_user_id is required")
+        # Role gating: a control point that names a responsible_role can only
+        # be signed by a signer with at-or-above authority.
+        if inspection.itp_item_id is not None:
+            item = await self.repo.get_itp_item(inspection.itp_item_id)
+            if item is not None:
+                self.validate_signer_role(item.responsible_role, data.signer_role)
         # Dedup: one (user, role) signature per inspection. Two distinct
         # roles on the same user are still allowed (e.g. GC inspector +
         # designer reviewer when one person wears both hats).
@@ -369,13 +472,17 @@ class QMSService:
                 raise ValueError(
                     f"Signer has already signed this inspection in role '{data.signer_role}'",
                 )
+        now_iso = _utc_now_iso()
         sig = QMSInspectionSignature(
             inspection_id=inspection_id,
             signer_user_id=signer_user_id,
             signer_role=data.signer_role,
-            signed_at=_utc_now_iso(),
+            signed_at=now_iso,
             signature_method=data.signature_method,
             comments=data.comments,
+            timestamp_utc=now_iso,
+            signer_ip=signer_ip,
+            signer_user_agent=(signer_user_agent[:512] if signer_user_agent else None),
         )
         return await self.repo.add_signature(sig)
 
@@ -429,10 +536,23 @@ class QMSService:
         )
 
         required_sigs = 1
+        item: ITPItem | None = None
         if inspection.itp_item_id is not None:
             item = await self.repo.get_itp_item(inspection.itp_item_id)
             if item is not None:
                 required_sigs = item.signatories_required
+
+        # Hold-point sequencing guard: a control point with a predecessor
+        # cannot be PASSED until its predecessor's inspection has passed.
+        # Failing or conditional an inspection is always allowed (you must be
+        # able to record a failure regardless of upstream state).
+        if result == "passed" and item is not None and item.predecessor_itp_item_id is not None:
+            pred_ok = await self.check_hold_point_predecessor_status(item.id)
+            if not pred_ok["predecessor_passed"]:
+                raise ValueError(
+                    "Blocked: predecessor hold point has not passed yet "
+                    f"(item '{pred_ok.get('predecessor_name') or pred_ok['predecessor_itp_item_id']}')",
+                )
 
         sigs = await self.repo.list_signatures(inspection_id)
         if len(sigs) < required_sigs:
@@ -469,15 +589,450 @@ class QMSService:
             },
             source_module="qms",
         )
+
+        # Hold-point lifecycle events (item 12). When the inspection is a
+        # hold or witness point, fan out a dedicated event so downstream
+        # subscribers (punchlist, notifications) can react to the gate
+        # passing or failing without parsing the generic passed/failed event.
+        is_hold_point = item is not None and item.hold_witness_point in ("hold", "witness")
+        if is_hold_point and result in ("passed", "failed"):
+            hold_event = (
+                "qms.inspection.hold_point_passed" if result == "passed" else "qms.inspection.hold_point_failed"
+            )
+            event_bus.publish_detached(
+                hold_event,
+                {
+                    "inspection_id": str(inspection_id),
+                    "project_id": str(inspection.project_id),
+                    "itp_item_id": str(item.id),
+                    "control_point_name": item.control_point_name,
+                    "hold_witness_point": item.hold_witness_point,
+                    "result": result,
+                    "location_ref": inspection.location_ref,
+                },
+                source_module="qms",
+            )
+
+        # Approval integration (item 12 gap #4). A failed or conditional
+        # result on a hold / witness point does not release the gate by
+        # itself - it needs a formal disposition. We fan out
+        # ``qms.inspection.approval_requested`` so the approval_routes engine
+        # (which subscribes in its own module) can open an approval instance
+        # against the inspection. Emitting an event rather than calling the
+        # approval service inline keeps QMS loadable without approval_routes
+        # in minimal fixtures and avoids holding a write session across a
+        # second module's transaction.
+        if is_hold_point and result in ("failed", "conditional"):
+            event_bus.publish_detached(
+                "qms.inspection.approval_requested",
+                {
+                    "inspection_id": str(inspection_id),
+                    "project_id": str(inspection.project_id),
+                    "itp_item_id": str(item.id),
+                    "control_point_name": item.control_point_name,
+                    "hold_witness_point": item.hold_witness_point,
+                    "result": result,
+                    "reason": (
+                        "Hold point did not pass cleanly; a disposition approval is required "
+                        "before dependent work may proceed."
+                    ),
+                },
+                source_module="qms",
+            )
+
         logger.info(
-            "QMS inspection completed: project=%s id=%s result=%s signatures=%d/%d",
+            "QMS inspection completed: project=%s id=%s result=%s signatures=%d/%d hold_point=%s",
             inspection.project_id,
             inspection_id,
             result,
             len(sigs),
             required_sigs,
+            is_hold_point,
         )
         return inspection
+
+    # ── Hold-point sequencing + evidence + release (item 12) ────────────
+
+    async def check_hold_point_predecessor_status(
+        self,
+        itp_item_id: uuid.UUID,
+    ) -> dict[str, Any]:
+        """Resolve whether an ITP item's predecessor hold point has passed.
+
+        Returns a dict describing the gate. ``predecessor_passed`` is True
+        when there is no predecessor, or when at least one inspection
+        scheduled against the predecessor item has reached ``passed``.
+        """
+        item = await self.repo.get_itp_item(itp_item_id)
+        if item is None:
+            raise ValueError(f"ITP item {itp_item_id} not found")
+        if item.predecessor_itp_item_id is None:
+            return {
+                "itp_item_id": itp_item_id,
+                "predecessor_itp_item_id": None,
+                "predecessor_name": None,
+                "predecessor_passed": True,
+            }
+        pred = await self.repo.get_itp_item(item.predecessor_itp_item_id)
+        pred_inspections = await self.repo.list_inspections_for_itp_item(
+            item.predecessor_itp_item_id,
+        )
+        passed = any(ins.status == "passed" for ins in pred_inspections)
+        return {
+            "itp_item_id": itp_item_id,
+            "predecessor_itp_item_id": item.predecessor_itp_item_id,
+            "predecessor_name": pred.control_point_name if pred is not None else None,
+            "predecessor_passed": passed,
+        }
+
+    async def hold_point_status(
+        self,
+        inspection_id: uuid.UUID,
+    ) -> dict[str, Any]:
+        """Aggregate the hold-point gate state for an inspection.
+
+        Combines predecessor status, whether the linked item is a hold/witness
+        point, and whether a manual release record already exists. Drives the
+        traffic-light in the UI.
+        """
+        inspection = await self.repo.get_inspection(inspection_id)
+        if inspection is None:
+            raise ValueError(f"Inspection {inspection_id} not found")
+        is_hold_point = False
+        predecessor_itp_item_id: uuid.UUID | None = None
+        predecessor_passed = True
+        blocking_reason: str | None = None
+        if inspection.itp_item_id is not None:
+            item = await self.repo.get_itp_item(inspection.itp_item_id)
+            if item is not None:
+                is_hold_point = item.hold_witness_point in ("hold", "witness")
+                if item.predecessor_itp_item_id is not None:
+                    pred = await self.check_hold_point_predecessor_status(item.id)
+                    predecessor_itp_item_id = pred["predecessor_itp_item_id"]
+                    predecessor_passed = pred["predecessor_passed"]
+                    if not predecessor_passed:
+                        blocking_reason = (
+                            "Predecessor hold point "
+                            f"'{pred.get('predecessor_name') or predecessor_itp_item_id}' "
+                            "has not passed yet"
+                        )
+        release = await self.repo.get_hold_point_release(inspection_id)
+        blocked = not predecessor_passed and inspection.status not in ("passed", "failed")
+        return {
+            "inspection_id": inspection_id,
+            "itp_item_id": inspection.itp_item_id,
+            "is_hold_point": is_hold_point,
+            "predecessor_itp_item_id": predecessor_itp_item_id,
+            "predecessor_passed": predecessor_passed,
+            "blocked": blocked,
+            "blocking_reason": blocking_reason,
+            "released": release is not None,
+        }
+
+    async def add_inspection_attachment(
+        self,
+        inspection_id: uuid.UUID,
+        data: InspectionAttachmentCreate,
+        *,
+        uploaded_by_user_id: uuid.UUID | None = None,
+    ) -> QMSInspectionAttachment:
+        """Link a stored document to an inspection as auditable evidence.
+
+        Keeps the denormalised ``attachment_document_ids`` array on the
+        inspection in sync so a single inspection read returns the id set.
+        """
+        inspection = await self.repo.get_inspection(inspection_id)
+        if inspection is None:
+            raise ValueError(f"Inspection {inspection_id} not found")
+        # Idempotency: a document can be linked to an inspection only once.
+        existing = await self.repo.list_inspection_attachments(inspection_id)
+        if any(a.document_id == data.document_id for a in existing):
+            raise ValueError("This document is already attached to the inspection")
+        attachment = QMSInspectionAttachment(
+            inspection_id=inspection_id,
+            document_id=data.document_id,
+            caption=data.caption,
+            file_hash_sha256=(data.file_hash_sha256.lower() if data.file_hash_sha256 else None),
+            uploaded_by=uploaded_by_user_id,
+            attached_at=_utc_now_iso(),
+        )
+        attachment = await self.repo.create_inspection_attachment(attachment)
+        # Sync the denormalised id list (deduplicated, order-stable).
+        doc_ids = list(inspection.attachment_document_ids or [])
+        doc_str = str(data.document_id)
+        if doc_str not in doc_ids:
+            doc_ids.append(doc_str)
+            await self.repo.update_inspection_fields(
+                inspection_id,
+                attachment_document_ids=doc_ids,
+            )
+        await self.repo.append_audit(
+            entity_type="inspection",
+            entity_id=inspection_id,
+            action="evidence_attached",
+            after_state={"document_id": doc_str},
+        )
+        return attachment
+
+    async def list_inspection_attachments(
+        self,
+        inspection_id: uuid.UUID,
+    ) -> list[QMSInspectionAttachment]:
+        return await self.repo.list_inspection_attachments(inspection_id)
+
+    async def release_hold_point(
+        self,
+        inspection_id: uuid.UUID,
+        data: HoldPointReleaseCreate,
+        *,
+        released_by_user_id: uuid.UUID | None = None,
+    ) -> QMSHoldPointRelease:
+        """Release a passed hold point so dependent work can proceed.
+
+        Pre-conditions:
+          * the inspection must exist and be linked to a hold / witness point,
+          * it must have PASSED (you cannot release a gate that has not been
+            satisfied),
+          * it must not already have a release record (the FK is unique).
+
+        Emits ``qms.inspection.hold_point_released`` on success.
+        """
+        inspection = await self.repo.get_inspection(inspection_id)
+        if inspection is None:
+            raise ValueError(f"Inspection {inspection_id} not found")
+        if inspection.itp_item_id is None:
+            raise ValueError("Inspection is not linked to an ITP control point")
+        item = await self.repo.get_itp_item(inspection.itp_item_id)
+        if item is None or item.hold_witness_point not in ("hold", "witness"):
+            raise ValueError("Only hold or witness control points can be released")
+        if inspection.status != "passed":
+            raise ValueError(
+                f"Cannot release a hold point from status '{inspection.status}'; the inspection must have passed first",
+            )
+        if await self.repo.get_hold_point_release(inspection_id) is not None:
+            raise ValueError("This hold point has already been released")
+
+        release = QMSHoldPointRelease(
+            inspection_id=inspection_id,
+            released_by=released_by_user_id,
+            released_at=_utc_now_iso(),
+            justification=data.justification,
+            approval_route_id=data.approval_route_id,
+        )
+        release = await self.repo.create_hold_point_release(release)
+        await self.repo.append_audit(
+            entity_type="inspection",
+            entity_id=inspection_id,
+            action="hold_point_released",
+            actor_user_id=released_by_user_id,
+            after_state={"justification": data.justification},
+        )
+        event_bus.publish_detached(
+            "qms.inspection.hold_point_released",
+            {
+                "inspection_id": str(inspection_id),
+                "project_id": str(inspection.project_id),
+                "itp_item_id": str(item.id),
+                "control_point_name": item.control_point_name,
+                "released_by": (str(released_by_user_id) if released_by_user_id else None),
+                "justification": data.justification,
+            },
+            source_module="qms",
+        )
+        logger.info(
+            "QMS hold point released: project=%s inspection=%s by=%s",
+            inspection.project_id,
+            inspection_id,
+            released_by_user_id,
+        )
+        return release
+
+    # ── Quality-gate enforcement for downstream modules (item 12 gap #3) ─
+
+    async def is_hold_point_satisfied(
+        self,
+        itp_item_id: uuid.UUID,
+    ) -> dict[str, Any]:
+        """Resolve whether the hold point on an ITP item is satisfied.
+
+        A hold / witness point is *satisfied* (downstream work may proceed)
+        when its most-recent inspection has PASSED, OR a manual hold-point
+        release record exists for a passed inspection. A ``review`` point is
+        not a gate and is always satisfied. Returns a dict the caller can use
+        both for a boolean decision and for surfacing the blocking reason in
+        a UI / error message.
+
+        This is the read-only seam other modules (task progression, change
+        orders) call before allowing a gated action - see
+        :meth:`assert_downstream_action_allowed`.
+        """
+        item = await self.repo.get_itp_item(itp_item_id)
+        if item is None:
+            raise ValueError(f"ITP item {itp_item_id} not found")
+        if item.hold_witness_point not in ("hold", "witness"):
+            return {
+                "itp_item_id": itp_item_id,
+                "is_hold_point": False,
+                "satisfied": True,
+                "reason": None,
+            }
+        inspections = await self.repo.list_inspections_for_itp_item(itp_item_id)
+        if not inspections:
+            return {
+                "itp_item_id": itp_item_id,
+                "is_hold_point": True,
+                "satisfied": False,
+                "reason": (f"Hold point '{item.control_point_name}' has no inspection scheduled yet"),
+            }
+        passed = [ins for ins in inspections if ins.status == "passed"]
+        if not passed:
+            # Any failed inspection is the strongest blocking signal.
+            failed = any(ins.status == "failed" for ins in inspections)
+            reason = (
+                f"Hold point '{item.control_point_name}' last inspection failed"
+                if failed
+                else f"Hold point '{item.control_point_name}' inspection has not passed yet"
+            )
+            return {
+                "itp_item_id": itp_item_id,
+                "is_hold_point": True,
+                "satisfied": False,
+                "reason": reason,
+            }
+        # At least one passed inspection. Witness points are satisfied on a
+        # pass; hold points additionally require a manual release record so a
+        # human explicitly unblocked downstream work.
+        if item.hold_witness_point == "witness":
+            return {
+                "itp_item_id": itp_item_id,
+                "is_hold_point": True,
+                "satisfied": True,
+                "reason": None,
+            }
+        released = False
+        for ins in passed:
+            if await self.repo.get_hold_point_release(ins.id) is not None:
+                released = True
+                break
+        return {
+            "itp_item_id": itp_item_id,
+            "is_hold_point": True,
+            "satisfied": released,
+            "reason": (
+                None if released else (f"Hold point '{item.control_point_name}' has passed but has not been released")
+            ),
+        }
+
+    async def assert_downstream_action_allowed(
+        self,
+        itp_item_id: uuid.UUID,
+    ) -> None:
+        """Raise :class:`ValueError` if a hold point blocks downstream work.
+
+        Thin guard wrapper over :meth:`is_hold_point_satisfied` for callers
+        (task progression, change-order approval) that want fail-closed
+        semantics: the action is allowed only when the gate is satisfied.
+        """
+        status = await self.is_hold_point_satisfied(itp_item_id)
+        if not status["satisfied"]:
+            raise ValueError(
+                f"Blocked by quality gate: {status['reason'] or 'hold point not satisfied'}",
+            )
+
+    # ── Compliance-ready export (item 12 gap #7) ────────────────────────
+
+    async def build_inspection_compliance_record(
+        self,
+        inspection_id: uuid.UUID,
+    ) -> dict[str, Any]:
+        """Assemble the audit-ready record for a single inspection.
+
+        Bundles the inspection, its linked control point, every signature
+        (with non-repudiation context), evidence attachments (with their
+        SHA-256 integrity hashes) and the hold-point release, if any. The
+        shape is reused by both the JSON and CSV/PDF export endpoints so a
+        compliance reviewer always sees the same fields.
+        """
+        inspection = await self.repo.get_inspection(inspection_id)
+        if inspection is None:
+            raise ValueError(f"Inspection {inspection_id} not found")
+        item: ITPItem | None = None
+        if inspection.itp_item_id is not None:
+            item = await self.repo.get_itp_item(inspection.itp_item_id)
+        signatures = await self.repo.list_signatures(inspection_id)
+        attachments = await self.repo.list_inspection_attachments(inspection_id)
+        release = await self.repo.get_hold_point_release(inspection_id)
+        return {
+            "inspection_id": str(inspection.id),
+            "project_id": str(inspection.project_id),
+            "status": inspection.status,
+            "scheduled_at": inspection.scheduled_at,
+            "performed_at": inspection.performed_at,
+            "location_ref": inspection.location_ref,
+            "control_point_name": (item.control_point_name if item else None),
+            "hold_witness_point": (item.hold_witness_point if item else None),
+            "responsible_role": (item.responsible_role if item else None),
+            "acceptance_criteria": (item.acceptance_criteria if item else None),
+            "csi_section_ref": (item.csi_section_ref if item else None),
+            "spec_drawing_ref": (item.spec_drawing_ref if item else None),
+            "boq_position_id": (str(item.boq_position_id) if item and item.boq_position_id else None),
+            "bim_element_id": (item.bim_element_id if item else None),
+            "signatures": [
+                {
+                    "signer_user_id": str(s.signer_user_id),
+                    "signer_role": s.signer_role,
+                    "signed_at": s.signed_at,
+                    "signature_method": s.signature_method,
+                    "timestamp_utc": s.timestamp_utc,
+                    "signer_ip": s.signer_ip,
+                    "comments": s.comments,
+                }
+                for s in signatures
+            ],
+            "evidence": [
+                {
+                    "document_id": str(a.document_id),
+                    "caption": a.caption,
+                    "file_hash_sha256": a.file_hash_sha256,
+                    "uploaded_by": (str(a.uploaded_by) if a.uploaded_by else None),
+                    "attached_at": a.attached_at,
+                }
+                for a in attachments
+            ],
+            "released": release is not None,
+            "released_by": (str(release.released_by) if release and release.released_by else None),
+            "released_at": (release.released_at if release else None),
+            "release_justification": (release.justification if release else None),
+        }
+
+    async def build_plan_compliance_export(
+        self,
+        plan_id: uuid.UUID,
+    ) -> dict[str, Any]:
+        """Assemble the compliance export for a whole ITP plan.
+
+        One compliance record per inspection across every control point in
+        the plan, plus the plan header. Used by the CSV / PDF endpoints so an
+        auditor can pull the full quality dossier for a work package.
+        """
+        plan = await self.repo.get_itp_plan(plan_id)
+        if plan is None:
+            raise ValueError(f"ITP plan {plan_id} not found")
+        items = await self.repo.list_itp_items(plan_id)
+        records: list[dict[str, Any]] = []
+        for item in items:
+            inspections = await self.repo.list_inspections_for_itp_item(item.id)
+            for ins in inspections:
+                records.append(await self.build_inspection_compliance_record(ins.id))
+        return {
+            "plan_id": str(plan.id),
+            "project_id": str(plan.project_id),
+            "name": plan.name,
+            "work_type": plan.work_type,
+            "status": plan.status,
+            "generated_at": _utc_now_iso(),
+            "records": records,
+        }
 
     # ── NCR ────────────────────────────────────────────────────────────
 
@@ -1090,7 +1645,7 @@ class QMSService:
         If the caller passed an explicit non-empty value we honour it
         (FX-converted upstream). Otherwise fall back to
         ``Project.currency``. Empty string is returned only if the
-        project lookup fails and no fallback was provided — callers
+        project lookup fails and no fallback was provided - callers
         should surface that as a "currency unknown" indicator rather
         than silently substituting ``EUR``/``USD``.
         """
@@ -1105,7 +1660,7 @@ class QMSService:
             project = await proj_repo.get_by_id(project_id)
             if project is not None:
                 return getattr(project, "currency", "") or ""
-        except Exception:  # noqa: BLE001 — defensive log-and-degrade
+        except Exception:  # noqa: BLE001 - defensive log-and-degrade
             logger.exception(
                 "QMS COPQ: project currency lookup failed for %s",
                 project_id,
@@ -1128,7 +1683,7 @@ class QMSService:
 
             proj_repo = ProjectRepository(self.session)
             project = await proj_repo.get_by_id(project_id)
-        except Exception:  # noqa: BLE001 — defensive log-and-degrade
+        except Exception:  # noqa: BLE001 - defensive log-and-degrade
             logger.exception(
                 "QMS COPQ: project lookup failed for %s",
                 project_id,
@@ -1162,7 +1717,7 @@ class QMSService:
         ``amount * fx_rates[code]``. A bucket whose currency has no FX rate
         is summed in its own units anyway (never dropped) so a missing rate
         degrades visibly. Returns ``(total_in_base, base_currency,
-        per_currency_breakdown)`` — the breakdown lets the UI surface a
+        per_currency_breakdown)`` - the breakdown lets the UI surface a
         mixed-currency warning when conversion was incomplete.
         """
         by_currency = await self.repo.sum_ncr_cost_impact_by_currency(project_id)
@@ -1181,7 +1736,7 @@ class QMSService:
                     if factor > 0:
                         total += amount * factor
                         continue
-            # Same currency, no base known, or missing rate — add raw.
+            # Same currency, no base known, or missing rate - add raw.
             total += amount
         return total, base, by_currency
 
@@ -1260,7 +1815,7 @@ class QMSService:
 
         COPQ (Juran) = internal failure (NCRs + rework) + external failure
         (warranty) + delay penalty. Each component is optional; defaults
-        come from tenant config — here we surface them as explicit kwargs.
+        come from tenant config - here we surface them as explicit kwargs.
         """
         per_punch = rework_cost_per_punch or _DEFAULT_REWORK_COST_PER_PUNCH
         warranty = Decimal(str(warranty_cost or 0))
@@ -1316,7 +1871,7 @@ class QMSService:
 
         Each bucket is ``period_days`` wide. Optional ``work_type`` filters
         to a single trade by walking the inspection→ITP item→ITP plan
-        relation in-process (kept simple — datasets are small per period).
+        relation in-process (kept simple - datasets are small per period).
         """
         if today is None:
             today = date.today()
@@ -1334,7 +1889,7 @@ class QMSService:
             )
             work_type_plan_ids = {p.id for p in plans if p.work_type == work_type}
             if not work_type_plan_ids:
-                # No plans of this work_type — empty trend
+                # No plans of this work_type - empty trend
                 return {
                     "project_id": project_id,
                     "work_type": work_type,
@@ -1479,23 +2034,23 @@ class QMSService:
         recs: list[str] = []
         if fpy < 0.85 and inspections_total > 0:
             recs.append(
-                f"First-pass yield {fpy:.2%} below 85% target — review inspector training and rework root causes."
+                f"First-pass yield {fpy:.2%} below 85% target - review inspector training and rework root causes."
             )
         if findings_open > findings_closed:
             recs.append(
-                f"{findings_open} open findings vs {findings_closed} closed — "
+                f"{findings_open} open findings vs {findings_closed} closed - "
                 "increase CAPA closure cadence and review responsible owners."
             )
         if ncrs_raised > 0 and ncrs_closed / max(ncrs_raised, 1) < 0.5:
             recs.append(
-                f"Only {ncrs_closed}/{ncrs_raised} NCRs closed in period — escalate ageing NCRs to senior leadership."
+                f"Only {ncrs_closed}/{ncrs_raised} NCRs closed in period - escalate ageing NCRs to senior leadership."
             )
         if open_punch > 50:
             recs.append(
-                f"{open_punch} open punch items — schedule a rolling punch-down sprint before final inspection."
+                f"{open_punch} open punch items - schedule a rolling punch-down sprint before final inspection."
             )
         if not recs:
-            recs.append("QMS performance within thresholds — maintain current cadence.")
+            recs.append("QMS performance within thresholds - maintain current cadence.")
 
         return {
             "project_id": project_id,
@@ -1761,7 +2316,7 @@ def compute_copq_breakdown(
     warranty_cost: Decimal = Decimal("0"),
     delay_penalty_cost: Decimal = Decimal("0"),
 ) -> dict[str, Decimal]:
-    """Pure COPQ breakdown — used by tests and offline reporting."""
+    """Pure COPQ breakdown - used by tests and offline reporting."""
     rework = rework_cost_per_punch * Decimal(open_punch_count)
     total = ncr_cost + rework + warranty_cost + delay_penalty_cost
     return {

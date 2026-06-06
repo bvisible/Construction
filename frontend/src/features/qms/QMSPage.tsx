@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import {
@@ -16,6 +17,10 @@ import {
   Send,
   ArrowUpRight,
   FileCheck,
+  Lock,
+  Unlock,
+  ShieldAlert,
+  Download,
 } from 'lucide-react';
 import {
   Button,
@@ -30,6 +35,7 @@ import {
   WideModalField,
 } from '@/shared/ui';
 import { RequiresProject } from '@/shared/auth/RequiresProject';
+import { PageHeader } from '@/shared/ui/PageHeader';
 import { MoneyDisplay } from '@/shared/ui/MoneyDisplay';
 import { DateDisplay } from '@/shared/ui/DateDisplay';
 import { SectionIntro } from '@/features/validation';
@@ -60,6 +66,10 @@ import {
   listITPItems,
   signInspection,
   listInspectionSignatures,
+  checkHoldPointStatus,
+  releaseHoldPoint,
+  linkITPItemToSpec,
+  planComplianceCsvUrl,
   type ITPPlan,
   type ITPItem,
   type Inspection,
@@ -71,6 +81,8 @@ import {
   type PunchCategory,
   type Audit,
 } from './api';
+import { HoldPointDependencyTree } from './HoldPointDependencyTree';
+import { AttachmentEvidenceGallery } from './AttachmentEvidenceGallery';
 import { listVariationOrders } from '@/features/variations/api';
 
 type Tab = 'itp' | 'inspections' | 'ncrs' | 'punch' | 'audits';
@@ -142,6 +154,7 @@ const inputCls =
 
 export function QMSPage() {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const [tab, setTab] = useState<Tab>('itp');
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
@@ -149,6 +162,7 @@ export function QMSPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [selectedNcrId, setSelectedNcrId] = useState<string | null>(null);
   const [selectedInspectionId, setSelectedInspectionId] = useState<string | null>(null);
+  const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
   const activeProjectId = useProjectContextStore((s) => s.activeProjectId);
 
   const { data: projects = [] } = useQuery({
@@ -158,6 +172,10 @@ export function QMSPage() {
   });
 
   const projectId = activeProjectId || projects[0]?.id || '';
+  // Genuinely-selected project (shared context) — used for the breadcrumb
+  // so the trail never shows a first-project guess.
+  const breadcrumbProjectName =
+    projects.find((p) => p.id === activeProjectId)?.name || '';
 
   const itpQ = useQuery({
     queryKey: ['qms', 'itp', projectId, statusFilter],
@@ -232,34 +250,41 @@ export function QMSPage() {
   const loadError = activeQuery.isError ? activeQuery.error : null;
 
   return (
-    <div className="space-y-5">
-      <Breadcrumb items={[{ label: t('qms.title', { defaultValue: 'Quality Management' }) }]} />
+    <div className="space-y-5 animate-fade-in">
+      <Breadcrumb
+        items={[
+          ...(activeProjectId && breadcrumbProjectName
+            ? [{ label: breadcrumbProjectName, to: `/projects/${activeProjectId}` }]
+            : []),
+          { label: t('nav.qms', { defaultValue: 'Quality Management' }) },
+        ]}
+      />
 
-      <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div>
-          <h1 className="text-2xl font-semibold text-content-primary">
-            {t('qms.title', { defaultValue: 'Quality Management' })}
-          </h1>
-          <p className="mt-1 text-sm text-content-secondary">
-            {t('qms.subtitle', {
-              defaultValue: 'ITP plans, inspections, NCRs, punch list and audits in one place.',
-            })}
-          </p>
-        </div>
-        <Button variant="primary" icon={<Plus size={14} />} onClick={() => setCreateOpen(true)} disabled={!projectId}>
-          {tabCreateLabel(tab, t)}
-        </Button>
-      </div>
+      <PageHeader
+        subtitle={t('qms.subtitle', {
+          defaultValue: 'ITP plans, inspections, NCRs, punch list and audits in one place.',
+        })}
+        actions={
+          <Button variant="primary" size="sm" icon={<Plus size={14} />} onClick={() => setCreateOpen(true)} disabled={!projectId}>
+            {tabCreateLabel(tab, t)}
+          </Button>
+        }
+      />
 
       <SectionIntro
         storageKey="qms"
         title={t('qms.intro_title', {
-          defaultValue: 'One quality system, five linked registers',
+          defaultValue: 'One quality chain, not five silos',
         })}
+        links={[
+          { label: t('inspections.title', { defaultValue: 'Inspections' }), onClick: () => navigate('/inspections') },
+          { label: t('ncr.title', { defaultValue: 'NCRs' }), onClick: () => navigate('/ncr') },
+          { label: t('nav.punchlist', { defaultValue: 'Punch List' }), onClick: () => navigate('/punchlist') },
+        ]}
       >
         {t('qms.intro_body', {
           defaultValue:
-            'QMS ties together the full ISO 9001 quality chain: ITP plans define hold/witness points → Inspections sign them off → failed checks raise NCRs → NCRs with cost impact escalate to a Variation and feed the Cost of Poor Quality (COPQ) rollup → Punch items track close-out → Audits cover the management system. Pick a project, then move through the tabs left-to-right.',
+            'Run the full ISO 9001 quality chain in one place: ITP plans define hold and witness points, Inspections sign them off, failed checks raise NCRs, NCRs with cost impact escalate to a Variation and feed the Cost of Poor Quality rollup, Punch items track close-out and Audits cover the management system. Pick a project, then work the tabs left to right.',
         })}
       </SectionIntro>
 
@@ -366,19 +391,6 @@ export function QMSPage() {
             ))}
           </select>
         )}
-        {projects.length > 1 && (
-          <select
-            value={projectId}
-            onChange={(e) => useProjectContextStore.getState().setActiveProject(e.target.value, projects.find((p) => p.id === e.target.value)?.name || '')}
-            className={clsx(inputCls, 'max-w-[240px]')}
-          >
-            {projects.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-        )}
       </div>
 
       <Card padding="none">
@@ -393,7 +405,11 @@ export function QMSPage() {
         ) : loadError ? (
           <RecoveryCard error={loadError} onRetry={() => activeQuery.refetch()} />
         ) : tab === 'itp' ? (
-          <ITPTable rows={filteredItp} onAction={() => setCreateOpen(true)} />
+          <ITPTable
+            rows={filteredItp}
+            onAction={() => setCreateOpen(true)}
+            onSelect={(id) => setSelectedPlanId(id)}
+          />
         ) : tab === 'inspections' ? (
           <InspectionTable
             rows={filteredInsp}
@@ -432,6 +448,15 @@ export function QMSPage() {
           id={selectedInspectionId}
           inspections={inspQ.data ?? []}
           onClose={() => setSelectedInspectionId(null)}
+        />
+      )}
+
+      {selectedPlanId && (
+        <ITPPlanDrawer
+          planId={selectedPlanId}
+          plan={(itpQ.data ?? []).find((p) => p.id === selectedPlanId) ?? null}
+          projectId={projectId}
+          onClose={() => setSelectedPlanId(null)}
         />
       )}
     </div>
@@ -571,7 +596,15 @@ function KvBlock({ label, value }: { label: React.ReactNode; value: React.ReactN
 
 /* ── Tables ────────────────────────────────────────────────────────────── */
 
-function ITPTable({ rows, onAction }: { rows: ITPPlan[]; onAction: () => void }) {
+function ITPTable({
+  rows,
+  onAction,
+  onSelect,
+}: {
+  rows: ITPPlan[];
+  onAction: () => void;
+  onSelect: (id: string) => void;
+}) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const addToast = useToastStore((s) => s.addToast);
@@ -610,7 +643,11 @@ function ITPTable({ rows, onAction }: { rows: ITPPlan[]; onAction: () => void })
         </thead>
         <tbody>
           {rows.map((r) => (
-            <tr key={r.id} className="border-t border-border-light hover:bg-surface-secondary">
+            <tr
+              key={r.id}
+              onClick={() => onSelect(r.id)}
+              className="border-t border-border-light hover:bg-surface-secondary cursor-pointer"
+            >
               <td className="px-4 py-2 font-medium text-content-primary">{r.name}</td>
               <td className="px-4 py-2 text-content-secondary">{r.work_type}</td>
               <td className="px-4 py-2 text-content-secondary text-xs">{r.wbs_ref || '—'}</td>
@@ -626,7 +663,10 @@ function ITPTable({ rows, onAction }: { rows: ITPPlan[]; onAction: () => void })
                     variant="ghost"
                     size="sm"
                     loading={activate.isPending && activate.variables === r.id}
-                    onClick={() => activate.mutate(r.id)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      activate.mutate(r.id);
+                    }}
                   >
                     {t('qms.activate', { defaultValue: 'Activate' })}
                   </Button>
@@ -1139,7 +1179,7 @@ function NCRDrawer({
                   value={responsible}
                   onChange={(e) => setResponsible(e.target.value)}
                   placeholder={t('qms.responsible_user', {
-                    defaultValue: 'Responsible (name or user ID — optional)',
+                    defaultValue: 'Responsible (name or user ID - optional)',
                   })}
                   className={inputCls}
                 />
@@ -1214,6 +1254,226 @@ function NCRDrawer({
   );
 }
 
+/* ── ITP Plan Drawer (hold-point sequencing + spec linkage, item 12) ─────── */
+
+function ITPPlanDrawer({
+  planId,
+  plan,
+  projectId,
+  onClose,
+}: {
+  planId: string;
+  plan: ITPPlan | null;
+  projectId: string;
+  onClose: () => void;
+}) {
+  const { t } = useTranslation();
+  const [editItemId, setEditItemId] = useState<string | null>(null);
+
+  const itemsQ = useQuery({
+    queryKey: ['qms', 'itp-items', planId],
+    queryFn: () => listITPItems(planId),
+  });
+  // Inspections drive the dependency-tree traffic lights.
+  const inspQ = useQuery({
+    queryKey: ['qms', 'inspections', projectId, ''],
+    queryFn: () => listInspections({ project_id: projectId, limit: 200 }),
+    enabled: !!projectId,
+  });
+
+  useEscapeToClose(onClose);
+
+  const items = itemsQ.data ?? [];
+
+  return (
+    <div className="fixed inset-0 z-50 flex justify-end" onClick={onClose}>
+      <div className="absolute inset-0 bg-black/30" />
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="qms-plan-drawer-title"
+        className="relative h-full w-full max-w-lg overflow-y-auto bg-surface-elevated shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="sticky top-0 z-10 flex items-center justify-between border-b border-border-light bg-surface-elevated px-5 py-3">
+          <h2 id="qms-plan-drawer-title" className="text-base font-semibold">
+            {plan?.name || t('qms.itp_plan', { defaultValue: 'ITP plan' })}
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded p-1 hover:bg-surface-secondary"
+            aria-label={t('common.close', { defaultValue: 'Close' })}
+          >
+            <X size={16} />
+          </button>
+        </div>
+        <div className="space-y-4 p-5">
+          <div className="flex items-center justify-between rounded-md border border-border-light bg-surface-secondary px-3 py-2">
+            <span className="flex items-center gap-1.5 text-xs text-content-secondary">
+              <FileCheck size={13} />
+              {t('qms.compliance_dossier', {
+                defaultValue: 'Audit-ready quality dossier',
+              })}
+            </span>
+            <a
+              href={planComplianceCsvUrl(planId)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1 rounded border border-border-light px-2 py-1 text-2xs font-medium text-content-primary hover:bg-surface-tertiary"
+            >
+              <Download size={12} />
+              {t('qms.export_compliance_csv', {
+                defaultValue: 'Export compliance (CSV)',
+              })}
+            </a>
+          </div>
+          <div>
+            <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-content-secondary">
+              <Lock size={13} />
+              {t('qms.hold_point_sequencing', { defaultValue: 'Hold point sequencing' })}
+            </p>
+            {itemsQ.isLoading ? (
+              <div className="flex items-center gap-2 py-3 text-xs text-content-tertiary">
+                <Loader2 size={14} className="animate-spin" />
+                {t('common.loading', { defaultValue: 'Loading…' })}
+              </div>
+            ) : (
+              <HoldPointDependencyTree items={items} inspections={inspQ.data ?? []} />
+            )}
+          </div>
+
+          {items.length > 0 && (
+            <div>
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-content-secondary">
+                {t('qms.spec_linkage', { defaultValue: 'Spec linkage' })}
+              </p>
+              <ul className="space-y-1.5">
+                {[...items]
+                  .sort((a, b) => a.sequence - b.sequence)
+                  .map((it) => (
+                    <li key={it.id}>
+                      <button
+                        type="button"
+                        onClick={() => setEditItemId(editItemId === it.id ? null : it.id)}
+                        className="flex w-full items-center justify-between gap-2 rounded-md border border-border-light bg-surface-secondary px-2.5 py-1.5 text-left text-xs hover:bg-surface-tertiary"
+                      >
+                        <span className="truncate font-medium text-content-primary">
+                          {it.sequence}. {it.control_point_name}
+                        </span>
+                        <span className="text-2xs text-content-tertiary">
+                          {it.boq_position_id || it.csi_section_ref || it.spec_drawing_ref || it.bim_element_id
+                            ? t('qms.linked', { defaultValue: 'Linked' })
+                            : t('qms.not_linked', { defaultValue: 'Not linked' })}
+                        </span>
+                      </button>
+                      {editItemId === it.id && (
+                        <SpecLinkEditor
+                          planId={planId}
+                          item={it}
+                          items={items}
+                          onDone={() => setEditItemId(null)}
+                        />
+                      )}
+                    </li>
+                  ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SpecLinkEditor({
+  planId,
+  item,
+  items,
+  onDone,
+}: {
+  planId: string;
+  item: ITPItem;
+  items: ITPItem[];
+  onDone: () => void;
+}) {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const addToast = useToastStore((s) => s.addToast);
+  const [csi, setCsi] = useState(item.csi_section_ref ?? '');
+  const [drawing, setDrawing] = useState(item.spec_drawing_ref ?? '');
+  const [bim, setBim] = useState(item.bim_element_id ?? '');
+  const [predecessor, setPredecessor] = useState(item.predecessor_itp_item_id ?? '');
+
+  const save = useMutation({
+    mutationFn: () =>
+      linkITPItemToSpec(planId, item.id, {
+        csi_section_ref: csi.trim() || null,
+        spec_drawing_ref: drawing.trim() || null,
+        bim_element_id: bim.trim() || null,
+        predecessor_itp_item_id: predecessor || null,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['qms', 'itp-items', planId] });
+      addToast({ type: 'success', title: t('qms.spec_linked', { defaultValue: 'Control point linked' }) });
+      onDone();
+    },
+    onError: (e) => addToast({ type: 'error', title: getErrorMessage(e) }),
+  });
+
+  // Predecessor candidates: any other item in the same plan.
+  const candidates = items.filter((i) => i.id !== item.id);
+
+  return (
+    <div className="mt-1.5 space-y-2 rounded-md border border-border-light bg-surface-primary p-2.5">
+      <input
+        value={csi}
+        onChange={(e) => setCsi(e.target.value)}
+        placeholder={t('qms.csi_section', { defaultValue: 'CSI section (e.g. 03 30 00)' })}
+        className={inputCls}
+        aria-label={t('qms.csi_section', { defaultValue: 'CSI section' })}
+      />
+      <input
+        value={drawing}
+        onChange={(e) => setDrawing(e.target.value)}
+        placeholder={t('qms.spec_drawing', { defaultValue: 'Drawing reference' })}
+        className={inputCls}
+        aria-label={t('qms.spec_drawing', { defaultValue: 'Drawing reference' })}
+      />
+      <input
+        value={bim}
+        onChange={(e) => setBim(e.target.value)}
+        placeholder={t('qms.bim_element', { defaultValue: 'BIM element id' })}
+        className={inputCls}
+        aria-label={t('qms.bim_element', { defaultValue: 'BIM element id' })}
+      />
+      <select
+        value={predecessor}
+        onChange={(e) => setPredecessor(e.target.value)}
+        className={inputCls}
+        aria-label={t('qms.predecessor', { defaultValue: 'Predecessor hold point' })}
+      >
+        <option value="">
+          {t('qms.no_predecessor', { defaultValue: 'No predecessor' })}
+        </option>
+        {candidates.map((c) => (
+          <option key={c.id} value={c.id}>
+            {c.sequence}. {c.control_point_name}
+          </option>
+        ))}
+      </select>
+      <div className="flex gap-2">
+        <Button variant="primary" size="sm" loading={save.isPending} onClick={() => save.mutate()}>
+          {t('common.save', { defaultValue: 'Save' })}
+        </Button>
+        <Button variant="ghost" size="sm" onClick={onDone}>
+          {t('common.cancel', { defaultValue: 'Cancel' })}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 /* ── Inspection Drawer ─────────────────────────────────────────────────── */
 
 function InspectionDrawer({
@@ -1233,9 +1493,30 @@ function InspectionDrawer({
   const [notes, setNotes] = useState('');
   const [signRole, setSignRole] = useState<InspectionSignature['signer_role']>('inspector');
 
+  const [releaseJustification, setReleaseJustification] = useState('');
+
   const sigsQ = useQuery({
     queryKey: ['qms', 'inspection-signatures', id],
     queryFn: () => listInspectionSignatures(id),
+  });
+
+  const holdQ = useQuery({
+    queryKey: ['qms', 'hold-point-status', id],
+    queryFn: () => checkHoldPointStatus(id),
+  });
+
+  const release = useMutation({
+    mutationFn: () => releaseHoldPoint(id, { justification: releaseJustification.trim() }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['qms', 'hold-point-status', id] });
+      qc.invalidateQueries({ queryKey: ['qms', 'inspections'] });
+      addToast({
+        type: 'success',
+        title: t('qms.hold_point_released', { defaultValue: 'Hold point released' }),
+      });
+      setReleaseJustification('');
+    },
+    onError: (e) => addToast({ type: 'error', title: getErrorMessage(e) }),
   });
 
   const sign = useMutation({
@@ -1320,6 +1601,39 @@ function InspectionDrawer({
             {insp.notes && <Field label={t('qms.notes')} value={insp.notes} />}
           </div>
 
+          {holdQ.data?.is_hold_point && (
+            <div
+              className={clsx(
+                'flex items-start gap-2 rounded-lg border px-3 py-2 text-sm',
+                holdQ.data.released
+                  ? 'border-semantic-success/30 bg-semantic-success/10 text-semantic-success'
+                  : holdQ.data.blocked
+                    ? 'border-semantic-error/30 bg-semantic-error/10 text-semantic-error'
+                    : 'border-semantic-warning/30 bg-semantic-warning/10 text-semantic-warning',
+              )}
+            >
+              {holdQ.data.released ? (
+                <Unlock size={15} className="mt-0.5 shrink-0" />
+              ) : holdQ.data.blocked ? (
+                <ShieldAlert size={15} className="mt-0.5 shrink-0" />
+              ) : (
+                <Lock size={15} className="mt-0.5 shrink-0" />
+              )}
+              <div>
+                <p className="font-medium">
+                  {holdQ.data.released
+                    ? t('qms.hold_point_released_label', { defaultValue: 'Hold point released' })
+                    : holdQ.data.blocked
+                      ? t('qms.hold_point_blocked_label', { defaultValue: 'Hold point blocked' })
+                      : t('qms.hold_point_label', { defaultValue: 'Hold point' })}
+                </p>
+                {holdQ.data.blocking_reason && (
+                  <p className="text-xs opacity-90">{holdQ.data.blocking_reason}</p>
+                )}
+              </div>
+            </div>
+          )}
+
           <Card padding="sm">
             <div className="flex items-center justify-between mb-2">
               <p className="text-xs font-semibold uppercase tracking-wide text-content-secondary">
@@ -1339,15 +1653,25 @@ function InspectionDrawer({
               })}
             </p>
             {(sigData?.signatures ?? []).length > 0 && (
-              <ul className="mb-3 space-y-1">
+              <ul className="mb-3 space-y-1.5">
                 {(sigData?.signatures ?? []).map((s) => (
-                  <li key={s.id} className="flex items-center justify-between gap-2 text-xs">
-                    <span className="text-content-primary">
-                      {t(`qms.signer_role.${s.signer_role}`, { defaultValue: s.signer_role })}
-                    </span>
-                    <span className="text-content-tertiary">
-                      {s.signed_at ? <DateDisplay value={s.signed_at} /> : '—'}
-                    </span>
+                  <li key={s.id} className="text-xs">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-content-primary">
+                        {t(`qms.signer_role.${s.signer_role}`, { defaultValue: s.signer_role })}
+                      </span>
+                      <span className="text-content-tertiary">
+                        {s.signed_at ? <DateDisplay value={s.signed_at} /> : '—'}
+                      </span>
+                    </div>
+                    {s.signer_ip && (
+                      <p className="text-2xs text-content-tertiary">
+                        {t('qms.signed_from', {
+                          defaultValue: 'from {{ip}}',
+                          ip: s.signer_ip,
+                        })}
+                      </p>
+                    )}
                   </li>
                 ))}
               </ul>
@@ -1415,6 +1739,44 @@ function InspectionDrawer({
                   );
                 })}
               </div>
+            </Card>
+          )}
+
+          <AttachmentEvidenceGallery inspectionId={id} canEdit={isOpenStatus} />
+
+          {holdQ.data?.is_hold_point && insp.status === 'passed' && !holdQ.data.released && (
+            <Card padding="sm">
+              <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-content-secondary">
+                <Unlock size={13} />
+                {t('qms.release_hold_point', { defaultValue: 'Release hold point' })}
+              </p>
+              <p className="mb-2 text-2xs text-content-tertiary">
+                {t('qms.release_hint', {
+                  defaultValue:
+                    'Releasing this hold point unblocks dependent work. The release is recorded with your name and time.',
+                })}
+              </p>
+              <textarea
+                value={releaseJustification}
+                onChange={(e) => setReleaseJustification(e.target.value)}
+                placeholder={t('qms.release_justification', {
+                  defaultValue: 'Justification (required)',
+                })}
+                rows={2}
+                className={clsx(inputCls, 'h-auto py-2')}
+                aria-label={t('qms.release_justification', { defaultValue: 'Justification (required)' })}
+              />
+              <Button
+                variant="primary"
+                size="sm"
+                className="mt-2"
+                icon={<Unlock size={14} />}
+                disabled={!releaseJustification.trim()}
+                loading={release.isPending}
+                onClick={() => release.mutate()}
+              >
+                {t('qms.release', { defaultValue: 'Release' })}
+              </Button>
             </Card>
           )}
 

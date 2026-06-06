@@ -2,15 +2,15 @@
 """Field Diary ORM models.
 
 Tables (all prefixed ``oe_field_diary_``):
-    oe_field_diary_entry              — header per (project, author, date)
-    oe_field_diary_activity           — append-only work/delay/inspection rows
-    oe_field_diary_attachment         — file metadata (storage key only)
-    oe_field_module_grant             — dedicated per-project module permission
+    oe_field_diary_entry              - header per (project, author, date)
+    oe_field_diary_activity           - append-only work/delay/inspection rows
+    oe_field_diary_attachment         - file metadata (storage key only)
+    oe_field_module_grant             - dedicated per-project module permission
                                         table (BYPASSES standard RBAC).
-    oe_field_diary_magic_link         — PIN-gated magic-link token (sha256 hash)
-    oe_field_diary_session            — long-lived field session (sha256 hash)
+    oe_field_diary_magic_link         - PIN-gated magic-link token (sha256 hash)
+    oe_field_diary_session            - long-lived field session (sha256 hash)
 
-The ``oe_field_module_grant`` table is intentionally generic — the
+The ``oe_field_module_grant`` table is intentionally generic - the
 ``module_key`` column is free-form so future field modules (timesheet,
 photos, deliveries) reuse the same grant table without a schema change.
 The MVP only writes ``module_key = 'field_diary'``.
@@ -67,7 +67,7 @@ class DiaryEntry(Base):
         nullable=False,
         index=True,
     )
-    # Plain ISO ``YYYY-MM-DD`` string — matches the legacy ``daily_diary``
+    # Plain ISO ``YYYY-MM-DD`` string - matches the legacy ``daily_diary``
     # convention and avoids a timezone trap when site clocks roll over at
     # local midnight while the server is on UTC.
     entry_date: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
@@ -80,6 +80,11 @@ class DiaryEntry(Base):
         server_default="0",
     )
     notes_md: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Origin marker: ``pwa`` when the entry was captured through the offline
+    # field shell, null for office/desktop-entered. Lets reporting distinguish
+    # field-captured from office-entered without parsing ``metadata``. Nullable,
+    # no server_default - absent means "not field-captured", not a real value.
+    field_source: Mapped[str | None] = mapped_column(String(16), nullable=True)
     # draft / submitted / approved. Free-form on the DB side so future
     # statuses can land without a migration; the FSM in the service layer
     # is authoritative.
@@ -110,7 +115,7 @@ class DiaryEntry(Base):
         server_default="{}",
     )
 
-    def __repr__(self) -> str:  # pragma: no cover — debug only
+    def __repr__(self) -> str:  # pragma: no cover - debug only
         return f"<DiaryEntry {self.entry_date} author={self.author_id} ({self.status})>"
 
 
@@ -132,7 +137,7 @@ class DiaryActivity(Base):
         nullable=False,
         index=True,
     )
-    # work / delay / inspection / visit / incident — service-layer enum.
+    # work / delay / inspection / visit / incident - service-layer enum.
     activity_type: Mapped[str] = mapped_column(
         String(32),
         nullable=False,
@@ -183,7 +188,7 @@ class DiaryAttachment(Base):
         nullable=False,
         index=True,
     )
-    # Filename as supplied by the client — purely informational. The
+    # Filename as supplied by the client - purely informational. The
     # router never trusts this to build a path (path-traversal guard).
     filename: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     mime_type: Mapped[str] = mapped_column(
@@ -213,21 +218,21 @@ class DiaryAttachment(Base):
 class FieldModuleGrant(Base):
     """Dedicated per-project field-module permission.
 
-    Distinct from ``oe_permission`` / ``oe_role`` — a row here grants
+    Distinct from ``oe_permission`` / ``oe_role`` - a row here grants
     access to ``module_key`` on ``project_id`` for ``user_id`` regardless
     of the user's standard RBAC role. Soft-revoke is via ``revoked_at``
     so historical audit data stays available.
 
     Unique constraint on the active row is enforced PARTIALLY (only when
     ``revoked_at IS NULL``). On SQLite this is implemented as a partial
-    index — see the migration for the exact predicate. On PostgreSQL the
+    index - see the migration for the exact predicate. On PostgreSQL the
     same partial index applies.
     """
 
     __tablename__ = "oe_field_module_grant"
     __table_args__ = (
         # Lookup hot path: "does this user have a non-revoked grant for
-        # (project, module)?" — covered by the partial unique index in
+        # (project, module)?" - covered by the partial unique index in
         # the migration. The plain composite below is the SQLAlchemy
         # metadata hint; the *unique* part is added in the migration as
         # a partial index for portability.
@@ -268,7 +273,7 @@ class FieldModuleGrant(Base):
         DateTime(timezone=True),
         nullable=False,
     )
-    # Optional sunset — null = no expiry. Service layer compares against
+    # Optional sunset - null = no expiry. Service layer compares against
     # UTC ``now()``.
     expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
@@ -304,7 +309,7 @@ class FieldMagicLink(Base):
         ),
     )
 
-    # Owning field worker (a regular ``oe_users_user`` row — provisioned
+    # Owning field worker (a regular ``oe_users_user`` row - provisioned
     # by the request-magic-link endpoint if missing).
     user_id: Mapped[uuid.UUID] = mapped_column(
         GUID(),
@@ -355,10 +360,90 @@ class FieldMagicLink(Base):
         return f"<FieldMagicLink user={self.user_id} project={self.project_id} consumed={self.consumed_at is not None}>"
 
 
+class FieldSyncLedger(Base):
+    """Durable idempotency ledger for offline-replayed field writes.
+
+    The offline field shell tags every queued mutation with a client-generated
+    ``client_op_id`` and replays the queue when connectivity returns. The replay
+    is **at-least-once** (a reconnect that fires twice, or a request that
+    succeeds on the server but whose response is lost to a dropped link, both
+    re-send the same op). Without a server-side record of which ops have already
+    been applied, an activity append would insert a duplicate row each time -
+    duplicate logged hours, duplicate payroll labour.
+
+    Each row records the outcome of one applied op keyed on ``client_op_id``
+    (globally unique - a UUID minted on the device). On a replay of a known id
+    the service short-circuits and returns the stored result, so draining the
+    queue any number of times is a no-op after the first success. This is the
+    durable half of the dedup guarantee the frontend queue's ``clientOpId``
+    promises; the in-browser dedup only covers a single tab's lifetime.
+
+    The ledger is scoped to ``(project_id, user_id)`` for auditing and so a
+    future "pending sync review" surface can list a worker's replayed ops, but
+    the uniqueness that enforces idempotency is on ``client_op_id`` alone.
+    """
+
+    __tablename__ = "oe_field_sync_ledger"
+    __table_args__ = (
+        UniqueConstraint(
+            "client_op_id",
+            name="uq_oe_field_sync_ledger_client_op_id",
+        ),
+        Index(
+            "ix_oe_field_sync_ledger_project_user",
+            "project_id",
+            "user_id",
+        ),
+    )
+
+    # The device-generated idempotency key (a UUID). The dedup key.
+    client_op_id: Mapped[str] = mapped_column(
+        String(128),
+        nullable=False,
+        index=True,
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(),
+        ForeignKey("oe_projects_project.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(),
+        ForeignKey("oe_users_user.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    # Logical op kind, e.g. ``field.diary.activity`` / ``field.crew.punch`` -
+    # mirrors the queue op ``kind`` for grouping a worker's replayed ops.
+    op_kind: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+        default="",
+        server_default="",
+    )
+    # The row this op produced, so a replay can return the original result
+    # instead of creating a duplicate. For an activity append this is the
+    # ``oe_field_diary_activity.id``.
+    result_type: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+        default="",
+        server_default="",
+    )
+    result_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(),
+        nullable=True,
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return f"<FieldSyncLedger op={self.client_op_id} result={self.result_type}:{self.result_id}>"
+
+
 class FieldSession(Base):
     """Long-lived field-worker session.
 
-    Scoped to a single ``(project_id, module_key)`` — once the field
+    Scoped to a single ``(project_id, module_key)`` - once the field
     worker scans a different project's QR code they need a fresh magic
     link. Token stored as SHA-256 hash; plaintext returned to the
     client exactly once on consume.
@@ -420,4 +505,5 @@ __all__ = [
     "FieldMagicLink",
     "FieldModuleGrant",
     "FieldSession",
+    "FieldSyncLedger",
 ]

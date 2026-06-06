@@ -2,23 +2,23 @@
 
 Endpoints:
     Drawings:
-        POST   /drawings/upload               — Upload DWG/DXF file
-        GET    /drawings/?project_id=X        — List drawings
-        GET    /drawings/{id}                 — Get single drawing with latest version
-        DELETE /drawings/{id}                 — Delete drawing
-        GET    /drawings/{id}/entities        — Parsed entities (filtered by layers)
-        GET    /drawings/{id}/thumbnail       — SVG thumbnail
-        PATCH  /drawings/{id}/layers          — Toggle layer visibility
+        POST   /drawings/upload               - Upload DWG/DXF file
+        GET    /drawings/?project_id=X        - List drawings
+        GET    /drawings/{id}                 - Get single drawing with latest version
+        DELETE /drawings/{id}                 - Delete drawing
+        GET    /drawings/{id}/entities        - Parsed entities (filtered by layers)
+        GET    /drawings/{id}/thumbnail       - SVG thumbnail
+        PATCH  /drawings/{id}/layers          - Toggle layer visibility
 
     Annotations:
-        POST   /annotations/                  — Create annotation
-        GET    /annotations/?drawing_id=X     — List annotations
-        PATCH  /annotations/{id}              — Update annotation
-        DELETE /annotations/{id}              — Delete annotation
-        POST   /annotations/{id}/link-boq     — Link to BOQ position
+        POST   /annotations/                  - Create annotation
+        GET    /annotations/?drawing_id=X     - List annotations
+        PATCH  /annotations/{id}              - Update annotation
+        DELETE /annotations/{id}              - Delete annotation
+        POST   /annotations/{id}/link-boq     - Link to BOQ position
 
     Pins:
-        GET    /pins/?drawing_id=X            — Task/punchlist pins
+        GET    /pins/?drawing_id=X            - Task/punchlist pins
 """
 
 import ipaddress
@@ -39,9 +39,12 @@ from app.dependencies import (
 )
 from app.modules.dwg_takeoff.schemas import (
     BoqLinkRequest,
+    CreateVariationFromDiffRequest,
+    CreateVariationFromDiffResponse,
     DwgAnnotationCreate,
     DwgAnnotationResponse,
     DwgAnnotationUpdate,
+    DwgDrawingDiffResponse,
     DwgDrawingFromDocument,
     DwgDrawingResponse,
     DwgDrawingScaleUpdate,
@@ -66,7 +69,7 @@ def _get_service(session: SessionDep) -> DwgTakeoffService:
 # Every read/write endpoint in this module must funnel through one of these
 # helpers so that no resource is reachable by guessing a UUID. They resolve
 # the resource's owning ``project_id`` and delegate to
-# ``verify_project_access`` (404 on both missing and forbidden — never 403,
+# ``verify_project_access`` (404 on both missing and forbidden - never 403,
 # never silent 200).
 
 
@@ -79,7 +82,7 @@ async def _gate_by_drawing(
     """Resolve a DwgDrawing and gate the caller on its project.
 
     Returns the drawing so callers don't re-fetch (one less round trip).
-    A missing drawing or one in a foreign tenant's project both 404 —
+    A missing drawing or one in a foreign tenant's project both 404 -
     the response is indistinguishable, preventing UUID-existence probes.
     """
     drawing = await service.get_drawing(drawing_id)
@@ -202,14 +205,14 @@ async def upload_drawing(
 ) -> DwgDrawingResponse:
     """Upload a DWG/DXF file and trigger processing.
 
-    Audit B-DWG-IDOR — was IDOR-on-write. ``project_id`` came in as a
+    Audit B-DWG-IDOR - was IDOR-on-write. ``project_id`` came in as a
     free-form query parameter and was persisted verbatim, so anyone with
     ``dwg_takeoff.create`` could attach a DWG to another tenant's project.
     We verify access *before* reading the upload body to fail fast.
     """
     await verify_project_access(project_id, str(user_id or ""), session)
 
-    # Use upload_limiter (30/min — matches BIM / documents / takeoff)
+    # Use upload_limiter (30/min - matches BIM / documents / takeoff)
     # rather than approval_limiter (20/min, intended for financial
     # mutations). Bench-driven fix: 30-file batch uploads were tripping
     # the wrong limit and surfacing 429s on legitimate workflows.
@@ -230,7 +233,7 @@ async def upload_drawing(
             detail="Invalid file type. Only .dwg and .dxf files are accepted.",
         )
 
-    # Per product policy, no upload size cap — memory-safety still
+    # Per product policy, no upload size cap - memory-safety still
     # comes from the streaming downstream pipeline.
 
     try:
@@ -250,7 +253,7 @@ async def upload_drawing(
         logger.exception("Unable to upload drawing")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Unable to upload drawing — please try again",
+            detail="Unable to upload drawing - please try again",
         )
 
 
@@ -270,13 +273,13 @@ async def import_drawing_from_document(
 
     Powers the Documents / File Manager "Open in DWG Takeoff" action for a
     CAD file that lives only as a Document (uploaded via /files or another
-    module) and therefore has no drawing to render — the deep-link used to
+    module) and therefore has no drawing to render - the deep-link used to
     land on a blank page. Idempotent per document: re-opening returns the
     same drawing rather than creating a duplicate.
 
     Access is gated on the *document's* owning project (resolved server-side
     from the trusted document row), mirroring the IDOR policy on every other
-    write in this module — a 404 is returned for both a missing document and
+    write in this module - a 404 is returned for both a missing document and
     one in a foreign tenant's project.
     """
     # Resolve the document first to learn its project, then gate. We import
@@ -302,7 +305,7 @@ async def import_drawing_from_document(
         logger.exception("Unable to import drawing from document")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Unable to open this document in DWG Takeoff — please try again",
+            detail="Unable to open this document in DWG Takeoff - please try again",
         )
 
 
@@ -322,7 +325,7 @@ async def list_drawings(
 ) -> list[DwgDrawingResponse]:
     """List drawings for a project.
 
-    Audit B-DWG-IDOR — was IDOR. Any user could pass a foreign tenant's
+    Audit B-DWG-IDOR - was IDOR. Any user could pass a foreign tenant's
     ``project_id`` and enumerate their drawings. Gated by
     ``verify_project_access`` so foreign projects 404.
     """
@@ -346,7 +349,7 @@ async def get_drawing(
 ) -> DwgDrawingResponse:
     """Get a single drawing with its latest version.
 
-    Audit B-DWG-IDOR — was IDOR. The ``drawing_id`` was trusted blindly.
+    Audit B-DWG-IDOR - was IDOR. The ``drawing_id`` was trusted blindly.
     """
     drawing = await _gate_by_drawing(drawing_id, user_id, service, session)
     version = await service.get_latest_version(drawing_id)
@@ -363,7 +366,7 @@ async def delete_drawing(
 ) -> None:
     """Delete a drawing.
 
-    Audit B-DWG-IDOR — was IDOR-on-write. Anyone with ``dwg_takeoff.delete``
+    Audit B-DWG-IDOR - was IDOR-on-write. Anyone with ``dwg_takeoff.delete``
     could blow away another tenant's drawing by UUID.
     """
     await _gate_by_drawing(drawing_id, user_id, service, session)
@@ -384,8 +387,8 @@ async def get_entities(
 ) -> list[dict]:
     """Get parsed entities for a drawing, optionally filtered by visible layers.
 
-    Audit B-DWG-IDOR — was IDOR. Entities expose layer geometry that
-    contains takeoff measurements — a juicy target for competitive
+    Audit B-DWG-IDOR - was IDOR. Entities expose layer geometry that
+    contains takeoff measurements - a juicy target for competitive
     enumeration.
     """
     await _gate_by_drawing(drawing_id, user_id, service, session)
@@ -405,7 +408,7 @@ async def get_thumbnail(
 ) -> Response:
     """Get SVG thumbnail for a drawing.
 
-    Audit B-DWG-IDOR — was IDOR. SVG thumbnails leak both layout and
+    Audit B-DWG-IDOR - was IDOR. SVG thumbnails leak both layout and
     proprietary symbology.
     """
     await _gate_by_drawing(drawing_id, user_id, service, session)
@@ -416,6 +419,100 @@ async def get_thumbnail(
             detail="Thumbnail not available",
         )
     return Response(content=svg_content, media_type="image/svg+xml")
+
+
+# ── Revision compare (Item 17) ───────────────────────────────────────────────
+
+
+@router.get(
+    "/drawings/{drawing_id}/versions/",
+    response_model=list[DwgDrawingVersionResponse],
+)
+async def list_drawing_versions(
+    drawing_id: uuid.UUID,
+    user_id: CurrentUserId = None,  # type: ignore[assignment]
+    session: SessionDep = None,  # type: ignore[assignment]
+    _perm: None = Depends(RequirePermission("dwg_takeoff.read")),
+    service: DwgTakeoffService = Depends(_get_service),
+) -> list[DwgDrawingVersionResponse]:
+    """List every parsed version of a drawing (newest first).
+
+    Powers the revision-compare version picker. Gated on the drawing's
+    owning project - a foreign-tenant or missing drawing both 404.
+    """
+    await _gate_by_drawing(drawing_id, user_id, service, session)
+    versions = await service.list_drawing_versions(drawing_id)
+    return [_version_to_response(v) for v in versions]
+
+
+@router.post(
+    "/drawings/{drawing_id}/compare/{other_version_id}",
+    response_model=DwgDrawingDiffResponse,
+)
+async def compare_drawing_versions(
+    drawing_id: uuid.UUID,
+    other_version_id: uuid.UUID,
+    from_version_id: uuid.UUID = Query(
+        ...,
+        description="Baseline version id (the 'before' side of the diff).",
+    ),
+    user_id: CurrentUserId = None,  # type: ignore[assignment]
+    session: SessionDep = None,  # type: ignore[assignment]
+    _perm: None = Depends(RequirePermission("dwg_takeoff.read")),
+    service: DwgTakeoffService = Depends(_get_service),
+) -> DwgDrawingDiffResponse:
+    """Compare two versions of a drawing and return the entity/annotation diff.
+
+    ``from_version_id`` is the baseline ("before") and the path
+    ``other_version_id`` is the target ("after"). Both must belong to
+    ``drawing_id`` (404 otherwise). Linked-to-BOQ annotations whose
+    measured value changed carry a money cost impact in the project's
+    base currency.
+
+    Access is gated on the drawing's owning project, mirroring the IDOR
+    policy on every other read in this module.
+    """
+    await _gate_by_drawing(drawing_id, user_id, service, session)
+    payload = await service.compare_drawing_versions(
+        drawing_id,
+        from_version_id,
+        other_version_id,
+    )
+    return DwgDrawingDiffResponse(**payload)
+
+
+@router.post(
+    "/drawings/{drawing_id}/compare/create-variation",
+    response_model=CreateVariationFromDiffResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_variation_from_drawing_diff(
+    drawing_id: uuid.UUID,
+    body: CreateVariationFromDiffRequest,
+    user_id: CurrentUserId = None,  # type: ignore[assignment]
+    session: SessionDep = None,  # type: ignore[assignment]
+    _perm_read: None = Depends(RequirePermission("dwg_takeoff.read")),
+    _perm_create: None = Depends(RequirePermission("variations.create")),
+    service: DwgTakeoffService = Depends(_get_service),
+) -> CreateVariationFromDiffResponse:
+    """Create a DRAFT variation request from a drawing revision delta.
+
+    Recomputes the deterministic compare for the two version ids and turns
+    its net cost impact into a draft VariationRequest (never submitted -
+    a human confirms it in the variations module). Requires BOTH
+    ``dwg_takeoff.read`` (to see the drawing) AND ``variations.create``
+    (so a read-only viewer cannot mint a variation). Gated on the
+    drawing's owning project so a foreign-tenant drawing 404s.
+    """
+    await _gate_by_drawing(drawing_id, user_id, service, session)
+    payload = await service.create_variation_from_versions(
+        drawing_id,
+        body.from_version_id,
+        body.to_version_id,
+        title=body.title,
+        user_id=str(user_id) if user_id else None,
+    )
+    return CreateVariationFromDiffResponse(**payload)
 
 
 # ── Layer Visibility ────────────────────────────────────────────────────────
@@ -432,8 +529,8 @@ async def update_drawing_scale(
 ) -> DwgDrawingResponse:
     """Persist the drawing's scale denominator + active scale mode.
 
-    Audit B-DWG-IDOR — was IDOR-on-write. Scale tampering flips every
-    derived measurement on the drawing — a 1:50 plan rescaled to 1:5
+    Audit B-DWG-IDOR - was IDOR-on-write. Scale tampering flips every
+    derived measurement on the drawing - a 1:50 plan rescaled to 1:5
     inflates BOQ totals 100×.
     """
     await _gate_by_drawing(drawing_id, user_id, service, session)
@@ -457,7 +554,7 @@ async def update_layer_visibility(
 ) -> DwgDrawingVersionResponse:
     """Toggle layer visibility in the latest drawing version.
 
-    Audit B-DWG-IDOR — was IDOR-on-write.
+    Audit B-DWG-IDOR - was IDOR-on-write.
     """
     await _gate_by_drawing(drawing_id, user_id, service, session)
     version = await service.update_layer_visibility(drawing_id, data.layers)
@@ -477,7 +574,7 @@ async def create_annotation(
 ) -> DwgAnnotationResponse:
     """Create a new annotation on a drawing.
 
-    Audit B-DWG-IDOR — was IDOR-on-write. ``project_id`` + ``drawing_id``
+    Audit B-DWG-IDOR - was IDOR-on-write. ``project_id`` + ``drawing_id``
     were trusted blindly from the body, so anyone with ``dwg_takeoff.create``
     could plant annotations (including measurement values) onto a
     foreign tenant's drawing. Gate both the project and confirm the
@@ -503,7 +600,7 @@ async def create_annotation(
         logger.exception("Unable to create annotation")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Unable to create annotation — please try again",
+            detail="Unable to create annotation - please try again",
         )
 
 
@@ -520,7 +617,7 @@ async def list_annotations(
 ) -> list[DwgAnnotationResponse]:
     """List annotations for a drawing.
 
-    Audit B-DWG-IDOR — was IDOR. Annotations carry measurement_value
+    Audit B-DWG-IDOR - was IDOR. Annotations carry measurement_value
     fields that flow into BOQ totals via link-boq.
     """
     await _gate_by_drawing(drawing_id, user_id, service, session)
@@ -544,7 +641,7 @@ async def update_annotation(
 ) -> DwgAnnotationResponse:
     """Update an annotation.
 
-    Audit B-DWG-IDOR — was IDOR-on-write.
+    Audit B-DWG-IDOR - was IDOR-on-write.
     """
     await _gate_by_annotation(annotation_id, user_id, service, session)
     item = await service.update_annotation(annotation_id, data)
@@ -561,7 +658,7 @@ async def delete_annotation(
 ) -> None:
     """Delete an annotation.
 
-    Audit B-DWG-IDOR — was IDOR-on-write.
+    Audit B-DWG-IDOR - was IDOR-on-write.
     """
     await _gate_by_annotation(annotation_id, user_id, service, session)
     await service.delete_annotation(annotation_id)
@@ -581,7 +678,7 @@ async def link_to_boq(
 ) -> DwgAnnotationResponse:
     """Link an annotation to a BOQ position.
 
-    Audit B-DWG-IDOR — was IDOR-on-write. Without the gate, a user could
+    Audit B-DWG-IDOR - was IDOR-on-write. Without the gate, a user could
     redirect a foreign tenant's measurement at their own BOQ position
     (poisoning their estimate) or vice versa.
     """
@@ -607,7 +704,7 @@ async def get_pins(
 ) -> list[DwgAnnotationResponse]:
     """Get task/punchlist pins for a drawing.
 
-    Audit B-DWG-IDOR — was IDOR. Pin coordinates + task linkage are
+    Audit B-DWG-IDOR - was IDOR. Pin coordinates + task linkage are
     sensitive (locations of incidents, defect counts).
     """
     await _gate_by_drawing(drawing_id, user_id, service, session)
@@ -641,7 +738,7 @@ async def create_entity_group(
 ) -> DwgEntityGroupResponse:
     """Create a saved group of DWG entities.
 
-    Audit B-DWG-IDOR — was IDOR-on-write. Anyone could attach a saved
+    Audit B-DWG-IDOR - was IDOR-on-write. Anyone could attach a saved
     group to another tenant's drawing.
     """
     await _gate_by_drawing(data.drawing_id, user_id, service, session)
@@ -654,7 +751,7 @@ async def create_entity_group(
         logger.exception("Unable to create entity group")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Unable to create entity group — please try again",
+            detail="Unable to create entity group - please try again",
         )
 
 
@@ -670,7 +767,7 @@ async def list_entity_groups(
 ) -> list[DwgEntityGroupResponse]:
     """List saved entity groups for a drawing.
 
-    Audit B-DWG-IDOR — was IDOR.
+    Audit B-DWG-IDOR - was IDOR.
     """
     await _gate_by_drawing(drawing_id, user_id, service, session)
     items, _ = await service.list_entity_groups(drawing_id, offset=offset, limit=limit)
@@ -687,7 +784,7 @@ async def delete_entity_group(
 ) -> None:
     """Delete an entity group.
 
-    Audit B-DWG-IDOR — was IDOR-on-write.
+    Audit B-DWG-IDOR - was IDOR-on-write.
     """
     await _gate_by_group(group_id, user_id, service, session)
     await service.delete_entity_group(group_id)
@@ -704,7 +801,7 @@ def _request_is_loopback(request: Request) -> bool:
     machine. We read the immediate socket peer (``request.client.host``)
     rather than any ``X-Forwarded-For`` header, because a forwarded value is
     attacker-controllable and a reverse proxy in front of a hosted demo
-    would itself connect from loopback — which is exactly the case we must
+    would itself connect from loopback - which is exactly the case we must
     NOT treat as local-only.
     """
     client = request.client
@@ -713,7 +810,7 @@ def _request_is_loopback(request: Request) -> bool:
     try:
         return ipaddress.ip_address(client.host).is_loopback
     except ValueError:
-        # Non-IP peer (e.g. a UNIX socket name) — treat as not loopback.
+        # Non-IP peer (e.g. a UNIX socket name) - treat as not loopback.
         return False
 
 

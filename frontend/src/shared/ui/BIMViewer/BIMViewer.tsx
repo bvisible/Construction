@@ -153,6 +153,9 @@ export interface BIMViewerProps {
    *   - 'validation'        — red=error, amber=warning, green=pass, grey=unchecked
    *   - 'boq_coverage'      — green=linked to ≥1 BOQ position, red=unlinked
    *   - 'document_coverage' — green=has ≥1 linked drawing/RFI, red=none
+   *   - 'by_progress'       — red(0)→orange(25)→yellow(50)→light-green(75)
+   *                            →green(100) ramp over each element's linked
+   *                            BOQ progress; unlinked elements neutral grey
    */
   colorByMode?:
     | 'default'
@@ -163,7 +166,22 @@ export interface BIMViewerProps {
     | 'boq_coverage'
     | 'document_coverage'
     | '5d_cost'
-    | '4d_schedule';
+    | '4d_schedule'
+    | 'by_progress';
+  /** Latest BOQ percent-complete (0-100) per element id, used by the
+   *  ``by_progress`` colour mode and surfaced in the element info panel /
+   *  hover tooltip as "BOQ Progress: XX%". The viewer's element list is
+   *  fetched in skeleton mode (no BOQ links), so progress is supplied as
+   *  a side map computed from the enriched listing rather than read off
+   *  each `BIMElementData`. Elements absent from the map are treated as
+   *  "no data" (painted neutral grey). */
+  progressByElementId?: Record<string, number>;
+  /** ISO-8601 recorded date of each element's headline progress entry (the
+   *  same entry whose percentage is in `progressByElementId`), keyed by
+   *  element id. Surfaced in the selected-element info panel as "as of
+   *  <date>" while the `by_progress` colour mode is active. Absent ids show
+   *  the percentage with no date. */
+  progressDateByElementId?: Record<string, string>;
   /** Show bounding box placeholders alongside geometry. Off by default. */
   showBoundingBoxes?: boolean;
   /** Element IDs to isolate (hide everything else). Empty = show all. */
@@ -461,6 +479,72 @@ function QuantitiesTable({ quantities }: { quantities: Record<string, number> })
   );
 }
 
+/* ── BOQ-progress colour ramp ("By progress" mode) ─────────────────────── */
+
+/**
+ * Five-stop progress ramp for the `by_progress` colour mode. The stops are
+ * red(0) → orange(25) → yellow(50) → light-green(75) → green(100). A value
+ * is mapped by linearly interpolating between the two enclosing stops so a
+ * 60%-complete element reads as a yellow-green blend, not a hard bucket.
+ */
+const PROGRESS_RAMP_STOPS: ReadonlyArray<{ t: number; hex: string }> = [
+  { t: 0, hex: '#ef4444' }, // red — not started
+  { t: 25, hex: '#f97316' }, // orange
+  { t: 50, hex: '#eab308' }, // yellow
+  { t: 75, hex: '#84cc16' }, // light green
+  { t: 100, hex: '#22c55e' }, // green — complete
+];
+
+/** Neutral grey for elements with no recorded BOQ progress (unlinked or
+ *  no ProgressEntry yet). Matches the validation "unchecked" swatch. */
+const PROGRESS_NO_DATA_HEX = '#9ca3af';
+
+function _hexToRgb(hex: string): [number, number, number] {
+  const h = hex.replace('#', '');
+  return [
+    parseInt(h.slice(0, 2), 16),
+    parseInt(h.slice(2, 4), 16),
+    parseInt(h.slice(4, 6), 16),
+  ];
+}
+
+function _rgbToHex(r: number, g: number, b: number): string {
+  const c = (n: number) => Math.round(n).toString(16).padStart(2, '0');
+  return `#${c(r)}${c(g)}${c(b)}`;
+}
+
+/**
+ * Map a 0-100 progress value to a hex colour on the five-stop ramp.
+ * Values are clamped to [0, 100]; `null` / non-finite returns the no-data
+ * grey. Exported-shape pure helper so the legend and the 3D colouring stay
+ * in lock-step.
+ */
+function colorForProgress(pct: number | null | undefined): string {
+  if (pct == null || !Number.isFinite(pct)) return PROGRESS_NO_DATA_HEX;
+  const v = Math.max(0, Math.min(100, pct));
+  // Find the bracketing stops.
+  let lo = PROGRESS_RAMP_STOPS[0]!;
+  let hi = PROGRESS_RAMP_STOPS[PROGRESS_RAMP_STOPS.length - 1]!;
+  for (let i = 0; i < PROGRESS_RAMP_STOPS.length - 1; i += 1) {
+    const a = PROGRESS_RAMP_STOPS[i]!;
+    const b = PROGRESS_RAMP_STOPS[i + 1]!;
+    if (v >= a.t && v <= b.t) {
+      lo = a;
+      hi = b;
+      break;
+    }
+  }
+  const span = hi.t - lo.t;
+  const frac = span <= 0 ? 0 : (v - lo.t) / span;
+  const [r1, g1, b1] = _hexToRgb(lo.hex);
+  const [r2, g2, b2] = _hexToRgb(hi.hex);
+  return _rgbToHex(
+    r1 + (r2 - r1) * frac,
+    g1 + (g2 - g1) * frac,
+    b1 + (b2 - b1) * frac,
+  );
+}
+
 /* ── Model-wide quantity rollup (synonym-aware) ────────────────────────── */
 
 /**
@@ -554,6 +638,8 @@ export function BIMViewer({
   showBoundingBoxes = false,
   filterPredicate = null,
   colorByMode = 'default',
+  progressByElementId,
+  progressDateByElementId,
   isolatedIds = null,
   onIsolationChange,
   highlightedIds = null,
@@ -846,6 +932,30 @@ export function BIMViewer({
     }
     return { min, max, linkedCount };
   }, [elements]);
+
+  /** Progress stats — min / max / average BOQ percent-complete across the
+   *  elements that have a recorded value.  Drives the horizontal legend
+   *  bar in the bottom-right corner when `colorByMode === 'by_progress'`. */
+  const progressStats = useMemo(() => {
+    let min = Infinity;
+    let max = -Infinity;
+    let sum = 0;
+    let withData = 0;
+    const map = progressByElementId ?? {};
+    for (const el of elements ?? []) {
+      const pct = map[el.id];
+      if (pct == null || !Number.isFinite(pct)) continue;
+      const v = Math.max(0, Math.min(100, pct));
+      withData++;
+      sum += v;
+      if (v < min) min = v;
+      if (v > max) max = v;
+    }
+    if (withData === 0) {
+      return { min: 0, max: 0, avg: 0, withData: 0 };
+    }
+    return { min, max, avg: sum / withData, withData };
+  }, [elements, progressByElementId]);
 
   /** Health-stat rollup over the loaded elements.  Drives the banner at
    *  the top of the viewport: total / linked-to-BOQ / errors / warnings /
@@ -1479,7 +1589,7 @@ export function BIMViewer({
             clashHighlightIds,
             'resolved to a mesh in model',
             modelId,
-            '— and no clash centroid was supplied for camera framing.',
+            '- and no clash centroid was supplied for camera framing.',
           );
           useToastStore.getState().addToast({
             type: 'warning',
@@ -1707,12 +1817,30 @@ export function BIMViewer({
           (el) => (rateByElement.has(el.id) ? 1 : NO_LINK_OPACITY),
         );
       });
+    } else if (colorByMode === 'by_progress') {
+      // Model-based progress overlay — colour each element by the latest
+      // percent-complete of its linked BOQ position(s). The percentages
+      // arrive as a side map (`progressByElementId`) because the viewer's
+      // element list is fetched in skeleton mode without BOQ links.
+      const pctMap = progressByElementId ?? {};
+      import('three').then((THREE) => {
+        mgr.colorByDirect(
+          (el) => {
+            const pct = pctMap[el.id];
+            return new THREE.Color(colorForProgress(pct ?? null));
+          },
+          // Fade elements with no recorded progress so the coloured
+          // (linked + measured) work pops out of the neutral context.
+          (el) => (pctMap[el.id] != null ? 1 : NO_LINK_OPACITY),
+        );
+      });
     } else {
       mgr.resetColors();
     }
   }, [
     colorByMode,
     elements,
+    progressByElementId,
     diffChangeByStableId,
     // 4D mode is time-varying: recolour whenever the scrubber moves or
     // the schedule data re-arrives.  These deps are harmless for other
@@ -2191,7 +2319,7 @@ export function BIMViewer({
           defaultValue: 'Screenshot failed',
         }),
         message: t('bim.screenshot_failed', {
-          defaultValue: 'WebGL context unavailable — try reloading the viewer.',
+          defaultValue: 'WebGL context unavailable - try reloading the viewer.',
         }),
       });
       return;
@@ -2671,7 +2799,7 @@ export function BIMViewer({
         className="w-full h-full block"
         role="img"
         aria-label={t('bim.viewer.canvas_aria_label', {
-          defaultValue: '3D BIM model viewer — use mouse or touch to orbit, zoom, and pan',
+          defaultValue: '3D BIM model viewer - use mouse or touch to orbit, zoom, and pan',
         })}
       />
 
@@ -2685,7 +2813,7 @@ export function BIMViewer({
           className="absolute bottom-3 z-20"
           style={{ left: leftPanelOpen ? leftPanelWidth + 16 : 12 }}
           aria-label={t('bim.site_compass.aria_label', {
-            defaultValue: 'Site Compass — 3D navigation cube',
+            defaultValue: 'Site Compass - 3D navigation cube',
           })}
         >
           <BIMViewCube sceneManager={sceneManagerReady} size={112} />
@@ -2739,7 +2867,7 @@ export function BIMViewer({
                   defaultValue: 'Placeholder geometry',
                 })}
               </span>
-              <span>{' — '}</span>
+              <span>{' - '}</span>
               <span>
                 {t('bim.placeholder_banner.body', {
                   defaultValue:
@@ -2833,7 +2961,7 @@ export function BIMViewer({
                     {geometryProgress >= 0.97
                       ? t('bim.loading_parsing', {
                           defaultValue:
-                            'Parsing 3D geometry — for large models (>50 MB) this can take 20-60s; do not refresh',
+                            'Parsing 3D geometry - for large models (>50 MB) this can take 20-60s; do not refresh',
                         })
                       : geometryProgress >= 0.95
                         ? t('bim.loading_finalising', {
@@ -2845,7 +2973,7 @@ export function BIMViewer({
                   </span>
                   <span className="text-[10px] text-content-quaternary text-center mt-1">
                     {t('bim.loading_navigate_hint', {
-                      defaultValue: 'You can navigate to other pages — loading will continue in the background',
+                      defaultValue: 'You can navigate to other pages - loading will continue in the background',
                     })}
                   </span>
                 </>
@@ -2953,7 +3081,7 @@ export function BIMViewer({
           });
           plainCause = plainCause ?? t('bim.geometry_err_server_cause', {
             defaultValue:
-              'A backend error prevented the file from being served. This is usually temporary — try Retry.',
+              'A backend error prevented the file from being served. This is usually temporary - try Retry.',
           });
         } else if (status === null) {
           headline = t('bim.geometry_err_network_title', {
@@ -3515,7 +3643,7 @@ export function BIMViewer({
                 : measureKind === 'angle'
                   ? t('bim.measure_hint_angle', {
                       defaultValue:
-                        'Click 3 points — the angle is at the middle point. {{count}} saved.',
+                        'Click 3 points - the angle is at the middle point. {{count}} saved.',
                       count: measureCount,
                     })
                   : t('bim.measure_hint', {
@@ -3676,6 +3804,54 @@ export function BIMViewer({
         </div>
       )}
 
+      {/* Progress legend — bottom-right, visible only in by_progress mode.
+          A horizontal red→green ramp bar with the min / max recorded
+          progress at each end so users can read the mesh colours as
+          percent-complete. Sits above the hidden-elements badge. */}
+      {colorByMode === 'by_progress' && (
+        <div
+          className="absolute bottom-3 end-3 z-20 flex flex-col items-end gap-1 rounded-lg bg-surface-primary border border-border-light shadow-sm px-3 py-2 min-w-[180px]"
+          data-testid="bim-progress-legend"
+        >
+          <span className="text-[10px] font-semibold uppercase tracking-wide text-content-tertiary">
+            {t('bim.progress_legend_title', { defaultValue: 'BOQ progress' })}
+          </span>
+          <div
+            className="h-2 w-full rounded-full"
+            style={{
+              background: `linear-gradient(to right, ${PROGRESS_RAMP_STOPS.map(
+                (s) => `${s.hex} ${s.t}%`,
+              ).join(', ')})`,
+            }}
+          />
+          <div className="flex items-center justify-between w-full text-[10px] text-content-secondary tabular-nums">
+            <span>{progressStats.withData > 0 ? `${Math.round(progressStats.min)}%` : '—'}</span>
+            <span className="text-content-tertiary">
+              {t('bim.progress_legend_avg', {
+                defaultValue: 'avg {{n}}%',
+                n: Math.round(progressStats.avg),
+              })}
+            </span>
+            <span>{progressStats.withData > 0 ? `${Math.round(progressStats.max)}%` : '—'}</span>
+          </div>
+          <div className="flex items-center gap-1.5 w-full justify-between text-[10px] text-content-tertiary">
+            <span>
+              {t('bim.progress_legend_measured', {
+                defaultValue: '{{n}} measured',
+                n: progressStats.withData,
+              })}
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <span
+                className="inline-block h-2 w-2 rounded-full"
+                style={{ background: PROGRESS_NO_DATA_HEX, opacity: NO_LINK_OPACITY }}
+              />
+              {t('bim.progress_legend_no_data', { defaultValue: 'no data' })}
+            </span>
+          </div>
+        </div>
+      )}
+
       {/* Color-mode legend (storey / category / validation / coverage).
           Matches the active palette one-for-one so the user can decode the
           3D scene at a glance. The 5D-cost gradient legend is rendered
@@ -3751,7 +3927,7 @@ export function BIMViewer({
               className="pointer-events-auto inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-sm hover:bg-emerald-100"
               title={t('bim.linked_count_title', {
                 defaultValue:
-                  '{{linked}} of {{total}} linked to BOQ — click to show ONLY the unlinked',
+                  '{{linked}} of {{total}} linked to BOQ - click to show ONLY the unlinked',
                 linked: healthStats.linkedToBoq,
                 total: elementCount,
               })}
@@ -3768,7 +3944,7 @@ export function BIMViewer({
               onClick={() => onSmartFilter?.('errors')}
               className="pointer-events-auto inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium bg-rose-50 text-rose-700 border border-rose-200 shadow-sm hover:bg-rose-100"
               title={t('bim.errors_count_title', {
-                defaultValue: '{{count}} elements with validation errors — click to filter',
+                defaultValue: '{{count}} elements with validation errors - click to filter',
                 count: healthStats.errors,
               })}
             >
@@ -3784,7 +3960,7 @@ export function BIMViewer({
               onClick={() => onSmartFilter?.('warnings')}
               className="pointer-events-auto inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-50 text-amber-700 border border-amber-200 shadow-sm hover:bg-amber-100"
               title={t('bim.warnings_count_title', {
-                defaultValue: '{{count}} elements with validation warnings — click to filter',
+                defaultValue: '{{count}} elements with validation warnings - click to filter',
                 count: healthStats.warnings,
               })}
             >
@@ -3800,7 +3976,7 @@ export function BIMViewer({
               onClick={() => onSmartFilter?.('has_tasks')}
               className="pointer-events-auto inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-50 text-amber-800 border border-amber-200 shadow-sm hover:bg-amber-100"
               title={t('bim.tasks_count_title', {
-                defaultValue: '{{count}} elements have linked tasks — click to filter',
+                defaultValue: '{{count}} elements have linked tasks - click to filter',
                 count: healthStats.hasTasks,
               })}
             >
@@ -3816,7 +3992,7 @@ export function BIMViewer({
               onClick={() => onSmartFilter?.('has_docs')}
               className="pointer-events-auto inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium bg-violet-50 text-violet-700 border border-violet-200 shadow-sm hover:bg-violet-100"
               title={t('bim.docs_count_title', {
-                defaultValue: '{{count}} elements have linked documents — click to filter',
+                defaultValue: '{{count}} elements have linked documents - click to filter',
                 count: healthStats.hasDocs,
               })}
             >
@@ -3842,6 +4018,22 @@ export function BIMViewer({
               <span className="ml-1.5 text-gray-400">{hoveredElement.storey}</span>
             )}
           </div>
+          {/* BOQ progress on hover — only when the viewer is in progress
+              mode and the element has a recorded value, so the tooltip
+              stays terse for every other colour mode. */}
+          {colorByMode === 'by_progress' &&
+            (() => {
+              const pct = progressByElementId?.[hoveredElement.id];
+              if (pct == null || !Number.isFinite(pct)) return null;
+              return (
+                <div className="text-gray-200 text-[10px] mt-0.5">
+                  {t('bim.boq_progress', { defaultValue: 'BOQ Progress' })}:{' '}
+                  <span className="font-semibold tabular-nums">
+                    {Math.round(Math.max(0, Math.min(100, pct)))}%
+                  </span>
+                </div>
+              );
+            })()}
         </div>
       )}
 
@@ -4120,7 +4312,7 @@ export function BIMViewer({
                           className="rounded-md bg-blue-50/50 dark:bg-blue-950/20 px-2 py-1"
                           title={t('bim.agg_avg_tooltip', {
                             defaultValue:
-                              'Per-element value — averaged across {{count}} elements',
+                              'Per-element value - averaged across {{count}} elements',
                             count: a.count,
                           })}
                         >
@@ -4181,7 +4373,7 @@ export function BIMViewer({
                         className="rounded-md bg-sky-50/40 dark:bg-sky-950/20 px-2 py-1"
                         title={t('bim.agg_distinct_tooltip', {
                           defaultValue:
-                            'Per-element value — listing the {{n}} unique value(s) seen',
+                            'Per-element value - listing the {{n}} unique value(s) seen',
                           n: a.uniqueValues.length,
                         })}
                       >
@@ -4711,6 +4903,57 @@ export function BIMViewer({
                   </button>
                 )}
               </div>
+              {/* BOQ progress — latest percent-complete of the linked
+                  position(s), folded by the backend into `current_pct`
+                  and supplied here via `progressByElementId`. Shown as a
+                  labelled mini-bar so the user reads the overlay colour as
+                  a concrete number. Hidden when there's no recorded value. */}
+              {(() => {
+                const pct = progressByElementId?.[selectedElement.id];
+                if (pct == null || !Number.isFinite(pct)) return null;
+                const clamped = Math.max(0, Math.min(100, pct));
+                // Recorded date of the headline entry. Format to a short
+                // localised date; fall back to the raw ISO string if the
+                // browser can't parse it (never throw inside render).
+                const rawDate = progressDateByElementId?.[selectedElement.id];
+                let asOf: string | null = null;
+                if (rawDate) {
+                  const d = new Date(rawDate);
+                  asOf = Number.isNaN(d.getTime()) ? rawDate : d.toLocaleDateString();
+                }
+                return (
+                  <div className="mb-1.5" data-testid="bim-boq-progress">
+                    <div className="flex items-center justify-between text-[10px] mb-0.5">
+                      <span className="text-content-tertiary">
+                        {t('bim.boq_progress', { defaultValue: 'BOQ Progress' })}
+                      </span>
+                      <span className="font-semibold tabular-nums text-content-primary">
+                        {Math.round(clamped)}%
+                      </span>
+                    </div>
+                    <div className="h-1.5 w-full rounded-full bg-surface-tertiary overflow-hidden">
+                      <div
+                        className="h-full rounded-full"
+                        style={{
+                          width: `${clamped}%`,
+                          background: colorForProgress(clamped),
+                        }}
+                      />
+                    </div>
+                    {asOf && (
+                      <div
+                        className="text-[9px] text-content-tertiary mt-0.5"
+                        data-testid="bim-boq-progress-date"
+                      >
+                        {t('bim.boq_progress_as_of', {
+                          defaultValue: 'as of {{date}}',
+                          date: asOf,
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
               {selectedElement.boq_links && selectedElement.boq_links.length > 0 ? (
                 <ul className="space-y-1">
                   {selectedElement.boq_links.map((link) => (
@@ -4757,7 +5000,7 @@ export function BIMViewer({
               ) : (
                 <div className="text-[10px] text-content-tertiary italic">
                   {t('bim.link_empty', {
-                    defaultValue: 'Not linked — click "Add to BOQ" to link this element to a cost position',
+                    defaultValue: 'Not linked - click "Add to BOQ" to link this element to a cost position',
                   })}
                 </div>
               )}
@@ -4815,7 +5058,7 @@ export function BIMViewer({
                 ) : (
                   <div className="text-[10px] text-content-tertiary italic">
                     {t('bim.docs_empty', {
-                      defaultValue: 'No drawings linked yet — click "Link" to attach a drawing or photo',
+                      defaultValue: 'No drawings linked yet - click "Link" to attach a drawing or photo',
                     })}
                   </div>
                 )}
@@ -4884,7 +5127,7 @@ export function BIMViewer({
                 ) : (
                   <div className="text-[10px] text-content-tertiary italic">
                     {t('bim.tasks_empty', {
-                      defaultValue: 'No tasks pinned yet — click "New" to file a defect or RFI',
+                      defaultValue: 'No tasks pinned yet - click "New" to file a defect or RFI',
                     })}
                   </div>
                 )}
@@ -4945,7 +5188,7 @@ export function BIMViewer({
                 ) : (
                   <div className="text-[10px] text-content-tertiary italic">
                     {t('bim.acts_empty', {
-                      defaultValue: 'No 4D activities yet — click "Link" to attach a schedule activity',
+                      defaultValue: 'No 4D activities yet - click "Link" to attach a schedule activity',
                     })}
                   </div>
                 )}
@@ -5036,7 +5279,7 @@ export function BIMViewer({
                   <div className="text-[10px] text-content-tertiary italic">
                     {t('bim.req_empty', {
                       defaultValue:
-                        'No requirements yet — click "Link" to pin a constraint to this element',
+                        'No requirements yet - click "Link" to pin a constraint to this element',
                     })}
                   </div>
                 )}

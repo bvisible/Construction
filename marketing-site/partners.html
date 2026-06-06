@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 
-  <title>Partner Program — OpenConstructionERP (Open Source Construction ERP)</title>
-  <meta name="description" content="Become a Founding Partner. 45–65% margins on OpenConstructionERP commercial licences, CWICR cost DB, cad2data converters and localisation packs. 100% on implementation services. AGPL-3.0 + Commercial dual-licence." />
+  <title>Partner Program - OpenConstructionERP (Open Source Construction ERP)</title>
+  <meta name="description" content="OpenConstructionERP partner program. One deal for everyone: 45% margin on commercial licences, CWICR and connectors, 55% on localisation packs and cad2data converters, 25% recurring on renewals, 100% on implementation services. EUR 0 annual fee. AGPL-3.0 + Commercial dual-licence." />
   <meta name="robots" content="index,follow" />
   <link rel="canonical" href="https://openconstructionerp.com/partners.html" />
 
@@ -13,14 +13,14 @@
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="OpenConstructionERP" />
   <meta property="og:url" content="https://openconstructionerp.com/partners.html" />
-  <meta property="og:title" content="OpenConstructionERP Partner Program — 80% open. 20% paid. 100% yours." />
-  <meta property="og:description" content="Free foundation. Paid floors. Real construction software, built like a building. Founding Partner cohort open — 10 spots, no fee, top-tier economics from day one." />
+  <meta property="og:title" content="OpenConstructionERP Partner Program - 80% open. 20% paid. 100% yours." />
+  <meta property="og:description" content="Free foundation. Paid floors. Real construction software, built like a building. One partner deal, same for everyone: real margins, no annual fee." />
   <meta property="og:image" content="https://openconstructionerp.com/pro/shared/media/og-breeze.png" />
   <meta property="og:image:width" content="1200" />
   <meta property="og:image:height" content="630" />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="OpenConstructionERP Partner Program" />
-  <meta name="twitter:description" content="Founding Partner cohort open — 10 spots, no fee, top-tier economics from day one." />
+  <meta name="twitter:description" content="One partner deal, same for everyone: real margins, no annual fee." />
   <meta name="twitter:image" content="https://openconstructionerp.com/pro/shared/media/og-breeze.png" />
 
   <!-- Favicon + manifest -->
@@ -64,7 +64,7 @@
 
   <style>
     /* ================================================================ */
-    /* THEME TOKENS — same family as breeze (sky blue palette)          */
+    /* THEME TOKENS - same family as breeze (sky blue palette)          */
     /* ================================================================ */
     :root {
       --bg-0: #f7fbff;
@@ -84,11 +84,11 @@
       --accent-5: #06b6d4;
 
       /* Construction-Stack floor accents */
-      --floor-foundation: #94a3b8;  /* slate-400 — open core */
-      --floor-1: #06b6d4;            /* cyan-500 — localisation */
-      --floor-2: #0ea5e9;            /* sky-500 — commercial */
-      --floor-3: #2563eb;            /* blue-600 — services */
-      --floor-roof: #f59e0b;         /* amber-500 — success */
+      --floor-foundation: #94a3b8;  /* slate-400 - open core */
+      --floor-1: #06b6d4;            /* cyan-500 - localisation */
+      --floor-2: #0ea5e9;            /* sky-500 - commercial */
+      --floor-3: #2563eb;            /* blue-600 - services */
+      --floor-roof: #f59e0b;         /* amber-500 - success */
     }
     [data-theme="dark"] {
       --bg-0: #0b1220;
@@ -133,7 +133,7 @@
     .wrap { max-width: 1200px; margin: 0 auto; padding: 0 clamp(20px, 4vw, 48px); }
     .narrow { max-width: 880px; margin: 0 auto; padding: 0 clamp(20px, 4vw, 48px); }
 
-    /* ─── TOP NAV — matches main site visually ───────────────────── */
+    /* ─── TOP NAV - matches main site visually ───────────────────── */
     .nav {
       position: sticky;
       top: 0;
@@ -764,9 +764,9 @@
     }
     .tier-grid {
       display: grid;
-      grid-template-columns: 1.4fr 1fr 1fr;
+      grid-template-columns: 1.8fr 1fr;
       gap: 0;
-      min-width: 560px;
+      min-width: 420px;
       background: var(--bg-1);
       border: 1px solid var(--line-1);
       border-radius: 16px;
@@ -779,53 +779,18 @@
       border-bottom: 1px solid var(--line-0);
       border-right: 1px solid var(--line-0);
     }
-    .tier-grid > div:nth-child(3n) { border-right: 0; }
-    .tier-grid > div:nth-last-child(-n+3) { border-bottom: 0; }
+    .tier-grid > div:nth-child(2n) { border-right: 0; }
+    .tier-grid > div:nth-last-child(-n+2) { border-bottom: 0; }
     .tier-grid .row-label {
       color: var(--ink-2);
       background: color-mix(in oklab, var(--bg-2) 60%, transparent);
       font-weight: 500;
     }
-    .tier-grid .col-head {
-      font-family: 'Inter Tight', sans-serif;
-      font-weight: 700;
-      font-size: 16px;
-      letter-spacing: -0.01em;
-      color: var(--ink-0);
-      text-align: center;
-      padding: 18px 14px;
-      background: color-mix(in oklab, var(--bg-2) 40%, transparent);
-    }
-    .tier-grid .col-head[data-tier="a"] {
-      box-shadow: inset 0 -3px 0 var(--accent-2);
-    }
-    .tier-grid .col-head[data-tier="f"] {
-      box-shadow: inset 0 -3px 0 #f59e0b;
-      background: linear-gradient(180deg,
-        color-mix(in oklab, #fbbf24 12%, var(--bg-2)) 0%,
-        color-mix(in oklab, #f59e0b 6%, var(--bg-2)) 100%);
-    }
-    .tier-grid .col-head .badge {
-      display: inline-block;
-      width: 10px; height: 10px;
-      border-radius: 50%;
-      margin-right: 8px;
-      vertical-align: middle;
-      box-shadow: 0 0 0 2px color-mix(in oklab, var(--bg-1) 80%, transparent);
-    }
-    .tier-grid .col-head[data-tier="a"] .badge { background: var(--accent-2); }
-    .tier-grid .col-head[data-tier="f"] .badge { background: linear-gradient(135deg, #fbbf24, #f59e0b); }
-
-    /* Column tinting — Active / Founding */
-    .tier-grid > div:nth-child(3n+2):not(.col-head):not(.row-label) {
+    /* Value-column tinting - single partner deal */
+    .tier-grid > div:nth-child(2n):not(.row-label) {
       background: linear-gradient(90deg,
         color-mix(in oklab, var(--accent-2) 18%, transparent) 0%,
         color-mix(in oklab, var(--accent-2) 6%, transparent) 100%);
-    }
-    .tier-grid > div:nth-child(3n+3):not(.col-head):not(.row-label) {
-      background: linear-gradient(90deg,
-        color-mix(in oklab, #fbbf24 22%, transparent) 0%,
-        color-mix(in oklab, #f59e0b 9%, transparent) 100%);
     }
     .tier-grid .num {
       text-align: center;
@@ -842,10 +807,6 @@
       font-weight: 700;
       color: var(--accent);
       text-shadow: 0 0 18px color-mix(in oklab, var(--accent) 40%, transparent);
-    }
-    .tier-grid > div:nth-child(3n+3).num.lg {
-      color: #b45309;
-      text-shadow: 0 0 18px color-mix(in oklab, #f59e0b 50%, transparent);
     }
     .tier-fee-banner {
       max-width: 1140px;
@@ -1017,192 +978,6 @@
       line-height: 1.55;
     }
     .earns-recurring b { color: var(--ink-0); }
-
-    /* ─── FOUNDING PARTNER ────────────────────────────────────────── */
-    .founding {
-      background: linear-gradient(165deg,
-        color-mix(in oklab, var(--accent) 8%, var(--bg-1)) 0%,
-        color-mix(in oklab, var(--accent-3) 6%, var(--bg-1)) 100%);
-      border-radius: 24px;
-      padding: clamp(36px, 6vw, 64px);
-      max-width: 1080px;
-      margin: 0 auto;
-      border: 1px solid color-mix(in oklab, var(--accent) 24%, transparent);
-    }
-    .founding-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: clamp(32px, 5vw, 64px);
-      align-items: start;
-    }
-    @media (max-width: 880px) {
-      .founding-grid { grid-template-columns: 1fr; }
-    }
-    .founding h3 {
-      font-family: 'Inter Tight', sans-serif;
-      font-weight: 600;
-      font-size: clamp(24px, 3vw, 36px);
-      letter-spacing: -0.025em;
-      margin: 0 0 18px;
-      line-height: 1.15;
-    }
-    .founding h3 em {
-      font-family: 'Fraunces', serif;
-      font-style: italic;
-      font-weight: 400;
-      color: var(--accent);
-    }
-    .founding p {
-      font-size: 15px;
-      color: var(--ink-1);
-      line-height: 1.6;
-      margin: 0 0 14px;
-    }
-    .founding p strong { color: var(--ink-0); }
-    .founding-counter-card {
-      position: relative;
-      background: linear-gradient(165deg, var(--bg-0) 0%, color-mix(in oklab, var(--accent) 5%, var(--bg-0)) 100%);
-      border: 1px solid color-mix(in oklab, var(--accent) 28%, transparent);
-      border-radius: 16px;
-      padding: 22px 22px 18px;
-      margin-bottom: 18px;
-      overflow: hidden;
-      box-shadow:
-        inset 0 1px 0 rgba(255, 255, 255, 0.55),
-        0 16px 36px -18px color-mix(in oklab, var(--accent) 32%, transparent);
-    }
-    .founding-counter-card::before {
-      content: "";
-      position: absolute;
-      top: -40%;
-      right: -25%;
-      width: 60%;
-      height: 180%;
-      background: radial-gradient(closest-side,
-        color-mix(in oklab, var(--accent) 18%, transparent) 0%,
-        transparent 100%);
-      pointer-events: none;
-      opacity: 0.6;
-    }
-    .founding-counter-card > * { position: relative; }
-    .founding-counter-head {
-      display: flex;
-      align-items: baseline;
-      justify-content: space-between;
-      gap: 12px;
-      margin-bottom: 16px;
-    }
-    .founding-counter-eyebrow {
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 11px;
-      letter-spacing: 0.1em;
-      text-transform: uppercase;
-      color: var(--ink-3);
-    }
-    .founding-counter-big {
-      font-family: 'Fraunces', serif;
-      font-weight: 500;
-      font-size: clamp(28px, 4vw, 40px);
-      line-height: 1;
-      color: var(--ink-0);
-      font-variant-numeric: tabular-nums;
-    }
-    .founding-counter-big b {
-      color: var(--accent);
-      font-weight: 500;
-    }
-    .founding-counter-sub {
-      font-size: 13.5px;
-      color: var(--ink-2);
-      line-height: 1.45;
-      margin: 0 0 18px;
-    }
-    .founding-counter-sub b { color: var(--ink-0); font-weight: 700; }
-    .founding-counter {
-      display: grid;
-      grid-template-columns: repeat(5, 1fr);
-      gap: 10px;
-    }
-    .founding-counter .slot {
-      position: relative;
-      aspect-ratio: 1 / 1;
-      border: 2px solid color-mix(in oklab, var(--accent) 50%, transparent);
-      border-radius: 10px;
-      display: grid;
-      place-items: center;
-      font-family: 'JetBrains Mono', monospace;
-      font-weight: 700;
-      font-size: 16px;
-      color: var(--accent);
-      background: color-mix(in oklab, var(--accent) 5%, var(--bg-0));
-      overflow: hidden;
-      transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
-    }
-    .founding-counter .slot > * { position: relative; z-index: 1; }
-    .founding-counter .slot:not(.filled)::before {
-      content: "";
-      position: absolute;
-      inset: 0;
-      background: radial-gradient(60% 60% at 50% 55%,
-        color-mix(in oklab, var(--accent) 26%, transparent) 0%,
-        transparent 70%);
-      animation: slotPulse 2.6s ease-in-out infinite;
-      z-index: 0;
-    }
-    .founding-counter .slot:not(.filled)::after {
-      content: "open";
-      position: absolute;
-      bottom: 5px;
-      left: 0; right: 0;
-      text-align: center;
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 8px;
-      font-weight: 700;
-      letter-spacing: 0.14em;
-      text-transform: uppercase;
-      color: color-mix(in oklab, var(--accent) 78%, transparent);
-      opacity: 0.75;
-      z-index: 1;
-    }
-    @keyframes slotPulse {
-      0%, 100% { opacity: 0.25; transform: scale(0.85); }
-      50% { opacity: 0.85; transform: scale(1.08); }
-    }
-    .founding-counter .slot:hover {
-      transform: translateY(-3px);
-      border-color: var(--accent);
-      box-shadow: 0 12px 22px -8px color-mix(in oklab, var(--accent) 38%, transparent);
-    }
-    .founding-counter .slot:not(.filled):hover::before {
-      animation: none;
-      opacity: 0.95;
-      transform: scale(1.18);
-    }
-    .founding-counter .slot.filled {
-      background: linear-gradient(135deg, var(--accent), var(--accent-3));
-      border-color: transparent;
-      color: #fff;
-      box-shadow:
-        inset 0 1px 0 rgba(255, 255, 255, 0.4),
-        0 6px 14px -6px color-mix(in oklab, var(--accent) 60%, transparent);
-    }
-    .founding-counter .slot.filled::after {
-      content: "";
-      position: absolute;
-      top: 4px; right: 4px;
-      width: 6px; height: 6px;
-      border-radius: 50%;
-      background: rgba(255, 255, 255, 0.85);
-    }
-    @media (max-width: 480px) {
-      .founding-counter { grid-template-columns: repeat(5, 1fr); gap: 6px; }
-      .founding-counter .slot { font-size: 13px; border-radius: 8px; }
-    }
-    .founding .micro {
-      font-size: 12.5px;
-      color: var(--ink-3);
-      margin-top: 14px;
-    }
 
     /* ─── STICKY SECTION NAV ──────────────────────────────────────── */
     .section-nav {
@@ -2582,8 +2357,8 @@
         "@type": "WebPage",
         "@id": "https://openconstructionerp.com/partners.html#webpage",
         "url": "https://openconstructionerp.com/partners.html",
-        "name": "Partner Program — OpenConstructionERP",
-        "description": "Become a Founding Partner. 45–65% margins on OpenConstructionERP commercial licences, CWICR cost DB, cad2data converters and localisation packs. 100% on implementation services. AGPL-3.0 + Commercial dual-licence.",
+        "name": "Partner Program - OpenConstructionERP",
+        "description": "OpenConstructionERP partner program. One deal for everyone: 45% margin on commercial licences, CWICR and connectors, 55% on localisation packs and cad2data converters, 25% recurring on renewals, 100% on implementation services. EUR 0 annual fee. AGPL-3.0 + Commercial dual-licence.",
         "inLanguage": "en",
         "isPartOf": { "@id": "https://openconstructionerp.com/#website" },
         "about": { "@id": "https://openconstructionerp.com/#software" },
@@ -2595,10 +2370,10 @@
         "mainEntity": [
           {
             "@type": "Question",
-            "name": "It's AGPL-3.0 — can my client really use it commercially without paying anything?",
+            "name": "It's AGPL-3.0 - can my client really use it commercially without paying anything?",
             "acceptedAnswer": {
               "@type": "Answer",
-              "text": "Yes. AGPL-3.0 permits commercial use, modification, and self-hosting. The obligation is to publish derivative source code if you modify and distribute or expose it as a network service to third parties. For most construction firms running internally, no obligation triggers. For SaaS resellers or OEMs, a commercial licence removes the AGPL obligation entirely — that licence is one of the SKUs partners sell at 45–55% margin."
+              "text": "Yes. AGPL-3.0 permits commercial use, modification, and self-hosting. The obligation is to publish derivative source code if you modify and distribute or expose it as a network service to third parties. For most construction firms running internally, no obligation triggers. For SaaS resellers or OEMs, a commercial licence removes the AGPL obligation entirely - that licence is one of the SKUs partners sell at 45–55% margin."
             }
           },
           {
@@ -2614,7 +2389,7 @@
             "name": "Will OpenConstructionERP compete with partners on implementation services?",
             "acceptedAnswer": {
               "@type": "Answer",
-              "text": "No. This is a written commitment in every partnership agreement. DDC's three commercial product lines are OpenConstructionERP commercial licences, CWICR (cost database), and cad2data converters — plus localisation packs and core training. Implementation services are 100% partner revenue."
+              "text": "No. This is a written commitment in every partnership agreement. DDC's three commercial product lines are OpenConstructionERP commercial licences, CWICR (cost database), and cad2data converters - plus localisation packs and core training. Implementation services are 100% partner revenue."
             }
           },
           {
@@ -2623,14 +2398,6 @@
             "acceptedAnswer": {
               "@type": "Answer",
               "text": "Two models per deal: resold (partner invoices client at list, pays DDC the wholesale price, keeps the margin) or referred (DDC invoices client, pays partner the margin within 30 days of cash receipt)."
-            }
-          },
-          {
-            "@type": "Question",
-            "name": "What's the difference between a Founding Partner and an Active Partner?",
-            "acceptedAnswer": {
-              "@type": "Answer",
-              "text": "Founding Partners are the first 3 signatories. They get the Founding rate card from day 0 — no ladder climb, no fees, direct line to the core team. Active is the standard partnership for everyone else. Founding cohort closes when 3 partners sign or on 31 December 2026, whichever comes first."
             }
           },
           {
@@ -2646,7 +2413,7 @@
             "name": "What about CWICR (cost database)?",
             "acceptedAnswer": {
               "@type": "Answer",
-              "text": "The community CWICR is free with the AGPL repo. The commercial CWICR — covering 11 countries, 55,000+ items, monthly updates, audit trail — is sold separately and resold by partners at 45–55% margin."
+              "text": "The community CWICR is free with the AGPL repo. The commercial CWICR - covering 11 countries, 55,000+ items, monthly updates, audit trail - is sold separately and resold by partners at 45–55% margin."
             }
           },
           {
@@ -2654,7 +2421,7 @@
             "name": "Can I run my client on the free AGPL version forever?",
             "acceptedAnswer": {
               "@type": "Answer",
-              "text": "Yes — and many will. Partners earn their margin on the four things free AGPL does not deliver: production hosting, production SLA, localisation packs, and AGPL-free commercial licensing for clients who need it."
+              "text": "Yes - and many will. Partners earn their margin on the four things free AGPL does not deliver: production hosting, production SLA, localisation packs, and AGPL-free commercial licensing for clients who need it."
             }
           },
           {
@@ -2662,15 +2429,15 @@
             "name": "How is this different from being an Odoo partner?",
             "acceptedAnswer": {
               "@type": "Answer",
-              "text": "Three concrete differences: (1) construction-native product (BOQ, IFC, schedule, AI takeoff) — no retrofit; (2) higher margins (up to 65% on localisation, 55% on commercial); (3) no annual partnership fee at any tier; (4) DDC explicitly does not compete on services."
+              "text": "Three concrete differences: (1) construction-native product (BOQ, IFC, schedule, AI takeoff) - no retrofit; (2) higher margins (up to 55% on localisation, 45% on commercial); (3) no annual partnership fee; (4) DDC explicitly does not compete on services."
             }
           },
           {
             "@type": "Question",
-            "name": "What if I never close a deal — do I lose my partnership?",
+            "name": "What if I never close a deal - do I lose my partnership?",
             "acceptedAnswer": {
               "@type": "Answer",
-              "text": "Nothing punitive. Partners stay on the Active rate card indefinitely — no demotion, no fee clawback, no expiry. If activity slows, we work on lead-share or co-sell. Founding partners keep Founding rates as long as they have at least one live client."
+              "text": "Nothing punitive. Partners stay on the rate card indefinitely - no demotion, no fee clawback, no expiry. If activity slows, we work on lead-share or co-sell."
             }
           }
         ]
@@ -2683,7 +2450,7 @@
 <body>
 
 <!-- ============================================================ -->
-<!-- NAV — same visual language as the main site                   -->
+<!-- NAV - same visual language as the main site                   -->
 <!-- ============================================================ -->
 <nav class="nav" aria-label="Primary">
   <div class="nav-inner">
@@ -2693,7 +2460,7 @@
           <span class="brand-seg-1">Open</span><span class="brand-seg-2">Construction</span><span class="brand-seg-3">ERP</span>
         </span>
       </a>
-      <button type="button" class="nav-icon-btn" id="theme-toggle" aria-label="Toggle theme" title="Toggle theme">
+      <button type="button" class="nav-icon-btn" id="theme-toggle" aria-label="Toggle theme" title="Toggle theme" data-i18n-aria-label="page.partners.nav_theme_toggle">
         <svg class="icon-sun" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <circle cx="12" cy="12" r="4"/>
           <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>
@@ -2704,20 +2471,21 @@
       </button>
     </div>
     <div class="nav-links">
-      <a href="/services.html">Practices</a>
-      <a href="/industries.html">Industries</a>
-      <a href="/standards.html">Standards</a>
-      <a href="/maturity.html">Maturity</a>
-      <a href="/#pricing">Pricing</a>
-      <a href="/partners.html" class="partners-link is-active">Partners</a>
+      <a href="/#tour" data-i18n="page.partners.nav_tour">Tour</a>
+      <a href="/#compare" data-i18n="page.partners.nav_compare">Compare</a>
+      <a href="/#pricing" data-i18n="page.partners.nav_pricing">Pricing</a>
+      <a href="/#faq" data-i18n="page.partners.nav_faq">FAQ</a>
+      <a href="/docs.html" data-i18n="page.partners.nav_docs">Docs</a>
+      <a href="/news.html" data-i18n="page.partners.nav_news">News</a>
+      <a href="/download" data-i18n="page.partners.nav_download">Download</a>
     </div>
     <div class="nav-right">
       <a class="nav-pill github" href="https://github.com/datadrivenconstruction/OpenConstructionERP" target="_blank" rel="noopener">
         <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M12 0.5C5.65 0.5 0.5 5.65 0.5 12a11.5 11.5 0 0 0 7.86 10.92c.58.1.79-.25.79-.56v-2c-3.2.7-3.87-1.36-3.87-1.36-.52-1.32-1.28-1.68-1.28-1.68-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.18 1.76 1.18 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.7 0-1.26.45-2.29 1.18-3.1-.12-.29-.51-1.47.11-3.05 0 0 .97-.31 3.18 1.18A11 11 0 0 1 12 6.8a11 11 0 0 1 2.9.39c2.2-1.5 3.17-1.18 3.17-1.18.63 1.58.24 2.76.12 3.05.74.81 1.18 1.84 1.18 3.1 0 4.43-2.7 5.4-5.27 5.69.42.36.78 1.07.78 2.15v3.19c0 .31.21.67.8.56A11.5 11.5 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5Z"/></svg>
-        <span>GitHub</span>
+        <span data-i18n="page.partners.nav_github">GitHub</span>
       </a>
       <a class="nav-pill apply" href="#apply">
-        <span>Apply</span>
+        <span data-i18n="page.partners.nav_apply">Apply</span>
         <svg class="arrow" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
       </a>
     </div>
@@ -2727,20 +2495,19 @@
 <!-- ============================================================ -->
 <!-- 0. STICKY SECTION NAV (in-page anchors)                       -->
 <!-- ============================================================ -->
-<nav class="section-nav" aria-label="Partner page sections">
+<nav class="section-nav" aria-label="Partner page sections" data-i18n-aria-label="page.partners.section_nav_aria">
   <div class="section-nav-inner" id="section-nav-inner">
-    <span class="section-nav-label">On this page</span>
-    <a href="#stack">Stack</a>
-    <a href="#earns">Economics</a>
-    <a href="#audience">Audience</a>
-    <a href="#compare-programs">vs Others</a>
-    <a href="#tiers">Tiers</a>
-    <a href="#founding">Founding</a>
-    <a href="#toolkit">Toolkit</a>
-    <a href="#archetypes">Archetypes</a>
-    <a href="#risk">Risk</a>
-    <a href="#faq">FAQ</a>
-    <a href="#apply">Apply →</a>
+    <span class="section-nav-label" data-i18n="page.partners.section_nav_label">On this page</span>
+    <a href="#stack" data-i18n="page.partners.section_nav_stack">Stack</a>
+    <a href="#earns" data-i18n="page.partners.section_nav_economics">Economics</a>
+    <a href="#audience" data-i18n="page.partners.section_nav_audience">Audience</a>
+    <a href="#compare-programs" data-i18n="page.partners.section_nav_vs_others">vs Others</a>
+    <a href="#tiers" data-i18n="page.partners.section_nav_deal">Partner deal</a>
+    <a href="#toolkit" data-i18n="page.partners.section_nav_toolkit">Toolkit</a>
+    <a href="#archetypes" data-i18n="page.partners.section_nav_archetypes">Archetypes</a>
+    <a href="#risk" data-i18n="page.partners.section_nav_risk">Risk</a>
+    <a href="#faq" data-i18n="page.partners.section_nav_faq">FAQ</a>
+    <a href="#apply" data-i18n="page.partners.section_nav_apply">Apply →</a>
   </div>
 </nav>
 
@@ -2753,81 +2520,81 @@
       <div>
         <span class="eyebrow">
           <span class="dot" aria-hidden="true"></span>
-          <span>Partner Program · Founding cohort</span>
+          <span data-i18n="page.partners.hero_eyebrow_v2">Partner Program</span>
         </span>
-        <h1 class="h1">
+        <h1 class="h1" data-i18n-html="page.partners.hero_title">
           Open core. <em>Real margins.</em><br>
           Construction ERP partner program, built for SMB.
         </h1>
-        <p class="lede">
+        <p class="lede" data-i18n-html="page.partners.hero_lede">
           OpenConstructionERP is <strong>AGPL-3.0 and free forever</strong>.
-          Implementation, localisation, training and converters are commercial —
+          Implementation, localisation, training and converters are commercial -
           and partners keep <strong>up to 100%</strong> of services revenue.
           Built for partners working with small and mid-sized construction
           firms. <em>No annual fees. No quotas.</em>
         </p>
         <div class="cta-row">
           <a class="btn btn-primary" href="#apply">
-            Become a Founding Partner
+            <span data-i18n="page.partners.hero_cta_primary_v2">Become a partner</span>
             <svg class="arr" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
           </a>
-          <a class="btn btn-ghost" href="#audience">
-            I'm a client — find a partner
+          <a class="btn btn-ghost" href="#audience" data-i18n="page.partners.hero_cta_ghost">
+            I'm a client - find a partner
           </a>
         </div>
         <div class="trust-strip">
-          <span>AGPL-3.0 on GitHub</span>
+          <span data-i18n="page.partners.hero_trust_agpl">AGPL-3.0 on GitHub</span>
           <span class="sep">·</span>
-          <span>Dual-licence (AGPL + commercial)</span>
+          <span data-i18n="page.partners.hero_trust_dual">Dual-licence (AGPL + commercial)</span>
           <span class="sep">·</span>
-          <span>CWICR cost database, 11 countries</span>
+          <span data-i18n="page.partners.hero_trust_cwicr">CWICR cost database, 11 countries</span>
         </div>
       </div>
       <div>
         <div class="stack-wrap">
-          <div class="stack" role="img" aria-label="Construction Stack — five floors representing the open-source foundation and the commercial value layered on top">
+          <div class="stack" role="img" aria-label="Construction Stack - five floors representing the open-source foundation and the commercial value layered on top" data-i18n-aria-label="page.partners.hero_stack_aria">
             <div class="floor floor-roof" data-floor="roof">
-              <div class="floor-num">Roof</div>
+              <div class="floor-num" data-i18n="page.partners.hero_floor_roof_num">Roof</div>
               <div class="floor-body">
-                <div class="floor-title">Success</div>
-                <div class="floor-sub">SLA, optimisation, year-3 expansion</div>
+                <div class="floor-title" data-i18n="page.partners.hero_floor_roof_title">Success</div>
+                <div class="floor-sub" data-i18n="page.partners.hero_floor_roof_sub">SLA, optimisation, year-3 expansion</div>
               </div>
-              <div class="floor-margin">30% rec.</div>
+              <div class="floor-margin" data-i18n="page.partners.hero_floor_roof_margin">30% rec.</div>
             </div>
             <div class="floor" data-floor="3">
-              <div class="floor-num">Floor 3</div>
+              <div class="floor-num" data-i18n="page.partners.hero_floor3_num">Floor 3</div>
               <div class="floor-body">
-                <div class="floor-title">Services</div>
-                <div class="floor-sub">Implementation, training, custom modules</div>
+                <div class="floor-title" data-i18n="page.partners.hero_floor3_title">Services</div>
+                <div class="floor-sub" data-i18n="page.partners.hero_floor3_sub">Implementation, training, custom modules</div>
               </div>
-              <div class="floor-margin">100%</div>
+              <div class="floor-margin" data-i18n="page.partners.hero_floor3_margin">100%</div>
             </div>
             <div class="floor" data-floor="2">
-              <div class="floor-num">Floor 2</div>
+              <div class="floor-num" data-i18n="page.partners.hero_floor2_num">Floor 2</div>
               <div class="floor-body">
-                <div class="floor-title">Commercial</div>
-                <div class="floor-sub">OpenConstructionERP commercial · CWICR · cad2data converters</div>
+                <div class="floor-title" data-i18n="page.partners.hero_floor2_title">Commercial</div>
+                <div class="floor-sub" data-i18n="page.partners.hero_floor2_sub">OpenConstructionERP commercial · CWICR · cad2data converters</div>
               </div>
-              <div class="floor-margin">45–55%</div>
+              <div class="floor-margin" data-i18n="page.partners.hero_floor2_margin">45–55%</div>
             </div>
             <div class="floor" data-floor="1">
-              <div class="floor-num">Floor 1</div>
+              <div class="floor-num" data-i18n="page.partners.hero_floor1_num">Floor 1</div>
               <div class="floor-body">
-                <div class="floor-title">Localisation</div>
-                <div class="floor-sub">20 languages · DACH · UK · US · regional packs</div>
+                <div class="floor-title" data-i18n="page.partners.hero_floor1_title">Localisation</div>
+                <div class="floor-sub" data-i18n="page.partners.hero_floor1_sub">20 languages · DACH · UK · US · regional packs</div>
               </div>
-              <div class="floor-margin">55–65%</div>
+              <div class="floor-margin" data-i18n="page.partners.hero_floor1_margin">55–65%</div>
             </div>
             <div class="floor floor-foundation" data-floor="foundation">
-              <div class="floor-num">Foundation</div>
+              <div class="floor-num" data-i18n="page.partners.hero_floor_foundation_num">Foundation</div>
               <div class="floor-body">
-                <div class="floor-title">AGPL-3.0 repo</div>
-                <div class="floor-sub">BOQ, BIM viewer, schedule, AI takeoff</div>
+                <div class="floor-title" data-i18n="page.partners.hero_floor_foundation_title">AGPL-3.0 repo</div>
+                <div class="floor-sub" data-i18n="page.partners.hero_floor_foundation_sub">BOQ, BIM viewer, schedule, AI takeoff</div>
               </div>
-              <div class="floor-margin" style="background: color-mix(in oklab, var(--ink-3) 18%, transparent); color: var(--ink-2);">free</div>
+              <div class="floor-margin" style="background: color-mix(in oklab, var(--ink-3) 18%, transparent); color: var(--ink-2);" data-i18n="page.partners.hero_floor_foundation_margin">free</div>
             </div>
           </div>
-          <p class="stack-callout">
+          <p class="stack-callout" data-i18n-html="page.partners.hero_stack_callout">
             80% of the building is the foundation.<br>20% is what makes it habitable.
           </p>
         </div>
@@ -2837,9 +2604,9 @@
 </section>
 
 <!-- ============================================================ -->
-<!-- 1.5 METRIC RIBBON — partner economics at a glance             -->
+<!-- 1.5 METRIC RIBBON - partner economics at a glance             -->
 <!-- ============================================================ -->
-<section class="metric-ribbon" aria-label="Partner economics at a glance">
+<section class="metric-ribbon" aria-label="Partner economics at a glance" data-i18n-aria-label="page.partners.ribbon_aria">
   <div class="ribbon-grid">
 
     <div class="ribbon-card">
@@ -2849,8 +2616,8 @@
         <path d="M7 15h2"/>
       </svg>
       <div class="ribbon-num">€0<sup>fee</sup></div>
-      <div class="ribbon-label">Annual partnership fee</div>
-      <div class="ribbon-sub">All tiers, forever — written in</div>
+      <div class="ribbon-label" data-i18n="page.partners.ribbon_fee_label">Annual partnership fee</div>
+      <div class="ribbon-sub" data-i18n="page.partners.ribbon_fee_sub_v2">Forever, written into the agreement</div>
     </div>
 
     <div class="ribbon-card">
@@ -2858,8 +2625,8 @@
         <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76Z"/>
       </svg>
       <div class="ribbon-num">100<sup>%</sup></div>
-      <div class="ribbon-label">Implementation revenue</div>
-      <div class="ribbon-sub">DDC never quotes services</div>
+      <div class="ribbon-label" data-i18n="page.partners.ribbon_impl_label">Implementation revenue</div>
+      <div class="ribbon-sub" data-i18n="page.partners.ribbon_impl_sub">DDC never quotes services</div>
     </div>
 
     <div class="ribbon-card hi">
@@ -2867,9 +2634,9 @@
         <path d="M3 17l6-6 4 4 8-8"/>
         <polyline points="14 7 21 7 21 14"/>
       </svg>
-      <div class="ribbon-num">65<sup>%</sup></div>
-      <div class="ribbon-label">Top localisation margin</div>
-      <div class="ribbon-sub">Regional packs · cad2data · Founding</div>
+      <div class="ribbon-num">55<sup>%</sup></div>
+      <div class="ribbon-label" data-i18n="page.partners.ribbon_loc_label_v2">Localisation margin</div>
+      <div class="ribbon-sub" data-i18n="page.partners.ribbon_loc_sub_v2">Regional packs and cad2data converters</div>
     </div>
 
     <div class="ribbon-card">
@@ -2878,69 +2645,69 @@
         <circle cx="12" cy="12" r="10"/>
       </svg>
       <div class="ribbon-num">30<sup>%</sup></div>
-      <div class="ribbon-label">Recurring on renewals</div>
-      <div class="ribbon-sub">Passive Year-2+ revenue stream</div>
+      <div class="ribbon-label" data-i18n="page.partners.ribbon_rec_label">Recurring on renewals</div>
+      <div class="ribbon-sub" data-i18n="page.partners.ribbon_rec_sub">Passive Year-2+ revenue stream</div>
     </div>
 
   </div>
 </section>
 
 <!-- ============================================================ -->
-<!-- 2. CONSTRUCTION STACK — full size                             -->
+<!-- 2. CONSTRUCTION STACK - full size                             -->
 <!-- ============================================================ -->
 <section class="section stack-section" id="stack">
   <div class="wrap">
     <div class="section-head">
-      <h2 class="h2">This is how the value <em>is built.</em></h2>
-      <p class="section-lede">
-        Grey is open source — free forever. Coloured floors are commercial. Partners keep
+      <h2 class="h2" data-i18n-html="page.partners.stack_h2">This is how the value <em>is built.</em></h2>
+      <p class="section-lede" data-i18n="page.partners.stack_lede">
+        Grey is open source - free forever. Coloured floors are commercial. Partners keep
         25%–100% of revenue on every floor above the foundation.
       </p>
     </div>
     <div class="stack-wrap">
-      <div class="stack" role="img" aria-label="Full Construction Stack visualization">
+      <div class="stack" role="img" aria-label="Full Construction Stack visualization" data-i18n-aria-label="page.partners.stack_full_aria">
         <div class="floor floor-roof" data-floor="roof">
-          <div class="floor-num">Roof</div>
+          <div class="floor-num" data-i18n="page.partners.stack_roof_num">Roof</div>
           <div class="floor-body">
-            <div class="floor-title">Success — Year 2 and beyond</div>
-            <div class="floor-sub">SLAs, optimisation cycles, capacity expansion, post-go-live consulting</div>
+            <div class="floor-title" data-i18n="page.partners.stack_roof_title">Success - Year 2 and beyond</div>
+            <div class="floor-sub" data-i18n="page.partners.stack_roof_sub">SLAs, optimisation cycles, capacity expansion, post-go-live consulting</div>
           </div>
-          <div class="floor-margin">30% rec.</div>
+          <div class="floor-margin" data-i18n="page.partners.stack_roof_margin">30% rec.</div>
         </div>
         <div class="floor" data-floor="3">
-          <div class="floor-num">Floor 3</div>
+          <div class="floor-num" data-i18n="page.partners.stack_floor3_num">Floor 3</div>
           <div class="floor-body">
-            <div class="floor-title">Services — implementation, training, custom modules</div>
-            <div class="floor-sub">Pure partner P&amp;L. DDC never competes on this floor — written commitment.</div>
+            <div class="floor-title" data-i18n="page.partners.stack_floor3_title">Services - implementation, training, custom modules</div>
+            <div class="floor-sub" data-i18n-html="page.partners.stack_floor3_sub">Pure partner P&amp;L. DDC never competes on this floor - written commitment.</div>
           </div>
-          <div class="floor-margin">100% partner</div>
+          <div class="floor-margin" data-i18n="page.partners.stack_floor3_margin">100% partner</div>
         </div>
         <div class="floor" data-floor="2">
-          <div class="floor-num">Floor 2</div>
+          <div class="floor-num" data-i18n="page.partners.stack_floor2_num">Floor 2</div>
           <div class="floor-body">
-            <div class="floor-title">Commercial SKUs — Enterprise · CWICR · connectors</div>
-            <div class="floor-sub">Closed-source-friendly licence, 55,000+ item cost DB, Revit/IFC/Tekla/Primavera connectors, batch converters</div>
+            <div class="floor-title" data-i18n="page.partners.stack_floor2_title">Commercial SKUs - Enterprise · CWICR · connectors</div>
+            <div class="floor-sub" data-i18n="page.partners.stack_floor2_sub">Closed-source-friendly licence, 55,000+ item cost DB, Revit/IFC/Tekla/Primavera connectors, batch converters</div>
           </div>
-          <div class="floor-margin">45–55%</div>
+          <div class="floor-margin" data-i18n="page.partners.stack_floor2_margin">45–55%</div>
         </div>
         <div class="floor" data-floor="1">
-          <div class="floor-num">Floor 1</div>
+          <div class="floor-num" data-i18n="page.partners.stack_floor1_num">Floor 1</div>
           <div class="floor-body">
-            <div class="floor-title">Localisation packs — own your country</div>
-            <div class="floor-sub">Tax codes · cost classifications · regulator output · language pack — 20 languages live, regional rollouts ongoing</div>
+            <div class="floor-title" data-i18n="page.partners.stack_floor1_title">Localisation packs - own your country</div>
+            <div class="floor-sub" data-i18n="page.partners.stack_floor1_sub">Tax codes · cost classifications · regulator output · language pack - 20 languages live, regional rollouts ongoing</div>
           </div>
-          <div class="floor-margin">55–65%</div>
+          <div class="floor-margin" data-i18n="page.partners.stack_floor1_margin">55–65%</div>
         </div>
         <div class="floor floor-foundation" data-floor="foundation">
-          <div class="floor-num">Foundation</div>
+          <div class="floor-num" data-i18n="page.partners.stack_foundation_num">Foundation</div>
           <div class="floor-body">
-            <div class="floor-title">AGPL-3.0 — free forever</div>
-            <div class="floor-sub">BOQ editor · BIM viewer · 4D schedule · AI takeoff · validation pipeline</div>
+            <div class="floor-title" data-i18n="page.partners.stack_foundation_title">AGPL-3.0 - free forever</div>
+            <div class="floor-sub" data-i18n="page.partners.stack_foundation_sub">BOQ editor · BIM viewer · 4D schedule · AI takeoff · validation pipeline</div>
           </div>
-          <div class="floor-margin" style="background: color-mix(in oklab, var(--ink-3) 18%, transparent); color: var(--ink-2);">free</div>
+          <div class="floor-margin" style="background: color-mix(in oklab, var(--ink-3) 18%, transparent); color: var(--ink-2);" data-i18n="page.partners.stack_foundation_margin">free</div>
         </div>
       </div>
-      <p class="legend">
+      <p class="legend" data-i18n-html="page.partners.stack_legend">
         <b>Foundation</b> = open source. <b>Floors above</b> = commercial. <b>Roof</b> = recurring success.
       </p>
     </div>
@@ -2953,8 +2720,8 @@
 <section class="section" id="earns" style="background: var(--bg-2);">
   <div class="wrap">
     <div class="section-head">
-      <h2 class="h2">Where the margin <em>comes from.</em></h2>
-      <p class="section-lede">
+      <h2 class="h2" data-i18n-html="page.partners.earns_h2">Where the margin <em>comes from.</em></h2>
+      <p class="section-lede" data-i18n="page.partners.earns_lede">
         One typical small/mid deal, broken down line by line. The open core
         stays free. Partners earn on the commercial layers and on services.
       </p>
@@ -2965,78 +2732,78 @@
       <div class="earns-deal">
         <div class="earns-deal-head">
           <div>
-            <div class="earns-deal-title">Year-1 deal — small/mid construction firm, ~15 seats</div>
-            <div style="font-size: 12.5px; color: var(--ink-3); margin-top: 4px;">Small GC, specialist sub or QS studio · 3–5 estimators · 2–3 PMs · owner read-only</div>
+            <div class="earns-deal-title" data-i18n="page.partners.earns_deal_title">Year-1 deal - small/mid construction firm, ~15 seats</div>
+            <div style="font-size: 12.5px; color: var(--ink-3); margin-top: 4px;" data-i18n="page.partners.earns_deal_who">Small GC, specialist sub or QS studio · 3–5 estimators · 2–3 PMs · owner read-only</div>
           </div>
-          <div class="earns-deal-total">€22,000<span style="font-size:12px;color:var(--ink-3);font-weight:400;display:block;text-align:right;">total deal value</span></div>
+          <div class="earns-deal-total">€22,000<span style="font-size:12px;color:var(--ink-3);font-weight:400;display:block;text-align:right;" data-i18n="page.partners.earns_deal_total_label">total deal value</span></div>
         </div>
 
         <div class="earns-row">
-          <div class="earns-label">Open Core (AGPL)<small>BOQ · BIM · 4D · AI takeoff</small></div>
-          <div class="earns-rate">€0 × free</div>
+          <div class="earns-label" data-i18n-html="page.partners.earns_row1_label">Open Core (AGPL)<small>BOQ · BIM · 4D · AI takeoff</small></div>
+          <div class="earns-rate" data-i18n="page.partners.earns_row1_rate">€0 × free</div>
           <div class="earns-bar-cell"><div class="earns-bar" style="width: 0%; background: var(--ink-5);"></div></div>
           <div class="earns-amount" style="color: var(--ink-3);">€0</div>
         </div>
 
         <div class="earns-row">
-          <div class="earns-label">Localisation pack<small>Tax · cost classes · regulator output</small></div>
-          <div class="earns-rate">€3.5k × 55%</div>
+          <div class="earns-label" data-i18n-html="page.partners.earns_row2_label">Localisation pack<small>Tax · cost classes · regulator output</small></div>
+          <div class="earns-rate" data-i18n="page.partners.earns_row2_rate">€3.5k × 55%</div>
           <div class="earns-bar-cell"><div class="earns-bar" style="width: 55%;"></div></div>
           <div class="earns-amount">€1,925</div>
         </div>
 
         <div class="earns-row">
-          <div class="earns-label">Commercial SKUs<small>Commercial licence · CWICR DB · connectors</small></div>
-          <div class="earns-rate">€5.5k × 45%</div>
+          <div class="earns-label" data-i18n-html="page.partners.earns_row3_label">Commercial SKUs<small>Commercial licence · CWICR DB · connectors</small></div>
+          <div class="earns-rate" data-i18n="page.partners.earns_row3_rate">€5.5k × 45%</div>
           <div class="earns-bar-cell"><div class="earns-bar" style="width: 45%;"></div></div>
           <div class="earns-amount">€2,475</div>
         </div>
 
         <div class="earns-row">
-          <div class="earns-label">Implementation<small>Template onboarding · data migration · training</small></div>
-          <div class="earns-rate">€10k × 100%</div>
+          <div class="earns-label" data-i18n-html="page.partners.earns_row4_label">Implementation<small>Template onboarding · data migration · training</small></div>
+          <div class="earns-rate" data-i18n="page.partners.earns_row4_rate">€10k × 100%</div>
           <div class="earns-bar-cell"><div class="earns-bar" style="width: 100%; background: linear-gradient(90deg, var(--accent-3), var(--accent));"></div></div>
           <div class="earns-amount">€10,000</div>
         </div>
 
         <div class="earns-row">
-          <div class="earns-label">Year-2 SLA + optimisation<small>Recurring, starts month 13</small></div>
-          <div class="earns-rate">€3k × 25%</div>
+          <div class="earns-label" data-i18n-html="page.partners.earns_row5_label">Year-2 SLA + optimisation<small>Recurring, starts month 13</small></div>
+          <div class="earns-rate" data-i18n="page.partners.earns_row5_rate">€3k × 25%</div>
           <div class="earns-bar-cell"><div class="earns-bar" style="width: 25%;"></div></div>
           <div class="earns-amount">€750</div>
         </div>
 
         <div class="earns-deal-foot">
-          <span>Partner take · Year-1 + first recurring slice</span>
+          <span data-i18n="page.partners.earns_deal_foot">Partner take · Year-1 + first recurring slice</span>
           <strong>€15,150</strong>
         </div>
       </div>
 
       <!-- Right: explanation -->
       <div class="earns-explain">
-        <h3>Services are <em>100% yours.</em></h3>
-        <p>
+        <h3 data-i18n-html="page.partners.earns_explain_h3">Services are <em>100% yours.</em></h3>
+        <p data-i18n="page.partners.earns_explain_p1">
           DDC writes the open core and doesn't quote implementation work. Every
           euro the client pays for partner hours, training or custom modules
           stays with the partner. No clawback, no marketplace fee.
         </p>
-        <p>
+        <p data-i18n="page.partners.earns_explain_p2">
           On commercial lines, the split is published. Localisation and cad2data
           carry the highest partner share because that's where local work
           actually happens.
         </p>
 
         <div class="earns-pill-row">
-          <span class="earns-pill"><b>100%</b> implementation</span>
-          <span class="earns-pill"><b>55–65%</b> localisation</span>
-          <span class="earns-pill"><b>45–55%</b> commercial</span>
-          <span class="earns-pill"><b>15–30%</b> recurring</span>
+          <span class="earns-pill" data-i18n-html="page.partners.earns_pill_impl"><b>100%</b> implementation</span>
+          <span class="earns-pill" data-i18n-html="page.partners.earns_pill_loc_v2"><b>55%</b> localisation</span>
+          <span class="earns-pill" data-i18n-html="page.partners.earns_pill_comm_v2"><b>45%</b> commercial</span>
+          <span class="earns-pill" data-i18n-html="page.partners.earns_pill_rec_v2"><b>25%</b> recurring</span>
         </div>
 
-        <div class="earns-recurring">
+        <div class="earns-recurring" data-i18n-html="page.partners.earns_recurring_v2">
           <b>Year-2 onwards:</b> the same client pays an SLA / optimisation retainer.
-          A Founding partner keeps <b>30%</b> of that for as long as the client
-          stays live (Active partners keep 25%). SMB volume compounds — ten live
+          You keep <b>25%</b> of that for as long as the client
+          stays live. SMB volume compounds, ten live
           clients ≈ €9k/year before any new work.
         </div>
       </div>
@@ -3050,48 +2817,48 @@
 <section class="section" id="audience">
   <div class="wrap">
     <div class="section-head">
-      <h2 class="h2">Which one are you?</h2>
-      <p class="section-lede">Three reader profiles. Pick the one that matches.</p>
+      <h2 class="h2" data-i18n="page.partners.audience_h2">Which one are you?</h2>
+      <p class="section-lede" data-i18n="page.partners.audience_lede">Three reader profiles. Pick the one that matches.</p>
     </div>
     <div class="audience-grid">
       <div class="audience-card">
         <div class="audience-icon" aria-hidden="true">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M16 11a4 4 0 1 0-8 0 4 4 0 0 0 8 0Z"/><path d="M3 21v-1a6 6 0 0 1 6-6h6a6 6 0 0 1 6 6v1"/><path d="m17 6 2 2 4-4"/></svg>
         </div>
-        <div class="audience-title">You're a partner</div>
-        <div class="audience-who">BIM consultancy · ERP integrator · freelance dev · local SI</div>
-        <p class="audience-body">
+        <div class="audience-title" data-i18n="page.partners.audience_partner_title">You're a partner</div>
+        <div class="audience-who" data-i18n="page.partners.audience_partner_who">BIM consultancy · ERP integrator · freelance dev · local SI</div>
+        <p class="audience-body" data-i18n="page.partners.audience_partner_body_v2">
           You sell implementation, training, custom modules. We share margins
-          (25–65%) on everything commercial and never compete on services.
-          €0 partnership fee at any tier.
+          (25–55%) on everything commercial and never compete on services.
+          €0 partnership fee.
         </p>
-        <a class="audience-cta" href="#apply">Apply as a partner →</a>
+        <a class="audience-cta" href="#apply" data-i18n="page.partners.audience_partner_cta">Apply as a partner →</a>
       </div>
       <div class="audience-card">
         <div class="audience-icon" aria-hidden="true">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18"/><path d="M5 21V7l7-4 7 4v14"/><path d="M9 9h2"/><path d="M9 13h2"/><path d="M13 9h2"/><path d="M13 13h2"/><path d="M9 17h6v4"/></svg>
         </div>
-        <div class="audience-title">You're a client</div>
-        <div class="audience-who">GC · subcontractor · developer · owner</div>
-        <p class="audience-body">
-          You can run OpenConstructionERP for free — or hire a vetted partner for
+        <div class="audience-title" data-i18n="page.partners.audience_client_title">You're a client</div>
+        <div class="audience-who" data-i18n="page.partners.audience_client_who">GC · subcontractor · developer · owner</div>
+        <p class="audience-body" data-i18n="page.partners.audience_client_body">
+          You can run OpenConstructionERP for free - or hire a vetted partner for
           production go-live, localisation and SLA. Three legitimate paths,
           your choice depends on team capacity and risk appetite.
         </p>
-        <a class="audience-cta" href="#tiers">Compare your options →</a>
+        <a class="audience-cta" href="#tiers" data-i18n="page.partners.audience_client_cta_v2">See the partner deal →</a>
       </div>
       <div class="audience-card">
         <div class="audience-icon" aria-hidden="true">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76Z"/></svg>
         </div>
-        <div class="audience-title">You're a specialist</div>
-        <div class="audience-who">Plugin author · Revit dev · IFC expert · trainer</div>
-        <p class="audience-body">
+        <div class="audience-title" data-i18n="page.partners.audience_specialist_title">You're a specialist</div>
+        <div class="audience-who" data-i18n="page.partners.audience_specialist_who">Plugin author · Revit dev · IFC expert · trainer</div>
+        <p class="audience-body" data-i18n="page.partners.audience_specialist_body_v2">
           You build a connector, training pack or custom module and earn
-          45–65% on every commercial deal it touches. Listed in the marketplace
+          45–55% on every commercial deal it touches. Listed in the marketplace
           once your first artefact ships.
         </p>
-        <a class="audience-cta" href="#apply">Apply as a specialist →</a>
+        <a class="audience-cta" href="#apply" data-i18n="page.partners.audience_specialist_cta">Apply as a specialist →</a>
       </div>
     </div>
   </div>
@@ -3103,12 +2870,12 @@
 <section class="section" id="compare-programs" style="background: var(--bg-2);">
   <div class="wrap">
     <div class="section-head">
-      <h2 class="h2">Our partner program at a glance.</h2>
-      <p class="section-lede">
+      <h2 class="h2" data-i18n="page.partners.cmp_h2">Our partner program at a glance.</h2>
+      <p class="section-lede" data-i18n-html="page.partners.cmp_lede_v2">
         Standalone summary of what OpenConstructionERP's program offers.
         We deliberately do not publish side-by-side numeric comparisons
         with named vendor programs &mdash; their terms change, vary by
-        region and tier, and are best confirmed against each vendor's
+        region, and are best confirmed against each vendor's
         own public materials. Below is what we commit to in writing.
       </p>
     </div>
@@ -3117,56 +2884,56 @@
       <table class="cmp-table">
         <thead>
           <tr>
-            <th>What partners get</th>
-            <th class="us">OpenConstructionERP partner program</th>
+            <th data-i18n="page.partners.cmp_th_what">What partners get</th>
+            <th class="us" data-i18n="page.partners.cmp_th_us">OpenConstructionERP partner program</th>
           </tr>
         </thead>
         <tbody>
           <tr>
-            <td>Annual partnership fee<small>at every tier</small></td>
-            <td class="us-cell"><b style="color:var(--accent);">&euro;0</b><small style="color:var(--ink-3);font-weight:400;">no certification fee, no annual minimum, no top-tier upcharge</small></td>
+            <td data-i18n-html="page.partners.cmp_r1_label_v2">Annual partnership fee<small>same for everyone</small></td>
+            <td class="us-cell" data-i18n-html="page.partners.cmp_r1_value_v2"><b style="color:var(--accent);">&euro;0</b><small style="color:var(--ink-3);font-weight:400;">no certification fee, no annual minimum, no upcharge</small></td>
           </tr>
           <tr>
-            <td>Margin on commercial licences and SaaS<small>partner share at top tier</small></td>
-            <td class="us-cell">45&ndash;55%<small style="color:var(--ink-3);font-weight:400;">documented in the partner agreement; tier-based</small></td>
+            <td data-i18n-html="page.partners.cmp_r2_label_v2">Margin on commercial licences and SaaS<small>partner share</small></td>
+            <td class="us-cell" data-i18n-html="page.partners.cmp_r2_value_v2">45%<small style="color:var(--ink-3);font-weight:400;">documented in the partner agreement</small></td>
           </tr>
           <tr>
-            <td>Margin on regional packs<small>localisation, vertical add-ons</small></td>
-            <td class="us-cell">55&ndash;65%<small style="color:var(--ink-3);font-weight:400;">higher share for partner-authored regional content</small></td>
+            <td data-i18n-html="page.partners.cmp_r3_label">Margin on regional packs<small>localisation, vertical add-ons</small></td>
+            <td class="us-cell" data-i18n-html="page.partners.cmp_r3_value_v2">55%<small style="color:var(--ink-3);font-weight:400;">higher share for partner-authored regional content</small></td>
           </tr>
           <tr>
-            <td>Implementation revenue<small>partner-kept</small></td>
-            <td class="us-cell">100%<small style="color:var(--ink-3);font-weight:400;">we don't bill end customers for services partners deliver</small></td>
+            <td data-i18n-html="page.partners.cmp_r4_label">Implementation revenue<small>partner-kept</small></td>
+            <td class="us-cell" data-i18n-html="page.partners.cmp_r4_value">100%<small style="color:var(--ink-3);font-weight:400;">we don't bill end customers for services partners deliver</small></td>
           </tr>
           <tr>
-            <td>Vendor competes on services?<small>directly with you</small></td>
-            <td class="us-cell"><span class="cmp-no">No</span><small style="color:var(--ink-3);font-weight:400;">written non-compete in the partner agreement</small></td>
+            <td data-i18n-html="page.partners.cmp_r5_label">Vendor competes on services?<small>directly with you</small></td>
+            <td class="us-cell" data-i18n-html="page.partners.cmp_r5_value"><span class="cmp-no">No</span><small style="color:var(--ink-3);font-weight:400;">written non-compete in the partner agreement</small></td>
           </tr>
           <tr>
-            <td>Headcount minimum<small>certified engineers required</small></td>
-            <td class="us-cell"><span style="color:#16a34a;font-weight:700;">0</span><small style="color:var(--ink-3);font-weight:400;">solo consultants and small studios welcome</small></td>
+            <td data-i18n-html="page.partners.cmp_r6_label">Headcount minimum<small>certified engineers required</small></td>
+            <td class="us-cell" data-i18n-html="page.partners.cmp_r6_value"><span style="color:#16a34a;font-weight:700;">0</span><small style="color:var(--ink-3);font-weight:400;">solo consultants and small studios welcome</small></td>
           </tr>
           <tr>
-            <td>Open-source product<small>partner can fork &amp; extend</small></td>
-            <td class="us-cell"><span class="cmp-yes">Full AGPL-3.0</span><small style="color:var(--ink-3);font-weight:400;">source available, no closed-source lock-in</small></td>
+            <td data-i18n-html="page.partners.cmp_r7_label">Open-source product<small>partner can fork &amp; extend</small></td>
+            <td class="us-cell" data-i18n-html="page.partners.cmp_r7_value"><span class="cmp-yes">Full AGPL-3.0</span><small style="color:var(--ink-3);font-weight:400;">source available, no closed-source lock-in</small></td>
           </tr>
           <tr>
-            <td>Construction-native product<small>BOQ · BIM · 4D · AI takeoff</small></td>
-            <td class="us-cell"><span class="cmp-yes">Yes</span><small style="color:var(--ink-3);font-weight:400;">built bottom-up for construction estimation &mdash; not a generic ERP module</small></td>
+            <td data-i18n-html="page.partners.cmp_r8_label">Construction-native product<small>BOQ · BIM · 4D · AI takeoff</small></td>
+            <td class="us-cell" data-i18n-html="page.partners.cmp_r8_value"><span class="cmp-yes">Yes</span><small style="color:var(--ink-3);font-weight:400;">built bottom-up for construction estimation &mdash; not a generic ERP module</small></td>
           </tr>
           <tr>
-            <td>Recurring renewal margin<small>passive Year-2+ stream</small></td>
-            <td class="us-cell">15&ndash;30%<small style="color:var(--ink-3);font-weight:400;">paid annually on every renewing customer you brought in</small></td>
+            <td data-i18n-html="page.partners.cmp_r9_label">Recurring renewal margin<small>passive Year-2+ stream</small></td>
+            <td class="us-cell" data-i18n-html="page.partners.cmp_r9_value_v2">25%<small style="color:var(--ink-3);font-weight:400;">paid annually on every renewing customer you brought in</small></td>
           </tr>
         </tbody>
       </table>
     </div>
 
-    <p class="calc-disclaimer">
+    <p class="calc-disclaimer" data-i18n-html="page.partners.cmp_disclaimer_v2">
       Figures reflect OpenConstructionERP's own partner agreement as
       published 2026-05-20. We deliberately avoid publishing side-by-side
-      numeric comparisons with named vendor programs &mdash; their tier
-      structures, regional minima and qualifying criteria change often
+      numeric comparisons with named vendor programs &mdash; their terms,
+      regional minima and qualifying criteria change often
       and are best confirmed against each vendor's own public materials.
     </p>
   </div>
@@ -3178,119 +2945,48 @@
 <section class="section" id="tiers">
   <div class="wrap">
     <div class="section-head">
-      <h2 class="h2">Two tiers. That's it.</h2>
-      <p class="section-lede">
-        No 4-step ladder, no certification gates. Either you're Active
-        (everyone, from day one) or you're Founding (first 3 partners).
+      <h2 class="h2" data-i18n="page.partners.deal_h2">One partner deal. Same for everyone.</h2>
+      <p class="section-lede" data-i18n="page.partners.deal_lede">
+        No tiers, no ladder, no certification gates. The same rate card from
+        day one, whoever you are.
       </p>
     </div>
     <div class="tiers">
-      <div class="tier-grid" role="table" aria-label="Partner tier card">
-        <div class="row-label">Margin band</div>
-        <div class="col-head" data-tier="a"><span class="badge"></span>Active</div>
-        <div class="col-head" data-tier="f"><span class="badge"></span>Founding</div>
-
-        <div class="row-label">Commercial licences · CWICR · connectors</div>
+      <div class="tier-grid" role="table" aria-label="Partner deal rate card" data-i18n-aria-label="page.partners.deal_table_aria">
+        <div class="row-label" data-i18n="page.partners.deal_row_commercial">Commercial licences · CWICR · connectors</div>
         <div class="num lg">45%</div>
+
+        <div class="row-label" data-i18n="page.partners.deal_row_localisation">Localisation packs · cad2data converters</div>
         <div class="num lg">55%</div>
 
-        <div class="row-label">Localisation packs · cad2data converters</div>
-        <div class="num lg">55%</div>
-        <div class="num lg">65%</div>
+        <div class="row-label" data-i18n="page.partners.deal_row_recurring">Recurring on renewals</div>
+        <div class="num lg">25%</div>
 
-        <div class="row-label">Recurring on renewals</div>
-        <div class="num">25%</div>
-        <div class="num lg">30%</div>
+        <div class="row-label" data-i18n="page.partners.deal_row_implementation">Implementation services</div>
+        <div class="num lg">100%</div>
 
-        <div class="row-label">Implementation services</div>
-        <div class="num">100%</div>
-        <div class="num">100%</div>
-
-        <div class="row-label">How you qualify</div>
-        <div class="num">Apply</div>
-        <div class="num">First 3 to sign</div>
-
-        <div class="row-label" style="font-weight: 700; color: var(--ink-0);">Annual fee</div>
+        <div class="row-label" style="font-weight: 700; color: var(--ink-0);" data-i18n="page.partners.deal_row_fee">Annual fee</div>
         <div class="num lg">€0</div>
-        <div class="num lg">€0</div>
+
+        <div class="row-label" data-i18n="page.partners.deal_row_qualify">How you qualify</div>
+        <div class="num" data-i18n="page.partners.deal_qualify_apply">Apply</div>
       </div>
     </div>
-    <div class="tier-fee-banner">
+    <div class="tier-fee-banner" data-i18n-html="page.partners.deal_fee_banner">
       <em>€0 annual fee.</em> No headcount minimums, no certification gates, no quotas.
-      Just close deals when you have them — keep the margin when you do.
+      Just close deals when you have them, keep the margin when you do.
     </div>
   </div>
 </section>
 
 <!-- ============================================================ -->
-<!-- 8. FOUNDING PARTNER                                           -->
-<!-- ============================================================ -->
-<section class="section" id="founding">
-  <div class="wrap">
-    <div class="founding">
-      <div class="founding-grid">
-        <div>
-          <h3>Founding Partner — <em>3 spots,</em> no fee, enhanced rates from day one.</h3>
-          <p>
-            Founding Partners get the Founding-tier rate card from signing,
-            keep that rate for 12 months, and co-shape the roadmap. After
-            month 12, you stay on Founding rates as long as you have at least
-            one live client.
-          </p>
-          <p>
-            <strong>What you get:</strong> <strong>65% margin on localisation packs and cad2data converters</strong>,
-            <strong>55% on OpenConstructionERP commercial licences and CWICR</strong>, 30% recurring on
-            renewals, 100% on services, <strong>€0 fees ever</strong>, direct Telegram
-            with the core team, your logo on the homepage, co-authored case study
-            after first go-live — distributed through DDC's social channels
-            (tens of thousands of AEC professionals across LinkedIn, X and
-            YouTube).
-          </p>
-          <p>
-            <strong>What we ask:</strong> one pilot deal in 90 days and a public commitment
-            to AGPL stewardship. <em>No headcount minimums. No certification gates.</em>
-            Build the team you need when you need it.
-          </p>
-        </div>
-        <div>
-          <div class="founding-counter-card">
-            <div class="founding-counter-head">
-              <div class="founding-counter-eyebrow">Founding cohort</div>
-              <div class="founding-counter-big"><b>3</b> / 3</div>
-            </div>
-            <p class="founding-counter-sub">
-              Three Founding Partner spots open. Each slot is one regional
-              integrator who joins on the Founding rate card from day one —
-              no fees, direct line to the core team. <b>0 claimed so far.</b>
-            </p>
-            <div class="founding-counter" aria-label="Founding Partner spots — 0 of 3 claimed">
-              <div class="slot" title="Spot 1 — open">1</div>
-              <div class="slot" title="Spot 2 — open">2</div>
-              <div class="slot" title="Spot 3 — open">3</div>
-            </div>
-          </div>
-          <a class="btn btn-primary" href="#apply" style="margin-top: 6px;">
-            Apply for a Founding Partner spot
-            <svg class="arr" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
-          </a>
-          <p class="micro">
-            Onboarding takes 1–2 weeks. Founding cohort closes once 3 partners
-            sign or on 31 December 2026 — whichever comes first.
-          </p>
-        </div>
-      </div>
-    </div>
-  </div>
-</section>
-
-<!-- ============================================================ -->
-<!-- 8.6 PARTNER TOOLKIT — what we ship + how leads flow + anti-promises -->
+<!-- 8.6 PARTNER TOOLKIT - what we ship + how leads flow + anti-promises -->
 <!-- ============================================================ -->
 <section class="section" id="toolkit" style="background: var(--bg-2);">
   <div class="wrap">
     <div class="section-head">
-      <h2 class="h2">What you actually get on day one.</h2>
-      <p class="section-lede">
+      <h2 class="h2" data-i18n="page.partners.toolkit_h2">What you actually get on day one.</h2>
+      <p class="section-lede" data-i18n="page.partners.toolkit_lede">
         Three concrete things: a 30-day timeline, a ready-made toolkit, and
         an honest map of where leads come from. No big promises, just the
         kit and the wiring.
@@ -3301,16 +2997,16 @@
 
       <!-- Column 1: First 30 days -->
       <article class="toolkit-card">
-        <div class="toolkit-eyebrow">First 30 days</div>
-        <h3 class="toolkit-name">Mostly async, light on calls.</h3>
+        <div class="toolkit-eyebrow" data-i18n="page.partners.toolkit_c1_eyebrow">First 30 days</div>
+        <h3 class="toolkit-name" data-i18n="page.partners.toolkit_c1_name">Mostly async, light on calls.</h3>
         <ul class="toolkit-list">
-          <li><b>Day 1–3</b> · Sign agreement (PDF, ~6 pages), Telegram invite, demo tenant credentials</li>
-          <li><b>Day 4–7</b> · Marketing kit handover (Loom walk-through, ~20 min, watch when it suits you)</li>
-          <li><b>Day 8–14</b> · Pick your first SMB target, async Q&amp;A in Telegram, pricing review</li>
-          <li><b>Day 15–30</b> · Pilot proposal sent, listed in partner directory, eligible for inbound lead share</li>
+          <li data-i18n-html="page.partners.toolkit_c1_li1"><b>Day 1–3</b> · Sign agreement (PDF, ~6 pages), Telegram invite, demo tenant credentials</li>
+          <li data-i18n-html="page.partners.toolkit_c1_li2"><b>Day 4–7</b> · Marketing kit handover (Loom walk-through, ~20 min, watch when it suits you)</li>
+          <li data-i18n-html="page.partners.toolkit_c1_li3"><b>Day 8–14</b> · Pick your first SMB target, async Q&amp;A in Telegram, pricing review</li>
+          <li data-i18n-html="page.partners.toolkit_c1_li4"><b>Day 15–30</b> · Pilot proposal sent, listed in partner directory, eligible for inbound lead share</li>
         </ul>
-        <p class="toolkit-tldr">
-          One 30-min call max in the first month — everything else is Loom,
+        <p class="toolkit-tldr" data-i18n="page.partners.toolkit_c1_tldr">
+          One 30-min call max in the first month - everything else is Loom,
           shared docs and Telegram. Built so a busy SMB consultant can onboard
           in evenings.
         </p>
@@ -3318,34 +3014,34 @@
 
       <!-- Column 2: Marketing kit -->
       <article class="toolkit-card">
-        <div class="toolkit-eyebrow">Marketing kit</div>
-        <h3 class="toolkit-name">Concrete assets, not vague support.</h3>
+        <div class="toolkit-eyebrow" data-i18n="page.partners.toolkit_c2_eyebrow">Marketing kit</div>
+        <h3 class="toolkit-name" data-i18n="page.partners.toolkit_c2_name">Concrete assets, not vague support.</h3>
         <ul class="toolkit-list">
-          <li>Branded demo tenant on <code>demo.openconstructionerp.com/{your-name}</code></li>
-          <li>White-label sales deck (PDF + Keynote source) — your logo, your colours</li>
-          <li>Pricing one-pager per region (DACH, UK, US, FR, ES, IT, NL, RO, PL)</li>
-          <li>3 ready-made BOQ templates per region (residential, small commercial, fit-out)</li>
-          <li>Email sequences for cold + warm outreach (3 variants, plain text)</li>
-          <li>LinkedIn &amp; X co-marketing post templates with our hashtag set</li>
+          <li data-i18n-html="page.partners.toolkit_c2_li1">Branded demo tenant on <code>demo.openconstructionerp.com/{your-name}</code></li>
+          <li data-i18n="page.partners.toolkit_c2_li2">White-label sales deck (PDF + Keynote source) - your logo, your colours</li>
+          <li data-i18n="page.partners.toolkit_c2_li3">Pricing one-pager per region (DACH, UK, US, FR, ES, IT, NL, RO, PL)</li>
+          <li data-i18n="page.partners.toolkit_c2_li4">3 ready-made BOQ templates per region (residential, small commercial, fit-out)</li>
+          <li data-i18n="page.partners.toolkit_c2_li5">Email sequences for cold + warm outreach (3 variants, plain text)</li>
+          <li data-i18n-html="page.partners.toolkit_c2_li6">LinkedIn &amp; X co-marketing post templates with our hashtag set</li>
         </ul>
-        <p class="toolkit-tldr">
-          Updated quarterly. Partners get a private GitHub release feed —
+        <p class="toolkit-tldr" data-i18n="page.partners.toolkit_c2_tldr">
+          Updated quarterly. Partners get a private GitHub release feed -
           new templates, decks and pricing land there as soon as they ship.
         </p>
       </article>
 
       <!-- Column 3: Where leads come from -->
       <article class="toolkit-card">
-        <div class="toolkit-eyebrow">Where leads come from</div>
-        <h3 class="toolkit-name">Honest map of the funnel.</h3>
+        <div class="toolkit-eyebrow" data-i18n="page.partners.toolkit_c3_eyebrow">Where leads come from</div>
+        <h3 class="toolkit-name" data-i18n="page.partners.toolkit_c3_name">Honest map of the funnel.</h3>
         <ul class="toolkit-list">
-          <li><b>~60–70%</b> · Your existing client base — partners who already serve SMB GCs / subs / QS practices have the warmest path</li>
-          <li><b>~15–25%</b> · DDC inbound — directory listing routes enquiries to the closest partner</li>
-          <li><b>~10–15%</b> · Social co-promotion — DDC amplifies your case studies, posts and webinars across LinkedIn, X and YouTube (tens of thousands of AEC followers)</li>
-          <li><b>Bonus</b> · Joint webinars and conference co-hosting once you have one live client</li>
+          <li data-i18n-html="page.partners.toolkit_c3_li1"><b>~60–70%</b> · Your existing client base - partners who already serve SMB GCs / subs / QS practices have the warmest path</li>
+          <li data-i18n-html="page.partners.toolkit_c3_li2"><b>~15–25%</b> · DDC inbound - directory listing routes enquiries to the closest partner</li>
+          <li data-i18n-html="page.partners.toolkit_c3_li3"><b>~10–15%</b> · Social co-promotion - DDC amplifies your case studies, posts and webinars across LinkedIn, X and YouTube (tens of thousands of AEC followers)</li>
+          <li data-i18n-html="page.partners.toolkit_c3_li4"><b>Bonus</b> · Joint webinars and conference co-hosting once you have one live client</li>
         </ul>
-        <p class="toolkit-tldr">
-          We can't replace your sales motion in Year 1 — but we can amplify it.
+        <p class="toolkit-tldr" data-i18n="page.partners.toolkit_c3_tldr">
+          We can't replace your sales motion in Year 1 - but we can amplify it.
           Most first deals come from the partner's own network; DDC compounds
           from there.
         </p>
@@ -3355,33 +3051,33 @@
     <!-- What we won't do -->
     <div class="toolkit-wont">
       <div class="toolkit-wont-head">
-        <h3>What we <em>won't</em> do.</h3>
-        <p>Anti-promises are honest promises. Here's what stays off the table:</p>
+        <h3 data-i18n-html="page.partners.toolkit_wont_h3">What we <em>won't</em> do.</h3>
+        <p data-i18n="page.partners.toolkit_wont_sub">Anti-promises are honest promises. Here's what stays off the table:</p>
       </div>
       <div class="toolkit-wont-grid">
         <div class="toolkit-wont-item">
           <span class="toolkit-wont-x">×</span>
-          <div><b>We won't run your sales for you.</b> Year-1 leads come mostly from your own network. We help, but we don't replace.</div>
+          <div data-i18n-html="page.partners.toolkit_wont_item1"><b>We won't run your sales for you.</b> Year-1 leads come mostly from your own network. We help, but we don't replace.</div>
         </div>
         <div class="toolkit-wont-item">
           <span class="toolkit-wont-x">×</span>
-          <div><b>We won't gate the marketplace.</b> No certification fees, no listing fees, no pay-to-play tiers. List as soon as you sign.</div>
+          <div data-i18n-html="page.partners.toolkit_wont_item2"><b>We won't gate the marketplace.</b> No certification fees, no listing fees, no pay-to-play tiers. List as soon as you sign.</div>
         </div>
         <div class="toolkit-wont-item">
           <span class="toolkit-wont-x">×</span>
-          <div><b>We won't invoice your clients without your sign-off.</b> Resold or referred — you decide per deal, not us.</div>
+          <div data-i18n-html="page.partners.toolkit_wont_item3"><b>We won't invoice your clients without your sign-off.</b> Resold or referred - you decide per deal, not us.</div>
         </div>
         <div class="toolkit-wont-item">
           <span class="toolkit-wont-x">×</span>
-          <div><b>We won't change rate cards mid-deal.</b> New rates only apply 90 days after notice, and never to deals already in flight.</div>
+          <div data-i18n-html="page.partners.toolkit_wont_item4"><b>We won't change rate cards mid-deal.</b> New rates only apply 90 days after notice, and never to deals already in flight.</div>
         </div>
         <div class="toolkit-wont-item">
           <span class="toolkit-wont-x">×</span>
-          <div><b>We won't quote services against you.</b> DDC has a written commitment to never compete on implementation, training or custom modules.</div>
+          <div data-i18n-html="page.partners.toolkit_wont_item5"><b>We won't quote services against you.</b> DDC has a written commitment to never compete on implementation, training or custom modules.</div>
         </div>
         <div class="toolkit-wont-item">
           <span class="toolkit-wont-x">×</span>
-          <div><b>We won't hide the pipeline.</b> If we route an inbound lead to another partner in your region, you'll see it in the partner Telegram — no surprises.</div>
+          <div data-i18n-html="page.partners.toolkit_wont_item6"><b>We won't hide the pipeline.</b> If we route an inbound lead to another partner in your region, you'll see it in the partner Telegram - no surprises.</div>
         </div>
       </div>
     </div>
@@ -3394,8 +3090,8 @@
 <section class="section" id="archetypes">
   <div class="wrap">
     <div class="section-head">
-      <h2 class="h2">Partner profiles.</h2>
-      <p class="section-lede">
+      <h2 class="h2" data-i18n="page.partners.arche_h2">Partner profiles.</h2>
+      <p class="section-lede" data-i18n="page.partners.arche_lede">
         Three shapes of partner, with rough Year-1 numbers. Pick the one
         closest to your team.
       </p>
@@ -3404,27 +3100,27 @@
     <div class="arche-grid">
       <!-- Archetype 1: Solo Specialist -->
       <article class="arche-card">
-        <span class="arche-tag">Solo specialist</span>
-        <h3 class="arche-name">Independent expert.</h3>
-        <div class="arche-who">Senior BIM consultant or QS · 1 person · works with small GCs and subs</div>
+        <span class="arche-tag" data-i18n="page.partners.arche1_tag">Solo specialist</span>
+        <h3 class="arche-name" data-i18n="page.partners.arche1_name">Independent expert.</h3>
+        <div class="arche-who" data-i18n="page.partners.arche1_who">Senior BIM consultant or QS · 1 person · works with small GCs and subs</div>
 
         <div class="arche-stats">
-          <div><div class="arche-stat-num">3–5</div><div class="arche-stat-label">deals / year</div></div>
-          <div><div class="arche-stat-num">€35–60k</div><div class="arche-stat-label">Year-1 take</div></div>
-          <div><div class="arche-stat-num">Active</div><div class="arche-stat-label">target tier</div></div>
-          <div><div class="arche-stat-num">€0</div><div class="arche-stat-label">fees, ever</div></div>
+          <div><div class="arche-stat-num">3–5</div><div class="arche-stat-label" data-i18n="page.partners.arche_stat_deals">deals / year</div></div>
+          <div><div class="arche-stat-num">€35–60k</div><div class="arche-stat-label" data-i18n="page.partners.arche_stat_take">Year-1 take</div></div>
+          <div><div class="arche-stat-num">+25%</div><div class="arche-stat-label" data-i18n="page.partners.arche_stat_recurring">recurring Year-2</div></div>
+          <div><div class="arche-stat-num">€0</div><div class="arche-stat-label" data-i18n="page.partners.arche_stat_fees">fees, ever</div></div>
         </div>
 
         <div class="arche-mix">
-          <div class="arche-mix-row"><span>Implementation services (100%)</span><span class="arche-mix-amt">€40k</span></div>
+          <div class="arche-mix-row"><span data-i18n="page.partners.arche1_mix1">Implementation services (100%)</span><span class="arche-mix-amt">€40k</span></div>
           <div class="arche-mix-bar"><span style="width:80%"></span></div>
-          <div class="arche-mix-row"><span>Localisation packs (45%)</span><span class="arche-mix-amt">€5k</span></div>
+          <div class="arche-mix-row"><span data-i18n="page.partners.arche1_mix2">Localisation packs (45%)</span><span class="arche-mix-amt">€5k</span></div>
           <div class="arche-mix-bar"><span style="width:18%"></span></div>
-          <div class="arche-mix-row"><span>Commercial / CWICR (35%)</span><span class="arche-mix-amt">€3k</span></div>
+          <div class="arche-mix-row"><span data-i18n="page.partners.arche1_mix3">Commercial / CWICR (35%)</span><span class="arche-mix-amt">€3k</span></div>
           <div class="arche-mix-bar"><span style="width:9%"></span></div>
         </div>
 
-        <p class="arche-tldr">
+        <p class="arche-tldr" data-i18n="page.partners.arche1_tldr">
           You sell your own time. Implementation pays the bills, licence margin
           is upside. No hires, no fixed costs, no quotas.
         </p>
@@ -3432,27 +3128,27 @@
 
       <!-- Archetype 2: BIM Consultancy / SI (FEATURED) -->
       <article class="arche-card featured">
-        <span class="arche-tag" style="background: color-mix(in oklab, var(--accent) 18%, transparent);">Most common</span>
-        <h3 class="arche-name">BIM consultancy.</h3>
-        <div class="arche-who">5–15 staff · half BIM, half dev · works with SMB clients regionally</div>
+        <span class="arche-tag" style="background: color-mix(in oklab, var(--accent) 18%, transparent);" data-i18n="page.partners.arche2_tag">Most common</span>
+        <h3 class="arche-name" data-i18n="page.partners.arche2_name">BIM consultancy.</h3>
+        <div class="arche-who" data-i18n="page.partners.arche2_who">5–15 staff · half BIM, half dev · works with SMB clients regionally</div>
 
         <div class="arche-stats">
-          <div><div class="arche-stat-num">8–12</div><div class="arche-stat-label">deals / year</div></div>
-          <div><div class="arche-stat-num">€130–200k</div><div class="arche-stat-label">Year-1 take</div></div>
-          <div><div class="arche-stat-num">Active / Founding</div><div class="arche-stat-label">target tier</div></div>
-          <div><div class="arche-stat-num">+30%</div><div class="arche-stat-label">recurring Year-2</div></div>
+          <div><div class="arche-stat-num">8–12</div><div class="arche-stat-label" data-i18n="page.partners.arche_stat_deals">deals / year</div></div>
+          <div><div class="arche-stat-num">€130–200k</div><div class="arche-stat-label" data-i18n="page.partners.arche_stat_take">Year-1 take</div></div>
+          <div><div class="arche-stat-num">€0</div><div class="arche-stat-label" data-i18n="page.partners.arche_stat_fees">fees, ever</div></div>
+          <div><div class="arche-stat-num">+25%</div><div class="arche-stat-label" data-i18n="page.partners.arche_stat_recurring">recurring Year-2</div></div>
         </div>
 
         <div class="arche-mix">
-          <div class="arche-mix-row"><span>Implementation services (100%)</span><span class="arche-mix-amt">€110k</span></div>
+          <div class="arche-mix-row"><span data-i18n="page.partners.arche2_mix1">Implementation services (100%)</span><span class="arche-mix-amt">€110k</span></div>
           <div class="arche-mix-bar"><span style="width:78%"></span></div>
-          <div class="arche-mix-row"><span>Localisation + cad2data (55–65%)</span><span class="arche-mix-amt">€26k</span></div>
+          <div class="arche-mix-row"><span data-i18n="page.partners.arche2_mix2_v2">Localisation + cad2data (55%)</span><span class="arche-mix-amt">€26k</span></div>
           <div class="arche-mix-bar"><span style="width:23%"></span></div>
-          <div class="arche-mix-row"><span>OCERP commercial + CWICR (45–55%)</span><span class="arche-mix-amt">€18k</span></div>
+          <div class="arche-mix-row"><span data-i18n="page.partners.arche2_mix3_v2">OCERP commercial + CWICR (45%)</span><span class="arche-mix-amt">€18k</span></div>
           <div class="arche-mix-bar"><span style="width:17%"></span></div>
         </div>
 
-        <p class="arche-tldr">
+        <p class="arche-tldr" data-i18n="page.partners.arche2_tldr">
           You own a country, run discovery and go-live, ship one localisation
           pack, keep 5+ SMB clients on SLA. Recurring margin starts month 13.
         </p>
@@ -3460,29 +3156,29 @@
 
       <!-- Archetype 3: ERP Integrator -->
       <article class="arche-card">
-        <span class="arche-tag">ERP integrator</span>
-        <h3 class="arche-name">Multi-product SI.</h3>
-        <div class="arche-who">15–30 staff · serves SMB at volume · adds OCERP to existing portfolio</div>
+        <span class="arche-tag" data-i18n="page.partners.arche3_tag">ERP integrator</span>
+        <h3 class="arche-name" data-i18n="page.partners.arche3_name">Multi-product SI.</h3>
+        <div class="arche-who" data-i18n="page.partners.arche3_who">15–30 staff · serves SMB at volume · adds OCERP to existing portfolio</div>
 
         <div class="arche-stats">
-          <div><div class="arche-stat-num">18–28</div><div class="arche-stat-label">deals / year</div></div>
-          <div><div class="arche-stat-num">€320–520k</div><div class="arche-stat-label">Year-1 take</div></div>
-          <div><div class="arche-stat-num">Founding</div><div class="arche-stat-label">target tier</div></div>
-          <div><div class="arche-stat-num">2–4</div><div class="arche-stat-label">countries served</div></div>
+          <div><div class="arche-stat-num">18–28</div><div class="arche-stat-label" data-i18n="page.partners.arche_stat_deals">deals / year</div></div>
+          <div><div class="arche-stat-num">€320–520k</div><div class="arche-stat-label" data-i18n="page.partners.arche_stat_take">Year-1 take</div></div>
+          <div><div class="arche-stat-num">€0</div><div class="arche-stat-label" data-i18n="page.partners.arche_stat_fees">fees, ever</div></div>
+          <div><div class="arche-stat-num">2–4</div><div class="arche-stat-label" data-i18n="page.partners.arche_stat_countries">countries served</div></div>
         </div>
 
         <div class="arche-mix">
-          <div class="arche-mix-row"><span>Implementation services (100%)</span><span class="arche-mix-amt">€260k</span></div>
+          <div class="arche-mix-row"><span data-i18n="page.partners.arche3_mix1">Implementation services (100%)</span><span class="arche-mix-amt">€260k</span></div>
           <div class="arche-mix-bar"><span style="width:75%"></span></div>
-          <div class="arche-mix-row"><span>Multi-country localisation (65%)</span><span class="arche-mix-amt">€60k</span></div>
+          <div class="arche-mix-row"><span data-i18n="page.partners.arche3_mix2_v2">Multi-country localisation (55%)</span><span class="arche-mix-amt">€60k</span></div>
           <div class="arche-mix-bar"><span style="width:22%"></span></div>
-          <div class="arche-mix-row"><span>Commercial + cad2data resale (55%)</span><span class="arche-mix-amt">€40k</span></div>
+          <div class="arche-mix-row"><span data-i18n="page.partners.arche3_mix3_v2">Commercial + cad2data resale (45%)</span><span class="arche-mix-amt">€40k</span></div>
           <div class="arche-mix-bar"><span style="width:17%"></span></div>
         </div>
 
-        <p class="arche-tldr">
+        <p class="arche-tldr" data-i18n="page.partners.arche3_tldr">
           You already sell Odoo, SAP or Oracle. OCERP slots in as the
-          construction-specific layer — same sales motion, same delivery team.
+          construction-specific layer - same sales motion, same delivery team.
           One agreement covers multiple countries.
         </p>
       </article>
@@ -3496,44 +3192,44 @@
 <section class="section">
   <div class="wrap">
     <div class="section-head">
-      <h2 class="h2">How to apply.</h2>
-      <p class="section-lede">
+      <h2 class="h2" data-i18n="page.partners.howapply_h2">How to apply.</h2>
+      <p class="section-lede" data-i18n="page.partners.howapply_lede">
         Four async steps, about two weeks end-to-end. Mostly your pace.
       </p>
     </div>
     <div class="apply-flow">
       <div class="apply-step">
-        <h4>Apply</h4>
-        <p>6-field form: name, company, country, website, current AEC clients, target tier.</p>
+        <h4 data-i18n="page.partners.howapply_s1_title">Apply</h4>
+        <p data-i18n="page.partners.howapply_s1_body_v2">5-field form: name, company, country, website, current AEC clients.</p>
       </div>
       <div class="apply-step">
-        <h4>Intro call</h4>
-        <p>30 minutes, async-friendly (we'll do video or just trade Looms). We walk through your portfolio and target deals.</p>
+        <h4 data-i18n="page.partners.howapply_s2_title">Intro call</h4>
+        <p data-i18n="page.partners.howapply_s2_body">30 minutes, async-friendly (we'll do video or just trade Looms). We walk through your portfolio and target deals.</p>
       </div>
       <div class="apply-step">
-        <h4>Sign &amp; onboard</h4>
-        <p>Partnership agreement (PDF, ~6 pages), Telegram invite, sales deck, demo environment, marketing kit handed over.</p>
+        <h4 data-i18n-html="page.partners.howapply_s3_title">Sign &amp; onboard</h4>
+        <p data-i18n="page.partners.howapply_s3_body">Partnership agreement (PDF, ~6 pages), Telegram invite, sales deck, demo environment, marketing kit handed over.</p>
       </div>
       <div class="apply-step">
-        <h4>First deal</h4>
-        <p>Listed on partner directory, co-promoted on our social channels, eligible for lead share from inbound enquiries.</p>
+        <h4 data-i18n="page.partners.howapply_s4_title">First deal</h4>
+        <p data-i18n="page.partners.howapply_s4_body">Listed on partner directory, co-promoted on our social channels, eligible for lead share from inbound enquiries.</p>
       </div>
     </div>
-    <div class="apply-meta">
-      Roughly 1–2 weeks end-to-end. Most steps are async — minimal calendar blocking on either side.
+    <div class="apply-meta" data-i18n="page.partners.howapply_meta">
+      Roughly 1–2 weeks end-to-end. Most steps are async - minimal calendar blocking on either side.
     </div>
   </div>
 </section>
 
 <!-- ============================================================ -->
-<!-- 9.5 RISK REVERSAL — common worries answered                    -->
+<!-- 9.5 RISK REVERSAL - common worries answered                    -->
 <!-- ============================================================ -->
 <section class="section" id="risk" style="background: var(--bg-2);">
   <div class="wrap">
     <div class="section-head">
-      <h2 class="h2">Common worries.</h2>
-      <p class="section-lede">
-        Plain answers to the questions worth asking before signing anything —
+      <h2 class="h2" data-i18n="page.partners.risk_h2">Common worries.</h2>
+      <p class="section-lede" data-i18n="page.partners.risk_lede">
+        Plain answers to the questions worth asking before signing anything -
         ours, theirs, anyone's.
       </p>
     </div>
@@ -3543,10 +3239,10 @@
         <span class="risk-icon" aria-hidden="true">
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
         </span>
-        <h3 class="risk-q">"What if you go out of business?"</h3>
-        <p class="risk-a">
+        <h3 class="risk-q" data-i18n="page.partners.risk_q1">"What if you go out of business?"</h3>
+        <p class="risk-a" data-i18n-html="page.partners.risk_a1">
           The product is <b>AGPL-3.0 open source</b>. BOQ, BIM viewer, schedule,
-          AI takeoff — everything sits on GitHub under a licence we can't revoke.
+          AI takeoff - everything sits on GitHub under a licence we can't revoke.
           If DDC disappears, your clients keep running, your contracts stay in
           force, and you can fork and maintain it yourself.
         </p>
@@ -3556,12 +3252,10 @@
         <span class="risk-icon" aria-hidden="true">
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
         </span>
-        <h3 class="risk-q">"What if I don't close any deals in Year 1?"</h3>
-        <p class="risk-a">
+        <h3 class="risk-q" data-i18n="page.partners.risk_q2">"What if I don't close any deals in Year 1?"</h3>
+        <p class="risk-a" data-i18n-html="page.partners.risk_a2_v2">
           You owe nothing. <b>€0 annual fee, no quotas, no minimums.</b>
-          You stay on the Active rate card indefinitely. Founding cohort
-          asks for one pilot in 90 days, but standard Active partnership
-          has no deal target.
+          You stay on the rate card indefinitely. There is no deal target.
         </p>
       </div>
 
@@ -3569,9 +3263,9 @@
         <span class="risk-icon" aria-hidden="true">
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h18"/><path d="m15 6 6 6-6 6"/></svg>
         </span>
-        <h3 class="risk-q">"Can I exit and take my clients with me?"</h3>
-        <p class="risk-a">
-          Yes. Client contracts are between you and the client — DDC has no
+        <h3 class="risk-q" data-i18n="page.partners.risk_q3">"Can I exit and take my clients with me?"</h3>
+        <p class="risk-a" data-i18n="page.partners.risk_a3">
+          Yes. Client contracts are between you and the client - DDC has no
           claim on them. Clients can keep running the AGPL build with nothing
           to renew. You'd just stop selling the commercial dual-licence and
           regional packs.
@@ -3582,11 +3276,10 @@
         <span class="risk-icon" aria-hidden="true">
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
         </span>
-        <h3 class="risk-q">"What if you change the terms later?"</h3>
-        <p class="risk-a">
-          Founding Partners keep signing-day rates for 12 months. All partners
-          get a rate guarantee on deals already in flight. New rates only
-          apply to deals booked after 90 days' notice.
+        <h3 class="risk-q" data-i18n="page.partners.risk_q4">"What if you change the terms later?"</h3>
+        <p class="risk-a" data-i18n="page.partners.risk_a4_v2">
+          All partners get a rate guarantee on deals already in flight. New
+          rates only apply to deals booked after 90 days' notice.
         </p>
       </div>
 
@@ -3594,11 +3287,11 @@
         <span class="risk-icon" aria-hidden="true">
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
         </span>
-        <h3 class="risk-q">"Show me the contract before I commit."</h3>
-        <p class="risk-a">
+        <h3 class="risk-q" data-i18n="page.partners.risk_q5">"Show me the contract before I commit."</h3>
+        <p class="risk-a" data-i18n="page.partners.risk_a5">
           The agreement is a 6-page PDF in plain English. We send it after
           the discovery call. No NDA required to read it. If anything looks
-          off, you walk away — half an hour spent, no obligation.
+          off, you walk away - half an hour spent, no obligation.
         </p>
       </div>
 
@@ -3606,11 +3299,11 @@
         <span class="risk-icon" aria-hidden="true">
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
         </span>
-        <h3 class="risk-q">"What if my first client hates the product?"</h3>
-        <p class="risk-a">
+        <h3 class="risk-q" data-i18n="page.partners.risk_q6">"What if my first client hates the product?"</h3>
+        <p class="risk-a" data-i18n="page.partners.risk_a6_v2">
           They run the AGPL build for free, so the downside is your hours
-          and their time — not a five-figure licence locked in upfront.
-          If a Founding pilot fails inside 90 days, we run a joint
+          and their time, not a five-figure licence locked in upfront.
+          If a pilot fails inside 90 days, we run a joint
           retrospective and help you unwind it.
         </p>
       </div>
@@ -3624,31 +3317,31 @@
 <section class="section" id="faq">
   <div class="wrap">
     <div class="section-head">
-      <h2 class="h2">Still have <em>questions?</em></h2>
-      <p class="section-lede">Ten of them, answered straight.</p>
+      <h2 class="h2" data-i18n-html="page.partners.faq_h2">Still have <em>questions?</em></h2>
+      <p class="section-lede" data-i18n="page.partners.faq_lede_v2">Nine of them, answered straight.</p>
     </div>
     <div class="faq-list">
       <details class="faq-item">
         <summary class="faq-q">
-          <span>It's AGPL-3.0 — can my client really use it commercially without paying anything?</span>
+          <span data-i18n="page.partners.faq_q1">It's AGPL-3.0 - can my client really use it commercially without paying anything?</span>
           <span class="faq-chev"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></span>
         </summary>
-        <div class="faq-a">
+        <div class="faq-a" data-i18n-html="page.partners.faq_a1">
           Yes. AGPL-3.0 permits commercial use, modification, and self-hosting. The
           obligation is to publish derivative source code if you modify and
           <strong>distribute</strong> or <strong>expose it as a network service to
           third parties</strong>. For most construction firms running internally, no
           obligation triggers. For SaaS resellers or OEMs, a commercial licence
-          removes the AGPL obligation entirely — that licence is one of the SKUs
+          removes the AGPL obligation entirely - that licence is one of the SKUs
           partners sell at 45–55% margin.
         </div>
       </details>
       <details class="faq-item">
         <summary class="faq-q">
-          <span>Why would a client pay a partner if the software is free?</span>
+          <span data-i18n="page.partners.faq_q2">Why would a client pay a partner if the software is free?</span>
           <span class="faq-chev"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></span>
         </summary>
-        <div class="faq-a">
+        <div class="faq-a" data-i18n-html="page.partners.faq_a2">
           For the same reason a developer pays a builder when bricks are sold at the
           merchant: <strong>assembling, sequencing, localising, validating, and
           operating</strong> the system reliably is the work. The repo gives you the
@@ -3657,102 +3350,88 @@
       </details>
       <details class="faq-item">
         <summary class="faq-q">
-          <span>Will OpenConstructionERP compete with me on implementation services?</span>
+          <span data-i18n="page.partners.faq_q3">Will OpenConstructionERP compete with me on implementation services?</span>
           <span class="faq-chev"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></span>
         </summary>
-        <div class="faq-a">
+        <div class="faq-a" data-i18n-html="page.partners.faq_a3">
           <strong>No. This is a written commitment in every partnership agreement.</strong>
           DDC's three commercial product lines are <strong>OpenConstructionERP commercial
           licences</strong>, <strong>CWICR (cost database)</strong>, and
-          <strong>cad2data converters</strong> — plus localisation packs and core training.
+          <strong>cad2data converters</strong> - plus localisation packs and core training.
           Implementation services are 100% partner revenue. Where a strategic account
           asks DDC directly, we route it to the closest qualified partner.
         </div>
       </details>
       <details class="faq-item">
         <summary class="faq-q">
-          <span>How do margins actually pay out?</span>
+          <span data-i18n="page.partners.faq_q4">How do margins actually pay out?</span>
           <span class="faq-chev"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></span>
         </summary>
-        <div class="faq-a">
-          Two models, available per deal: <strong>(a) resold</strong> — partner invoices
+        <div class="faq-a" data-i18n-html="page.partners.faq_a4">
+          Two models, available per deal: <strong>(a) resold</strong> - partner invoices
           client at list, pays DDC the wholesale price, keeps the margin;
-          <strong>(b) referred</strong> — DDC invoices client, pays partner the margin
+          <strong>(b) referred</strong> - DDC invoices client, pays partner the margin
           within 30 days of cash receipt.
         </div>
       </details>
       <details class="faq-item">
         <summary class="faq-q">
-          <span>What's the difference between a Founding Partner and an Active Partner?</span>
+          <span data-i18n="page.partners.faq_q6">Do I need to be a developer or a software house to qualify?</span>
           <span class="faq-chev"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></span>
         </summary>
-        <div class="faq-a">
-          Founding Partners are the first 3 signatories. They get the Founding
-          rate card from day 0 — no ladder climb, no fees, direct line to
-          the core team. Active is the standard partnership for everyone
-          else. <strong>Founding cohort closes</strong> when 3 partners sign
-          or on 31 December 2026, whichever comes first.
-        </div>
-      </details>
-      <details class="faq-item">
-        <summary class="faq-q">
-          <span>Do I need to be a developer or a software house to qualify?</span>
-          <span class="faq-chev"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></span>
-        </summary>
-        <div class="faq-a">
+        <div class="faq-a" data-i18n-html="page.partners.faq_a6">
           No. The dominant partner profile is a <strong>BIM consultancy or
           construction-tech integrator</strong> with one technical lead and one
-          delivery lead. We help you onboard a developer if you don't have one —
+          delivery lead. We help you onboard a developer if you don't have one -
           training is free for the first two engineers per partner.
         </div>
       </details>
       <details class="faq-item">
         <summary class="faq-q">
-          <span>What about CWICR — the cost database?</span>
+          <span data-i18n="page.partners.faq_q7">What about CWICR - the cost database?</span>
           <span class="faq-chev"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></span>
         </summary>
-        <div class="faq-a">
+        <div class="faq-a" data-i18n-html="page.partners.faq_a7">
           The <strong>community CWICR</strong> is free with the AGPL repo. The
-          <strong>commercial CWICR</strong> — covering 11 countries, 55,000+ items,
-          monthly updates, audit trail — is sold separately and resold by partners
+          <strong>commercial CWICR</strong> - covering 11 countries, 55,000+ items,
+          monthly updates, audit trail - is sold separately and resold by partners
           at 45–55% margin.
         </div>
       </details>
       <details class="faq-item">
         <summary class="faq-q">
-          <span>Can I run my client on the free AGPL version forever?</span>
+          <span data-i18n="page.partners.faq_q8">Can I run my client on the free AGPL version forever?</span>
           <span class="faq-chev"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></span>
         </summary>
-        <div class="faq-a">
-          Yes — and many will. Partners earn their margin on the four things free AGPL
+        <div class="faq-a" data-i18n-html="page.partners.faq_a8">
+          Yes - and many will. Partners earn their margin on the four things free AGPL
           doesn't deliver: <strong>production go-live, SLA support, localisation
           packs, and AGPL-free commercial licensing</strong> for clients who need it.
         </div>
       </details>
       <details class="faq-item">
         <summary class="faq-q">
-          <span>How is this different from being an Odoo partner?</span>
+          <span data-i18n="page.partners.faq_q9">How is this different from being an Odoo partner?</span>
           <span class="faq-chev"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></span>
         </summary>
-        <div class="faq-a">
+        <div class="faq-a" data-i18n-html="page.partners.faq_a9_v2">
           Three concrete differences: (1) <strong>construction-native product</strong>
-          (BOQ, IFC, schedule, AI takeoff) — no retrofit; (2) <strong>higher
-          margins</strong> — up to 65% on localisation packs and cad2data converters,
-          55% on commercial OpenConstructionERP / CWICR; (3) <strong>no annual
-          partnership fee</strong> at any tier; (4) DDC explicitly does not compete on
+          (BOQ, IFC, schedule, AI takeoff), no retrofit; (2) <strong>higher
+          margins</strong>, 55% on localisation packs and cad2data converters,
+          45% on commercial OpenConstructionERP / CWICR; (3) <strong>no annual
+          partnership fee</strong>; (4) DDC explicitly does not compete on
           services.
         </div>
       </details>
       <details class="faq-item">
         <summary class="faq-q">
-          <span>What if I never close a deal — do I lose my partnership?</span>
+          <span data-i18n="page.partners.faq_q10">What if I never close a deal - do I lose my partnership?</span>
           <span class="faq-chev"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></span>
         </summary>
-        <div class="faq-a">
-          Nothing punitive. <strong>You stay on the Active rate card indefinitely</strong> —
-          there's no demotion, no fee clawback, no expiry. If activity slows,
-          we work with you on lead-share or co-sell. Founding partners keep
-          Founding rates as long as they have at least one live client.
+        <div class="faq-a" data-i18n-html="page.partners.faq_a10_v2">
+          Nothing punitive. <strong>You stay on the rate card indefinitely.</strong>
+          There's no demotion, no fee clawback, no expiry. If activity slows,
+          we work with you on lead-share or co-sell.
         </div>
       </details>
     </div>
@@ -3768,9 +3447,9 @@
 
       <!-- LEFT RAIL: what happens next + trust -->
       <div class="apply-rail">
-        <div class="apply-rail-eyebrow">Founding cohort · 0 of 3 claimed</div>
-        <h2>Apply in <em>six fields.</em></h2>
-        <p class="apply-rail-lede">
+        <div class="apply-rail-eyebrow" data-i18n="page.partners.apply_rail_eyebrow_v2">Partner program · open to apply</div>
+        <h2 data-i18n-html="page.partners.apply_rail_h2">Apply in <em>six fields.</em></h2>
+        <p class="apply-rail-lede" data-i18n="page.partners.apply_rail_lede">
           We read every application personally.
         </p>
 
@@ -3778,22 +3457,22 @@
           <div class="apply-step-row">
             <div class="apply-step-num">1</div>
             <div>
-              <b>You send the form</b>
-              <span>Six fields. Two minutes. No file uploads required.</span>
+              <b data-i18n="page.partners.apply_step1_title">You send the form</b>
+              <span data-i18n="page.partners.apply_step1_body">Six fields. Two minutes. No file uploads required.</span>
             </div>
           </div>
           <div class="apply-step-row">
             <div class="apply-step-num">2</div>
             <div>
-              <b>We reply with next steps</b>
-              <span>A short note with a link to a 30-min intro call. Async by default — no calendar Tetris.</span>
+              <b data-i18n="page.partners.apply_step2_title">We reply with next steps</b>
+              <span data-i18n="page.partners.apply_step2_body">A short note with a link to a 30-min intro call. Async by default - no calendar Tetris.</span>
             </div>
           </div>
           <div class="apply-step-row">
             <div class="apply-step-num">3</div>
             <div>
-              <b>Onboarding in 1–2 weeks</b>
-              <span>Partnership agreement, Telegram invite, demo environment, marketing kit handover.</span>
+              <b data-i18n="page.partners.apply_step3_title">Onboarding in 1–2 weeks</b>
+              <span data-i18n="page.partners.apply_step3_body">Partnership agreement, Telegram invite, demo environment, marketing kit handover.</span>
             </div>
           </div>
         </div>
@@ -3801,15 +3480,15 @@
         <div class="apply-trust">
           <div class="apply-trust-row">
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-            <span>Stored in <b>EU servers</b> · GDPR-compliant · never sold or shared</span>
+            <span data-i18n-html="page.partners.apply_trust1">Stored in <b>EU servers</b> · GDPR-compliant · never sold or shared</span>
           </div>
           <div class="apply-trust-row">
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 12V8a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v9a3 3 0 0 0 3 3h11a3 3 0 0 0 3-3v-1"/><path d="M16 12h4M18 10v4"/></svg>
-            <span><b>€0 partnership fees</b> · forever, written into the agreement</span>
+            <span data-i18n-html="page.partners.apply_trust2"><b>€0 partnership fees</b> · forever, written into the agreement</span>
           </div>
           <div class="apply-trust-row">
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><path d="M20 8v6M23 11h-6"/></svg>
-            <span>No headcount minimums · build the team when you need it</span>
+            <span data-i18n="page.partners.apply_trust3">No headcount minimums · build the team when you need it</span>
           </div>
         </div>
       </div>
@@ -3817,60 +3496,52 @@
       <!-- RIGHT: form card -->
       <div class="apply-form-wrap">
         <form class="apply-form" id="apply-form" action="/api/partners-apply" method="POST">
-<!-- Honeypot — bots fill it, real users never see it. Backend rejects non-empty submissions. -->
+<!-- Honeypot - bots fill it, real users never see it. Backend rejects non-empty submissions. -->
 <input type="text" name="_honey" tabindex="-1" autocomplete="off" style="position:absolute;left:-9999px" aria-hidden="true" />
 <div class="apply-form-grid">
 
-            <div class="apply-form-section-label first">Who you are</div>
+            <div class="apply-form-section-label first" data-i18n="page.partners.form_section_who">Who you are</div>
             <label>
-              Your name
-              <input type="text" name="name" required autocomplete="name" placeholder="Full name" />
+              <span data-i18n="page.partners.form_label_name">Your name</span>
+              <input type="text" name="name" required autocomplete="name" placeholder="Full name" data-i18n-attr="placeholder:page.partners.form_ph_name" />
             </label>
             <label>
-              Email
-              <input type="email" name="email" required autocomplete="email" placeholder="you@company.com" />
+              <span data-i18n="page.partners.form_label_email">Email</span>
+              <input type="email" name="email" required autocomplete="email" placeholder="you@company.com" data-i18n-attr="placeholder:page.partners.form_ph_email" />
             </label>
             <label>
-              Company
-              <input type="text" name="company" required autocomplete="organization" placeholder="Company name" />
+              <span data-i18n="page.partners.form_label_company">Company</span>
+              <input type="text" name="company" required autocomplete="organization" placeholder="Company name" data-i18n-attr="placeholder:page.partners.form_ph_company" />
             </label>
             <label>
-              Country
-              <input type="text" name="country" required autocomplete="country-name" placeholder="Germany, France, UK..." />
+              <span data-i18n="page.partners.form_label_country">Country</span>
+              <input type="text" name="country" required autocomplete="country-name" placeholder="Germany, France, UK..." data-i18n-attr="placeholder:page.partners.form_ph_country" />
             </label>
             <label class="full">
-              Website <span style="color:var(--ink-3); font-weight:400;">(optional)</span>
+              <span data-i18n-html="page.partners.form_label_website">Website <span style="color:var(--ink-3); font-weight:400;">(optional)</span></span>
               <input type="url" name="website" placeholder="https://..." />
             </label>
 
-            <div class="apply-form-section-label">What you'd build</div>
+            <div class="apply-form-section-label" data-i18n="page.partners.form_section_build">What you'd build</div>
             <label class="full">
-              Current AEC clients &amp; what you'd implement first
-              <textarea name="brief" required placeholder="e.g. We are a Berlin-based BIM consultancy with 12 SMB GC clients. First target: a €22k pilot for a small residential developer in Q3 2026..."></textarea>
+              <span data-i18n-html="page.partners.form_label_brief">Current AEC clients &amp; what you'd implement first</span>
+              <textarea name="brief" required placeholder="e.g. We are a Berlin-based BIM consultancy with 12 SMB GC clients. First target: a €22k pilot for a small residential developer in Q3 2026..." data-i18n-attr="placeholder:page.partners.form_ph_brief"></textarea>
             </label>
             <label>
-              Target tier
-              <select name="target_tier" required>
-                <option value="founding" selected>Founding Partner (first 3, top rates)</option>
-                <option value="active">Active Partner (standard rates)</option>
-                <option value="not_sure">Not sure — let's discuss</option>
-              </select>
-            </label>
-            <label>
-              Audience type
+              <span data-i18n="page.partners.form_label_audience">Audience type</span>
               <select name="audience_type">
-                <option value="partner">Implementation / reseller partner</option>
-                <option value="specialist">Specialist (plugin / training / converter)</option>
-                <option value="client_inquiry">I'm a client looking for a partner</option>
+                <option value="partner" data-i18n="page.partners.form_aud_partner">Implementation / reseller partner</option>
+                <option value="specialist" data-i18n="page.partners.form_aud_specialist">Specialist (plugin / training / converter)</option>
+                <option value="client_inquiry" data-i18n="page.partners.form_aud_client">I'm a client looking for a partner</option>
               </select>
             </label>
 
             <div class="submit-row">
               <button type="submit" class="btn btn-primary">
-                Send application
+                <span data-i18n="page.partners.form_submit">Send application</span>
                 <svg class="arr" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
               </button>
-              <span class="micro">
+              <span class="micro" data-i18n="page.partners.form_micro">
                 Used only to evaluate your application. Stored in EU. Never sold.
               </span>
             </div>
@@ -3888,16 +3559,15 @@
 <!-- ============================================================ -->
 <section class="footer-cta">
   <div class="narrow">
-    <h2>Build with us. <em>Or build on us.</em></h2>
-    <p>Either way, the foundation stays open.</p>
+    <h2 data-i18n-html="page.partners.footer_cta_h2">Build with us. <em>Or build on us.</em></h2>
+    <p data-i18n="page.partners.footer_cta_p">Either way, the foundation stays open.</p>
     <div class="cta-row" style="justify-content: center;">
-      <a class="btn btn-primary" href="#apply">Apply as a partner</a>
-      <a class="btn btn-ghost" href="https://github.com/datadrivenconstruction/OpenConstructionERP" target="_blank" rel="noopener">View on GitHub</a>
+      <a class="btn btn-primary" href="#apply" data-i18n="page.partners.footer_cta_apply">Apply as a partner</a>
+      <a class="btn btn-ghost" href="https://github.com/datadrivenconstruction/OpenConstructionERP" target="_blank" rel="noopener" data-i18n="page.partners.footer_cta_github">View on GitHub</a>
     </div>
-    <p class="commitment">
+    <p class="commitment" data-i18n="page.partners.footer_cta_commitment_v2">
       Written commitment in every partnership agreement: DDC will never compete with
-      partners on implementation services. Tiers reviewed annually, never demoted in
-      the first year. €0 partnership fee at every tier, forever.
+      partners on implementation services. €0 partnership fee, forever.
     </p>
   </div>
 </section>
@@ -3905,9 +3575,9 @@
 <footer class="pagefoot">
   <div class="wrap">
     <div class="pagefoot-inner">
-      <div>© 2026 DataDrivenConstruction — Open source under AGPL-3.0.</div>
+      <div data-i18n="page.partners.pagefoot_copyright">© 2026 DataDrivenConstruction - Open source under AGPL-3.0.</div>
       <div>
-        <a href="/">Home</a> ·
+        <a href="/" data-i18n="page.partners.pagefoot_home">Home</a> ·
         <a href="https://github.com/datadrivenconstruction/OpenConstructionERP" target="_blank" rel="noopener">GitHub</a> ·
         <a href="https://datadrivenconstruction.io" target="_blank" rel="noopener">DataDrivenConstruction.io</a>
       </div>
@@ -3928,7 +3598,7 @@
   if (location.search.includes('submitted=1')) {
     const t = document.createElement('div');
     t.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:linear-gradient(135deg,#0284c7,#2563eb);color:#fff;padding:14px 22px;border-radius:12px;font-weight:600;font-size:14px;box-shadow:0 18px 36px -12px rgba(2,90,160,0.6);z-index:9999';
-    t.textContent = '✓ Application received — we will be in touch shortly.';
+    t.textContent = '✓ Application received - we will be in touch shortly.';
     document.body.appendChild(t);
     setTimeout(() => t.remove(), 6000);
   }
@@ -3937,7 +3607,7 @@
 
 
 <script>
-/* Partner application form — POSTs JSON to /api/partners-apply.
+/* Partner application form - POSTs JSON to /api/partners-apply.
    On success, swap form with a success card. On error, show inline message. */
 (function(){
   var form = document.getElementById('apply-form');
@@ -3966,7 +3636,7 @@
           '<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">' +
           '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#059669" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>' +
           '<strong style="font-size:17px;color:#064e3b;">Application received</strong></div>' +
-          '<p style="margin:0 0 10px;color:#065f46;font-size:14.5px;line-height:1.55;">Thanks — we read every application personally. Typical response time is 1–3 business days.</p>' +
+          '<p style="margin:0 0 10px;color:#065f46;font-size:14.5px;line-height:1.55;">Thanks - we read every application personally. Typical response time is 1–3 business days.</p>' +
           '<p style="margin:0;color:#047857;font-size:13px;">Your reference: <code style="background:#fff;padding:2px 8px;border-radius:4px;color:#065f46;font-weight:600;">' + ref + '</code></p>' +
           '<p style="margin:14px 0 0;color:#065f46;font-size:12.5px;">A confirmation email is on its way to you. If you don't see it within 10 minutes, check your spam folder.</p>' +
           '</div>';
@@ -3993,5 +3663,6 @@
   });
 })();
 </script>
+<script src="/i18n/i18n.js" defer></script>
 </body>
 </html>

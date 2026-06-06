@@ -1,4 +1,4 @@
-"""‌⁠‍Equipment Pydantic schemas — request/response models."""
+"""‌⁠‍Equipment Pydantic schemas - request/response models."""
 
 from __future__ import annotations
 
@@ -395,6 +395,7 @@ class EquipmentRentalResponse(BaseModel):
     internal_rate_per_hour: Decimal
     currency: str = ""
     status: str
+    billing_calculated_at: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict, validation_alias="metadata_")
     created_at: datetime
     updated_at: datetime
@@ -579,3 +580,76 @@ class FleetDashboardResponse(BaseModel):
     expiring_inspections: int = 0
     blocked_units: int = 0
     active_rentals: int = 0
+
+
+# ── Predictive maintenance / fleet analytics ──────────────────────────────
+
+
+class HealthAnomalyResponse(BaseModel):
+    """A single anomalous telemetry reading."""
+
+    recorded_at: datetime
+    metric: str
+    value: float
+    z_score: float
+    reason: str
+
+
+class HealthAnalyticsResponse(BaseModel):
+    """Per-unit predictive health assessment.
+
+    Plain-English fields (``health_score`` 0-100, red/amber/green ``band``)
+    so a fleet manager can read it without reliability-engineering jargon.
+    """
+
+    equipment_id: UUID
+    health_score: float = Field(..., ge=0, le=100)
+    band: str
+    anomaly_detected: bool
+    maintenance_trend: str
+    reasons: list[str] = Field(default_factory=list)
+    anomalies: list[HealthAnomalyResponse] = Field(default_factory=list)
+    sample_count: int = 0
+
+
+class FailureForecastResponse(BaseModel):
+    """Per-unit failure / next-service forecast."""
+
+    equipment_id: UUID
+    predicted_failure_date: str | None = None
+    failure_confidence: float = Field(..., ge=0, le=1)
+    days_to_failure: int | None = None
+    basis: str
+    daily_usage: float = 0.0
+
+
+class FleetUnderutilizedResponse(BaseModel):
+    """An underutilised unit with its idle-cost saving opportunity."""
+
+    equipment_id: str
+    code: str
+    name: str
+    utilization_pct: float
+    estimated_idle_days: float
+    estimated_monthly_saving: str
+
+
+class FleetMaintenanceBundleResponse(BaseModel):
+    """A group of units that should be serviced together."""
+
+    label: str
+    equipment_ids: list[str] = Field(default_factory=list)
+    codes: list[str] = Field(default_factory=list)
+    unit_count: int = 0
+
+
+class FleetOptimizationResponse(BaseModel):
+    """Fleet-wide optimisation recommendations."""
+
+    total_units: int = 0
+    target_utilization_pct: float = 70.0
+    window_days: int = 30
+    underutilized_count: int = 0
+    estimated_monthly_savings: str = "0"
+    underutilized: list[FleetUnderutilizedResponse] = Field(default_factory=list)
+    maintenance_bundles: list[FleetMaintenanceBundleResponse] = Field(default_factory=list)

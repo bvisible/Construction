@@ -1,17 +1,17 @@
 """‌⁠‍Reporting & Dashboards API routes.
 
 Endpoints:
-    GET    /kpi?project_id=X                     — Latest KPI snapshot
-    GET    /kpi/history?project_id=X             — KPI snapshots over time
-    POST   /kpi/snapshot                         — Create KPI snapshot
-    GET    /templates                             — List report templates
-    POST   /templates                             — Create custom template
-    POST   /templates/{id}/schedule               — Attach/replace/clear cron schedule
-    POST   /templates/{id}/run-now                — Trigger an immediate render
-    GET    /templates/scheduled                   — List all scheduled templates
-    POST   /generate                              — Generate a report
-    GET    /reports?project_id=X                  — List generated reports
-    GET    /reports/{report_id}                   — Get a generated report
+    GET    /kpi?project_id=X                     - Latest KPI snapshot
+    GET    /kpi/history?project_id=X             - KPI snapshots over time
+    POST   /kpi/snapshot                         - Create KPI snapshot
+    GET    /templates                             - List report templates
+    POST   /templates                             - Create custom template
+    POST   /templates/{id}/schedule               - Attach/replace/clear cron schedule
+    POST   /templates/{id}/run-now                - Trigger an immediate render
+    GET    /templates/scheduled                   - List all scheduled templates
+    POST   /generate                              - Generate a report
+    GET    /reports?project_id=X                  - List generated reports
+    GET    /reports/{report_id}                   - Get a generated report
 """
 
 import logging
@@ -116,6 +116,33 @@ async def recalculate_all_kpis(
     return await service.auto_recalculate_kpis()
 
 
+# ── PO retainage reconciliation (Gap F) ───────────────────────────────────
+
+
+@router.get("/po-retainage-reconciliation/", response_model=dict)
+async def get_po_retainage_reconciliation(
+    session: SessionDep,
+    project_id: uuid.UUID = Query(...),
+    period_start: str = Query(..., pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    period_end: str = Query(..., pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    user_id: CurrentUserId = None,  # type: ignore[assignment]
+    _perm: None = Depends(RequirePermission("reporting.read")),
+    service: ReportingService = Depends(_get_service),
+) -> dict:
+    """Period-end PO retainage reconciliation for a project.
+
+    Aggregates POs issued in ``[period_start, period_end]`` (inclusive,
+    ISO ``YYYY-MM-DD``) that carry a non-zero retention percentage. Money is
+    rolled up per currency (never blended). Deterministic; no AI.
+    """
+    await verify_project_access(project_id, user_id, session)
+    return await service.render_po_retainage_reconciliation(
+        project_id=project_id,
+        period_start=period_start,
+        period_end=period_end,
+    )
+
+
 # ── Report Template endpoints ─────────────────────────────────────────────
 
 
@@ -124,6 +151,7 @@ async def list_templates(
     user_id: CurrentUserId = None,  # type: ignore[assignment]
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=100),
+    _perm: None = Depends(RequirePermission("reporting.read")),
     service: ReportingService = Depends(_get_service),
 ) -> list[ReportTemplateResponse]:
     """List all report templates (system + custom)."""
@@ -152,7 +180,7 @@ async def list_scheduled_templates(
     """List every template that has a cron schedule attached.
 
     IDOR-guarded: templates whose ``project_id_scope`` points at a
-    project the caller cannot access are filtered out — otherwise the
+    project the caller cannot access are filtered out - otherwise the
     response would leak project UUIDs (and recipient email lists) for
     every other tenant on the platform. Portfolio-wide templates
     (``project_id_scope is None``) remain visible to all authenticated
@@ -166,7 +194,7 @@ async def list_scheduled_templates(
 
     templates = await service.list_scheduled_templates()
 
-    # Admin bypass — admins can see every scheduled template.
+    # Admin bypass - admins can see every scheduled template.
     try:
         user_repo = UserRepository(session)
         user = await user_repo.get_by_id(uuid.UUID(user_id))
@@ -270,6 +298,11 @@ async def run_template_now(
     )
     report = await service.generate_report(gen_data, user_id=user_id)
     await service.mark_template_ran(template)
+    # Distribute to the template's recipients (emails + portal users) when
+    # any are configured. Best-effort: a notification failure never blocks
+    # the run-now response (the report is already persisted).
+    if template.recipients:
+        await service.dispatch_report_email(report, list(template.recipients))
     return GeneratedReportResponse.model_validate(report)
 
 
@@ -327,7 +360,7 @@ async def get_report_content(
     """Return the rendered HTML body of a generated report.
 
     The matching metadata row must exist (404 otherwise) and have a
-    populated ``storage_key`` (410 Gone otherwise — the metadata exists
+    populated ``storage_key`` (410 Gone otherwise - the metadata exists
     but the renderer never produced or persisted a body). IDOR-guarded
     via ``verify_project_access`` on the report's parent project.
 
@@ -358,7 +391,7 @@ async def get_report(
 
     The caller must have access to the report's parent project. Reports
     owned by another tenant return 404 (not 403) to avoid leaking the
-    existence of report UUIDs — same convention as
+    existence of report UUIDs - same convention as
     ``verify_project_access``.
     """
     # Resolve the report first so we know which project to gate on.

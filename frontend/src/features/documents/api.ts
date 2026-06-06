@@ -37,6 +37,59 @@ export interface PhotoTimelineGroup {
   photos: PhotoItem[];
 }
 
+export type DefectSeverity = 'low' | 'medium' | 'high';
+
+/** AI / heuristic category suggestion stored in a photo's `metadata` on
+ *  upload. NEVER auto-applied — the user confirms it in the gallery. */
+export interface PhotoCategorySuggestion {
+  suggested_category: PhotoCategory;
+  /** 0..1 model probability, or null when a heuristic with no score. */
+  confidence: number | null;
+  /** 'ai' (vision model) or 'heuristic' (deterministic keyword match). */
+  source: 'ai' | 'heuristic';
+  /** Short lower-case auto-tags the model saw (vision only). Empty when none. */
+  suggested_tags: string[];
+  /** Severity rating for a suggested `defect` photo, or null otherwise. */
+  defect_severity: DefectSeverity | null;
+}
+
+/** Read the category suggestion out of a photo's metadata blob, if present
+ *  and well-formed. Returns null otherwise so callers can guard cleanly. */
+export function getCategorySuggestion(photo: PhotoItem): PhotoCategorySuggestion | null {
+  const raw = photo.metadata?.['category_suggestion'];
+  if (!raw || typeof raw !== 'object') return null;
+  const rec = raw as Record<string, unknown>;
+  const cat = rec['suggested_category'];
+  const validCats: readonly string[] = ['site', 'progress', 'defect', 'delivery', 'safety', 'other'];
+  if (typeof cat !== 'string' || !validCats.includes(cat)) return null;
+  const conf = rec['confidence'];
+  const src = rec['source'];
+  const rawTags = rec['suggested_tags'];
+  const tags = Array.isArray(rawTags)
+    ? rawTags.filter((x): x is string => typeof x === 'string')
+    : [];
+  const sev = rec['defect_severity'];
+  const validSev: readonly string[] = ['low', 'medium', 'high'];
+  return {
+    suggested_category: cat as PhotoCategory,
+    confidence: typeof conf === 'number' ? conf : null,
+    source: src === 'ai' ? 'ai' : 'heuristic',
+    suggested_tags: tags,
+    defect_severity:
+      typeof sev === 'string' && validSev.includes(sev) ? (sev as DefectSeverity) : null,
+  };
+}
+
+/** True when the photo's GPS was auto-filled from EXIF on upload. */
+export function isGpsFromExif(photo: PhotoItem): boolean {
+  return photo.metadata?.['gps_source'] === 'exif';
+}
+
+/** True when the photo's capture date was auto-filled from EXIF on upload. */
+export function isDateFromExif(photo: PhotoItem): boolean {
+  return photo.metadata?.['taken_at_source'] === 'exif';
+}
+
 export interface PhotoFilters {
   category?: PhotoCategory | '';
   tag?: string;

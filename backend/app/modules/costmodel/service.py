@@ -1,4 +1,4 @@
-"""‌⁠‍5D Cost Model service — business logic for EVM, budgets, and cash flow.
+"""‌⁠‍5D Cost Model service - business logic for EVM, budgets, and cash flow.
 
 Stateless service layer.  Handles:
 - EVM snapshot creation and S-curve data
@@ -10,7 +10,8 @@ Stateless service layer.  Handles:
 
 import logging
 import uuid
-from decimal import Decimal
+from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal, InvalidOperation
 from types import SimpleNamespace
 
 from fastapi import HTTPException, status
@@ -31,6 +32,7 @@ from app.modules.costmodel.repository import (
     CostLineRepository,
     CostSpineRepository,
     SnapshotRepository,
+    _amount_in_base,
 )
 from app.modules.costmodel.schemas import (
     BudgetCategoryRow,
@@ -72,6 +74,14 @@ async def _safe_publish(name: str, data: dict, source_module: str = "") -> None:
 
 logger = logging.getLogger(__name__)
 
+# Allowed cost categories for an actual-cost posting (Gap B). Mirrors the
+# BudgetLine.category doc plus the what-if/dashboard category vocabulary. An
+# empty / None category is always allowed (the "uncategorised" sentinel).
+_ACTUAL_COST_CATEGORIES = frozenset({"material", "labor", "equipment", "subcontractor", "overhead", "contingency"})
+
+# metadata.kind marker for budget lines auto-maintained by actual-cost postings.
+_ACTUAL_POSTING_MARKER = "actual_posting_auto"
+
 
 def _str_to_float(value: str | None) -> float:
     """‌⁠‍Convert a string-stored numeric value to float, defaulting to 0.0."""
@@ -105,11 +115,101 @@ def _safe_divide(numerator: float, denominator: float) -> float:
     return numerator / denominator
 
 
+def _parse_iso_date(value: str | None) -> date | None:
+    """Parse the leading ``YYYY-MM-DD`` of an ISO date/datetime string.
+
+    Returns ``None`` when ``value`` is empty or unparseable, so callers can
+    fall back gracefully instead of raising on dirty data.
+    """
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(value[:10])
+    except (ValueError, TypeError):
+        return None
+
+
+def _phase_fraction(start: date, end: date, as_of: date) -> Decimal:
+    """Fraction of a planned window [start, end] elapsed by ``as_of``.
+
+    Linear distribution over the inclusive-exclusive day span. Clamped to
+    ``[0, 1]``. A zero/negative span (start >= end, e.g. a milestone) counts
+    as fully earned once ``as_of`` reaches ``start``.
+
+    Args:
+        start: Window planned start date.
+        end: Window planned finish date.
+        as_of: The valuation date (the EVM "data date" / today).
+
+    Returns:
+        A Decimal in ``[0, 1]``.
+    """
+    total_days = (end - start).days
+    if total_days <= 0:
+        return Decimal("1") if as_of >= start else Decimal("0")
+    elapsed_days = (as_of - start).days
+    if elapsed_days <= 0:
+        return Decimal("0")
+    if elapsed_days >= total_days:
+        return Decimal("1")
+    return Decimal(elapsed_days) / Decimal(total_days)
+
+
+# Fallback chain a budget line walks to find the planned window over which its
+# amount is time-phased. See :meth:`CostModelService._time_phased_pv`.
+PVSource = str  # "activity" | "line_period" | "project_period" | "approximation"
+
+
 def _variance_pct(planned: float, forecast: float) -> float:
     """Calculate variance percentage: (planned - forecast) / planned * 100."""
     if planned == 0.0:
         return 0.0
     return round((planned - forecast) / planned * 100.0, 2)
+
+
+# ── Cost-overrun alerts (Gap D) ────────────────────────────────────────────────
+
+# Cooldown between two overrun alerts for the same budget line (design §"Idempotent").
+_OVERRUN_COOLDOWN = timedelta(hours=24)
+
+
+def is_budget_line_overrun(planned: object, actual: object, threshold_pct: object) -> bool:
+    """Return whether ``actual`` has breached the overrun threshold of ``planned``.
+
+    Pure decision function (no I/O) so the overrun rule is unit-testable in
+    isolation and reused identically by the subscriber. Money/percentage inputs
+    are the Decimal-as-string column values; they are parsed defensively.
+
+    The breach condition is ``actual >= planned * (1 + threshold_pct / 100)``.
+    Returns ``False`` when:
+        * the threshold is ``<= 0`` (alerting disabled - '0' is the sentinel);
+        * ``planned`` is ``<= 0`` (no baseline to measure an overrun against);
+        * any input fails to parse as a finite number.
+
+    All arithmetic is Decimal so a million-currency baseline does not drift.
+    """
+
+    def _dec(value: object) -> Decimal | None:
+        if value is None:
+            return None
+        try:
+            d = Decimal(str(value))
+        except (InvalidOperation, ValueError, TypeError):
+            return None
+        return d if d.is_finite() else None
+
+    threshold = _dec(threshold_pct)
+    if threshold is None or threshold <= 0:
+        return False
+    planned_d = _dec(planned)
+    if planned_d is None or planned_d <= 0:
+        return False
+    actual_d = _dec(actual)
+    if actual_d is None:
+        return False
+
+    limit = planned_d * (Decimal("1") + threshold / Decimal("100"))
+    return actual_d >= limit
 
 
 class CostModelService:
@@ -124,7 +224,7 @@ class CostModelService:
     async def _get_project_currency(self, project_id: uuid.UUID) -> str:
         """Return the project's configured currency.
 
-        Currency is strictly data-driven — it comes from the project record
+        Currency is strictly data-driven - it comes from the project record
         and nowhere else. When the project has no currency set (or the lookup
         fails) we return an empty string rather than fabricating a default;
         the UI is responsible for rendering a currency-less number instead of
@@ -148,7 +248,7 @@ class CostModelService:
         if they are not explicitly set.
 
         R5 audit (May 2026): ``(project_id, period)`` must be unique.
-        Pre-audit two snapshots for the same period silently coexisted —
+        Pre-audit two snapshots for the same period silently coexisted -
         ``get_latest_for_project`` then picked one arbitrarily and EVM
         rollups flapped between them. The DB-level unique index added in
         migration v3108 is the belt to this in-process suspenders.
@@ -179,7 +279,7 @@ class CostModelService:
         cpi = data.cpi
 
         # Auto-compute indices if not provided (left at default 0).
-        # v3 §10 — money fields are Decimal; cast to float at this
+        # v3 §10 - money fields are Decimal; cast to float at this
         # boundary because SPI/CPI are unitless ratios stored as float.
         if spi == 0.0 and float(data.planned_cost) > 0.0:
             spi = round(
@@ -389,7 +489,7 @@ class CostModelService:
         (planned_cost / earned_value / actual_cost). By definition these are
         *cumulative-to-date* values, and every other consumer in this module
         (dashboard, EVM, what-if) treats them as absolute totals. The S-curve
-        therefore plots the snapshot values directly — re-summing them across
+        therefore plots the snapshot values directly - re-summing them across
         periods (the previous behaviour) double-counted and produced curves
         that climbed far past BAC.
 
@@ -670,7 +770,137 @@ class CostModelService:
 
         logger.info("Budget line deleted: %s", line_id)
 
+    async def set_overrun_alert_threshold(self, line_id: uuid.UUID, threshold_pct: float) -> BudgetLine:
+        """Arm (or disable) the cost-overrun alert threshold on a budget line (Gap D).
+
+        ``threshold_pct`` is a percentage in ``[0, 100]``; ``0`` disables
+        alerting. The value is stored as a string (column vocabulary parity with
+        the money columns). Re-publishes ``costmodel.budget_line.updated`` so an
+        already-overrun line fires its alert the moment a threshold is armed,
+        instead of only on the next actual-cost change.
+
+        Args:
+            line_id: Target budget line.
+            threshold_pct: Percentage above planned that arms an alert.
+
+        Returns:
+            The updated budget line.
+
+        Raises:
+            HTTPException: 404 when the line is missing; 400 when the percentage
+                is out of range or not a finite number.
+        """
+        line = await self.budget_repo.get_by_id(line_id)
+        if line is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Budget line not found")
+
+        try:
+            pct = Decimal(str(threshold_pct))
+        except (InvalidOperation, ValueError, TypeError) as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid threshold: {threshold_pct!r}",
+            ) from exc
+        if not pct.is_finite() or pct < 0 or pct > 100:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="threshold must be a percentage between 0 and 100.",
+            )
+
+        project_id_str = str(line.project_id)
+        # Normalise to a plain decimal string ("10", "12.5"); strips any
+        # exponent form so the column / partial-index comparison stays simple.
+        stored = format(pct.normalize(), "f")
+
+        await self.budget_repo.update_fields(line_id, overrun_alert_threshold_pct=stored)
+
+        await _safe_publish(
+            "costmodel.budget_line.updated",
+            {
+                "line_id": str(line_id),
+                "project_id": project_id_str,
+                "fields": ["overrun_alert_threshold_pct"],
+            },
+            source_module="oe_costmodel",
+        )
+
+        updated = await self.budget_repo.get_by_id(line_id)
+        if updated is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Budget line not found after update",
+            )
+        return updated
+
     # ── EVM Calculations ──────────────────────────────────────────────────
+
+    @staticmethod
+    def _time_phased_pv(
+        budget_lines: list[BudgetLine],
+        *,
+        activity_window: dict[str, tuple[date, date]],
+        project_period: tuple[date, date] | None,
+        as_of: date,
+        time_elapsed_pct: float,
+    ) -> Decimal:
+        """Compute time-phased Planned Value as of ``as_of``.
+
+        ``PV(t) = Σ line_amount × phase_fraction_elapsed_by_t`` where the phase
+        fraction is the linear share of each line's planned window that has
+        elapsed by ``as_of`` (clamped to ``[0, 1]``). All arithmetic is Decimal
+        so a multi-million-currency baseline never drifts; the caller converts
+        to float only at the response boundary.
+
+        Per-line window fallback chain (first available wins):
+            1. The line's linked schedule ``Activity`` planned window
+               (``activity_window[str(line.activity_id)]``).
+            2. The line's own ``period_start`` .. ``period_end``.
+            3. ``project_period`` - the primary schedule's start..end.
+            4. Last resort: the legacy approximation
+               ``amount × time_elapsed_pct / 100``. Used only when no usable
+               window of any kind exists for that line (e.g. a budget line with
+               no activity link, no period, and no project schedule dates).
+
+        Args:
+            budget_lines: All budget lines for the project.
+            activity_window: Map of activity id (str) to planned (start, end).
+            project_period: The project/budget planned (start, end), if known.
+            as_of: The valuation/data date.
+            time_elapsed_pct: Project-level percent elapsed (0..100), used only
+                for the last-resort approximation.
+
+        Returns:
+            The summed time-phased Planned Value as a Decimal.
+        """
+        approx_fraction = Decimal(str(time_elapsed_pct)) / Decimal("100")
+        total = Decimal("0")
+        for line in budget_lines:
+            amount = _str_to_decimal(line.planned_amount)
+            if amount == 0:
+                continue
+
+            window: tuple[date, date] | None = None
+            # Level 1: linked activity planned window.
+            if line.activity_id is not None:
+                window = activity_window.get(str(line.activity_id))
+            # Level 2: the line's own period.
+            if window is None:
+                line_start = _parse_iso_date(line.period_start)
+                line_end = _parse_iso_date(line.period_end)
+                if line_start is not None and line_end is not None:
+                    window = (line_start, line_end)
+            # Level 3: the project/budget period.
+            if window is None and project_period is not None:
+                window = project_period
+
+            if window is not None:
+                fraction = _phase_fraction(window[0], window[1], as_of)
+            else:
+                # Level 4: legacy approximation (no window available at all).
+                fraction = approx_fraction
+
+            total += amount * fraction
+        return total
 
     async def calculate_evm(self, project_id: uuid.UUID) -> EVMResponse:
         """Calculate real Earned Value Management metrics from schedule progress and budget.
@@ -681,23 +911,30 @@ class CostModelService:
         Algorithm:
             1. BAC = sum of planned_amount across all budget lines
             2. AC  = sum of actual_amount across all budget lines
-            3. time_elapsed% = computed from project schedule start/end vs today
+            3. PV  = real time-phased Planned Value (see :meth:`_time_phased_pv`):
+               each budget line's planned_amount is distributed linearly over a
+               planned window and only the fraction elapsed by the data date
+               counts toward PV.
             4. schedule_progress% = weighted average of activity progress_pct
                (weighted by planned_amount of linked budget lines)
-            5. PV  = BAC * time_elapsed%
-            6. EV  = BAC * schedule_progress%
-            7. Derived indices: SV, CV, SPI, CPI, EAC, ETC, VAC, TCPI
+            5. EV  = BAC * schedule_progress%
+            6. Derived indices: SV, CV, SPI, CPI, EAC, ETC, VAC, TCPI
 
-        Known limitation (v1.3.x):
-            PV is an approximation: ``BAC × time_elapsed%`` rather than a proper
-            time-phased baseline. When a project has not started yet (``time_elapsed%``
-            ~ 0) but activities already report progress, SPI = EV / PV explodes.
-            To prevent mathematically impossible values we clamp:
-                - ``pv`` to a minimum of ``1% × BAC`` (avoids divide-by-near-zero)
-                - ``spi`` to the ``[0.0, 5.0]`` range
-            and set ``spi_capped=True`` so the UI can label the figure as approximate.
-            TODO (v1.4): replace with a proper time-phased PV computed from
-            ``BudgetLine`` + ``Activity`` planned dates (see audit notes, Option A).
+        Planned-Value fallback chain (per budget line, see
+        :meth:`_time_phased_pv`):
+            1. The line's linked schedule Activity planned window
+               (``Activity.start_date`` .. ``Activity.end_date``).
+            2. The line's own ``period_start`` .. ``period_end``.
+            3. The project/budget period - the primary schedule's
+               ``start_date`` .. ``end_date``.
+            4. Last resort: the legacy approximation ``amount * time_elapsed%``
+               (only when no window of any kind is available).
+
+        SPI guard:
+            When PV collapses toward zero (project barely started) we still
+            clamp ``pv`` to a minimum of ``1% × BAC`` and ``spi`` to
+            ``[0.0, 5.0]`` and set ``spi_capped=True`` so the UI can flag the
+            figure as unreliable.
 
         Args:
             project_id: Target project.
@@ -705,8 +942,6 @@ class CostModelService:
         Returns:
             EVMResponse with all computed EVM metrics.
         """
-        from datetime import date
-
         from app.modules.schedule.repository import ActivityRepository, ScheduleRepository
 
         # ── Step 1: Aggregate budget totals ────────────────────────────────
@@ -721,45 +956,59 @@ class CostModelService:
                 status="unknown",
             )
 
+        # Budget lines are project-scoped; fetch once up front so both the
+        # progress weighting and the time-phased PV computation can reuse them.
+        budget_lines, _ = await self.budget_repo.list_for_project(project_id, limit=10000)
+
         # ── Step 2: Read schedule activities for progress ──────────────────
         schedule_repo = ScheduleRepository(self.session)
         schedules, _ = await schedule_repo.list_for_project(project_id, limit=50)
 
+        today = date.today()
         time_elapsed_pct = 0.0
         schedule_progress_pct = 0.0
         # Tracks whether we actually have a usable schedule signal. When False,
         # we surface this to the caller via evm_status="schedule_unknown"
-        # instead of silently falling back to a 50 % placeholder — the legacy
+        # instead of silently falling back to a 50 % placeholder - the legacy
         # fallback skewed portfolio-level reports by pretending half-elapsed
         # progress on projects that had no schedule at all.
         schedule_known = False
+        # Planned window of the project as a whole - PV fallback level 3.
+        project_period: tuple[date, date] | None = None
+        # Per-activity planned window keyed by activity id - PV fallback level 1.
+        activity_window: dict[str, tuple[date, date]] = {}
 
         if schedules:
             # Use the first (primary) schedule for time elapsed calculation
             primary_schedule = schedules[0]
-            today = date.today()
 
             # Compute time_elapsed_pct from schedule dates
-            if primary_schedule.start_date and primary_schedule.end_date:
-                try:
-                    start = date.fromisoformat(primary_schedule.start_date[:10])
-                    end = date.fromisoformat(primary_schedule.end_date[:10])
-                    total_days = (end - start).days
-                    if total_days > 0:
-                        elapsed_days = (today - start).days
-                        time_elapsed_pct = max(0.0, min(100.0, (elapsed_days / total_days) * 100.0))
-                        schedule_known = True
-                except (ValueError, TypeError) as exc:
-                    # Log explicitly instead of swallowing silently. Bad schedule
-                    # dates are a data-quality issue worth surfacing to ops —
-                    # previously this bug masqueraded as "on track" projects.
+            proj_start = _parse_iso_date(primary_schedule.start_date)
+            proj_end = _parse_iso_date(primary_schedule.end_date)
+            if proj_start is not None and proj_end is not None:
+                total_days = (proj_end - proj_start).days
+                if total_days > 0:
+                    project_period = (proj_start, proj_end)
+                    elapsed_days = (today - proj_start).days
+                    time_elapsed_pct = max(0.0, min(100.0, (elapsed_days / total_days) * 100.0))
+                    schedule_known = True
+                else:
                     logger.warning(
-                        "Unparseable schedule dates on schedule_id=%s (start=%r, end=%r): %s",
+                        "Non-positive schedule span on schedule_id=%s (start=%r, end=%r)",
                         getattr(primary_schedule, "id", "<unknown>"),
                         primary_schedule.start_date,
                         primary_schedule.end_date,
-                        exc,
                     )
+            elif primary_schedule.start_date or primary_schedule.end_date:
+                # Log explicitly instead of swallowing silently. Bad schedule
+                # dates are a data-quality issue worth surfacing to ops -
+                # previously this bug masqueraded as "on track" projects.
+                logger.warning(
+                    "Unparseable schedule dates on schedule_id=%s (start=%r, end=%r)",
+                    getattr(primary_schedule, "id", "<unknown>"),
+                    primary_schedule.start_date,
+                    primary_schedule.end_date,
+                )
 
             # Compute weighted schedule progress from all activities
             activity_repo = ActivityRepository(self.session)
@@ -767,9 +1016,8 @@ class CostModelService:
             total_weight = 0.0
 
             # Build lookup: budget lines keyed by activity_id (hoisted out of the
-            # per-schedule loop — these lines are project-scoped, not schedule-scoped,
+            # per-schedule loop - these lines are project-scoped, not schedule-scoped,
             # so fetching once avoids an N+1 query).
-            budget_lines, _ = await self.budget_repo.list_for_project(project_id, limit=10000)
             activity_budget: dict[str, float] = {}
             for bl in budget_lines:
                 if bl.activity_id is not None:
@@ -782,6 +1030,13 @@ class CostModelService:
                 for act in activities:
                     act_id = str(act.id)
                     progress = _str_to_float(act.progress_pct)
+
+                    # Capture the activity's planned window for the time-phased
+                    # PV computation (fallback level 1).
+                    act_start = _parse_iso_date(act.start_date)
+                    act_end = _parse_iso_date(act.end_date)
+                    if act_start is not None and act_end is not None:
+                        activity_window[act_id] = (act_start, act_end)
 
                     # Weight by the planned budget linked to this activity,
                     # fallback to equal weight if no budget link exists
@@ -796,7 +1051,7 @@ class CostModelService:
             if total_weight > 0.0:
                 schedule_progress_pct = total_weighted_progress / total_weight
         else:
-            # No schedule at all — try the latest snapshot as a weak signal,
+            # No schedule at all - try the latest snapshot as a weak signal,
             # but do NOT fake a 50 % time_elapsed. The old 50 % placeholder
             # silently labelled unscheduled projects as "half-elapsed",
             # which skewed portfolio roll-ups and made at-risk projects look
@@ -811,12 +1066,21 @@ class CostModelService:
                     schedule_progress_pct = (ev_snap / bac) * 100.0
 
         # ── Step 3: Compute EVM values ─────────────────────────────────────
-        # PV is an approximation (BAC × time_elapsed%). See the function
-        # docstring for limitations. We clamp PV to a minimum of 1% × BAC so
-        # SPI never explodes toward infinity when the project has not really
-        # started yet but activities report nominal progress.
-        raw_pv = bac * (time_elapsed_pct / 100.0)
-        pv_floor = bac * 0.01  # 1% of BAC — prevents divide-by-near-zero
+        # Real time-phased Planned Value: distribute each budget line over its
+        # planned window (activity → line period → project period → legacy
+        # approximation) and sum only the fraction elapsed by the data date.
+        # Decimal math throughout; we clamp to a minimum of 1% × BAC so SPI
+        # never explodes toward infinity when the project has barely started.
+        raw_pv = float(
+            self._time_phased_pv(
+                budget_lines,
+                activity_window=activity_window,
+                project_period=project_period,
+                as_of=today,
+                time_elapsed_pct=time_elapsed_pct,
+            )
+        )
+        pv_floor = bac * 0.01  # 1% of BAC - prevents divide-by-near-zero
         pv = max(raw_pv, pv_floor)
         ev = bac * (schedule_progress_pct / 100.0)
 
@@ -1039,7 +1303,7 @@ class CostModelService:
         boqs, _ = await boq_repo.list_for_project(project_id, limit=100)
         if not boqs:
             return None
-        # Pick the most recently updated BOQ — that's the one the user is
+        # Pick the most recently updated BOQ - that's the one the user is
         # actively working on. position_count is computed lazily so don't
         # rely on it here.
         sorted_boqs = sorted(boqs, key=lambda b: b.updated_at, reverse=True)
@@ -1049,7 +1313,7 @@ class CostModelService:
         """Auto-generate budget lines from BOQ positions.
 
         Each BOQ position becomes a budget line with planned_amount = position total.
-        Existing budget lines for the project are NOT deleted — new lines are appended.
+        Existing budget lines for the project are NOT deleted - new lines are appended.
 
         Idempotency (R5 audit, May 2026):
             Positions already wired to a budget line for this project are
@@ -1093,7 +1357,7 @@ class CostModelService:
                 project_id=project_id,
                 boq_position_id=pos.id,
                 category="material",  # Default; user can reclassify later
-                description=f"{pos.ordinal} — {pos.description[:200]}",
+                description=f"{pos.ordinal} - {pos.description[:200]}",
                 planned_amount=str(total),
                 committed_amount="0",
                 actual_amount="0",
@@ -1141,7 +1405,7 @@ class CostModelService:
         the project base currency via ``fx_rates`` before being added to
         the period bucket. Pre-audit cash flow totals silently mixed USD,
         EUR, JPY values into one ``Decimal`` and the S-curve plotted the
-        result as if they were all base — a 100 % bug for any multi-
+        result as if they were all base - a 100 % bug for any multi-
         currency project.
 
         Args:
@@ -1187,7 +1451,7 @@ class CostModelService:
                     p = start[:7]
                     period_outflows[p] = period_outflows.get(p, Decimal("0")) + amount
             else:
-                # No schedule — use a generic unscheduled bucket.
+                # No schedule - use a generic unscheduled bucket.
                 # Keep the sentinel <= 10 chars to fit the period column (varchar(10)).
                 period_outflows["unsched"] = period_outflows.get("unsched", Decimal("0")) + amount
 
@@ -1236,7 +1500,7 @@ class CostModelService:
         """Compute the budget-variance KPI for the Estimation Dashboard.
 
         Budget is ``sum(unit_rate * quantity)`` across all positions of the
-        largest BOQ for the project — there is no dedicated ``baseline_total``
+        largest BOQ for the project - there is no dedicated ``baseline_total``
         column in the Position model today, so the current rate is used as
         the baseline. ``current`` is the live ``sum(total)``; any manual
         overrides (totals that diverge from quantity * rate) therefore
@@ -1264,7 +1528,7 @@ class CostModelService:
         if not boqs:
             return VarianceResponse(currency=currency)
 
-        # Aggregate across every BOQ for the project — estimators usually
+        # Aggregate across every BOQ for the project - estimators usually
         # work in one BOQ, but summing protects us when multiple revisions
         # exist and all contribute to the live cost signal.
         budget = 0.0
@@ -1480,7 +1744,10 @@ class CostSpineService:
             await self.account_repo.update_fields(account_id, **fields)
         updated = await self.account_repo.get_by_id(account_id)
         if updated is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Control account not found after update")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Control account not found after update",
+            )
         return _control_account_to_response(updated)
 
     async def delete_account(self, account_id: uuid.UUID) -> None:
@@ -2318,3 +2585,641 @@ class CostSpineService:
 
         await self.session.flush()
         self.session.expire_all()
+
+    # ── Actual-cost posting (Gap B - shared spine method) ─────────────────────
+
+    async def post_actual_to_budget_line(
+        self,
+        project_id: uuid.UUID,
+        cost_line_id: uuid.UUID | None,
+        cost_category: str | None,
+        amount_base: str,
+        currency: str,
+        source_kind: str,
+        source_ref: str,
+        *,
+        idempotency_key: str,
+    ) -> BudgetLine:
+        """Idempotently upsert ``BudgetLine.actual_amount`` from an actual cost.
+
+        This is the single shared sink for posting realised cost into the cost
+        spine. Finance calls it when an invoice is paid; Gaps A/C/E (labour,
+        equipment, certified-claim receivable) will call it later for their own
+        ``source_kind``. Keeping the posting logic here means every actual lands
+        with identical idempotency, FX-audit and event semantics.
+
+        Semantics:
+            * Resolves (or creates) the budget row matching
+              ``(project_id, cost_line_id, cost_category)``. ``cost_category``
+              ``None`` is stored as ``""`` (the NOT-NULL column sentinel for
+              "uncategorised") so a headerless posting lands on one stable row.
+            * Increments ``actual_amount`` by ``amount_base`` (Decimal end to
+              end; ``amount_base`` is already in the project base currency -
+              the caller is responsible for FX conversion and must NEVER zero a
+              foreign value when a rate is missing).
+            * Idempotent on ``(source_kind, source_ref)``: the posting is
+              recorded in ``metadata.postings``; re-posting the same source is a
+              no-op that returns the row unchanged. ``idempotency_key`` is
+              stored alongside for the caller's own audit/replay correlation.
+            * Emits ``costmodel.budget_line.actual_posted`` on a real change.
+
+        Args:
+            project_id: Owning project (must exist and carry a base currency).
+            cost_line_id: Optional cost-spine link; when set must belong to the
+                project.
+            cost_category: One of the allowed categories, or ``None`` /
+                ``""`` for uncategorised.
+            amount_base: Decimal-as-string amount in the project base currency.
+            currency: Original source-line currency, recorded for audit only.
+            source_kind: Posting source family (e.g. ``"invoice_paid"``).
+            source_ref: Stable unique reference within the source family
+                (e.g. ``"{invoice_id}:{item_id}"``).
+            idempotency_key: Caller-supplied replay token (recorded in the
+                posting trail).
+
+        Returns:
+            The created or updated ``BudgetLine`` row (or the unchanged row when
+            the posting was already applied).
+
+        Raises:
+            HTTPException: 404 when the project / cost line is missing or
+                cross-project; 400 when the project has no base currency, the
+                category is unknown, or the amount is not a finite number.
+        """
+        # ── 1. Validate project + base currency ──────────────────────────
+        base_currency = await self._get_project_currency(project_id)
+        if not base_currency:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "Project has no base currency configured - cannot post an "
+                    "actual cost without a currency to denominate it in."
+                ),
+            )
+
+        # ── 2. Validate cost line belongs to the project (when supplied) ──
+        control_account_id: uuid.UUID | None = None
+        if cost_line_id is not None:
+            cost_line = await self.line_repo.get_by_id(cost_line_id)
+            if cost_line is None or cost_line.project_id != project_id:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="cost_line_id does not reference a cost line in this project.",
+                )
+            control_account_id = cost_line.control_account_id
+
+        # ── 3. Validate category ──────────────────────────────────────────
+        normalized_category = (cost_category or "").strip().lower()
+        if normalized_category and normalized_category not in _ACTUAL_COST_CATEGORIES:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"Unknown cost_category '{cost_category}'. Allowed: {', '.join(sorted(_ACTUAL_COST_CATEGORIES))}."
+                ),
+            )
+
+        # ── 4. Validate amount ────────────────────────────────────────────
+        try:
+            amount = Decimal(str(amount_base))
+        except (InvalidOperation, ValueError, TypeError) as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid amount_base: {amount_base!r}",
+            ) from exc
+        if not amount.is_finite():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Non-finite amount_base: {amount_base!r}",
+            )
+
+        # ── 5. Resolve or create the target budget line ───────────────────
+        line = await self.budget_repo.find_for_actual_posting(
+            project_id,
+            cost_line_id=cost_line_id,
+            category=normalized_category,
+        )
+
+        # Quantize to 2dp once so the posting trail amount matches exactly what
+        # is added to actual_amount (no "900.0" vs "900.00" audit mismatch).
+        amount = amount.quantize(Decimal("0.01"))
+        posting_entry = {
+            "source_kind": source_kind,
+            "source_ref": source_ref,
+            "idempotency_key": idempotency_key,
+            "amount": str(amount),
+            "currency": currency or "",
+            "posted_at": datetime.now(UTC).isoformat(),
+        }
+
+        if line is None:
+            # New row: actual_amount = amount, seed the posting trail.
+            line = BudgetLine(
+                project_id=project_id,
+                cost_line_id=cost_line_id,
+                control_account_id=control_account_id,
+                category=normalized_category,
+                description="Actual cost (auto)",
+                planned_amount="0",
+                committed_amount="0",
+                actual_amount=str(amount),
+                forecast_amount="0",
+                currency=base_currency,
+                metadata_={"kind": _ACTUAL_POSTING_MARKER, "postings": [posting_entry]},
+            )
+            line = await self.budget_repo.create(line)
+            # Capture identity/linkage NOW - a later session.expire_all (none
+            # here, but kept for symmetry) must never force a sync lazy-load.
+            await self._publish_actual_posted(
+                budget_line_id=line.id,
+                project_id=project_id,
+                cost_line_id=cost_line_id,
+                category=normalized_category,
+                source_kind=source_kind,
+                source_ref=source_ref,
+                amount=amount,
+            )
+            logger.info(
+                "Actual posted (new line): project=%s line=%s kind=%s ref=%s +%s",
+                project_id,
+                line.id,
+                source_kind,
+                source_ref,
+                amount,
+            )
+            return line
+
+        # ── 6. Existing row: idempotency check on (source_kind, source_ref)
+        # Snapshot every attribute we need BEFORE update_fields() calls
+        # expire_all(): reading line.* afterwards would re-issue a sync SELECT
+        # and raise MissingGreenlet under the async session.
+        line_id = line.id
+        existing_cost_line_id = line.cost_line_id
+        line_category = line.category or ""
+        md = dict(line.metadata_) if isinstance(line.metadata_, dict) else {}
+        postings = md.get("postings")
+        if not isinstance(postings, list):
+            postings = []
+        already = any(
+            isinstance(p, dict) and p.get("source_kind") == source_kind and p.get("source_ref") == source_ref
+            for p in postings
+        )
+        if already:
+            # Replay - return the row unchanged (no event, no double count).
+            logger.info(
+                "Actual posting skipped (already applied): project=%s line=%s kind=%s ref=%s",
+                project_id,
+                line_id,
+                source_kind,
+                source_ref,
+            )
+            refreshed = await self.budget_repo.get_by_id(line_id)
+            return refreshed if refreshed is not None else line
+
+        prior = _str_to_decimal(line.actual_amount)
+        new_actual = (prior + amount).quantize(Decimal("0.01"))
+        postings = [*postings, posting_entry]
+        md["postings"] = postings
+        if md.get("kind") is None:
+            md["kind"] = _ACTUAL_POSTING_MARKER
+
+        # Fill a missing cost-line / account link if this posting carries one
+        # (a budget line created before the spine may now learn its link).
+        fill: dict[str, object] = {"actual_amount": str(new_actual), "metadata_": md}
+        resolved_cost_line_id = existing_cost_line_id
+        if existing_cost_line_id is None and cost_line_id is not None:
+            fill["cost_line_id"] = cost_line_id
+            resolved_cost_line_id = cost_line_id
+            if control_account_id is not None:
+                fill["control_account_id"] = control_account_id
+
+        await self.budget_repo.update_fields(line_id, **fill)
+        await self._publish_actual_posted(
+            budget_line_id=line_id,
+            project_id=project_id,
+            cost_line_id=resolved_cost_line_id,
+            category=line_category,
+            source_kind=source_kind,
+            source_ref=source_ref,
+            amount=amount,
+        )
+        logger.info(
+            "Actual posted (increment): project=%s line=%s kind=%s ref=%s +%s -> %s",
+            project_id,
+            line_id,
+            source_kind,
+            source_ref,
+            amount,
+            new_actual,
+        )
+
+        updated = await self.budget_repo.get_by_id(line_id)
+        if updated is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Budget line not found after posting",
+            )
+        return updated
+
+    @staticmethod
+    async def _publish_actual_posted(
+        *,
+        budget_line_id: uuid.UUID,
+        project_id: uuid.UUID,
+        cost_line_id: uuid.UUID | None,
+        category: str,
+        source_kind: str,
+        source_ref: str,
+        amount: Decimal,
+    ) -> None:
+        """Emit ``costmodel.budget_line.actual_posted`` for downstream consumers.
+
+        Takes only primitives (never an ORM row) so the publish never reads an
+        attribute the surrounding ``update_fields`` / ``expire_all`` may have
+        expired - that would re-issue a sync SELECT and raise MissingGreenlet
+        under the async session. Gap D (cost-overrun alerts) and reporting
+        subscribe here.
+        """
+        from app.modules.costmodel.events import EVENT_BUDGET_LINE_ACTUAL_POSTED
+
+        await _safe_publish(
+            EVENT_BUDGET_LINE_ACTUAL_POSTED,
+            {
+                "project_id": str(project_id),
+                "budget_line_id": str(budget_line_id),
+                "cost_line_id": str(cost_line_id) if cost_line_id else None,
+                "category": category or "",
+                "source_kind": source_kind,
+                "source_ref": source_ref,
+                "amount": str(amount),
+            },
+            source_module="oe_costmodel",
+        )
+
+
+# ── Labour actuals (field labour -> budget) ────────────────────────────────────
+
+
+# Marker used to find/track the single auto-maintained labour budget line per
+# project, and to record which (report_id, status) pairs have already been
+# folded into ``actual_amount`` so a submit -> approve pair never double-counts.
+_LABOUR_LINE_MARKER = "labour_actuals_auto"
+
+
+class LabourActualsService:
+    """Roll field-reported labour hours into the project budget actuals.
+
+    Subscribes (via :data:`event_bus`) to ``fieldreports.labour.logged`` and,
+    for each event, converts every workforce row's ``hours x cost_rate`` into
+    the project base currency and accumulates the total onto a single
+    auto-maintained ``category="labor"`` budget line. The line is found /
+    created idempotently per project (tagged via ``metadata.kind``), and each
+    event is applied at most once (the ``(report_id, status)`` key is recorded
+    in the line metadata).
+
+    FX is never blended: a row's own currency (explicit, or the resource's
+    currency) is converted to the project base via the project ``fx_rates``
+    using the shared :func:`_amount_in_base` helper.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+        self.budget_repo = BudgetLineRepository(session)
+
+    @staticmethod
+    def _to_decimal(value: object) -> Decimal:
+        if value is None:
+            return Decimal("0")
+        try:
+            d = Decimal(str(value))
+        except (ValueError, ArithmeticError, TypeError):
+            return Decimal("0")
+        return d if d.is_finite() and d >= 0 else Decimal("0")
+
+    async def _resource_rate(self, resource_id: str) -> tuple[Decimal, str]:
+        """Return ``(default_cost_rate, currency)`` for a resource, or (0, "")."""
+        try:
+            rid = uuid.UUID(str(resource_id))
+        except (ValueError, AttributeError, TypeError):
+            return Decimal("0"), ""
+        try:
+            from app.modules.resources.repository import ResourceRepository
+
+            resource = await ResourceRepository(self.session).get_by_id(rid)
+        except Exception:
+            return Decimal("0"), ""
+        if resource is None:
+            return Decimal("0"), ""
+        rate = resource.default_cost_rate if resource.default_cost_rate is not None else Decimal("0")
+        return self._to_decimal(rate), (resource.currency or "").strip().upper()
+
+    async def compute_labour_cost(
+        self,
+        project_id: uuid.UUID,
+        rows: list[dict],
+    ) -> Decimal:
+        """Compute the total labour cost of ``rows`` in the project base currency.
+
+        Pure aggregation (no writes) so it is unit-testable in isolation:
+        for each row, ``hours x rate`` is evaluated in the row's own currency,
+        then converted to base via ``_amount_in_base``. A row with neither an
+        explicit ``cost_rate`` nor a resolvable resource rate contributes 0.
+        """
+        base, fx = await self.budget_repo._project_fx_context(project_id)
+        total = Decimal("0")
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            hours = self._to_decimal(row.get("hours"))
+            if hours <= 0:
+                continue
+
+            rate = self._to_decimal(row.get("cost_rate"))
+            row_ccy = (str(row.get("currency") or "")).strip().upper()
+            if rate <= 0 and row.get("resource_id"):
+                rate, res_ccy = await self._resource_rate(str(row["resource_id"]))
+                if not row_ccy:
+                    row_ccy = res_ccy
+            if rate <= 0:
+                continue
+
+            amount_native = hours * rate
+            total += _amount_in_base(str(amount_native), row_ccy, base, fx)
+        return total
+
+    async def _get_or_create_labour_line(self, project_id: uuid.UUID) -> BudgetLine:
+        """Find (or create) the single auto-maintained labour budget line."""
+        lines, _ = await self.budget_repo.list_for_project(project_id, category="labor", limit=1000)
+        for line in lines:
+            md = line.metadata_ if isinstance(line.metadata_, dict) else {}
+            if md.get("kind") == _LABOUR_LINE_MARKER:
+                return line
+
+        currency = await CostModelService(self.session)._get_project_currency(project_id)
+        line = BudgetLine(
+            project_id=project_id,
+            category="labor",
+            description="Field labour (auto)",
+            planned_amount="0",
+            committed_amount="0",
+            actual_amount="0",
+            forecast_amount="0",
+            currency=currency,
+            metadata_={"kind": _LABOUR_LINE_MARKER, "applied_events": []},
+        )
+        return await self.budget_repo.create(line)
+
+    async def apply_labour_event(
+        self,
+        *,
+        project_id: uuid.UUID,
+        report_id: str,
+        status_value: str,
+        rows: list[dict],
+    ) -> Decimal:
+        """Fold one labour event into the labour budget line's ``actual_amount``.
+
+        Idempotent on ``(report_id, status_value)``: re-firing the same event
+        (or a submit followed by an approve carrying identical hours) adds the
+        amount at most once. Returns the amount applied (0 when skipped).
+        """
+        amount = await self.compute_labour_cost(project_id, rows)
+        if amount <= 0:
+            return Decimal("0")
+
+        line = await self._get_or_create_labour_line(project_id)
+        md = dict(line.metadata_) if isinstance(line.metadata_, dict) else {}
+        applied = md.get("applied_events")
+        if not isinstance(applied, list):
+            applied = []
+        event_key = f"{report_id}:{status_value}"
+        if event_key in applied:
+            return Decimal("0")  # already counted
+
+        prior = self._to_decimal(line.actual_amount)
+        new_actual = (prior + amount).quantize(Decimal("0.01"))
+        applied = [*applied, event_key]
+        md["applied_events"] = applied
+
+        await self.budget_repo.update_fields(
+            line.id,
+            actual_amount=str(new_actual),
+            metadata_=md,
+        )
+        logger.info(
+            "Labour actuals: project=%s report=%s status=%s +%s -> %s",
+            project_id,
+            report_id,
+            status_value,
+            amount,
+            new_actual,
+        )
+        return amount
+
+
+async def _on_labour_logged(event: object) -> None:
+    """Detached subscriber: roll a labour event into budget actuals.
+
+    Opens its own session (the publisher is still inside its request
+    transaction) and swallows errors so a cost-rollup failure never breaks
+    the field-report / diary submission that triggered it.
+    """
+    data = getattr(event, "data", None) or {}
+    rows = data.get("rows")
+    project_id_raw = data.get("project_id")
+    report_id = str(data.get("report_id") or "")
+    status_value = str(data.get("status") or "")
+    if not project_id_raw or not isinstance(rows, list) or not rows:
+        return
+    try:
+        project_id = uuid.UUID(str(project_id_raw))
+    except (ValueError, AttributeError, TypeError):
+        return
+
+    from app.database import async_session_factory
+
+    try:
+        async with async_session_factory() as session:
+            service = LabourActualsService(session)
+            await service.apply_labour_event(
+                project_id=project_id,
+                report_id=report_id,
+                status_value=status_value,
+                rows=rows,
+            )
+            await session.commit()
+    except Exception:
+        logger.exception(
+            "Labour actuals rollup failed for report=%s - source submission unaffected",
+            report_id,
+        )
+
+
+# Register the subscriber at import time. The module loader imports
+# ``costmodel.events`` (absent) AND ``costmodel.service`` indirectly via the
+# router, so binding here keeps the wiring inside an allowed file. Guard
+# against double-registration on repeated imports (test reload, etc.).
+if _on_labour_logged not in event_bus._handlers.get("fieldreports.labour.logged", []):
+    event_bus.subscribe("fieldreports.labour.logged", _on_labour_logged)
+
+
+# ── Cost-overrun alerts (Gap D - actual breaches planned + threshold) ─────────
+
+
+class CostOverrunAlertService:
+    """Decide whether a budget line's actual cost has breached its alert
+    threshold, and (when it has) notify the project owner at most once per
+    cooldown window.
+
+    This is the home for Gap D's alerting logic. It lives in the cost-model
+    module (which owns ``BudgetLine`` and the events) and reaches across to the
+    notifications module's :class:`NotificationService` to deliver the in-app
+    notification - mirroring how :class:`LabourActualsService` reaches into
+    resources. The subscriber below opens its own session and calls
+    :meth:`check_and_alert`, swallowing any failure so a notification problem
+    never breaks the foreground cost update.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+        self.budget_repo = BudgetLineRepository(session)
+
+    async def _resolve_owner_id(self, project_id: uuid.UUID) -> uuid.UUID | None:
+        """Return the project owner's user id, or ``None`` when unavailable."""
+        try:
+            from app.modules.projects.repository import ProjectRepository
+
+            project = await ProjectRepository(self.session).get_by_id(project_id)
+        except Exception:
+            return None
+        if project is None:
+            return None
+        return getattr(project, "owner_id", None)
+
+    @staticmethod
+    def _cooldown_active(alerted_at: datetime | None, *, now: datetime) -> bool:
+        """True when an alert was sent within the cooldown window."""
+        if alerted_at is None:
+            return False
+        # Older rows may carry a naive datetime; treat it as UTC so the
+        # comparison never raises on an aware/naive mismatch.
+        if alerted_at.tzinfo is None:
+            alerted_at = alerted_at.replace(tzinfo=UTC)
+        return (now - alerted_at) < _OVERRUN_COOLDOWN
+
+    async def check_and_alert(self, line_id: uuid.UUID, *, now: datetime | None = None) -> bool:
+        """Evaluate one budget line and notify the project owner on a breach.
+
+        Returns ``True`` when a notification was sent (and the cooldown stamp
+        written), ``False`` otherwise (no threshold, not breached, cooldown
+        active, no owner, or line missing). The caller is responsible for
+        committing the session.
+        """
+        now = now or datetime.now(UTC)
+        line = await self.budget_repo.get_by_id(line_id)
+        if line is None:
+            return False
+
+        threshold = getattr(line, "overrun_alert_threshold_pct", "0") or "0"
+        if not is_budget_line_overrun(line.planned_amount, line.actual_amount, threshold):
+            return False
+
+        if self._cooldown_active(getattr(line, "overrun_alerted_at", None), now=now):
+            return False
+
+        # Snapshot everything BEFORE update_fields() expires the ORM row (a
+        # later attribute read would re-issue a sync SELECT -> MissingGreenlet).
+        project_id = line.project_id
+        category = line.category or ""
+        currency = line.currency or ""
+        planned = str(line.planned_amount)
+        actual = str(line.actual_amount)
+        # Threshold rendered for the message (strip a trailing ".0").
+        try:
+            threshold_pct = format(Decimal(str(threshold)).normalize(), "f")
+        except (InvalidOperation, ValueError, TypeError):
+            threshold_pct = str(threshold)
+
+        owner_id = await self._resolve_owner_id(project_id)
+        if owner_id is None:
+            # No recipient - do NOT stamp the cooldown so a later owner
+            # assignment still gets the first alert.
+            return False
+
+        # Deliver the in-app notification (cross-module call, same pattern as
+        # the wave-5 subscribers).
+        from app.modules.notifications.service import NotificationService
+
+        notif = NotificationService(self.session)
+        await notif.create(
+            user_id=owner_id,
+            notification_type="cost_overrun_alert",
+            title_key="notifications.costmodel.overrun_alert.title",
+            body_key="notifications.costmodel.overrun_alert.body",
+            body_context={
+                "category": category or "uncategorised",
+                "threshold_pct": threshold_pct,
+                "planned": planned,
+                "actual": actual,
+                "currency": currency,
+            },
+            entity_type="budget_line",
+            entity_id=str(line_id),
+            action_url=f"/costmodel?line={line_id}",
+        )
+
+        # Stamp the cooldown anchor so a second event inside 24h is a no-op.
+        await self.budget_repo.update_fields(line_id, overrun_alerted_at=now)
+        logger.info(
+            "Cost-overrun alert sent: project=%s line=%s category=%s actual=%s planned=%s @+%s%%",
+            project_id,
+            line_id,
+            category,
+            actual,
+            planned,
+            threshold_pct,
+        )
+        return True
+
+
+def _extract_line_id(event: object) -> uuid.UUID | None:
+    """Pull a ``budget_line_id`` / ``line_id`` out of an event payload."""
+    data = getattr(event, "data", None) or {}
+    raw = data.get("budget_line_id") or data.get("line_id")
+    if not raw:
+        return None
+    try:
+        return uuid.UUID(str(raw))
+    except (ValueError, AttributeError, TypeError):
+        return None
+
+
+async def _on_budget_line_changed(event: object) -> None:
+    """Detached subscriber: alert the project owner when a budget line overruns.
+
+    Bound to both ``costmodel.budget_line.updated`` (manual edits + threshold
+    arming) and ``costmodel.budget_line.actual_posted`` (Gap B / labour
+    postings, which increment ``actual_amount`` without emitting ``updated``).
+    Opens its own session because the publisher is still inside its own request
+    transaction, and swallows every exception so an alerting failure never
+    breaks the upstream cost update.
+    """
+    line_id = _extract_line_id(event)
+    if line_id is None:
+        return
+
+    from app.database import async_session_factory
+
+    try:
+        async with async_session_factory() as session:
+            service = CostOverrunAlertService(session)
+            await service.check_and_alert(line_id)
+            await session.commit()
+    except Exception:
+        logger.debug("Cost-overrun alert check failed for line=%s", line_id, exc_info=True)
+
+
+# Bind the overrun subscriber at import time (same rationale as the labour
+# subscriber above). Guard against double-registration on repeated imports.
+for _overrun_event in ("costmodel.budget_line.updated", "costmodel.budget_line.actual_posted"):
+    if _on_budget_line_changed not in event_bus._handlers.get(_overrun_event, []):
+        event_bus.subscribe(_overrun_event, _on_budget_line_changed)

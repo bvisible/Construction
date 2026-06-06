@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useNavigate } from 'react-router-dom';
 import {
   BarChart3,
   Briefcase,
@@ -18,8 +19,19 @@ import {
   Activity,
   Eye,
   X,
+  ChevronRight,
 } from 'lucide-react';
-import { Breadcrumb, Button, Card, CardContent, EmptyState, Skeleton } from '@/shared/ui';
+import {
+  Breadcrumb,
+  Button,
+  Card,
+  CardContent,
+  DismissibleInfo,
+  EmptyState,
+  MoneyDisplay,
+  Skeleton,
+} from '@/shared/ui';
+import { PageHeader } from '@/shared/ui/PageHeader';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { apiGet, apiPost, API_BASE, getAuthToken, ApiError } from '@/shared/lib/api';
@@ -101,24 +113,33 @@ interface FinanceDashboard {
   currency: string;
 }
 
+// Wire contract for GET /api/v1/safety/stats/. The real response uses
+// `days_without_incident` (NOT `days_since_last_incident`); the old key
+// was always undefined, so the "Days Since Incident" card read a dash.
 interface SafetyStats {
   total_incidents: number;
   total_observations: number;
   open_corrective_actions: number;
-  days_since_last_incident: number;
+  days_without_incident: number;
 }
 
+// Wire contract for GET /api/v1/tasks/stats/. The overdue count is
+// `overdue_count` on the wire; the old `overdue` key never existed so the
+// "Overdue Tasks" card always rendered "N/A".
 interface TaskStats {
   total: number;
   by_status: Record<string, number>;
-  overdue: number;
+  overdue_count: number;
 }
 
+// Wire contract for GET /api/v1/rfi/stats/. Average response time is
+// `avg_days_to_response` on the wire (the old `avg_response_days` key was
+// undefined, so "Avg Response" read "N/A").
 interface RFIStats {
   total: number;
   open: number;
   overdue: number;
-  avg_response_days: number;
+  avg_days_to_response: number;
 }
 
 interface ScheduleStats {
@@ -130,11 +151,13 @@ interface ScheduleStats {
   progress_pct: number;
 }
 
+// Wire contract for GET /api/v1/procurement/stats/. Pending deliveries are
+// `pending_delivery_count` on the wire (old `pending_delivery` was undefined).
 interface ProcurementStats {
   total_pos: number;
   by_status: Record<string, number>;
-  total_committed: number;
-  pending_delivery: number;
+  total_committed: number | string;
+  pending_delivery_count: number;
 }
 
 /* ── KPI helpers ───��───────────────────────────────────────────────────────── */
@@ -155,13 +178,27 @@ const trafficClasses: Record<TrafficLight, string> = {
   gray: 'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400',
 };
 
+// Empty metrics render as a muted em-dash, never "N/A". A grid full of
+// "N/A" reads as a broken page; a quiet dash reads as "not measured yet".
+const EMPTY = '—';
+
 function fmt(v: string | number | null | undefined, suffix = ''): string {
-  if (v === null || v === undefined || v === '') return 'N/A';
+  if (v === null || v === undefined || v === '') return EMPTY;
   return `${v}${suffix}`;
 }
 
+// Humanise a report_type enum token ("progress_report" → "Progress
+// Report") for display. Report types are seeded server-side, so the list
+// is open-ended; rather than maintaining a closed label map we Title-Case
+// the snake_case token. Keeps the new progress_report type readable
+// without a frontend code change per new type.
+function humanizeReportType(reportType: string): string {
+  if (!reportType) return '';
+  return reportType.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 function fmtNum(v: number | null | undefined, decimals = 0): string {
-  if (v === null || v === undefined) return 'N/A';
+  if (v === null || v === undefined) return EMPTY;
   return v.toLocaleString(undefined, {
     minimumFractionDigits: decimals,
     maximumFractionDigits: decimals,
@@ -169,11 +206,11 @@ function fmtNum(v: number | null | undefined, decimals = 0): string {
 }
 
 // Money-bug guard: finance amounts arrive as Decimal-serialized STRINGS
-// (e.g. "517103508.65"). Passing a string to fmtNum (which calls
-// .toLocaleString) or doing `value > 0` would format/compare a string —
-// yielding "NaN" or a lexicographic comparison. Coerce through Number()
-// first; non-numeric/empty values become null so the card shows N/A rather
-// than a misleading 0. Returns number | null, which fmtNum already accepts.
+// (e.g. "517103508.65"). Doing `value > 0` on a string would compare
+// lexicographically. Coerce through Number() first so the traffic-light
+// thresholds below work on real numbers; non-numeric/empty values become
+// null (the amount itself renders through MoneyDisplay, which shows the
+// shared em-dash for null).
 function toMoneyNum(v: number | string | null | undefined): number | null {
   if (v === null || v === undefined || v === '') return null;
   const n = Number(v);
@@ -189,7 +226,9 @@ function KPICard({
   icon: Icon,
 }: {
   label: string;
-  value: string;
+  // ReactNode so money tiles can pass <MoneyDisplay> directly (no
+  // hand-formatted currency strings).
+  value: React.ReactNode;
   color?: TrafficLight;
   icon?: React.ElementType;
 }) {
@@ -202,9 +241,35 @@ function KPICard({
       )}
       <div className="min-w-0">
         <p className="truncate text-xs font-medium text-content-secondary">{label}</p>
-        <p className="text-lg font-semibold text-content-primary">{value}</p>
+        <p className="truncate text-lg font-semibold text-content-primary">{value}</p>
       </div>
     </div>
+  );
+}
+
+/** Money KPI tile — renders a project-currency amount via MoneyDisplay so the
+ *  figure is locale-formatted and carries its ISO code (never a hand-built
+ *  "1234.00 EUR" string). A null amount shows the shared em-dash. */
+function MoneyKPICard({
+  label,
+  amount,
+  currency,
+  color = 'gray',
+  icon,
+}: {
+  label: string;
+  amount: number | string | null | undefined;
+  currency: string;
+  color?: TrafficLight;
+  icon?: React.ElementType;
+}) {
+  return (
+    <KPICard
+      label={label}
+      value={<MoneyDisplay amount={amount} currency={currency} showCode />}
+      color={color}
+      icon={icon}
+    />
   );
 }
 
@@ -260,13 +325,24 @@ const TABS: { key: DashboardTab; labelKey: string; defaultLabel: string; icon: R
 
 export function ReportingPage() {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const { activeProjectId, activeProjectName } = useProjectContextStore();
   const userRole = useAuthStore((s) => s.userRole);
   const canRecalculate = RECALC_ROLES.has((userRole ?? '').toLowerCase());
 
   const [tab, setTab] = useState<DashboardTab>('executive');
+  // `loading` tracks ONLY the fast projects.list() fetch. The audit's
+  // "perpetual grey skeleton" was caused by gating the WHOLE page behind a
+  // single flag that only flipped after a 29-project KPI loop + 6 stats
+  // fetches all settled (35 requests, browser-capped at ~6 concurrent =
+  // several seconds, and a project switch re-fired the whole chain). Now the
+  // page resolves the instant the project list arrives; the KPI map and the
+  // per-tab stats fill in independently, each with its own honest state.
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
+  const [kpiLoading, setKpiLoading] = useState(true);
+  const [statsLoading, setStatsLoading] = useState(false);
+  const [statsError, setStatsError] = useState(false);
   const [recalculating, setRecalculating] = useState(false);
   const [recalcError, setRecalcError] = useState(false);
 
@@ -290,6 +366,8 @@ export function ReportingPage() {
 
   const loadProjectStats = useCallback(async (pid: string) => {
     const gen = ++statsGenRef.current;
+    setStatsLoading(true);
+    setStatsError(false);
     const guard = <T,>(setter: (v: T | null) => void) => (v: T) => {
       if (statsGenRef.current === gen) setter(v);
     };
@@ -302,68 +380,85 @@ export function ReportingPage() {
       apiGet<ProcurementStats>(`/v1/procurement/stats/?project_id=${pid}`).then(guard(setProcurementStats)),
     ]);
 
-    // Clear data for rejected promises to avoid stale state — but only
-    // if this fetch is still the current generation.
+    // Only the latest generation may touch state.
     if (statsGenRef.current !== gen) return;
+    // Clear data for rejected promises to avoid stale state.
     if (results[0].status === 'rejected') setFinanceDash(null);
     if (results[1].status === 'rejected') setSafetyStats(null);
     if (results[2].status === 'rejected') setTaskStats(null);
     if (results[3].status === 'rejected') setRfiStats(null);
     if (results[4].status === 'rejected') setScheduleStats(null);
     if (results[5].status === 'rejected') setProcurementStats(null);
+    // If EVERY section failed the project's data is genuinely unreachable
+    // (vs simply empty); surface a retry block instead of six silent dashes.
+    setStatsError(results.every((r) => r.status === 'rejected'));
+    setStatsLoading(false);
   }, []);
 
-  // Load everything
+  // Load the portfolio KPI snapshots for every project. Runs detached from
+  // page `loading` so the Executive table renders immediately and the
+  // traffic-light cells fill in (or stay a dash) as snapshots arrive.
+  const loadKpiMap = useCallback(async (projs: Project[]) => {
+    setKpiLoading(true);
+    const kpis: Record<string, KPISnapshot> = {};
+    await Promise.allSettled(
+      projs.map(async (p) => {
+        try {
+          const kpi = await apiGet<KPISnapshot | null>(`/v1/reporting/kpi/?project_id=${p.id}`);
+          if (kpi) kpis[p.id] = kpi;
+        } catch {
+          // No KPI snapshot for this project yet — leave the row's cells as
+          // a dash. This is expected, not an error.
+        }
+      }),
+    );
+    setKpiMap(kpis);
+    setKpiLoading(false);
+  }, []);
+
+  // Load the project list — the ONLY thing that gates the page.
   const loadData = useCallback(async () => {
     setLoading(true);
     setLoadError(false);
     try {
       const projs = await projectsApi.list();
       setProjects(projs);
-
-      // Load KPI for each project
-      const kpis: Record<string, KPISnapshot> = {};
-      await Promise.allSettled(
-        projs.map(async (p) => {
-          try {
-            const kpi = await apiGet<KPISnapshot | null>(
-              `/v1/reporting/kpi/?project_id=${p.id}`,
-            );
-            if (kpi) kpis[p.id] = kpi;
-          } catch {
-            // no KPI for this project yet
-          }
-        }),
-      );
-      setKpiMap(kpis);
-
-      // Project-scoped stats (use selected project or first)
-      const pid = selectedProjectId || projs[0]?.id;
-      if (pid) {
-        await loadProjectStats(pid);
-      }
+      setLoading(false);
+      // KPI map loads detached — it must never block the page from
+      // rendering (fire-and-forget; it manages its own kpiLoading flag).
+      void loadKpiMap(projs);
     } catch {
-      // The per-project KPI and per-section fetches above already
-      // degrade gracefully (Promise.allSettled). Reaching this catch
-      // means the *fatal* projects.list() call failed — without a
-      // surfaced error the user would see an empty dashboard that is
-      // indistinguishable from "no projects yet". Flag it so the
-      // retry banner renders instead.
+      // The fatal projects.list() call failed — without a surfaced error
+      // the user sees an empty dashboard indistinguishable from "no
+      // projects yet". Flag it so the retry banner renders instead.
       setProjects([]);
       setLoadError(true);
-    } finally {
       setLoading(false);
+      setKpiLoading(false);
     }
-  }, [selectedProjectId, loadProjectStats]);
+  }, [loadKpiMap]);
 
   useEffect(() => {
     loadData();
   }, [loadData]);
 
-  // Reload project-specific stats when selected project changes
+  // Load project-specific stats whenever the active project changes. The
+  // Executive tab needs no project, so we skip the fetch there; the other
+  // tabs render their own loading / empty / error states from these.
   useEffect(() => {
     if (selectedProjectId) {
       loadProjectStats(selectedProjectId);
+    } else {
+      // No project selected: clear any stale stats so the tabs show their
+      // "select a project" prompt rather than a previous project's numbers.
+      setFinanceDash(null);
+      setSafetyStats(null);
+      setTaskStats(null);
+      setRfiStats(null);
+      setScheduleStats(null);
+      setProcurementStats(null);
+      setStatsLoading(false);
+      setStatsError(false);
     }
   }, [selectedProjectId, loadProjectStats]);
 
@@ -372,7 +467,10 @@ export function ReportingPage() {
     setRecalcError(false);
     try {
       await apiPost('/v1/reporting/kpi/recalculate-all/', {});
-      await loadData();
+      // Refresh just the KPI map (and the active project's stats) — no need
+      // to refetch the whole project list, which never changes here.
+      await loadKpiMap(projects);
+      if (selectedProjectId) await loadProjectStats(selectedProjectId);
     } catch {
       // No error boundary wraps this page — a swallowed failure left
       // the button looking like it succeeded. Surface it inline.
@@ -393,7 +491,10 @@ export function ReportingPage() {
     const budget = meta?.budget_estimate ?? (p as unknown as Record<string, unknown>).budget_estimate;
     const amount = budget ? Number(budget) || 0 : 0;
     if (amount <= 0) return acc;
-    const code = (p.currency || '').trim().toUpperCase() || 'N/A';
+    // A project with no currency set is grouped under an empty code; the
+    // renderer skips money it can't denominate rather than printing "N/A".
+    const code = (p.currency || '').trim().toUpperCase();
+    if (!code) return acc;
     acc[code] = (acc[code] ?? 0) + amount;
     return acc;
   }, {});
@@ -401,44 +502,77 @@ export function ReportingPage() {
   const selectedProject = projects.find((p) => p.id === selectedProjectId);
   const selectedKpi = selectedProjectId ? kpiMap[selectedProjectId] : undefined;
 
+  // Executive drill-down: clicking a portfolio row makes that project the
+  // active context and jumps to its PM dashboard — the richest project-level
+  // reporting surface — so the row is a real navigation, not a dead end.
+  const drillIntoProject = useCallback(
+    (p: Project) => {
+      useProjectContextStore.getState().setActiveProject(p.id, p.name);
+      setTab('pm');
+    },
+    [],
+  );
+
   /* ── Render ─────────────────────────────────────────────────────────────── */
 
   return (
-    <div className="w-full space-y-6 animate-fade-in">
+    <div className="space-y-5 animate-fade-in">
       <Breadcrumb
         items={[
-          { label: t('nav.dashboard', { defaultValue: 'Dashboard' }), to: '/' },
           ...(activeProjectName
             ? [{ label: activeProjectName, to: `/projects/${activeProjectId}` }]
             : []),
-          { label: t('reporting.title', { defaultValue: 'Reporting Dashboards' }) },
+          { label: t('nav.reporting_dashboards', { defaultValue: 'Reporting Dashboards' }) },
         ]}
-        className="mb-4"
       />
 
-      {/* Header */}
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold text-content-primary">
-            {t('reporting.title', { defaultValue: 'Reporting Dashboards' })}
-          </h1>
-          <p className="mt-1 text-sm text-content-secondary">
-            {t('reporting.subtitle', {
-              defaultValue: 'Role-based KPI dashboards with real-time project data',
-            })}
-          </p>
-        </div>
-        {canRecalculate && (
-          <button
-            onClick={handleRecalculate}
-            disabled={recalculating}
-            className="inline-flex items-center gap-2 rounded-lg bg-oe-blue px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-oe-blue-hover disabled:opacity-50"
-          >
-            {recalculating ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
-            {t('reporting.recalculate', { defaultValue: 'Recalculate KPIs' })}
-          </button>
-        )}
-      </div>
+      {/* Header row — module name + icon live in the top app bar (style guide
+          §2); the page shows only a one-line subtitle and the right-aligned
+          action, routed through the shared PageHeader so it inherits the
+          items-center midline and min-h-9 rules (audit S7). */}
+      <PageHeader
+        srTitle={t('nav.reporting_dashboards', { defaultValue: 'Reporting Dashboards' })}
+        subtitle={t('reporting.subtitle', {
+          defaultValue: 'Role-based KPI dashboards built from live project data.',
+        })}
+        actions={
+          canRecalculate && (
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={handleRecalculate}
+              disabled={recalculating}
+              icon={
+                recalculating ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />
+              }
+            >
+              {t('reporting.recalculate', { defaultValue: 'Recalculate KPIs' })}
+            </Button>
+          )
+        }
+      />
+
+      {/* What this page is, vs the two neighbouring surfaces it is often
+          confused with (audit IA-overlap finding). */}
+      <DismissibleInfo
+        storageKey="reporting"
+        title={t('reporting.info_title', { defaultValue: 'Role-based project dashboards' })}
+        links={[
+          {
+            label: t('reporting.info_link_analytics', { defaultValue: 'Cross-project analytics' }),
+            onClick: () => navigate('/analytics'),
+          },
+          {
+            label: t('reporting.info_link_reports', { defaultValue: 'Generated documents' }),
+            onClick: () => navigate('/reports'),
+          },
+        ]}
+      >
+        {t('reporting.info_body', {
+          defaultValue:
+            'Live KPI dashboards for one project at a time, organised by role. For figures that span every project use Analytics; for downloadable PDF and Excel documents use Reports.',
+        })}
+      </DismissibleInfo>
 
       {recalcError && (
         <div
@@ -472,33 +606,9 @@ export function ReportingPage() {
         ))}
       </div>
 
-      {/* Project selector for PM / Estimator / Site / Finance tabs */}
-      {tab !== 'executive' && (
-        <div className="flex items-center gap-3">
-          <label className="text-xs font-medium text-content-secondary">
-            {t('reporting.select_project', { defaultValue: 'Project' })}
-          </label>
-          <select
-            value={selectedProjectId}
-            onChange={(e) => {
-              const id = e.target.value;
-              const name = projects.find((p) => p.id === id)?.name ?? '';
-              if (id) {
-                useProjectContextStore.getState().setActiveProject(id, name);
-              }
-            }}
-            className="h-9 min-w-[240px] rounded-lg border border-border-light bg-surface-primary px-3 text-sm text-content-primary outline-none focus:border-oe-blue focus:ring-1 focus:ring-oe-blue"
-          >
-            {projects.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-        </div>
-      )}
-
-      {/* Loading skeleton */}
+      {/* Loading skeleton — gated on the FAST projects.list() fetch only, so
+          it resolves in well under a second instead of waiting on the whole
+          KPI fan-out (the audit's perpetual-skeleton root cause). */}
       {loading && (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {Array.from({ length: 8 }).map((_, i) => (
@@ -540,6 +650,9 @@ export function ReportingPage() {
           activeProjects={activeProjects}
           valueByCurrency={portfolioValueByCurrency}
           kpiMap={kpiMap}
+          kpiLoading={kpiLoading}
+          onCreateProject={() => navigate('/projects')}
+          onDrillIn={drillIntoProject}
         />
       )}
       {!loading && !loadError && tab === 'pm' && (
@@ -549,19 +662,24 @@ export function ReportingPage() {
           taskStats={taskStats}
           rfiStats={rfiStats}
           scheduleStats={scheduleStats}
+          loading={statsLoading}
+          error={statsError}
+          onRetry={() => selectedProjectId && loadProjectStats(selectedProjectId)}
+          projects={projects}
         />
       )}
       {!loading && !loadError && tab === 'estimator' && (
-        <EstimatorDashboard
-          project={selectedProject}
-          kpi={selectedKpi}
-        />
+        <EstimatorDashboard project={selectedProject} kpi={selectedKpi} projects={projects} />
       )}
       {!loading && !loadError && tab === 'site' && (
         <SiteDashboard
           project={selectedProject}
           safetyStats={safetyStats}
           scheduleStats={scheduleStats}
+          loading={statsLoading}
+          error={statsError}
+          onRetry={() => selectedProjectId && loadProjectStats(selectedProjectId)}
+          projects={projects}
         />
       )}
       {!loading && !loadError && tab === 'finance' && (
@@ -569,11 +687,125 @@ export function ReportingPage() {
           project={selectedProject}
           financeDash={financeDash}
           procurementStats={procurementStats}
+          loading={statsLoading}
+          error={statsError}
+          onRetry={() => selectedProjectId && loadProjectStats(selectedProjectId)}
+          projects={projects}
         />
       )}
       {!loading && !loadError && tab === 'reports' && (
-        <ReportsTab project={selectedProject} />
+        <ReportsTab project={selectedProject} projects={projects} />
       )}
+    </div>
+  );
+}
+
+/* ── Inline project-picker prompt (replaces the dead PromptCard) ──────────── */
+
+/**
+ * Shown on every project-scoped tab when no project is active. Instead of a
+ * dead "Select a project" sentence, it offers an inline picker that sets the
+ * shared project context in place (QW3 in the audit) — and a deep link to the
+ * projects list when the workspace has none yet.
+ */
+function RequiresProject({
+  message,
+  projects,
+}: {
+  message: string;
+  projects: Project[];
+}) {
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+
+  if (projects.length === 0) {
+    return (
+      <Card>
+        <CardContent>
+          <EmptyState
+            icon={<Briefcase size={24} />}
+            title={t('reporting.no_projects_title', { defaultValue: 'No projects yet' })}
+            description={t('reporting.no_projects_desc', {
+              defaultValue: 'Create a project to start tracking its KPIs here.',
+            })}
+            action={{
+              label: t('reporting.create_project', { defaultValue: 'Create a project' }),
+              onClick: () => navigate('/projects'),
+            }}
+          />
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <Card>
+      <CardContent>
+        <div className="flex flex-col items-center justify-center gap-4 py-12 text-center">
+          <BarChart3 size={40} className="text-content-tertiary" />
+          <p className="max-w-sm text-sm text-content-secondary">{message}</p>
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            <label htmlFor="reporting-inline-project" className="sr-only">
+              {t('reporting.select_project', { defaultValue: 'Project' })}
+            </label>
+            <select
+              id="reporting-inline-project"
+              defaultValue=""
+              onChange={(e) => {
+                const id = e.target.value;
+                const name = projects.find((p) => p.id === id)?.name ?? '';
+                if (id) useProjectContextStore.getState().setActiveProject(id, name);
+              }}
+              className="h-9 min-w-[240px] rounded-lg border border-border-light bg-surface-primary px-3 text-sm text-content-primary outline-none focus:border-oe-blue focus:ring-1 focus:ring-oe-blue"
+            >
+              <option value="" disabled>
+                {t('reporting.choose_project', { defaultValue: 'Choose a project…' })}
+              </option>
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+/* ── Inline error + retry block for the project-scoped tabs ───────────────── */
+
+function StatsErrorBlock({ onRetry }: { onRetry: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <Card>
+      <CardContent>
+        <div role="alert" className="flex flex-col items-center justify-center gap-3 py-12 text-center">
+          <AlertTriangle size={36} className="text-red-500" />
+          <p className="max-w-sm text-sm text-content-secondary">
+            {t('reporting.stats_load_failed', {
+              defaultValue: 'Could not load this project’s metrics. Check your connection and try again.',
+            })}
+          </p>
+          <Button variant="secondary" onClick={onRetry} className="inline-flex items-center gap-2">
+            <RefreshCw size={16} />
+            {t('common.retry', { defaultValue: 'Retry' })}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+/* ── KPI strip skeleton mirroring the final 4-tile layout ─────────────────── */
+
+function KpiStripSkeleton({ tiles = 4 }: { tiles?: number }) {
+  return (
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      {Array.from({ length: tiles }).map((_, i) => (
+        <Skeleton key={i} className="h-20 rounded-xl" />
+      ))}
     </div>
   );
 }
@@ -585,28 +817,50 @@ function ExecutiveDashboard({
   activeProjects,
   valueByCurrency,
   kpiMap,
+  kpiLoading,
+  onCreateProject,
+  onDrillIn,
 }: {
   projects: Project[];
   activeProjects: Project[];
   valueByCurrency: Record<string, number>;
   kpiMap: Record<string, KPISnapshot>;
+  kpiLoading: boolean;
+  onCreateProject: () => void;
+  onDrillIn: (p: Project) => void;
 }) {
   const { t } = useTranslation();
 
-  // Sort currencies by descending subtotal so the largest leads. Each
-  // entry keeps its own ISO code — we never collapse them into one
-  // figure because there is no FX context here to convert with.
+  // No projects in the workspace: a teaching empty state, never a bare table
+  // row that reads as broken.
+  if (projects.length === 0) {
+    return (
+      <Card>
+        <CardContent>
+          <EmptyState
+            icon={<Briefcase size={24} />}
+            title={t('reporting.no_projects_title', { defaultValue: 'No projects yet' })}
+            description={t('reporting.no_projects_desc', {
+              defaultValue: 'Create a project to start tracking its KPIs here.',
+            })}
+            action={{
+              label: t('reporting.create_project', { defaultValue: 'Create a project' }),
+              onClick: onCreateProject,
+            }}
+          />
+        </CardContent>
+      </Card>
+    );
+  }
+
+  // Sort currencies by descending subtotal so the largest leads. Each entry
+  // keeps its own ISO code — we never collapse them into one figure because
+  // there is no FX context here to convert with.
   const currencyEntries = Object.entries(valueByCurrency).sort((a, b) => b[1] - a[1]);
-  const [topEntry] = currencyEntries;
-  const portfolioValueLabel =
-    currencyEntries.length === 0 || topEntry === undefined
-      ? 'N/A'
-      : currencyEntries.length === 1
-        ? `${fmtNum(topEntry[1])} ${topEntry[0]}`
-        : currencyEntries.map(([code, amount]) => `${fmtNum(amount)} ${code}`).join(' · ');
+  const kpiCount = Object.keys(kpiMap).length;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       {/* Portfolio KPIs */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <KPICard
@@ -621,19 +875,31 @@ function ExecutiveDashboard({
           color="green"
           icon={Activity}
         />
-        <KPICard
-          label={t('reporting.portfolio_value', { defaultValue: 'Portfolio Value' })}
-          value={portfolioValueLabel}
-          color="gray"
-          icon={BarChart3}
-        />
+        {/* Portfolio value: each currency rendered through MoneyDisplay so the
+            amount is locale-formatted and carries its ISO code — never blended,
+            never a hand-formatted EUR. */}
+        <PortfolioValueCard currencyEntries={currencyEntries} />
         <KPICard
           label={t('reporting.projects_with_kpi', { defaultValue: 'Projects with KPI' })}
-          value={`${Object.keys(kpiMap).length} / ${projects.length}`}
-          color={Object.keys(kpiMap).length >= projects.length ? 'green' : 'yellow'}
+          value={kpiLoading ? '…' : `${kpiCount} / ${projects.length}`}
+          color={kpiLoading ? 'gray' : kpiCount >= projects.length ? 'green' : 'yellow'}
           icon={TrendingUp}
         />
       </div>
+
+      {/* Explain the dashes: KPI snapshots are opt-in per project, so a fresh
+          project legitimately has no CPI/SPI/progress until its first snapshot. */}
+      {!kpiLoading && kpiCount < projects.length && (
+        <div className="flex items-start gap-2 rounded-lg border border-border-light bg-surface-secondary/60 px-4 py-2.5 text-xs text-content-secondary">
+          <Activity size={14} className="mt-0.5 shrink-0 text-content-tertiary" />
+          <span>
+            {t('reporting.kpi_empty_hint', {
+              defaultValue:
+                'CPI, SPI, budget and schedule progress appear once a project has its first cost snapshot. Projects without one show a dash, not a problem.',
+            })}
+          </span>
+        </div>
+      )}
 
       {/* Project table with KPI traffic lights */}
       <Card>
@@ -650,6 +916,7 @@ function ExecutiveDashboard({
                   <th className="px-4 py-3">{t('reporting.col_schedule', { defaultValue: 'Schedule %' })}</th>
                   <th className="px-4 py-3">{t('reporting.col_risk', { defaultValue: 'Risk Score' })}</th>
                   <th className="px-4 py-3">{t('reporting.col_open_items', { defaultValue: 'Open Items' })}</th>
+                  <th className="px-4 py-3" aria-hidden="true" />
                 </tr>
               </thead>
               <tbody>
@@ -663,8 +930,23 @@ function ExecutiveDashboard({
                   const openItems = (kpi?.open_rfis ?? 0) + (kpi?.open_submittals ?? 0) + (kpi?.open_defects ?? 0) + (kpi?.open_observations ?? 0);
 
                   return (
-                    <tr key={p.id} className="border-b border-border-light last:border-0 hover:bg-surface-secondary/50">
-                      <td className="px-4 py-3 font-medium text-content-primary">{p.name}</td>
+                    <tr
+                      key={p.id}
+                      onClick={() => onDrillIn(p)}
+                      tabIndex={0}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          onDrillIn(p);
+                        }
+                      }}
+                      aria-label={t('reporting.open_pm_for', {
+                        defaultValue: 'Open Project Manager dashboard for {{name}}',
+                        name: p.name,
+                      })}
+                      className="group cursor-pointer border-b border-border-light last:border-0 transition-colors hover:bg-surface-secondary/50 focus-visible:bg-surface-secondary/50 focus-visible:outline-none"
+                    >
+                      <td className="px-4 py-3 font-medium text-content-primary group-hover:text-oe-blue-text">{p.name}</td>
                       <td className="px-4 py-3"><StatusBadge status={p.status} /></td>
                       <td className="px-4 py-3">
                         <TrafficDot color={kpiColor(cpiVal, [0.9, 1.0])} label={fmt(kpi?.cpi)} />
@@ -681,17 +963,18 @@ function ExecutiveDashboard({
                       <td className="px-4 py-3">
                         <TrafficDot color={riskVal !== null ? kpiColor(10 - riskVal, [3, 7]) : 'gray'} label={fmt(kpi?.risk_score_avg)} />
                       </td>
-                      <td className="px-4 py-3 text-content-secondary">{kpi ? openItems : 'N/A'}</td>
+                      <td className="px-4 py-3 text-content-secondary">
+                        {kpi ? openItems : <span className="text-content-tertiary">{EMPTY}</span>}
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <ChevronRight
+                          size={16}
+                          className="text-content-quaternary transition-colors group-hover:text-oe-blue-text"
+                        />
+                      </td>
                     </tr>
                   );
                 })}
-                {projects.length === 0 && (
-                  <tr>
-                    <td colSpan={8} className="px-4 py-8 text-center text-content-secondary">
-                      {t('reporting.no_projects', { defaultValue: 'No projects found' })}
-                    </td>
-                  </tr>
-                )}
               </tbody>
             </table>
           </div>
@@ -701,9 +984,43 @@ function ExecutiveDashboard({
   );
 }
 
+/* ── Portfolio value tile (per-currency, MoneyDisplay) ────────────────────── */
+
+function PortfolioValueCard({ currencyEntries }: { currencyEntries: [string, number][] }) {
+  const { t } = useTranslation();
+  const label = t('reporting.portfolio_value', { defaultValue: 'Portfolio Value' });
+  return (
+    <div className="flex items-center gap-3 rounded-xl border border-border-light bg-surface-primary p-4 shadow-xs">
+      <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${trafficClasses.gray}`}>
+        <BarChart3 size={18} />
+      </div>
+      <div className="min-w-0">
+        <p className="truncate text-xs font-medium text-content-secondary">{label}</p>
+        {currencyEntries.length === 0 ? (
+          <p className="text-lg font-semibold text-content-tertiary">{EMPTY}</p>
+        ) : (
+          <p className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-lg font-semibold text-content-primary">
+            {currencyEntries.map(([code, amount], i) => (
+              <span key={code} className="inline-flex items-baseline">
+                {i > 0 && <span className="mr-2 text-content-quaternary">·</span>}
+                <MoneyDisplay amount={amount} currency={code} compact showCode />
+              </span>
+            ))}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /* ── Traffic dot component ─────────────────────────────────────────────────── */
 
 function TrafficDot({ color, label }: { color: TrafficLight; label: string }) {
+  // No value yet: render a quiet muted dash with no status dot, so an
+  // un-snapshotted project does not light up a row of grey "lights".
+  if (label === EMPTY) {
+    return <span className="text-sm text-content-tertiary">{EMPTY}</span>;
+  }
   const dotColors: Record<TrafficLight, string> = {
     green: 'bg-emerald-500',
     yellow: 'bg-amber-500',
@@ -726,24 +1043,41 @@ function PMDashboard({
   taskStats,
   rfiStats,
   scheduleStats,
+  loading,
+  error,
+  onRetry,
+  projects,
 }: {
   project?: Project;
   kpi?: KPISnapshot;
   taskStats: TaskStats | null;
   rfiStats: RFIStats | null;
   scheduleStats: ScheduleStats | null;
+  loading: boolean;
+  error: boolean;
+  onRetry: () => void;
+  projects: Project[];
 }) {
   const { t } = useTranslation();
   if (!project) {
-    return <PromptCard message={t('reporting.select_project_prompt', { defaultValue: 'Select a project to view PM dashboard' })} />;
+    return (
+      <RequiresProject
+        message={t('reporting.select_project_prompt', {
+          defaultValue: 'Choose a project to see its PM dashboard.',
+        })}
+        projects={projects}
+      />
+    );
   }
+  if (loading) return <KpiStripSkeleton />;
+  if (error) return <StatsErrorBlock onRetry={onRetry} />;
 
   const budgetPct = kpi?.budget_consumed_pct ? parseFloat(kpi.budget_consumed_pct) : null;
   const spiVal = kpi?.spi ? parseFloat(kpi.spi) : null;
   const cpiVal = kpi?.cpi ? parseFloat(kpi.cpi) : null;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       {/* Project KPIs */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <KPICard
@@ -779,25 +1113,25 @@ function PMDashboard({
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <KPICard
           label={t('reporting.open_rfis', { defaultValue: 'Open RFIs' })}
-          value={rfiStats ? String(rfiStats.open) : fmt(kpi?.open_rfis)}
+          value={rfiStats ? String(rfiStats.open) : fmtNum(kpi?.open_rfis)}
           color={kpiColor(rfiStats?.open !== undefined ? (rfiStats.open === 0 ? 10 : 10 - rfiStats.open) : null, [0, 5])}
           icon={FileText}
         />
         <KPICard
           label={t('reporting.open_submittals', { defaultValue: 'Open Submittals' })}
-          value={String(kpi?.open_submittals ?? 'N/A')}
+          value={fmtNum(kpi?.open_submittals)}
           color="gray"
           icon={ClipboardList}
         />
         <KPICard
           label={t('reporting.overdue_tasks', { defaultValue: 'Overdue Tasks' })}
-          value={taskStats ? String(taskStats.overdue) : 'N/A'}
-          color={taskStats?.overdue ? (taskStats.overdue > 5 ? 'red' : 'yellow') : 'gray'}
+          value={fmtNum(taskStats?.overdue_count)}
+          color={taskStats?.overdue_count ? (taskStats.overdue_count > 5 ? 'red' : 'yellow') : 'gray'}
           icon={AlertTriangle}
         />
         <KPICard
           label={t('reporting.total_tasks', { defaultValue: 'Total Tasks' })}
-          value={taskStats ? String(taskStats.total) : 'N/A'}
+          value={fmtNum(taskStats?.total)}
           color="gray"
           icon={CheckCircle2}
         />
@@ -834,7 +1168,11 @@ function PMDashboard({
               <StatBlock label={t('reporting.overdue', { defaultValue: 'Overdue' })} value={rfiStats.overdue} color="red" />
               <StatBlock
                 label={t('reporting.avg_response', { defaultValue: 'Avg Response (days)' })}
-                value={rfiStats.avg_response_days?.toFixed(1) ?? 'N/A'}
+                value={
+                  rfiStats.avg_days_to_response != null
+                    ? rfiStats.avg_days_to_response.toFixed(1)
+                    : EMPTY
+                }
               />
             </div>
           </CardContent>
@@ -846,43 +1184,69 @@ function PMDashboard({
 
 /* ── Estimator Dashboard ─────────��─────────────────────────────────────────── */
 
+interface EstimatorBoq {
+  id: string;
+  name: string;
+  status: string;
+  grand_total: number | string;
+  currency: string;
+  position_count: number;
+}
+
 function EstimatorDashboard({
   project,
   kpi,
+  projects,
 }: {
   project?: Project;
   kpi?: KPISnapshot;
+  projects: Project[];
 }) {
   const { t } = useTranslation();
-  const [boqs, setBoqs] = useState<Array<{ id: string; name: string; status: string; grand_total: number; currency: string; position_count: number }>>([]);
-  const [loadingBoqs, setLoadingBoqs] = useState(false);
+  const navigate = useNavigate();
+  const [boqs, setBoqs] = useState<EstimatorBoq[]>([]);
+  const [loadingBoqs, setLoadingBoqs] = useState(true);
+  const [boqsError, setBoqsError] = useState(false);
   const projectId = project?.id;
 
-  useEffect(() => {
-    if (!projectId) return;
+  const loadBoqs = useCallback(() => {
+    if (!projectId) return undefined;
     let cancelled = false;
     setLoadingBoqs(true);
+    setBoqsError(false);
     (async () => {
       try {
-        const data = await apiGet<Array<{ id: string; name: string; status: string; grand_total: number; currency: string; position_count: number }>>(
-          `/v1/boq/boqs/?project_id=${projectId}`,
-        );
+        const data = await apiGet<EstimatorBoq[]>(`/v1/boq/boqs/?project_id=${projectId}`);
         if (!cancelled) setBoqs(data);
       } catch {
-        if (!cancelled) setBoqs([]);
+        if (!cancelled) {
+          setBoqs([]);
+          setBoqsError(true);
+        }
       } finally {
         if (!cancelled) setLoadingBoqs(false);
       }
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [projectId]);
 
+  useEffect(() => loadBoqs(), [loadBoqs]);
+
   if (!project) {
-    return <PromptCard message={t('reporting.select_project_prompt_estimator', { defaultValue: 'Select a project to view Estimator dashboard' })} />;
+    return (
+      <RequiresProject
+        message={t('reporting.select_project_prompt_estimator', {
+          defaultValue: 'Choose a project to see its Estimator dashboard.',
+        })}
+        projects={projects}
+      />
+    );
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       {/* KPIs */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <KPICard
@@ -899,7 +1263,7 @@ function EstimatorDashboard({
         />
         <KPICard
           label={t('reporting.boq_count', { defaultValue: 'BOQs' })}
-          value={String(boqs.length)}
+          value={loadingBoqs ? '…' : String(boqs.length)}
           color="gray"
           icon={Calculator}
         />
@@ -909,9 +1273,30 @@ function EstimatorDashboard({
       <Card>
         <CardContent className="p-0">
           {loadingBoqs ? (
-            <div className="p-4">
-              <Skeleton className="h-20 w-full rounded-lg" />
+            <div className="space-y-2 p-4">
+              <Skeleton className="h-12 w-full rounded-lg" />
+              <Skeleton className="h-12 w-full rounded-lg" />
             </div>
+          ) : boqsError ? (
+            <div role="alert" className="flex items-center gap-2 px-4 py-4 text-sm text-red-700 dark:text-red-400">
+              <AlertTriangle size={16} className="shrink-0" />
+              <span>{t('reporting.boqs_load_failed', { defaultValue: 'Could not load BOQs for this project.' })}</span>
+              <button onClick={loadBoqs} className="ml-2 underline">
+                {t('common.retry', { defaultValue: 'Retry' })}
+              </button>
+            </div>
+          ) : boqs.length === 0 ? (
+            <EmptyState
+              icon={<Calculator size={24} />}
+              title={t('reporting.no_boqs_title', { defaultValue: 'No BOQs yet' })}
+              description={t('reporting.no_boqs_desc', {
+                defaultValue: 'Build a Bill of Quantities for this project to see its totals here.',
+              })}
+              action={{
+                label: t('reporting.open_boq', { defaultValue: 'Open BOQ editor' }),
+                onClick: () => navigate(`/projects/${projectId}/boq`),
+              }}
+            />
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
@@ -925,22 +1310,26 @@ function EstimatorDashboard({
                 </thead>
                 <tbody>
                   {boqs.map((b) => (
-                    <tr key={b.id} className="border-b border-border-light last:border-0 hover:bg-surface-secondary/50">
-                      <td className="px-4 py-3 font-medium text-content-primary">{b.name}</td>
+                    <tr
+                      key={b.id}
+                      onClick={() => navigate(`/projects/${projectId}/boq`)}
+                      tabIndex={0}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          navigate(`/projects/${projectId}/boq`);
+                        }
+                      }}
+                      className="group cursor-pointer border-b border-border-light last:border-0 transition-colors hover:bg-surface-secondary/50 focus-visible:bg-surface-secondary/50 focus-visible:outline-none"
+                    >
+                      <td className="px-4 py-3 font-medium text-content-primary group-hover:text-oe-blue-text">{b.name}</td>
                       <td className="px-4 py-3"><StatusBadge status={b.status} /></td>
                       <td className="px-4 py-3 text-right text-content-secondary">{b.position_count ?? 0}</td>
                       <td className="px-4 py-3 text-right font-medium text-content-primary">
-                        {fmtNum(b.grand_total, 2)} {b.currency}
+                        <MoneyDisplay amount={b.grand_total} currency={b.currency} showCode />
                       </td>
                     </tr>
                   ))}
-                  {boqs.length === 0 && (
-                    <tr>
-                      <td colSpan={4} className="px-4 py-8 text-center text-content-secondary">
-                        {t('reporting.no_boqs', { defaultValue: 'No BOQs in this project' })}
-                      </td>
-                    </tr>
-                  )}
                 </tbody>
               </table>
             </div>
@@ -957,42 +1346,60 @@ function SiteDashboard({
   project,
   safetyStats,
   scheduleStats,
+  loading,
+  error,
+  onRetry,
+  projects,
 }: {
   project?: Project;
   safetyStats: SafetyStats | null;
   scheduleStats: ScheduleStats | null;
+  loading: boolean;
+  error: boolean;
+  onRetry: () => void;
+  projects: Project[];
 }) {
   const { t } = useTranslation();
+  const navigate = useNavigate();
 
   if (!project) {
-    return <PromptCard message={t('reporting.select_project_prompt_site', { defaultValue: 'Select a project to view Site Engineer dashboard' })} />;
+    return (
+      <RequiresProject
+        message={t('reporting.select_project_prompt_site', {
+          defaultValue: 'Choose a project to see its Site Engineer dashboard.',
+        })}
+        projects={projects}
+      />
+    );
   }
+  if (loading) return <KpiStripSkeleton />;
+  if (error) return <StatsErrorBlock onRetry={onRetry} />;
 
   return (
-    <div className="space-y-6">
-      {/* Schedule KPIs */}
+    <div className="space-y-5">
+      {/* Schedule KPIs — a dash (not "N/A") when the project has no schedule. */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <KPICard
           label={t('reporting.today_activities', { defaultValue: 'Total Activities' })}
-          value={scheduleStats ? String(scheduleStats.total_activities) : 'N/A'}
+          value={fmtNum(scheduleStats?.total_activities)}
           color="gray"
           icon={ClipboardList}
         />
         <KPICard
           label={t('reporting.in_progress', { defaultValue: 'In Progress' })}
-          value={scheduleStats ? String(scheduleStats.in_progress) : 'N/A'}
+          value={fmtNum(scheduleStats?.in_progress)}
           color="green"
           icon={Activity}
         />
         <KPICard
           label={t('reporting.delayed_activities', { defaultValue: 'Delayed' })}
-          value={scheduleStats ? String(scheduleStats.delayed) : 'N/A'}
+          value={fmtNum(scheduleStats?.delayed)}
           color={scheduleStats?.delayed ? (scheduleStats.delayed > 3 ? 'red' : 'yellow') : 'gray'}
           icon={AlertTriangle}
         />
         <KPICard
           label={t('reporting.progress', { defaultValue: 'Progress' })}
-          value={scheduleStats ? `${scheduleStats.progress_pct?.toFixed(0) ?? 0}%` : 'N/A'}
+          value={scheduleStats?.progress_pct != null ? `${scheduleStats.progress_pct.toFixed(0)}%` : EMPTY}
           color={kpiColor(scheduleStats?.progress_pct ?? null, [50, 80])}
           icon={BarChart3}
         />
@@ -1022,7 +1429,7 @@ function SiteDashboard({
               />
               <StatBlock
                 label={t('reporting.days_safe', { defaultValue: 'Days Since Incident' })}
-                value={safetyStats.days_since_last_incident}
+                value={fmtNum(safetyStats.days_without_incident)}
                 color="emerald"
               />
             </div>
@@ -1031,9 +1438,17 @@ function SiteDashboard({
       ) : (
         <Card>
           <CardContent>
-            <p className="text-sm text-content-secondary">
-              {t('reporting.no_safety_data', { defaultValue: 'No safety data available for this project.' })}
-            </p>
+            <EmptyState
+              icon={<HardHat size={24} />}
+              title={t('reporting.no_safety_title', { defaultValue: 'No safety records yet' })}
+              description={t('reporting.no_safety_desc', {
+                defaultValue: 'Log incidents and observations to track this project’s safety performance here.',
+              })}
+              action={{
+                label: t('reporting.open_safety', { defaultValue: 'Open Safety module' }),
+                onClick: () => navigate('/safety'),
+              }}
+            />
           </CardContent>
         </Card>
       )}
@@ -1047,45 +1462,51 @@ function FinanceDashboardView({
   project,
   financeDash,
   procurementStats,
+  loading,
+  error,
+  onRetry,
+  projects,
 }: {
   project?: Project;
   financeDash: FinanceDashboard | null;
   procurementStats: ProcurementStats | null;
+  loading: boolean;
+  error: boolean;
+  onRetry: () => void;
+  projects: Project[];
 }) {
   const { t } = useTranslation();
+  const navigate = useNavigate();
 
   if (!project) {
-    return <PromptCard message={t('reporting.select_project_prompt_finance', { defaultValue: 'Select a project to view Finance dashboard' })} />;
+    return (
+      <RequiresProject
+        message={t('reporting.select_project_prompt_finance', {
+          defaultValue: 'Choose a project to see its Finance dashboard.',
+        })}
+        projects={projects}
+      />
+    );
   }
+  if (loading) return <KpiStripSkeleton />;
+  if (error) return <StatsErrorBlock onRetry={onRetry} />;
 
   // The procurement stats endpoint does not expose its own currency, so
   // committed money is shown against the project's finance currency
-  // (purchase orders inherit the project currency). Money must always
-  // carry its ISO code — a bare number is ambiguous. Derived from the
-  // finance payload's own currency first, then the project, never EUR.
+  // (purchase orders inherit the project currency). Derived from the finance
+  // payload's own currency first, then the project, never EUR.
   const procurementCurrency = financeDash?.currency || project.currency || '';
 
-  // Coerce the Decimal-string money fields once so arithmetic and
-  // formatting below operate on real numbers (money-bug fix). null means
-  // the figure was absent — render N/A instead of a misleading 0.
-  const currency = financeDash?.currency ?? '';
-  const totalPayable = toMoneyNum(financeDash?.total_payable);
-  const totalReceivable = toMoneyNum(financeDash?.total_receivable);
-  // Was overdue_payable (a key the endpoint never returns) — real wire field
-  // is total_overdue.
+  // Coerce the Decimal-string money fields once for the traffic-light logic.
+  // The amounts themselves render through MoneyDisplay (which coerces too).
+  const currency = financeDash?.currency || project.currency || '';
   const totalOverdue = toMoneyNum(financeDash?.total_overdue);
   const cashFlowNet = toMoneyNum(financeDash?.cash_flow_net);
-  // Real wire field is total_budget_revised; the old `total_budget` key never
-  // existed so this card always read N/A.
-  const totalBudgetRevised = toMoneyNum(financeDash?.total_budget_revised);
-  const totalCommitted = toMoneyNum(financeDash?.total_committed);
-  const totalActual = toMoneyNum(financeDash?.total_actual);
   // budget_consumed_pct is a percentage (may be string/float/null on the wire).
   const budgetConsumedPct = toMoneyNum(financeDash?.budget_consumed_pct);
   // Primary budget signal is the numeric consumed-% (unambiguous); the
   // backend's budget_warning_level string ("normal"|"caution"|"critical") is
-  // a secondary escalator. The old code compared the nonexistent
-  // `budget_warning` key, so the light was permanently green even at 100%.
+  // a secondary escalator.
   const warningLevel = (financeDash?.budget_warning_level ?? '').toLowerCase();
   const budgetColor: TrafficLight =
     warningLevel === 'critical' || (budgetConsumedPct !== null && budgetConsumedPct >= 100)
@@ -1097,32 +1518,34 @@ function FinanceDashboardView({
           : 'green';
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       {/* Finance KPIs */}
       {financeDash ? (
         <>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <KPICard
+            <MoneyKPICard
               label={t('reporting.payable', { defaultValue: 'Total Payable' })}
-              value={`${fmtNum(totalPayable, 2)} ${currency}`.trim()}
-              color="gray"
+              amount={financeDash.total_payable}
+              currency={currency}
               icon={Wallet}
             />
-            <KPICard
+            <MoneyKPICard
               label={t('reporting.receivable', { defaultValue: 'Total Receivable' })}
-              value={`${fmtNum(totalReceivable, 2)} ${currency}`.trim()}
-              color="gray"
+              amount={financeDash.total_receivable}
+              currency={currency}
               icon={TrendingUp}
             />
-            <KPICard
+            <MoneyKPICard
               label={t('reporting.overdue_total', { defaultValue: 'Total Overdue' })}
-              value={`${fmtNum(totalOverdue, 2)} ${currency}`.trim()}
+              amount={financeDash.total_overdue}
+              currency={currency}
               color={totalOverdue !== null && totalOverdue > 0 ? 'red' : 'green'}
               icon={AlertTriangle}
             />
-            <KPICard
+            <MoneyKPICard
               label={t('reporting.cash_flow_net', { defaultValue: 'Net Cash Flow' })}
-              value={`${fmtNum(cashFlowNet, 2)} ${currency}`.trim()}
+              amount={financeDash.cash_flow_net}
+              currency={currency}
               color={cashFlowNet === null ? 'gray' : cashFlowNet >= 0 ? 'green' : 'red'}
               icon={cashFlowNet !== null && cashFlowNet < 0 ? TrendingDown : TrendingUp}
             />
@@ -1131,27 +1554,27 @@ function FinanceDashboardView({
           {/* Budget and committed — replaces the invoices_due_* cards, which
               had no source on the finance dashboard endpoint. */}
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <KPICard
+            <MoneyKPICard
               label={t('reporting.budget_total', { defaultValue: 'Total Budget' })}
-              value={`${fmtNum(totalBudgetRevised, 2)} ${currency}`.trim()}
-              color="gray"
+              amount={financeDash.total_budget_revised}
+              currency={currency}
               icon={Wallet}
             />
-            <KPICard
+            <MoneyKPICard
               label={t('reporting.committed', { defaultValue: 'Committed' })}
-              value={`${fmtNum(totalCommitted, 2)} ${currency}`.trim()}
-              color="gray"
+              amount={financeDash.total_committed}
+              currency={currency}
               icon={ClipboardList}
             />
-            <KPICard
+            <MoneyKPICard
               label={t('reporting.actual_spend', { defaultValue: 'Actual Spend' })}
-              value={`${fmtNum(totalActual, 2)} ${currency}`.trim()}
-              color="gray"
+              amount={financeDash.total_actual}
+              currency={currency}
               icon={Wallet}
             />
             <KPICard
               label={t('reporting.budget_consumed', { defaultValue: 'Budget Consumed' })}
-              value={budgetConsumedPct !== null ? `${budgetConsumedPct.toFixed(1)}%` : 'N/A'}
+              value={budgetConsumedPct !== null ? `${budgetConsumedPct.toFixed(1)}%` : EMPTY}
               color={budgetColor}
               icon={BarChart3}
             />
@@ -1160,9 +1583,17 @@ function FinanceDashboardView({
       ) : (
         <Card>
           <CardContent>
-            <p className="text-sm text-content-secondary">
-              {t('reporting.no_finance_data', { defaultValue: 'No finance data available for this project. Create invoices and budgets first.' })}
-            </p>
+            <EmptyState
+              icon={<Wallet size={24} />}
+              title={t('reporting.no_finance_title', { defaultValue: 'No finance data yet' })}
+              description={t('reporting.no_finance_desc', {
+                defaultValue: 'Add a budget and record invoices to see this project’s cost position here.',
+              })}
+              action={{
+                label: t('reporting.open_finance', { defaultValue: 'Open Finance module' }),
+                onClick: () => navigate(`/projects/${project.id}/finance`),
+              }}
+            />
           </CardContent>
         </Card>
       )}
@@ -1178,12 +1609,12 @@ function FinanceDashboardView({
               <StatBlock label={t('reporting.total_pos', { defaultValue: 'Total POs' })} value={procurementStats.total_pos} />
               <StatBlock
                 label={t('reporting.committed', { defaultValue: 'Committed' })}
-                value={`${fmtNum(procurementStats.total_committed, 2)}${procurementCurrency ? ` ${procurementCurrency}` : ''}`}
+                value={<MoneyDisplay amount={procurementStats.total_committed} currency={procurementCurrency} showCode />}
               />
               <StatBlock
                 label={t('reporting.pending_delivery', { defaultValue: 'Pending Delivery' })}
-                value={procurementStats.pending_delivery}
-                color={procurementStats.pending_delivery > 0 ? 'amber' : 'emerald'}
+                value={procurementStats.pending_delivery_count}
+                color={procurementStats.pending_delivery_count > 0 ? 'amber' : 'emerald'}
               />
               <StatBlock
                 label={t('reporting.approved_pos', { defaultValue: 'Approved' })}
@@ -1219,7 +1650,7 @@ function StatBlock({
   color,
 }: {
   label: string;
-  value: string | number;
+  value: React.ReactNode;
   color?: StatColor;
 }) {
   const textColor = color ? STAT_COLOR_CLASSES[color] : 'text-content-primary';
@@ -1231,22 +1662,9 @@ function StatBlock({
   );
 }
 
-function PromptCard({ message }: { message: string }) {
-  return (
-    <Card>
-      <CardContent>
-        <div className="flex flex-col items-center justify-center py-12 text-center">
-          <BarChart3 size={40} className="mb-3 text-content-tertiary" />
-          <p className="text-sm text-content-secondary">{message}</p>
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
 /* ── Reports tab — templates + generated reports list ─────────────────────── */
 
-function ReportsTab({ project }: { project?: Project }) {
+function ReportsTab({ project, projects }: { project?: Project; projects: Project[] }) {
   const { t } = useTranslation();
   const [templates, setTemplates] = useState<ReportTemplate[]>([]);
   const [reports, setReports] = useState<GeneratedReport[]>([]);
@@ -1311,7 +1729,7 @@ function ReportsTab({ project }: { project?: Project }) {
         project_id: projectId,
         template_id: template.id,
         report_type: template.report_type,
-        title: `${template.name} — ${new Date().toLocaleDateString()}`,
+        title: `${template.name} - ${new Date().toLocaleDateString()}`,
         format: 'pdf',
       });
       await fetchReports();
@@ -1323,11 +1741,18 @@ function ReportsTab({ project }: { project?: Project }) {
   };
 
   if (!project) {
-    return <PromptCard message={t('reporting.select_project_prompt_reports', { defaultValue: 'Select a project to view reports' })} />;
+    return (
+      <RequiresProject
+        message={t('reporting.select_project_prompt_reports', {
+          defaultValue: 'Choose a project to generate and view its reports.',
+        })}
+        projects={projects}
+      />
+    );
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       {/* Templates */}
       <Card>
         <CardContent>
@@ -1373,7 +1798,7 @@ function ReportsTab({ project }: { project?: Project }) {
                   {templates.map((tpl) => (
                     <tr key={tpl.id} className="border-b border-border-light last:border-0 hover:bg-surface-secondary/50">
                       <td className="px-4 py-3 font-medium text-content-primary">{tpl.name}</td>
-                      <td className="px-4 py-3 text-content-secondary">{tpl.report_type}</td>
+                      <td className="px-4 py-3 text-content-secondary">{humanizeReportType(tpl.report_type)}</td>
                       <td className="px-4 py-3 text-content-secondary">
                         {tpl.is_system
                           ? t('reporting.scope_system', { defaultValue: 'System' })
@@ -1454,7 +1879,7 @@ function ReportsTab({ project }: { project?: Project }) {
                     return (
                       <tr key={r.id} className="border-b border-border-light last:border-0 hover:bg-surface-secondary/50">
                         <td className="px-4 py-3 font-medium text-content-primary">{r.title}</td>
-                        <td className="px-4 py-3 text-content-secondary">{r.report_type}</td>
+                        <td className="px-4 py-3 text-content-secondary">{humanizeReportType(r.report_type)}</td>
                         <td className="px-4 py-3 text-content-secondary uppercase">{r.format}</td>
                         <td className="px-4 py-3 text-content-secondary">{ts}</td>
                         <td className="px-4 py-3 text-right">
@@ -1610,7 +2035,7 @@ function ReportViewerModal({
               {report.title}
             </h2>
             <p className="truncate text-xs text-content-secondary">
-              {report.report_type} · {report.format?.toUpperCase()}
+              {humanizeReportType(report.report_type)} · {report.format?.toUpperCase()}
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-2">

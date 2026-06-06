@@ -1,5 +1,5 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
-"""‌⁠‍Compliance documents service — CRUD + status derivation."""
+"""‌⁠‍Compliance documents service - CRUD + status derivation."""
 
 from __future__ import annotations
 
@@ -47,7 +47,7 @@ def recompute_status(
 
     Rules:
         - If the caller has explicitly marked the document ``cancelled``
-          or ``void``, preserve that — those are terminal manual states
+          or ``void``, preserve that - those are terminal manual states
           and must never auto-flip back to ``active``.
         - ``today > expires_at``  → ``expired``.
         - ``today + notify_days_before >= expires_at`` → ``expiring_soon``.
@@ -67,7 +67,7 @@ def recompute_status(
     if today > expires_at:
         return "expired"
 
-    # Inclusive on both sides — exactly ``notify_days_before`` days out
+    # Inclusive on both sides - exactly ``notify_days_before`` days out
     # already counts as "expiring soon" so reminders aren't silently
     # skipped on the boundary day.
     delta = (expires_at - today).days
@@ -99,19 +99,19 @@ class ComplianceDocService:
         """Fire ``compliance_docs.expiry.alert`` on a status transition.
 
         Only the *transition* into ``expiring_soon`` / ``expired`` fires
-        the event — repeated PATCHes that leave a doc inside the same
+        the event - repeated PATCHes that leave a doc inside the same
         alert bucket don't re-spam subscribers. ``previous_status=None``
         is treated as "no prior state" (create path).
         """
         if doc.status not in _ALERT_STATUSES:
             return
         if previous_status == doc.status:
-            return  # No transition — already in this bucket.
+            return  # No transition - already in this bucket.
 
         try:
             today = datetime.now(UTC).date()
             days = (doc.expires_at - today).days if doc.expires_at else 0
-        except TypeError:  # pragma: no cover — defensive
+        except TypeError:  # pragma: no cover - defensive
             days = 0
 
         # Detached publish so SQLite's single-writer constraint isn't
@@ -145,11 +145,11 @@ class ComplianceDocService:
         """
         if attachment_document_id is None:
             return
-        # Lazy import — keeps the module loadable when the documents
+        # Lazy import - keeps the module loadable when the documents
         # module is disabled.
         try:
             from app.modules.documents.models import Document
-        except ImportError:  # pragma: no cover — documents always present
+        except ImportError:  # pragma: no cover - documents always present
             return
 
         stmt = select(Document.project_id).where(Document.id == attachment_document_id)
@@ -283,6 +283,17 @@ class ComplianceDocService:
         # If status not explicitly set in the patch, recompute it from
         # the (possibly updated) date window.
         explicit_status = fields.get("status")
+        # FSM guard: ``cancelled`` / ``void`` are terminal manual states.
+        # ``recompute_status`` already preserves them on the auto-derive
+        # path, but an explicit ``status`` in the patch body would bypass
+        # that and let a doc be un-cancelled (e.g. ``cancelled`` → ``active``).
+        # Mirror the terminal-state contract here so the explicit path can't
+        # break it.
+        if explicit_status is not None and doc.status in _TERMINAL_STATUSES and explicit_status != doc.status:
+            raise HTTPException(
+                status_code=http_status.HTTP_400_BAD_REQUEST,
+                detail=("Cannot transition out of a terminal status."),
+            )
         if explicit_status is None:
             fields["status"] = recompute_status(
                 today=self._today(),
@@ -296,7 +307,7 @@ class ComplianceDocService:
 
         # Audit: track who applied the patch inside ``metadata_`` so we
         # don't need an alembic migration for a new column. Caller may
-        # have also patched ``metadata`` itself — merge instead of
+        # have also patched ``metadata`` itself - merge instead of
         # clobber.
         if user_id is not None:
             merged_meta = dict(fields.get("metadata_") or doc.metadata_ or {})
@@ -311,7 +322,7 @@ class ComplianceDocService:
         fresh = await self.repo.get_by_id(doc_id)
         result = fresh or doc
         # Emit alert only if the patch *moved* the doc into an alerting
-        # bucket — same bucket → no event (avoids subscriber re-spam).
+        # bucket - same bucket → no event (avoids subscriber re-spam).
         self._publish_expiry_alert(result, previous_status=previous_status)
         return result
 
@@ -332,7 +343,7 @@ class ComplianceDocService:
         """Record a magic-byte-validated upload against a compliance doc.
 
         Caller (the router) is responsible for the magic-byte gate and
-        for actually writing the bytes to disk — this method just
+        for actually writing the bytes to disk - this method just
         persists the metadata. Stored under ``metadata_["attachment"]``
         to avoid an alembic migration; readers should treat the dict
         as opaque.

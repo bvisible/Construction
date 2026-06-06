@@ -19,7 +19,7 @@ import {
   XCircle,
   AlertTriangle,
   Clock,
-  Globe2,
+  MapPin,
 } from 'lucide-react';
 import {
   Button,
@@ -34,6 +34,7 @@ import {
   WideModalField,
   SkeletonTable,
 } from '@/shared/ui';
+import { PageHeader } from '@/shared/ui/PageHeader';
 import { RequiresProject } from '@/shared/auth/RequiresProject';
 import { useConfirm } from '@/shared/hooks/useConfirm';
 import { SectionIntro } from '@/features/validation';
@@ -123,14 +124,20 @@ const STATUS_TRANSITION: Record<PunchStatus, { next: PunchStatus; labelKey: stri
   in_progress: [
     { next: 'resolved', labelKey: 'punch.action_resolve', defaultLabel: 'Mark Resolved', icon: CheckCircle2 },
   ],
+  // Reopen targets must mirror the backend FSM (punchlist/service.py
+  // VALID_TRANSITIONS): resolved/verified/closed may all go back to "open" —
+  // "in_progress" is NOT a legal reopen target and the API rejects it.
   resolved: [
     { next: 'verified', labelKey: 'punch.action_verify', defaultLabel: 'Verify', icon: ShieldCheck },
-    { next: 'in_progress', labelKey: 'punch.action_reopen', defaultLabel: 'Reopen', icon: XCircle },
+    { next: 'open', labelKey: 'punch.action_reopen', defaultLabel: 'Reopen', icon: XCircle },
   ],
   verified: [
     { next: 'closed', labelKey: 'punch.action_close', defaultLabel: 'Close', icon: CheckCircle2 },
+    { next: 'open', labelKey: 'punch.action_reopen', defaultLabel: 'Reopen', icon: XCircle },
   ],
-  closed: [],
+  closed: [
+    { next: 'open', labelKey: 'punch.action_reopen', defaultLabel: 'Reopen', icon: XCircle },
+  ],
 };
 
 /* ── Styling helpers ──────────────────────────────────────────────────── */
@@ -186,14 +193,17 @@ function StatsCards({ summary }: { summary: PunchSummary | undefined }) {
   ];
 
   return (
-    <div className="grid grid-cols-3 lg:grid-cols-6 gap-4">
+    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
       {items.map((item) => (
-        <Card key={item.label} className="p-4 animate-card-in">
-          <p className="text-2xs text-content-tertiary uppercase tracking-wide">{item.label}</p>
-          <p className={clsx('text-xl font-bold mt-1 tabular-nums', item.cls)}>
+        <div
+          key={item.label}
+          className="rounded-xl border border-border bg-surface-primary p-3 animate-card-in"
+        >
+          <p className="text-2xs uppercase tracking-wide text-content-tertiary">{item.label}</p>
+          <p className={clsx('mt-1 text-lg font-semibold tabular-nums', item.cls)}>
             {item.value}
           </p>
-        </Card>
+        </div>
       ))}
     </div>
   );
@@ -669,6 +679,11 @@ export function PunchListPage() {
   });
 
   const projectId = activeProjectId || projects[0]?.id || '';
+  // Breadcrumb only links a project when one is explicitly in the global
+  // context (never the projects[0] fallback), matching the rest of the cluster.
+  const breadcrumbProjectName = activeProjectId
+    ? projects.find((p) => p.id === activeProjectId)?.name
+    : undefined;
 
   const { data: punchItems = [], isLoading, isError, error, refetch } = useQuery({
     queryKey: ['punchlist', projectId, filterPriority, filterStatus, filterCategory, filterAssignee],
@@ -876,98 +891,83 @@ export function PunchListPage() {
   );
 
   return (
-    <div className="mx-auto max-w-7xl px-6 py-6 animate-fade-in">
-      {/* Breadcrumb */}
+    <div className="animate-fade-in space-y-5">
+      {/* Breadcrumb — the Home icon already links to the dashboard, and a lone
+          module label auto-hides (MODULE_STYLE_GUIDE section 2.1), so no
+          literal "Dashboard" item. A project link is added once one is in
+          context, matching the rest of the quality cluster. */}
       <Breadcrumb
         items={[
-          { label: t('nav.dashboard', { defaultValue: 'Dashboard' }), to: '/' },
+          ...(breadcrumbProjectName && activeProjectId
+            ? [{ label: breadcrumbProjectName, to: `/projects/${activeProjectId}` }]
+            : []),
           { label: t('punch.title', { defaultValue: 'Punch List' }) },
         ]}
       />
 
-      {/* ── Header: single compact row ─────────────────────────────────── */}
-      <div className="mt-3 flex items-center justify-between gap-3 flex-nowrap overflow-x-auto">
-        {/* Left: title */}
-        <h1 className="text-lg font-bold text-content-primary flex items-center gap-2 shrink-0">
-          <ListChecks size={20} className="text-oe-blue" />
-          {t('punch.title', { defaultValue: 'Punch List' })}
-        </h1>
-
-        {/* Right: controls */}
-        <div className="flex items-center gap-2 shrink-0">
-          {/* Project selector */}
-          {projects.length > 0 && (
-            <select
-              value={projectId}
-              onChange={(e) => {
-                const p = projects.find((pr) => pr.id === e.target.value);
-                if (p) {
-                  useProjectContextStore.getState().setActiveProject(p.id, p.name);
-                }
-              }}
-              aria-label={t('punch.select_project', { defaultValue: 'Project...' })}
-              className={inputCls + ' !h-8 !text-xs max-w-[180px]'}
+      {/* ── Header: subtitle + primary actions ─────────────────────────── */}
+      {/* Module title and icon live in the global top app bar; project
+          selection is handled by the global top bar and read here from the
+          shared project context. */}
+      <PageHeader
+        srTitle={t('punch.title', { defaultValue: 'Punch List' })}
+        subtitle={t('punch.header_subtitle', {
+          defaultValue: 'Track snags and deficiencies through to close-out',
+        })}
+        actions={
+          <>
+            {projectId && (
+              <Button
+                variant="secondary"
+                size="sm"
+                icon={<MapPin size={14} />}
+                onClick={() => navigate(`/projects/${projectId}/geo`)}
+                title={t('geo_hub.view_on_map', { defaultValue: 'View on map' })}
+                data-testid="punchlist-view-on-map"
+              >
+                {t('geo_hub.view_on_map', { defaultValue: 'View on map' })}
+              </Button>
+            )}
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => setShowAddModal(true)}
+              disabled={!projectId}
+              icon={<Plus size={14} />}
             >
-              <option value="" disabled>
-                {t('punch.select_project', { defaultValue: 'Project...' })}
-              </option>
-              {projects.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-          )}
-          {projectId && (
-            <button
-              type="button"
-              onClick={() => navigate(`/projects/${projectId}/geo`)}
-              className="inline-flex items-center gap-1.5 rounded-md border border-border-light bg-surface-primary px-2.5 py-1.5 text-xs font-medium text-content-secondary hover:bg-surface-secondary hover:text-oe-blue focus:outline-none focus:ring-2 focus:ring-oe-blue/40 shrink-0 whitespace-nowrap"
-              title={t('geo_hub.view_on_map', { defaultValue: 'View on map' })}
-              aria-label={t('geo_hub.view_on_map', { defaultValue: 'View on map' })}
-              data-testid="punchlist-view-on-map"
-            >
-              <Globe2 size={13} />
-              {t('geo_hub.view_on_map', { defaultValue: 'View on map' })}
-            </button>
-          )}
-          <Button variant="primary" size="sm" onClick={() => setShowAddModal(true)} disabled={!projectId} className="shrink-0 whitespace-nowrap" icon={<Plus size={14} />}>
-            {t('punch.new_item', { defaultValue: 'New Item' })}
-          </Button>
-        </div>
-      </div>
+              {t('punch.new_item', { defaultValue: 'New Item' })}
+            </Button>
+          </>
+        }
+      />
 
-      <div className="mt-4">
-        <SectionIntro
-          storageKey="punchlist"
-          title={t('punch.intro_title', {
-            defaultValue: 'Track snags & deficiencies to close-out',
-          })}
-          links={[
-            {
-              label: t('punch.intro_link_inspections', { defaultValue: 'Inspections' }),
-              onClick: () => navigate('/inspections'),
-            },
-            {
-              label: t('punch.intro_link_ncr', { defaultValue: 'NCRs' }),
-              onClick: () => navigate('/ncr'),
-            },
-          ]}
-        >
-          {t('punch.intro_body', {
-            defaultValue:
-              'Punch list items capture outstanding work, snags and minor defects. Move each item through Open → In Progress → Resolved → Verified → Closed. Items raised from a failed inspection or an NCR are tagged with their source so you can trace them back. Use the Kanban view to manage flow, the list view for bulk triage.',
-          })}
-        </SectionIntro>
-      </div>
+      <SectionIntro
+        storageKey="punchlist"
+        title={t('punch.intro_title', {
+          defaultValue: 'Nothing slips through at handover',
+        })}
+        links={[
+          {
+            label: t('punch.intro_link_inspections', { defaultValue: 'Inspections' }),
+            onClick: () => navigate('/inspections'),
+          },
+          {
+            label: t('punch.intro_link_ncr', { defaultValue: 'NCRs' }),
+            onClick: () => navigate('/ncr'),
+          },
+        ]}
+      >
+        {t('punch.intro_body', {
+          defaultValue:
+            'Punch list items capture outstanding work, snags and minor defects. Move each item Open to In Progress to Resolved to Verified to Closed, and reopen anything back to Open straight from Resolved, Verified or Closed when a fix does not hold up on a re-check. Items raised from a failed inspection or an NCR are tagged with their source so you can trace them back. Use the Kanban view to manage flow, the list view for bulk triage.',
+        })}
+      </SectionIntro>
 
-      {/* Stats */}
-      <div className="mt-6">
-        <StatsCards summary={summary} />
-      </div>
+      {/* KPI strip */}
+      <StatsCards summary={summary} />
 
       {/* Toolbar */}
-      <div className="mt-6 flex flex-col sm:flex-row sm:items-center gap-3">
+      <div className="flex flex-col sm:flex-row sm:items-center gap-3">
         {/* Search */}
         <div className="relative flex-1 max-w-sm">
           <Search
@@ -1036,7 +1036,7 @@ export function PunchListPage() {
 
       {/* Collapsible filters */}
       {showFilters && (
-        <div className="mt-3 flex flex-wrap gap-3 animate-fade-in">
+        <div className="flex flex-wrap gap-3 animate-fade-in">
           <select
             value={filterPriority}
             onChange={(e) => setFilterPriority(e.target.value as PunchPriority | '')}
@@ -1116,7 +1116,7 @@ export function PunchListPage() {
       )}
 
       {/* Content */}
-      <div className="mt-6">
+      <div>
         {!projectId ? (
           <RequiresProject
             emptyHint={t('punch.no_project_desc', {

@@ -4,7 +4,7 @@
 The service issues lightweight per-category SELECT-COUNT statements (one
 per data point) against the existing sibling-module tables. There is
 NEVER a Python-side join, an ORM hydration of a list and a manual
-``len()``, or an N+1 — every count is its own ``func.count()`` query.
+``len()``, or an N+1 - every count is its own ``func.count()`` query.
 
 Each sub-count is wrapped in :func:`_safe_count` so a missing table /
 mid-migration deploy / dropped dependency on a smaller install never
@@ -63,7 +63,7 @@ logger = logging.getLogger(__name__)
 _DASHBOARD_TTL_SECONDS = 30.0
 
 #: Module-scoped cache. Keyed by ``project_id``; value is the tuple
-#: ``(payload, monotonic_ts)``. Process-local — no cross-worker share —
+#: ``(payload, monotonic_ts)``. Process-local - no cross-worker share -
 #: which is fine because the cache is purely a request-rate dampener.
 _DASHBOARD_CACHE: dict[uuid.UUID, tuple[CoordinationDashboardResponse, float]] = {}
 
@@ -88,7 +88,7 @@ def _normalise_trade(value: str | None) -> str:
     Mirrors :func:`clash_cost_impact.service._normalise_discipline` but
     keeps the bucket vocabulary at the 6 canonical names the dashboard
     needs (the cost-impact module rolls up to 7+ vocabularies for its
-    own lookup table). Unknown labels fall through to ``"other"`` — the
+    own lookup table). Unknown labels fall through to ``"other"`` - the
     matrix never silently drops a clash.
     """
     if not value:
@@ -151,15 +151,15 @@ async def _safe_count(
         return int(value or 0)
     except SQLAlchemyError as exc:
         logger.warning(
-            "coordination_hub: safe-count failed for %s — returning 0 (%s)",
+            "coordination_hub: safe-count failed for %s - returning 0 (%s)",
             label,
             exc.__class__.__name__,
         )
         await _safe_rollback(session)
         return 0
-    except Exception:  # noqa: BLE001 — defensive: never 500 the dashboard
+    except Exception:  # noqa: BLE001 - defensive: never 500 the dashboard
         logger.exception(
-            "coordination_hub: unexpected error counting %s — returning 0",
+            "coordination_hub: unexpected error counting %s - returning 0",
             label,
         )
         await _safe_rollback(session)
@@ -178,7 +178,7 @@ async def _safe_scalar(
         return result.scalar()
     except SQLAlchemyError as exc:
         logger.warning(
-            "coordination_hub: safe-scalar failed for %s — returning None (%s)",
+            "coordination_hub: safe-scalar failed for %s - returning None (%s)",
             label,
             exc.__class__.__name__,
         )
@@ -186,7 +186,7 @@ async def _safe_scalar(
         return None
     except Exception:  # noqa: BLE001
         logger.exception(
-            "coordination_hub: unexpected error fetching %s — returning None",
+            "coordination_hub: unexpected error fetching %s - returning None",
             label,
         )
         await _safe_rollback(session)
@@ -205,7 +205,7 @@ async def _safe_list(
         return list(result.all())
     except SQLAlchemyError as exc:
         logger.warning(
-            "coordination_hub: safe-list failed for %s — returning [] (%s)",
+            "coordination_hub: safe-list failed for %s - returning [] (%s)",
             label,
             exc.__class__.__name__,
         )
@@ -213,7 +213,7 @@ async def _safe_list(
         return []
     except Exception:  # noqa: BLE001
         logger.exception(
-            "coordination_hub: unexpected error fetching %s — returning []",
+            "coordination_hub: unexpected error fetching %s - returning []",
             label,
         )
         await _safe_rollback(session)
@@ -243,7 +243,7 @@ class CoordinationHubService:
                 BIMFederationModel,
                 BIMModel,
             )
-        except Exception:  # pragma: no cover — bim_hub always present today
+        except Exception:  # pragma: no cover - bim_hub always present today
             logger.warning("coordination_hub: bim_hub models unavailable")
             return FederationStats()
 
@@ -253,7 +253,7 @@ class CoordinationHubService:
             label="federations",
         )
 
-        # Member count joined to project — never trust the join row alone
+        # Member count joined to project - never trust the join row alone
         # because deleted federations cascade and there could be orphans
         # mid-migration.
         members_stmt = (
@@ -358,10 +358,10 @@ class CoordinationHubService:
             resolved     → ``delta.resolved``  (left this period)
             reopened     → derived heuristic: persisted issues whose
                            ``resolved_run_id`` is non-null (they came
-                           back). Best-effort — the schema doesn't track
+                           back). Best-effort - the schema doesn't track
                            a true reopen count.
 
-        The window is "since the latest run" — we don't filter by ts
+        The window is "since the latest run" - we don't filter by ts
         here because the lifecycle column is the canonical signal. When
         the issue table is missing or unreadable the delta is zeroed.
         """
@@ -384,7 +384,7 @@ class CoordinationHubService:
         )
         # A reopen is a persisted issue that previously hit a resolved
         # run (resolved_run_id is non-null). It's an honest under-count
-        # — the schema doesn't have a dedicated reopen-counter — but
+        # - the schema doesn't have a dedicated reopen-counter - but
         # better than zero for the heat-map signal.
         reopened_q = select(func.count(ClashIssue.id)).where(
             and_(
@@ -475,7 +475,7 @@ class CoordinationHubService:
         # Project-scoped views are addressed by ``scope_id == project_id``
         # and are a true per-project count. User-scoped ("personal")
         # views are owned by a user GLOBALLY and carry no project link,
-        # so ``user_count`` is deliberately an ALL-PROJECTS figure — there
+        # so ``user_count`` is deliberately an ALL-PROJECTS figure - there
         # is no cheap user-project join to scope it. The UI must label it
         # "personal views (all projects)" rather than implying it is
         # project-scoped; this matches how BIMcollab Zoom surfaces its
@@ -517,7 +517,7 @@ class CoordinationHubService:
                 BCFTopic.created_at >= thirty_days_ago,
             )
         )
-        # We don't yet split BCF import vs export at the row level —
+        # We don't yet split BCF import vs export at the row level -
         # there is no ``direction`` column on ``BCFTopic``. ``imported``
         # is conservatively counted as topics whose ``creation_author``
         # is set + differs from ``created_by``; absent that we surface
@@ -582,7 +582,7 @@ class CoordinationHubService:
     ) -> CoordinationDashboardResponse:
         """Build the full project-level coordination payload.
 
-        ``currency`` comes from the owning project — we don't read it
+        ``currency`` comes from the owning project - we don't read it
         here so the router can return a 404 before the heavy aggregation
         runs.
         """
@@ -599,7 +599,7 @@ class CoordinationHubService:
         # Run them SEQUENTIALLY on the shared self.session: an AsyncSession is
         # not safe for concurrent use, and on PostgreSQL (the v6 default) a
         # concurrent fan-out would interleave statements on one connection and
-        # one failing query would abort the shared transaction — turning the
+        # one failing query would abort the shared transaction - turning the
         # rest of the dashboard into silent zeros. The per-counter _safe_*
         # helpers roll the session back on error so a missing optional table
         # cannot cascade to its neighbours.
@@ -635,13 +635,20 @@ class CoordinationHubService:
 
     # ── Trade matrix ────────────────────────────────────────────────────────
 
-    async def trade_matrix(self, project_id: uuid.UUID) -> TradeMatrixResponse:
+    async def trade_matrix(self, project_id: uuid.UUID, *, currency: str = "") -> TradeMatrixResponse:
         """6×6 discipline-pair heat-map of OPEN clashes for ``project_id``.
 
         Rows / cols come from :data:`CANONICAL_TRADES`; cells aggregate
-        ``count`` (all statuses), ``open`` and ``resolved``. A pair is
+        ``count`` (all statuses), ``open``, ``resolved`` and the summed
+        open ``cost_impact`` (rework + labour) of that pair. A pair is
         normalised symmetrically (row index ≤ col index) so we never
         produce duplicate cells like (struct, arch) AND (arch, struct).
+
+        The cost weighting reuses the :mod:`clash_cost_impact` kernel
+        (same arithmetic the cost dashboard shows) so a "weight by money"
+        toggle in the UI is honest end to end, not a fresh client guess.
+        When the cost module is unavailable the cells still carry counts
+        and ``cost_impact`` degrades to ``0`` - the matrix never 500s.
         """
         try:
             from app.modules.clash.models import ClashResult, ClashRun
@@ -651,6 +658,7 @@ class CoordinationHubService:
                 project_id=project_id,
                 trades=list(CANONICAL_TRADES),
                 cells=[],
+                currency=currency,
             )
 
         stmt = (
@@ -674,6 +682,7 @@ class CoordinationHubService:
                 project_id=project_id,
                 trades=list(CANONICAL_TRADES),
                 cells=[],
+                currency=currency,
             )
 
         # Pair-key → (count, open, resolved). The pair is sorted
@@ -693,6 +702,10 @@ class CoordinationHubService:
             elif status_ in ("approved", "resolved"):
                 cell["resolved"] += n_int
 
+        # Cost weighting per canonical pair. Best-effort: a missing cost
+        # module / priced-rework leaves every pair at Decimal("0").
+        cost_by_pair = await self._cost_impact_by_canonical_pair(project_id)
+
         cells = [
             TradeMatrixCell(
                 row=row,
@@ -700,6 +713,7 @@ class CoordinationHubService:
                 count=v["count"],
                 open=v["open"],
                 resolved=v["resolved"],
+                cost_impact=cost_by_pair.get((row, col), Decimal("0")),
             )
             for (row, col), v in agg.items()
         ]
@@ -707,16 +721,95 @@ class CoordinationHubService:
         # deterministically (snapshot-friendly).
         idx = {t: i for i, t in enumerate(CANONICAL_TRADES)}
         cells.sort(key=lambda c: (idx.get(c.row, 999), idx.get(c.col, 999)))
+        total_cost = sum((c.cost_impact for c in cells), Decimal("0"))
         return TradeMatrixResponse(
             project_id=project_id,
             trades=list(CANONICAL_TRADES),
             cells=cells,
+            currency=currency,
+            total_cost_impact=total_cost,
         )
+
+    async def _cost_impact_by_canonical_pair(self, project_id: uuid.UUID) -> dict[tuple[str, str], Decimal]:
+        """Open cost-impact summed per canonical (row, col) trade pair.
+
+        Reuses the :class:`ClashCostImpactService` per-clash arithmetic
+        kernel so the money figure matches the cost dashboard exactly,
+        then re-buckets each clash into the matrix's own 6-trade
+        vocabulary (the cost service keeps mechanical / electrical /
+        plumbing separate; the matrix folds all three into ``mep``).
+
+        Returns an empty dict on any failure - the matrix degrades to a
+        count-only view rather than 500ing. Reads BOQ positions ONCE for
+        the whole project so we never N+1 over clashes.
+        """
+        try:
+            from app.modules.clash.models import ClashResult, ClashRun
+            from app.modules.clash.schemas import OPEN_STATUSES
+            from app.modules.clash_cost_impact.service import (
+                ClashCostImpactService,
+            )
+        except Exception:
+            return {}
+
+        cost_svc = ClashCostImpactService(self.session)
+        project = await cost_svc._load_project(project_id)  # noqa: SLF001
+        if project is None:
+            return {}
+
+        # ``select(Entity)`` rows come back as 1-tuple ``Row`` objects from
+        # ``.all()``; use ``.scalars()`` so we iterate the ORM instances
+        # directly (a ``Row`` is not an ``isinstance`` of ``tuple``).
+        try:
+            result = await self.session.execute(
+                select(ClashResult)
+                .join(ClashRun, ClashRun.id == ClashResult.run_id)
+                .where(
+                    and_(
+                        ClashRun.project_id == project_id,
+                        ClashResult.status.in_(OPEN_STATUSES),
+                    )
+                )
+            )
+            open_clashes = list(result.scalars().all())
+        except SQLAlchemyError:
+            await _safe_rollback(self.session)
+            return {}
+        except Exception:  # noqa: BLE001
+            logger.exception("coordination_hub: cost-matrix clash load failed")
+            await _safe_rollback(self.session)
+            return {}
+        if not open_clashes:
+            return {}
+
+        try:
+            positions = await cost_svc._positions_for_project(project_id)  # noqa: SLF001
+        except SQLAlchemyError:
+            await _safe_rollback(self.session)
+            return {}
+        except Exception:  # noqa: BLE001
+            logger.exception("coordination_hub: cost-matrix positions load failed")
+            await _safe_rollback(self.session)
+            return {}
+
+        out: dict[tuple[str, str], Decimal] = defaultdict(lambda: Decimal("0"))
+        for clash in open_clashes:
+            try:
+                affected = cost_svc._affected_positions(clash, positions)  # noqa: SLF001
+                _, clash_total = cost_svc._compute_impact(clash, project, affected)  # noqa: SLF001
+            except Exception:  # noqa: BLE001 - never let one bad row break the matrix
+                continue
+            a = _normalise_trade(getattr(clash, "a_discipline", None))
+            b = _normalise_trade(getattr(clash, "b_discipline", None))
+            if a > b:
+                a, b = b, a
+            out[(a, b)] += clash_total
+        return dict(out)
 
     # ── Timeline ────────────────────────────────────────────────────────────
 
     async def timeline(self, project_id: uuid.UUID, *, days: int = 30) -> TimelineResponse:
-        """Activity stream — UNION of created-rows across sibling modules.
+        """Activity stream - UNION of created-rows across sibling modules.
 
         We pull at most ``_TIMELINE_MAX_EVENTS`` per source then merge +
         truncate; this keeps each query bounded and lets a noisy source
@@ -916,7 +1009,7 @@ class CoordinationHubService:
         """Insert any missing default row; idempotent + race-tolerant.
 
         On a unique-constraint collision (parallel first-read from two
-        workers) we swallow the error and re-fetch — both writers wind
+        workers) we swallow the error and re-fetch - both writers wind
         up with the same canonical row set.
         """
         missing = [(m, w, e) for (m, w, e) in DEFAULT_THRESHOLDS if m not in existing]
@@ -935,7 +1028,7 @@ class CoordinationHubService:
             await self.session.commit()
         except IntegrityError:
             await self.session.rollback()
-            # Another worker beat us — re-read.
+            # Another worker beat us - re-read.
         except SQLAlchemyError as exc:
             await self.session.rollback()
             logger.warning(
@@ -955,7 +1048,7 @@ class CoordinationHubService:
         rows so the caller can render a working dashboard.
 
         ``allow_seed=False`` skips the DB insert entirely and falls
-        through to ephemeral defaults — used when the caller only holds
+        through to ephemeral defaults - used when the caller only holds
         ``coordination.read`` so a VIEWER never silently triggers DB
         writes by polling the dashboard.
         """
@@ -1000,7 +1093,7 @@ class CoordinationHubService:
         rows = await self.get_or_seed_thresholds(project_id)
         target: CoordinationThreshold | None = next((r for r in rows if r.metric == metric), None)
         if target is None or target.id is None:
-            # Ephemeral fallback path — promote to a real row before edit.
+            # Ephemeral fallback path - promote to a real row before edit.
             for m, w, e in DEFAULT_THRESHOLDS:
                 if m == metric:
                     target = CoordinationThreshold(
@@ -1015,7 +1108,7 @@ class CoordinationHubService:
         assert target is not None  # KNOWN_METRICS guarantees a default
         # Compute the post-patch values so we can sanity-check the pair
         # BEFORE touching the row. An inverted warn/error pair (warn >
-        # error) breaks the evaluator's elif-cascade silently — the
+        # error) breaks the evaluator's elif-cascade silently - the
         # error tier would never trigger because the warn comparison
         # would always be hit first. Reject explicitly with a 422-able
         # ValueError so the operator sees the mistake.
@@ -1033,7 +1126,7 @@ class CoordinationHubService:
             target.enabled = enabled
         await self.session.commit()
         await self.session.refresh(target)
-        # Structured audit-style log line — threshold edits change the
+        # Structured audit-style log line - threshold edits change the
         # project's alarm bar and should be traceable post-hoc without
         # diff-ing the DB.
         logger.info(
@@ -1125,7 +1218,7 @@ class CoordinationHubService:
         """Days since the most-recent BIM model upload for this project.
 
         Returns ``Decimal('99999')`` when no model has ever been uploaded
-        so the alarm fires loudly on an empty project — coordination
+        so the alarm fires loudly on an empty project - coordination
         without any model is the strongest possible signal.
         """
         try:
@@ -1149,7 +1242,7 @@ class CoordinationHubService:
 
         ``allow_seed=False`` lets read-only callers (VIEWER role hitting
         the GET endpoint) get a working evaluation without triggering
-        the default-threshold DB seed — that write is reserved for
+        the default-threshold DB seed - that write is reserved for
         callers holding ``coordination.write``.
         """
         rows = await self.get_or_seed_thresholds(project_id, allow_seed=allow_seed)
@@ -1209,10 +1302,89 @@ class CoordinationHubService:
                         message=message,
                     )
                 )
-        # Sort alerts: error first, then warn — most-urgent at the top.
+        # Sort alerts: error first, then warn - most-urgent at the top.
         alerts.sort(key=lambda a: (0 if a.level == "error" else 1, a.metric))
         return CoordinationThresholdsResponse(
             project_id=project_id,
             thresholds=out_rows,
             alerts=alerts,
         )
+
+    # ── Snapshot export ────────────────────────────────────────────────────
+
+    async def export_snapshot_csv(self, project_id: uuid.UUID, *, currency: str) -> str:
+        """Render the project's coordination snapshot as a single CSV string.
+
+        One file a coordinator can attach to meeting minutes: the headline
+        KPIs, the threshold-alert status, and the per-discipline-pair
+        breakdown with cost weighting. Built off the SAME aggregator the
+        dashboard renders (no fresh, divergent computation) and never
+        cached so an export always reflects live numbers.
+
+        The CSV uses a leading ``section`` column so the three logical
+        blocks (kpi / alert / trade_pair) stay one parseable file - Excel
+        and pandas both read it back without per-block re-splitting.
+        """
+        import csv
+        import io
+
+        # Bypass the dashboard TTL cache so an export is always fresh - a
+        # coordinator clicking Export right after a clash run must not get
+        # a 30s-stale snapshot stamped onto the meeting record.
+        dashboard = await self.dashboard(project_id, currency=currency, use_cache=False)
+        matrix = await self.trade_matrix(project_id, currency=currency)
+        thresholds = await self.evaluate_thresholds(project_id, allow_seed=False)
+
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow(["section", "key", "value", "detail", "currency"])
+
+        # Block 1 - headline KPIs.
+        cur = dashboard.currency or currency or ""
+        writer.writerow(["kpi", "as_of", dashboard.as_of.isoformat(), "", ""])
+        writer.writerow(["kpi", "open_clashes", dashboard.clashes.open_count, "", ""])
+        writer.writerow(["kpi", "resolved_clashes", dashboard.clashes.resolved_count, "", ""])
+        writer.writerow(["kpi", "ignored_clashes", dashboard.clashes.ignored_count, "", ""])
+        writer.writerow(
+            [
+                "kpi",
+                "open_cost_impact_total",
+                format(dashboard.open_cost_impact_total, "f"),
+                "",
+                cur,
+            ]
+        )
+        writer.writerow(["kpi", "federations", dashboard.federations.count, "", ""])
+        writer.writerow(["kpi", "rule_packs_installed", dashboard.rule_packs.installed_count, "", ""])
+        writer.writerow(["kpi", "bcf_topics_30d", dashboard.bcf_activity.topics_exported_30d, "", ""])
+
+        # Block 2 - threshold alerts (every metric, with its current level).
+        for tr in thresholds.thresholds:
+            writer.writerow(
+                [
+                    "alert",
+                    tr.metric,
+                    format(tr.current_value, "f"),
+                    f"{tr.level} (warn>={format(tr.warn_value, 'f')}, "
+                    f"error>={format(tr.error_value, 'f')}, "
+                    f"enabled={tr.enabled})",
+                    "",
+                ]
+            )
+
+        # Block 3 - per-discipline-pair breakdown with cost weighting.
+        for cell in matrix.cells:
+            # Skip empty pairs so the export is a signal, not a 36-row grid.
+            if cell.count == 0 and cell.cost_impact == 0:
+                continue
+            writer.writerow(
+                [
+                    "trade_pair",
+                    f"{cell.row} x {cell.col}",
+                    cell.open,
+                    f"total={cell.count}, resolved={cell.resolved}, cost_impact={format(cell.cost_impact, 'f')}",
+                    matrix.currency or cur,
+                ]
+            )
+
+        return buf.getvalue()

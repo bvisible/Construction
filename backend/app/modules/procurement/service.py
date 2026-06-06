@@ -1,18 +1,18 @@
-"""‌⁠‍Procurement service — business logic for purchase orders and goods receipts.
+"""‌⁠‍Procurement service - business logic for purchase orders and goods receipts.
 
 Stateless service layer.
 
 Event publishing (slice E):
-    procurement.po.created      — new PO row inserted
-    procurement.po.updated      — PO fields changed (incl. status transition)
-    procurement.po.issued       — PO transitioned to 'issued'
-    procurement.gr.created      — new goods receipt inserted
-    procurement.gr.confirmed    — goods receipt confirmed (may flip PO status)
+    procurement.po.created      - new PO row inserted
+    procurement.po.updated      - PO fields changed (incl. status transition)
+    procurement.po.issued       - PO transitioned to 'issued'
+    procurement.gr.created      - new goods receipt inserted
+    procurement.gr.confirmed    - goods receipt confirmed (may flip PO status)
 """
 
 import logging
 import uuid
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 
 from fastapi import HTTPException, status
@@ -26,6 +26,7 @@ from app.modules.procurement.models import (
     GoodsReceiptItem,
     MaterialRequisition,
     MaterialRequisitionItem,
+    PORetainageRelease,
     PurchaseOrder,
     PurchaseOrderItem,
 )
@@ -33,6 +34,7 @@ from app.modules.procurement.repository import (
     GoodsReceiptRepository,
     GRItemRepository,
     POItemRepository,
+    PORetainageReleaseRepository,
     PurchaseOrderRepository,
 )
 from app.modules.procurement.schemas import (
@@ -71,7 +73,7 @@ def _mr_assert_transition(current: str, target: str) -> None:
     Self-transitions (same status) are always allowed as no-ops.
     """
     if current == target:
-        return  # idempotent write — always legal
+        return  # idempotent write - always legal
     allowed = _MR_STATUS_TRANSITIONS.get(current, set())
     if target not in allowed:
         raise HTTPException(
@@ -87,7 +89,7 @@ def _compute_delivery_date(required_date: str | None, lead_time_days: int) -> st
     """Compute estimated delivery date = required_date - lead_time_days.
 
     Returns an ISO-8601 date string, or None if inputs are invalid.
-    Zero lead_time means "deliver on the required date" — returns None to
+    Zero lead_time means "deliver on the required date" - returns None to
     signal that no meaningful pre-order window exists.
     Note: uses calendar days, not working-day calendar.
     """
@@ -110,7 +112,7 @@ def _mr_reconcile(
 
     Returns:
         requested, ordered, received, consumed, undelivered, unconsumed
-        — all clamped at zero to avoid negative counters from data errors.
+        - all clamped at zero to avoid negative counters from data errors.
     """
     # Normalize: single item → one-element list
     if not isinstance(items, list):
@@ -141,7 +143,7 @@ _logger_ev = logging.getLogger(__name__ + ".events")
 
 
 async def _safe_publish(name: str, data: dict, source_module: str = "oe_procurement") -> None:
-    """‌⁠‍Best-effort event publish — never blocks the caller on failure."""
+    """‌⁠‍Best-effort event publish - never blocks the caller on failure."""
     try:
         event_bus.publish_detached(name, data, source_module=source_module)
     except Exception:
@@ -275,8 +277,8 @@ def _validate_3way_match(
                     "ordinal": line.get("ordinal"),
                     "po_item_id": str(po_item_id),
                     "description": po_item.description,
-                    "requested_qty": str(requested),
-                    "received_qty": str(received),
+                    "requested_qty": _fmt_qty(requested),
+                    "received_qty": _fmt_qty(received),
                     "reason": "qty_exceeds_received",
                 }
             )
@@ -291,6 +293,19 @@ def _to_decimal(value: object) -> Decimal:
         return Decimal("0")
 
 
+def _fmt_qty(value: object) -> str:
+    """Render a quantity uniformly, regardless of source.
+
+    Quantities reach us as plain strings ("100"), but a SQL ``SUM`` over a
+    ``numeric_value`` column comes back as a float (100.0). Without
+    normalisation the same logical quantity renders two ways in one response
+    ("ordered 100" vs "received 100.0"). ``Decimal.normalize`` strips the
+    spurious trailing zeros and ``format(..., "f")`` keeps large values out of
+    scientific notation (normalize alone yields ``1E+2``).
+    """
+    return format(_to_decimal(value).normalize(), "f")
+
+
 class ProcurementService:
     """Business logic for procurement operations."""
 
@@ -300,6 +315,86 @@ class ProcurementService:
         self.po_item_repo = POItemRepository(session)
         self.gr_repo = GoodsReceiptRepository(session)
         self.gr_item_repo = GRItemRepository(session)
+        self.retainage_repo = PORetainageReleaseRepository(session)
+
+    # ── Vendor prequalification gate (TOP-30 #20) ───────────────────────────
+
+    async def _vendor_block_status(
+        self,
+        vendor_contact_id: str | None,
+    ) -> tuple[bool, list[str]]:
+        """Resolve a PO vendor's prequalification / block verdict.
+
+        Maps the PO's CRM ``vendor_contact_id`` to the linked subcontractor
+        (the unified vendor master is ``Subcontractor.contact_id``) and reads
+        the same award-block reasons the subcontractors module computes:
+
+        * ``subcontractor_blocked`` - the vendor is hard-flagged ``is_blocked``;
+          the gate raises 409 (a blocked vendor must never receive a PO).
+        * ``prequalification_<status>`` - the vendor's prequal is rejected /
+          suspended; the gate does NOT block, it returns a non-blocking
+          warning so the buyer can still raise the PO with eyes open.
+
+        Returns ``(is_blocked, reasons)``. An unknown / ad-hoc vendor (no
+        linked subcontractor, or no contact at all) yields ``(False, [])`` -
+        never gated. The lookup is best-effort and never 500s a PO write: a
+        failed resolution degrades to "no gate".
+        """
+        if not vendor_contact_id:
+            return False, []
+        try:
+            contact_uuid = uuid.UUID(str(vendor_contact_id))
+        except (ValueError, TypeError):
+            return False, []
+        try:
+            from sqlalchemy import select
+
+            from app.modules.subcontractors.models import Subcontractor
+            from app.modules.subcontractors.service import subcontractor_award_block
+
+            stmt = (
+                select(Subcontractor)
+                .where(
+                    Subcontractor.contact_id == contact_uuid,
+                    Subcontractor.is_active.is_(True),
+                )
+                .order_by(Subcontractor.created_at.desc())
+                .limit(1)
+            )
+            sub = (await self.session.execute(stmt)).scalar_one_or_none()
+        except Exception:  # noqa: BLE001 - resolution is non-critical
+            return False, []
+        if sub is None:
+            return False, []
+        verdict = subcontractor_award_block(sub)
+        is_blocked = "subcontractor_blocked" in verdict.reasons
+        return is_blocked, verdict.reasons
+
+    async def _enforce_vendor_gate(
+        self,
+        vendor_contact_id: str | None,
+    ) -> list[str]:
+        """Apply the vendor prequalification gate, returning warnings.
+
+        Hard-blocks (409) a vendor flagged ``is_blocked``; otherwise returns
+        the non-blocking warning reasons (e.g. a rejected prequal) for the
+        caller to surface in the PO response. Empty list = vendor is clean
+        or ad-hoc.
+        """
+        is_blocked, reasons = await self._vendor_block_status(vendor_contact_id)
+        if is_blocked:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "vendor_blocked",
+                    "message": (
+                        "This vendor is blocked and cannot receive a purchase order. "
+                        "Clear the block on the subcontractor record first."
+                    ),
+                    "reasons": reasons,
+                },
+            )
+        return reasons
 
     # ── Purchase Orders ──────────────────────────────────────────────────────
 
@@ -315,12 +410,23 @@ class ProcurementService:
         ``sum(quantity * unit_rate)`` so the PO totals always agree with the
         line items the caller actually persisted (BUG-015).
         """
-        # Validate initial status
-        if data.status not in _VALID_PO_STATUSES:
+        # Validate initial status - a PO always enters the FSM at "draft".
+        # Allowing a caller to create one already "approved"/"issued"/"completed"
+        # would bypass the approval gate that commits budget (TOP-30 #10). The
+        # only legal entry state is "draft"; advance it via approve_po/issue_po.
+        if data.status != "draft":
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(f"Invalid PO status: '{data.status}'. Allowed: {', '.join(sorted(_VALID_PO_STATUSES))}"),
+                detail=(
+                    f"A purchase order must be created in 'draft' status, not '{data.status}'. "
+                    "Use the approve and issue actions to advance it through the workflow."
+                ),
             )
+
+        # Vendor prequalification gate (TOP-30 #20): hard-block a vendor
+        # flagged ``is_blocked`` (409 here); a non-prequalified vendor is a
+        # non-blocking warning stamped onto the PO below.
+        vendor_warnings = await self._enforce_vendor_gate(data.vendor_contact_id)
 
         # Re-aggregate subtotal from items when items are supplied. Each item's
         # own ``amount`` is also normalised to ``quantity * unit_rate`` if the
@@ -343,7 +449,7 @@ class ProcurementService:
         computed_total = _compute_po_total(data.amount_subtotal, data.tax_amount)
 
         # Inherit the parent project's currency when the caller did not
-        # supply one — never hardcode EUR (task #217).
+        # supply one - never hardcode EUR (task #217).
         currency_code = data.currency_code
         if not currency_code:
             from sqlalchemy import select
@@ -351,14 +457,14 @@ class ProcurementService:
             from app.modules.projects.models import Project
 
             # Best-effort, mirrors boq ``_resolve_project_currency``: a
-            # failed/unavailable lookup must never 500 a PO create — fall
-            # back to "" (honest unknown, never a wrong hardcoded EUR —
+            # failed/unavailable lookup must never 500 a PO create - fall
+            # back to "" (honest unknown, never a wrong hardcoded EUR -
             # task #217).
             try:
                 proj_currency = (
                     await self.session.execute(select(Project.currency).where(Project.id == data.project_id))
                 ).scalar_one_or_none()
-            except Exception:  # noqa: BLE001 — lookup is non-critical
+            except Exception:  # noqa: BLE001 - lookup is non-critical
                 proj_currency = None
             currency_code = proj_currency or ""
 
@@ -366,7 +472,7 @@ class ProcurementService:
         # Mirrors changeorders BUG-354: MAX(po_number)+1 is not atomic, so two
         # concurrent creates can compute the same suffix and one would 500 on
         # the uq_procurement_po_project_number constraint. Retry by re-reading
-        # MAX for auto-numbered POs. Explicit numbers do not retry — a
+        # MAX for auto-numbered POs. Explicit numbers do not retry - a
         # collision there is a 409 client error.
         po = await self._create_po_with_retry(
             data=data,
@@ -415,6 +521,10 @@ class ProcurementService:
             },
         )
 
+        # Transient (non-persisted) attribute the router reads to surface the
+        # non-blocking vendor-prequalification warnings on the response.
+        po.vendor_warnings = vendor_warnings  # type: ignore[attr-defined]
+
         logger.info("PO created: %s (type=%s)", po.po_number, po.po_type)
         return po
 
@@ -430,7 +540,7 @@ class ProcurementService:
         """Insert a PurchaseOrder row, retrying on auto-number collisions.
 
         Single break-on-success control flow:
-          * explicit po_number collision → 409 immediately (no retry — caller
+          * explicit po_number collision → 409 immediately (no retry - caller
             asked for a specific number and a unique row already owns it).
           * auto-number collision → re-read MAX(po_number) and retry up to
             ``_MAX_RETRIES`` times.
@@ -469,7 +579,7 @@ class ProcurementService:
                         status_code=status.HTTP_409_CONFLICT,
                         detail=(f"Purchase order number '{explicit_po_number}' already exists for this project."),
                     ) from exc
-                # else: auto-number collision — try again with a fresh MAX read.
+                # else: auto-number collision - try again with a fresh MAX read.
 
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -522,6 +632,13 @@ class ProcurementService:
         fields = data.model_dump(exclude_unset=True, exclude={"items"})
         if "metadata" in fields:
             fields["metadata_"] = fields.pop("metadata")
+
+        # Re-apply the vendor prequalification gate (TOP-30 #20) only when the
+        # PATCH actually changes the vendor - re-gate the NEW vendor, hard-block
+        # if blocked, collect the non-blocking warnings for the response.
+        vendor_warnings: list[str] = []
+        if "vendor_contact_id" in fields:
+            vendor_warnings = await self._enforce_vendor_gate(fields["vendor_contact_id"])
 
         # Validate status transition if status is being changed
         if "status" in fields and fields["status"] is not None:
@@ -617,6 +734,8 @@ class ProcurementService:
             },
         )
 
+        updated.vendor_warnings = vendor_warnings  # type: ignore[attr-defined]
+
         logger.info("PO updated: %s", po_id)
         return updated
 
@@ -685,13 +804,18 @@ class ProcurementService:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=(
-                    f"Cannot issue PO in status '{prior_status}'; "
-                    "a purchase order must be approved before it is issued"
+                    f"Cannot issue PO in status '{prior_status}'; a purchase order must be approved before it is issued"
                 ),
             )
+        # Re-check the hard block at issue time (TOP-30 #20): a vendor that was
+        # blocked AFTER the PO was created must not receive live work. A
+        # non-prequalified (but not blocked) vendor still issues - we re-surface
+        # the warning on the issue response so the buyer sees it at the moment
+        # the PO actually goes out, not only at create time.
+        vendor_warnings = await self._enforce_vendor_gate(po.vendor_contact_id)
         await self.po_repo.update(po_id, status="issued")
 
-        # FSM audit row — PO lifecycle is closely tied to the RFQ FSM (see
+        # FSM audit row - PO lifecycle is closely tied to the RFQ FSM (see
         # rfq.po_issued event). PO is not one of the six core FSMs but it
         # benefits from the same audit-log substrate for compliance.
         try:
@@ -729,8 +853,134 @@ class ProcurementService:
             },
         )
 
+        updated.vendor_warnings = vendor_warnings  # type: ignore[attr-defined]
         logger.info("PO issued: %s", po.po_number)
         return updated
+
+    # ── Retainage (Gap F) ─────────────────────────────────────────────────────
+
+    # Statuses from which retainage may be released. A draft / approved /
+    # cancelled PO has not yet committed money to a vendor, so there is
+    # nothing legitimate to release.
+    _RETAINAGE_RELEASABLE_STATUSES = ("issued", "partially_received", "completed")
+
+    async def release_po_retainage(
+        self,
+        po_id: uuid.UUID,
+        release_amount: Decimal,
+        reason: str | None = None,
+        user_id: uuid.UUID | None = None,
+    ) -> PORetainageRelease:
+        """Release withheld retainage on a PO and audit-log the transaction.
+
+        Validation:
+            * 404 if the PO does not exist.
+            * 409 if the PO is in a status that cannot release retainage
+              (draft / approved / cancelled).
+            * 400 if the requested amount is non-positive or exceeds the
+              currently-held balance.
+
+        On success ``PurchaseOrder.retainage_released_amount`` is incremented,
+        a :class:`PORetainageRelease` audit row is written, and the
+        ``procurement.po.retainage_released`` event is published. The release
+        amount is kept in the PO's own currency (never blended).
+        """
+        po = await self.po_repo.get(po_id)
+        if po is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Purchase order not found",
+            )
+
+        if po.status not in self._RETAINAGE_RELEASABLE_STATUSES:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"Cannot release retainage from a PO in status '{po.status}'. "
+                    f"Allowed: {', '.join(self._RETAINAGE_RELEASABLE_STATUSES)}."
+                ),
+            )
+
+        if release_amount <= Decimal("0"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Release amount must be positive",
+            )
+
+        held = po.retainage_held()
+        if release_amount > held:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Release amount {release_amount} exceeds held retainage {held}",
+            )
+
+        released_sum = _to_decimal(po.retainage_released_amount)
+        new_released = released_sum + release_amount
+        await self.po_repo.update(po_id, retainage_released_amount=str(new_released))
+
+        now = datetime.now(UTC).isoformat()
+        release = PORetainageRelease(
+            po_id=po_id,
+            release_date=now,
+            release_amount=release_amount,
+            release_reason=reason,
+            released_by_id=user_id,
+        )
+        release = await self.retainage_repo.create(release)
+
+        # FSM-style audit row - mirrors the PO approve/issue audit hooks so
+        # the release leaves the same evidence trail compliance expects.
+        try:
+            from app.core.audit_log import log_activity
+
+            await log_activity(
+                self.session,
+                actor_id=str(user_id) if user_id else None,
+                entity_type="purchase_order",
+                entity_id=str(po_id),
+                action="retainage_released",
+                reason=reason or "Retainage released via release_po_retainage()",
+                metadata={
+                    "po_number": po.po_number,
+                    "release_amount": str(release_amount),
+                    "currency_code": po.currency_code or "",
+                    "retainage_released_total": str(new_released),
+                },
+            )
+        except Exception:
+            logger.debug("Audit log skipped for PO %s retainage release", po_id)
+
+        await _safe_publish(
+            "procurement.po.retainage_released",
+            {
+                "po_id": str(po_id),
+                "project_id": str(po.project_id),
+                "po_number": po.po_number,
+                "release_amount": str(release_amount),
+                "currency_code": po.currency_code or "",
+                "released_by": str(user_id) if user_id else None,
+                "release_reason": reason,
+                "retainage_released_total": str(new_released),
+            },
+        )
+
+        logger.info(
+            "Retainage released on PO %s: amount=%s %s",
+            po.po_number,
+            release_amount,
+            po.currency_code or "",
+        )
+        return release
+
+    async def get_po_retainage_releases(
+        self,
+        po_id: uuid.UUID,
+        offset: int = 0,
+        limit: int = 100,
+    ) -> tuple[list[PORetainageRelease], int]:
+        """List the retainage-release audit log for a PO (404 if PO missing)."""
+        await self.get_po(po_id)  # 404 if the PO does not exist
+        return await self.retainage_repo.list_for_po(po_id, offset=offset, limit=limit)
 
     # ── Goods Receipts ───────────────────────────────────────────────────────
 
@@ -818,7 +1068,7 @@ class ProcurementService:
         )
 
         logger.info("GR created for PO %s (date=%s)", data.po_id, data.receipt_date)
-        # The freshly-flushed ``gr`` has no ``items`` collection loaded —
+        # The freshly-flushed ``gr`` has no ``items`` collection loaded -
         # ``selectin`` only fires on a query, not on a pending instance. The
         # router serialises ``GRResponse`` (which includes ``items``), so a
         # lazy load would be attempted outside the async greenlet
@@ -973,11 +1223,11 @@ class ProcurementService:
 
         po = await self.get_po(po_id)  # 404 if missing
 
-        # ── Received quantities (confirmed GRs only) — one query ─────────
+        # ── Received quantities (confirmed GRs only) - one query ─────────
         gr_stmt = (
             _select(
                 GoodsReceiptItem.po_item_id,
-                # quantity_received is String(50) — sum it numerically (PG-safe
+                # quantity_received is String(50) - sum it numerically (PG-safe
                 # via numeric_value) and coalesce the empty-group SUM to 0.
                 _func.coalesce(_func.sum(numeric_value(GoodsReceiptItem.quantity_received)), 0),
             )
@@ -991,7 +1241,7 @@ class ProcurementService:
         # numeric_value already returns a float; convert to Decimal defensively.
         received_by_item: dict[uuid.UUID, Decimal] = {row[0]: _to_decimal(row[1]) for row in gr_rows}
 
-        # ── Invoiced quantities — best-effort, optional finance module ──
+        # ── Invoiced quantities - best-effort, optional finance module ──
         invoiced_by_sort: dict[int, Decimal] = {}
         try:
             from app.modules.finance.models import Invoice, InvoiceLineItem
@@ -1027,7 +1277,7 @@ class ProcurementService:
                     if inv_id not in linked_invoice_ids:
                         continue
                     invoiced_by_sort[sort_order] = invoiced_by_sort.get(sort_order, Decimal("0")) + _to_decimal(qty)
-        except Exception:  # noqa: BLE001 — finance is optional
+        except Exception:  # noqa: BLE001 - finance is optional
             logger.debug("Finance lookup skipped for PO %s match-status", po_id)
 
         # ── Compose per-line statuses ───────────────────────────────────
@@ -1044,9 +1294,9 @@ class ProcurementService:
                 {
                     "line_id": po_item.id,
                     "description": po_item.description,
-                    "ordered_qty": str(ordered),
-                    "received_qty": str(received),
-                    "invoiced_qty": str(invoiced),
+                    "ordered_qty": _fmt_qty(ordered),
+                    "received_qty": _fmt_qty(received),
+                    "invoiced_qty": _fmt_qty(invoiced),
                     "match_status": status_tag,
                 }
             )
@@ -1129,7 +1379,7 @@ class ProcurementService:
             if not currency and cur:
                 currency = cur
 
-        # PO ids in scope — drives the GR + line-variance queries.
+        # PO ids in scope - drives the GR + line-variance queries.
         po_ids_stmt = _select(PurchaseOrder.id).where(_and(*po_filters))
         po_ids = [row[0] for row in (await self.session.execute(po_ids_stmt)).all()]
 
@@ -1137,7 +1387,7 @@ class ProcurementService:
         # ``on_time_count`` covers GRs whose parent PO had a delivery_date AND
         # the receipt was on/before it. GRs against POs with NO delivery_date
         # (unscheduled) cannot be evaluated, so they are tracked in a separate
-        # ``unscheduled_count`` and excluded from the on-time denominator —
+        # ``unscheduled_count`` and excluded from the on-time denominator -
         # otherwise scoring inflates with every unscheduled PO (P0-2).
         total_gr_count = 0
         on_time_count = 0
@@ -1184,7 +1434,7 @@ class ProcurementService:
             recv_stmt = (
                 _select(
                     GoodsReceiptItem.po_item_id,
-                    # quantity_received is String(50) — sum it numerically
+                    # quantity_received is String(50) - sum it numerically
                     # (PG-safe via numeric_value); coalesce empty group to 0.
                     _func.coalesce(_func.sum(numeric_value(GoodsReceiptItem.quantity_received)), 0),
                 )
@@ -1207,7 +1457,7 @@ class ProcurementService:
                 qty_variance_pct = float(sum(line_variances) / Decimal(len(line_variances)))
 
         # On-time denominator excludes unscheduled GRs (P0-2). Rejection
-        # rate keeps the full GR count as the denominator — a rejected
+        # rate keeps the full GR count as the denominator - a rejected
         # delivery is still a delivery, scheduled or not.
         scheduled_gr_count = total_gr_count - unscheduled_count
         on_time_pct = (on_time_count / scheduled_gr_count) if scheduled_gr_count else 0.0
@@ -1290,7 +1540,7 @@ class MaterialRequisitionService:
         Args:
             project_id: the project this requisition belongs to.
             items: optional list of dicts with keys description, quantity_requested,
-                   unit_cost — extended_cost is computed as qty * unit_cost.
+                   unit_cost - extended_cost is computed as qty * unit_cost.
         """
         from sqlalchemy import func as sa_func
         from sqlalchemy import select
@@ -1317,7 +1567,7 @@ class MaterialRequisitionService:
             notes=notes,
         )
         # Attach req_number as a plain attribute (no DB column) for test compatibility.
-        # A real migration would add a proper column — this is a schema-less stub.
+        # A real migration would add a proper column - this is a schema-less stub.
         req.req_number = req_number  # type: ignore[attr-defined]
         self.session.add(req)
         await self.session.flush()
@@ -1342,7 +1592,7 @@ class MaterialRequisitionService:
         return req
 
     async def get_requisition(self, requisition_id: uuid.UUID) -> MaterialRequisition:
-        """Get requisition by ID — 404 if not found."""
+        """Get requisition by ID - 404 if not found."""
         req = await self.session.get(MaterialRequisition, requisition_id)
         if req is None:
             raise HTTPException(

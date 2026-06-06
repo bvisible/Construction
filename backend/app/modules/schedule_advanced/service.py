@@ -1,12 +1,12 @@
-"""‌⁠‍Schedule Advanced service — Last Planner System (LPS) business logic.
+"""‌⁠‍Schedule Advanced service - Last Planner System (LPS) business logic.
 
 This module is organised as:
 
 1. **Pure helpers** at module scope (``compute_ppc``, ``compute_rnc_pareto``,
    ``compute_baseline_delta``, ``is_constraint_blocking_task``,
-   ``weeks_from_lookahead``, ``validate_commitment``) — easily unit-tested.
-2. **State machines** — pure transition tables for each entity.
-3. **Service class** (:class:`ScheduleAdvancedService`) — orchestrator
+   ``weeks_from_lookahead``, ``validate_commitment``) - easily unit-tested.
+2. **State machines** - pure transition tables for each entity.
+3. **Service class** (:class:`ScheduleAdvancedService`) - orchestrator
    that wires repositories + event bus + database session.
 
 State machines mirror :pep:`8` and the safety/* / schedule/* patterns:
@@ -35,10 +35,13 @@ from app.modules.schedule_advanced.models import (
     Calendar,
     Commitment,
     Constraint,
+    Location,
     LookAheadPlan,
     MasterSchedule,
     PhasePlan,
     ReasonForNonCompletion,
+    TaktActivity,
+    TaktSchedule,
     WeeklyWorkPlan,
 )
 from app.modules.schedule_advanced.repository import (
@@ -47,10 +50,13 @@ from app.modules.schedule_advanced.repository import (
     CalendarRepository,
     CommitmentRepository,
     ConstraintRepository,
+    LocationRepository,
     LookAheadRepository,
     MasterScheduleRepository,
     PhasePlanRepository,
     RNCRepository,
+    TaktActivityRepository,
+    TaktScheduleRepository,
     WeeklyWorkPlanRepository,
 )
 from app.modules.schedule_advanced.schemas import (
@@ -64,6 +70,9 @@ from app.modules.schedule_advanced.schemas import (
     CommitmentUpdate,
     ConstraintCreate,
     ConstraintUpdate,
+    LineOfBalanceBar,
+    LineOfBalanceResponse,
+    LocationCreate,
     LookAheadCreate,
     LookAheadUpdate,
     MasterScheduleCreate,
@@ -72,6 +81,11 @@ from app.modules.schedule_advanced.schemas import (
     PhasePlanUpdate,
     RNCCreate,
     RNCUpdate,
+    TaktActivityCreate,
+    TaktActivityUpdate,
+    TaktScheduleCreate,
+    TaktScheduleUpdate,
+    TaktViolation,
     WeeklyWorkPlanCreate,
     WeeklyWorkPlanUpdate,
 )
@@ -101,7 +115,7 @@ def compute_ppc(commitments: list[Commitment] | list[Any]) -> Decimal:
 
     PPC = completed / committed × 100. "Completed" means status == "completed".
     "Committed" means status in (committed, in_progress, completed, missed,
-    at_risk) — i.e. anything that actually entered the week's commitment
+    at_risk) - i.e. anything that actually entered the week's commitment
     pool. Plain "planned" commitments don't count as denominators because
     they were never promised on the floor.
 
@@ -123,7 +137,7 @@ def compute_rnc_pareto(
     """‌⁠‍Return a category -> count mapping for the supplied RNC records.
 
     ``period_start`` / ``period_end`` are reported in the response but
-    not enforced here — callers are expected to filter beforehand. The
+    not enforced here - callers are expected to filter beforehand. The
     full canonical category set is always present in the output (zero
     counts for missing categories) so the front-end chart never needs
     to re-fill blanks.
@@ -207,7 +221,7 @@ def compute_baseline_delta(
 
 
 def _parse_date(value: Any) -> date | None:
-    """Tolerant date parser — accepts date, datetime, or ISO string."""
+    """Tolerant date parser - accepts date, datetime, or ISO string."""
     if value is None:
         return None
     if isinstance(value, date) and not isinstance(value, datetime):
@@ -223,7 +237,7 @@ def _parse_date(value: Any) -> date | None:
 
 
 def _to_decimal(value: Any) -> Decimal:
-    """Tolerant Decimal parser — empty / unparseable → Decimal("0")."""
+    """Tolerant Decimal parser - empty / unparseable → Decimal("0")."""
     if value is None or value == "":
         return Decimal("0")
     if isinstance(value, Decimal):
@@ -304,7 +318,7 @@ def cpm_forward_backward_pass(
             if indeg[s] == 0:
                 queue.append(s)
 
-    # Forward pass — compute ES, EF
+    # Forward pass - compute ES, EF
     es: dict[Any, int] = {}
     ef: dict[Any, int] = {}
     for aid in topo:
@@ -320,13 +334,13 @@ def cpm_forward_backward_pass(
         return {}
     project_finish = max(ef.values())
 
-    # Backward pass — compute LF, LS
+    # Backward pass - compute LF, LS
     lf: dict[Any, int] = {}
     ls: dict[Any, int] = {}
     for aid in reversed(topo):
         dur = max(0, int(by_id[aid].get("duration", 0) or 0))
         # Symmetric to the forward pass: a successor in a cycle never gets
-        # an ``ls`` — fall back to ``project_finish`` instead of raising.
+        # an ``ls`` - fall back to ``project_finish`` instead of raising.
         ready_succs = [ls[s] for s in succs[aid] if s in ls]
         lf[aid] = min(ready_succs) if ready_succs else project_finish
         ls[aid] = lf[aid] - dur
@@ -421,6 +435,142 @@ def time_impact_analysis(
     }
 
 
+# ── Takt / line-of-balance geometry ───────────────────────────────────────
+
+
+def compute_line_of_balance_geometry(
+    locations: list[dict[str, Any]],
+    activities: list[dict[str, Any]],
+    tolerance_days: int = 1,
+) -> dict[str, Any]:
+    """Compute line-of-balance bar geometry for a takt schedule.
+
+    Pure, deterministic, DB-free - easily unit-tested. The model is the
+    classic takt rhythm: every activity repeats once per location and the
+    crew cycles top-to-bottom. The *takt time* is the maximum per-location
+    activity duration (plus its buffer); each location's work starts one
+    takt later than the previous, which produces the staggered diagonal
+    "marching" pattern of a line-of-balance diagram.
+
+    Args:
+        locations: ``[{"id": str, "name": str, "sequence_order": int}, ...]``.
+            Sorted by ``sequence_order`` internally.
+        activities: ``[{"id": str, "name": str, "sequence_order": int,
+            "planned_cycle_duration_days": int, "buffer_days_before": int,
+            "crew_size": int, "actual_cycle_duration_days": float | None}, ...]``.
+            ``sequence_order`` is the trade hand-off order within a location.
+        tolerance_days: rhythm-break threshold - an activity whose observed
+            cycle deviates from plan by more than this is flagged.
+
+    Returns a dict with ``bars``, ``violations``, ``critical_path``
+    (list of activity ids), ``total_makespan_days``, and
+    ``average_cycle_days``.
+    """
+    locs = sorted(locations, key=lambda loc: int(loc.get("sequence_order", 0)))
+    acts = sorted(
+        activities,
+        key=lambda a: (int(a.get("sequence_order", 0)), str(a.get("name", ""))),
+    )
+    if not locs or not acts:
+        return {
+            "bars": [],
+            "violations": [],
+            "critical_path": [],
+            "total_makespan_days": 0,
+            "average_cycle_days": 0.0,
+        }
+
+    # Takt time = the slowest trade cycle (+ its lead buffer). This sets the
+    # rhythm at which the crew train advances one location.
+    takt_time = 0
+    for a in acts:
+        dur = max(1, int(a.get("planned_cycle_duration_days", 1) or 1))
+        buf = max(0, int(a.get("buffer_days_before", 0) or 0))
+        takt_time = max(takt_time, dur + buf)
+
+    # The single longest-duration trade is the critical chain in a balanced
+    # takt plan: any slip in it pushes the whole train.
+    critical_activity_id: str | None = None
+    longest = -1
+    for a in acts:
+        dur = max(1, int(a.get("planned_cycle_duration_days", 1) or 1))
+        if dur > longest:
+            longest = dur
+            critical_activity_id = str(a.get("id"))
+
+    bars: list[dict[str, Any]] = []
+    violations: list[dict[str, Any]] = []
+    makespan = 0
+    cycle_sum = 0
+
+    # Within one location, trades run back-to-back in hand-off order; across
+    # locations each trade's start is offset by one takt per location step.
+    for li, loc in enumerate(locs):
+        cursor = li * takt_time  # location's day-zero
+        for a in acts:
+            dur = max(1, int(a.get("planned_cycle_duration_days", 1) or 1))
+            buf = max(0, int(a.get("buffer_days_before", 0) or 0))
+            start = cursor + buf
+            end = start + dur
+            cursor = end
+            cycle_sum += dur
+
+            # Rhythm-break detection from observed cycle on this activity.
+            has_break = False
+            actual_raw = a.get("actual_cycle_duration_days")
+            if actual_raw not in (None, ""):
+                try:
+                    deviation = abs(float(actual_raw) - float(dur))
+                except (TypeError, ValueError):
+                    deviation = 0.0
+                if deviation > float(tolerance_days):
+                    has_break = True
+                    violations.append(
+                        {
+                            "activity_id": str(a.get("id")),
+                            "location_id": str(loc.get("id")),
+                            "activity_name": str(a.get("name", "")),
+                            "location_name": str(loc.get("name", "")),
+                            "violation_type": "rhythm_break",
+                            "deviation_days": round(deviation, 2),
+                            "severity": "error" if deviation > 2 * float(tolerance_days) else "warning",
+                            "message": (
+                                f"{a.get('name', '')} at {loc.get('name', '')}: "
+                                f"observed cycle deviates {round(deviation, 2)}d from the "
+                                f"{dur}d plan (tolerance {tolerance_days}d)."
+                            ),
+                        }
+                    )
+
+            bars.append(
+                {
+                    "activity_id": str(a.get("id")),
+                    "location_id": str(loc.get("id")),
+                    "activity_name": str(a.get("name", "")),
+                    "location_name": str(loc.get("name", "")),
+                    "sequence_order": int(loc.get("sequence_order", 0)),
+                    "start_day": int(start),
+                    "end_day": int(end),
+                    "crew_size": max(1, int(a.get("crew_size", 1) or 1)),
+                    "is_critical": str(a.get("id")) == critical_activity_id,
+                    "has_rhythm_break": has_break,
+                }
+            )
+            makespan = max(makespan, end)
+
+    total_bars = len(bars)
+    average_cycle = round(cycle_sum / total_bars, 2) if total_bars else 0.0
+    critical_path = [critical_activity_id] if critical_activity_id else []
+
+    return {
+        "bars": bars,
+        "violations": violations,
+        "critical_path": critical_path,
+        "total_makespan_days": int(makespan),
+        "average_cycle_days": average_cycle,
+    }
+
+
 # ── Earned-Value Management ───────────────────────────────────────────────
 
 
@@ -468,7 +618,7 @@ def compute_evm(
         ev_total += bac * (pct / Decimal("100"))
         # Linear-ramp PV between planned_start_workday and planned_finish_workday.
         if pf <= ps:
-            # Zero-duration / point activity — full PV at start.
+            # Zero-duration / point activity - full PV at start.
             pv_pct = Decimal("100") if today_workday >= ps else Decimal("0")
         elif today_workday <= ps:
             pv_pct = Decimal("0")
@@ -625,7 +775,7 @@ def is_constraint_blocking_task(
 
     Open = status not in (cleared, cannot_clear). Constraints with no
     target_clear_date OR a target in the future are not considered
-    blocking (yet) — they're make-ready work in progress.
+    blocking (yet) - they're make-ready work in progress.
     """
     ref = str(task_ref)
     for c in constraints:
@@ -923,7 +1073,7 @@ class ScheduleAdvancedService:
         await self.phase_repo.update_fields(phase_id, pulled_status="completed")
         await self.session.refresh(p)
 
-        # Epic H — universal audit trail.
+        # Epic H - universal audit trail.
         from app.core.audit_log import log_activity as _log_activity
 
         await _log_activity(
@@ -1177,7 +1327,7 @@ class ScheduleAdvancedService:
         await self.weekly_repo.update_fields(wp_id, status="closed", ppc_percent=ppc)
         await self.session.refresh(w)
 
-        # Epic H — universal audit trail.
+        # Epic H - universal audit trail.
         from app.core.audit_log import log_activity as _log_activity
 
         await _log_activity(
@@ -1315,6 +1465,7 @@ class ScheduleAdvancedService:
         self,
         cid: uuid.UUID,
         rnc_payload: dict[str, Any] | RNCCreate,
+        user_id: str | None = None,
     ) -> tuple[Commitment, ReasonForNonCompletion]:
         """Flip a commitment to ``missed`` and record the paired RNC."""
         c = await self.get_commitment(cid)
@@ -1331,12 +1482,18 @@ class ScheduleAdvancedService:
         else:
             payload = dict(rnc_payload)
         payload["commitment_id"] = cid
+        recorded_by_uuid = payload.get("recorded_by")
+        if recorded_by_uuid is None and user_id is not None:
+            try:
+                recorded_by_uuid = uuid.UUID(str(user_id))
+            except (TypeError, ValueError):
+                recorded_by_uuid = None
         rnc = ReasonForNonCompletion(
             commitment_id=cid,
             category=payload.get("category", "other"),
             description=payload.get("description", ""),
             recorded_at=payload.get("recorded_at") or datetime.now(UTC),
-            recorded_by=payload.get("recorded_by"),
+            recorded_by=recorded_by_uuid,
             root_cause_notes=payload.get("root_cause_notes", ""),
         )
         rnc = await self.rnc_repo.create(rnc)
@@ -1510,7 +1667,7 @@ class ScheduleAdvancedService:
         delta_records = compute_baseline_delta(b.snapshot, current_tasks)
 
         # Persist deltas (idempotency note: this is a re-computation entry
-        # point — we wipe prior deltas for this (baseline, current_master)
+        # point - we wipe prior deltas for this (baseline, current_master)
         # pair before re-inserting).
         prior = await self.baseline_delta_repo.list_for_baseline(baseline_id)
         for old in prior:
@@ -1694,3 +1851,255 @@ class ScheduleAdvancedService:
             "rows": rows,
             "total": sum(r["count"] for r in rows),
         }
+
+
+# ── Takt / line-of-balance service ─────────────────────────────────────────
+
+
+class TaktScheduleService:
+    """Orchestrator for takt / line-of-balance scheduling.
+
+    Parallel to :class:`ScheduleAdvancedService` - it owns only the three
+    takt tables and never perturbs the CPM / LPS hierarchy. A takt schedule
+    always hangs off an existing :class:`MasterSchedule`.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+        self.master_repo = MasterScheduleRepository(session)
+        self.takt_repo = TaktScheduleRepository(session)
+        self.location_repo = LocationRepository(session)
+        self.activity_repo = TaktActivityRepository(session)
+
+    # ── Takt schedule CRUD ──────────────────────────────────────────────
+
+    async def _get_master(self, master_id: uuid.UUID) -> MasterSchedule:
+        m = await self.master_repo.get_by_id(master_id)
+        if m is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="MasterSchedule not found")
+        return m
+
+    async def get_takt_schedule(self, takt_id: uuid.UUID) -> TaktSchedule:
+        ts = await self.takt_repo.get_by_id(takt_id)
+        if ts is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="TaktSchedule not found")
+        return ts
+
+    async def list_for_master(self, master_id: uuid.UUID) -> list[TaktSchedule]:
+        return await self.takt_repo.list_for_master(master_id)
+
+    async def create_takt_schedule(
+        self,
+        data: TaktScheduleCreate,
+        user_id: str | None = None,
+    ) -> TaktSchedule:
+        """Create a takt schedule and its location sequence in one call."""
+        await self._get_master(data.master_schedule_id)
+        created_by_uuid: uuid.UUID | None = None
+        if user_id is not None:
+            try:
+                created_by_uuid = uuid.UUID(str(user_id))
+            except (TypeError, ValueError):
+                created_by_uuid = None
+
+        ts = TaktSchedule(
+            master_schedule_id=data.master_schedule_id,
+            name=data.name,
+            description=data.description,
+            target_cycle_days=data.target_cycle_days,
+            takt_rhythm_tolerance_days=data.takt_rhythm_tolerance_days,
+            location_sequence_count=len(data.locations),
+            status="draft",
+            created_by=created_by_uuid,
+        )
+        ts = await self.takt_repo.create(ts)
+
+        for loc in data.locations:
+            await self.location_repo.create(
+                Location(
+                    takt_schedule_id=ts.id,
+                    sequence_order=loc.sequence_order,
+                    name=loc.name,
+                    description=loc.description,
+                    work_area_sqm=loc.work_area_sqm,
+                )
+            )
+        await self.session.flush()
+
+        event_bus.publish_detached(
+            "schedule_advanced.takt.schedule.created",
+            {
+                "takt_schedule_id": str(ts.id),
+                "master_schedule_id": str(ts.master_schedule_id),
+                "location_count": len(data.locations),
+                "user_id": user_id,
+            },
+            source_module="schedule_advanced",
+        )
+        return ts
+
+    async def update_takt_schedule(
+        self,
+        takt_id: uuid.UUID,
+        data: TaktScheduleUpdate,
+    ) -> TaktSchedule:
+        ts = await self.get_takt_schedule(takt_id)
+        fields = data.model_dump(exclude_unset=True)
+        if fields:
+            await self.takt_repo.update_fields(takt_id, **fields)
+            await self.session.refresh(ts)
+        return ts
+
+    async def delete_takt_schedule(self, takt_id: uuid.UUID) -> None:
+        await self.get_takt_schedule(takt_id)
+        await self.takt_repo.delete(takt_id)
+
+    async def list_locations(self, takt_id: uuid.UUID) -> list[Location]:
+        return await self.location_repo.list_for_takt(takt_id)
+
+    async def list_locations_for_takts(
+        self,
+        takt_ids: list[uuid.UUID],
+    ) -> dict[uuid.UUID, list[Location]]:
+        """Batch-fetch locations for several takt schedules in one query."""
+        return await self.location_repo.list_for_takts(takt_ids)
+
+    async def add_location(
+        self,
+        takt_id: uuid.UUID,
+        data: LocationCreate,
+    ) -> Location:
+        await self.get_takt_schedule(takt_id)
+        loc = await self.location_repo.create(
+            Location(
+                takt_schedule_id=takt_id,
+                sequence_order=data.sequence_order,
+                name=data.name,
+                description=data.description,
+                work_area_sqm=data.work_area_sqm,
+            )
+        )
+        count = len(await self.location_repo.list_for_takt(takt_id))
+        await self.takt_repo.update_fields(takt_id, location_sequence_count=count)
+        return loc
+
+    # ── Activities ──────────────────────────────────────────────────────
+
+    async def list_activities(self, takt_id: uuid.UUID) -> list[TaktActivity]:
+        return await self.activity_repo.list_for_takt(takt_id)
+
+    async def import_activities(
+        self,
+        takt_id: uuid.UUID,
+        activities: list[TaktActivityCreate],
+    ) -> list[TaktActivity]:
+        """Bulk-insert activities into a takt schedule."""
+        await self.get_takt_schedule(takt_id)
+        created: list[TaktActivity] = []
+        for a in activities:
+            row = TaktActivity(
+                takt_schedule_id=takt_id,
+                name=a.name,
+                activity_code=a.activity_code,
+                sequence_order=a.sequence_order,
+                planned_cycle_duration_days=a.planned_cycle_duration_days,
+                crew_size=a.crew_size,
+                crew_skill_codes=list(a.crew_skill_codes),
+                buffer_days_before=a.buffer_days_before,
+                sequence_predecessor_activity_id=a.sequence_predecessor_activity_id,
+                status="planned",
+            )
+            created.append(await self.activity_repo.create(row))
+        await self.session.flush()
+
+        event_bus.publish_detached(
+            "schedule_advanced.takt.activities_imported",
+            {
+                "takt_schedule_id": str(takt_id),
+                "count": len(created),
+            },
+            source_module="schedule_advanced",
+        )
+        return created
+
+    async def get_activity(self, activity_id: uuid.UUID) -> TaktActivity:
+        a = await self.activity_repo.get_by_id(activity_id)
+        if a is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="TaktActivity not found")
+        return a
+
+    async def update_activity(
+        self,
+        activity_id: uuid.UUID,
+        data: TaktActivityUpdate,
+    ) -> TaktActivity:
+        a = await self.get_activity(activity_id)
+        fields = data.model_dump(exclude_unset=True)
+        if fields:
+            await self.activity_repo.update_fields(activity_id, **fields)
+            await self.session.refresh(a)
+        return a
+
+    async def delete_activity(self, activity_id: uuid.UUID) -> None:
+        await self.get_activity(activity_id)
+        await self.activity_repo.delete(activity_id)
+
+    # ── Line-of-balance computation ─────────────────────────────────────
+
+    async def compute_line_of_balance(
+        self,
+        takt_id: uuid.UUID,
+    ) -> LineOfBalanceResponse:
+        """Compute the line-of-balance geometry, violations, critical path."""
+        ts = await self.get_takt_schedule(takt_id)
+        locations = await self.location_repo.list_for_takt(takt_id)
+        activities = await self.activity_repo.list_for_takt(takt_id)
+
+        loc_payload = [{"id": str(loc.id), "name": loc.name, "sequence_order": loc.sequence_order} for loc in locations]
+        act_payload = [
+            {
+                "id": str(a.id),
+                "name": a.name,
+                "sequence_order": a.sequence_order,
+                "planned_cycle_duration_days": a.planned_cycle_duration_days,
+                "buffer_days_before": a.buffer_days_before,
+                "crew_size": a.crew_size,
+                "actual_cycle_duration_days": (
+                    float(a.actual_cycle_duration_days) if a.actual_cycle_duration_days is not None else None
+                ),
+            }
+            for a in activities
+        ]
+
+        geom = compute_line_of_balance_geometry(
+            loc_payload,
+            act_payload,
+            tolerance_days=ts.takt_rhythm_tolerance_days,
+        )
+
+        event_bus.publish_detached(
+            "schedule_advanced.takt.cycle_updated",
+            {
+                "takt_schedule_id": str(takt_id),
+                "master_schedule_id": str(ts.master_schedule_id),
+                "makespan_days": geom["total_makespan_days"],
+                "violation_count": len(geom["violations"]),
+            },
+            source_module="schedule_advanced",
+        )
+
+        return LineOfBalanceResponse(
+            takt_schedule_id=takt_id,
+            total_makespan_days=geom["total_makespan_days"],
+            bars=[LineOfBalanceBar(**b) for b in geom["bars"]],
+            violations=[TaktViolation(**v) for v in geom["violations"]],
+            critical_path=[uuid.UUID(x) for x in geom["critical_path"]],
+            total_locations=len(locations),
+            total_activities=len(activities),
+            average_cycle_days=geom["average_cycle_days"],
+        )
+
+    async def detect_violations(self, takt_id: uuid.UUID) -> list[TaktViolation]:
+        """Return just the takt rhythm / feasibility violations."""
+        lob = await self.compute_line_of_balance(takt_id)
+        return lob.violations

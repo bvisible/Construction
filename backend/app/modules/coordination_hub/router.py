@@ -16,7 +16,7 @@ Auth pattern matches the sibling clash/clash_cost_impact routers:
       inside each route so a VIEWER of project A can never read project
       B's coordination signal.
 
-The aggregator service is defensive — every sub-module is wrapped in a
+The aggregator service is defensive - every sub-module is wrapped in a
 ``_safe_count`` (see :mod:`app.modules.coordination_hub.service`) so a
 partial deploy still returns honest zeros instead of 500s.
 """
@@ -27,6 +27,7 @@ import logging
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import PlainTextResponse
 from sqlalchemy import select
 
 from app.dependencies import (
@@ -71,7 +72,7 @@ async def _load_project_currency(
     stmt = select(Project.currency).where(Project.id == project_id)
     result = await session.execute(stmt)
     currency = result.scalar()
-    # Empty-string fallback (not a hard-coded "EUR") — the project row's
+    # Empty-string fallback (not a hard-coded "EUR") - the project row's
     # currency is authoritative; absent that we surface the absence so
     # the UI can render unitless rather than mis-label totals.
     # See feedback/v3_db_eur_defaults_killed.
@@ -107,10 +108,11 @@ async def get_trade_matrix(
     session: SessionDep,
     service: CoordinationHubService = Depends(_get_service),
 ) -> TradeMatrixResponse:
-    """6×6 discipline-pair grid of clashes — drives the heat-map cell."""
+    """6×6 discipline-pair grid of clashes - drives the heat-map cell."""
     user_id = payload.get("sub", "")
     await verify_project_access(project_id, user_id, session)
-    return await service.trade_matrix(project_id)
+    currency = await _load_project_currency(session, project_id)
+    return await service.trade_matrix(project_id, currency=currency)
 
 
 @router.get(
@@ -136,6 +138,37 @@ async def get_timeline(
     return await service.timeline(project_id, days=days)
 
 
+@router.get(
+    "/projects/{project_id}/export.csv",
+    response_class=PlainTextResponse,
+    dependencies=[Depends(RequirePermission("coordination.read"))],
+)
+async def export_snapshot_csv(
+    project_id: uuid.UUID,
+    payload: CurrentUserPayload,
+    session: SessionDep,
+    service: CoordinationHubService = Depends(_get_service),
+) -> PlainTextResponse:
+    """Download the live coordination snapshot as a single CSV file.
+
+    One attachable artefact for a coordination meeting: headline KPIs +
+    threshold-alert status + the per-discipline-pair (cost-weighted)
+    breakdown. Always reflects live numbers (the dashboard TTL cache is
+    bypassed for the export). Read-only - same ``coordination.read`` gate
+    as the dashboard, with the per-project IDOR guard.
+    """
+    user_id = payload.get("sub", "")
+    await verify_project_access(project_id, user_id, session)
+    currency = await _load_project_currency(session, project_id)
+    csv_text = await service.export_snapshot_csv(project_id, currency=currency)
+    filename = f"coordination-{project_id}.csv"
+    return PlainTextResponse(
+        content=csv_text,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 # ── Thresholds ─────────────────────────────────────────────────────────────
 
 
@@ -156,14 +189,14 @@ async def list_thresholds(
     ``coordination.write``** so operators always see something they can
     edit and the alert banner has data to render against. A plain
     ``coordination.read`` caller (VIEWER) gets ephemeral defaults so a
-    GET never triggers a DB write — the seed runs the first time an
+    GET never triggers a DB write - the seed runs the first time an
     EDITOR / MANAGER / ADMIN touches the threshold view.
     """
     user_id = payload.get("sub", "")
     await verify_project_access(project_id, user_id, session)
     # Determine seed authority from the caller's live permissions /
     # role. Mirrors the same check ``RequirePermission("coordination.write")``
-    # would do — but inline because the surrounding gate is the coarser
+    # would do - but inline because the surrounding gate is the coarser
     # ``coordination.read``.
     perms: list[str] = payload.get("permissions", []) or []
     role: str = payload.get("role", "") or ""
@@ -171,12 +204,12 @@ async def list_thresholds(
     if not can_seed:
         # Fall through to the live registry so a stale JWT (issued
         # before a role-permission map change) still honours the
-        # current mapping — same pattern as RequirePermission uses.
+        # current mapping - same pattern as RequirePermission uses.
         try:
             from app.core.permissions import permission_registry as _reg
 
             can_seed = _reg.role_has_permission(role, "coordination.write")
-        except Exception:  # noqa: BLE001 — registry is best-effort here
+        except Exception:  # noqa: BLE001 - registry is best-effort here
             can_seed = False
     return await service.evaluate_thresholds(project_id, allow_seed=can_seed)
 
@@ -225,7 +258,7 @@ async def update_threshold(
     for tr in evaluated.thresholds:
         if tr.metric == row.metric:
             return tr
-    # Fallback — return the persisted row with neutral evaluation state.
+    # Fallback - return the persisted row with neutral evaluation state.
     return ThresholdRow(
         metric=row.metric,
         warn_value=row.warn_value,

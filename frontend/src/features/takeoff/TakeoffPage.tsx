@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useMemo, useEffect, useId, lazy, Suspense } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import clsx from 'clsx';
 import {
@@ -25,9 +25,12 @@ import {
   Layers,
   Pin,
   PinOff,
+  GitCompare,
 } from 'lucide-react';
 
-import { Button, Card, Badge, Input, Skeleton } from '@/shared/ui';
+import { Button, Card, Badge, Input, Skeleton, DismissibleInfo, IntroRichText, Breadcrumb } from '@/shared/ui';
+import { PageHeader } from '@/shared/ui/PageHeader';
+import { PdfCompareDrawer } from './PdfCompareDrawer';
 import { apiGet, apiPost } from '@/shared/lib/api';
 import { formatFileSize } from '@/shared/lib/formatters';
 import { useAuthStore } from '@/stores/useAuthStore';
@@ -1020,6 +1023,7 @@ export function TakeoffPage() {
 
   /* ── Tab state (synced with ?tab= query parameter from sidebar) ──── */
 
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const tabFromUrl = searchParams.get('tab');
   const initialTab: TakeoffTab =
@@ -1046,6 +1050,9 @@ export function TakeoffPage() {
 
   /** Currently opened document in the Measurements viewer. */
   const [viewerDoc, setViewerDoc] = useState<{ url: string; name: string } | null>(null);
+
+  /** Revision compare drawer (Item 17) — diffs two takeoff PDFs. */
+  const [showCompare, setShowCompare] = useState(false);
 
   /** Set when a deep-link references a measurement so the viewer can
    *  select + scroll-to it after the document and measurement list load. */
@@ -1789,14 +1796,57 @@ export function TakeoffPage() {
           </g>
         </g>
       </svg>
-      {/* Header removed — the page title is already in the left sidebar
-          nav, and the subtitle was purely decorative. Saves ~80px of
-          vertical space so the main workspace fits in one viewport. */}
+      {/* Header zone — full-bleed viewer keeps its own SVG chrome on the root,
+          so the canonical breadcrumb > header > info > tabs block carries its
+          own space-y-5 rhythm here (style guide §1 viewer exception). */}
+      <div className="space-y-5">
+      <Breadcrumb
+        items={[
+          ...(() => {
+            const sel = projects?.find((p) => p.id === selectedProjectId);
+            return sel ? [{ label: sel.name, to: `/projects/${sel.id}` }] : [];
+          })(),
+          { label: t('nav.pdf_measurements', 'PDF Measurements') },
+        ]}
+      />
+      {/* Canonical top block — the module name + icon are shown by the global
+          top app bar, so no visible in-page title. The PageHeader carries a
+          subtitle (what the page does) so the header row is never a blank
+          midline before the info card. */}
+      <PageHeader
+        srTitle={t('nav.pdf_measurements', 'PDF Measurements')}
+        subtitle={t('takeoff.subtitle', {
+          defaultValue:
+            'Measure areas, lengths and counts on PDF drawings and send them to a BOQ',
+        })}
+      />
+
+      <DismissibleInfo
+        storageKey="takeoff"
+        title={t('takeoff.intro_title', { defaultValue: 'Measure straight off the drawing' })}
+        more={
+          t('takeoff.intro_more', { defaultValue: '' })
+            ? <IntroRichText text={t('takeoff.intro_more')} />
+            : undefined
+        }
+        links={[
+          { label: t('nav.boq', { defaultValue: 'Bill of Quantities' }), onClick: () => navigate('/boq') },
+          { label: t('nav.quantities', { defaultValue: 'Quantity Takeoff' }), onClick: () => navigate('/quantities') },
+        ]}
+      >
+        {t('takeoff.intro_body', {
+          defaultValue:
+            'Upload PDF drawings to measure areas, lengths and counts by hand, or let AI extract elements with quantities. Selected measurements flow straight into your BOQ and stay linked to the project cost and schedule.',
+        })}
+      </DismissibleInfo>
 
       {/* Tabs — Measurements primary (first), AI second. Lower radius
-          for a sharper, more "tool-like" feel; no ring-halo. */}
+          for a sharper, more "tool-like" feel; no ring-halo. The Compare
+          button sits to the right so revision-diffing is reachable from
+          either tab without stealing the tablist's full width. */}
+      <div className="flex items-stretch gap-2">
       <div
-        className="mb-3 flex gap-1 rounded-md border border-border-light/80 bg-surface-secondary/40 p-1"
+        className="flex flex-1 gap-1 rounded-md border border-border-light/80 bg-surface-secondary/40 p-1"
         role="tablist"
         aria-label={t('takeoff.tabs_aria', { defaultValue: 'Takeoff sections' })}
       >
@@ -1854,6 +1904,28 @@ export function TakeoffPage() {
           )}
         </button>
       </div>
+      <button
+        type="button"
+        onClick={() => setShowCompare(true)}
+        disabled={(serverDocuments?.length ?? 0) < 2}
+        data-testid="takeoff-compare-button"
+        title={t('takeoff_compare.compare_revisions', {
+          defaultValue: 'Compare two takeoff PDFs with cost delta',
+        })}
+        className={clsx(
+          'inline-flex items-center gap-1.5 rounded-md border border-border-light/80 px-3 text-sm font-semibold transition-colors',
+          (serverDocuments?.length ?? 0) >= 2
+            ? 'bg-surface-secondary/40 text-content-secondary hover:text-oe-blue hover:bg-surface-primary/60'
+            : 'cursor-not-allowed text-content-quaternary',
+        )}
+      >
+        <GitCompare size={15} strokeWidth={2.1} aria-hidden />
+        <span className="hidden sm:inline">
+          {t('takeoff_compare.compare_short', { defaultValue: 'Compare' })}
+        </span>
+      </button>
+      </div>
+      </div>
 
       {/* Tab content */}
       {activeTab === 'documents' ? (
@@ -1861,6 +1933,7 @@ export function TakeoffPage() {
           role="tabpanel"
           id="takeoff-tabpanel-documents"
           aria-labelledby="takeoff-tab-documents"
+          className="mt-5"
         >
           {/* Workflow steps */}
           <div className="mb-6 grid grid-cols-1 sm:grid-cols-4 gap-3">
@@ -2040,7 +2113,7 @@ export function TakeoffPage() {
         // most internal height — 8rem wasted ~1rem that was shrinking the
         // viewer enough to force an internal scrollbar on laptop screens.
         <div
-          className="flex flex-col h-[calc(100vh-var(--oe-header-height,52px)-7rem)] min-h-0 overflow-x-hidden"
+          className="mt-5 flex flex-col h-[calc(100vh-var(--oe-header-height,52px)-7rem)] min-h-0 overflow-x-hidden"
           role="tabpanel"
           id="takeoff-tabpanel-measurements"
           aria-labelledby="takeoff-tab-measurements"
@@ -2117,6 +2190,17 @@ export function TakeoffPage() {
             }}
           />
         </div>
+      )}
+
+      {/* Revision compare with cost delta (Item 17) */}
+      {selectedProjectId && (
+        <PdfCompareDrawer
+          open={showCompare}
+          onClose={() => setShowCompare(false)}
+          projectId={selectedProjectId}
+          documents={serverDocuments ?? []}
+          currentDocumentId={activeDocId}
+        />
       )}
     </div>
   );

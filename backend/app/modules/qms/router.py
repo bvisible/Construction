@@ -6,12 +6,24 @@ Per-project access is enforced via :func:`verify_project_access`.
 
 from __future__ import annotations
 
+import csv
+import io
 import logging
 import uuid
 from decimal import Decimal
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+    status,
+)
+from fastapi.responses import StreamingResponse
 
 from app.core.file_signature import (
     SIGNATURE_BYTES_REQUIRED,
@@ -31,7 +43,7 @@ from app.dependencies import (
 
 # Allow-list of magic-byte tokens we accept for QMS attachments. Mirrors
 # the correspondence module's tightened list: PDFs, common images, and
-# Office ZIP / OLE containers. XML/HTML deliberately excluded — these
+# Office ZIP / OLE containers. XML/HTML deliberately excluded - these
 # files are rendered back as clickable links and HTML has repeatedly
 # been an XSS sink in audited modules.
 _QMS_ALLOWED_ATTACHMENT_TYPES = frozenset({"pdf", "png", "jpeg", "gif", "webp", "zip", "ole"})
@@ -53,6 +65,11 @@ from app.modules.qms.schemas import (
     FirstPassYieldReport,
     FPYTrendBucket,
     FPYTrendReport,
+    HoldPointReleaseCreate,
+    HoldPointReleaseRead,
+    HoldPointStatus,
+    InspectionAttachmentCreate,
+    InspectionAttachmentRead,
     InspectionCreate,
     InspectionRead,
     InspectionSignatureCreate,
@@ -60,6 +77,7 @@ from app.modules.qms.schemas import (
     InspectionSignaturesEnvelope,
     InspectionUpdate,
     ITPItemCreate,
+    ITPItemLinkSpec,
     ITPItemRead,
     ITPPlanCreate,
     ITPPlanRead,
@@ -95,6 +113,26 @@ def _bad(detail: str) -> HTTPException:
 
 def _not_found(detail: str) -> HTTPException:
     return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=detail)
+
+
+def _conflict(detail: str) -> HTTPException:
+    return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)
+
+
+def _client_ip(request: Request) -> str | None:
+    """Best-effort client IP, honouring a single trusted proxy hop.
+
+    ``X-Forwarded-For`` is attacker-spoofable but is the only signal behind
+    a reverse proxy; we take the first hop and fall back to the socket peer.
+    Stored purely as non-repudiation context, never used for authorisation.
+    """
+    fwd = request.headers.get("x-forwarded-for")
+    if fwd:
+        first = fwd.split(",")[0].strip()
+        if first:
+            return first[:64]
+    client = request.client
+    return client.host[:64] if client and client.host else None
 
 
 # ── ITP Plans ─────────────────────────────────────────────────────────────
@@ -179,6 +217,38 @@ async def add_itp_item(
     return ITPItemRead.model_validate(item)
 
 
+@router.patch(
+    "/itp-plans/{plan_id}/items/{item_id}/link-spec",
+    response_model=ITPItemRead,
+)
+async def link_itp_item_to_spec(
+    plan_id: uuid.UUID,
+    item_id: uuid.UUID,
+    data: ITPItemLinkSpec,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    _perm: None = Depends(RequirePermission("qms.itp.write")),
+    service: QMSService = Depends(_get_service),
+) -> ITPItemRead:
+    """‌⁠‍Link a control point to its BOQ / drawing / BIM spec + predecessor.
+
+    IDOR-gated by the plan's project; the item is checked to belong to the
+    plan so the URL can't cross-link items between plans.
+    """
+    plan = await service.repo.get_itp_plan(plan_id)
+    if plan is None:
+        raise _not_found("ITP plan not found")
+    await verify_project_access(plan.project_id, user_id, session)
+    item = await service.repo.get_itp_item(item_id)
+    if item is None or item.itp_plan_id != plan_id:
+        raise _not_found("ITP item not found")
+    try:
+        item = await service.link_itp_item_to_spec(item_id, data)
+    except ValueError as exc:
+        raise _bad(str(exc)) from exc
+    return ITPItemRead.model_validate(item)
+
+
 @router.post("/itp-plans/{plan_id}/activate", response_model=ITPPlanRead)
 async def activate_itp_plan(
     plan_id: uuid.UUID,
@@ -250,6 +320,7 @@ async def schedule_inspection(
 async def sign_inspection(
     inspection_id: uuid.UUID,
     data: InspectionSignatureCreate,
+    request: Request,
     user_id: CurrentUserId,
     session: SessionDep,
     _perm: None = Depends(RequirePermission("qms.inspection.sign")),
@@ -266,11 +337,14 @@ async def sign_inspection(
         default_signer = uuid.UUID(str(user_id))
     except (ValueError, AttributeError, TypeError):
         default_signer = None
+    user_agent = request.headers.get("user-agent")
     try:
         sig = await service.add_signature(
             inspection_id,
             data,
             default_signer_user_id=default_signer,
+            signer_ip=_client_ip(request),
+            signer_user_agent=user_agent,
         )
     except ValueError as exc:
         raise _bad(str(exc)) from exc
@@ -383,7 +457,7 @@ async def upload_inspection_attachment(
 ) -> dict[str, object]:
     """‌⁠‍Upload an attachment to an inspection (magic-byte gated).
 
-    The ``Content-Type`` header is fully attacker-controlled — magic-byte
+    The ``Content-Type`` header is fully attacker-controlled - magic-byte
     sniffing is the only thing that decides whether we keep the file. The
     IDOR check runs BEFORE we read the body so an unauthorised caller
     never causes us to learn whether the inspection exists.
@@ -437,7 +511,7 @@ async def upload_inspection_attachment(
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Unable to save attachment — storage error",
+            detail="Unable to save attachment - storage error",
         ) from exc
 
     return {
@@ -447,6 +521,306 @@ async def upload_inspection_attachment(
         "size_bytes": len(content),
         "relative_path": f"qms/attachments/{safe_name}",
     }
+
+
+@router.post(
+    "/inspections/{inspection_id}/attach-evidence",
+    response_model=InspectionAttachmentRead,
+    status_code=201,
+)
+async def attach_inspection_evidence(
+    inspection_id: uuid.UUID,
+    data: InspectionAttachmentCreate,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    _perm: None = Depends(RequirePermission("qms.inspection.write")),
+    service: QMSService = Depends(_get_service),
+) -> InspectionAttachmentRead:
+    """‌⁠‍Link an already-stored document to an inspection as evidence."""
+    inspection = await service.repo.get_inspection(inspection_id)
+    if inspection is None:
+        raise _not_found("Inspection not found")
+    await verify_project_access(inspection.project_id, user_id, session)
+    signer: uuid.UUID | None
+    try:
+        signer = uuid.UUID(str(user_id))
+    except (ValueError, AttributeError, TypeError):
+        signer = None
+    try:
+        attachment = await service.add_inspection_attachment(
+            inspection_id,
+            data,
+            uploaded_by_user_id=signer,
+        )
+    except ValueError as exc:
+        raise _bad(str(exc)) from exc
+    return InspectionAttachmentRead.model_validate(attachment)
+
+
+@router.get(
+    "/inspections/{inspection_id}/evidence",
+    response_model=list[InspectionAttachmentRead],
+)
+async def list_inspection_evidence(
+    inspection_id: uuid.UUID,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    _perm: None = Depends(RequirePermission("qms.inspection.read")),
+    service: QMSService = Depends(_get_service),
+) -> list[InspectionAttachmentRead]:
+    """‌⁠‍List evidence attachments for an inspection (IDOR-gated)."""
+    inspection = await service.repo.get_inspection(inspection_id)
+    if inspection is None:
+        raise _not_found("Inspection not found")
+    await verify_project_access(inspection.project_id, user_id, session)
+    rows = await service.list_inspection_attachments(inspection_id)
+    return [InspectionAttachmentRead.model_validate(r) for r in rows]
+
+
+@router.get(
+    "/inspections/{inspection_id}/hold-point-status",
+    response_model=HoldPointStatus,
+)
+async def hold_point_status(
+    inspection_id: uuid.UUID,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    _perm: None = Depends(RequirePermission("qms.inspection.read")),
+    service: QMSService = Depends(_get_service),
+) -> HoldPointStatus:
+    """‌⁠‍Resolve the predecessor / hold-point gate state for an inspection."""
+    inspection = await service.repo.get_inspection(inspection_id)
+    if inspection is None:
+        raise _not_found("Inspection not found")
+    await verify_project_access(inspection.project_id, user_id, session)
+    try:
+        data = await service.hold_point_status(inspection_id)
+    except ValueError as exc:
+        raise _bad(str(exc)) from exc
+    return HoldPointStatus(**data)
+
+
+@router.post(
+    "/inspections/{inspection_id}/release",
+    response_model=HoldPointReleaseRead,
+    status_code=201,
+)
+async def release_hold_point(
+    inspection_id: uuid.UUID,
+    data: HoldPointReleaseCreate,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    _perm: None = Depends(RequirePermission("qms.inspection.release_hold")),
+    service: QMSService = Depends(_get_service),
+) -> HoldPointReleaseRead:
+    """‌⁠‍Release a passed hold point so dependent work can proceed.
+
+    Requires the dedicated ``qms.inspection.release_hold`` permission
+    (MANAGER+); a conflict (already released / wrong status) returns 409.
+    """
+    inspection = await service.repo.get_inspection(inspection_id)
+    if inspection is None:
+        raise _not_found("Inspection not found")
+    await verify_project_access(inspection.project_id, user_id, session)
+    signer: uuid.UUID | None
+    try:
+        signer = uuid.UUID(str(user_id))
+    except (ValueError, AttributeError, TypeError):
+        signer = None
+    try:
+        release = await service.release_hold_point(
+            inspection_id,
+            data,
+            released_by_user_id=signer,
+        )
+    except ValueError as exc:
+        msg = str(exc)
+        if "already been released" in msg:
+            raise _conflict(msg) from exc
+        raise _bad(msg) from exc
+    return HoldPointReleaseRead.model_validate(release)
+
+
+@router.get(
+    "/inspections/{inspection_id}/release",
+    response_model=HoldPointReleaseRead,
+)
+async def get_hold_point_release(
+    inspection_id: uuid.UUID,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    _perm: None = Depends(RequirePermission("qms.inspection.read")),
+    service: QMSService = Depends(_get_service),
+) -> HoldPointReleaseRead:
+    """‌⁠‍Fetch the hold-point release record for an inspection (404 if none)."""
+    inspection = await service.repo.get_inspection(inspection_id)
+    if inspection is None:
+        raise _not_found("Inspection not found")
+    await verify_project_access(inspection.project_id, user_id, session)
+    release = await service.repo.get_hold_point_release(inspection_id)
+    if release is None:
+        raise _not_found("Hold point has not been released")
+    return HoldPointReleaseRead.model_validate(release)
+
+
+# ── Quality-gate enforcement + compliance export (item 12) ─────────────────
+
+
+@router.get("/itp-plans/{plan_id}/items/{item_id}/gate-status")
+async def itp_item_gate_status(
+    plan_id: uuid.UUID,
+    item_id: uuid.UUID,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    _perm: None = Depends(RequirePermission("qms.inspection.read")),
+    service: QMSService = Depends(_get_service),
+) -> dict[str, object]:
+    """‌⁠‍Resolve whether a control point's hold point blocks downstream work.
+
+    Read-only seam other modules (task progression, change-order approval)
+    can consult before allowing a gated action. IDOR-gated by the plan's
+    project; the item is checked to belong to the plan.
+    """
+    plan = await service.repo.get_itp_plan(plan_id)
+    if plan is None:
+        raise _not_found("ITP plan not found")
+    await verify_project_access(plan.project_id, user_id, session)
+    item = await service.repo.get_itp_item(item_id)
+    if item is None or item.itp_plan_id != plan_id:
+        raise _not_found("ITP item not found")
+    try:
+        result = await service.is_hold_point_satisfied(item_id)
+    except ValueError as exc:
+        raise _bad(str(exc)) from exc
+    return {
+        "itp_item_id": str(result["itp_item_id"]),
+        "is_hold_point": result["is_hold_point"],
+        "satisfied": result["satisfied"],
+        "reason": result["reason"],
+    }
+
+
+def _compliance_csv(records: list[dict[str, object]]) -> str:
+    """Flatten compliance records to a single CSV table (one row per record).
+
+    Signatures and evidence are collapsed into compact ``;``-joined cells so
+    the export opens cleanly in Excel for an auditor while still carrying the
+    signer roles / timestamps and evidence integrity hashes.
+    """
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(
+        [
+            "inspection_id",
+            "control_point_name",
+            "hold_witness_point",
+            "status",
+            "performed_at",
+            "location_ref",
+            "csi_section_ref",
+            "spec_drawing_ref",
+            "responsible_role",
+            "signatures",
+            "evidence_hashes",
+            "released",
+            "released_at",
+            "release_justification",
+        ]
+    )
+    for rec in records:
+        sigs = "; ".join(
+            f"{s.get('signer_role')}@{s.get('timestamp_utc') or s.get('signed_at') or ''}"
+            for s in (rec.get("signatures") or [])  # type: ignore[union-attr]
+        )
+        evidence = "; ".join(
+            f"{e.get('document_id')}:{e.get('file_hash_sha256') or 'no-hash'}"
+            for e in (rec.get("evidence") or [])  # type: ignore[union-attr]
+        )
+        writer.writerow(
+            [
+                rec.get("inspection_id") or "",
+                rec.get("control_point_name") or "",
+                rec.get("hold_witness_point") or "",
+                rec.get("status") or "",
+                rec.get("performed_at") or "",
+                rec.get("location_ref") or "",
+                rec.get("csi_section_ref") or "",
+                rec.get("spec_drawing_ref") or "",
+                rec.get("responsible_role") or "",
+                sigs,
+                evidence,
+                "yes" if rec.get("released") else "no",
+                rec.get("released_at") or "",
+                rec.get("release_justification") or "",
+            ]
+        )
+    return buf.getvalue()
+
+
+@router.get("/inspections/{inspection_id}/compliance-export")
+async def inspection_compliance_export(
+    inspection_id: uuid.UUID,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    fmt: str = Query(default="json", alias="format", pattern=r"^(json|csv)$"),
+    _perm: None = Depends(RequirePermission("qms.report.read")),
+    service: QMSService = Depends(_get_service),
+) -> object:
+    """‌⁠‍Audit-ready compliance record for one inspection (JSON or CSV).
+
+    Bundles signatures (with non-repudiation context), evidence attachments
+    with their SHA-256 integrity hashes, and the hold-point release. IDOR-gated
+    by project ownership.
+    """
+    inspection = await service.repo.get_inspection(inspection_id)
+    if inspection is None:
+        raise _not_found("Inspection not found")
+    await verify_project_access(inspection.project_id, user_id, session)
+    try:
+        record = await service.build_inspection_compliance_record(inspection_id)
+    except ValueError as exc:
+        raise _bad(str(exc)) from exc
+    if fmt == "csv":
+        body = _compliance_csv([record])
+        return StreamingResponse(
+            iter([body]),
+            media_type="text/csv",
+            headers={"Content-Disposition": (f'attachment; filename="inspection_{inspection_id}_compliance.csv"')},
+        )
+    return record
+
+
+@router.get("/itp-plans/{plan_id}/compliance-export")
+async def plan_compliance_export(
+    plan_id: uuid.UUID,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    fmt: str = Query(default="json", alias="format", pattern=r"^(json|csv)$"),
+    _perm: None = Depends(RequirePermission("qms.report.read")),
+    service: QMSService = Depends(_get_service),
+) -> object:
+    """‌⁠‍Full compliance dossier for an ITP plan (JSON or CSV).
+
+    One record per inspection across every control point in the plan, with
+    signatures + evidence integrity hashes + hold-point releases. IDOR-gated
+    by the plan's project.
+    """
+    plan = await service.repo.get_itp_plan(plan_id)
+    if plan is None:
+        raise _not_found("ITP plan not found")
+    await verify_project_access(plan.project_id, user_id, session)
+    try:
+        export = await service.build_plan_compliance_export(plan_id)
+    except ValueError as exc:
+        raise _bad(str(exc)) from exc
+    if fmt == "csv":
+        body = _compliance_csv(export["records"])
+        return StreamingResponse(
+            iter([body]),
+            media_type="text/csv",
+            headers={"Content-Disposition": (f'attachment; filename="itp_plan_{plan_id}_compliance.csv"')},
+        )
+    return export
 
 
 # ── NCRs ──────────────────────────────────────────────────────────────────
@@ -711,7 +1085,7 @@ async def upload_ncr_attachment(
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Unable to save attachment — storage error",
+            detail="Unable to save attachment - storage error",
         ) from exc
 
     return {
@@ -1011,7 +1385,7 @@ async def copq_detailed_report(
     _perm: None = Depends(RequirePermission("qms.report.read")),
     service: QMSService = Depends(_get_service),
 ) -> COPQDetailed:
-    """Detailed COPQ — NCRs + rework + warranty + delay penalty."""
+    """Detailed COPQ - NCRs + rework + warranty + delay penalty."""
     await verify_project_access(project_id, user_id, session)
     data = await service.compute_copq_detailed(
         project_id,
@@ -1162,7 +1536,7 @@ async def list_calibrations(
     """List calibrations.
 
     A ``project_id`` is required to prevent cross-tenant disclosure.
-    Without it we cannot gate the response by project ownership — the
+    Without it we cannot gate the response by project ownership - the
     Round-4 IDOR convention for list endpoints.
     """
     if project_id is None:
@@ -1193,9 +1567,9 @@ async def create_calibration(
 
     Two flavours:
 
-    * **project-scoped** (``data.project_id`` set) — gated by per-project
+    * **project-scoped** (``data.project_id`` set) - gated by per-project
       ownership (Round-5 IDOR).
-    * **tenant-wide** (``data.project_id`` is None) — visible to every
+    * **tenant-wide** (``data.project_id`` is None) - visible to every
       reader in the tenant and used for shared instruments (e.g. a
       single torque wrench rotating across projects). A plain EDITOR
       must NOT be able to mint these because they bypass the per-project

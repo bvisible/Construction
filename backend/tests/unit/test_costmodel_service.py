@@ -15,6 +15,8 @@ service only touches repositories, so swapping them with
 from __future__ import annotations
 
 import uuid
+from datetime import date
+from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any
 
@@ -212,6 +214,155 @@ async def test_calculate_evm_returns_bcws_bcwp_acwp_fields() -> None:
 
     for field in ("bac", "pv", "ev", "ac", "sv", "cv", "spi", "cpi", "eac"):
         assert hasattr(response, field), f"EVMResponse missing {field}"
+
+
+# ── Time-phased Planned Value ───────────────────────────────────────────────
+
+
+def _line(amount: str, *, activity_id: Any = None, period: tuple[str, str] | None = None) -> SimpleNamespace:
+    """Build a BudgetLine-shaped stub for the time-phased PV helper."""
+    return SimpleNamespace(
+        planned_amount=amount,
+        activity_id=activity_id,
+        period_start=period[0] if period else None,
+        period_end=period[1] if period else None,
+    )
+
+
+def test_time_phased_pv_two_activity_windows_at_mid_date() -> None:
+    """Two lines on different activity windows are time-phased independently.
+
+    Line A: 100,000 over 2026-01-01 .. 2026-01-11 (10-day window).
+    Line B:  60,000 over 2026-01-06 .. 2026-01-16 (10-day window).
+    As-of  : 2026-01-11.
+
+        A fraction = (Jan11 - Jan01) / 10 = 10/10 = 1.0   → 100,000
+        B fraction = (Jan11 - Jan06) / 10 =  5/10 = 0.5   →  30,000
+        PV         = 130,000
+    """
+    act_a = uuid.uuid4()
+    act_b = uuid.uuid4()
+    lines = [
+        _line("100000", activity_id=act_a),
+        _line("60000", activity_id=act_b),
+    ]
+    activity_window = {
+        str(act_a): (date(2026, 1, 1), date(2026, 1, 11)),
+        str(act_b): (date(2026, 1, 6), date(2026, 1, 16)),
+    }
+
+    pv = CostModelService._time_phased_pv(
+        lines,
+        activity_window=activity_window,
+        project_period=None,
+        as_of=date(2026, 1, 11),
+        time_elapsed_pct=0.0,
+    )
+    assert pv == Decimal("130000")
+
+
+def test_time_phased_pv_falls_back_to_line_period() -> None:
+    """A line with no activity link uses its own period_start/period_end.
+
+    Line: 80,000 over 2026-03-01 .. 2026-03-05 (4-day window), as-of mid =
+    2026-03-03 → fraction = 2/4 = 0.5 → PV = 40,000.
+    """
+    lines = [_line("80000", period=("2026-03-01", "2026-03-05"))]
+    pv = CostModelService._time_phased_pv(
+        lines,
+        activity_window={},
+        project_period=None,
+        as_of=date(2026, 3, 3),
+        time_elapsed_pct=0.0,
+    )
+    assert pv == Decimal("40000")
+
+
+def test_time_phased_pv_falls_back_to_project_period() -> None:
+    """No activity link and no line period → distribute over the project period."""
+    lines = [_line("50000")]
+    pv = CostModelService._time_phased_pv(
+        lines,
+        activity_window={},
+        project_period=(date(2026, 1, 1), date(2026, 1, 11)),
+        as_of=date(2026, 1, 6),  # halfway through the 10-day project window
+        time_elapsed_pct=0.0,
+    )
+    assert pv == Decimal("25000")
+
+
+def test_time_phased_pv_last_resort_approximation() -> None:
+    """With no window of any kind, fall back to amount × time_elapsed%."""
+    lines = [_line("200000")]
+    pv = CostModelService._time_phased_pv(
+        lines,
+        activity_window={},
+        project_period=None,
+        as_of=date(2026, 1, 1),
+        time_elapsed_pct=30.0,
+    )
+    assert pv == Decimal("60000.0")
+
+
+@pytest.mark.asyncio
+async def test_calculate_evm_uses_time_phased_pv_end_to_end(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End-to-end: calculate_evm wires time-phased PV from activities.
+
+    Two budget lines linked to two activities with different windows that
+    both fully span before today (a 2020 schedule), so each line is 100 %
+    time-phased and PV == BAC. This proves the wiring distributes per line
+    rather than using the old BAC × time_elapsed% proxy.
+    """
+    service = _make_service()
+    pid = uuid.uuid4()
+    act_a = uuid.uuid4()
+    act_b = uuid.uuid4()
+
+    service.budget_repo.set_aggregate(  # type: ignore[attr-defined]
+        total_planned="160000",
+        total_actual="0",
+    )
+    # Seed two activity-linked budget lines into the stub repo.
+    await service.budget_repo.create(  # type: ignore[attr-defined]
+        SimpleNamespace(project_id=pid, activity_id=act_a, planned_amount="100000", category="material")
+    )
+    await service.budget_repo.create(  # type: ignore[attr-defined]
+        SimpleNamespace(project_id=pid, activity_id=act_b, planned_amount="60000", category="labor")
+    )
+
+    from app.modules.schedule import repository as schedule_repo_mod
+
+    sched = SimpleNamespace(id=uuid.uuid4(), start_date="2020-01-01", end_date="2020-12-31")
+
+    class _SchedRepo:
+        def __init__(self, *_a: Any, **_k: Any) -> None: ...
+
+        async def list_for_project(self, project_id: uuid.UUID, *, limit: int = 50) -> tuple[list[Any], int]:
+            return [sched], 1
+
+    class _ActivityRepo:
+        def __init__(self, *_a: Any, **_k: Any) -> None: ...
+
+        async def list_for_schedule(self, schedule_id: uuid.UUID, *, limit: int = 10000) -> tuple[list[Any], int]:
+            return (
+                [
+                    SimpleNamespace(id=act_a, start_date="2020-01-01", end_date="2020-03-01", progress_pct="100"),
+                    SimpleNamespace(id=act_b, start_date="2020-04-01", end_date="2020-06-01", progress_pct="100"),
+                ],
+                2,
+            )
+
+    monkeypatch.setattr(schedule_repo_mod, "ScheduleRepository", _SchedRepo)
+    monkeypatch.setattr(schedule_repo_mod, "ActivityRepository", _ActivityRepo)
+
+    response = await service.calculate_evm(pid)
+
+    # Both activity windows are entirely in the past → each line is 100 %
+    # planned-value-earned → PV == BAC == 160,000.
+    assert response.bac == 160_000.0
+    assert response.pv == 160_000.0
 
 
 # ── Snapshots ─────────────────────────────────────────────────────────────

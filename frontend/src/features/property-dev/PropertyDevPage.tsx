@@ -53,11 +53,13 @@ import {
   Badge,
   EmptyState,
   Breadcrumb,
+  DismissibleInfo,
   SkeletonTable,
   SideDrawer,
   ConfirmDialog,
   ModuleHelpButton,
 } from '@/shared/ui';
+import { PageHeader } from '@/shared/ui/PageHeader';
 import {
   WideModal,
   WideModalSection,
@@ -67,16 +69,16 @@ import { MoneyDisplay } from '@/shared/ui/MoneyDisplay';
 import { DateDisplay } from '@/shared/ui/DateDisplay';
 import { useConfirm } from '@/shared/hooks/useConfirm';
 import { useTabKeyboardNav } from '@/shared/hooks/useTabKeyboardNav';
-import { PipelineBanner } from './PipelineBanner';
 import { useToastStore } from '@/stores/useToastStore';
 import { usePreferencesStore } from '@/stores/usePreferencesStore';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
-import { getErrorMessage } from '@/shared/lib/api';
+import { getErrorMessage, ApiError } from '@/shared/lib/api';
 import { EditBuyerModal } from './EditBuyerModal';
 import { BuyerAccessLinkPanel } from '@/features/buyer-portal/BuyerAccessLinkPanel';
 import { DocumentPreviewModal } from './DocumentPreviewModal';
 import { SnagsBlock } from './SnagsBlock';
+import { HandoverDocumentsSection } from './HandoverDocumentsSection';
 import type { PropDevDocType } from './api';
 import {
   listDevelopments,
@@ -393,41 +395,21 @@ export function PropertyDevPage() {
         : null;
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-5 animate-fade-in">
       <Breadcrumb
         items={[
           { label: t('propdev.title', { defaultValue: 'Property Development' }) },
         ]}
       />
 
-      <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div>
-          <div className="flex items-center gap-2">
-            <h1 className="text-2xl font-semibold text-content-primary">
-              {t('propdev.title', { defaultValue: 'Property Development' })}
-            </h1>
-            {/* Per-module Tour CTA — launches the PropDev guided tour. */}
-            <ModuleHelpButton tourId="propdev" />
-          </div>
-          <p className="mt-1 text-sm text-content-secondary">
-            {t('propdev.subtitle', {
-              defaultValue:
-                'Developments, plots, buyer journeys, handovers and warranty claims.',
-            })}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button
-            variant="ghost"
-            icon={<LayoutDashboard size={14} />}
-            onClick={() => navigate('/property-dev/dashboards')}
-            aria-label={t('propdev.open_dashboards', {
-              defaultValue: 'Open analytics dashboards',
-            })}
-            data-testid="propdev-tour-dashboards-button"
-          >
-            {t('propdev.dashboards_short', { defaultValue: 'Dashboards' })}
-          </Button>
+      <PageHeader
+        srTitle={t('propdev.title', { defaultValue: 'Property Development' })}
+        subtitle={t('propdev.subtitle', {
+          defaultValue:
+            'Developments, plots, buyer journeys, handovers and warranty claims.',
+        })}
+        actions={
+          <>
           <Button
             variant="primary"
             icon={<Plus size={14} />}
@@ -500,31 +482,45 @@ export function PropertyDevPage() {
                                   ? t('propdev.new_escrow_account', { defaultValue: 'New Escrow Account' })
                                   : t('propdev.new_development', { defaultValue: 'New Development' })}
           </Button>
-        </div>
-      </div>
+          <Button
+            variant="ghost"
+            icon={<LayoutDashboard size={14} />}
+            onClick={() => navigate('/property-dev/dashboards')}
+            aria-label={t('propdev.open_dashboards', {
+              defaultValue: 'Open analytics dashboards',
+            })}
+            data-testid="propdev-tour-dashboards-button"
+          >
+            {t('propdev.dashboards_short', { defaultValue: 'Dashboards' })}
+          </Button>
+          {/* Per-module Tour CTA — launches the PropDev guided tour. */}
+          <ModuleHelpButton tourId="propdev" />
+          </>
+        }
+      />
 
       <div data-testid="propdev-tour-pipeline">
-      <PipelineBanner
-        intro={t('propdev.pipeline_intro', {
-          defaultValue:
-            'Residential sales pipeline: lay out a development of plots and house types, take buyers from lead → reservation → contract → handover, then service warranty claims. Contract values feed Finance.',
-        })}
-        steps={[
-          {
-            label: t('propdev.step_dev', { defaultValue: 'Development' }),
-            current: true,
-          },
-          { label: t('propdev.step_buyers', { defaultValue: 'Buyers' }) },
-          {
-            label: t('propdev.step_contracts', { defaultValue: 'Contracts' }),
-            to: '/contracts',
-          },
-          {
-            label: t('propdev.step_finance', { defaultValue: 'Finance' }),
-            to: '/finance',
-          },
-        ]}
-      />
+        <DismissibleInfo
+          storageKey="property-dev"
+          title={t('propdev.intro_title', {
+            defaultValue: 'Take a buyer from first enquiry to handover',
+          })}
+          links={[
+            {
+              label: t('nav.contracts', { defaultValue: 'Contracts' }),
+              onClick: () => navigate('/contracts'),
+            },
+            {
+              label: t('finance.title', { defaultValue: 'Finance' }),
+              onClick: () => navigate('/finance'),
+            },
+          ]}
+        >
+          {t('propdev.intro_body', {
+            defaultValue:
+              'Lay out a development of plots and house types, then move buyers from lead to reservation to contract to handover and service warranty claims afterwards. Signed contract values flow into Finance, so the sales pipeline and the project books stay in step.',
+          })}
+        </DismissibleInfo>
       </div>
 
       {/* Tabs — all 16 icon buttons in a single wrap row. Group boundaries
@@ -605,7 +601,7 @@ export function PropertyDevPage() {
                           aria-controls={`propdev-panel-${tabItem.id}`}
                           id={`propdev-tab-${tabItem.id}`}
                           tabIndex={active ? 0 : -1}
-                          title={`${tabItem.label} — ${tabItem.tip}`}
+                          title={`${tabItem.label} - ${tabItem.tip}`}
                           onClick={() => {
                             setTab(tabItem.id);
                             setSearch('');
@@ -1793,7 +1789,7 @@ function LeadDetailDrawer({
               }
               title={t('propdev.lead_score_hint', {
                 defaultValue:
-                  'Your qualification confidence — 0 = cold, 50 = warm, 100 = hot. Drives the Leads list sort order.',
+                  'Your qualification confidence - 0 = cold, 50 = warm, 100 = hot. Drives the Leads list sort order.',
               })}
             />
             <span className="mt-0.5 text-2xs text-content-tertiary">
@@ -2210,7 +2206,7 @@ function ConvertLeadModal({
               <span>
                 {t('propdev.create_buyer_shadow', {
                   defaultValue:
-                    'Also materialise a Buyer row (recommended — downstream modules need it).',
+                    'Also materialise a Buyer row (recommended - downstream modules need it).',
                 })}
               </span>
             </label>
@@ -3864,7 +3860,7 @@ function PaymentScheduleTab({
               onClick={() => setGenerateForSpa(spasWithoutSchedule[0] ?? null)}
               title={t('propdev.generate_schedule_for_spa_help', {
                 defaultValue:
-                  '{{n}} SPA(s) have no payment schedule yet — generate one',
+                  '{{n}} SPA(s) have no payment schedule yet - generate one',
                 n: spasWithoutSchedule.length,
               })}
             >
@@ -4105,7 +4101,7 @@ function HandoversTab({ plots, buyers }: { plots: Plot[]; buyers: Buyer[] }) {
           })}
           description={t('propdev.empty_handovers_no_plots_desc', {
             defaultValue:
-              'Create plots first (under the Plots tab) — handovers are scheduled per plot once a buyer is assigned.',
+              'Create plots first (under the Plots tab) - handovers are scheduled per plot once a buyer is assigned.',
           })}
         />
       </Card>
@@ -4317,17 +4313,16 @@ function HandoverPlotRow({ plot, buyer }: { plot: Plot; buyer: Buyer | undefined
           </Button>
         </div>
       )}
-      {/* Snags block — one per handover. Buyer is implicit (the plot's
-          buyer). Drives the snag → warranty promote flow on completed
-          handovers; on scheduled handovers we still allow adding snags
-          so site engineers can log defects ahead of completion. */}
+      {/* Per-handover blocks: the digital closeout package (item #25 —
+          warranty / manuals / key receipt + ZIP export) sits above the
+          snags block. Snags drive the snag → warranty promote flow on
+          completed handovers; on scheduled handovers we still allow
+          adding both so site engineers can prepare ahead of completion. */}
       {handovers.map((h: Handover) => (
-        <SnagsBlock
-          key={`snags-${h.id}`}
-          handover={h}
-          buyer={buyer}
-          plotId={plot.id}
-        />
+        <div key={`handover-blocks-${h.id}`}>
+          <HandoverDocumentsSection handover={h} />
+          <SnagsBlock handover={h} buyer={buyer} plotId={plot.id} />
+        </div>
       ))}
       {scheduleOpen && (
         <WideModal
@@ -4450,7 +4445,31 @@ function CompleteHandoverModal({
       qc.invalidateQueries({ queryKey: ['propdev', 'buyers'] });
       onClose();
     },
-    onError: (err) => addToast({ type: 'error', title: getErrorMessage(err) }),
+    onError: (err) => {
+      // The closeout gate (item #25) blocks completion with a 409 when a
+      // required handover document is still undelivered. Surface the
+      // missing-doc list so the user knows exactly what to deliver first.
+      if (err instanceof ApiError && err.status === 409) {
+        const detail = (err.body as { detail?: { missing_required?: string[] } })
+          ?.detail;
+        const missing = detail?.missing_required ?? [];
+        addToast({
+          type: 'error',
+          title: t('propdev.handover_blocked_docs', {
+            defaultValue: 'Required documents missing',
+          }),
+          message:
+            missing.length > 0
+              ? t('propdev.handover_blocked_docs_list', {
+                  defaultValue: 'Deliver these first: {{docs}}',
+                  docs: missing.join(', '),
+                })
+              : getErrorMessage(err),
+        });
+        return;
+      }
+      addToast({ type: 'error', title: getErrorMessage(err) });
+    },
   });
   const canSubmit =
     !!form.completed_at && form.customer_signature_ref.trim().length > 0;
@@ -4696,7 +4715,7 @@ function WarrantyTab({
           })}
           description={t('propdev.warranty.pick_dev_desc', {
             defaultValue:
-              'Warranty claims are listed per development — pick one from the Developments tab to see its open claims.',
+              'Warranty claims are listed per development - pick one from the Developments tab to see its open claims.',
           })}
         />
       </Card>
@@ -6736,7 +6755,7 @@ function CreateModal({
             label={t('propdev.lead_score', { defaultValue: 'Score (0-100)' })}
             hint={t('propdev.lead_score_hint', {
               defaultValue:
-                'Your qualification confidence — 0 = cold, 50 = warm, 100 = hot. Drives the Leads list sort order.',
+                'Your qualification confidence - 0 = cold, 50 = warm, 100 = hot. Drives the Leads list sort order.',
             })}
           >
             <input
@@ -7517,7 +7536,7 @@ function PlotFormBody({
           </span>
           <span className="font-medium text-content-primary">
             {activeDevelopment
-              ? `${activeDevelopment.code}${activeDevelopment.name ? ` — ${activeDevelopment.name}` : ''}`
+              ? `${activeDevelopment.code}${activeDevelopment.name ? ` - ${activeDevelopment.name}` : ''}`
               : t('propdev.unknown_development', { defaultValue: 'Selected development' })}
           </span>
         </div>

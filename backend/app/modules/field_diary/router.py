@@ -2,9 +2,9 @@
 """Field Diary API routes (mounted at ``/api/v1/field-diary``).
 
 Auth model:
-    * ``POST /auth/request-magic-link/`` is **unauthenticated** — it
+    * ``POST /auth/request-magic-link/`` is **unauthenticated** - it
       provisions a magic-link + PIN for the supplied phone.
-    * ``POST /auth/consume/`` is also unauthenticated — exchanges
+    * ``POST /auth/consume/`` is also unauthenticated - exchanges
       ``(token, pin)`` for a long-lived session token.
     * Every other endpoint depends on :class:`RequirePinPlusMagicLink`
       (validates ``Authorization: Bearer <session-token>`` AND
@@ -18,6 +18,7 @@ Auth model:
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from pathlib import Path
 from typing import Annotated
@@ -48,15 +49,23 @@ from app.modules.field_diary.schemas import (
     DiaryEntryCreate,
     DiaryEntryResponse,
     DiaryEntryUpdate,
+    FieldCaptureResponse,
+    FieldInspectionCreate,
     FieldMagicLinkConsume,
     FieldMagicLinkRequest,
     FieldMagicLinkRequestResponse,
     FieldModuleGrantCreate,
     FieldModuleGrantResponse,
+    FieldPunchCreate,
     FieldSessionResponse,
+    FieldSyncBatch,
+    FieldSyncOpResponse,
+    FieldTodayResponse,
 )
 from app.modules.field_diary.service import (
     FieldDiaryService,
+    FieldSyncService,
+    now_utc,
 )
 
 router = APIRouter(tags=["field_diary"])
@@ -80,7 +89,7 @@ class RequirePinPlusMagicLink:
 
     Returns the live :class:`FieldSession` on success; raises 401 on any
     failure. The session is scoped to a single ``(user, project,
-    module)`` tuple — callers should compare against the resource being
+    module)`` tuple - callers should compare against the resource being
     accessed.
     """
 
@@ -124,7 +133,7 @@ async def _require_field_module_grant(
 ):
     """Gate every diary endpoint on the dedicated module-grant table.
 
-    Reads ``project_id`` from the live session (NOT from the URL —
+    Reads ``project_id`` from the live session (NOT from the URL -
     sessions are pinned to one project, no IDOR window).
     """
     svc = FieldDiaryService(session)
@@ -158,7 +167,7 @@ async def request_magic_link(
 
     Provisions an ``oe_users_user`` row for the phone number if one
     doesn't already exist (field workers may have never logged into the
-    internal app). The user has no role + no permissions — access is
+    internal app). The user has no role + no permissions - access is
     granted exclusively via the ``oe_field_module_grant`` table.
 
     Always returns 202 with ``accepted=true`` to avoid leaking whether
@@ -242,7 +251,7 @@ async def list_entries(
     service: FieldDiaryService = Depends(_get_service),
 ) -> list[DiaryEntryResponse]:
     """List entries for the session's project (cross-project queries are
-    silently scoped down to the session project — no IDOR window)."""
+    silently scoped down to the session project - no IDOR window)."""
     target_project = field_session.project_id
     if project_id is not None and project_id != target_project:
         # Session is pinned to one project; reject mismatching ?project_id=.
@@ -286,7 +295,7 @@ async def get_entry(
 ) -> DiaryEntryResponse:
     entry = await service.get_diary_entry(entry_id)
     if entry.project_id != field_session.project_id:
-        # Hide existence — match HTTP 404 semantics used elsewhere.
+        # Hide existence - match HTTP 404 semantics used elsewhere.
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Diary entry not found",
@@ -352,6 +361,39 @@ async def append_activity(
 
 
 @router.post(
+    "/entries/by-date/{entry_date}/activities/",
+    response_model=DiaryActivityResponse,
+    status_code=201,
+)
+async def append_activity_by_date(
+    entry_date: str,
+    payload: DiaryActivityCreate,
+    field_session=Depends(_require_field_module_grant),
+    service: FieldDiaryService = Depends(_get_service),
+) -> DiaryActivityResponse:
+    """Append a time activity to the session author's diary entry for a date.
+
+    Find-or-creates the ``(project, author, date)`` entry first, so an offline
+    capture replayed from the field shell needs no server entry id. The date is
+    validated as ISO ``YYYY-MM-DD``; the project + author come from the live
+    session (no IDOR window - the URL carries no project).
+    """
+    if not re.match(r"^\d{4}-\d{2}-\d{2}$", entry_date):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="entry_date must be ISO YYYY-MM-DD",
+        )
+    activity = await service.append_activity_by_date(
+        project_id=field_session.project_id,
+        author_id=field_session.user_id,
+        entry_date=entry_date,
+        data=payload,
+        op_kind="field.diary.activity",
+    )
+    return DiaryActivityResponse.model_validate(activity)
+
+
+@router.post(
     "/entries/{entry_id}/attachments/",
     response_model=DiaryAttachmentResponse,
     status_code=201,
@@ -362,7 +404,7 @@ async def upload_attachment(
     field_session=Depends(_require_field_module_grant),
     service: FieldDiaryService = Depends(_get_service),
 ) -> DiaryAttachmentResponse:
-    """Upload a file attachment (S3-style — stored as opaque bytes).
+    """Upload a file attachment (S3-style - stored as opaque bytes).
 
     Hard cap of 25 MB. The filename supplied by the client is kept as
     metadata only; the on-disk storage key is server-derived to defuse
@@ -412,7 +454,7 @@ async def upload_attachment(
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Unable to save attachment — storage error",
+            detail="Unable to save attachment - storage error",
         ) from exc
 
     relative_path = f"field_diary/attachments/{safe_name}"
@@ -425,6 +467,279 @@ async def upload_attachment(
         uploaded_by=field_session.user_id,
     )
     return DiaryAttachmentResponse.model_validate(attachment)
+
+
+# ── Field Today screen ─────────────────────────────────────────────────────
+
+
+@router.get("/today/", response_model=FieldTodayResponse)
+async def field_today(
+    session: SessionDep,
+    field_session=Depends(_require_field_module_grant),
+) -> FieldTodayResponse:
+    """Single round-trip seed for the offline Today screen.
+
+    Returns the session author's diary entry for today, open punch/inspection
+    counts and the top open punch items, all scoped to the session project. The
+    client caches this as its offline seed; ``server_time`` lets it reconcile
+    clock skew against the device's local capture time.
+    """
+    import datetime as _dt
+
+    from app.modules.field_diary.service import FieldDiaryService as _FDS
+    from app.modules.inspections.repository import InspectionRepository
+    from app.modules.punchlist.repository import PunchListRepository
+
+    project_id = field_session.project_id
+    today_iso = _dt.datetime.now(_dt.UTC).strftime("%Y-%m-%d")
+
+    fds = _FDS(session)
+    entries = await fds.list_diary_entries(
+        project_id,
+        date_from=today_iso,
+        date_to=today_iso,
+        limit=50,
+    )
+    mine = next((e for e in entries if e.author_id == field_session.user_id), None)
+
+    punch_repo = PunchListRepository(session)
+    open_punch, open_punch_total = await punch_repo.list_for_project(
+        project_id,
+        offset=0,
+        limit=5,
+        status="open",
+    )
+    insp_repo = InspectionRepository(session)
+    _open_insp, open_insp_total = await insp_repo.list_for_project(
+        project_id,
+        offset=0,
+        limit=1,
+        status="scheduled",
+    )
+
+    return FieldTodayResponse(
+        project_id=project_id,
+        diary=DiaryEntryResponse.model_validate(mine) if mine is not None else None,
+        open_punch_count=open_punch_total,
+        top_punch=[
+            {
+                "id": str(p.id),
+                "title": p.title,
+                "priority": p.priority,
+                "status": p.status,
+            }
+            for p in open_punch
+        ],
+        open_inspection_count=open_insp_total,
+        server_time=now_utc().isoformat(),
+    )
+
+
+# ── Field capture (cross-module, idempotent) ───────────────────────────────
+
+
+@router.post("/capture/punch/", response_model=FieldCaptureResponse, status_code=201)
+async def capture_punch(
+    payload: FieldPunchCreate,
+    session: SessionDep,
+    field_session=Depends(_require_field_module_grant),
+) -> FieldCaptureResponse:
+    """Create a punch item from a field capture, scoped to the session project.
+
+    Idempotent on ``client_op_id``: a replayed op returns the original punch id
+    (HTTP 200) instead of creating a second row.
+    """
+    svc = FieldSyncService(session)
+    return await svc.capture_punch(field_session, payload)
+
+
+@router.post("/capture/inspection/", response_model=FieldCaptureResponse, status_code=201)
+async def capture_inspection(
+    payload: FieldInspectionCreate,
+    session: SessionDep,
+    field_session=Depends(_require_field_module_grant),
+) -> FieldCaptureResponse:
+    """Create an inspection from a field capture, scoped to the session project.
+
+    Idempotent on ``client_op_id``. The created inspection feeds the existing
+    desktop ``create-defect`` / ``create-ncr`` bridges with no new bridge code.
+    """
+    svc = FieldSyncService(session)
+    return await svc.capture_inspection(field_session, payload)
+
+
+@router.post("/capture/photo/", response_model=FieldCaptureResponse, status_code=201)
+async def capture_photo(
+    session: SessionDep,
+    field_session=Depends(_require_field_module_grant),
+    file: UploadFile = File(...),
+    punch_item_id: Annotated[uuid.UUID | None, Header(alias="X-Punch-Item-Id")] = None,
+    client_op_id: Annotated[str | None, Header(alias="X-Client-Op-Id")] = None,
+) -> FieldCaptureResponse:
+    """Attach a photo to a field-captured punch item.
+
+    The image is magic-byte gated against the photo allow-list (the request
+    Content-Type is attacker-controlled), stored under ``uploads/punchlist/
+    photos`` and cross-linked into the Documents hub, reusing the punchlist
+    photo path. The target punch item must belong to the session project (a
+    cross-project ``punch_item_id`` resolves to 404, not 403).
+    """
+    from app.core.file_signature import (
+        ALLOWED_PHOTO_TYPES,
+        SIGNATURE_BYTES_REQUIRED,
+        FileSignatureMismatch,
+        mime_for_signature,
+    )
+    from app.core.file_signature import require as require_signature
+    from app.modules.punchlist.service import PunchListService
+
+    if punch_item_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="X-Punch-Item-Id header is required for a field photo capture",
+        )
+    if not client_op_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="X-Client-Op-Id header is required for a field photo capture",
+        )
+
+    punch_svc = PunchListService(session)
+    item = await punch_svc.get_item(punch_item_id)
+    if item.project_id != field_session.project_id:
+        # Hide existence - IDOR returns 404 for cross-project ids.
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Punch item not found",
+        )
+
+    try:
+        content = await file.read()
+    except Exception as exc:
+        logger.exception("Unable to read field photo capture for punch %s", punch_item_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Unable to read uploaded photo",
+        ) from exc
+
+    try:
+        detected = require_signature(
+            content[:SIGNATURE_BYTES_REQUIRED],
+            ALLOWED_PHOTO_TYPES,
+            filename=file.filename,
+        )
+    except FileSignatureMismatch as exc:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail=str(exc),
+        ) from exc
+    safe_mime = mime_for_signature(detected)
+
+    photos_dir = Path("uploads/punchlist/photos")
+    photos_dir.mkdir(parents=True, exist_ok=True)
+    ext = Path(file.filename or "photo.jpg").suffix or ".jpg"
+    ext = ext.replace("/", "").replace("\\", "")
+    safe_name = f"{punch_item_id}_{uuid.uuid4().hex[:8]}{ext}"
+    filepath = photos_dir / safe_name
+    try:
+        filepath.write_bytes(content)
+    except Exception as exc:
+        logger.exception("Unable to save field photo for punch %s", punch_item_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Unable to save photo - storage error",
+        ) from exc
+
+    await punch_svc.add_photo(punch_item_id, f"punchlist/photos/{safe_name}")
+
+    # Cross-link into the Documents hub (best-effort - the photo is persisted).
+    try:
+        from app.modules.documents.models import Document
+
+        doc = Document(
+            project_id=item.project_id,
+            name=safe_name,
+            description=f"Field punch photo for item {punch_item_id}",
+            category="photo",
+            file_size=len(content),
+            mime_type=safe_mime,
+            file_path=str(filepath),
+            version=1,
+            uploaded_by=str(field_session.user_id),
+            tags=["punchlist", "photo", "field"],
+        )
+        session.add(doc)
+        await session.flush()
+    except Exception:
+        logger.exception("Failed to cross-link field punch photo to Documents hub")
+
+    return FieldCaptureResponse(
+        client_op_id=client_op_id,
+        status="applied",
+        target_module="punchlist",
+        target_kind="punch_photo",
+        result_id=punch_item_id,
+        http_status=201,
+    )
+
+
+# ── Sync (bulk drain + op history) ─────────────────────────────────────────
+
+
+@router.post("/sync/batch/", response_model=list[FieldCaptureResponse])
+async def sync_batch(
+    payload: FieldSyncBatch,
+    session: SessionDep,
+    field_session=Depends(_require_field_module_grant),
+) -> list[FieldCaptureResponse]:
+    """Bulk-drain up to 50 queued ops through the idempotency ledger.
+
+    The client may replay one op at a time against the ``capture/*`` endpoints
+    or batch them here; both paths go through the same per-``client_op_id``
+    dedup, so a batch that overlaps a prior single replay never double-applies.
+    """
+    svc = FieldSyncService(session)
+    results: list[FieldCaptureResponse] = []
+    for op in payload.ops:
+        if op.target_kind == "punch_item":
+            body = FieldPunchCreate(
+                client_op_id=op.client_op_id,
+                captured_at=op.captured_at,
+                lat=op.lat,
+                lon=op.lon,
+                accuracy_m=op.accuracy_m,
+                device_hint=op.device_hint,
+                **op.payload,
+            )
+            results.append(await svc.capture_punch(field_session, body))
+        elif op.target_kind == "inspection":
+            body = FieldInspectionCreate(
+                client_op_id=op.client_op_id,
+                captured_at=op.captured_at,
+                lat=op.lat,
+                lon=op.lon,
+                accuracy_m=op.accuracy_m,
+                device_hint=op.device_hint,
+                **op.payload,
+            )
+            results.append(await svc.capture_inspection(field_session, body))
+    return results
+
+
+@router.get("/sync/ops/", response_model=list[FieldSyncOpResponse])
+async def sync_ops(
+    session: SessionDep,
+    field_session=Depends(_require_field_module_grant),
+    since: str | None = Query(default=None),
+) -> list[FieldSyncOpResponse]:
+    """The worker's own applied-op history (newest first), scoped to the session.
+
+    Drives the "what synced / what conflicted" review surface. ``since`` is an
+    optional ISO timestamp filter.
+    """
+    svc = FieldSyncService(session)
+    ops = await svc.list_ops(field_session, since=since)
+    return [FieldSyncOpResponse.model_validate(o) for o in ops]
 
 
 # ── Admin grant endpoints (internal RBAC) ─────────────────────────────────
@@ -441,7 +756,7 @@ async def create_grant(
     user_id: CurrentUserId,
     service: FieldDiaryService = Depends(_get_service),
 ) -> FieldModuleGrantResponse:
-    """Operator-facing — grant a field user access to a module on a project.
+    """Operator-facing - grant a field user access to a module on a project.
 
     Gated by standard RBAC (``RequireRole("admin")``) because it modifies
     permissions; the data path it gates (the field worker's requests)

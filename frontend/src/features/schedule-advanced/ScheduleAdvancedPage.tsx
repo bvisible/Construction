@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useTabKeyboardNav } from '@/shared/hooks/useTabKeyboardNav';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -30,12 +31,14 @@ import {
   Badge,
   EmptyState,
   Breadcrumb,
+  DismissibleInfo,
   RecoveryCard,
   SkeletonTable,
   WideModal,
   ConfirmDialog,
   InfoHint,
 } from '@/shared/ui';
+import { PageHeader } from '@/shared/ui/PageHeader';
 import { RequiresProject } from '@/shared/auth/RequiresProject';
 import { PlanningCrossLinks } from '@/features/schedule/PlanningCrossLinks';
 import { DateDisplay } from '@/shared/ui/DateDisplay';
@@ -167,6 +170,7 @@ function pctNumber(value: string | number | null | undefined): number {
 
 export function ScheduleAdvancedPage() {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const [tab, setTab] = useState<Tab>('master');
   // Arrow-key navigation across the schedule advanced tab strip (WCAG 2.1.1).
   const onTabKeyDown = useTabKeyboardNav<Tab>({
@@ -193,13 +197,16 @@ export function ScheduleAdvancedPage() {
     queryFn: () => projectsApi.list(),
   });
 
-  // Prefer the globally-selected active project; fall back to the first
-  // project only when no active project is set. Never override an explicit
-  // in-page selection.
+  // Project selection lives in the global top-bar selector. Follow the
+  // active project; fall back to the first project only when nothing is
+  // active yet. Reset dependent selections whenever the project changes.
   useEffect(() => {
-    if (projectId) return;
-    const seed = activeProjectId || projectsQ.data?.[0]?.id;
-    if (seed) setProjectId(seed);
+    const next = activeProjectId || projectsQ.data?.[0]?.id || '';
+    if (!next || next === projectId) return;
+    setProjectId(next);
+    setMasterId('');
+    setLookAheadId('');
+    setWeekPlanId('');
   }, [activeProjectId, projectsQ.data, projectId]);
 
   const masterQ = useQuery({
@@ -317,59 +324,53 @@ export function ScheduleAdvancedPage() {
   });
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-5 animate-fade-in">
       <Breadcrumb
         items={[
           {
-            label: t('schedule_advanced.title', {
+            label: t('nav.schedule_advanced', {
               defaultValue: 'Last Planner / CPM',
             }),
           },
         ]}
       />
 
+      <PageHeader
+        srTitle={t('nav.schedule_advanced', { defaultValue: 'Last Planner / CPM' })}
+        subtitle={t('schedule_advanced.subtitle', {
+          defaultValue:
+            'Pull-planning, lookaheads, weekly commitments, constraints and baselines.',
+        })}
+        actions={
+          <Button
+            variant="primary"
+            icon={<Plus size={14} />}
+            onClick={() => setCreateMaster(true)}
+            disabled={!projectId}
+          >
+            {t('schedule_advanced.new_master', { defaultValue: 'New Master Schedule' })}
+          </Button>
+        }
+      />
+
+      <DismissibleInfo
+        storageKey="schedule-advanced"
+        title={t('schedule_advanced.intro_title', {
+          defaultValue: 'Keep the weekly promises the plan depends on',
+        })}
+        links={[
+          { label: t('schedule_advanced.intro_link_schedule', { defaultValue: '4D Schedule' }), onClick: () => navigate('/schedule') },
+          { label: t('schedule_advanced.intro_link_takt', { defaultValue: 'Takt planning' }), onClick: () => navigate('/takt') },
+        ]}
+      >
+        {t('schedule_advanced.intro_body', {
+          defaultValue:
+            'Builds the Last Planner stack on top of a master schedule: break the project into phases, roll a six-week look-ahead to clear constraints, and capture weekly commitments from trade foremen. Missed commitments record a reason for non-completion that feeds root-cause analysis, and baselines track variance against the plan.',
+        })}
+      </DismissibleInfo>
+
       {/* Cross-module navigation — connects the planning value chain */}
       <PlanningCrossLinks active="schedule-advanced" />
-
-      <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div>
-          <h1 className="text-2xl font-semibold text-content-primary">
-            {t('schedule_advanced.title', { defaultValue: 'Last Planner / CPM' })}
-          </h1>
-          <p className="mt-1 text-sm text-content-secondary">
-            {t('schedule_advanced.subtitle', {
-              defaultValue:
-                'Pull-planning, lookaheads, weekly commitments, constraints and baselines.',
-            })}
-          </p>
-        </div>
-        {projectsQ.data && projectsQ.data.length > 0 && (
-          <select
-            value={projectId}
-            onChange={(e) => {
-              setProjectId(e.target.value);
-              setMasterId('');
-              setLookAheadId('');
-              setWeekPlanId('');
-            }}
-            className={clsx(inputCls, 'max-w-xs')}
-          >
-            {projectsQ.data.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-        )}
-      </div>
-
-      {/* How Last Planner connects to the rest of the platform */}
-      <InfoHint
-        text={t('schedule_advanced.what_is_lps', {
-          defaultValue:
-            'The Last Planner System is pull-based production control that complements the 4D Schedule. Master schedule sets milestones, Phase Plans pull work backwards from them, Look-Aheads (6 weeks) make work ready by removing constraints, and Weekly Work Plans capture crew commitments. PPC (Percent Plan Complete) and constraint logs measure reliability. Use the 4D Schedule for the CPM critical path; use this for what the team actually commits to do next.',
-        })}
-      />
 
       {/* Tabs */}
       <div className="border-b border-border-light">
@@ -545,7 +546,7 @@ export function ScheduleAdvancedPage() {
             ? t('schedule_advanced.delete_master_message', {
                 name: deleteMaster.name,
                 defaultValue:
-                  '"{{name}}" and everything under it — phase plans, look-aheads, weekly work plans, commitments and baselines — will be permanently deleted. This cannot be undone.',
+                  '"{{name}}" and everything under it - phase plans, look-aheads, weekly work plans, commitments and baselines - will be permanently deleted. This cannot be undone.',
               })
             : ''
         }
@@ -621,7 +622,7 @@ function MasterTab({
           title={t('schedule_advanced.no_master_yet', { defaultValue: 'No master schedule yet' })}
           description={t('schedule_advanced.no_master_yet_desc', {
             defaultValue:
-              'The master schedule is the top-level plan that every phase plan, look-ahead and weekly work plan rolls up to. Create one to start pull-planning — you can rename it, change its dates, or delete it at any time.',
+              'The master schedule is the top-level plan that every phase plan, look-ahead and weekly work plan rolls up to. Create one to start pull-planning - you can rename it, change its dates, or delete it at any time.',
           })}
           action={{
             label: t('schedule_advanced.create_master', { defaultValue: 'Create Master' }),
@@ -1381,7 +1382,7 @@ function PhasesCardGrid({
             {onCritical && (
               <span
                 className="absolute top-2 right-2 inline-flex items-center gap-0.5 rounded-md bg-rose-500/15 px-1.5 py-px text-2xs font-semibold text-rose-700 dark:text-rose-300"
-                title={t('schedule_advanced.cp_tooltip', { defaultValue: 'On the critical path — slipping this phase delays the project finish' })}
+                title={t('schedule_advanced.cp_tooltip', { defaultValue: 'On the critical path - slipping this phase delays the project finish' })}
                 data-testid="phase-cp-badge"
               >
                 <AlertTriangle size={9} />
@@ -1526,7 +1527,7 @@ function PhasesTableView({
                       {isPhaseMilestone(p) && <Diamond size={10} className="text-amber-500 rotate-45 shrink-0" aria-hidden />}
                       {p.name}
                       {onCritical && (
-                        <span className="rounded-md bg-rose-500/15 px-1 py-px text-2xs font-semibold text-rose-700 dark:text-rose-300" title={t('schedule_advanced.cp_tooltip', { defaultValue: 'On the critical path — slipping this phase delays the project finish' })} data-testid="phase-cp-badge">CP</span>
+                        <span className="rounded-md bg-rose-500/15 px-1 py-px text-2xs font-semibold text-rose-700 dark:text-rose-300" title={t('schedule_advanced.cp_tooltip', { defaultValue: 'On the critical path - slipping this phase delays the project finish' })} data-testid="phase-cp-badge">CP</span>
                       )}
                     </button>
                   </td>
@@ -1733,7 +1734,7 @@ function PhasesTimelineView({
                     title={p.name}
                   >
                     {onCritical && (
-                      <span className="rounded-sm bg-rose-500/15 px-1 py-px text-2xs font-semibold text-rose-700 dark:text-rose-300" title={t('schedule_advanced.cp_tooltip', { defaultValue: 'On the critical path — slipping this phase delays the project finish' })} data-testid="phase-cp-badge">CP</span>
+                      <span className="rounded-sm bg-rose-500/15 px-1 py-px text-2xs font-semibold text-rose-700 dark:text-rose-300" title={t('schedule_advanced.cp_tooltip', { defaultValue: 'On the critical path - slipping this phase delays the project finish' })} data-testid="phase-cp-badge">CP</span>
                     )}
                     <span className="truncate">{p.name}</span>
                     <VarianceBadge days={variance} />
@@ -1872,7 +1873,7 @@ function PhaseFormModal({
       title={isEdit ? t('schedule_advanced.edit_phase', { defaultValue: 'Edit phase' }) : t('schedule_advanced.create_phase', { defaultValue: 'New phase' })}
       subtitle={t('schedule_advanced.phase_modal_subtitle', {
         defaultValue:
-          'Phases are high-level project segments — typically 4–12 weeks each. Use the lifecycle buttons on the card to pull, start, and complete a phase.',
+          'Phases are high-level project segments - typically 4–12 weeks each. Use the lifecycle buttons on the card to pull, start, and complete a phase.',
       })}
       size="lg"
       busy={busy}
@@ -1969,21 +1970,21 @@ function PhaseTemplateModal({
       key: 'residential',
       title: t('schedule_advanced.template_residential', { defaultValue: 'Residential' }),
       description: t('schedule_advanced.template_residential_desc', {
-        defaultValue: 'Single-family / multi-family build — site prep through handover.',
+        defaultValue: 'Single-family / multi-family build - site prep through handover.',
       }),
     },
     {
       key: 'commercial',
       title: t('schedule_advanced.template_commercial', { defaultValue: 'Commercial' }),
       description: t('schedule_advanced.template_commercial_desc', {
-        defaultValue: 'Office / retail / institutional — includes commissioning phase.',
+        defaultValue: 'Office / retail / institutional - includes commissioning phase.',
       }),
     },
     {
       key: 'infrastructure',
       title: t('schedule_advanced.template_infrastructure', { defaultValue: 'Infrastructure' }),
       description: t('schedule_advanced.template_infrastructure_desc', {
-        defaultValue: 'Roads / utilities — earthworks-heavy with final inspection.',
+        defaultValue: 'Roads / utilities - earthworks-heavy with final inspection.',
       }),
     },
   ];
@@ -1997,7 +1998,7 @@ function PhaseTemplateModal({
       title={t('schedule_advanced.apply_template', { defaultValue: 'Apply phase template' })}
       subtitle={t('schedule_advanced.apply_template_subtitle', {
         defaultValue:
-          'Pick a starter set of construction phases. Each phase gets a default duration — you can edit names, dates, and notes after applying.',
+          'Pick a starter set of construction phases. Each phase gets a default duration - you can edit names, dates, and notes after applying.',
       })}
       size="xl"
       busy={busy}
@@ -2849,7 +2850,7 @@ function ConstraintsTab({
           icon={<AlertCircle size={22} />}
           title={t('schedule_advanced.no_la_for_constraints', { defaultValue: 'No look-aheads' })}
           description={t('schedule_advanced.no_la_for_constraints_desc', {
-            defaultValue: 'Constraints belong to a look-ahead — create one first.',
+            defaultValue: 'Constraints belong to a look-ahead - create one first.',
           })}
         />
       </Card>
@@ -3210,7 +3211,7 @@ function BaselinesTab({
             <p className="mt-3 text-center text-xs text-content-tertiary">
               {t('schedule_advanced.no_variance_entries', {
                 defaultValue:
-                  'No variance data — the baseline snapshot was empty. Capture a new baseline now to start tracking variance.',
+                  'No variance data - the baseline snapshot was empty. Capture a new baseline now to start tracking variance.',
               })}
             </p>
           )}
@@ -3530,7 +3531,7 @@ function CreateWeeklyModal({
       title={t('schedule_advanced.create_weekly', { defaultValue: 'New weekly work plan' })}
       subtitle={t('schedule_advanced.create_weekly_subtitle', {
         defaultValue:
-          'Last Planner® weekly plan — pick the work week you want to commit to delivering.',
+          'Last Planner® weekly plan - pick the work week you want to commit to delivering.',
       })}
       onClose={onClose}
       onSubmit={submit}

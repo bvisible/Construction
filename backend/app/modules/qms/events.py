@@ -51,7 +51,7 @@ async def _on_hse_capa_completed(event: Event) -> None:
     # The HSE event payload is intentionally lean; if the source_type was
     # not 'incident' we do nothing. The mirror event below carries the
     # contextual fields explicitly.
-    return  # explicit no-op — see _on_hse_incident_root_cause for the real path
+    return  # explicit no-op - see _on_hse_incident_root_cause for the real path
 
 
 async def _on_hse_incident_root_cause(event: Event) -> None:
@@ -59,7 +59,7 @@ async def _on_hse_incident_root_cause(event: Event) -> None:
 
     We look up the HSE CAPA on-demand to determine whether it was tied to
     an incident and what the cost / severity context is. The subscriber
-    is fail-soft — any error is logged at debug.
+    is fail-soft - any error is logged at debug.
     """
     data = event.data or {}
     capa_id = data.get("capa_id")
@@ -80,7 +80,7 @@ async def _on_hse_incident_root_cause(event: Event) -> None:
                 return
             if capa.source_type != "incident":
                 return
-            # Idempotency — check if an NCR with this CAPA reference already exists.
+            # Idempotency - check if an NCR with this CAPA reference already exists.
             from sqlalchemy import select  # noqa: PLC0415
 
             existing = await session.execute(
@@ -157,11 +157,11 @@ async def _on_ncr_raised_fanout(event: Event) -> None:
 
     Two follow-on events:
 
-    * ``procurement.supplier_rating_update`` — when an NCR is linked to
+    * ``procurement.supplier_rating_update`` - when an NCR is linked to
       an inspection that references a subcontractor / supplier, the rating
       projection should re-compute. We publish unconditionally and let the
-      procurement-side handler resolve the supplier — keeps coupling loose.
-    * ``bi_dashboards.kpi_recompute`` — the COPQ / first-pass-yield gauges
+      procurement-side handler resolve the supplier - keeps coupling loose.
+    * ``bi_dashboards.kpi_recompute`` - the COPQ / first-pass-yield gauges
       depend on NCR counts and severities.
     """
     data = event.data or {}
@@ -202,6 +202,113 @@ async def _on_ncr_raised_fanout(event: Event) -> None:
         logger.debug("qms: kpi_recompute emit failed", exc_info=True)
 
 
+async def _on_hold_point_failed(event: Event) -> None:
+    """``qms.inspection.hold_point_failed`` → notify + flag for follow-up (item 12).
+
+    Infrastructure-only this phase: we fan out a ``notifications.dispatch``
+    event so the notifications module can alert the inspector / GC, and a
+    ``bi_dashboards.kpi_recompute`` so the first-pass-yield gauge refreshes.
+    A failed hold point is the strongest quality signal on a project, so the
+    hook is wired now even though the punchlist auto-raise lands in Phase 2.
+    The subscriber is fail-soft - any error is logged at debug.
+    """
+    data = event.data or {}
+    inspection_id = data.get("inspection_id")
+    project_id = data.get("project_id")
+    if not (inspection_id and project_id):
+        return
+    try:
+        event_bus.publish_detached(
+            "notifications.dispatch",
+            {
+                "source_module": "qms",
+                "source_event": "qms.inspection.hold_point_failed",
+                "project_id": str(project_id),
+                "inspection_id": str(inspection_id),
+                "itp_item_id": data.get("itp_item_id") or "",
+                "control_point_name": data.get("control_point_name") or "",
+                "severity": "high",
+                "title": "Hold point failed",
+            },
+            source_module="qms",
+        )
+    except Exception:
+        logger.debug("qms: hold_point_failed notify emit failed", exc_info=True)
+
+    try:
+        event_bus.publish_detached(
+            "bi_dashboards.kpi_recompute",
+            {
+                "source_module": "qms",
+                "source_event": "qms.inspection.hold_point_failed",
+                "project_id": str(project_id),
+                "kpi_codes": ["first_pass_yield", "ncr_open_count"],
+                "reason": "hold_point_failed",
+            },
+            source_module="qms",
+        )
+    except Exception:
+        logger.debug("qms: hold_point_failed kpi emit failed", exc_info=True)
+
+
+async def _on_inspection_approval_requested(event: Event) -> None:
+    """``qms.inspection.approval_requested`` → start an approval instance (item 12).
+
+    A failed / conditional hold or witness point needs a formal disposition
+    before dependent work proceeds. When the project has an *active*
+    ``qms_hold_point`` approval route configured, start an approval instance
+    against the inspection so the gate cannot release without sign-off. When
+    no route is configured the event is a no-op (the project simply has not
+    opted into routed hold-point dispositions) - a release still requires the
+    MANAGER+ ``qms.inspection.release_hold`` permission, so the gate is never
+    silently weakened. Fail-soft: any error is logged at debug.
+    """
+    data = event.data or {}
+    inspection_id = data.get("inspection_id")
+    project_id = data.get("project_id")
+    if not (inspection_id and project_id):
+        return
+    if not await _can_open_isolated_session():
+        return
+    try:
+        async with async_session_factory() as session:
+            from app.modules.approval_routes.repository import (  # noqa: PLC0415
+                ApprovalRouteRepository,
+            )
+            from app.modules.approval_routes.schemas import (  # noqa: PLC0415
+                InstanceCreate,
+            )
+            from app.modules.approval_routes.service import (  # noqa: PLC0415
+                ApprovalRouteService,
+            )
+
+            repo = ApprovalRouteRepository(session)
+            routes = await repo.list_routes(
+                project_id=uuid.UUID(project_id),
+                target_kind="qms_hold_point",
+            )
+            active = [r for r in routes if r.is_active]
+            if not active:
+                return
+            svc = ApprovalRouteService(session)
+            await svc.start_instance(
+                InstanceCreate(
+                    route_id=active[0].id,
+                    target_kind="qms_hold_point",
+                    target_id=uuid.UUID(inspection_id),
+                ),
+                started_by=None,
+            )
+            await session.commit()
+            logger.info(
+                "QMS hold-point disposition approval started for inspection %s (route %s)",
+                inspection_id,
+                active[0].id,
+            )
+    except Exception:
+        logger.debug("qms: hold-point approval auto-start skipped", exc_info=True)
+
+
 def register_subscribers() -> None:
     """Idempotently subscribe QMS handlers to upstream events."""
     if getattr(event_bus, _SUBSCRIBED_FLAG, False):
@@ -212,4 +319,12 @@ def register_subscribers() -> None:
         _on_hse_incident_root_cause,
     )
     event_bus.subscribe("qms.ncr.raised", _on_ncr_raised_fanout)
+    event_bus.subscribe(
+        "qms.inspection.hold_point_failed",
+        _on_hold_point_failed,
+    )
+    event_bus.subscribe(
+        "qms.inspection.approval_requested",
+        _on_inspection_approval_requested,
+    )
     setattr(event_bus, _SUBSCRIBED_FLAG, True)

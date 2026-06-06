@@ -433,3 +433,116 @@ async def test_diary_entry_unique_per_author_date(app_and_client) -> None:
         json=payload,
     )
     assert r.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_offline_activity_replay_is_idempotent(app_and_client) -> None:
+    """A queued activity replayed twice (same client_op_id) creates ONE row.
+
+    This is the durable-sync-ledger guarantee for TOP-30 #14: the offline field
+    shell drains at-least-once (a reconnect that fires twice, or a write whose
+    response was lost), re-sending the same op. Without the server-side ledger
+    the by-date activity append inserted a duplicate row each time - duplicate
+    logged hours feeding duplicate payroll labour. The ledger keyed on
+    client_op_id must collapse the replay to a single activity.
+    """
+    from sqlalchemy import func, select
+
+    from app.modules.field_diary.models import DiaryActivity, FieldSyncLedger
+
+    _app, client, SessionFactory = app_and_client
+    _owner, project_id = await _seed_user_and_project(SessionFactory)
+    token, pin, _user_id = await _request_link_and_grant(
+        client,
+        SessionFactory,
+        project_id=project_id,
+    )
+    session_token = await _open_session(client, token, pin)
+    headers = {
+        "Authorization": f"Bearer {session_token}",
+        "X-Field-PIN": pin,
+    }
+
+    date = "2026-05-25"
+    op_id = "11111111-2222-3333-4444-555555555555"
+    body = {
+        "activity_type": "work",
+        "description": "Poured slab zone A",
+        "hours": "8",
+        "started_at": f"{date}T07:00:00",
+        "ended_at": f"{date}T15:00:00",
+        "metadata": {"task": "concrete"},
+        "client_op_id": op_id,
+    }
+
+    # First replay: applies, returns 201 with the new activity id.
+    r1 = await client.post(
+        f"/v1/field-diary/entries/by-date/{date}/activities/",
+        headers=headers,
+        json=body,
+    )
+    assert r1.status_code == 201, r1.text
+    first_id = r1.json()["id"]
+
+    # Second replay of the SAME op_id (the "reconnect fired twice" case).
+    r2 = await client.post(
+        f"/v1/field-diary/entries/by-date/{date}/activities/",
+        headers=headers,
+        json=body,
+    )
+    assert r2.status_code == 201, r2.text
+    # The server returned the ORIGINAL row, not a fresh one.
+    assert r2.json()["id"] == first_id
+
+    # Exactly one activity row and one ledger row exist.
+    async with SessionFactory() as s:
+        act_count = (await s.execute(select(func.count()).select_from(DiaryActivity))).scalar_one()
+        assert act_count == 1
+        ledger = (
+            await s.execute(
+                select(FieldSyncLedger).where(FieldSyncLedger.client_op_id == op_id),
+            )
+        ).scalar_one()
+        assert str(ledger.result_id) == str(first_id)
+        assert ledger.op_kind == "field.diary.activity"
+
+
+@pytest.mark.asyncio
+async def test_online_activity_without_op_id_not_deduplicated(app_and_client) -> None:
+    """Two direct (online) appends with no client_op_id are two distinct rows.
+
+    Dedup is opt-in on the device-supplied key; an online caller that omits it
+    gets normal append-only behaviour (no accidental collapse of two real
+    distinct activities).
+    """
+    from sqlalchemy import func, select
+
+    from app.modules.field_diary.models import DiaryActivity
+
+    _app, client, SessionFactory = app_and_client
+    _owner, project_id = await _seed_user_and_project(SessionFactory)
+    token, pin, _user_id = await _request_link_and_grant(
+        client,
+        SessionFactory,
+        project_id=project_id,
+    )
+    session_token = await _open_session(client, token, pin)
+    headers = {
+        "Authorization": f"Bearer {session_token}",
+        "X-Field-PIN": pin,
+    }
+
+    date = "2026-05-26"
+    body = {"activity_type": "work", "description": "shift", "hours": "4"}
+
+    for _ in range(2):
+        r = await client.post(
+            f"/v1/field-diary/entries/by-date/{date}/activities/",
+            headers=headers,
+            json=body,
+        )
+        assert r.status_code == 201, r.text
+
+    async with SessionFactory() as s:
+        act_count = (await s.execute(select(func.count()).select_from(DiaryActivity))).scalar_one()
+        assert act_count == 2

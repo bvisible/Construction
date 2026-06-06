@@ -29,6 +29,8 @@ import {
   RecoveryCard,
   SkeletonTable,
   ConfirmDialog,
+  DismissibleInfo,
+  IntroRichText,
 } from '@/shared/ui';
 import { useConfirm } from '@/shared/hooks/useConfirm';
 import {
@@ -36,9 +38,10 @@ import {
   WideModalSection,
   WideModalField,
 } from '@/shared/ui/WideModal';
+import { useNavigate } from 'react-router-dom';
 import { MoneyDisplay } from '@/shared/ui/MoneyDisplay';
 import { DateDisplay } from '@/shared/ui/DateDisplay';
-import { PipelineBanner } from './PipelineBanner';
+import { PageHeader } from '@/shared/ui/PageHeader';
 import { apiGet, getErrorMessage } from '@/shared/lib/api';
 import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
@@ -241,8 +244,8 @@ function DashKPI({
 
 export function VariationsPage() {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const activeProjectId = useProjectContextStore((s) => s.activeProjectId);
-  const setActiveProject = useProjectContextStore((s) => s.setActiveProject);
 
   const projectsQ = useQuery({
     queryKey: ['variations', 'projects'],
@@ -440,8 +443,8 @@ export function VariationsPage() {
 
   if (!projectId) {
     return (
-      <div className="space-y-5">
-        <Breadcrumb items={[{ label: t('variations.title', { defaultValue: 'Variations' }) }]} />
+      <div className="space-y-5 animate-fade-in">
+        <Breadcrumb items={[{ label: t('nav.variations', { defaultValue: 'Variations' }) }]} />
         <EmptyState
           icon={<FileText size={22} />}
           title={t('variations.no_project', {
@@ -449,7 +452,7 @@ export function VariationsPage() {
           })}
           description={t('variations.no_project_desc', {
             defaultValue:
-              'Variations are project-scoped — create or open a project, then return here.',
+              'Variations are project-scoped, create or open a project, then return here.',
           })}
         />
       </div>
@@ -478,38 +481,24 @@ export function VariationsPage() {
   };
 
   return (
-    <div className="space-y-5">
-      <Breadcrumb items={[{ label: t('variations.title', { defaultValue: 'Variations' }) }]} />
+    <div className="space-y-5 animate-fade-in">
+      <Breadcrumb
+        items={[
+          ...(currentProject
+            ? [{ label: currentProject.name, to: `/projects/${currentProject.id}` }]
+            : []),
+          { label: t('nav.variations', { defaultValue: 'Variations' }) },
+        ]}
+      />
 
-      <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div>
-          <h1 className="text-2xl font-semibold text-content-primary">
-            {t('variations.title', { defaultValue: 'Variations' })}
-          </h1>
-          <p className="mt-1 text-sm text-content-secondary">
-            {t('variations.subtitle', {
-              defaultValue:
-                'Track variation notices, requests, orders, daywork and EoT claims through to final account.',
-            })}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          {projects.length > 1 && (
-            <select
-              value={projectId}
-              onChange={(e) => {
-                const p = projects.find((x) => x.id === e.target.value);
-                if (p) setActiveProject(p.id, p.name);
-              }}
-              className={clsx(inputCls, 'max-w-[260px]')}
-            >
-              {projects.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-          )}
+      {/* Header — project selection lives in the global top bar; no in-page
+          project picker. The page reads the shared project context. */}
+      <PageHeader
+        subtitle={t('variations.subtitle', {
+          defaultValue:
+            'Track variation notices, requests, orders, daywork and EoT claims through to final account.',
+        })}
+        actions={
           <Button variant="primary" icon={<Plus size={14} />} onClick={() => setCreateOpen(true)}>
             {tab === 'notices'
               ? t('variations.new_notice', { defaultValue: 'New Notice' })
@@ -521,31 +510,35 @@ export function VariationsPage() {
                     ? t('variations.new_daywork', { defaultValue: 'New Daywork' })
                     : t('variations.new_eot', { defaultValue: 'New EoT Claim' })}
           </Button>
-        </div>
-      </div>
+        }
+      />
 
-      <PipelineBanner
-        intro={t('variations.pipeline_intro', {
-          defaultValue:
-            'Variations adjust a live contract. A notice flags a change event, a request prices its cost and time impact, and on approval it converts to a variation order that feeds the contract final account. Daywork and EoT claims run alongside.',
+      <DismissibleInfo
+        storageKey="variations"
+        title={t('variations.intro_title', {
+          defaultValue: 'Settle changes before they become disputes',
         })}
-        steps={[
+        more={
+          t('variations.intro_more', { defaultValue: '' })
+            ? <IntroRichText text={t('variations.intro_more')} />
+            : undefined
+        }
+        links={[
           {
-            label: t('variations.step_contract', { defaultValue: 'Contracts' }),
-            to: '/contracts',
+            label: t('nav.contracts', { defaultValue: 'Contracts' }),
+            onClick: () => navigate('/contracts'),
           },
           {
-            label: t('variations.step_variations', {
-              defaultValue: 'Variations',
-            }),
-            current: true,
-          },
-          {
-            label: t('variations.step_finance', { defaultValue: 'Finance' }),
-            to: '/finance',
+            label: t('nav.finance', { defaultValue: 'Finance' }),
+            onClick: () => navigate('/finance'),
           },
         ]}
-      />
+      >
+        {t('variations.intro_body', {
+          defaultValue:
+            'Track a change event from a notice, through a priced variation request, to an agreed variation order, with daywork sheets and extension-of-time claims running alongside. On approval the order carries its cost and time impact into the contract final account and rolls up into Finance, so nothing agreed on site is lost at settlement.',
+        })}
+      </DismissibleInfo>
 
       {dashboardQ.data && (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-6">

@@ -1,13 +1,13 @@
 """‌⁠‍Teams API routes.
 
 Endpoints:
-    GET    /project/{project_id}        — List teams for project
-    POST   /                            — Create team (auth required)
-    PATCH  /{team_id}                   — Update team
-    DELETE /{team_id}                   — Delete team
-    POST   /{team_id}/members           — Add member
-    DELETE /{team_id}/members/{user_id} — Remove member
-    GET    /{team_id}/members           — List members
+    GET    /project/{project_id}        - List teams for project
+    POST   /                            - Create team (auth required)
+    PATCH  /{team_id}                   - Update team
+    DELETE /{team_id}                   - Delete team
+    POST   /{team_id}/members           - Add member
+    DELETE /{team_id}/members/{user_id} - Remove member
+    GET    /{team_id}/members           - List members
 """
 
 import logging
@@ -15,7 +15,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.dependencies import CurrentUserId, SessionDep
+from app.dependencies import CurrentUserId, SessionDep, verify_project_access
 from app.modules.teams.schemas import (
     AddMemberRequest,
     MembershipResponse,
@@ -66,7 +66,7 @@ async def create_team(
     """Create a new team within a project.
 
     RBAC: caller must own (or be admin of) the parent project. The
-    service-layer ``_assert_project_access`` enforces this — the router
+    service-layer ``_assert_project_access`` enforces this - the router
     just forwards ``user_id``.
     """
     try:
@@ -84,23 +84,30 @@ async def update_team(
     team_id: uuid.UUID,
     data: TeamUpdate,
     user_id: CurrentUserId,
+    session: SessionDep,
     service: TeamService = Depends(_get_service),
 ) -> TeamResponse:
-    """Update team fields."""
-    # Service performs the verify_project_access call internally —
-    # double-gating at the router was redundant and made the service
-    # privately callable from inside the process without a guard.
-    team = await service.update_team(team_id, data, actor_id=user_id)
-    return TeamResponse.model_validate(team)
+    """Update team fields.
+
+    IDOR-gated at the router on the parent project; the service repeats the
+    same check as defence in depth for internal (non-HTTP) callers.
+    """
+    team = await service.get_team(team_id)  # 404 if missing
+    await verify_project_access(team.project_id, str(user_id), session)
+    updated = await service.update_team(team_id, data, actor_id=user_id)
+    return TeamResponse.model_validate(updated)
 
 
 @router.delete("/{team_id}", status_code=204)
 async def delete_team(
     team_id: uuid.UUID,
     user_id: CurrentUserId,
+    session: SessionDep,
     service: TeamService = Depends(_get_service),
 ) -> None:
-    """Delete a team and all its memberships."""
+    """Delete a team and all its memberships (IDOR-gated on the parent project)."""
+    team = await service.get_team(team_id)  # 404 if missing
+    await verify_project_access(team.project_id, str(user_id), session)
     await service.delete_team(team_id, actor_id=user_id)
 
 
@@ -110,10 +117,11 @@ async def delete_team(
 @router.get("/{team_id}/members/", response_model=list[MembershipResponse])
 async def list_members(
     team_id: uuid.UUID,
+    user_id: CurrentUserId,
     service: TeamService = Depends(_get_service),
 ) -> list[MembershipResponse]:
-    """List members of a team."""
-    members = await service.list_members(team_id)
+    """List members of a team (IDOR-gated on the parent project in the service)."""
+    members = await service.list_members(team_id, actor_id=user_id)
     return [MembershipResponse.model_validate(m) for m in members]
 
 

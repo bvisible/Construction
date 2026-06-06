@@ -1,5 +1,5 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
-"""‌⁠‍KPI formula registry — every system KPI as a registered Python function.
+"""‌⁠‍KPI formula registry - every system KPI as a registered Python function.
 
 Each KPI:
     * Is registered with :func:`register_kpi(code)`
@@ -10,7 +10,7 @@ Each KPI:
       and must never crash because an upstream module was uninstalled.
 
 The registry is process-local. Custom KPIs registered by community
-modules survive a hot reload of this file but not a worker restart —
+modules survive a hot reload of this file but not a worker restart -
 modules should register inside their own ``on_startup`` hook.
 """
 
@@ -42,10 +42,10 @@ class KPIComputation:
 
 KPIFormula = Callable[..., Awaitable[KPIComputation]]
 
-# Global registry — populated by @register_kpi decorators below.
+# Global registry - populated by @register_kpi decorators below.
 KPI_FORMULAS: dict[str, KPIFormula] = {}
 
-# Metadata for system KPIs — drives the seed step that writes KPIDefinition
+# Metadata for system KPIs - drives the seed step that writes KPIDefinition
 # rows. Order must match @register_kpi declarations or seeding is wrong.
 SYSTEM_KPI_META: dict[str, dict[str, Any]] = {}
 
@@ -125,14 +125,14 @@ def _safe_div(numerator: Decimal, denominator: Decimal) -> Decimal:
 # ``_position_total_in_base``). The ``rate`` is BASE units per 1 unit of
 # foreign, so a foreign amount contributes ``amount * rate``. Across the
 # whole portfolio (``project_id is None``) we deliberately do NOT collapse
-# everything into one scalar — the breakdown carries a per-currency map so
+# everything into one scalar - the breakdown carries a per-currency map so
 # the UI can group by ISO code instead of presenting a meaningless sum.
 
 
 def _fx_map(project: Any) -> dict[str, str]:
     """Project ``Project.fx_rates`` JSON list into ``{CODE: rate}``.
 
-    Defensive against missing attribute / malformed rows — returns an
+    Defensive against missing attribute / malformed rows - returns an
     empty dict on any error so callers can pass it through unguarded.
     """
     if project is None:
@@ -161,7 +161,7 @@ def _amount_in_base(
 
     Missing / matching currency → treated as base. A foreign currency with
     no FX rate is summed in its own units anyway (never zeroed) so a
-    forgotten rate degrades visibly rather than silently dropping money —
+    forgotten rate degrades visibly rather than silently dropping money -
     the caller surfaces the unconverted codes via :func:`_missing_fx_codes`.
     """
     base = (base_currency or "").strip().upper()
@@ -230,7 +230,7 @@ def _portfolio_money_breakdown(
     """Reduce a per-currency bucket map into a headline value + breakdown.
 
     Portfolio (``project_id is None``) money KPIs must never collapse mixed
-    currencies into one blended scalar — there is no single base currency
+    currencies into one blended scalar - there is no single base currency
     to convert into. Mirrors the cross-project rollup in
     ``projects.router.analytics_overview``:
 
@@ -350,7 +350,7 @@ async def _evm_snapshot_for_project(
         * EV:  Σ Task.earned_value (calculated upstream as % complete × BAC)
         * AC:  Σ finance.Payment.amount + Σ procurement.PurchaseOrder.amount_total
                (every foreign-currency row converted into the project's base
-               currency via ``Project.fx_rates`` before summing — no mixed-
+               currency via ``Project.fx_rates`` before summing - no mixed-
                currency blending).
 
     Note: there is no ``finance.Expense`` model on this platform; actual
@@ -398,7 +398,7 @@ async def _evm_snapshot_for_project(
     try:
         from app.modules.finance.models import Invoice, Payment  # type: ignore
 
-        # Payment has no project_id — it hangs off the Invoice, so scope
+        # Payment has no project_id - it hangs off the Invoice, so scope
         # via the parent invoice's project_id.
         stmt = (
             select(Payment)
@@ -457,11 +457,11 @@ async def _evm_snapshot_portfolio(session: AsyncSession) -> EVMSnapshot:
     Each project's money primitives are computed in its OWN base currency
     (so within-project FX conversion still applies via
     ``_evm_snapshot_for_project``), then bucketed by that project's ISO
-    currency — mixed currencies are NEVER summed into one scalar.
+    currency - mixed currencies are NEVER summed into one scalar.
 
     The scalar primitives (``bac/pv/ev/ac``) still carry the raw
     cross-project sums so the currency-neutral ratio KPIs (CPI = EV/AC,
-    SPI = EV/PV, TCPI) stay meaningful — a ratio of two same-shaped sums
+    SPI = EV/PV, TCPI) stay meaningful - a ratio of two same-shaped sums
     is dimensionless even across currencies (it is a blended performance
     index, the standard portfolio EVM reading). The currency-denominated
     KPIs (CV/SV/EAC/ETC/VAC) instead read the ``*_by_currency`` maps and
@@ -471,7 +471,7 @@ async def _evm_snapshot_portfolio(session: AsyncSession) -> EVMSnapshot:
     try:
         from app.modules.projects.models import Project  # type: ignore
 
-        # Select only the PK column — a full ``select(Project)`` would
+        # Select only the PK column - a full ``select(Project)`` would
         # eager-load ``Project``'s ``lazy="selectin"`` relationships (WBS,
         # team, …), which is both wasteful here and brittle under partial
         # test schemas. We only need each project's id to fan out.
@@ -524,11 +524,11 @@ async def _evm_snapshot(
     """Build EVM primitives for one project, or aggregate the portfolio.
 
     Single-project (``project_id`` set): every money row is converted into
-    that project's base currency via its ``fx_rates`` table — see
+    that project's base currency via its ``fx_rates`` table - see
     :func:`_evm_snapshot_for_project`.
 
     Portfolio (``project_id is None``): per-project snapshots are bucketed
-    by each project's own ISO currency, never blended — see
+    by each project's own ISO currency, never blended - see
     :func:`_evm_snapshot_portfolio`.
     """
     if project_id is None:
@@ -682,7 +682,7 @@ async def sv_kpi(
     unit="currency",
     category="financial",
     source_modules=["finance", "tasks", "projects"],
-    description=("AC + (BAC - EV) / (CPI * SPI) — assumes both perf indices persist (common in construction)."),
+    description=("AC + (BAC - EV) / (CPI * SPI) - assumes both perf indices persist (common in construction)."),
 )
 def _eac_from_primitives(bac: Decimal, pv: Decimal, ev: Decimal, ac: Decimal) -> Decimal:
     """EAC = AC + (BAC - EV) / (CPI * SPI). Falls back to BAC when a
@@ -847,7 +847,7 @@ async def procurement_savings_kpi(
 
     Actual is the committed PO value (``PurchaseOrder.amount_total``).
     Budgeted is the pre-order estimate carried on the linked material
-    requisition lines (``MaterialRequisitionItem.extended_cost``) — the
+    requisition lines (``MaterialRequisitionItem.extended_cost``) - the
     requisition is the baseline a PO is raised against. All amounts are
     converted into the project base currency via ``Project.fx_rates``
     before the savings ratio is taken so mixed-currency POs never blend.
@@ -1039,7 +1039,7 @@ async def cash_in_30d_kpi(
 
     Portfolio mode (``project_id is None``): there is no single base
     currency, so amounts are grouped by each invoice's own ``currency_code``
-    and the headline ``value`` is the dominant currency's subtotal — never a
+    and the headline ``value`` is the dominant currency's subtotal - never a
     blended cross-currency scalar. The full per-currency map and the
     ``multi_currency`` flag are returned in ``breakdown``.
     """
@@ -1124,7 +1124,7 @@ async def cash_out_30d_kpi(
 
     Portfolio mode (``project_id is None``): amounts are grouped by each
     row's own ``currency_code`` and the headline ``value`` is the dominant
-    currency's subtotal — never a blended cross-currency scalar. The full
+    currency's subtotal - never a blended cross-currency scalar. The full
     per-currency map and the ``multi_currency`` flag are returned in
     ``breakdown``.
     """
@@ -1234,7 +1234,7 @@ async def dso_kpi(
 ) -> KPIComputation:
     """Average days from a receivable invoice date to its last payment.
 
-    The Invoice model has no ``issue_date``/``paid_at`` columns — issue is
+    The Invoice model has no ``issue_date``/``paid_at`` columns - issue is
     ``invoice_date`` and settlement dates live on the ``Payment`` relation.
     Only ``receivable`` invoices that have at least one payment contribute.
     """
@@ -1547,7 +1547,7 @@ async def safety_trir_kpi(
                 "medical_treatment",
             ):
                 incidents += 1
-        # Try to find actual hours-worked records — gracefully fall back
+        # Try to find actual hours-worked records - gracefully fall back
         try:
             from app.modules.safety.models import WorkHours  # type: ignore
 
@@ -1749,7 +1749,7 @@ async def bid_win_rate_kpi(
 
     Sourced from ``tendering.TenderBid`` (its ``status`` distinguishes
     won/awarded/accepted from pending/rejected). TenderBid has no direct
-    ``project_id`` — it hangs off ``TenderPackage`` — so a project scope is
+    ``project_id`` - it hangs off ``TenderPackage`` - so a project scope is
     applied by joining the package. When the tendering module is absent we
     fall back to ``bid_management``: a win is a ``BidAward`` (one per
     package) and total is the number of ``BidSubmission`` envelopes.
@@ -1835,7 +1835,7 @@ async def bid_win_rate_kpi(
 )
 async def project_count_active_kpi(
     session: AsyncSession,
-    project_id: uuid.UUID | None = None,  # noqa: ARG001 — global only
+    project_id: uuid.UUID | None = None,  # noqa: ARG001 - global only
     **_: Any,
 ) -> KPIComputation:
     count = 0
@@ -1859,6 +1859,468 @@ async def project_count_active_kpi(
     )
 
 
+# ── Project-controls spine KPIs (feature 09) ───────────────────────────
+# Six cross-module KPIs that complete the executive controls spine (risk,
+# quality, safety, changes, schedule). Each registers into the shared
+# registry so the BI dashboards, alert engine and the project-controls
+# snapshot all gain them at once. Every formula follows the established
+# graceful-degradation + currency-honest contract.
+
+# Statuses that mean a register entry is no longer "open" / live.
+_RISK_CLOSED_STATUSES = {"closed", "mitigated", "accepted", "resolved", "retired"}
+_NCR_CLOSED_STATUSES = {"closed", "resolved", "verified", "cancelled", "void"}
+_HIGH_SEVERITY = {"high", "very_high", "critical", "severe", "catastrophic"}
+# Variation statuses that are still pending a decision (not yet approved/rejected).
+_VARIATION_PENDING_STATUSES = {"draft", "submitted", "under_review", "pending", "in_review"}
+
+
+@register_kpi(
+    "risk_open_exposure",
+    name="Open Risk Exposure",
+    unit="currency",
+    category="risk",
+    source_modules=["risk", "projects"],
+    description="Sum of impact_cost over open (not closed/mitigated/accepted) risks.",
+)
+async def risk_open_exposure_kpi(
+    session: AsyncSession,
+    project_id: uuid.UUID | None = None,
+    **_: Any,
+) -> KPIComputation:
+    """Total cost exposure of open risks, currency-honest.
+
+    Within a single project every risk's ``impact_cost`` is converted into
+    the project base currency via ``Project.fx_rates``; across the portfolio
+    the amounts are bucketed by each project's ISO currency and never blended.
+    The breakdown also carries a probability-weighted exposure variant
+    (``Σ impact_cost × probability``) as a secondary signal.
+    """
+    base_currency, fx_map = await _project_currency_and_fx(session, project_id)
+    seen_codes: set[str] = set()
+    by_currency: dict[str, Decimal] = {}
+    scalar_exposure = Decimal("0")
+    weighted = Decimal("0")
+    count = 0
+    # Resolve each row's owning-project base currency in portfolio mode so the
+    # per-currency bucketing is correct without re-querying every project.
+    fx_cache: dict[uuid.UUID, tuple[str, dict[str, str]]] = {}
+    try:
+        from app.modules.risk.models import RiskItem  # type: ignore
+
+        stmt = select(RiskItem)
+        if project_id is not None:
+            stmt = stmt.where(RiskItem.project_id == project_id)
+        rows = (await session.execute(stmt)).scalars().all()
+        for row in rows:
+            status_val = (getattr(row, "status", "") or "").strip().lower()
+            if status_val in _RISK_CLOSED_STATUSES:
+                continue
+            amt = _to_decimal(getattr(row, "impact_cost", 0))
+            code = str(getattr(row, "currency", "") or "").strip().upper()
+            prob = _to_decimal(getattr(row, "probability", 0))
+            count += 1
+            if project_id is None:
+                pid = getattr(row, "project_id", None)
+                row_base, row_fx = base_currency, fx_map
+                if pid is not None:
+                    if pid not in fx_cache:
+                        fx_cache[pid] = await _project_currency_and_fx(session, pid)
+                    row_base, row_fx = fx_cache[pid]
+                bucket_code = code or row_base or "UNKNOWN"
+                converted = _amount_in_base(amt, code, row_fx, row_base)
+                _add_currency_bucket(by_currency, converted, bucket_code, row_base)
+                scalar_exposure += converted
+                weighted += converted * prob
+            else:
+                if code:
+                    seen_codes.add(code)
+                converted = _amount_in_base(amt, code, fx_map, base_currency)
+                scalar_exposure += converted
+                weighted += converted * prob
+    except ImportError:
+        return KPIComputation(value=Decimal("0"), unit="currency", source_record_count=0)
+    except Exception:
+        logger.debug("risk_open_exposure: probe failed", exc_info=True)
+
+    if project_id is None:
+        value, breakdown = _portfolio_money_breakdown(by_currency)
+        breakdown["open_risk_count"] = count
+        breakdown["weighted_exposure"] = str(weighted)
+        return KPIComputation(
+            value=value,
+            unit="currency",
+            source_record_count=count,
+            breakdown=breakdown,
+        )
+    breakdown = {
+        "currency": base_currency,
+        "open_risk_count": count,
+        "weighted_exposure": str(weighted),
+    }
+    missing = _missing_fx_codes(seen_codes, fx_map, base_currency)
+    if missing:
+        breakdown["missing_fx_codes"] = missing
+    return KPIComputation(
+        value=scalar_exposure,
+        unit="currency",
+        source_record_count=count,
+        breakdown=breakdown,
+    )
+
+
+@register_kpi(
+    "risk_high_unmitigated_count",
+    name="High Unmitigated Risks",
+    unit="count",
+    category="risk",
+    source_modules=["risk"],
+    description="Count of open high/critical risks with no mitigation strategy.",
+)
+async def risk_high_unmitigated_count_kpi(
+    session: AsyncSession,
+    project_id: uuid.UUID | None = None,
+    **_: Any,
+) -> KPIComputation:
+    """High/critical risks that are still open and carry no mitigation.
+
+    Severity comes from ``impact_severity`` (falling back to ``risk_tier``);
+    a risk counts as unmitigated when ``mitigation_strategy`` is empty and no
+    ``mitigation_actions`` are recorded. Mirrors the ``project_intelligence``
+    collector's risk-gap signal.
+    """
+    count = 0
+    total = 0
+    try:
+        from app.modules.risk.models import RiskItem  # type: ignore
+
+        stmt = select(RiskItem)
+        if project_id is not None:
+            stmt = stmt.where(RiskItem.project_id == project_id)
+        rows = (await session.execute(stmt)).scalars().all()
+        for row in rows:
+            status_val = (getattr(row, "status", "") or "").strip().lower()
+            if status_val in _RISK_CLOSED_STATUSES:
+                continue
+            total += 1
+            severity = (getattr(row, "impact_severity", "") or "").strip().lower()
+            tier = (getattr(row, "risk_tier", "") or "").strip().lower()
+            if severity not in _HIGH_SEVERITY and tier not in _HIGH_SEVERITY:
+                continue
+            strategy = (getattr(row, "mitigation_strategy", "") or "").strip()
+            actions = getattr(row, "mitigation_actions", None) or []
+            if not strategy and not actions:
+                count += 1
+    except ImportError:
+        return KPIComputation(value=Decimal("0"), unit="count", source_record_count=0)
+    except Exception:
+        logger.debug("risk_high_unmitigated_count: probe failed", exc_info=True)
+
+    return KPIComputation(
+        value=Decimal(count),
+        unit="count",
+        source_record_count=count,
+        breakdown={"open_risk_count": total},
+    )
+
+
+@register_kpi(
+    "ncr_open_count",
+    name="Open NCRs",
+    unit="count",
+    category="quality",
+    source_modules=["ncr"],
+    description="Count of NCRs not yet closed/resolved/verified.",
+)
+async def ncr_open_count_kpi(
+    session: AsyncSession,
+    project_id: uuid.UUID | None = None,
+    **_: Any,
+) -> KPIComputation:
+    """Open Non-Conformance Reports - the live quality-defect backlog."""
+    count = 0
+    total = 0
+    try:
+        from app.modules.ncr.models import NCR  # type: ignore
+
+        stmt = select(NCR)
+        if project_id is not None:
+            stmt = stmt.where(NCR.project_id == project_id)
+        rows = (await session.execute(stmt)).scalars().all()
+        for row in rows:
+            total += 1
+            status_val = (getattr(row, "status", "") or "").strip().lower()
+            if status_val not in _NCR_CLOSED_STATUSES:
+                count += 1
+    except ImportError:
+        return KPIComputation(value=Decimal("0"), unit="count", source_record_count=0)
+    except Exception:
+        logger.debug("ncr_open_count: probe failed", exc_info=True)
+
+    return KPIComputation(
+        value=Decimal(count),
+        unit="count",
+        source_record_count=count,
+        breakdown={"total_ncr_count": total},
+    )
+
+
+@register_kpi(
+    "incident_count",
+    name="Safety Incidents",
+    unit="count",
+    category="safety",
+    source_modules=["safety"],
+    description="Count of safety incidents in the period (complements TRIR).",
+)
+async def incident_count_kpi(
+    session: AsyncSession,
+    project_id: uuid.UUID | None = None,
+    period_start: _date | None = None,
+    period_end: _date | None = None,
+    **_: Any,
+) -> KPIComputation:
+    """Raw incident count, optionally windowed by ``incident_date``.
+
+    Uses the real ``SafetyIncident`` model (the ``safety_trir`` formula
+    imports a non-existent ``Incident`` alias and so silently counts zero;
+    this KPI is the working count surface).
+    """
+    count = 0
+    try:
+        from app.modules.safety.models import SafetyIncident  # type: ignore
+
+        stmt = select(SafetyIncident)
+        if project_id is not None:
+            stmt = stmt.where(SafetyIncident.project_id == project_id)
+        rows = (await session.execute(stmt)).scalars().all()
+        for row in rows:
+            when = _parse_date(getattr(row, "incident_date", None))
+            if period_start is not None and (when is None or when < period_start):
+                continue
+            if period_end is not None and (when is None or when > period_end):
+                continue
+            count += 1
+    except ImportError:
+        return KPIComputation(value=Decimal("0"), unit="count", source_record_count=0)
+    except Exception:
+        logger.debug("incident_count: probe failed", exc_info=True)
+
+    return KPIComputation(
+        value=Decimal(count),
+        unit="count",
+        source_record_count=count,
+    )
+
+
+@register_kpi(
+    "pending_variation_value",
+    name="Pending Variation Value",
+    unit="currency",
+    category="changes",
+    source_modules=["variations", "projects"],
+    description="Sum of estimated_cost_impact over variation requests awaiting a decision.",
+)
+async def pending_variation_value_kpi(
+    session: AsyncSession,
+    project_id: uuid.UUID | None = None,
+    **_: Any,
+) -> KPIComputation:
+    """Value of variation requests still pending (draft/submitted/under review).
+
+    Distinct from ``change_order_ratio`` which measures signed/approved change
+    orders against the contract. Currency-honest: within-project FX convert,
+    portfolio per-currency bucketing, never blended.
+    """
+    base_currency, fx_map = await _project_currency_and_fx(session, project_id)
+    seen_codes: set[str] = set()
+    by_currency: dict[str, Decimal] = {}
+    scalar_value = Decimal("0")
+    count = 0
+    fx_cache: dict[uuid.UUID, tuple[str, dict[str, str]]] = {}
+    try:
+        from app.modules.variations.models import VariationRequest  # type: ignore
+
+        stmt = select(VariationRequest)
+        if project_id is not None:
+            stmt = stmt.where(VariationRequest.project_id == project_id)
+        rows = (await session.execute(stmt)).scalars().all()
+        for row in rows:
+            status_val = (getattr(row, "status", "") or "").strip().lower()
+            if status_val not in _VARIATION_PENDING_STATUSES:
+                continue
+            amt = _to_decimal(getattr(row, "estimated_cost_impact", 0))
+            code = str(getattr(row, "currency", "") or "").strip().upper()
+            count += 1
+            if project_id is None:
+                pid = getattr(row, "project_id", None)
+                row_base, row_fx = base_currency, fx_map
+                if pid is not None:
+                    if pid not in fx_cache:
+                        fx_cache[pid] = await _project_currency_and_fx(session, pid)
+                    row_base, row_fx = fx_cache[pid]
+                bucket_code = code or row_base or "UNKNOWN"
+                converted = _amount_in_base(amt, code, row_fx, row_base)
+                _add_currency_bucket(by_currency, converted, bucket_code, row_base)
+                scalar_value += converted
+            else:
+                if code:
+                    seen_codes.add(code)
+                scalar_value += _amount_in_base(amt, code, fx_map, base_currency)
+    except ImportError:
+        return KPIComputation(value=Decimal("0"), unit="currency", source_record_count=0)
+    except Exception:
+        logger.debug("pending_variation_value: probe failed", exc_info=True)
+
+    if project_id is None:
+        value, breakdown = _portfolio_money_breakdown(by_currency)
+        breakdown["pending_count"] = count
+        return KPIComputation(
+            value=value,
+            unit="currency",
+            source_record_count=count,
+            breakdown=breakdown,
+        )
+    breakdown = {"currency": base_currency, "pending_count": count}
+    missing = _missing_fx_codes(seen_codes, fx_map, base_currency)
+    if missing:
+        breakdown["missing_fx_codes"] = missing
+    return KPIComputation(
+        value=scalar_value,
+        unit="currency",
+        source_record_count=count,
+        breakdown=breakdown,
+    )
+
+
+async def _active_baseline_finishes(
+    session: AsyncSession,
+    project_id: uuid.UUID,
+) -> dict[str, _date]:
+    """Map activity-id / wbs-code → baselined finish date for one project.
+
+    The baseline ``snapshot_data`` is a caller-defined JSON blob. We accept
+    the common shapes defensively: a top-level ``activities`` list, or a bare
+    list, where each entry carries an id (``id``/``activity_id``) and/or a
+    ``wbs_code`` plus a finish date (``end_date``/``finish``/``baseline_finish``).
+    The most recent active baseline wins.
+    """
+    finishes: dict[str, _date] = {}
+    try:
+        from app.modules.schedule.models import ScheduleBaseline  # type: ignore
+
+        stmt = (
+            select(ScheduleBaseline)
+            .where(ScheduleBaseline.project_id == project_id)
+            .where(ScheduleBaseline.is_active.is_(True))
+        )
+        rows = (await session.execute(stmt)).scalars().all()
+        # Prefer the latest baseline_date when several are active.
+        rows = sorted(rows, key=lambda r: str(getattr(r, "baseline_date", "") or ""))
+        for row in rows:
+            data = getattr(row, "snapshot_data", None)
+            entries: list[Any] = []
+            if isinstance(data, dict):
+                raw = data.get("activities")
+                if isinstance(raw, list):
+                    entries = raw
+            elif isinstance(data, list):
+                entries = data
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                finish = _parse_date(
+                    entry.get("end_date")
+                    or entry.get("finish")
+                    or entry.get("baseline_finish")
+                    or entry.get("baseline_end"),
+                )
+                if finish is None:
+                    continue
+                for key in (entry.get("id"), entry.get("activity_id"), entry.get("wbs_code")):
+                    if key:
+                        finishes[str(key)] = finish
+    except ImportError:
+        return {}
+    except Exception:
+        logger.debug("milestone_slippage: baseline probe failed", exc_info=True)
+    return finishes
+
+
+@register_kpi(
+    "milestone_slippage_days",
+    name="Milestone Slippage",
+    unit="days",
+    category="schedule",
+    source_modules=["schedule"],
+    description="Max positive delta between an activity's current finish and its baseline finish.",
+)
+async def milestone_slippage_days_kpi(
+    session: AsyncSession,
+    project_id: uuid.UUID | None = None,
+    **_: Any,
+) -> KPIComputation:
+    """Worst-case schedule slip: the largest number of days any activity's
+    current finish has moved past its baselined finish.
+
+    Pure ISO-string date arithmetic via ``_parse_date`` (schedule dates are
+    ``String`` columns). Region-neutral. Returns 0 when no baseline exists or
+    nothing has slipped.
+    """
+    max_slip = 0
+    slipped = 0
+    total = 0
+    try:
+        from app.modules.schedule.models import Activity, Schedule  # type: ignore
+
+        # Resolve which project owns each schedule (Activity has no
+        # project_id - it hangs off Schedule).
+        sched_stmt = select(Schedule.id, Schedule.project_id)
+        sched_rows = (await session.execute(sched_stmt)).all()
+        sched_to_project = {sid: pid for sid, pid in sched_rows}
+
+        target_pids = [project_id] if project_id is not None else sorted({p for p in sched_to_project.values() if p})
+        baselines: dict[uuid.UUID, dict[str, _date]] = {}
+        for pid in target_pids:
+            baselines[pid] = await _active_baseline_finishes(session, pid)
+
+        act_stmt = select(Activity)
+        if project_id is not None:
+            scoped_schedule_ids = [sid for sid, pid in sched_to_project.items() if pid == project_id]
+            if not scoped_schedule_ids:
+                return KPIComputation(value=Decimal("0"), unit="days", source_record_count=0)
+            act_stmt = act_stmt.where(Activity.schedule_id.in_(scoped_schedule_ids))
+        rows = (await session.execute(act_stmt)).scalars().all()
+        for row in rows:
+            owning_project = sched_to_project.get(getattr(row, "schedule_id", None))
+            if owning_project is None:
+                continue
+            baseline = baselines.get(owning_project, {})
+            if not baseline:
+                continue
+            current = _parse_date(getattr(row, "end_date", None))
+            if current is None:
+                continue
+            base_finish = baseline.get(str(getattr(row, "id", ""))) or baseline.get(str(getattr(row, "wbs_code", "")))
+            if base_finish is None:
+                continue
+            total += 1
+            slip = (current - base_finish).days
+            if slip > 0:
+                slipped += 1
+                max_slip = max(max_slip, slip)
+    except ImportError:
+        return KPIComputation(value=Decimal("0"), unit="days", source_record_count=0)
+    except Exception:
+        logger.debug("milestone_slippage_days: probe failed", exc_info=True)
+
+    return KPIComputation(
+        value=Decimal(max_slip),
+        unit="days",
+        source_record_count=total,
+        breakdown={"activities_compared": total, "activities_slipped": slipped},
+    )
+
+
 # ── Bootstrap ──────────────────────────────────────────────────────────
 
 
@@ -1868,7 +2330,7 @@ def list_system_kpis() -> list[dict[str, Any]]:
 
 
 # ── Drill-down record providers ─────────────────────────────────────────
-# A KPI's "drill-down" returns the underlying rows that fed the aggregate —
+# A KPI's "drill-down" returns the underlying rows that fed the aggregate -
 # e.g. for ``cpi`` we return task earned-value rows plus the finance
 # payments / purchase orders that make up actual cost. Each provider is
 # registered against a KPI code and returns a list of dicts, capped at
@@ -1896,7 +2358,7 @@ async def _evm_drilldown_records(
     """Shared drill-down implementation for every EVM KPI.
 
     Returns one row per task with its PV/EV plus the matching finance
-    expenses (joined logically via project_id only — strict task-expense
+    expenses (joined logically via project_id only - strict task-expense
     linking is upstream).
     """
     records: list[dict[str, Any]] = []
@@ -1923,7 +2385,7 @@ async def _evm_drilldown_records(
     except Exception:
         logger.debug("evm drilldown: tasks probe failed", exc_info=True)
     # Actual cost rows: settled payments (joined to the invoice for project
-    # scope) — there is no finance.Expense model on this platform.
+    # scope) - there is no finance.Expense model on this platform.
     try:
         from app.modules.finance.models import Invoice, Payment  # type: ignore
 
@@ -2035,6 +2497,216 @@ async def _projects_active_records(
     return records
 
 
+# ── Project-controls spine drill-down providers (feature 09) ────────────
+
+
+async def _risk_drilldown_records(
+    session: AsyncSession,
+    project_id: uuid.UUID | None,
+    limit: int,
+) -> list[dict[str, Any]]:
+    """Open risks behind ``risk_open_exposure`` / ``risk_high_unmitigated_count``."""
+    records: list[dict[str, Any]] = []
+    try:
+        from app.modules.risk.models import RiskItem  # type: ignore
+
+        stmt = select(RiskItem).limit(limit)
+        if project_id is not None:
+            stmt = stmt.where(RiskItem.project_id == project_id)
+        rows = (await session.execute(stmt)).scalars().all()
+        for row in rows:
+            status_val = (getattr(row, "status", "") or "").strip().lower()
+            if status_val in _RISK_CLOSED_STATUSES:
+                continue
+            records.append(
+                {
+                    "kind": "risk",
+                    "id": str(row.id),
+                    "code": getattr(row, "code", "") or "",
+                    "title": getattr(row, "title", "") or "",
+                    "status": getattr(row, "status", "") or "",
+                    "impact_severity": getattr(row, "impact_severity", "") or "",
+                    "impact_cost": str(_to_decimal(getattr(row, "impact_cost", 0))),
+                    "currency": getattr(row, "currency", "") or "",
+                    "mitigation_strategy": (getattr(row, "mitigation_strategy", "") or "")[:200],
+                    "project_id": str(getattr(row, "project_id", "") or ""),
+                },
+            )
+    except ImportError:
+        pass
+    except Exception:
+        logger.debug("risk drilldown: probe failed", exc_info=True)
+    return records
+
+
+KPI_RECORD_PROVIDERS["risk_open_exposure"] = _risk_drilldown_records
+KPI_RECORD_PROVIDERS["risk_high_unmitigated_count"] = _risk_drilldown_records
+
+
+@register_kpi_records("ncr_open_count")
+async def _ncr_open_records(
+    session: AsyncSession,
+    project_id: uuid.UUID | None,
+    limit: int,
+) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    try:
+        from app.modules.ncr.models import NCR  # type: ignore
+
+        stmt = select(NCR).limit(limit)
+        if project_id is not None:
+            stmt = stmt.where(NCR.project_id == project_id)
+        rows = (await session.execute(stmt)).scalars().all()
+        for row in rows:
+            status_val = (getattr(row, "status", "") or "").strip().lower()
+            if status_val in _NCR_CLOSED_STATUSES:
+                continue
+            records.append(
+                {
+                    "kind": "ncr",
+                    "id": str(row.id),
+                    "ncr_number": getattr(row, "ncr_number", "") or "",
+                    "title": getattr(row, "title", "") or "",
+                    "severity": getattr(row, "severity", "") or "",
+                    "status": getattr(row, "status", "") or "",
+                    "cost_impact": str(getattr(row, "cost_impact", "") or ""),
+                    "project_id": str(getattr(row, "project_id", "") or ""),
+                },
+            )
+    except ImportError:
+        pass
+    except Exception:
+        logger.debug("ncr_open_count drilldown: probe failed", exc_info=True)
+    return records
+
+
+@register_kpi_records("incident_count")
+async def _incident_records(
+    session: AsyncSession,
+    project_id: uuid.UUID | None,
+    limit: int,
+) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    try:
+        from app.modules.safety.models import SafetyIncident  # type: ignore
+
+        stmt = select(SafetyIncident).limit(limit)
+        if project_id is not None:
+            stmt = stmt.where(SafetyIncident.project_id == project_id)
+        rows = (await session.execute(stmt)).scalars().all()
+        for row in rows:
+            records.append(
+                {
+                    "kind": "incident",
+                    "id": str(row.id),
+                    "incident_number": getattr(row, "incident_number", "") or "",
+                    "severity": getattr(row, "severity", "") or "",
+                    "incident_date": str(getattr(row, "incident_date", "") or ""),
+                    "status": getattr(row, "status", "") or "",
+                    "project_id": str(getattr(row, "project_id", "") or ""),
+                },
+            )
+    except ImportError:
+        pass
+    except Exception:
+        logger.debug("incident_count drilldown: probe failed", exc_info=True)
+    return records
+
+
+@register_kpi_records("pending_variation_value")
+async def _pending_variation_records(
+    session: AsyncSession,
+    project_id: uuid.UUID | None,
+    limit: int,
+) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    try:
+        from app.modules.variations.models import VariationRequest  # type: ignore
+
+        stmt = select(VariationRequest).limit(limit)
+        if project_id is not None:
+            stmt = stmt.where(VariationRequest.project_id == project_id)
+        rows = (await session.execute(stmt)).scalars().all()
+        for row in rows:
+            status_val = (getattr(row, "status", "") or "").strip().lower()
+            if status_val not in _VARIATION_PENDING_STATUSES:
+                continue
+            records.append(
+                {
+                    "kind": "variation_request",
+                    "id": str(row.id),
+                    "code": getattr(row, "code", "") or "",
+                    "status": getattr(row, "status", "") or "",
+                    "estimated_cost_impact": str(_to_decimal(getattr(row, "estimated_cost_impact", 0))),
+                    "currency": getattr(row, "currency", "") or "",
+                    "project_id": str(getattr(row, "project_id", "") or ""),
+                },
+            )
+    except ImportError:
+        pass
+    except Exception:
+        logger.debug("pending_variation_value drilldown: probe failed", exc_info=True)
+    return records
+
+
+@register_kpi_records("milestone_slippage_days")
+async def _milestone_slippage_records(
+    session: AsyncSession,
+    project_id: uuid.UUID | None,
+    limit: int,
+) -> list[dict[str, Any]]:
+    """Activities whose current finish has slipped past their baseline finish."""
+    records: list[dict[str, Any]] = []
+    try:
+        from app.modules.schedule.models import Activity, Schedule  # type: ignore
+
+        sched_rows = (await session.execute(select(Schedule.id, Schedule.project_id))).all()
+        sched_to_project = {sid: pid for sid, pid in sched_rows}
+        target_pids = [project_id] if project_id is not None else sorted({p for p in sched_to_project.values() if p})
+        baselines: dict[uuid.UUID, dict[str, _date]] = {}
+        for pid in target_pids:
+            baselines[pid] = await _active_baseline_finishes(session, pid)
+
+        act_stmt = select(Activity)
+        if project_id is not None:
+            scoped = [sid for sid, pid in sched_to_project.items() if pid == project_id]
+            if not scoped:
+                return records
+            act_stmt = act_stmt.where(Activity.schedule_id.in_(scoped))
+        rows = (await session.execute(act_stmt)).scalars().all()
+        for row in rows:
+            owning_project = sched_to_project.get(getattr(row, "schedule_id", None))
+            if owning_project is None:
+                continue
+            baseline = baselines.get(owning_project, {})
+            base_finish = baseline.get(str(getattr(row, "id", ""))) or baseline.get(str(getattr(row, "wbs_code", "")))
+            current = _parse_date(getattr(row, "end_date", None))
+            if base_finish is None or current is None:
+                continue
+            slip = (current - base_finish).days
+            if slip <= 0:
+                continue
+            records.append(
+                {
+                    "kind": "activity",
+                    "id": str(row.id),
+                    "name": getattr(row, "name", "") or "",
+                    "wbs_code": getattr(row, "wbs_code", "") or "",
+                    "baseline_finish": base_finish.isoformat(),
+                    "current_finish": current.isoformat(),
+                    "slip_days": slip,
+                    "project_id": str(owning_project),
+                },
+            )
+            if len(records) >= limit:
+                break
+    except ImportError:
+        pass
+    except Exception:
+        logger.debug("milestone_slippage_days drilldown: probe failed", exc_info=True)
+    return records
+
+
 async def drilldown(
     code: str,
     session: AsyncSession,
@@ -2125,7 +2797,7 @@ async def compute(
     """Invoke a registered KPI safely.
 
     Returns a zero-value :class:`KPIComputation` when the code is unknown
-    or when the formula raises — never bubble up to API callers, this
+    or when the formula raises - never bubble up to API callers, this
     module is purely consumer code.
     """
     fn = KPI_FORMULAS.get(code)

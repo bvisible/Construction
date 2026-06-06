@@ -1,4 +1,4 @@
-"""‌⁠‍Resources service — business logic for assignment, conflicts, skill matching."""
+"""‌⁠‍Resources service - business logic for assignment, conflicts, skill matching."""
 
 from __future__ import annotations
 
@@ -103,7 +103,7 @@ def _as_aware(dt: datetime) -> datetime:
     """Coerce a datetime to timezone-aware UTC.
 
     Columns are declared ``DateTime(timezone=True)`` (so Postgres returns aware
-    values), but SQLite — used in dev and on the single-node VPS — ignores the
+    values), but SQLite - used in dev and on the single-node VPS - ignores the
     timezone flag and hands back naive datetimes. Comparing such a naive value
     with ``datetime.now(UTC)`` raises ``TypeError: can't compare offset-naive and
     offset-aware datetimes`` (a 500 on every resource dashboard). Stored values
@@ -149,6 +149,92 @@ def _build_capacity_buckets(
     return out
 
 
+# Assignment states that consume capacity for leveling purposes. Cancelled
+# bookings never consumed the resource; completed bookings are in the past and
+# cannot be re-levelled, so neither contributes to a forward-looking overload.
+_LEVELING_ACTIVE_STATES: frozenset[str] = frozenset({"proposed", "confirmed", "in_progress"})
+
+
+def build_leveling_suggestions(
+    bucket_index: int,
+    capacity_percent: int,
+    bucket_bookings: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Pure: propose leveling actions for one over-allocated bucket.
+
+    Given the bookings overlapping a single bucket and the resource's known
+    ``capacity_percent``, return read-only suggestions that, if a human applied
+    them, would bring the bucket back to (or below) capacity. No mutation is
+    performed and no booking is auto-moved.
+
+    Each ``bucket_bookings`` entry is a dict with at least:
+        ``assignment_id`` (uuid), ``project_id`` (uuid | None),
+        ``project_name`` (str), ``allocation_percent`` (int).
+
+    Strategy (deterministic so the same input always yields the same advice):
+        1. ``shift``  the smallest contributing booking out of the bucket if it
+           alone is enough to clear the overflow.
+        2. otherwise ``spread`` the largest contributing booking down to the
+           allocation that just fits the remaining headroom.
+
+    Returns an empty list when capacity is non-positive (caller must guard the
+    "capacity unknown" path) or the bucket is within capacity.
+    """
+    if capacity_percent <= 0:
+        return []
+    total = sum(int(b.get("allocation_percent") or 0) for b in bucket_bookings)
+    overflow = total - capacity_percent
+    if overflow <= 0 or not bucket_bookings:
+        return []
+
+    suggestions: list[dict[str, Any]] = []
+    # Sort smallest-first for the shift candidate, largest-first for spread.
+    by_alloc_asc = sorted(bucket_bookings, key=lambda b: int(b.get("allocation_percent") or 0))
+    smallest = by_alloc_asc[0]
+    smallest_alloc = int(smallest.get("allocation_percent") or 0)
+
+    if smallest_alloc >= overflow and smallest_alloc > 0:
+        # Moving the smallest booking elsewhere clears the overload outright.
+        suggestions.append(
+            {
+                "action": "shift",
+                "bucket_index": bucket_index,
+                "target_assignment_id": smallest["assignment_id"],
+                "target_project_id": smallest.get("project_id"),
+                "target_project_name": smallest.get("project_name", ""),
+                "overflow_percent": overflow,
+                "suggested_allocation_percent": 0,
+                "rationale": (
+                    f"Shift this {smallest_alloc}% booking to another period to "
+                    f"clear the {overflow}% overload (capacity {capacity_percent}%)."
+                ),
+            }
+        )
+        return suggestions
+
+    # Otherwise reduce the largest booking so the bucket just fits.
+    largest = by_alloc_asc[-1]
+    largest_alloc = int(largest.get("allocation_percent") or 0)
+    suggested = max(0, largest_alloc - overflow)
+    suggestions.append(
+        {
+            "action": "spread",
+            "bucket_index": bucket_index,
+            "target_assignment_id": largest["assignment_id"],
+            "target_project_id": largest.get("project_id"),
+            "target_project_name": largest.get("project_name", ""),
+            "overflow_percent": overflow,
+            "suggested_allocation_percent": suggested,
+            "rationale": (
+                f"Reduce this booking from {largest_alloc}% to {suggested}% (or "
+                f"spread the work over more time) to fit the {capacity_percent}% "
+                f"capacity; the bucket is {overflow}% over."
+            ),
+        }
+    )
+    return suggestions
+
+
 def detect_conflicts(
     assignment_resource_id: uuid.UUID,
     start_at: datetime,
@@ -189,7 +275,7 @@ def detect_conflicts(
     # 120% and must be flagged even though no single pair exceeds 100%.
     # (The previous implementation summed the candidate with each existing
     # row independently, so N small overlaps that together blew the budget
-    # slipped through silently — a real over-booking integrity hole.)
+    # slipped through silently - a real over-booking integrity hole.)
     overlapping: list[Assignment] = []
     for existing in existing_for_resource:
         if exclude_id is not None and existing.id == exclude_id:
@@ -368,7 +454,7 @@ def compute_resource_utilization(
             continue
         # Only committed work counts toward utilization. 'cancelled' never
         # consumed the resource, and 'proposed' is a tentative booking still
-        # awaiting confirm/decline — counting either as assigned hours
+        # awaiting confirm/decline - counting either as assigned hours
         # inflates the figure and can push utilization past 100%.
         if a.status in ("cancelled", "proposed"):
             continue
@@ -423,6 +509,7 @@ class ResourcesService:
             contact_id=data.contact_id,
             default_cost_rate=data.default_cost_rate,
             currency=data.currency,
+            capacity_percent=data.capacity_percent,
             status=data.status,
             avatar_url=data.avatar_url,
             notes=data.notes,
@@ -737,7 +824,7 @@ class ResourcesService:
             )
         # A cancelled/completed assignment consumes no allocation, so a PATCH
         # that lands the row in one of those terminal states must NOT be
-        # conflict-checked — otherwise cancelling an (already over-allocated)
+        # conflict-checked - otherwise cancelling an (already over-allocated)
         # assignment via the edit modal, which sends status+dates together,
         # is spuriously blocked with a 409.
         new_status = fields.get("status", assignment.status)
@@ -828,7 +915,7 @@ class ResourcesService:
                 raise SkillMismatchError(f"Resource {resource.code} missing required skills", missing)
 
         # Cost-rate snapshot policy: the assignment freezes whatever the
-        # caller supplied AT THIS MOMENT. A *missing* cost_rate (None — only
+        # caller supplied AT THIS MOMENT. A *missing* cost_rate (None - only
         # possible when extra fields drift) falls back to the resource
         # default; a *zero* cost_rate (legit for donated kit / loaned staff
         # / pro-bono crews) is honoured exactly as sent. Pre-fix, the
@@ -923,7 +1010,7 @@ class ResourcesService:
         if actual_end is not None:
             # A caller-supplied actual end before the assignment start would
             # produce a negative-length window that corrupts utilization and
-            # availability math downstream — reject it at the boundary.
+            # availability math downstream - reject it at the boundary.
             if actual_end <= assignment.start_at:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
@@ -1139,8 +1226,8 @@ class ResourcesService:
         all_assignments, _ = await self.assignment_repo.list_for_resource(resource_id, offset=0, limit=500)
         # "Active" = anything that is happening right now and still needs
         # attention. A *proposed* assignment whose window has already
-        # started is the most important thing to show — it is awaiting a
-        # confirm/decline decision — yet the old filter only matched
+        # started is the most important thing to show - it is awaiting a
+        # confirm/decline decision - yet the old filter only matched
         # confirmed/in_progress, so a live-but-unconfirmed booking fell
         # into a dead zone (not "active", and not "upcoming" because its
         # start is in the past). Include running proposed rows here.
@@ -1260,7 +1347,7 @@ class ResourcesService:
         sums the ``allocation_percent`` of active assignments overlapping that
         bucket, grouped by project. A bucket is *over-allocated* when the total
         exceeds 100% and *cross-project* when more than one distinct project
-        competes for the resource in that bucket — the exact signal portfolio
+        competes for the resource in that bucket - the exact signal portfolio
         leveling exists to resolve. Only resources with at least one assignment
         in the window are returned, conflicts first.
         """
@@ -1268,9 +1355,7 @@ class ResourcesService:
         end = _as_aware(end)
         bucket = bucket if bucket in ("week", "month") else "week"
         buckets = _build_capacity_buckets(start, end, bucket)
-        bucket_dicts = [
-            {"index": i, "start": bs, "end": be, "label": label} for (i, bs, be, label) in buckets
-        ]
+        bucket_dicts = [{"index": i, "start": bs, "end": be, "label": label} for (i, bs, be, label) in buckets]
         empty = {
             "start": start,
             "end": end,
@@ -1296,9 +1381,7 @@ class ResourcesService:
             from app.modules.projects.models import Project
 
             rows = (
-                await self.session.execute(
-                    select(Project.id, Project.name).where(Project.id.in_(project_ids))
-                )
+                await self.session.execute(select(Project.id, Project.name).where(Project.id.in_(project_ids)))
             ).all()
             name_by_project = {pid: pname for (pid, pname) in rows}
 
@@ -1320,14 +1403,12 @@ class ResourcesService:
             cells: list[dict[str, Any]] = []
             peak = 0
             has_conflict = False
-            for (bi, b_start, b_end, _label) in buckets:
+            for bi, b_start, b_end, _label in buckets:
                 # Per-project tally inside this bucket.
                 per_project: dict[uuid.UUID | None, int] = {}
                 for a in asgns:
                     if _intervals_overlap(_as_aware(a.start_at), _as_aware(a.end_at), b_start, b_end):
-                        per_project[a.project_id] = per_project.get(a.project_id, 0) + int(
-                            a.allocation_percent or 0
-                        )
+                        per_project[a.project_id] = per_project.get(a.project_id, 0) + int(a.allocation_percent or 0)
                 if not per_project:
                     continue
                 total = sum(per_project.values())
@@ -1347,15 +1428,11 @@ class ResourcesService:
                             {
                                 "project_id": pid,
                                 "project_name": (
-                                    name_by_project.get(pid, "Unknown project")
-                                    if pid is not None
-                                    else "Unassigned"
+                                    name_by_project.get(pid, "Unknown project") if pid is not None else "Unassigned"
                                 ),
                                 "allocation_percent": pct,
                             }
-                            for pid, pct in sorted(
-                                per_project.items(), key=lambda kv: kv[1], reverse=True
-                            )
+                            for pid, pct in sorted(per_project.items(), key=lambda kv: kv[1], reverse=True)
                         ],
                     }
                 )
@@ -1376,7 +1453,7 @@ class ResourcesService:
                 }
             )
 
-        # Conflicts first, then highest peak, then name — the order a planner reads.
+        # Conflicts first, then highest peak, then name - the order a planner reads.
         rows_out.sort(key=lambda r: (not r["has_conflict"], -r["peak_allocation_percent"], r["name"]))
         total_resources = len(rows_out)
         rows_out = rows_out[:max_resources]
@@ -1390,6 +1467,203 @@ class ResourcesService:
             "total_resources": total_resources,
             "floating_resources": floating_count,
             "conflict_resources": conflict_count,
+        }
+
+    async def portfolio_leveling(
+        self,
+        start: datetime,
+        end: datetime,
+        *,
+        bucket: str = "week",
+        project_id: uuid.UUID | None = None,
+        max_resources: int = 200,
+    ) -> dict[str, Any]:
+        """Read-only portfolio resource-leveling grid with overload + suggestions.
+
+        Buckets ``[start, end)`` into week/month columns. Per resource per bucket
+        it sums the ``allocation_percent`` of active assignments (proposed /
+        confirmed / in_progress) overlapping that bucket. A bucket is
+        *over-allocated* only when the resource has a declared
+        ``capacity_percent`` AND the bucket total exceeds it; resources without a
+        capacity are surfaced as ``capacity_unknown`` and are NEVER flagged
+        over-allocated (we never fabricate a ceiling). For each overloaded bucket
+        a deterministic leveling suggestion (shift / spread) is attached. No
+        booking is moved - the planner confirms each action.
+
+        When ``project_id`` is set the grid is scoped to that project's
+        assignments only; otherwise it spans every project (portfolio view).
+        """
+        start = _as_aware(start)
+        end = _as_aware(end)
+        bucket = bucket if bucket in ("week", "month") else "week"
+        buckets = _build_capacity_buckets(start, end, bucket)
+        bucket_dicts = [{"index": i, "start": bs, "end": be, "label": label} for (i, bs, be, label) in buckets]
+        empty = {
+            "start": start,
+            "end": end,
+            "bucket": bucket,
+            "project_id": project_id,
+            "buckets": bucket_dicts,
+            "resources": [],
+            "total_resources": 0,
+            "overloaded_resources": 0,
+            "capacity_unknown_resources": 0,
+            "total_suggestions": 0,
+        }
+        if end <= start or not buckets:
+            return empty
+
+        assignments = await self.assignment_repo.list_in_window(start, end, project_id=project_id)
+        active = [a for a in assignments if a.status in _LEVELING_ACTIVE_STATES]
+        if not active:
+            return empty
+
+        # Resolve project names once for the whole payload.
+        project_ids = {a.project_id for a in active if a.project_id is not None}
+        name_by_project: dict[uuid.UUID, str] = {}
+        if project_ids:
+            from app.modules.projects.models import Project
+
+            rows = (
+                await self.session.execute(select(Project.id, Project.name).where(Project.id.in_(project_ids)))
+            ).all()
+            name_by_project = {pid: pname for (pid, pname) in rows}
+
+        by_resource: dict[uuid.UUID, list[Assignment]] = {}
+        for a in active:
+            by_resource.setdefault(a.resource_id, []).append(a)
+
+        def _pname(pid: uuid.UUID | None) -> str:
+            if pid is None:
+                return "Unassigned"
+            return name_by_project.get(pid, "Unknown project")
+
+        rows_out: list[dict[str, Any]] = []
+        overloaded_count = 0
+        capacity_unknown_count = 0
+        total_suggestions = 0
+        for rid, asgns in by_resource.items():
+            resource = await self.resource_repo.get_by_id(rid)
+            if resource is None:
+                continue
+            capacity = resource.capacity_percent
+            capacity_unknown = capacity is None
+            is_floating = resource.home_project_id is None
+
+            cells: list[dict[str, Any]] = []
+            suggestions: list[dict[str, Any]] = []
+            peak = 0
+            overload_buckets = 0
+            for bi, b_start, b_end, _label in buckets:
+                bucket_bookings: list[dict[str, Any]] = []
+                per_project_projects: set[uuid.UUID] = set()
+                for a in asgns:
+                    if _intervals_overlap(_as_aware(a.start_at), _as_aware(a.end_at), b_start, b_end):
+                        bucket_bookings.append(
+                            {
+                                "assignment_id": a.id,
+                                "project_id": a.project_id,
+                                "project_name": _pname(a.project_id),
+                                "allocation_percent": int(a.allocation_percent or 0),
+                                "status": a.status,
+                                "start_at": _as_aware(a.start_at),
+                                "end_at": _as_aware(a.end_at),
+                            }
+                        )
+                        if a.project_id is not None:
+                            per_project_projects.add(a.project_id)
+                if not bucket_bookings:
+                    continue
+                total = sum(int(b["allocation_percent"]) for b in bucket_bookings)
+                peak = max(peak, total)
+                # Over-allocation is ONLY meaningful against a known capacity.
+                over = (not capacity_unknown) and capacity is not None and total > capacity
+                if over:
+                    overload_buckets += 1
+                    cell_suggestions = build_leveling_suggestions(
+                        bi,
+                        int(capacity),
+                        bucket_bookings,  # type: ignore[arg-type]
+                    )
+                    suggestions.extend(cell_suggestions)
+                cells.append(
+                    {
+                        "bucket_index": bi,
+                        "allocation_percent": total,
+                        "capacity_percent": capacity,
+                        "over_allocated": over,
+                        "capacity_unknown": capacity_unknown,
+                        "cross_project": len(per_project_projects) > 1,
+                        "bookings": sorted(
+                            bucket_bookings,
+                            key=lambda b: int(b["allocation_percent"]),
+                            reverse=True,
+                        ),
+                    }
+                )
+            if not cells:
+                continue
+            has_overload = overload_buckets > 0
+            if has_overload:
+                overloaded_count += 1
+            if capacity_unknown:
+                capacity_unknown_count += 1
+            total_suggestions += len(suggestions)
+            rows_out.append(
+                {
+                    "resource_id": rid,
+                    "code": resource.code,
+                    "name": resource.name,
+                    "resource_type": resource.resource_type,
+                    "is_floating": is_floating,
+                    "capacity_percent": capacity,
+                    "capacity_unknown": capacity_unknown,
+                    "peak_allocation_percent": peak,
+                    "overload_bucket_count": overload_buckets,
+                    "has_overload": has_overload,
+                    "cells": cells,
+                    "suggestions": suggestions,
+                }
+            )
+
+        # Overloaded first, then most overloaded buckets, then highest peak, then
+        # name - the order a planner reads to triage the worst offenders first.
+        rows_out.sort(
+            key=lambda r: (
+                not r["has_overload"],
+                -r["overload_bucket_count"],
+                -r["peak_allocation_percent"],
+                r["name"],
+            )
+        )
+        total_resources = len(rows_out)
+        rows_out = rows_out[:max_resources]
+
+        if overloaded_count > 0:
+            event_bus.publish_detached(
+                "resources.portfolio.overload_detected",
+                {
+                    "start": start.isoformat(),
+                    "end": end.isoformat(),
+                    "bucket": bucket,
+                    "project_id": str(project_id) if project_id else None,
+                    "overloaded_resources": overloaded_count,
+                    "total_suggestions": total_suggestions,
+                },
+                source_module="resources",
+            )
+
+        return {
+            "start": start,
+            "end": end,
+            "bucket": bucket,
+            "project_id": project_id,
+            "buckets": bucket_dicts,
+            "resources": rows_out,
+            "total_resources": total_resources,
+            "overloaded_resources": overloaded_count,
+            "capacity_unknown_resources": capacity_unknown_count,
+            "total_suggestions": total_suggestions,
         }
 
     async def find_candidates(
@@ -1441,19 +1715,29 @@ class ResourcesService:
         all_resources, _ = await self.resource_repo.list_all(limit=2000)
         out: list[dict[str, Any]] = []
         required_set: set[uuid.UUID] = {uuid.UUID(str(s)) for s in required_skill_ids}
+
+        # Bulk-fetch skills, in-window assignments, and availability windows for
+        # the whole active candidate set in three round-trips, then join in
+        # Python. The previous per-resource queries inside the loop produced an
+        # N+1 explosion (~3 queries × up to 2000 resources).
+        active_ids = [res.id for res in all_resources if res.status == "active"]
+        skills_by_resource = await self.resource_skill_repo.list_for_resources(active_ids)
+        assignments_by_resource = await self.assignment_repo.assignments_for_resources_in_window(active_ids, start, end)
+        windows_by_resource = await self.window_repo.list_for_resources(active_ids, start_at=start, end_at=end)
+
         for res in all_resources:
             if res.status != "active":
                 continue
-            res_skills = await self.resource_skill_repo.list_for_resource(res.id)
+            res_skills = skills_by_resource.get(res.id, [])
             owned_skill_ids = {rs.skill_id for rs in res_skills}
             matched = required_set & owned_skill_ids
             if not matched and required_set:
-                continue  # zero overlap — not a candidate
+                continue  # zero overlap - not a candidate
             skill_score = len(matched) / len(required_set) if required_set else 1.0
 
             # Availability: sum allocation_percent of overlapping non-cancelled
             # assignments in [start, end). Convert to a 0..1 free-fraction.
-            existing = await self.assignment_repo.assignments_for_resource_in_window(res.id, start, end)
+            existing = assignments_by_resource.get(res.id, [])
             total_alloc = 0
             for a in existing:
                 if a.status in ("cancelled", "completed"):
@@ -1466,10 +1750,10 @@ class ResourcesService:
             # Blocking availability windows (holiday/sick/unavailable).
             # No defensive try/except here: a failing window query is a real
             # fault and must surface, not be silently downgraded to "fully
-            # available" — that would rank an out-of-office resource top of
+            # available" - that would rank an out-of-office resource top of
             # the list and let a dispatcher book someone who is on leave.
             blocking = False
-            windows = await self.window_repo.list_for_resource(res.id, start_at=start, end_at=end)
+            windows = windows_by_resource.get(res.id, [])
             for w in windows:
                 if w.window_type in ("unavailable", "holiday", "sick"):
                     if _intervals_overlap(start, end, w.start_at, w.end_at):
@@ -1517,7 +1801,7 @@ class ResourcesService:
 
         For each window N in ``windows_days`` (descending), return certs whose
         ``valid_until`` falls between today and today+N, exclusive of any
-        earlier (smaller) bucket — so a cert expiring in 6 days lands only
+        earlier (smaller) bucket - so a cert expiring in 6 days lands only
         in the 7-day bucket, not also in 14/30/60.
         """
         if not windows_days:
@@ -1554,7 +1838,7 @@ class ResourcesService:
         """Emit ``resources.cert_expiring`` events bucketed by ``windows_days``.
 
         Returns the total count of events emitted. Idempotency is the
-        subscriber's responsibility — we publish a deterministic ``key`` so
+        subscriber's responsibility - we publish a deterministic ``key`` so
         downstream notification stores can dedupe.
         """
         buckets = await self.scan_expiring_certifications(windows_days=windows_days)

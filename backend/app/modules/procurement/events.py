@@ -1,11 +1,11 @@
-"""‌⁠‍Procurement event handlers — auto-create PO from awarded tender / bid.
+"""‌⁠‍Procurement event handlers - auto-create PO from awarded tender / bid.
 
 Subscribes to BOTH award events emitted by the two sister tendering
 modules and creates a draft Purchase Order pre-populated from the winner:
 
-* ``tendering.package.awarded`` (oe_tendering) — see
+* ``tendering.package.awarded`` (oe_tendering) - see
   :func:`_create_po_from_award`.
-* ``bid_management.package.awarded`` (oe_bid_management) — see
+* ``bid_management.package.awarded`` (oe_bid_management) - see
   :func:`_create_po_from_bid_award`.
 
 Both close the long-standing workflow gap where an award updated the BOQ
@@ -28,13 +28,13 @@ Before creating a PO each handler scans existing project POs and
 short-circuits if any of these keys already match. Because the two paths
 share the ``tender_package_id`` key whenever a bid package is linked to a
 tender, a project that runs BOTH modules for the same logical award never
-ends up with two purchase orders — whichever fires first wins, the second
+ends up with two purchase orders - whichever fires first wins, the second
 is an idempotent skip. Re-firing the same event (bus retry, manual
 replay) is likewise a no-op.
 
 Failure mode
 ------------
-Errors are logged and swallowed — the award itself must never be blocked
+Errors are logged and swallowed - the award itself must never be blocked
 because procurement wiring choked. The PO can always be created manually
 from the UI.
 """
@@ -103,11 +103,7 @@ async def _find_existing_po(
     wanted = {field: value for field, value in keys.items() if value}
     if not wanted:
         return None
-    rows = (
-        (await session.execute(select(PurchaseOrder).where(PurchaseOrder.project_id == project_id)))
-        .scalars()
-        .all()
-    )
+    rows = (await session.execute(select(PurchaseOrder).where(PurchaseOrder.project_id == project_id))).scalars().all()
     for po in rows:
         md = po.metadata_ if isinstance(po.metadata_, dict) else {}
         for field, value in wanted.items():
@@ -182,12 +178,8 @@ async def _create_po_from_award(event: Event) -> None:
             # caught.
             po_repo = PurchaseOrderRepository(session)
             linked_bid_package_id = (
-                (
-                    await session.execute(
-                        select(BidPackage.id).where(BidPackage.tender_id == package_id)
-                    )
-                ).scalar_one_or_none()
-            )
+                await session.execute(select(BidPackage.id).where(BidPackage.tender_id == package_id))
+            ).scalar_one_or_none()
             existing = await _find_existing_po(
                 session,
                 package.project_id,
@@ -239,7 +231,7 @@ async def _create_po_from_award(event: Event) -> None:
             subtotal = running_subtotal if running_subtotal > 0 else bid_total
 
             # Use the existing repository to assign a project-scoped
-            # auto-incremented PO number — keeps the format consistent
+            # auto-incremented PO number - keeps the format consistent
             # with manually-created POs.
             po_number = await po_repo.next_po_number(package.project_id)
 
@@ -256,7 +248,7 @@ async def _create_po_from_award(event: Event) -> None:
                 amount_total=str(subtotal),
                 status="draft",
                 payment_terms=None,
-                notes=(f"Auto-created from awarded tender: {package.name} — bid by {bid.company_name}")[:5000],
+                notes=(f"Auto-created from awarded tender: {package.name} - bid by {bid.company_name}")[:5000],
                 created_by=None,
                 metadata_={
                     "tender_package_id": str(package_id),
@@ -288,7 +280,7 @@ async def _create_po_from_award(event: Event) -> None:
             )
     except Exception:
         logger.exception(
-            "tender.awarded auto-PO failed for package=%s bid=%s — tender award itself was unaffected",
+            "tender.awarded auto-PO failed for package=%s bid=%s - tender award itself was unaffected",
             package_id,
             bid_id,
         )
@@ -339,9 +331,7 @@ async def _create_po_from_bid_award(event: Event) -> None:
             package = (
                 await session.execute(select(BidPackage).where(BidPackage.id == package_id))
             ).scalar_one_or_none()
-            bidder = (
-                await session.execute(select(Bidder).where(Bidder.id == bidder_id))
-            ).scalar_one_or_none()
+            bidder = (await session.execute(select(Bidder).where(Bidder.id == bidder_id))).scalar_one_or_none()
 
             if package is None or bidder is None:
                 logger.warning(
@@ -389,7 +379,7 @@ async def _create_po_from_bid_award(event: Event) -> None:
             winning_submission = next((s for s in submissions if s.is_valid), None)
             if winning_submission is None and submissions:
                 # Fall back to the newest submission even if the validity
-                # flag was never set — the award itself already vetted it.
+                # flag was never set - the award itself already vetted it.
                 winning_submission = submissions[0]
 
             # Map the priced submission lines to PO items, joining each line
@@ -400,8 +390,7 @@ async def _create_po_from_bid_award(event: Event) -> None:
                 sub_lines = (
                     (
                         await session.execute(
-                            select(BidSubmissionLine)
-                            .where(BidSubmissionLine.submission_id == winning_submission.id)
+                            select(BidSubmissionLine).where(BidSubmissionLine.submission_id == winning_submission.id)
                         )
                     )
                     .scalars()
@@ -468,7 +457,7 @@ async def _create_po_from_bid_award(event: Event) -> None:
                 payment_terms=None,
                 notes=(
                     f"Auto-created from awarded bid package: {package.title or package.code} "
-                    f"— bid by {bidder.company_name}"
+                    f"- bid by {bidder.company_name}"
                 )[:5000],
                 created_by=None,
                 metadata_={
@@ -500,7 +489,7 @@ async def _create_po_from_bid_award(event: Event) -> None:
             )
     except Exception:
         logger.exception(
-            "bid_management.awarded auto-PO failed for package=%s bidder=%s — the award itself was unaffected",
+            "bid_management.awarded auto-PO failed for package=%s bidder=%s - the award itself was unaffected",
             package_id,
             bidder_id,
         )
@@ -516,11 +505,7 @@ async def _bid_line_lookup(session: AsyncSession, package_id: uuid.UUID) -> dict
     from app.modules.bid_management.models import BidPackageLineItem
 
     rows = (
-        (
-            await session.execute(
-                select(BidPackageLineItem).where(BidPackageLineItem.package_id == package_id)
-            )
-        )
+        (await session.execute(select(BidPackageLineItem).where(BidPackageLineItem.package_id == package_id)))
         .scalars()
         .all()
     )
@@ -536,37 +521,132 @@ async def _bid_line_lookup(session: AsyncSession, package_id: uuid.UUID) -> dict
 
 
 async def _on_supplier_rating_update(event: Event) -> None:
-    """‌⁠‍``procurement.supplier_rating_update`` → adjust supplier scorecard.
+    """‌⁠‍``procurement.supplier_rating_update`` → flag the vendor on a defect.
 
     Published by ``qms/events.py::_on_ncr_raised_fanout`` whenever an NCR
-    is raised (line 167 of that file). For now this is a stub that logs
-    the payload at INFO so the cross-module hand-off is *observable*; a
-    full implementation will resolve the supplier via the NCR's linked
-    inspection row and decrement a per-supplier rating column once the
-    procurement scorecard model gains one.
+    is raised. When the payload carries a ``supplier_id`` (the responsible
+    subcontractor), this marks that subcontractor ``under_review`` on its
+    metadata - a non-destructive flag the scorecard UI surfaces and the next
+    monthly rollup folds into the quality score via the NCR count. The flag
+    records the triggering NCR id, severity and timestamp so the buyer can
+    see *why* a vendor is under review without spelunking the event bus.
 
-    TODO(v4.2.2 audit): once procurement gains a `Supplier.rating` or a
-    dedicated `SupplierScorecard` model, replace the log line with a
-    real "mark as under_review" / numeric decrement. Tracking issue
-    in the orphan-publisher audit.
+    The defect signal is also forwarded to the subcontractors module as
+    ``subcontractors.defect.recorded`` so its event subscriber can accumulate
+    the NCR count onto the current period's rating basis (the same low-latency
+    path the monthly compute reads).
+
+    When no ``supplier_id`` is present (today's qms payload links the NCR to
+    an inspection but does not resolve the responsible sub) the hand-off is
+    logged so it stays observable; nothing to flag without a vendor. The
+    handler never raises - an NCR must never fail because the rating
+    projection choked.
     """
     data = event.data or {}
     ncr_id = data.get("ncr_id") or ""
     project_id = data.get("project_id") or ""
     severity = data.get("severity") or ""
     supplier_id = data.get("supplier_id") or ""
-    logger.info(
-        "procurement.supplier_rating_update received "
-        "(stub — TODO v4.2.2 audit): ncr_id=%s project_id=%s "
-        "supplier_id=%s defect_severity=%s",
-        ncr_id,
-        project_id,
-        supplier_id,
-        severity,
-    )
+
+    if not supplier_id:
+        logger.info(
+            "procurement.supplier_rating_update: no supplier_id on NCR %s (project=%s severity=%s) - nothing to flag",
+            ncr_id,
+            project_id,
+            severity,
+        )
+        return
+
+    try:
+        sub_uuid = uuid.UUID(str(supplier_id))
+    except (ValueError, TypeError):
+        logger.warning(
+            "procurement.supplier_rating_update: supplier_id %r is not a UUID",
+            supplier_id,
+        )
+        return
+
+    from datetime import UTC, datetime
+
+    from app.modules.subcontractors.models import Subcontractor
+
+    try:
+        async with async_session_factory() as session:
+            sub = await session.get(Subcontractor, sub_uuid)
+            if sub is None:
+                logger.info(
+                    "procurement.supplier_rating_update: supplier %s not a known subcontractor - skipping",
+                    supplier_id,
+                )
+                return
+            meta = dict(sub.metadata_ or {})
+            meta["under_review"] = True
+            meta["under_review_reason"] = {
+                "trigger": "ncr",
+                "ncr_id": str(ncr_id),
+                "project_id": str(project_id),
+                "severity": str(severity),
+                "at": datetime.now(UTC).isoformat(),
+            }
+            sub.metadata_ = meta
+            session.add(sub)
+            await session.commit()
+        # Forward the defect so the subcontractors rating projection can
+        # accumulate the NCR count onto the current period's basis.
+        event_bus.publish_detached(
+            "subcontractors.defect.recorded",
+            {
+                "subcontractor_id": str(sub_uuid),
+                "ncr_id": str(ncr_id),
+                "project_id": str(project_id),
+                "severity": str(severity),
+            },
+            source_module="procurement",
+        )
+        logger.info(
+            "procurement.supplier_rating_update: flagged subcontractor %s under_review from NCR %s (severity=%s)",
+            supplier_id,
+            ncr_id,
+            severity,
+        )
+    except Exception:  # noqa: BLE001 - never fail the NCR over a projection
+        logger.warning(
+            "procurement.supplier_rating_update: failed to flag supplier %s",
+            supplier_id,
+            exc_info=True,
+        )
 
 
-# Register subscribers at module import — module_loader picks this up
+# ── Published events (declared for discoverability) ───────────────────────────
+#
+# Events this module PUBLISHES (see procurement/service.py):
+#   * procurement.po.created            - new PO row inserted
+#   * procurement.po.updated            - PO fields changed
+#   * procurement.po.approved           - PO transitioned to 'approved'
+#   * procurement.po.issued             - PO transitioned to 'issued'
+#   * procurement.gr.created            - new goods receipt inserted
+#   * procurement.gr.confirmed          - goods receipt confirmed
+#   * procurement.po.retainage_released - withheld retainage released (Gap F)
+#
+# ``procurement.po.retainage_released`` payload:
+#   { po_id, project_id, po_number, release_amount, currency_code,
+#     released_by, release_reason, retainage_released_total }
+# No subscriber is wired yet - retainage release does not re-post to the cost
+# spine (the actual cost already landed on the BudgetLine when the PO/GR was
+# posted; releasing retainage is a payment-timing event, not a new cost). A
+# future Wave 6 item may subscribe to feed a cash-flow / payment-schedule view.
+PUBLISHED_EVENTS = (
+    "procurement.po.created",
+    "procurement.po.updated",
+    "procurement.po.approved",
+    "procurement.po.issued",
+    "procurement.gr.created",
+    "procurement.gr.confirmed",
+    "procurement.po.retainage_released",
+)
+
+
+# Register subscribers at module import - module_loader picks this up
 # automatically when ``oe_procurement`` is loaded.
 event_bus.subscribe("tendering.package.awarded", _on_tender_awarded)
 event_bus.subscribe("bid_management.package.awarded", _on_bid_management_awarded)

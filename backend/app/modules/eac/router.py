@@ -4,17 +4,17 @@
 
 Endpoints for EAC-1.1 + EAC-1.2:
 
-* ``POST   /rules``               — create rule
-* ``GET    /rules/{id}``          — fetch rule
-* ``GET    /rules``               — list rules (filters)
-* ``PUT    /rules/{id}``          — update rule (auto-bumps version)
-* ``DELETE /rules/{id}``          — soft-delete (sets is_active=False)
-* ``POST   /rules:validate``      — stub validator (real impl in EAC-1.3)
-* ``POST   /rulesets``            — create ruleset
-* ``GET    /rulesets/{id}``       — fetch ruleset
-* ``GET    /rulesets``            — list rulesets
-* ``PUT    /rulesets/{id}``       — update ruleset
-* ``DELETE /rulesets/{id}``       — hard-delete (rules cascade by FK SET NULL)
+* ``POST   /rules``               - create rule
+* ``GET    /rules/{id}``          - fetch rule
+* ``GET    /rules``               - list rules (filters)
+* ``PUT    /rules/{id}``          - update rule (auto-bumps version)
+* ``DELETE /rules/{id}``          - soft-delete (sets is_active=False)
+* ``POST   /rules:validate``      - stub validator (real impl in EAC-1.3)
+* ``POST   /rulesets``            - create ruleset
+* ``GET    /rulesets/{id}``       - fetch ruleset
+* ``GET    /rulesets``            - list rulesets
+* ``PUT    /rulesets/{id}``       - update ruleset
+* ``DELETE /rulesets/{id}``       - hard-delete (rules cascade by FK SET NULL)
 
 The module loader auto-mounts this router at ``/api/v1/eac/``. The canonical
 ``/api/v2/eac/`` surface (RFC 35 L15) is wired up by the parent task in
@@ -267,15 +267,35 @@ async def list_rules(
                 EacRule.description.ilike(like),
             )
         )
-    stmt = stmt.order_by(EacRule.created_at.desc()).limit(filters.limit).offset(filters.offset)
+    stmt = stmt.order_by(EacRule.created_at.desc())
 
-    result = await session.execute(stmt)
-    rules = list(result.scalars().all())
+    # Tag membership lives in a JSON array column. It MUST be applied before
+    # ``limit``/``offset`` or pagination breaks: SQL paginates first, then a
+    # post-fetch Python filter drops some of those rows, so the page comes back
+    # short of ``limit`` even when more matching rows exist. On PostgreSQL the
+    # column is physically JSONB, so push the predicate into SQL via ``@>``
+    # containment (mirrors ``requirements.service``). On other dialects (the
+    # SQLite test lane) we cannot express array containment portably, so fetch
+    # the filtered set in Python and slice the page afterwards.
+    bind = session.get_bind()
+    dialect_name = getattr(getattr(bind, "dialect", None), "name", "") or ""
 
-    if filters.tag:
-        # Tags live in a JSON column — filter in Python rather than write a
-        # dialect-specific JSON containment expression that breaks SQLite.
-        rules = [r for r in rules if filters.tag in (r.tags or [])]
+    if filters.tag and dialect_name == "postgresql":
+        from sqlalchemy import cast
+        from sqlalchemy.dialects.postgresql import JSONB
+
+        stmt = stmt.where(cast(EacRule.tags, JSONB).contains([filters.tag]))
+
+    if not filters.tag or dialect_name == "postgresql":
+        stmt = stmt.limit(filters.limit).offset(filters.offset)
+        result = await session.execute(stmt)
+        rules = list(result.scalars().all())
+    else:
+        # Non-PostgreSQL with a tag filter: filter in Python, then paginate so
+        # the page still honours ``limit``/``offset`` against the filtered set.
+        result = await session.execute(stmt)
+        matched = [r for r in result.scalars().all() if filters.tag in (r.tags or [])]
+        rules = matched[filters.offset : filters.offset + filters.limit]
 
     return [EacRuleRead.model_validate(r) for r in rules]
 
@@ -365,9 +385,9 @@ async def validate_rule(
 
     Pipeline:
 
-    1. Pydantic shape check — catches malformed payloads before any
+    1. Pydantic shape check - catches malformed payloads before any
        DB work.
-    2. Semantic validator — alias / global-var existence, formula
+    2. Semantic validator - alias / global-var existence, formula
        syntax, ReDoS reject, ``between`` ordering, local-var cycle
        detection (FR-1.10).
     """
@@ -400,7 +420,7 @@ async def validate_rule(
         tenant_id = await _resolve_tenant_id(session, user_id)
     except HTTPException:
         raise
-    except Exception:  # noqa: BLE001 — soft fallback when tenant can't resolve
+    except Exception:  # noqa: BLE001 - soft fallback when tenant can't resolve
         tenant_id = None
 
     try:
@@ -684,7 +704,7 @@ async def run_ruleset_endpoint(
     """Execute every active rule in a ruleset and persist an EacRun.
 
     The caller may either supply ``elements`` inline (small models,
-    tests) or a ``model_id`` — in the latter case the runner loads
+    tests) or a ``model_id`` - in the latter case the runner loads
     BIMElement rows and converts them to canonical dicts via
     :func:`bim_element_to_canonical`.
 
@@ -692,7 +712,7 @@ async def run_ruleset_endpoint(
     is set or when ``elements`` are supplied inline we compute a stable
     key from ``ruleset_id + ruleset.updated_at + sorted element hash``.
     A prior run with the same key for this ``(tenant, ruleset)`` is
-    returned verbatim — protecting against webhook retries, double-
+    returned verbatim - protecting against webhook retries, double-
     click submits, and client retries on transient errors.
 
     **Audit log**: each accepted trigger writes one ``ActivityLog`` row
@@ -720,7 +740,7 @@ async def run_ruleset_endpoint(
         from app.modules.bim_hub.models import BIMElement, BIMModel
 
         # IDOR guard: a ruleset run can read every element of the model, so the
-        # caller must have access to the model's project — otherwise model_id
+        # caller must have access to the model's project - otherwise model_id
         # is a cross-tenant read of another project's BIM data.
         model = await session.get(BIMModel, payload.model_id)
         if model is None:
@@ -740,7 +760,7 @@ async def run_ruleset_endpoint(
         )
 
     # Derive an idempotency key. ``updated_at`` may be None on freshly
-    # created rulesets — fall back to ``created_at`` then to the epoch
+    # created rulesets - fall back to ``created_at`` then to the epoch
     # so the hash input is always defined.
     ruleset_ts = getattr(ruleset, "updated_at", None) or getattr(ruleset, "created_at", None)
     if ruleset_ts is None:
@@ -785,7 +805,7 @@ async def run_ruleset_endpoint(
             detail=str(exc),
         ) from exc
 
-    # Audit log — best effort. A failed audit-write must not roll back
+    # Audit log - best effort. A failed audit-write must not roll back
     # the run row: the work succeeded either way.
     try:
         await log_activity(
@@ -872,7 +892,7 @@ async def list_run_results(
 ) -> list[EacRunResultItemRead]:
     """Paginate the per-element result rows for a run.
 
-    ``only_failures`` filters to rows where ``pass_=False`` — used by
+    ``only_failures`` filters to rows where ``pass_=False`` - used by
     the run-detail view's "show what failed" tab.
     """
     tenant_id = await _resolve_tenant_id(session, user_id)
@@ -1007,10 +1027,10 @@ async def cancel_run_endpoint(
     """Request graceful cancellation of ``run_id``.
 
     Returns 200 with ``cancelled=true`` when the request was accepted
-    (run is pending/running, or already cancelled — idempotent).
+    (run is pending/running, or already cancelled - idempotent).
     Returns 404 when the run does not exist for the current tenant.
     Returns 409 when the run is in a terminal non-cancelled state
-    (success/failed) — cancel is meaningless there.
+    (success/failed/partial) - cancel is meaningless there.
     """
     from app.modules.eac.service import cancel_run
 
@@ -1021,7 +1041,7 @@ async def cancel_run_endpoint(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Run {run_id} not found",
         )
-    if pre.status in {"success", "failed"}:
+    if pre.status in {"success", "failed", "partial"}:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Run {run_id} is already in terminal state '{pre.status}'",
@@ -1082,7 +1102,7 @@ async def rerun_run_endpoint(
             user_id=user_id,
         )
     except ExecutionError as exc:
-        # Source run not found / tenant mismatch — surface as 404 so the
+        # Source run not found / tenant mismatch - surface as 404 so the
         # caller doesn't conflate it with a malformed payload (422).
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

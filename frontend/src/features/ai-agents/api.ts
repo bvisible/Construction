@@ -77,6 +77,8 @@ export interface AgentRun {
   project_id: string | null;
   user_id: string;
   status: 'running' | 'completed' | 'failed';
+  // How the run was initiated: 'manual' | 'schedule' | 'event:<name>'.
+  trigger_source: string;
   failure_reason: string | null;
   user_input: string;
   final_output: string | null;
@@ -95,6 +97,8 @@ export interface AgentRunListItem {
   project_id: string | null;
   user_id: string;
   status: 'running' | 'completed' | 'failed';
+  // How the run was initiated: 'manual' | 'schedule' | 'event:<name>'.
+  trigger_source: string;
   failure_reason: string | null;
   iterations: number;
   total_tokens: number;
@@ -115,12 +119,107 @@ export interface AgentHealth {
   settings_url: string;
 }
 
+// ── Automation: schedule + tools + triggers (Item 29) ────────────────────────
+
+/** The automation envelope of a custom agent (schedule + tools + triggers). */
+export interface AgentMetadata {
+  cron: string | null;
+  schedule_enabled: boolean;
+  next_run_at: string | null;
+  schedule_input: string;
+  triggers: string[];
+  allowed_tools: string[];
+}
+
+export interface SetScheduleRequest {
+  cron_expr: string;
+  enabled?: boolean;
+  schedule_input?: string;
+  triggers?: string[];
+}
+
+/** A runner tool plus the permission an operator needs to grant it. */
+export interface ToolWithPermission {
+  name: string;
+  description: string;
+  input_schema: Record<string, unknown>;
+  required_permission: string;
+}
+
+/** Tool-picker payload: full catalogue + the agent's current grant. */
+export interface AgentTools {
+  available: ToolWithPermission[];
+  selected: string[];
+}
+
+export interface SetToolsRequest {
+  allowed_tools: string[];
+}
+
+export interface SetTriggersRequest {
+  triggers: string[];
+}
+
+/** One subscribable platform event for the trigger picker. */
+export interface EventTriggerDescriptor {
+  name: string;
+  label: string;
+  description: string;
+  available: boolean;
+}
+
+// ── BOQ proposals: extract + apply (human-confirmed) ──────────────────────────
+
+/** One structured BOQ-position proposal a run produced (money as strings). */
+export interface PositionProposalDto {
+  description: string;
+  unit: string;
+  qty: number;
+  unit_rate: string;
+  currency: string;
+  total: string;
+}
+
+/** The applyable proposals a run produced (GET /runs/{id}/proposals). */
+export interface RunProposals {
+  run_id: string;
+  project_id: string | null;
+  count: number;
+  currencies: string[];
+  mixed_currency: boolean;
+  proposals: PositionProposalDto[];
+}
+
+export interface ApplyProposalsRequest {
+  boq_id: string;
+}
+
+/** Outcome of applying a run's proposals to a BOQ (POST /runs/{id}/apply). */
+export interface ApplyProposalsResult {
+  run_id: string;
+  boq_id: string;
+  created: number;
+  skipped: number;
+  currency: string | null;
+  created_ordinals: string[];
+  skipped_reasons: string[];
+}
+
+/** A BOQ a run's proposals can be applied to (subset of the BOQ list item). */
+export interface BoqOption {
+  id: string;
+  name: string;
+}
+
 export const aiAgentsApi = {
   listAgents: () => apiGet<AgentDescriptor[]>('/v1/ai-agents/agents/'),
   listRuns: (projectId?: string) =>
     apiGet<AgentRunListItem[]>(
       `/v1/ai-agents/runs/${projectId ? `?project_id=${projectId}` : ''}`,
     ),
+  // Monitoring: automated (scheduler / event-fired) runs across all projects.
+  listAutomatedRuns: () =>
+    apiGet<AgentRunListItem[]>('/v1/ai-agents/runs/automated'),
   getRun: (runId: string) => apiGet<AgentRun>(`/v1/ai-agents/runs/${runId}`),
   startRun: (body: CreateAgentRunRequest) =>
     apiPost<AgentRun, CreateAgentRunRequest>('/v1/ai-agents/runs/', body),
@@ -133,4 +232,32 @@ export const aiAgentsApi = {
   updateCustomAgent: (id: string, body: CustomAgentInput) =>
     apiPut<CustomAgent, CustomAgentInput>(`/v1/ai-agents/custom/${id}`, body),
   deleteCustomAgent: (id: string) => apiDelete(`/v1/ai-agents/custom/${id}`),
+
+  // Automation: schedule + tools + triggers (Item 29).
+  getAgentSchedule: (id: string) =>
+    apiGet<AgentMetadata>(`/v1/ai-agents/custom/${id}/schedule`),
+  setAgentSchedule: (id: string, body: SetScheduleRequest) =>
+    apiPost<AgentMetadata, SetScheduleRequest>(`/v1/ai-agents/custom/${id}/schedule`, body),
+  deleteAgentSchedule: (id: string) => apiDelete(`/v1/ai-agents/custom/${id}/schedule`),
+  getAgentTools: (id: string) => apiGet<AgentTools>(`/v1/ai-agents/custom/${id}/tools`),
+  listGrantableTools: () =>
+    apiGet<ToolWithPermission[]>('/v1/ai-agents/grantable-tools/'),
+  setAgentTools: (id: string, body: SetToolsRequest) =>
+    apiPost<AgentMetadata, SetToolsRequest>(`/v1/ai-agents/custom/${id}/tools`, body),
+  listEventTriggers: () =>
+    apiGet<EventTriggerDescriptor[]>('/v1/ai-agents/triggers/'),
+  setAgentTriggers: (id: string, body: SetTriggersRequest) =>
+    apiPost<AgentMetadata, SetTriggersRequest>(`/v1/ai-agents/custom/${id}/triggers`, body),
+
+  // BOQ proposals: extract from a run + apply to a BOQ (human-confirmed).
+  getRunProposals: (runId: string) =>
+    apiGet<RunProposals>(`/v1/ai-agents/runs/${runId}/proposals`),
+  applyRunProposals: (runId: string, body: ApplyProposalsRequest) =>
+    apiPost<ApplyProposalsResult, ApplyProposalsRequest>(
+      `/v1/ai-agents/runs/${runId}/apply`,
+      body,
+    ),
+  // BOQs the proposals can be applied to (the cross-module target list).
+  listProjectBoqs: (projectId: string) =>
+    apiGet<BoqOption[]>(`/v1/boq/?project_id=${projectId}`),
 };

@@ -20,6 +20,7 @@ from app.config import Settings
 from app.core.email import (
     ConsoleEmailBackend,
     DeliveryResult,
+    EmailAttachment,
     EmailMessage,
     EmailService,
     MemoryEmailBackend,
@@ -183,6 +184,29 @@ class TestSmtpBackend:
         assert result.reason == "recipient refused"
 
     @pytest.mark.asyncio
+    async def test_attachment_builds_mixed_multipart(self):
+        backend = SmtpEmailBackend(self._settings(smtp_host="mail.example.com"))
+        with patch("app.core.email.smtp.smtplib.SMTP") as smtp_cls:
+            server = smtp_cls.return_value
+            result = await backend.send(
+                EmailMessage(
+                    to="a@x.com",
+                    subject="With PDF",
+                    html_body="<p>See attached</p>",
+                    attachments=[
+                        EmailAttachment(filename="doc.pdf", content=b"%PDF-1.4 data"),
+                    ],
+                ),
+            )
+        assert result.ok
+        # The serialized MIME passed to sendmail must carry the attachment
+        # filename and a mixed multipart envelope (body + file part).
+        raw = server.sendmail.call_args.args[2]
+        assert "multipart/mixed" in raw
+        assert "doc.pdf" in raw
+        assert "attachment" in raw
+
+    @pytest.mark.asyncio
     async def test_network_error_returned_not_raised(self):
         backend = SmtpEmailBackend(self._settings(smtp_host="unreachable.example"))
         with patch("app.core.email.smtp.smtplib.SMTP", side_effect=OSError("refused")):
@@ -224,6 +248,46 @@ class TestEmailService:
             to="x@y",
             reset_url="https://x.y/r?token=T",
             recipient_name=None,
+        )
+        assert "Hello" in mem.sent[0].html_body
+
+    @pytest.mark.asyncio
+    async def test_send_document_attaches_pdf(self):
+        mem = MemoryEmailBackend()
+        service = EmailService(mem)
+        result = await service.send_document(
+            "buyer@example.com",
+            subject="Handover Certificate - OpenConstructionERP",
+            document_name="Handover Certificate",
+            attachment=EmailAttachment(
+                filename="handover-certificate.pdf",
+                content=b"%PDF-1.4 fake",
+            ),
+            recipient_name="Bob",
+            note="Welcome to your new home.",
+        )
+        assert result.ok
+        sent = mem.sent[0]
+        assert sent.to == "buyer@example.com"
+        assert "document" in sent.tags
+        assert "Handover Certificate" in sent.html_body
+        assert "Bob" in sent.html_body
+        assert "Welcome to your new home." in sent.html_body
+        assert len(sent.attachments) == 1
+        att = sent.attachments[0]
+        assert att.filename == "handover-certificate.pdf"
+        assert att.content == b"%PDF-1.4 fake"
+        assert att.content_type == "application/pdf"
+
+    @pytest.mark.asyncio
+    async def test_send_document_anonymous_greeting(self):
+        mem = MemoryEmailBackend()
+        service = EmailService(mem)
+        await service.send_document(
+            "x@y.com",
+            subject="Doc",
+            document_name="Receipt",
+            attachment=EmailAttachment(filename="r.pdf", content=b"x"),
         )
         assert "Hello" in mem.sent[0].html_body
 

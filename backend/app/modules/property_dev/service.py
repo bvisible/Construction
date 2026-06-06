@@ -1,4 +1,4 @@
-"""‌⁠‍Property Development service — business logic + state machines.
+"""‌⁠‍Property Development service - business logic + state machines.
 
 Pure helpers (no DB / I/O) live at module top so tests can exercise them
 directly. The :class:`PropertyDevService` orchestrates them against the
@@ -146,12 +146,12 @@ _MONTH_RE = re.compile(r"^\d{4}-\d{2}$")
 
 
 _PLOT_TRANSITIONS: dict[str, set[str]] = {
-    # ``held`` + ``blocked`` (task #142 — Inventory Map) are short-lived sales
+    # ``held`` + ``blocked`` (task #142 - Inventory Map) are short-lived sales
     # statuses used by the bulk hold/release workflow. They can only be
     # entered from an "available" plot (``planned`` / ``ready``) and they
     # always release back to ``planned``. ``blocked`` is reserved for
     # admin-flagged plots (legal / structural defect) and cannot be moved
-    # by the bulk-release endpoint — only an explicit PATCH lifts it.
+    # by the bulk-release endpoint - only an explicit PATCH lifts it.
     "planned": {"reserved", "under_construction", "ready", "held", "blocked"},
     "reserved": {"planned", "under_construction", "ready", "sold"},
     "under_construction": {"ready", "reserved"},
@@ -186,8 +186,8 @@ _HANDOVER_TRANSITIONS: dict[str, set[str]] = {
 
 _WARRANTY_TRANSITIONS: dict[str, set[str]] = {
     # ``raised`` may be triaged into ``under_review`` or accepted /
-    # rejected straight away — the UI's Accept / Reject buttons on a
-    # raised claim shortcut the triage step (v3113 — was blocking the
+    # rejected straight away - the UI's Accept / Reject buttons on a
+    # raised claim shortcut the triage step (v3113 - was blocking the
     # WarrantyTab Accept button).
     "raised": {"under_review", "accepted", "rejected", "closed"},
     "under_review": {"accepted", "rejected", "closed"},
@@ -257,7 +257,7 @@ _INSTALMENT_TRANSITIONS: dict[str, set[str]] = {
     # Allow ``pending → paid`` directly so an early payment from the
     # buyer (before the demand-letter / "due" transition has fired)
     # doesn't 409. Real-world UX: the user marks paid the moment they
-    # see funds — they shouldn't have to flip the row to ``due`` first.
+    # see funds - they shouldn't have to flip the row to ``due`` first.
     "pending": {"due", "paid", "waived", "cancelled"},
     "due": {"overdue", "paid", "waived", "cancelled"},
     "overdue": {"paid", "waived", "cancelled"},
@@ -383,7 +383,7 @@ def validate_option_compatibility(
         all_options: Iterable of option-like objects (must expose ``id``,
             ``code``, ``compatibility_rules``).
         rules: Optional explicit rules dict (overrides per-option rules
-            when provided — handy for tests).
+            when provided - handy for tests).
 
     Returns:
         ``(ok, violations)``: ``ok`` is False when any rule fails;
@@ -497,7 +497,7 @@ def derive_plot_construction_progress(plot_id: uuid.UUID, work_packages: Iterabl
 # Each rule: (forfeit_fraction, citation, summary)
 # fraction = Decimal between 0 and 1 representing the SHARE OF THE DEPOSIT
 # kept by the developer. Fractions > 1 mean the developer must pay the
-# buyer 2x deposit penalty (Spain LOE retraction at developer fault — but
+# buyer 2x deposit penalty (Spain LOE retraction at developer fault - but
 # we model only buyer-initiated cancellations here; developer-side
 # defaults are handled separately in the cancellation reason chain).
 _DEPOSIT_FORFEITURE_RULES: dict[str, tuple[Decimal, str, str]] = {
@@ -505,33 +505,33 @@ _DEPOSIT_FORFEITURE_RULES: dict[str, tuple[Decimal, str, str]] = {
         Decimal("1.00"),
         "PRA CP21/22 + UK SRA Property Standards",
         "Buyer forfeits full deposit after exchange of contracts; "
-        "before exchange — full refund (cooling-off period applies).",
+        "before exchange - full refund (cooling-off period applies).",
     ),
     "IE": (
         Decimal("1.00"),
-        "Law Society of Ireland — Standard Conditions of Sale 2023",
+        "Law Society of Ireland - Standard Conditions of Sale 2023",
         "Buyer forfeits 10% deposit on rescission after binding contract.",
     ),
     "ES": (
         Decimal("1.00"),
-        "Código Civil Art. 1454 — Arras Penitenciales",
+        "Código Civil Art. 1454 - Arras Penitenciales",
         "Buyer loses full deposit on retraction; seller-default is "
         "2x deposit but is handled in seller-cancellation flow.",
     ),
     "PT": (
         Decimal("1.00"),
-        "Código Civil Português Art. 442 — Sinal",
+        "Código Civil Português Art. 442 - Sinal",
         "Buyer forfeits sinal (deposit) on contract rescission.",
     ),
     "AE": (
         Decimal("1.00"),
-        "RERA Dubai Law No. (8) of 2007 — Article 11",
+        "RERA Dubai Law No. (8) of 2007 - Article 11",
         "RERA escrow holds deposit; buyer forfeits full deposit on "
         "default after 30-day notice period if developer is not at fault.",
     ),
     "SA": (
         Decimal("1.00"),
-        "Saudi Real Estate General Authority — Escrow Account Regs",
+        "Saudi Real Estate General Authority - Escrow Account Regs",
         "Buyer forfeits full deposit on default; seller delivers refund "
         "only when default is attributable to developer.",
     ),
@@ -542,18 +542,18 @@ _DEPOSIT_FORFEITURE_RULES: dict[str, tuple[Decimal, str, str]] = {
     ),
     "DE": (
         Decimal("0.00"),
-        "BGB §§ 311b, 313 — notarized purchase contract",
+        "BGB §§ 311b, 313 - notarized purchase contract",
         "No standard deposit forfeiture under German civil code; "
         "developer may claim damages but no automatic deposit penalty.",
     ),
     "FR": (
         Decimal("1.00"),
-        "Code civil Art. 1590 — arrhes",
+        "Code civil Art. 1590 - arrhes",
         "Buyer forfeits arrhes on rescission; seller delivers 2x arrhes if seller withdraws.",
     ),
     "AU": (
         Decimal("1.00"),
-        "Conveyancing Act (state-by-state) — typically 10% deposit",
+        "Conveyancing Act (state-by-state) - typically 10% deposit",
         "Buyer forfeits deposit on default after cooling-off (typically 5 business days).",
     ),
 }
@@ -573,7 +573,7 @@ def compute_deposit_forfeiture(
     """Return forfeiture amount + jurisdiction-cited rule.
 
     When ``cancelled_before_contract`` is True, the buyer is still in
-    cooling-off / pre-exchange window — full refund regardless of
+    cooling-off / pre-exchange window - full refund regardless of
     jurisdiction.
 
     Pure: no DB. Always uses a real, citable rule (no random defaults).
@@ -583,12 +583,12 @@ def compute_deposit_forfeiture(
 
     if cancelled_before_contract:
         return {
-            "jurisdiction": code or "—",
+            "jurisdiction": code or "-",
             "deposit_amount": amount,
             "forfeited_amount": Decimal("0"),
             "refundable_amount": amount,
             "rule_citation": "Pre-contract / cooling-off period",
-            "rule_summary": ("Cancellation before contract exchange — full refund regardless of jurisdiction."),
+            "rule_summary": ("Cancellation before contract exchange - full refund regardless of jurisdiction."),
         }
 
     rule = _DEPOSIT_FORFEITURE_RULES.get(code, _DEFAULT_FORFEITURE_RULE)
@@ -596,7 +596,7 @@ def compute_deposit_forfeiture(
     forfeited = (amount * fraction).quantize(Decimal("0.01"))
     refundable = (amount - forfeited).quantize(Decimal("0.01"))
     return {
-        "jurisdiction": code or "—",
+        "jurisdiction": code or "-",
         "deposit_amount": amount,
         "forfeited_amount": forfeited,
         "refundable_amount": refundable,
@@ -622,7 +622,7 @@ def compute_residual_appraisal(
     developer_profit_target_pct: Decimal | float | int | str = Decimal("20"),
     contingency_pct: Decimal | float | int | str = Decimal("5"),
 ) -> dict[str, Any]:
-    """Run the residual-valuation method (RICS Red Book — Global, 2025).
+    """Run the residual-valuation method (RICS Red Book - Global, 2025).
 
     Residual Land Value = GDV − (construction + fees + contingency +
     finance + sales costs + developer profit).
@@ -630,7 +630,7 @@ def compute_residual_appraisal(
     Profit on Cost = developer_profit / total development cost, where
     "total development cost" is construction + fees + contingency +
     finance + sales costs (i.e. excluding the residual land value and
-    excluding the profit line itself — the standard RICS denominator).
+    excluding the profit line itself - the standard RICS denominator).
     Profit on GDV  = developer_profit / GDV.
 
     All inputs are coerced through ``Decimal`` so callers may pass floats
@@ -679,7 +679,7 @@ def compute_residual_appraisal(
         "profit_on_cost": profit_on_cost.quantize(pct_q),
         "profit_on_gdv": profit_on_gdv.quantize(pct_q),
         "viable": viable,
-        "method": "RICS Red Book Global 2025 — Residual Valuation",
+        "method": "RICS Red Book Global 2025 - Residual Valuation",
     }
 
 
@@ -729,9 +729,84 @@ def _today_iso() -> str:
     return datetime.now(UTC).date().isoformat()
 
 
+# ── Handover closeout-package assembly (item #25) ───────────────────────
+
+
+def _safe_zip_name(raw: str, *, fallback: str = "file") -> str:
+    """Sanitise an arbitrary string into a safe ZIP entry leaf name.
+
+    Strips path separators + parent refs so a hostile ``file_url`` /
+    photo path can never write outside its folder inside the archive
+    (Zip-Slip). Keeps only the basename, collapses whitespace, and falls
+    back to ``fallback`` when nothing usable survives.
+    """
+    leaf = str(raw or "").replace("\\", "/").split("/")[-1].strip()
+    leaf = leaf.replace("..", "").strip(". ")
+    # Allow a conservative leaf charset; anything else → underscore.
+    leaf = re.sub(r"[^A-Za-z0-9._ +()\-]", "_", leaf)
+    return leaf or fallback
+
+
+def build_handover_package_zip(
+    *,
+    plot_number: str,
+    date_iso: str,
+    manifest_text: str,
+    certificates: list[tuple[str, bytes]],
+    documents: list[tuple[str, bytes]],
+    snag_photos: list[tuple[str, bytes]],
+    manifest_json: str | None = None,
+) -> bytes:
+    """Assemble the closeout-package ZIP from already-resolved bytes.
+
+    Pure (no DB / no network) so it can be unit-tested directly. Lays out:
+
+        MANIFEST.txt
+        manifest.json   (machine-readable index, when ``manifest_json`` given)
+        certificates/<name>.pdf
+        docs/<name>
+        snags/<name>
+
+    Entry names are de-duplicated (``name``, ``name (2)``, …) and sanitised
+    against Zip-Slip. ``plot_number`` / ``date_iso`` are only used by the
+    caller for the download filename; they are echoed into the manifest.
+    """
+    import zipfile
+    from io import BytesIO
+
+    buf = BytesIO()
+    seen: set[str] = set()
+
+    def _unique(folder: str, name: str) -> str:
+        base = f"{folder}/{name}" if folder else name
+        candidate = base
+        stem, dot, ext = name.rpartition(".")
+        n = 2
+        while candidate in seen:
+            if dot:
+                candidate = f"{folder}/{stem} ({n}).{ext}" if folder else f"{stem} ({n}).{ext}"
+            else:
+                candidate = f"{folder}/{name} ({n})" if folder else f"{name} ({n})"
+            n += 1
+        seen.add(candidate)
+        return candidate
+
+    with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("MANIFEST.txt", manifest_text)
+        if manifest_json is not None:
+            zf.writestr("manifest.json", manifest_json)
+        for name, data in certificates:
+            zf.writestr(_unique("certificates", _safe_zip_name(name, fallback="certificate.pdf")), data)
+        for name, data in documents:
+            zf.writestr(_unique("docs", _safe_zip_name(name, fallback="document")), data)
+        for name, data in snag_photos:
+            zf.writestr(_unique("snags", _safe_zip_name(name, fallback="photo")), data)
+    return buf.getvalue()
+
+
 # ── Payment-schedule milestone templates ────────────────────────────────
 #
-# Pure data — no DB, no I/O. Each template is a sequence of milestone
+# Pure data - no DB, no I/O. Each template is a sequence of milestone
 # entries summing to 100 % of contract value. ``offset_days`` is added to
 # the chosen start date to derive ``due_date``. ``milestone_event`` is
 # carried through to ``Instalment.milestone_event`` so downstream
@@ -912,7 +987,7 @@ class PropertyDevService:
         self.payment_schedules = PaymentScheduleRepository(session)
         self.instalments = InstalmentRepository(session)
         self.contract_parties = ContractPartyRepository(session)
-        # ── Task #138 — new repositories.
+        # ── Task #138 - new repositories.
         self.phases = PhaseRepository(session)
         self.blocks = BlockRepository(session)
         self.brokers = BrokerRepository(session)
@@ -1027,7 +1102,7 @@ class PropertyDevService:
         project_id: uuid.UUID,
         user_payload: dict[str, object] | None,
     ) -> None:
-        """Confirm the caller owns the project — collapse "not yours" to 404.
+        """Confirm the caller owns the project - collapse "not yours" to 404.
 
         Mirrors the cross-tenant IDOR guard used elsewhere in property_dev
         (see :func:`router._verify_buyer_owner`). Admins bypass.
@@ -1189,7 +1264,7 @@ class PropertyDevService:
         self.session.add(obj)
         try:
             await self.session.flush()
-        except Exception as exc:  # noqa: BLE001 — surface as 409 conflict
+        except Exception as exc:  # noqa: BLE001 - surface as 409 conflict
             await self.session.rollback()
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -1294,7 +1369,7 @@ class PropertyDevService:
             house_type_id=data.house_type_id,
             house_type_variant_id=data.house_type_variant_id,
             house_type_label=data.house_type_label,
-            # Task #138 — Phase/Block hierarchy fields.
+            # Task #138 - Phase/Block hierarchy fields.
             block_id=data.block_id,
             level_in_block=data.level_in_block,
             position_on_floor=data.position_on_floor,
@@ -1349,7 +1424,7 @@ class PropertyDevService:
                 detail=f"Plot in status '{plot.status}' cannot be reserved",
             )
 
-        # The plot must not already be bound to a *different* buyer — the
+        # The plot must not already be bound to a *different* buyer - the
         # ``Buyer.plot_id`` UNIQUE constraint would otherwise raise an
         # opaque IntegrityError at flush. Surface a clean 409 instead.
         existing_buyer = await self.buyers.get_for_plot(plot_id)
@@ -1374,7 +1449,7 @@ class PropertyDevService:
                     detail="Buyer belongs to a different development",
                 )
             # Terminal/contracted buyers must not be silently re-pointed at
-            # a new plot — only leads/reserved buyers may be (re)reserved.
+            # a new plot - only leads/reserved buyers may be (re)reserved.
             if buyer.status not in {"lead", "reserved"}:
                 raise HTTPException(
                     status_code=409,
@@ -1496,7 +1571,7 @@ class PropertyDevService:
             up anonymously and we don't yet want a directory entry.
 
         ``tenant_id``:
-            The caller's user id — used to scope the contact lookup.
+            The caller's user id - used to scope the contact lookup.
             Falls back to None (admin / system context) when omitted.
         """
         obj = Buyer(
@@ -1518,7 +1593,7 @@ class PropertyDevService:
                 from app.modules.contacts import bridge as _contacts_bridge
 
                 await _contacts_bridge.ensure_contact_for_buyer(self.session, created, tenant_id=tenant_id)
-            except Exception:  # noqa: BLE001 — bridge is best-effort
+            except Exception:  # noqa: BLE001 - bridge is best-effort
                 logger.exception(
                     "Contacts bridge failed for buyer %s; continuing without link",
                     created.id,
@@ -1559,7 +1634,7 @@ class PropertyDevService:
         if "jurisdiction" in fields and isinstance(fields["jurisdiction"], str):
             fields["jurisdiction"] = fields["jurisdiction"].upper()
         # Currency: enforce 3-letter ISO format when supplied (the schema
-        # only caps length at 8 to allow stablecoin tickers like USDT —
+        # only caps length at 8 to allow stablecoin tickers like USDT -
         # for the edit flow we want a real currency, not a tag).
         currency = fields.get("currency")
         if currency is not None and currency != "" and len(currency) != 3:
@@ -1666,7 +1741,7 @@ class PropertyDevService:
         # ``reserved`` plot goes back to ``planned`` (re-marketable, no
         # construction state to preserve). A ``sold`` plot has typically
         # been (part-)built, so it is released to ``ready`` rather than
-        # regressed all the way to ``planned`` — that keeps the legal
+        # regressed all the way to ``planned`` - that keeps the legal
         # plot state machine intact (``sold`` -> ``planned`` is NOT an
         # allowed transition) and does not throw away build progress.
         if buyer.plot_id:
@@ -1748,7 +1823,7 @@ class PropertyDevService:
         item = await self.selection_items.create(item)
         item_id = item.id
         # ``_recompute_selection_total`` calls ``update_fields`` which runs
-        # ``session.expire_all()`` — that expires the freshly-created ``item``
+        # ``session.expire_all()`` - that expires the freshly-created ``item``
         # too, so returning it would force a lazy-load outside the async
         # session (MissingGreenlet 500). Re-fetch after recompute so the
         # router serialises a live, attribute-populated instance.
@@ -1864,6 +1939,24 @@ class PropertyDevService:
         handover = await self.get_handover(h_id)
         if handover.completed_at:
             return handover
+
+        # Closeout gate (item #25): a handover cannot be signed off while a
+        # required document is still undelivered. The bundle's
+        # ``ready_for_handover`` flag is False iff any ``is_required`` doc is
+        # not yet delivered; surface the missing doc-types so the UI can list
+        # them. 409 (conflict) - the request is well-formed but the resource
+        # state forbids completion.
+        bundle = await self.handover_bundle(h_id)
+        if not bundle["ready_for_handover"]:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "handover_docs_incomplete",
+                    "message": translate("errors.handover_docs_incomplete", locale=get_locale()),
+                    "missing_required": bundle["missing_required"],
+                },
+            )
+
         await self.handovers.update_fields(
             h_id,
             completed_at=data.completed_at,
@@ -2009,7 +2102,7 @@ class PropertyDevService:
                 ).scalar_one_or_none()
                 if row is not None:
                     handover_id = row.id
-            except Exception:  # noqa: BLE001 — non-fatal best-effort
+            except Exception:  # noqa: BLE001 - non-fatal best-effort
                 handover_id = None
 
         obj = WarrantyClaim(
@@ -2063,7 +2156,7 @@ class PropertyDevService:
     async def add_warranty_photo(self, w_id: uuid.UUID, photo_path: str) -> WarrantyClaim:
         """Append a relative photo path to ``warranty_claim.photos``.
 
-        Mirrors :meth:`add_snag_photo` — the router validates magic
+        Mirrors :meth:`add_snag_photo` - the router validates magic
         bytes + writes the file before calling this.
         """
         claim = await self.get_warranty(w_id)
@@ -2119,7 +2212,7 @@ class PropertyDevService:
         return payload
 
     async def warranty_responses(self, claims: list[WarrantyClaim]):
-        """Batched variant — kills the per-claim Handover SELECT (N+1).
+        """Batched variant - kills the per-claim Handover SELECT (N+1).
 
         Used by the warranty list endpoint where the per-row
         ``warranty_response`` previously triggered one ``handovers.get_by_id``
@@ -2141,7 +2234,7 @@ class PropertyDevService:
                 stmt = select(Handover).where(Handover.id.in_(handover_ids))
                 rows = (await self.session.execute(stmt)).scalars().all()
                 handovers_by_id = {h.id: h for h in rows}
-            except Exception:  # noqa: BLE001 — falls back to per-row path
+            except Exception:  # noqa: BLE001 - falls back to per-row path
                 handovers_by_id = {}
 
         out = []
@@ -2156,7 +2249,7 @@ class PropertyDevService:
         return out
 
     def _compute_in_warranty(self, claim: WarrantyClaim, handover) -> bool:  # noqa: ANN001
-        """Pure variant of :meth:`_is_in_warranty` — no I/O."""
+        """Pure variant of :meth:`_is_in_warranty` - no I/O."""
         if not claim.handover_id or not claim.raised_at:
             return False
         if handover is None or not handover.completed_at:
@@ -2307,6 +2400,197 @@ class PropertyDevService:
             "ready_for_handover": not missing,
         }
 
+    async def export_handover_package(
+        self,
+        handover_id: uuid.UUID,
+        *,
+        locale: str = "en",
+    ) -> tuple[str, bytes]:
+        """Assemble the digital closeout package for a handover (item #25).
+
+        Returns ``(download_filename, zip_bytes)``. The ZIP bundles:
+
+        * ``MANIFEST.txt`` - a human-readable index of everything inside,
+          plus the required-doc compliance summary.
+        * ``certificates/`` - freshly rendered handover + warranty
+          certificate PDFs (best-effort; a render failure is recorded in
+          the manifest instead of aborting the export).
+        * ``docs/`` - every *delivered* handover document whose ``file_url``
+          points at a local upload. External URLs are listed as references
+          in the manifest (we never make an outbound request inside the
+          handler so a slow/hostile host can't hang the export).
+        * ``snags/`` - all snag photos for the handover, copied from the
+          local upload store. Invalid / traversal paths are skipped.
+
+        Deterministic + degrades gracefully: a handover with no docs/snags
+        still yields a valid ZIP containing the manifest + certificates.
+        """
+        import json
+        from pathlib import Path
+
+        handover = await self.get_handover(handover_id)
+        plot = await self.plots.get_by_id(handover.plot_id)
+        plot_number = plot.plot_number if plot is not None else str(handover.plot_id)
+
+        bundle = await self.handover_bundle(handover_id)
+        docs: list[HandoverDoc] = bundle["docs"]
+        delivered = [d for d in docs if d.is_delivered]
+
+        date_iso = _today_iso()
+        manifest: list[str] = [
+            "DIGITAL HANDOVER / CLOSEOUT PACKAGE",
+            "=" * 40,
+            f"Plot:            {plot_number}",
+            f"Handover ID:     {handover_id}",
+            f"Generated:       {date_iso}",
+            f"Completed at:    {handover.completed_at or '(not completed)'}",
+            f"Keys handed:     {handover.keys_handed_over_at or '-'}",
+            f"Final check:     {'PASSED' if handover.final_check_passed else 'not passed'}",
+            "",
+            "DOCUMENT COMPLIANCE",
+            "-" * 40,
+            f"Delivered docs:  {bundle['delivered_count']}",
+            f"Required docs:   {bundle['required_count']}",
+            f"Missing reqd:    {', '.join(bundle['missing_required']) or 'none'}",
+            f"Ready:           {'YES' if bundle['ready_for_handover'] else 'NO'}",
+            "",
+        ]
+
+        # ── Certificates (best-effort render) ──────────────────────────
+        certificates: list[tuple[str, bytes]] = []
+        manifest.append("CERTIFICATES")
+        manifest.append("-" * 40)
+        for cert_type, leaf in (
+            ("handover_certificate", "handover_certificate.pdf"),
+            ("warranty_certificate", "warranty_certificate.pdf"),
+        ):
+            try:
+                pdf_bytes = await self.generate_document(  # type: ignore[attr-defined]
+                    doc_type=cert_type,
+                    handover_id=handover_id,
+                    locale=locale,
+                )
+                certificates.append((leaf, pdf_bytes))
+                manifest.append(f"  certificates/{leaf}  ({len(pdf_bytes)} bytes)")
+            except Exception as exc:  # noqa: BLE001 - never abort the export
+                logger.warning("Handover %s: could not render %s: %s", handover_id, cert_type, exc)
+                manifest.append(f"  {leaf}  - NOT GENERATED ({exc.__class__.__name__})")
+        manifest.append("")
+
+        # ── Delivered documents (local uploads only) ───────────────────
+        documents: list[tuple[str, bytes]] = []
+        uploads_root = Path("uploads").resolve()
+        manifest.append("DOCUMENTS")
+        manifest.append("-" * 40)
+        if not delivered:
+            manifest.append("  (no delivered documents)")
+        for d in delivered:
+            label = d.title or d.doc_type
+            url = (d.file_url or "").strip()
+            if not url:
+                manifest.append(f"  {label} [{d.doc_type}] - no file attached")
+                continue
+            if url.lower().startswith(("http://", "https://")):
+                # External reference - listed, never fetched in-request.
+                manifest.append(f"  {label} [{d.doc_type}] - external: {url}")
+                continue
+            # Local upload path. Resolve under uploads/ and reject traversal.
+            rel = url.lstrip("/")
+            if rel.startswith("uploads/"):
+                rel = rel[len("uploads/") :]
+            candidate = (uploads_root / rel).resolve()
+            try:
+                inside = candidate.is_relative_to(uploads_root)
+            except AttributeError:  # pragma: no cover - py<3.9 guard
+                inside = str(candidate).startswith(str(uploads_root))
+            if not inside or not candidate.is_file():
+                manifest.append(f"  {label} [{d.doc_type}] - file missing: {url}")
+                continue
+            try:
+                data = candidate.read_bytes()
+            except OSError as exc:
+                manifest.append(f"  {label} [{d.doc_type}] - unreadable ({exc.__class__.__name__})")
+                continue
+            leaf = f"{_safe_zip_name(d.doc_type, fallback='document')}_{_safe_zip_name(candidate.name)}"
+            documents.append((leaf, data))
+            manifest.append(f"  docs/{leaf}  ({len(data)} bytes)")
+        manifest.append("")
+
+        # ── Snag photos (local uploads only) ───────────────────────────
+        snag_photos: list[tuple[str, bytes]] = []
+        snags = await self.snags.list_for_handover(handover_id)
+        manifest.append("SNAGS")
+        manifest.append("-" * 40)
+        manifest.append(f"  Total snags: {len(snags)}")
+        for snag in snags:
+            paths = snag.photos or []
+            for raw in paths:
+                rel = str(raw or "").lstrip("/")
+                if rel.startswith("uploads/"):
+                    rel = rel[len("uploads/") :]
+                candidate = (uploads_root / rel).resolve()
+                try:
+                    inside = candidate.is_relative_to(uploads_root)
+                except AttributeError:  # pragma: no cover
+                    inside = str(candidate).startswith(str(uploads_root))
+                if not inside or not candidate.is_file():
+                    continue
+                try:
+                    data = candidate.read_bytes()
+                except OSError:
+                    continue
+                leaf = f"{_safe_zip_name(str(snag.id)[:8])}_{_safe_zip_name(candidate.name)}"
+                snag_photos.append((leaf, data))
+        manifest.append(f"  Photos included: {len(snag_photos)}")
+
+        # ── Machine-readable manifest.json ─────────────────────────────
+        # A structured index of everything the archive carries, so the
+        # buyer portal / downstream integrations can parse the package
+        # without scraping MANIFEST.txt.
+        manifest_obj = {
+            "format_version": "1.0",
+            "kind": "handover_closeout_package",
+            "plot": plot_number,
+            "handover_id": str(handover_id),
+            "generated": date_iso,
+            "completed_at": handover.completed_at or None,
+            "final_check_passed": bool(handover.final_check_passed),
+            "compliance": {
+                "delivered_count": bundle["delivered_count"],
+                "required_count": bundle["required_count"],
+                "missing_required": list(bundle["missing_required"]),
+                "ready_for_handover": bundle["ready_for_handover"],
+            },
+            "contents": {
+                "certificates": [name for name, _ in certificates],
+                "documents": [name for name, _ in documents],
+                "snags": [name for name, _ in snag_photos],
+            },
+            "documents": [
+                {
+                    "doc_type": d.doc_type,
+                    "title": d.title,
+                    "is_required": bool(d.is_required),
+                    "is_delivered": bool(d.is_delivered),
+                    "delivered_at": d.delivered_at or None,
+                    "file_url": d.file_url,
+                }
+                for d in docs
+            ],
+        }
+
+        zip_bytes = build_handover_package_zip(
+            plot_number=plot_number,
+            date_iso=date_iso,
+            manifest_text="\n".join(manifest) + "\n",
+            certificates=certificates,
+            documents=documents,
+            snag_photos=snag_photos,
+            manifest_json=json.dumps(manifest_obj, indent=2, default=str),
+        )
+        filename = f"handover_{_safe_zip_name(plot_number, fallback='plot')}_{date_iso}.zip"
+        return filename, zip_bytes
+
     # ── Sales pipeline kanban + reservation calendar ────────────────────
 
     async def sales_kanban(self, dev_id: uuid.UUID) -> dict[str, Any]:
@@ -2386,7 +2670,7 @@ class PropertyDevService:
 
         Currency: a development is single-currency by convention. We pick
         the currency of the first buyer that has one and only aggregate
-        buyers in that currency — silently summing mixed-currency contract
+        buyers in that currency - silently summing mixed-currency contract
         values into one number is meaningless. ``mixed_currency`` flags
         when at least one buyer used a different currency so the UI can
         warn instead of showing a wrong total.
@@ -2432,7 +2716,7 @@ class PropertyDevService:
             if plot is not None and plot.status == "handed_over":
                 plot_count_handed_over += 1
         # Average sale price = mean contract value across buyers that
-        # actually hold a contract — NOT contracted revenue divided by
+        # actually hold a contract - NOT contracted revenue divided by
         # the count of *sold plots* (mismatched populations: a contracted
         # buyer's plot is usually still under construction, not "sold").
         avg_sale = (
@@ -2458,7 +2742,7 @@ class PropertyDevService:
         }
 
     # ════════════════════════════════════════════════════════════════════
-    # R6 — Lead / Reservation / SPA / PaymentSchedule / ContractParty
+    # R6 - Lead / Reservation / SPA / PaymentSchedule / ContractParty
     # ════════════════════════════════════════════════════════════════════
 
     # ── Lead ────────────────────────────────────────────────────────────
@@ -2477,7 +2761,7 @@ class PropertyDevService:
         ``'property_dev_lead'`` module tag. See
         :mod:`app.modules.contacts.bridge` for the full rationale.
 
-        ``tenant_id``: caller's user id — scopes the contact lookup.
+        ``tenant_id``: caller's user id - scopes the contact lookup.
         Falls back to ``data.tenant_id`` when None.
         """
         if data.preferred_house_type_id is not None:
@@ -2587,7 +2871,7 @@ class PropertyDevService:
         plot = await self.plots.get_by_id(data.plot_id)
         if plot is None:
             raise HTTPException(status_code=422, detail="plot not found")
-        # Snapshot every plot attribute the rest of this function reads —
+        # Snapshot every plot attribute the rest of this function reads -
         # later update_fields() calls expire the ORM object and any deferred
         # column access trips MissingGreenlet under aiosqlite (caught by R6
         # dashboards + document-templates work).
@@ -2713,7 +2997,7 @@ class PropertyDevService:
                     "currency": currency,
                     "price_list_id": None,
                 }
-        except Exception:  # noqa: BLE001 — never block a reservation on snapshot
+        except Exception:  # noqa: BLE001 - never block a reservation on snapshot
             snapshot = {
                 "base_price": str(Decimal(str(plot.price_base or 0))),
                 "lines": [],
@@ -2865,7 +3149,7 @@ class PropertyDevService:
                 await self.expire_reservation(res.id)
                 out.append(res.id)
             except HTTPException:
-                # Transition conflict (already mutated by another path) —
+                # Transition conflict (already mutated by another path) -
                 # skip, do not abort the batch.
                 continue
         return out
@@ -2926,7 +3210,7 @@ class PropertyDevService:
             # Auto-create the primary ContractParty so the SPA can move
             # straight into the "send for signature" step. Without this
             # the user was stuck on a draft SPA that the FSM rejected with
-            # "SalesContract has no primary party — cannot send" and had
+            # "SalesContract has no primary party - cannot send" and had
             # no UI affordance to add a party (root cause of "Sales
             # Contracts не работает": the only convert-from-reservation
             # path produced a dead-end SPA).
@@ -2941,7 +3225,7 @@ class PropertyDevService:
                     )
                 )
             except Exception:  # noqa: BLE001
-                # Auto-party creation must NEVER block SPA creation —
+                # Auto-party creation must NEVER block SPA creation -
                 # if it fails (e.g. on a future race) the SPA still
                 # exists and the user can add the party manually via
                 # the contract-parties endpoint.
@@ -3079,7 +3363,7 @@ class PropertyDevService:
         if not any(p.party_role == "primary" for p in parties):
             raise HTTPException(
                 status_code=409,
-                detail="SalesContract has no primary party — cannot send",
+                detail="SalesContract has no primary party - cannot send",
             )
         fields: dict[str, Any] = {"status": "sent_for_signature"}
         if data.e_sign_envelope_id is not None:
@@ -3269,7 +3553,7 @@ class PropertyDevService:
             "currency": spa.currency,
         }
         # If the SPA's price breakdown carries an explicit ``net`` line,
-        # prefer that — it captures discounts/options the engine can't see.
+        # prefer that - it captures discounts/options the engine can't see.
         breakdown = spa.total_price_breakdown or {}
         if isinstance(breakdown, dict) and breakdown.get("net"):
             contract_input["net"] = breakdown["net"]
@@ -3317,7 +3601,7 @@ class PropertyDevService:
             # The convert-reservation-to-spa flow always creates a default
             # ``active`` 1-line schedule (so finance has *something* to
             # post against immediately). Allow a from-template rebuild
-            # over that default IFF nothing has been paid yet — otherwise
+            # over that default IFF nothing has been paid yet - otherwise
             # the user is stuck (UX dead-end the user reported as
             # "Payment Schedules не работает"). The strict 409 still
             # applies to schedules with any paid/waived/cancelled rows.
@@ -3332,7 +3616,7 @@ class PropertyDevService:
                     status_code=409,
                     detail=(
                         f"PaymentSchedule in status '{existing.status}' is "
-                        "live with paid instalments — suspend it first or "
+                        "live with paid instalments - suspend it first or "
                         "create a new SPA revision."
                     ),
                 )
@@ -3380,7 +3664,7 @@ class PropertyDevService:
             schedule = await self.payment_schedules.create(schedule_obj)
         else:
             # Snapshot every attribute the rest of this block touches BEFORE
-            # any mutation — once update_fields() expires the row, lazy
+            # any mutation - once update_fields() expires the row, lazy
             # column reloads under aiosqlite trip MissingGreenlet (same
             # pattern as convert_reservation_to_spa above).
             existing_id = existing.id
@@ -3477,7 +3761,7 @@ class PropertyDevService:
         """Activate a suspended schedule and mark the first pending line due."""
         schedule = await self.get_payment_schedule(schedule_id)
         if schedule.status == "active":
-            # Idempotent — but still mark first pending instalment due.
+            # Idempotent - but still mark first pending instalment due.
             await self._mark_first_pending_due(schedule_id)
             return schedule
         _ensure_transition(
@@ -3639,7 +3923,7 @@ class PropertyDevService:
         if ins.status in {"paid", "waived", "cancelled"}:
             raise HTTPException(
                 status_code=409,
-                detail=f"Instalment in status '{ins.status}' — no demand",
+                detail=f"Instalment in status '{ins.status}' - no demand",
             )
         # Mark overdue if past due_date.
         today = datetime.now(UTC).date().isoformat()
@@ -3771,7 +4055,7 @@ class PropertyDevService:
         if spa.status not in {"draft", "sent_for_signature"}:
             raise HTTPException(
                 status_code=409,
-                detail=(f"SalesContract in status '{spa.status}' is locked — no party changes"),
+                detail=(f"SalesContract in status '{spa.status}' is locked - no party changes"),
             )
         buyer = await self.buyers.get_by_id(data.buyer_id)
         if buyer is None:
@@ -3830,7 +4114,7 @@ class PropertyDevService:
             if spa.status not in {"draft", "sent_for_signature"}:
                 raise HTTPException(
                     status_code=409,
-                    detail=(f"SPA in status '{spa.status}' — ownership is locked"),
+                    detail=(f"SPA in status '{spa.status}' - ownership is locked"),
                 )
             parties = await self.contract_parties.list_for_contract(party.sales_contract_id)
             new_total = Decimal("0")
@@ -3853,7 +4137,7 @@ class PropertyDevService:
         if spa.status not in {"draft", "sent_for_signature"}:
             raise HTTPException(
                 status_code=409,
-                detail=(f"SPA in status '{spa.status}' — parties are locked"),
+                detail=(f"SPA in status '{spa.status}' - parties are locked"),
             )
         await self.contract_parties.delete(party_id)
         event_bus.publish_detached(
@@ -3883,7 +4167,7 @@ class PropertyDevService:
         Each cell is one Plot, coloured by ``status``. Layout follows
         ``Phase.sequence`` then ``Block.code``. Plots without ``block_id``
         fall back to a synthetic "Unassigned" block under the synthetic
-        "—" phase so legacy data still renders.
+        "-" phase so legacy data still renders.
         """
         from sqlalchemy import select as _select
 
@@ -3978,7 +4262,7 @@ class PropertyDevService:
             legacy_blocks.append(
                 {
                     "block_id": None,
-                    "code": (ht.code if ht else "—"),
+                    "code": (ht.code if ht else "-"),
                     "name": (ht.name if ht else "Unassigned"),
                     "levels_count": 1,
                     "units_per_level": len(lp),
@@ -3990,7 +4274,7 @@ class PropertyDevService:
             phase_rows.append(
                 {
                     "phase_id": None,
-                    "code": "—",
+                    "code": "-",
                     "name": "Legacy (no phase)",
                     "sequence": 9999,
                     "status": "planned",
@@ -4087,7 +4371,7 @@ class PropertyDevService:
             )
             bucket["revenue_by_currency"][currency] = cur_revenue + Decimal(str(spa.total_value or 0))
 
-        # Legacy Buyer fallback — skip any buyer whose plot already has a
+        # Legacy Buyer fallback - skip any buyer whose plot already has a
         # signed SPA above.
         legacy_rows = await self.pipeline.kanban_for_development(dev_id)
         for buyer, plot in legacy_rows:
@@ -4169,15 +4453,15 @@ class PropertyDevService:
         """Monthly cash-flow projection from Instalments + Escrow.
 
         Three series per month bucket:
-          * ``scheduled``       — sum of Instalment.amount due in month
-          * ``actual_collected``— sum of EscrowTransaction direction=credit
-          * ``actual_disbursed``— sum of EscrowTransaction direction=debit
+          * ``scheduled``       - sum of Instalment.amount due in month
+          * ``actual_collected``- sum of EscrowTransaction direction=credit
+          * ``actual_disbursed``- sum of EscrowTransaction direction=debit
         """
         from sqlalchemy import select as _select
 
         await self.get_development(dev_id)
 
-        # Resolve window — default = current month + N-1 forward months.
+        # Resolve window - default = current month + N-1 forward months.
         if not start_month or not _MONTH_RE.match(start_month):
             today = datetime.now(UTC).date()
             start_month = f"{today.year:04d}-{today.month:02d}"
@@ -4315,7 +4599,7 @@ class PropertyDevService:
 
         Source of the start-date: Plot doesn't have a ``listed_at``
         column today, so we fall back to ``created_at``. (Migrate to
-        ``listed_at`` once #138.2 lands — code is already prepared.)
+        ``listed_at`` once #138.2 lands - code is already prepared.)
         Adds a new bucket ``reserved_no_contract`` for Plots that have
         an active Reservation but no SalesContract yet.
         """
@@ -4436,7 +4720,7 @@ class PropertyDevService:
         cutoff = datetime.now(UTC) - timedelta(days=int(period_days))
         cutoff_iso = cutoff.date().isoformat()
 
-        # Stage 1 — Lead (any source, this development, created within window).
+        # Stage 1 - Lead (any source, this development, created within window).
         lead_count = (
             await self.session.execute(
                 _select(_func.count())
@@ -4446,7 +4730,7 @@ class PropertyDevService:
             )
         ).scalar_one() or 0
 
-        # Stage 2 — Reservation (plots in this dev, created within window).
+        # Stage 2 - Reservation (plots in this dev, created within window).
         res_count = (
             await self.session.execute(
                 _select(_func.count())
@@ -4457,7 +4741,7 @@ class PropertyDevService:
             )
         ).scalar_one() or 0
 
-        # Stage 3 — SPA in draft/sent/partially_signed within window.
+        # Stage 3 - SPA in draft/sent/partially_signed within window.
         spa_draft_count = (
             await self.session.execute(
                 _select(_func.count())
@@ -4468,7 +4752,7 @@ class PropertyDevService:
             )
         ).scalar_one() or 0
 
-        # Stage 4 — SPA signed (signing_date within window).
+        # Stage 4 - SPA signed (signing_date within window).
         spa_signed_count = (
             await self.session.execute(
                 _select(_func.count())
@@ -4480,7 +4764,7 @@ class PropertyDevService:
             )
         ).scalar_one() or 0
 
-        # Stage 5 — Handover completed within window.
+        # Stage 5 - Handover completed within window.
         handover_count = (
             await self.session.execute(
                 _select(_func.count())
@@ -4591,7 +4875,7 @@ class PropertyDevService:
                 }
             )
 
-        # 1) Lead — match by email, dev scope (if dev is known).
+        # 1) Lead - match by email, dev scope (if dev is known).
         lead_row = None
         if buyer.email:
             lead_stmt = (
@@ -4624,7 +4908,7 @@ class PropertyDevService:
                 entity_id=str(buyer.id),
             )
 
-        # 2) Reservation — via ContractParty? simpler: by buyer_id on Reservation.
+        # 2) Reservation - via ContractParty? simpler: by buyer_id on Reservation.
         res_stmt = _select(Reservation).where(Reservation.buyer_id == buyer_id).order_by(Reservation.created_at)
         reservations = list((await self.session.execute(res_stmt)).scalars().all())
         for res in reservations:
@@ -4713,7 +4997,7 @@ class PropertyDevService:
                     },
                 )
 
-        # 5) Handover — by plot.
+        # 5) Handover - by plot.
         if buyer.plot_id:
             handovers = await self.handovers.list_for_plot(buyer.plot_id)
             for h in handovers:
@@ -4772,7 +5056,7 @@ class PropertyDevService:
                     entity_id=str(w.id),
                 )
 
-        # Chronological sort — missing timestamps go last.
+        # Chronological sort - missing timestamps go last.
         events.sort(key=lambda e: e["timestamp"] or "9999-99-99")
         return {
             "buyer_id": buyer.id,
@@ -4785,7 +5069,7 @@ class PropertyDevService:
 
 
 # ════════════════════════════════════════════════════════════════════════
-# Task #138 — Broker / Commission / Escrow / PriceMatrix / Phase / Block
+# Task #138 - Broker / Commission / Escrow / PriceMatrix / Phase / Block
 # ════════════════════════════════════════════════════════════════════════
 
 
@@ -4922,7 +5206,7 @@ def compute_plot_price_breakdown(
     """Apply a PriceMatrix to a Plot and return the full breakdown.
 
     Result keys: ``base_price``, ``applied_rules``, ``combined_multiplier``,
-    ``final_price``. Floats are forbidden — every monetary computation
+    ``final_price``. Floats are forbidden - every monetary computation
     runs in Decimal space to avoid drift on % math.
 
     Pure: no DB / I/O.
@@ -4960,12 +5244,12 @@ def compute_plot_price_breakdown(
     }
 
 
-# ── PropertyDevService — extension methods ─────────────────────────────
+# ── PropertyDevService - extension methods ─────────────────────────────
 
 
 # We attach commission/escrow/etc methods to PropertyDevService below.
 # Done as a monkey-patch via ``setattr`` after the class body would also
-# work but a subclass-style extension is harder to test — instead we
+# work but a subclass-style extension is harder to test - instead we
 # define standalone helpers that take a ``svc`` and add bound-method
 # shims at the bottom of this file.
 
@@ -5514,7 +5798,7 @@ async def _svc_bulk_recompute_dev_prices(
         offset=0,
         limit=10_000,
     )
-    # Snapshot all needed attributes BEFORE the first update_fields call —
+    # Snapshot all needed attributes BEFORE the first update_fields call -
     # ``_BaseRepo.update_fields`` runs ``session.expire_all`` after every
     # write, which would otherwise force a lazy load on ``plot.id`` /
     # ``plot.computed_price`` from inside a non-greenlet context and
@@ -5626,8 +5910,8 @@ def _render_regulator_pdf(
 ) -> bytes:
     """Render a real PDF for a regulator quarterly disclosure.
 
-    Uses reportlab (already a hard dep). Layout is minimal but real —
-    header + project block + key metrics table — so the file is a valid,
+    Uses reportlab (already a hard dep). Layout is minimal but real -
+    header + project block + key metrics table - so the file is a valid,
     rendered PDF that opens in any reader, not an empty stub.
     """
     from io import BytesIO
@@ -5663,7 +5947,7 @@ def _render_regulator_pdf(
     styles["Italic"].fontName = BODY_FONT
     story = [
         Paragraph(
-            f"<b>{regulator} — Quarterly Disclosure ({quarter})</b>",
+            f"<b>{regulator} - Quarterly Disclosure ({quarter})</b>",
             styles["Title"],
         ),
         Spacer(1, 0.6 * cm),
@@ -5676,7 +5960,7 @@ def _render_regulator_pdf(
             styles["Normal"],
         ),
         Paragraph(
-            f"<b>Currency:</b> {summary.get('currency', '—')}",
+            f"<b>Currency:</b> {summary.get('currency', '-')}",
             styles["Normal"],
         ),
         Spacer(1, 0.4 * cm),
@@ -5775,10 +6059,10 @@ async def _svc_generate_regulator_report(
     dev, summary = await _svc_collect_regulator_summary(svc, dev_id, quarter)
     if regulator == "RERA":
         title = "RERA Dubai (DLD) Quarterly Disclosure"
-        summary["regulator_law"] = "Law No. (8) of 2007 — RERA Dubai"
+        summary["regulator_law"] = "Law No. (8) of 2007 - RERA Dubai"
     elif regulator == "MAHARERA":
-        title = "MahaRERA Form 5 — Quarterly Project Update"
-        summary["regulator_law"] = "RERA Act 2016 — MahaRERA Rule 5"
+        title = "MahaRERA Form 5 - Quarterly Project Update"
+        summary["regulator_law"] = "RERA Act 2016 - MahaRERA Rule 5"
     elif regulator == "214_FZ":
         title = "ФЗ-214 Ежеквартальный отчёт застройщика"
         summary["regulator_law"] = "ФЗ № 214 от 30.12.2004"
@@ -5997,7 +6281,7 @@ async def _svc_generate_document(
         payment_schedule = await svc.payment_schedules.get_for_contract(contract_id)
         instalments = await svc.instalments.list_for_contract(contract_id) if payment_schedule is not None else []
         parties = await svc.contract_parties.list_for_contract(contract_id)
-        # Resolve buyer rows for parties (single per-contract resolution —
+        # Resolve buyer rows for parties (single per-contract resolution -
         # no N+1 because we only fetch unique buyer_ids).
         buyer_lookup: dict[uuid.UUID, Buyer] = {}
         for p in parties:
@@ -6052,7 +6336,7 @@ async def _svc_generate_document(
         if plot is None:
             raise HTTPException(status_code=404, detail=translate("errors.plot_not_found", locale=get_locale()))
         development = await svc.developments.get_by_id(plot.development_id)
-        # The handover certificate quotes the SPA — find the most recent
+        # The handover certificate quotes the SPA - find the most recent
         # signed contract on the plot. Falls back to draft if no signed one.
         from sqlalchemy import select as _select
 
@@ -6077,7 +6361,7 @@ async def _svc_generate_document(
                 .where(_Snag.status.in_(("open", "in_progress")))
             )
             open_snags = int((await svc.session.execute(cnt_stmt)).scalar() or 0)
-        except Exception:  # noqa: BLE001 — best-effort snag count
+        except Exception:  # noqa: BLE001 - best-effort snag count
             open_snags = int(_attr(handover, "snag_count_at_handover", 0) or 0)
         return render_handover_certificate_pdf(
             handover,
@@ -6134,7 +6418,7 @@ async def _svc_generate_document(
             validity_days=int(noc_validity_days),
         )
 
-    # Unreachable — _VALID_DOC_TYPES is exhaustive.
+    # Unreachable - _VALID_DOC_TYPES is exhaustive.
     raise HTTPException(status_code=400, detail="Unhandled doc_type")  # pragma: no cover
 
 
@@ -6142,7 +6426,7 @@ PropertyDevService.generate_document = _svc_generate_document  # type: ignore[at
 
 
 # ════════════════════════════════════════════════════════════════════════
-# Inventory Map (task #142) — sales-floor block / floor / unit grid.
+# Inventory Map (task #142) - sales-floor block / floor / unit grid.
 # ════════════════════════════════════════════════════════════════════════
 #
 # The Inventory Map is the read-side fan-out of the BOQ for a residential
@@ -6150,7 +6434,7 @@ PropertyDevService.generate_document = _svc_generate_document  # type: ignore[at
 # Plot, grouped by Block, grouped by floor, coloured by status, with a
 # KPI ribbon and bulk hold / release". This is intentionally a *separate*
 # endpoint from /developments/{dev_id}/dashboard-inventory-heatmap
-# (task #140) — that one is the analytics phase->block view, this one is
+# (task #140) - that one is the analytics phase->block view, this one is
 # the sales-desk floor-by-floor view.
 
 
@@ -6176,7 +6460,7 @@ def _inventory_summary(plots: Iterable[Plot]) -> dict[str, int]:
     for plot in plots:
         out["total"] += 1
         st = plot.status or ""
-        # "available" is the union of planned + ready — these are the
+        # "available" is the union of planned + ready - these are the
         # statuses the bulk-hold endpoint will accept; we surface a
         # dedicated counter so the UI's primary KPI matches the action.
         if st in _INVENTORY_AVAILABLE_STATUSES:
@@ -6191,13 +6475,13 @@ def _derive_unit_code(plot: Plot, block_code: str | None) -> str:
 
     Falls back to ``Plot.plot_number`` when the hierarchy is incomplete
     (legacy plots without ``block_id`` / ``level_in_block``). Keeps the
-    sales-floor display deterministic — never returns an empty string.
+    sales-floor display deterministic - never returns an empty string.
     """
     if block_code and plot.level_in_block is not None and (plot.position_on_floor or plot.plot_number):
         floor_part = f"{int(plot.level_in_block):02d}"
         pos_part = (plot.position_on_floor or plot.plot_number).strip() or "00"
         return f"{block_code}-{floor_part}-{pos_part}"
-    return plot.plot_number or "—"
+    return plot.plot_number or "-"
 
 
 async def _svc_inventory_map(
@@ -6223,13 +6507,13 @@ async def _svc_inventory_map(
 
     # Bucket: block_code → floor → list[Plot].
     # ``block_code`` is None for unassigned plots; we render them last
-    # under a synthetic "—" block code.
+    # under a synthetic "-" block code.
     buckets: dict[tuple[str, str | None], dict[int, list[Plot]]] = {}
     block_meta: dict[tuple[str, str | None], dict[str, Any]] = {}
 
     for plot in plots:
         block = blocks_by_id.get(plot.block_id) if plot.block_id else None
-        block_code = (block.code if block else None) or "—"
+        block_code = (block.code if block else None) or "-"
         block_id_key = str(block.id) if block else None
         key = (block_code, block_id_key)
         if key not in block_meta:
@@ -6241,17 +6525,17 @@ async def _svc_inventory_map(
         floor = int(plot.level_in_block) if plot.level_in_block is not None else 0
         buckets.setdefault(key, {}).setdefault(floor, []).append(plot)
 
-    # Stable sort: block_code asc, but the synthetic "—" goes last.
+    # Stable sort: block_code asc, but the synthetic "-" goes last.
     def _block_key(item: tuple[str, str | None]) -> tuple[int, str]:
         code = item[0]
-        return (1 if code == "—" else 0, code)
+        return (1 if code == "-" else 0, code)
 
     block_rows: list[dict[str, Any]] = []
     for key in sorted(buckets.keys(), key=_block_key):
         meta = block_meta[key]
         floor_map = buckets[key]
         floor_rows: list[dict[str, Any]] = []
-        # Floors descending — penthouse on top of the card, matches
+        # Floors descending - penthouse on top of the card, matches
         # how every real-estate brochure prints floor plans.
         for floor in sorted(floor_map.keys(), reverse=True):
             plots_on_floor = floor_map[floor]
@@ -6315,7 +6599,7 @@ async def _svc_inventory_bulk_hold(
         If ANY plot fails the precondition checks (not in this dev, not
         available, FK violation) the SAVEPOINT rolls back and NO plot
         flips status. Rationale: a half-applied hold is worse than a
-        rejected one — the sales desk would otherwise have to manually
+        rejected one - the sales desk would otherwise have to manually
         reconcile "which 6 of 11 went through".
 
     Skipped (already-held or wrong tenant) plots are silently dropped
@@ -6323,7 +6607,7 @@ async def _svc_inventory_bulk_hold(
     show a "5 of 7 held, 2 already held" toast.
     """
     # We must verify every requested plot belongs to this dev BEFORE
-    # we mutate anything — otherwise a SAVEPOINT abort can't reverse the
+    # we mutate anything - otherwise a SAVEPOINT abort can't reverse the
     # initial check (the check itself doesn't write).
     await svc.get_development(dev_id)  # 404 if dev doesn't exist
 
@@ -6353,7 +6637,7 @@ async def _svc_inventory_bulk_hold(
             for pid in dedup_ids:
                 plot = await svc.plots.get_by_id(pid)
                 if plot is None or plot.development_id != dev_id:
-                    # Cross-tenant / unknown plot — soft-skip; we
+                    # Cross-tenant / unknown plot - soft-skip; we
                     # intentionally do NOT 404 here, because the bulk
                     # endpoint should not become a UUID-existence
                     # oracle for other tenants' inventory.
@@ -6365,19 +6649,19 @@ async def _svc_inventory_bulk_hold(
                     )
                     continue
                 if plot.status == "held":
-                    # Idempotent — already in the requested state.
+                    # Idempotent - already in the requested state.
                     skipped.append({"plot_id": str(pid), "reason": "already_held"})
                     continue
                 if plot.status not in _INVENTORY_AVAILABLE_STATUSES:
-                    # Hard reject — a reserved / sold / handed-over plot
+                    # Hard reject - a reserved / sold / handed-over plot
                     # must NOT be held; that would corrupt the sales
                     # pipeline. Raise 409 so the *whole* batch rolls back
-                    # — better to fail loud than half-apply.
+                    # - better to fail loud than half-apply.
                     raise HTTPException(
                         status_code=409,
                         detail=(f"Plot {plot.plot_number} is in status '{plot.status}' and cannot be held"),
                     )
-                # Stash hold metadata on Plot.metadata — no schema migration
+                # Stash hold metadata on Plot.metadata - no schema migration
                 # needed because metadata is JSON. Audit trail is also
                 # written below.
                 new_metadata = dict(plot.metadata_ or {})
@@ -6413,7 +6697,7 @@ async def _svc_inventory_bulk_hold(
                             "hold_until": hold_until or "",
                         },
                     )
-                except Exception:  # pragma: no cover — audit best-effort
+                except Exception:  # pragma: no cover - audit best-effort
                     logger.exception("audit log failed for inventory bulk_hold")
                     raise
     except HTTPException:
@@ -6441,9 +6725,9 @@ async def _svc_inventory_bulk_release(
     plot they already released; a noisy 409 would force them to redo
     the selection one plot at a time.
 
-    ``blocked`` plots are NEVER released by this endpoint — only an
+    ``blocked`` plots are NEVER released by this endpoint - only an
     explicit ``PATCH /plots/{id} {"status": "planned"}`` (MANAGER) lifts
-    a block. The bulk path treats them like ``reserved`` / ``sold`` —
+    a block. The bulk path treats them like ``reserved`` / ``sold`` -
     silently skipped.
     """
     await svc.get_development(dev_id)
@@ -6475,7 +6759,7 @@ async def _svc_inventory_bulk_release(
                     skipped.append({"plot_id": str(pid), "reason": "not_in_development"})
                     continue
                 if plot.status != "held":
-                    # Idempotent — anything that isn't currently held
+                    # Idempotent - anything that isn't currently held
                     # (including ``blocked``) is a soft skip.
                     skipped.append({"plot_id": str(pid), "reason": "not_held"})
                     continue
@@ -6538,7 +6822,7 @@ async def _svc_resolve_development_owner(
     """Resolve the owning ``Project.owner_id`` for the entity referenced.
 
     Used by the router for cross-tenant IDOR closure. Returns ``None``
-    when any link in the chain is missing — the router collapses that
+    when any link in the chain is missing - the router collapses that
     into a 404 so we never leak existence of other tenants' entities.
     """
     plot_id: uuid.UUID | None = None
@@ -6686,7 +6970,7 @@ async def _svc_activate_price_list(
     Wraps the two writes (supersede-others + flip-this-to-active) in
     a SAVEPOINT when one is open, falling back to back-to-back flushes
     on the outer request-scope transaction otherwise. Either way the
-    pair commits together — concurrent activations against the same
+    pair commits together - concurrent activations against the same
     development serialise on the row lock the UPDATE acquires.
     """
     pl = await svc.price_lists.get_by_id(price_list_id)
@@ -6704,7 +6988,7 @@ async def _svc_activate_price_list(
     # write the ORM expires the loaded attributes; accessing
     # ``pl.id`` / ``pl.development_id`` later would trigger an
     # implicit lazy refresh that crashes under aiosqlite
-    # (MissingGreenlet — async I/O inside a sync attribute getter).
+    # (MissingGreenlet - async I/O inside a sync attribute getter).
     pl_id = pl.id
     pl_development_id = pl.development_id
 
@@ -6712,7 +6996,7 @@ async def _svc_activate_price_list(
     # * On Postgres we wrap the supersede+activate pair in a SAVEPOINT
     #   (``begin_nested``) so a concurrent activation against the same
     #   development serialises on the row lock the UPDATE acquires.
-    # * On SQLite (local dev + tests only) we skip SAVEPOINT — aiosqlite's
+    # * On SQLite (local dev + tests only) we skip SAVEPOINT - aiosqlite's
     #   savepoint path loses the greenlet context and trips MissingGreenlet.
     #   SQLite has no concurrent-write story anyway (one writer at a time
     #   serialised by the database lock), so the pair is naturally atomic

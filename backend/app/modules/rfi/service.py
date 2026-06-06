@@ -1,4 +1,4 @@
-"""‌⁠‍RFI service — business logic for RFI management.
+"""‌⁠‍RFI service - business logic for RFI management.
 
 - Event publishing on create/update/delete
 - Structured state-change logs (R5: keys = rfi_id / project_id /
@@ -66,7 +66,7 @@ _ESCALATION_ROLES = frozenset({"admin", "manager", "owner"})
 # (status answered → open). The generic FSM table allows it as a
 # free transition because the workflow has to support "the answer was
 # wrong, let's re-open", but doing that invalidates the prior response
-# and should never be a silent EDITOR action — it's the same
+# and should never be a silent EDITOR action - it's the same
 # escalation chain as (re)assigning ball-in-court.
 _REOPEN_ROLES = frozenset({"admin", "manager", "owner"})
 
@@ -116,7 +116,7 @@ class RFIService:
         same suffix. We catch the resulting :class:`IntegrityError`, roll
         back, and retry up to ``_RFI_CREATE_MAX_RETRIES`` times. If every
         retry collides (high contention) we surface HTTP 409 so the
-        client retries — never silently writing a duplicate.
+        client retries - never silently writing a duplicate.
         """
         # Auto-set ball_in_court to assigned_to on creation
         ball_in_court = data.ball_in_court
@@ -125,10 +125,10 @@ class RFIService:
 
         # BUG-RFI-RAISED-SPOOF: ``raised_by`` is part of the audit log
         # (who filed this RFI) and must always be the authenticated
-        # caller. The Pydantic schema still exposes the field — older
+        # caller. The Pydantic schema still exposes the field - older
         # clients populate it as a convenience and some internal
         # background paths supply it explicitly when no JWT is in
-        # scope — but when a real ``user_id`` is in scope it wins
+        # scope - but when a real ``user_id`` is in scope it wins
         # unconditionally, so the wire payload cannot impersonate
         # another user. Mirrors the changeorders / variations pattern
         # (created_by is always JWT-derived).
@@ -190,6 +190,18 @@ class RFIService:
                 },
             )
 
+            # Publish rfi.created so the vector indexer embeds the new row
+            # for semantic search / the floating-chat assistant (item 16).
+            await _safe_publish(
+                "rfi.created",
+                {
+                    "project_id": str(data.project_id),
+                    "rfi_id": str(rfi.id),
+                    "rfi_number": rfi_number,
+                },
+                source_module="oe_rfi",
+            )
+
             # Publish rfi.assigned event so notification handlers fire
             if data.assigned_to:
                 await _safe_publish(
@@ -207,7 +219,7 @@ class RFIService:
 
             return rfi
 
-        # Exhausted the retry budget — surface as 409 so the client can
+        # Exhausted the retry budget - surface as 409 so the client can
         # back off and retry rather than silently failing.
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -255,12 +267,12 @@ class RFIService:
 
         R5 / BUG-RFI-ROLE: only ``admin`` / ``manager`` / ``owner`` may
         change ``assigned_to``. An editor that attempts to reassign gets
-        a clean 403 — the rest of the payload is still rejected wholesale
+        a clean 403 - the rest of the payload is still rejected wholesale
         (atomicity) so the caller never gets a partial update.
 
         ``actor_role`` is plumbed through from the router so the service
         can enforce the gate without re-reading the JWT. ``None`` means
-        the caller is internal (no router-supplied role) — internal
+        the caller is internal (no router-supplied role) - internal
         callers bypass the role check; in practice only background
         subscribers like event handlers reach this path.
         """
@@ -311,7 +323,7 @@ class RFIService:
             # mechanical transition; the role gate keeps it scoped to
             # MANAGER+ so a junior estimator can't quietly invalidate a
             # vetted answer. ``actor_role=None`` means an internal
-            # caller (no JWT in scope) — those bypass the check, same
+            # caller (no JWT in scope) - those bypass the check, same
             # convention as the assigner gate above.
             if (
                 rfi.status == "answered"
@@ -364,6 +376,18 @@ class RFIService:
         else:
             logger.info("rfi.updated", extra=log_extra)
 
+        # Publish rfi.updated so the vector indexer re-embeds the edited
+        # row (subject / question / response may have changed) - item 16.
+        await _safe_publish(
+            "rfi.updated",
+            {
+                "project_id": project_id_s,
+                "rfi_id": str(rfi_id),
+                "rfi_number": rfi_number_s,
+            },
+            source_module="oe_rfi",
+        )
+
         # Fire rfi.assigned when assigned_to changes to a new user
         if new_assigned is not None and str(new_assigned) != old_assigned:
             await _safe_publish(
@@ -392,6 +416,16 @@ class RFIService:
                 "actor": actor_id,
             },
         )
+        # Publish rfi.deleted so the vector indexer drops the embedding for
+        # the removed row (item 16).
+        await _safe_publish(
+            "rfi.deleted",
+            {
+                "project_id": project_id_s,
+                "rfi_id": str(rfi_id),
+            },
+            source_module="oe_rfi",
+        )
 
     async def respond_to_rfi(
         self,
@@ -415,7 +449,7 @@ class RFIService:
         2. an ``admin`` / ``manager`` / ``owner`` (escalation chain).
 
         Unassigned RFIs (``assigned_to IS NULL``) can be answered by any
-        caller with ``rfi.respond`` — the router permission already
+        caller with ``rfi.respond`` - the router permission already
         covers the coarse gate there. Refusing with 403 (not 404) so the
         assignee knows the RFI exists; the IDOR concern is already
         neutralised by ``verify_project_access`` at the router boundary.
@@ -423,7 +457,7 @@ class RFIService:
         rfi = await self.get_rfi(rfi_id)
         # BUG-RFI-FSM-RESPOND: ``respond_to_rfi`` used to block only
         # ``closed`` / ``void``, which silently let a ``draft`` (or
-        # already-``answered``) RFI leap straight to ``answered`` —
+        # already-``answered``) RFI leap straight to ``answered`` -
         # bypassing the documented ``draft → open → answered`` flow
         # and overwriting any prior response without a state-change
         # log entry. We now constrain the transition to the single
@@ -467,7 +501,7 @@ class RFIService:
         )
         fresh = await self.repo.get_by_id(rfi_id)
 
-        # Epic H — universal audit trail. Service-layer log so the row
+        # Epic H - universal audit trail. Service-layer log so the row
         # lands in the same transaction as the business write; on
         # rollback the audit row goes with it.
         from app.core.audit_log import log_activity as _log_activity
@@ -587,6 +621,142 @@ class RFIService:
         )
         return fresh or rfi
 
+    async def start_approval(
+        self,
+        rfi_id: uuid.UUID,
+        route_id: uuid.UUID,
+        *,
+        started_by: str | None = None,
+    ) -> Any:
+        """Start a routed approval workflow against this RFI (feature 06).
+
+        Delegates to the generic ``approval_routes`` engine, which validates
+        the route is active, that its ``target_kind`` is ``rfi``, that it has
+        steps, and that no workflow is already pending on this target (409).
+
+        The natural pre-state for a routed RFI sign-off is ``open`` (the
+        question is live and now needs a routed sign-off on the answer). A
+        ``draft`` RFI is moved ``draft -> open`` through the existing FSM
+        before the workflow starts; an RFI already ``open`` / ``answered``
+        is left where it is. The instance id is recorded in
+        ``metadata_["approval_instance_id"]`` for deep-linking. The FSM
+        transition and the instance insert share this request session.
+
+        Returns the created approval ``Instance``.
+        """
+        from app.modules.approval_routes.schemas import InstanceCreate
+        from app.modules.approval_routes.service import ApprovalRouteService
+
+        rfi = await self.get_rfi(rfi_id)
+        if rfi.status in ("closed", "void"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(f"Cannot start an approval workflow on an RFI with status '{rfi.status}'."),
+            )
+
+        engine = ApprovalRouteService(self.session)
+        instance = await engine.start_instance(
+            InstanceCreate(
+                route_id=route_id,
+                target_kind="rfi",
+                target_id=rfi_id,
+            ),
+            started_by=uuid.UUID(started_by) if started_by else None,
+        )
+
+        # Move a draft RFI open through the existing FSM gate. ``actor_role``
+        # is the caller's role so the gate behaves exactly as a normal update.
+        if rfi.status == "draft":
+            await self.update_rfi(
+                rfi_id,
+                RFIUpdate(status="open"),
+                actor_id=started_by,
+            )
+
+        fresh = await self.get_rfi(rfi_id)
+        meta = dict(getattr(fresh, "metadata_", {}) or {})
+        meta["approval_instance_id"] = str(instance.id)
+        await self.repo.update_fields(rfi_id, metadata_=meta)
+
+        return instance
+
+    async def get_latest_approval(self, rfi_id: uuid.UUID) -> Any:
+        """Return the most recent approval instance for this RFI, or None."""
+        from app.modules.approval_routes.service import ApprovalRouteService
+
+        await self.get_rfi(rfi_id)
+        engine = ApprovalRouteService(self.session)
+        instances = await engine.list_instances(
+            target_kind="rfi",
+            target_id=rfi_id,
+            limit=1,
+        )
+        return instances[0] if instances else None
+
+    async def apply_approval_decision(
+        self,
+        rfi_id: uuid.UUID,
+        *,
+        decision: str,
+        decided_by: str | None,
+        comment: str | None = None,
+    ) -> RFI | None:
+        """Drive the RFI FSM from a terminal routed approval decision.
+
+        Conservative by design (the RFI FSM and the approval FSM are
+        orthogonal): the subscriber only ever drives transitions the
+        existing FSM already allows, so it can never corrupt state.
+
+        * ``approved`` and the RFI is ``open`` with an ``official_response``
+          already recorded → close the loop by moving it to ``answered``
+          through the existing ``respond_to_rfi`` path (re-affirms the
+          recorded answer and flips ball-in-court). When no response exists
+          yet the answer flow is left to the human and this is a no-op.
+        * ``rejected`` and the RFI is ``answered`` → reopen via the
+          manager-gated ``answered -> open`` path (``actor_role=None`` is an
+          internal caller and bypasses the role gate) with the step comment
+          as the reason, so the prior answer is sent back.
+
+        Any other state is a deliberate no-op.
+        """
+        rfi = await self.get_rfi(rfi_id)
+
+        if decision == "approved":
+            if rfi.status == "open" and rfi.official_response:
+                return await self.respond_to_rfi(
+                    rfi_id,
+                    rfi.official_response,
+                    responded_by=decided_by or (str(rfi.assigned_to) if rfi.assigned_to else ""),
+                    actor_role=None,  # internal caller - bypasses the assignee gate
+                )
+            logger.info(
+                "RFI %s approval completed but status=%s / response=%s - no FSM transition applied",
+                rfi_id,
+                rfi.status,
+                bool(rfi.official_response),
+            )
+            return None
+
+        if decision == "rejected":
+            if rfi.status == "answered":
+                meta = dict(getattr(rfi, "metadata_", {}) or {})
+                if comment:
+                    meta["approval_reject_reason"] = comment
+                return await self.update_rfi(
+                    rfi_id,
+                    RFIUpdate(status="open", metadata=meta),
+                    actor_id=decided_by,
+                    actor_role=None,  # internal caller - bypasses the reopen role gate
+                )
+            logger.info(
+                "RFI %s approval rejected but status=%s - no FSM transition applied",
+                rfi_id,
+                rfi.status,
+            )
+            return None
+
+        return None
+
     async def add_attachment(
         self,
         rfi_id: uuid.UUID,
@@ -654,7 +824,7 @@ class RFIService:
             # Overdue = open/draft + past due date. Use the same
             # ``now > midnight(due)`` rule the row/detail view applies
             # (router._compute_rfi_fields) so the stat tile and the list never
-            # disagree for an RFI due *today* — a naive ``due_str < today_str``
+            # disagree for an RFI due *today* - a naive ``due_str < today_str``
             # string compare treated "due today" as not-overdue while the list
             # treated it as overdue.
             if rfi.status in ("draft", "open") and rfi.response_due_date:

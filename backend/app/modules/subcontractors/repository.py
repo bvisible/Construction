@@ -25,7 +25,7 @@ from app.modules.subcontractors.models import (
 
 
 class _BaseRepo:
-    """‌⁠‍Shared CRUD primitives — keeps the per-entity repos compact."""
+    """‌⁠‍Shared CRUD primitives - keeps the per-entity repos compact."""
 
     model: type[Any]
 
@@ -74,7 +74,7 @@ class SubcontractorRepository(_BaseRepo):
         if prequalification_status is not None:
             base = base.where(Subcontractor.prequalification_status == prequalification_status)
         if trade_category is not None:
-            # JSON contains check — keep simple/portable: load and filter in Python
+            # JSON contains check - keep simple/portable: load and filter in Python
             # for cross-dialect parity. For the typical N≤1000 catalogue this is
             # cheap and correct on both SQLite and Postgres.
             pass
@@ -97,7 +97,7 @@ class SubcontractorRepository(_BaseRepo):
         """Look up an active subcontractor by ``(country, tax_id)``.
 
         Used by ``SubcontractorService.create_subcontractor`` for the
-        happy-path 409 — backed by the partial unique index added in
+        happy-path 409 - backed by the partial unique index added in
         ``v3099_subcontractors_unique_tax_id``.
         """
         if not tax_id:
@@ -111,6 +111,28 @@ class SubcontractorRepository(_BaseRepo):
         stmt = stmt.limit(1)
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
+    async def get_by_contact_id(self, contact_id: uuid.UUID) -> Subcontractor | None:
+        """Resolve the subcontractor linked to a CRM ``Contact`` row.
+
+        The unified vendor master is the existing ``Subcontractor.contact_id``
+        column (it points at the same ``oe_contacts_contact`` row a
+        procurement PO references via ``vendor_contact_id``). This lets the
+        procurement gate and the PO-row badge look up a vendor's
+        prequalification / block status from a contact id without a second
+        link table. Returns the active match, newest first, or ``None`` when
+        the contact is not a registered subcontractor.
+        """
+        stmt = (
+            select(Subcontractor)
+            .where(
+                Subcontractor.contact_id == contact_id,
+                Subcontractor.is_active.is_(True),
+            )
+            .order_by(Subcontractor.created_at.desc())
+            .limit(1)
+        )
+        return (await self.session.execute(stmt)).scalar_one_or_none()
+
     async def list_with_insurance_expiry_within(
         self,
         *,
@@ -119,7 +141,7 @@ class SubcontractorRepository(_BaseRepo):
     ) -> list[Subcontractor]:
         """Return subs whose ``insurance_expiry_date`` is on/before ``upper_bound``.
 
-        This includes already-past expiries — the sweep surfaces both
+        This includes already-past expiries - the sweep surfaces both
         "expiring soon" and "already expired" so the GC can chase
         renewals on a single list.  Subs whose expiry is NULL are NOT
         included (they need a separate "missing insurance" report).
@@ -311,6 +333,21 @@ class PaymentApplicationRepository(_BaseRepo):
         return int((await self.session.execute(stmt)).scalar_one() or 0)
 
     async def next_application_number(self, agreement_id: uuid.UUID) -> str:
+        """Mint the next ``PA-NNNN`` number for an agreement.
+
+        Two concurrent ``submit_payment_application`` calls on the same
+        agreement would otherwise both read the same ``COUNT(*)`` and mint
+        identical application numbers. To serialise them, take an exclusive
+        row lock on the parent agreement first: the lock is held until the
+        surrounding transaction commits, so a second concurrent transaction
+        blocks here until the first has flushed its new payment row and then
+        sees the updated count. Mirrors the ``with_for_update`` pattern used
+        in cde/repository.py (``FOR UPDATE`` is honoured on PostgreSQL, the
+        only supported backend).
+        """
+        lock_stmt = select(SubcontractAgreement.id).where(SubcontractAgreement.id == agreement_id).with_for_update()
+        await self.session.execute(lock_stmt)
+
         stmt = (
             select(func.count()).select_from(PaymentApplication).where(PaymentApplication.agreement_id == agreement_id)
         )

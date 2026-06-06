@@ -1,4 +1,4 @@
-"""‌⁠‍Format classifier for BIM requirement files.
+"""Format classifier for BIM requirement files.
 
 Auto-detects the file format from extension and content sniffing.
 """
@@ -10,19 +10,19 @@ logger = logging.getLogger(__name__)
 
 
 class FormatClassifier:
-    """‌⁠‍Automatically detect the format of a BIM requirements file."""
+    """Automatically detect the format of a BIM requirements file."""
 
     def classify(self, file_path: Path) -> str:
-        """‌⁠‍Classify the file format.
+        """Classify the file format.
 
         Args:
             file_path: Path to the file to classify.
 
         Returns:
-            Format string. Strongly-typed labels — 'IDS', 'COBie', 'BIMQ',
-            'Excel', 'RevitSP' — map to a dedicated parser. Loosely-detected
-            labels — 'GenericXML', 'MVD', 'ArchiCAD', 'GenericJSON',
-            'PlainText' — are *also* handled: ``service._get_parser`` routes
+            Format string. Strongly-typed labels - 'IDS', 'COBie', 'BIMQ',
+            'Excel', 'RevitSP' - map to a dedicated parser. Loosely-detected
+            labels - 'GenericXML', 'MVD', 'ArchiCAD', 'GenericJSON',
+            'PlainText' - are *also* handled: ``service._get_parser`` routes
             them to the closest content-compatible parser as a best effort
             (any XML → IDS, any JSON → BIMQ, text → RevitSP) so a valid
             generic requirements export is not rejected with a blanket 422

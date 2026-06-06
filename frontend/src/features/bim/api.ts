@@ -8,7 +8,15 @@
  *   GET  /v1/bim_hub/models/{id}/geometry   — serve DAE geometry file
  */
 
-import { apiGet, apiPost, apiPatch, apiDelete, extractErrorMessageFromBody } from '@/shared/lib/api';
+import {
+  apiGet,
+  apiPost,
+  apiPatch,
+  apiDelete,
+  extractErrorMessageFromBody,
+  triggerDownload,
+  getAuthToken,
+} from '@/shared/lib/api';
 import { isModuleLoaded } from '@/shared/lib/moduleProbe';
 import { useAuthStore } from '@/stores/useAuthStore';
 import type { BIMElementData, BIMModelData } from '@/shared/ui/BIMViewer';
@@ -34,6 +42,67 @@ export interface BIMModelsResponse {
 export interface BIMElementsResponse {
   items: BIMElementData[];
   total: number;
+}
+
+/** One enriched element row carrying just the fields the "By progress"
+ *  3D overlay needs: the element id and its `current_pct` — the latest
+ *  percent-complete (0-100) of the BOQ position(s) it links to, computed
+ *  by the backend as the MAX across linked positions. `null` means the
+ *  element is unlinked or no progress has been recorded yet. */
+export interface BIMElementProgressRow {
+  id: string;
+  current_pct: number | null;
+  /** ISO-8601 recorded date of the headline progress entry (the same entry
+   *  whose percentage is `current_pct`). `null` when there's no linked
+   *  progress or the winning entry carries no recorded date. Drives the
+   *  "as of <date>" line in the selected-element info panel. */
+  current_pct_date: string | null;
+}
+
+export interface BIMElementProgressResponse {
+  items: BIMElementProgressRow[];
+  total: number;
+}
+
+/** Fetch the latest BOQ progress per element for a model.
+ *
+ *  Uses the enriched element listing (`skeleton=false`) so the backend
+ *  resolves each element's BOQ links and folds the latest
+ *  `ProgressEntry.percent_complete` onto `current_pct`. We only keep the
+ *  `id` + `current_pct` pair here — the heavy property / relation payload
+ *  is discarded — so the caller gets a compact map to drive the 3D
+ *  colour ramp. Paginated server-side at 2000/page; we walk every page
+ *  so the overlay covers the whole model. */
+export async function fetchBIMElementProgress(
+  modelId: string,
+): Promise<BIMElementProgressResponse> {
+  const pageSize = 2000;
+  const rows: BIMElementProgressRow[] = [];
+  let offset = 0;
+  let total = 0;
+  // Bound the walk defensively so a backend that ignores pagination can
+  // never spin us forever (models cap well under 200k elements).
+  for (let page = 0; page < 200; page += 1) {
+    const params = new URLSearchParams({
+      limit: String(pageSize),
+      offset: String(offset),
+    });
+    const resp = await apiGet<{
+      items: Array<{ id: string; current_pct?: number | null; current_pct_date?: string | null }>;
+      total: number;
+    }>(`/v1/bim_hub/models/${encodeURIComponent(modelId)}/elements/?${params.toString()}`);
+    total = resp.total;
+    for (const item of resp.items) {
+      rows.push({
+        id: item.id,
+        current_pct: item.current_pct ?? null,
+        current_pct_date: item.current_pct_date ?? null,
+      });
+    }
+    offset += pageSize;
+    if (resp.items.length < pageSize || offset >= total) break;
+  }
+  return { items: rows, total };
 }
 
 export interface BIMUploadResponse {
@@ -764,7 +833,7 @@ export async function resolveElementUUID(
   };
   if (!ref.meshRef && !ref.stableId) {
     throw new Error(
-      'This mesh has no Revit ElementId — cannot persist it. ' +
+      'This mesh has no Revit ElementId - cannot persist it. ' +
         'Re-upload the model so the viewer can attach a stable reference.',
     );
   }
@@ -1384,19 +1453,144 @@ export async function deleteBIMRequirementSet(setId: string): Promise<void> {
   await apiDelete(`/v1/bim_requirements/sets/${encodeURIComponent(setId)}/`);
 }
 
-/** Download the BIM requirements Excel template URL. */
+/** Download the BIM requirements Excel template URL.
+ *  @deprecated A bare `<a href>` to this GET endpoint sends no Authorization
+ *  header and 401s. Use {@link downloadBIMRequirementsTemplate} instead. */
 export function bimRequirementsTemplateUrl(): string {
   return '/api/v1/bim_requirements/template/';
 }
 
-/** Export a BIM requirement set as Excel (returns action URL for POST). */
+/** Export a BIM requirement set as Excel (returns action URL for POST).
+ *  @deprecated The endpoint is POST-only and auth is Bearer-only, so a
+ *  plain `<a href>` 405s/401s. Use {@link exportBIMRequirementSetExcel}. */
 export function bimRequirementsExportExcelUrl(setId: string, language = 'en'): string {
   return `/api/v1/bim_requirements/export/${encodeURIComponent(setId)}/excel/?language=${language}`;
 }
 
-/** Export a BIM requirement set as IDS XML (returns action URL for POST). */
+/** Export a BIM requirement set as IDS XML (returns action URL for POST).
+ *  @deprecated POST-only + Bearer-only auth. Use {@link exportBIMRequirementSetIds}. */
 export function bimRequirementsExportIdsUrl(setId: string): string {
   return `/api/v1/bim_requirements/export/${encodeURIComponent(setId)}/ids/`;
+}
+
+/** Pull a filename out of a Content-Disposition header, falling back to a
+ *  caller-supplied default. Shared by the three requirement downloads. */
+function filenameFromContentDisposition(resp: Response, fallback: string): string {
+  const cd = resp.headers.get('content-disposition') || '';
+  const match = cd.match(/filename="?([^";]+)"?/i);
+  return match?.[1] || fallback;
+}
+
+/** Common authenticated-blob fetch for the requirement export/template
+ *  endpoints. These are POST-only (export) or auth-guarded GET (template);
+ *  a bare anchor click carries no Bearer token, so we fetch the blob with
+ *  the JWT ourselves and trigger a synthetic download. Throws on HTTP
+ *  error with the backend's message when available. */
+async function downloadRequirementBlob(
+  url: string,
+  method: 'GET' | 'POST',
+  fallbackName: string,
+): Promise<void> {
+  const token = getAuthToken();
+  const headers: Record<string, string> = { Accept: '*/*' };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  const init: RequestInit = { method, headers };
+  if (method === 'POST') {
+    headers['Content-Type'] = 'application/json';
+    init.body = '{}';
+  }
+  const resp = await fetch(url, init);
+  if (!resp.ok) {
+    let detail = `Download failed (HTTP ${resp.status})`;
+    try {
+      const body = await resp.json();
+      detail = extractErrorMessageFromBody(body) ?? detail;
+    } catch {
+      /* ignore parse errors — keep the HTTP-status fallback */
+    }
+    throw new Error(detail);
+  }
+  const blob = await resp.blob();
+  triggerDownload(blob, filenameFromContentDisposition(resp, fallbackName));
+}
+
+/** Download the BIM requirements Excel template via an authenticated fetch. */
+export async function downloadBIMRequirementsTemplate(): Promise<void> {
+  await downloadRequirementBlob(
+    bimRequirementsTemplateUrl(),
+    'GET',
+    'bim_requirements_template.xlsx',
+  );
+}
+
+/** Export a requirement set as a formatted Excel file (authenticated POST). */
+export async function exportBIMRequirementSetExcel(
+  setId: string,
+  filename: string,
+  language = 'en',
+): Promise<void> {
+  await downloadRequirementBlob(
+    bimRequirementsExportExcelUrl(setId, language),
+    'POST',
+    `${filename || 'requirements'}.xlsx`,
+  );
+}
+
+/** Export a requirement set as IDS XML (authenticated POST). */
+export async function exportBIMRequirementSetIds(
+  setId: string,
+  filename: string,
+): Promise<void> {
+  await downloadRequirementBlob(
+    bimRequirementsExportIdsUrl(setId),
+    'POST',
+    `${filename || 'requirements'}.ids`,
+  );
+}
+
+/* ── BIM Requirements — model compliance validation ─────────────────── */
+
+/** One requirement's outcome when a set is validated against a BIM model.
+ *  Mirrors backend ``RequirementCheckResult``. */
+export interface BIMRequirementCheckResult {
+  requirement_id: string;
+  property_group: string | null;
+  property_name: string;
+  element_filter: Record<string, unknown>;
+  constraint_def: Record<string, unknown>;
+  /** "pass" | "fail" | "not_applicable". */
+  status: string;
+  matched_elements: number;
+  compliant_elements: number;
+  non_compliant_elements: number;
+  details: string;
+}
+
+/** Compliance report for a requirement set checked against a BIM model.
+ *  Mirrors backend ``RequirementValidationResponse``. */
+export interface BIMRequirementValidationResult {
+  requirement_set_id: string;
+  requirement_set_name: string;
+  model_id: string;
+  total_requirements: number;
+  passed: number;
+  failed: number;
+  not_applicable: number;
+  compliance_ratio: number;
+  results: BIMRequirementCheckResult[];
+}
+
+/** Validate a BIM model's elements against a requirement set. Calls the
+ *  real ``POST /validate/{set_id}/?model_id=...`` endpoint and returns the
+ *  pass/fail/not-applicable compliance report. */
+export async function validateBIMRequirementSet(
+  setId: string,
+  modelId: string,
+): Promise<BIMRequirementValidationResult> {
+  return apiPost<BIMRequirementValidationResult>(
+    `/v1/bim_requirements/validate/${encodeURIComponent(setId)}/?model_id=${encodeURIComponent(modelId)}`,
+    {},
+  );
 }
 
 /* ── Asset Register (v2.3.0) ──────────────────────────────────────────── */

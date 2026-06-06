@@ -10,7 +10,15 @@
  * aliases at the bottom so any in-flight call sites still type-check.
  */
 
-import { apiGet, apiPost, apiPatch, apiDelete } from '@/shared/lib/api';
+import {
+  apiGet,
+  apiPost,
+  apiPatch,
+  apiPut,
+  apiDelete,
+  getAuthToken,
+  triggerDownload,
+} from '@/shared/lib/api';
 
 /* ── Enums / unions ───────────────────────────────────────────────────── */
 
@@ -21,7 +29,8 @@ export type ContractType =
   | 'tm'
   | 'unit_price'
   | 'design_build'
-  | 'combination';
+  | 'combination'
+  | 'remeasurement';
 
 export type CounterpartyType = 'client' | 'subcontractor';
 
@@ -427,6 +436,83 @@ export function listClaimLines(claimId: string): Promise<ProgressClaimLine[]> {
   return safeGetList<ProgressClaimLine>(`/v1/contracts/progress-claims/${claimId}/lines`);
 }
 
+export function updateClaimLine(
+  lineId: string,
+  data: {
+    period_completed_qty?: number;
+    period_completed_value?: number;
+    period_completed_pct?: number;
+    cumulative_completed_value?: number;
+  },
+): Promise<ProgressClaimLine> {
+  return apiPatch<ProgressClaimLine>(
+    `/v1/contracts/progress-claim-lines/${lineId}`,
+    data,
+  );
+}
+
+/* ── Progress bridge (Gap I) ──────────────────────────────────────────── */
+
+export interface ProgressClaimPopulatePreviewItem {
+  contract_line_id: string;
+  contract_line_code: string;
+  contract_line_description: string;
+  boq_position_id: string;
+  unit: string | null;
+  contract_quantity: number | string;
+  contract_line_value: number | string;
+  observed_pct: number | string;
+  period_label: string | null;
+  recorded_at: string | null;
+  period_completed_qty: number | string;
+  period_completed_value: number | string;
+  cumulative_completed_value: number | string;
+}
+
+export interface ProgressClaimPopulatePreview {
+  claim_id: string;
+  contract_id: string;
+  currency: string;
+  items: ProgressClaimPopulatePreviewItem[];
+  skipped_unlinked: number;
+  skipped_no_progress: number;
+  skipped_foreign_currency: number;
+  gross: number | string;
+  retention: number | string;
+  prior_claims_total: number | string;
+  net_due: number | string;
+}
+
+export interface ProgressClaimCommitLine {
+  contract_line_id: string;
+  period_completed_pct: number;
+  period_completed_value?: number;
+}
+
+/** Read-only preview of the claim lines derived from progress observations. */
+export function populateClaimPreview(
+  claimId: string,
+  boqPositionIds?: string[],
+): Promise<ProgressClaimPopulatePreview> {
+  const qs = new URLSearchParams();
+  (boqPositionIds ?? []).forEach((id) => qs.append('boq_position_ids', id));
+  const suffix = qs.toString() ? `?${qs.toString()}` : '';
+  return apiGet<ProgressClaimPopulatePreview>(
+    `/v1/contracts/progress-claims/${claimId}/populate-from-progress${suffix}`,
+  );
+}
+
+/** Commit a populated / edited set of claim lines; server re-rolls totals. */
+export function commitClaimLines(
+  claimId: string,
+  lines: ProgressClaimCommitLine[],
+): Promise<ProgressClaimItem> {
+  return apiPut<ProgressClaimItem>(
+    `/v1/contracts/progress-claims/${claimId}/commit-populated-lines`,
+    { lines },
+  );
+}
+
 /* ── Retention schedule ───────────────────────────────────────────────── */
 
 export function getRetentionSchedule(scheduleId: string): Promise<RetentionScheduleItem> {
@@ -515,6 +601,188 @@ export interface ClauseTemplate {
 
 export function listClauseTemplates(): Promise<ClauseTemplate[]> {
   return safeGetList<ClauseTemplate>('/v1/contracts/contract-templates/');
+}
+
+/* ── Compliance gate (Item #27) ───────────────────────────────────────── */
+
+export interface ComplianceViolation {
+  rule_id: string;
+  rule_name: string;
+  severity: 'error' | 'warning' | 'info';
+  message: string;
+  element_ref: string | null;
+  suggestion: string | null;
+}
+
+export interface ComplianceGateReport {
+  contract_id: string;
+  contract_status: ContractStatus;
+  rule_packs: string[];
+  rule_sets: string[];
+  status: 'passed' | 'warnings' | 'errors' | 'skipped';
+  score: number | null;
+  blocked: boolean;
+  counts: { errors: number; warnings: number; passed: number };
+  errors: ComplianceViolation[];
+  warnings: ComplianceViolation[];
+}
+
+/** Shape of the structured 422 body returned when the sign gate blocks. */
+export interface ComplianceGateError {
+  error: 'compliance_gate_failed';
+  message: string;
+  rule_packs: string[];
+  rule_sets: string[];
+  status: 'passed' | 'warnings' | 'errors' | 'skipped';
+  score: number | null;
+  counts: { errors: number; warnings: number; passed: number };
+  errors: ComplianceViolation[];
+  warnings: ComplianceViolation[];
+}
+
+export interface ComplianceRulePack {
+  id: string;
+  name: string;
+  description?: string;
+  jurisdiction: string | null;
+  enforced_workflows: string[];
+  rule_sets: string[];
+}
+
+/** Read-only preview of the compliance gate (does not transition the contract). */
+export function previewComplianceGate(
+  contractId: string,
+): Promise<ComplianceGateReport> {
+  return apiGet<ComplianceGateReport>(
+    `/v1/contracts/contracts/${contractId}/compliance-gate`,
+  );
+}
+
+/** List the jurisdiction compliance rule-pack catalogue. */
+export function listComplianceRulePacks(): Promise<ComplianceRulePack[]> {
+  return safeGetList<ComplianceRulePack>('/v1/contracts/compliance-rule-packs/');
+}
+
+/**
+ * Narrow a thrown {@link ApiError} body to a {@link ComplianceGateError}.
+ *
+ * The sign endpoint returns HTTP 422 with this structured detail when the
+ * compliance gate blocks. Returns the parsed detail or `null` when the error
+ * is something else (so the caller can fall back to a plain toast).
+ */
+export function asComplianceGateError(err: unknown): ComplianceGateError | null {
+  if (!err || typeof err !== 'object') return null;
+  const body = (err as { body?: unknown }).body;
+  const detail =
+    body && typeof body === 'object'
+      ? (body as { detail?: unknown }).detail
+      : undefined;
+  if (
+    detail &&
+    typeof detail === 'object' &&
+    (detail as { error?: unknown }).error === 'compliance_gate_failed'
+  ) {
+    return detail as ComplianceGateError;
+  }
+  return null;
+}
+
+/* ── AIA G702/G703 payment applications (US/CA/AU only) ───────────────── */
+//
+// These mirror the backend AIAApplicationResponse / AIAG702Summary /
+// AIAG703Line / AIACertification schemas. The endpoints are country-gated on
+// the server (404 for non-US/CA/AU projects), and the UI is additionally gated
+// off project.is_aia_eligible so it never renders elsewhere.
+
+export interface AIAG703Line {
+  line_number: number;
+  item_number: string;
+  description: string;
+  scheduled_value: string;
+  previous_value: string;
+  this_period_value: string;
+  materials_stored: string;
+  total_completed_stored: string;
+  percent_complete: string;
+  balance_to_finish: string;
+  retainage: string;
+}
+
+export interface AIAG702Summary {
+  original_contract_sum: string;
+  change_orders_net: string;
+  contract_sum_to_date: string;
+  total_completed_stored: string;
+  retainage: string;
+  total_earned_less_retainage: string;
+  previous_certificates_total: string;
+  current_payment_due: string;
+  balance_to_finish: string;
+}
+
+export interface AIACertification {
+  architect_certified_at?: string | null;
+  architect_certified_by?: string | null;
+  owner_certified_at?: string | null;
+  owner_certified_by?: string | null;
+  certified_amount?: string | null;
+}
+
+export interface AIAApplication {
+  claim_id: string;
+  contract_id: string;
+  project_id: string;
+  application_number: string;
+  period_start?: string | null;
+  period_end?: string | null;
+  claim_date?: string | null;
+  currency: string;
+  claim_status: ClaimStatus;
+  retainage_percent: string;
+  summary: AIAG702Summary;
+  lines: AIAG703Line[];
+  certification: AIACertification;
+}
+
+/**
+ * Fetch the AIA G702 summary + G703 continuation for a progress claim.
+ *
+ * The backend raises 404 for non-US/CA/AU projects, so callers must only hit
+ * this when {@link Project.is_aia_eligible} is true.
+ */
+export function getAiaApplication(claimId: string): Promise<AIAApplication> {
+  return apiGet<AIAApplication>(
+    `/v1/contracts/progress-claims/${encodeURIComponent(claimId)}/aia-application`,
+  );
+}
+
+/**
+ * Download the AIA G702/G703 application as a PDF.
+ *
+ * Mirrors the blob-download pattern used by the BOQ / Daily-Diary exports:
+ * fetch with the stored bearer token, then stream the response to a file.
+ */
+export async function downloadAiaApplicationPdf(
+  claimId: string,
+  applicationNumber?: string,
+): Promise<void> {
+  const token = getAuthToken();
+  const res = await fetch(
+    `/api/v1/contracts/progress-claims/${encodeURIComponent(claimId)}/aia-application/pdf`,
+    { headers: token ? { Authorization: `Bearer ${token}` } : {} },
+  );
+  if (!res.ok) {
+    let message = `Export failed (${res.status})`;
+    try {
+      const body = await res.json();
+      if (body?.detail) message = String(body.detail);
+    } catch {
+      // Non-JSON error body — keep the status-code message.
+    }
+    throw new Error(message);
+  }
+  const blob = await res.blob();
+  triggerDownload(blob, `AIA_G702_${applicationNumber || claimId}.pdf`);
 }
 
 /* ── Back-compat aliases (old skeleton names) ─────────────────────────── */

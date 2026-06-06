@@ -4,7 +4,6 @@ import { useTranslation } from 'react-i18next';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Bot,
   AlertCircle,
   Loader2,
   Play,
@@ -19,18 +18,23 @@ import clsx from 'clsx';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { useToastStore } from '@/stores/useToastStore';
 import { useConfirm } from '@/shared/hooks/useConfirm';
-import { SkeletonCard, EmptyState, ConfirmDialog } from '@/shared/ui';
+import { SkeletonCard, EmptyState, ConfirmDialog, Button, DismissibleInfo, IntroRichText } from '@/shared/ui';
+import { PageHeader } from '@/shared/ui/PageHeader';
 import {
   aiAgentsApi,
   type AgentDescriptor,
   type AgentRun,
   type CustomAgent,
-  type CustomAgentInput,
 } from './api';
 import { AgentGallery } from './components/AgentGallery';
-import { CustomAgentBuilder } from './components/CustomAgentBuilder';
+import {
+  CustomAgentBuilder,
+  type BuilderSchedule,
+  type BuilderSubmit,
+} from './components/CustomAgentBuilder';
 import { RunTimeline } from './components/RunTimeline';
 import { RecentRunsList } from './components/RecentRunsList';
+import { AutomatedRunsPanel } from './components/AutomatedRunsPanel';
 import {
   agentDisplayName,
   agentTagline,
@@ -50,6 +54,12 @@ export function AgentsPage(): JSX.Element {
   // Custom-agent builder modal state. `builderEditing` null + open = create.
   const [builderOpen, setBuilderOpen] = useState(false);
   const [builderEditing, setBuilderEditing] = useState<CustomAgent | null>(null);
+  // Automation (Item 29) pre-load for the builder when editing an agent.
+  const [builderSchedule, setBuilderSchedule] = useState<BuilderSchedule | null>(null);
+  const [builderNextRunAt, setBuilderNextRunAt] = useState<string | null>(null);
+  const [builderTools, setBuilderTools] = useState<string[]>([]);
+  const [builderTriggers, setBuilderTriggers] = useState<string[]>([]);
+  const [loadingAutomation, setLoadingAutomation] = useState(false);
 
   const [selected, setSelected] = useState<AgentDescriptor | null>(null);
   const [userInput, setUserInput] = useState('');
@@ -74,6 +84,32 @@ export function AgentsPage(): JSX.Element {
   const agentsQuery = useQuery({
     queryKey: ['ai-agents', 'list'],
     queryFn: () => aiAgentsApi.listAgents(),
+  });
+
+  // Tool catalogue (with required permissions) for the builder's Tools panel.
+  // Only fetched while the builder is open to keep the page lean.
+  const toolsCatalogueQuery = useQuery({
+    queryKey: ['ai-agents', 'grantable-tools'],
+    queryFn: () => aiAgentsApi.listGrantableTools(),
+    enabled: builderOpen,
+    staleTime: 60_000,
+  });
+
+  // Event-trigger catalogue for the builder's Triggers panel. Fetched only
+  // while the builder is open to keep the page lean.
+  const triggerCatalogueQuery = useQuery({
+    queryKey: ['ai-agents', 'event-triggers'],
+    queryFn: () => aiAgentsApi.listEventTriggers(),
+    enabled: builderOpen,
+    staleTime: 60_000,
+  });
+
+  // Monitoring: automated (scheduler / event-fired) runs. Polled so a freshly
+  // fired scheduled run shows up without a manual refresh.
+  const automatedRunsQuery = useQuery({
+    queryKey: ['ai-agents', 'automated-runs'],
+    queryFn: () => aiAgentsApi.listAutomatedRuns(),
+    refetchInterval: 15_000,
   });
 
   const runsQuery = useQuery({
@@ -124,13 +160,41 @@ export function AgentsPage(): JSX.Element {
   };
 
   // ── Custom-agent builder ────────────────────────────────────────────────
+  // Save orchestration: create/update the agent, then persist its automation
+  // (schedule + tools) against the resulting id. Schedule/tools live behind
+  // dedicated endpoints keyed by agent id, so they can only be set once the
+  // agent exists. A schedule/tool failure is surfaced but does not lose the
+  // saved agent — the user can reopen and retry that section.
   const saveMutation = useMutation({
-    mutationFn: (input: CustomAgentInput) =>
-      builderEditing
-        ? aiAgentsApi.updateCustomAgent(builderEditing.id, input)
-        : aiAgentsApi.createCustomAgent(input),
+    mutationFn: async (submit: BuilderSubmit) => {
+      const saved = builderEditing
+        ? await aiAgentsApi.updateCustomAgent(builderEditing.id, submit.agent)
+        : await aiAgentsApi.createCustomAgent(submit.agent);
+
+      // Schedule: set when a cron is present + enabled, otherwise clear it.
+      if (submit.schedule.cron && submit.schedule.enabled) {
+        await aiAgentsApi.setAgentSchedule(saved.id, {
+          cron_expr: submit.schedule.cron,
+          enabled: true,
+          schedule_input: submit.schedule.scheduleInput,
+        });
+      } else if (builderEditing) {
+        // Editing an agent that previously had a schedule but the user turned
+        // it off — remove it (ignore 404 when there was none).
+        await aiAgentsApi.deleteAgentSchedule(saved.id).catch(() => undefined);
+      }
+
+      // Tools: always persist the (possibly empty) selection on save.
+      await aiAgentsApi.setAgentTools(saved.id, { allowed_tools: submit.allowedTools });
+
+      // Triggers: persist the (possibly empty) event subscriptions. These fire
+      // the agent on a platform event independently of any cron schedule.
+      await aiAgentsApi.setAgentTriggers(saved.id, { triggers: submit.triggers });
+      return saved;
+    },
     onSuccess: (saved) => {
       queryClient.invalidateQueries({ queryKey: ['ai-agents', 'list'] });
+      queryClient.invalidateQueries({ queryKey: ['ai-agents', 'automated-runs'] });
       setBuilderOpen(false);
       setBuilderEditing(null);
       addToast({
@@ -145,28 +209,46 @@ export function AgentsPage(): JSX.Element {
 
   const openCreate = () => {
     setBuilderEditing(null);
+    setBuilderSchedule(null);
+    setBuilderNextRunAt(null);
+    setBuilderTools([]);
+    setBuilderTriggers([]);
     setBuilderOpen(true);
   };
 
   const openEdit = (agent: AgentDescriptor) => {
     if (!agent.custom_id) return;
+    const customId = agent.custom_id;
     // The catalogue descriptor lacks the guided spec / raw prompt needed to
-    // re-hydrate the form, so fetch the full custom-agent row first.
-    aiAgentsApi
-      .listCustomAgents()
-      .then((rows) => {
-        const row = rows.find((r) => r.id === agent.custom_id);
-        if (row) {
-          setBuilderEditing(row);
-          setBuilderOpen(true);
-        }
+    // re-hydrate the form, so fetch the full custom-agent row first, then its
+    // automation envelope (schedule + tools) in parallel.
+    setLoadingAutomation(true);
+    setBuilderSchedule(null);
+    setBuilderNextRunAt(null);
+    setBuilderTools([]);
+    setBuilderTriggers([]);
+    Promise.all([aiAgentsApi.listCustomAgents(), aiAgentsApi.getAgentSchedule(customId)])
+      .then(([rows, meta]) => {
+        const row = rows.find((r) => r.id === customId);
+        if (!row) throw new Error('not found');
+        setBuilderSchedule({
+          cron: meta.cron,
+          enabled: meta.schedule_enabled,
+          scheduleInput: meta.schedule_input,
+        });
+        setBuilderNextRunAt(meta.next_run_at);
+        setBuilderTools(meta.allowed_tools);
+        setBuilderTriggers(meta.triggers);
+        setBuilderEditing(row);
+        setBuilderOpen(true);
       })
       .catch(() => {
         addToast({
           type: 'error',
           title: t('agents.builder.load_error', { defaultValue: 'Could not open the agent' }),
         });
-      });
+      })
+      .finally(() => setLoadingAutomation(false));
   };
 
   const handleDelete = async (agent: AgentDescriptor) => {
@@ -233,35 +315,33 @@ export function AgentsPage(): JSX.Element {
   const selectedPrompts = (selected?.example_prompts ?? []).filter((p) => p.trim().length > 0);
 
   return (
-    <div className="mx-auto max-w-content space-y-6 p-6">
-      {/* Header */}
-      <div className="flex items-start gap-3">
-        <div className="rounded-lg bg-oe-blue-subtle p-2 text-oe-blue-text dark:bg-oe-blue/15">
-          <Bot className="h-6 w-6" />
-        </div>
-        <div className="min-w-0 flex-1">
-          <h1 className="text-2xl font-semibold text-content-primary">
-            {t('agents.title', { defaultValue: 'AI Agents' })}
-          </h1>
-          <p className="mt-1 text-sm text-content-secondary">
-            {t('agents.subtitle', {
-              defaultValue:
-                'Run autonomous AI agents that reason, call tools, and propose actions for your review.',
-            })}
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={openCreate}
-          className={clsx(
-            'inline-flex shrink-0 items-center gap-2 rounded-lg bg-oe-blue px-4 py-2 text-sm font-medium text-content-inverse transition-all',
-            'hover:bg-oe-blue-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-oe-blue focus-visible:ring-offset-2',
-          )}
-        >
-          <Plus className="h-4 w-4" />
-          {t('agents.builder.create_button', { defaultValue: 'Create your own agent' })}
-        </button>
-      </div>
+    <div className="space-y-5 animate-fade-in">
+      {/* Canonical top block - module name + icon live in the global top app
+          bar. The page renders only its (contextual) subtitle on the left and
+          the page actions on the right. */}
+      <PageHeader
+        srTitle={t('agents.title', { defaultValue: 'AI Agents' })}
+        subtitle={t('agents.subtitle', {
+          defaultValue:
+            'Run autonomous AI agents that reason, call tools, and propose actions for your review.',
+        })}
+        actions={
+          <Button variant="primary" size="sm" icon={<Plus className="h-4 w-4" />} onClick={openCreate}>
+            {t('agents.builder.create_button', { defaultValue: 'Create your own agent' })}
+          </Button>
+        }
+      />
+
+      <DismissibleInfo
+        storageKey="agents"
+        title={t('agents.intro_title', { defaultValue: 'Put autonomous agents to work' })}
+        more={t('agents.intro_more', { defaultValue: '' }) ? <IntroRichText text={t('agents.intro_more')} /> : undefined}
+      >
+        {t('agents.intro_body', {
+          defaultValue:
+            'Run AI agents that reason over your project data, call tools and propose actions for you to review before anything is applied.',
+        })}
+      </DismissibleInfo>
 
       {/* LLM-provider banner — surfaces the most common failure cause
           (no_llm) upfront instead of letting the user write a prompt,
@@ -363,7 +443,7 @@ export function AgentsPage(): JSX.Element {
                         defaultValue: 'Run will be linked to active project.',
                       })
                     : t('agents.no_project', {
-                        defaultValue: 'No active project — run will be global.',
+                        defaultValue: 'No active project - run will be global.',
                       })}
                 </span>
                 <button
@@ -479,7 +559,7 @@ export function AgentsPage(): JSX.Element {
               </p>
               <p className="mt-1 text-xs text-content-tertiary">
                 {t('agents.no_runs_body', {
-                  defaultValue: 'Pick an agent and run it — your runs will show up here.',
+                  defaultValue: 'Pick an agent and run it - your runs will show up here.',
                 })}
               </p>
             </div>
@@ -492,6 +572,15 @@ export function AgentsPage(): JSX.Element {
               onSelect={(id) => setActiveRunId(id)}
             />
           )}
+
+          {/* Monitoring: automated (scheduler / event-fired) runs. */}
+          <AutomatedRunsPanel
+            runs={automatedRunsQuery.data ?? []}
+            agents={agents}
+            loading={automatedRunsQuery.isLoading}
+            activeRunId={activeRunId}
+            onSelect={(id) => setActiveRunId(id)}
+          />
         </aside>
       </div>
 
@@ -500,6 +589,13 @@ export function AgentsPage(): JSX.Element {
         open={builderOpen}
         editing={builderEditing}
         saving={saveMutation.isPending}
+        tools={toolsCatalogueQuery.data ?? []}
+        triggerCatalogue={triggerCatalogueQuery.data ?? []}
+        initialSchedule={builderSchedule}
+        initialNextRunAt={builderNextRunAt}
+        initialTools={builderTools}
+        initialTriggers={builderTriggers}
+        loadingAutomation={loadingAutomation || toolsCatalogueQuery.isLoading || triggerCatalogueQuery.isLoading}
         error={
           saveMutation.isError
             ? ((saveMutation.error as Error)?.message ??
@@ -510,7 +606,7 @@ export function AgentsPage(): JSX.Element {
           setBuilderOpen(false);
           setBuilderEditing(null);
         }}
-        onSubmit={(input) => saveMutation.mutate(input)}
+        onSubmit={(submit) => saveMutation.mutate(submit)}
       />
       <ConfirmDialog {...confirmProps} />
     </div>

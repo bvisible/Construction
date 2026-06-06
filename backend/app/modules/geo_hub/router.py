@@ -47,6 +47,7 @@ from app.modules.geo_hub.schemas import (
     ImageryLayerUpdate,
     KMLImportRequest,
     MapConfigResponse,
+    MapSummaryResponse,
     PunchlistPinResponse,
     RasterOverlayUploadResponse,
     TerrainSourceCreate,
@@ -84,7 +85,7 @@ def _svc(session: SessionDep) -> GeoHubService:
 # attach an auth header, and basemap tiles are public imagery.
 _TILE_UPSTREAM = "https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png"
 # Bounded LRU of ``(bytes, etag)`` keyed by ``z/x/y``. 4096 256px PNGs is a
-# few MB resident — small enough to keep in-process, big enough to cover a
+# few MB resident - small enough to keep in-process, big enough to cover a
 # project view plus several pan/zoom steps so repeat loads never re-fetch.
 _TILE_CACHE: OrderedDict[str, tuple[bytes, str]] = OrderedDict()
 _TILE_CACHE_MAX = 4096
@@ -109,7 +110,7 @@ _BLANK_TILE_HEADERS = {"Cache-Control": "no-store"}
 # Shared, pooled httpx client. The previous implementation opened a brand-new
 # ``AsyncClient`` (and therefore a fresh TLS handshake + connection) for EVERY
 # tile, which under Cesium's burst of ~20-60 simultaneous tile requests starved
-# the event loop and left many tiles to time out — the "loads slowly / only a
+# the event loop and left many tiles to time out - the "loads slowly / only a
 # fragment of the map" report. A single process-wide client with a sized
 # connection pool keeps the upstream connections warm and lets many tiles fly
 # in parallel over kept-alive sockets.
@@ -342,7 +343,7 @@ async def bulk_anchor_from_address(
     return BulkAnchorFromAddressResponse.model_validate(summary)
 
 
-# ── Geocode (Nominatim) — suggest + admin cache ────────────────────────
+# ── Geocode (Nominatim) - suggest + admin cache ────────────────────────
 
 
 @router.get("/geocode/suggest", response_model=GeocodeSuggestResponse)
@@ -355,7 +356,7 @@ async def geocode_suggest(
     """Free-text Nominatim search for the address autocomplete dropdown.
 
     Returns up to ``limit`` results (capped at 10). The endpoint never
-    raises on geocoder failure — it returns an empty ``suggestions``
+    raises on geocoder failure - it returns an empty ``suggestions``
     array so the frontend can render "no matches" without exception
     handling. Authentication is required (``geo_hub.read``) so an
     unauthenticated caller can't pin Nominatim through our IP.
@@ -366,7 +367,7 @@ async def geocode_suggest(
     even under heavy keystroke pressure (client-side debounce + cache
     cooperate to keep this well below the budget in practice).
     """
-    # ``payload`` is unused beyond the RBAC gate — kept on the signature
+    # ``payload`` is unused beyond the RBAC gate - kept on the signature
     # to match the convention used by every other read endpoint in this
     # module so security audits can grep for it uniformly.
     _ = payload
@@ -426,7 +427,7 @@ async def geocode_cache_purge(
     """Manually invalidate cache rows older than ``older_than_days``.
 
     Defaults to 30 days (matches ``CACHE_TTL``) so a default call only
-    sweeps already-expired rows — a no-op for healthy caches and a
+    sweeps already-expired rows - a no-op for healthy caches and a
     sanity-restore for caches that were never read often enough to age
     out via the normal TTL miss path. Pass ``older_than_days=0`` to
     flush everything.
@@ -863,11 +864,34 @@ async def import_kml(
 async def export_geojson(
     project_id: uuid.UUID = Query(...),
     kind: str | None = Query(default=None),
+    include: str | None = Query(
+        default=None,
+        description=(
+            "Comma-separated layers to fold into the export: overlays, anchor, "
+            "hse, punchlist, diary. Defaults to all when omitted."
+        ),
+    ),
     service: GeoHubService = Depends(_svc),
     payload: CurrentUserPayload = None,  # type: ignore[assignment]
     _perm: None = Depends(RequirePermission("geo_hub.read")),
 ) -> dict[str, Any]:
-    return await service.export_geojson(project_id, payload=payload, kind=kind)
+    """Export a project's whole map as one GeoJSON FeatureCollection.
+
+    Folds vector overlays, the anchor point and the HSE / punchlist /
+    diary pin layers into a single collection, each feature tagged with
+    an ``oe:layer`` property. Unknown ``include`` tokens are ignored so a
+    typo degrades to "export nothing for that token" rather than a 422.
+    """
+    allowed = {"overlays", "anchor", "hse", "punchlist", "diary"}
+    include_set: set[str] | None = None
+    if include is not None:
+        include_set = {tok.strip() for tok in include.split(",") if tok.strip() in allowed}
+    return await service.export_geojson(
+        project_id,
+        payload=payload,
+        kind=kind,
+        include=include_set,
+    )
 
 
 # ── Raster overlays (PDF / DWG / image pinned on the globe) ─────────────
@@ -1031,7 +1055,7 @@ async def get_raster_overlay_image(
     _perm: None = Depends(RequirePermission("geo_hub.read")),
 ) -> Response:
     blob = await service.get_raster_overlay_bytes(overlay_id, payload=payload)
-    # ``Cache-Control: private`` because the bytes are tenant-scoped —
+    # ``Cache-Control: private`` because the bytes are tenant-scoped -
     # public caches must not store them. ``max-age`` short so Cesium's
     # SingleTileImageryProvider doesn't pin a stale crop.
     return Response(
@@ -1123,6 +1147,26 @@ async def get_map_config(
     return MapConfigResponse.model_validate(bundle)
 
 
+@router.get("/map-summary/{project_id}", response_model=MapSummaryResponse)
+async def get_map_summary(
+    project_id: uuid.UUID,
+    service: GeoHubService = Depends(_svc),
+    payload: CurrentUserPayload = None,  # type: ignore[assignment]
+    _perm: None = Depends(RequirePermission("geo_hub.read")),
+) -> MapSummaryResponse:
+    """Aggregate counts + breakdowns for the project-map layer legend.
+
+    One round-trip that returns per-layer feature counts (tilesets,
+    overlays, raster overlays, viewpoints, HSE / punchlist / diary pins)
+    plus small domain breakdowns (HSE severity, punch priority, tileset
+    status). The frontend renders this as a layer legend with toggles
+    and deep-links to the source module for any layer that is empty.
+    Cross-tenant access collapses to 404 via the service IDOR helper.
+    """
+    summary = await service.map_summary(project_id, payload=payload)
+    return MapSummaryResponse.model_validate(summary)
+
+
 # ── Cross-module geo pin layers ──────────────────────────────────────────
 
 
@@ -1200,7 +1244,7 @@ async def sweep_deleted_raster_overlays(
     Frees storage blobs (source + rasterised PNG) before removing the DB row
     so orphaned bytes are actually reclaimed. Defaults to 30 days matching
     the geocode-cache TTL. Pass ``older_than_days=0`` to flush everything
-    older than the current second (full purge — use with caution).
+    older than the current second (full purge - use with caution).
 
     Admin-only (``geo_hub.admin``). Safe to call repeatedly; each pass
     processes only rows whose ``deleted_at`` is before the cutoff.

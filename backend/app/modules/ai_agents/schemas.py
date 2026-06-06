@@ -1,4 +1,4 @@
-"""AI Agents Pydantic schemas — request/response models."""
+"""AI Agents Pydantic schemas - request/response models."""
 
 from datetime import datetime
 from typing import Any
@@ -33,7 +33,7 @@ class AgentDescriptor(BaseModel):
 
     # True for user-authored agents (DB-backed, editable by their creator).
     is_custom: bool = False
-    # Present only for custom agents — the row id, so the UI can edit/delete.
+    # Present only for custom agents - the row id, so the UI can edit/delete.
     custom_id: UUID | None = None
 
 
@@ -72,7 +72,7 @@ class AgentStepResponse(BaseModel):
 
 
 class AgentRunResponse(BaseModel):
-    """Full run snapshot — status, totals, every step so far."""
+    """Full run snapshot - status, totals, every step so far."""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -81,6 +81,8 @@ class AgentRunResponse(BaseModel):
     project_id: UUID | None = None
     user_id: UUID
     status: str
+    # How the run was initiated: "manual" | "schedule" | "event:<name>".
+    trigger_source: str = "manual"
     failure_reason: str | None = None
     user_input: str
     final_output: str | None = None
@@ -103,6 +105,8 @@ class AgentRunListItem(BaseModel):
     project_id: UUID | None = None
     user_id: UUID
     status: str
+    # How the run was initiated: "manual" | "schedule" | "event:<name>".
+    trigger_source: str = "manual"
     failure_reason: str | None = None
     iterations: int = 0
     total_tokens: int = 0
@@ -170,7 +174,7 @@ class GuidedAgentSpec(BaseModel):
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
-    # "Act as a ..." — the expert role the agent should play.
+    # "Act as a ..." - the expert role the agent should play.
     role: str = Field("", max_length=200)
     # The single most important field: what should this agent help with / do.
     goal: str = Field(..., min_length=3, max_length=2000)
@@ -206,7 +210,7 @@ class CustomAgentCreateRequest(BaseModel):
 
 
 class CustomAgentUpdateRequest(BaseModel):
-    """Request body for ``PUT /ai-agents/custom/{id}`` — full replace.
+    """Request body for ``PUT /ai-agents/custom/{id}`` - full replace.
 
     Same shape as create; the agent is rewritten from these values. Keeping it
     a full replace (rather than a sparse patch) matches how the builder form
@@ -247,3 +251,162 @@ class CustomAgentResponse(BaseModel):
     guided: GuidedAgentSpec | None = None
     created_at: datetime
     updated_at: datetime
+
+
+# ── Automation: schedule + tools + triggers (Item 29) ────────────────────────
+
+
+class AgentMetadataResponse(BaseModel):
+    """The automation envelope of a custom agent - schedule, tools, triggers.
+
+    Returned by the schedule/tools endpoints so the builder can re-hydrate the
+    Schedule and Tools panels. ``next_run_at`` is an ISO-8601 UTC string the UI
+    renders with the shared DateDisplay; ``null`` when the schedule is paused or
+    absent.
+    """
+
+    cron: str | None = None
+    schedule_enabled: bool = True
+    next_run_at: str | None = None
+    schedule_input: str = ""
+    triggers: list[str] = Field(default_factory=list)
+    allowed_tools: list[str] = Field(default_factory=list)
+
+
+class SetScheduleRequest(BaseModel):
+    """Request body for ``POST /custom/{agent_id}/schedule``.
+
+    ``cron_expr`` is a 5-field POSIX cron string interpreted in UTC; it is
+    validated server-side (reusing the reporting parser) so a bad expression
+    yields a 422 rather than a silently-never-firing schedule.
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    cron_expr: str = Field(..., min_length=1, max_length=120)
+    enabled: bool = True
+    # Optional fixed instruction a scheduled run is fired with. When blank the
+    # scheduler uses a generic default prompt.
+    schedule_input: str = Field("", max_length=2000)
+    # Optional event triggers to subscribe to alongside the cron. Unknown names
+    # are dropped server-side.
+    triggers: list[str] = Field(default_factory=list, max_length=10)
+
+
+class SetToolsRequest(BaseModel):
+    """Request body for ``POST /custom/{agent_id}/tools``.
+
+    ``allowed_tools`` is the operator's vetted tool selection. The server keeps
+    only tools that exist AND the operator has permission to grant; selecting a
+    tool the operator lacks permission for is a 403.
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    allowed_tools: list[str] = Field(default_factory=list, max_length=30)
+
+
+class SetTriggersRequest(BaseModel):
+    """Request body for ``POST /custom/{agent_id}/triggers``.
+
+    ``triggers`` is the set of platform-event slugs the agent should react to
+    (e.g. ``rfi_created``). Unknown slugs are dropped server-side. Triggers fire
+    the agent on the event independently of any cron schedule.
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    triggers: list[str] = Field(default_factory=list, max_length=10)
+
+
+class ToolWithPermission(BaseModel):
+    """A runner tool plus the permission an operator needs to grant it."""
+
+    name: str
+    description: str
+    input_schema: dict[str, Any] = Field(default_factory=dict)
+    required_permission: str
+
+
+class AgentToolsResponse(BaseModel):
+    """Tool-picker payload: every available tool + the agent's current grant.
+
+    Returned by ``GET /custom/{agent_id}/tools`` so the builder can render the
+    full catalogue with the agent's selected tools pre-checked.
+    """
+
+    available: list[ToolWithPermission] = Field(default_factory=list)
+    selected: list[str] = Field(default_factory=list)
+
+
+class EventTriggerDescriptor(BaseModel):
+    """One subscribable platform event for the trigger picker."""
+
+    name: str
+    label: str
+    description: str
+    available: bool = False
+
+
+# ── BOQ proposals: extract + apply (human-confirmed) ──────────────────────────
+
+
+class PositionProposalSchema(BaseModel):
+    """One structured BOQ-position proposal recovered from a completed run.
+
+    The drafter's ``create_position`` tool produces these during the loop;
+    money is carried as Decimal-as-string with its ISO 4217 ``currency`` so a
+    priced proposal round-trips losslessly and is never read without its
+    currency code.
+    """
+
+    description: str
+    unit: str
+    qty: float
+    unit_rate: str
+    currency: str
+    total: str
+
+
+class RunProposalsResponse(BaseModel):
+    """The applyable BOQ proposals a run produced (``GET /runs/{id}/proposals``).
+
+    ``mixed_currency`` is true when the proposals span more than one currency;
+    the UI surfaces that the lines cannot be combined into one total and that
+    off-currency lines will be skipped on apply (currencies are never blended).
+    """
+
+    run_id: str
+    project_id: str | None = None
+    count: int = 0
+    currencies: list[str] = Field(default_factory=list)
+    mixed_currency: bool = False
+    proposals: list[PositionProposalSchema] = Field(default_factory=list)
+
+
+class ApplyProposalsRequest(BaseModel):
+    """Request body for ``POST /runs/{id}/apply``.
+
+    The user reviewed the proposals and picked the BOQ to write them into. This
+    is the explicit human confirmation - nothing is ever applied automatically.
+    """
+
+    boq_id: UUID = Field(..., description="UUID of the BOQ to apply the proposals to")
+
+
+class ApplyProposalsResponse(BaseModel):
+    """Outcome of applying a run's proposals (``POST /runs/{id}/apply``).
+
+    ``created`` real positions were added to the BOQ; ``skipped`` lines were not
+    (each with a human-readable reason - typically a currency mismatch or an
+    un-priced line). ``currency`` is the currency the created lines were applied
+    in.
+    """
+
+    run_id: str
+    boq_id: str
+    created: int = 0
+    skipped: int = 0
+    currency: str | None = None
+    created_ordinals: list[str] = Field(default_factory=list)
+    skipped_reasons: list[str] = Field(default_factory=list)

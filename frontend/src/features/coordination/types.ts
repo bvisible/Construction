@@ -83,6 +83,12 @@ export interface TradeMatrixCell {
   count: number;
   open: number;
   resolved: number;
+  /**
+   * Summed open cost-impact (rework + labour) of this discipline pair,
+   * computed by the clash_cost_impact kernel. Decimal-as-string on the
+   * wire; `'0'` when the cost module is unavailable or no priced rework.
+   */
+  cost_impact: string | number;
 }
 
 /** Full payload returned by `GET /coordination/projects/:id/trade-matrix`. */
@@ -90,6 +96,10 @@ export interface TradeMatrixResponse {
   project_id: string;
   trades: CanonicalTrade[];
   cells: TradeMatrixCell[];
+  /** Project display currency for the cost-weighted view (may be ''). */
+  currency?: string;
+  /** Sum of every cell's `cost_impact` (Decimal-as-string). */
+  total_cost_impact?: string | number;
 }
 
 /**
@@ -133,4 +143,55 @@ export interface CoordinationTimelineEvent {
 export interface CoordinationTimelineResponse {
   project_id: string;
   events: CoordinationTimelineEvent[];
+}
+
+// ── Thresholds & alerts ────────────────────────────────────────────────────
+
+/** Severity bucket of an evaluated threshold result. */
+export type ThresholdLevel = 'ok' | 'warn' | 'error';
+
+/**
+ * The four metrics the coordination hub evaluates thresholds against.
+ * Mirrors `models.KNOWN_METRICS` on the backend.
+ */
+export type CoordinationMetric =
+  | 'open_clashes_total'
+  | 'high_severity_clashes'
+  | 'open_cost_impact_pct_of_budget'
+  | 'model_age_days_max'
+  | string;
+
+/** One configured threshold + its current evaluated state. */
+export interface ThresholdRow {
+  metric: CoordinationMetric;
+  /** Numbers arrive as JSON strings (Decimal-as-string on the wire). */
+  warn_value: string | number;
+  error_value: string | number;
+  enabled: boolean;
+  current_value: string | number;
+  level: ThresholdLevel;
+  message: string;
+}
+
+/** A single in-breach metric — surfaces in the dashboard alert banner. */
+export interface ThresholdAlert {
+  metric: CoordinationMetric;
+  current_value: string | number;
+  threshold_value: string | number;
+  level: ThresholdLevel;
+  message: string;
+}
+
+/** Full payload returned by `GET /coordination/projects/:id/thresholds`. */
+export interface CoordinationThresholdsResponse {
+  project_id: string;
+  thresholds: ThresholdRow[];
+  alerts: ThresholdAlert[];
+}
+
+/** PUT body for editing one threshold. All fields optional, but at least one. */
+export interface CoordinationThresholdUpdate {
+  warn_value?: number;
+  error_value?: number;
+  enabled?: boolean;
 }

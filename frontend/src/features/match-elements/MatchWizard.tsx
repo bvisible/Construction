@@ -37,6 +37,7 @@ import {
   FileText,
   FileType,
   Hammer,
+  Image as ImageIcon,
   Layers,
   Loader2,
   Mountain,
@@ -61,6 +62,7 @@ import {
 import { useToastStore } from '@/stores/useToastStore';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { unwrapCataloguesPayload } from './catalogues-payload';
+import ImageSourceSelector from './ImageSourceSelector';
 
 /* ── Types ─────────────────────────────────────────────────────────────── */
 
@@ -68,6 +70,7 @@ type Source =
   | { kind: 'bim'; modelId: string; modelName: string }
   | { kind: 'excel'; file: File }
   | { kind: 'pdf'; file: File }
+  | { kind: 'image'; file: File }
   | { kind: 'text'; lines: string[] };
 
 interface CatalogueRow {
@@ -150,9 +153,9 @@ function Stepper({
               aria-current={isCurrent ? 'step' : undefined}
               aria-label={`${labels[n]}${
                 isDone
-                  ? ` — ${t('common.done', 'done')}`
+                  ? ` - ${t('common.done', 'done')}`
                   : isCurrent
-                    ? ` — ${t('common.current', 'current')}`
+                    ? ` - ${t('common.current', 'current')}`
                     : ''
               }`}
             >
@@ -416,7 +419,7 @@ function StageStep({
           <div className="text-xs text-content-tertiary mt-0.5">
             {t(
               'match_wizard.stage_any_help',
-              'Match across the whole project — no phase filter applied.',
+              'Match across the whole project - no phase filter applied.',
             )}
           </div>
         </div>
@@ -663,7 +666,7 @@ export function CatalogueStep({
         <p className="text-sm text-content-secondary leading-relaxed max-w-2xl">
           {t(
             'match_wizard.step2_help',
-            'Each catalogue is a vector index of priced positions — talk to it in plain language ("reinforced concrete wall 24cm", "ELT cable tray", "DN200 steel pipe") and it returns the closest rate-book lines, regardless of exact wording or language. Rates are sourced from the regional book; switch if you want rates from elsewhere.',
+            'Each catalogue is a vector index of priced positions - talk to it in plain language ("reinforced concrete wall 24cm", "ELT cable tray", "DN200 steel pipe") and it returns the closest rate-book lines, regardless of exact wording or language. Rates are sourced from the regional book; switch if you want rates from elsewhere.',
           )}
         </p>
         {/* Reinforces the "vector / semantic" angle with a small, scannable
@@ -712,7 +715,7 @@ export function CatalogueStep({
               <p className="text-xs text-amber-800/90 dark:text-amber-200/80 mt-1 leading-relaxed">
                 {t(
                   'match_wizard.no_installed_body',
-                  'A cost catalogue is the vector index your project elements are matched against. You can\'t move past this step until at least one is installed. Pick the closest regional book below — installs run in the background, the wizard keeps your picks.',
+                  'A cost catalogue is the vector index your project elements are matched against. You can\'t move past this step until at least one is installed. Pick the closest regional book below - installs run in the background, the wizard keeps your picks.',
                 )}
               </p>
               <button
@@ -920,7 +923,9 @@ function SourceStep({
   onPick: (s: Source | null) => void;
 }) {
   const { t } = useTranslation();
-  const [tab, setTab] = useState<'bim' | 'excel' | 'pdf' | 'text'>(selected?.kind ?? 'bim');
+  const [tab, setTab] = useState<'bim' | 'excel' | 'pdf' | 'image' | 'text'>(
+    selected?.kind ?? 'bim',
+  );
   const [textValue, setTextValue] = useState(
     selected?.kind === 'text' ? selected.lines.join('\n') : '',
   );
@@ -935,6 +940,11 @@ function SourceStep({
     { id: 'bim' as const, icon: Building2, label: t('match_wizard.tab_bim', 'BIM model') },
     { id: 'excel' as const, icon: FileSpreadsheet, label: t('match_wizard.tab_excel', 'Excel BoQ') },
     { id: 'pdf' as const, icon: FileType, label: t('match_wizard.tab_pdf', { defaultValue: 'PDF BoQ' }) },
+    {
+      id: 'image' as const,
+      icon: ImageIcon,
+      label: t('match_wizard.tab_image', { defaultValue: 'Photo / Drawing' }),
+    },
     { id: 'text' as const, icon: FileText, label: t('match_wizard.tab_text', 'Pasted text') },
   ];
 
@@ -1052,7 +1062,7 @@ function SourceStep({
                       {t('match_wizard.excel_drop', 'Click or drop an Excel file')}
                     </span>
                     <div className="text-xs text-content-tertiary mt-0.5">
-                      {t('match_wizard.excel_hint', 'Multi-language column detection — EN/DE/RU/ES/PT/CJK/…')}
+                      {t('match_wizard.excel_hint', 'Multi-language column detection - EN/DE/RU/ES/PT/CJK/…')}
                     </div>
                   </>
                 )}
@@ -1106,6 +1116,13 @@ function SourceStep({
         </div>
       )}
 
+      {tab === 'image' && (
+        <ImageSourceSelector
+          file={selected?.kind === 'image' ? selected.file : null}
+          onPick={(f) => onPick(f ? { kind: 'image', file: f } : null)}
+        />
+      )}
+
       {tab === 'text' && (
         <div>
           <label className="block">
@@ -1129,7 +1146,7 @@ function SourceStep({
               rows={9}
               placeholder={t(
                 'match_wizard.text_placeholder',
-                'Concrete C30/37 wall, 240mm\nDoor — single leaf, hardwood\n…',
+                'Concrete C30/37 wall, 240mm\nDoor - single leaf, hardwood\n…',
               )}
               className="block w-full rounded-2xl border border-border-light bg-surface-primary text-sm font-mono p-3.5 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 focus:border-indigo-500 transition-colors"
             />
@@ -1162,7 +1179,8 @@ function ReviewStep({
   const sourceLabel = (() => {
     if (!source) return t('match_wizard.review_no_source', 'No source picked');
     if (source.kind === 'bim') return source.modelName;
-    if (source.kind === 'excel' || source.kind === 'pdf') return source.file.name;
+    if (source.kind === 'excel' || source.kind === 'pdf' || source.kind === 'image')
+      return source.file.name;
     return t('match_wizard.review_text_lines', '{{n}} lines pasted', {
       n: source.lines.length,
     });
@@ -1187,6 +1205,8 @@ function ReviewStep({
           ? FileSpreadsheet
           : source?.kind === 'pdf'
           ? FileType
+          : source?.kind === 'image'
+          ? ImageIcon
           : source?.kind === 'text'
           ? FileText
           : Building2,
@@ -1202,7 +1222,7 @@ function ReviewStep({
           {t('match_wizard.step4_eyebrow', 'Step 4')}
         </p>
         <h2 className="text-2xl font-semibold tracking-tight text-content-primary mb-1.5">
-          {t('match_wizard.step4_title', 'Run the match — then refine it')}
+          {t('match_wizard.step4_title', 'Run the match - then refine it')}
         </h2>
         <p className="text-sm text-content-secondary leading-relaxed max-w-xl">
           {t(
@@ -1272,6 +1292,15 @@ export function MatchWizard({
       }
       if (source.kind === 'pdf') {
         const session = await matchElementsApi.createSessionFromPdf({
+          project_id: projectId,
+          file: source.file,
+          catalogue_id: catalogueId,
+          construction_stage: stagePayload,
+        });
+        return session.id;
+      }
+      if (source.kind === 'image') {
+        const session = await matchElementsApi.createSessionFromImage({
           project_id: projectId,
           file: source.file,
           catalogue_id: catalogueId,
@@ -1383,7 +1412,7 @@ export function MatchWizard({
             <p className="text-xs text-content-secondary mt-0.5 leading-relaxed">
               {t(
                 'match_wizard.goal_blurb',
-                'Four quick steps set up the match. You then review and tune the 7-stage pipeline — each pass sharpens the costing until the estimate fits this specific project.',
+                'Four quick steps set up the match. You then review and tune the 7-stage pipeline - each pass sharpens the costing until the estimate fits this specific project.',
               )}
             </p>
           </div>

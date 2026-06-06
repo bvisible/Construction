@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
+import { useNavigate } from 'react-router-dom';
 import { getIntlLocale } from '@/shared/lib/formatters';
 import {
   FileText,
@@ -24,7 +25,9 @@ import {
   LineChart,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import { Breadcrumb, InfoHint, SkeletonGrid } from '@/shared/ui';
+import { Breadcrumb, EmptyState, SkeletonGrid } from '@/shared/ui';
+import { PageHeader } from '@/shared/ui/PageHeader';
+import { DismissibleInfo, IntroRichText } from '@/shared/ui/DismissibleInfo';
 import { useToastStore } from '@/stores/useToastStore';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
@@ -380,7 +383,7 @@ async function downloadScheduleReport(projectId: string, projectName: string): P
   }
 
   const lines: string[] = [
-    `Schedule Report — ${projectName}`,
+    `Schedule Report - ${projectName}`,
     `Generated: ${new Date().toISOString()}`,
     '='.repeat(60),
     '',
@@ -711,10 +714,10 @@ async function downloadCashFlowReport(projectId: string, projectName: string): P
  */
 async function downloadProgressReport(projectId: string, projectName: string): Promise<void> {
   const htmlParts: string[] = [];
-  htmlParts.push(`<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>${esc(projectName)} — Progress Report</title>`);
+  htmlParts.push(`<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>${esc(projectName)} - Progress Report</title>`);
   htmlParts.push('<style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;max-width:900px;margin:0 auto;padding:40px 24px;color:#1a1a1a;line-height:1.6}h1{font-size:28px;border-bottom:3px solid #2563eb;padding-bottom:12px}h2{font-size:20px;color:#2563eb;margin-top:32px;border-bottom:1px solid #e5e7eb;padding-bottom:6px}table{width:100%;border-collapse:collapse;margin:12px 0}th,td{padding:8px 12px;text-align:left;border-bottom:1px solid #e5e7eb;font-size:14px}th{background:#f9fafb;font-weight:600}.metric{display:inline-block;margin:8px 16px 8px 0;padding:12px 20px;border:1px solid #e5e7eb;border-radius:8px;text-align:center}.metric-label{font-size:11px;text-transform:uppercase;color:#6b7280;letter-spacing:0.05em}.metric-value{font-size:22px;font-weight:700}p.footer{color:#9ca3af;font-size:12px;margin-top:40px;border-top:1px solid #e5e7eb;padding-top:12px}@media print{body{padding:0}}</style>');
   htmlParts.push('</head><body>');
-  htmlParts.push(`<h1>${esc(projectName)} — Progress Report</h1>`);
+  htmlParts.push(`<h1>${esc(projectName)} - Progress Report</h1>`);
   htmlParts.push(`<p style="color:#6b7280">Generated: ${new Date().toLocaleString()}</p>`);
 
   // EVM section
@@ -803,8 +806,9 @@ async function downloadBoqExport(
 
 export function ReportsPage() {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const addToast = useToastStore((s) => s.addToast);
-  const { activeProjectId, setActiveProject } = useProjectContextStore();
+  const { activeProjectId } = useProjectContextStore();
 
   // Project & BOQ selectors
   const [projects, setProjects] = useState<Project[]>([]);
@@ -958,13 +962,11 @@ export function ReportsPage() {
 
   if (loadingProjects) {
     return (
-      <div className="w-full space-y-6 animate-fade-in">
+      <div className="w-full space-y-5 animate-fade-in">
         <Breadcrumb
           items={[
-            { label: t('nav.dashboard', { defaultValue: 'Dashboard' }), to: '/' },
-            { label: t('reports.title', { defaultValue: 'Reports' }) },
+            { label: t('nav.reports', { defaultValue: 'Reports' }) },
           ]}
-          className="mb-4"
         />
         <SkeletonGrid items={6} />
       </div>
@@ -972,72 +974,70 @@ export function ReportsPage() {
   }
 
   return (
-    <div className="w-full space-y-6 animate-fade-in">
+    <div className="w-full space-y-5 animate-fade-in">
       <Breadcrumb
         items={[
-          { label: t('nav.dashboard', { defaultValue: 'Dashboard' }), to: '/' },
-          { label: t('reports.title', { defaultValue: 'Reports' }) },
+          { label: t('nav.reports', { defaultValue: 'Reports' }) },
         ]}
-        className="mb-4"
       />
 
-      {/* Header */}
-      <div>
-        <h1 className="text-2xl font-semibold text-content-primary">
-          {t('reports.title', { defaultValue: 'Reports' })}
-        </h1>
-        <p className="mt-1 text-sm text-content-secondary">
-          {t('reports.subtitle', {
-            defaultValue: 'Generate professional reports for your projects',
-          })}
-        </p>
-      </div>
+      {/* Header — module name + icon live in the global top bar; the page
+          renders only the muted subtitle here (canon §2). Project selection
+          lives in the global top bar, so there is no in-page project picker;
+          the BOQ picker below is a within-project picker and stays. */}
+      <PageHeader
+        srTitle={t('nav.reports', { defaultValue: 'Reports' })}
+        subtitle={t('reports.subtitle', {
+          defaultValue: 'Generate professional reports for your projects',
+        })}
+      />
 
-      {/* Report guide */}
-      <InfoHint text={t('reports.guide_desc', { defaultValue: 'BOQ Report = detailed bill of quantities with totals. Cost Report = cost breakdown by category. GAEB XML = structured tender exchange format (.x83). Validation = compliance check results. Schedule = Gantt activities summary. 5D = budget vs. actual cost curves.' })} />
+      <DismissibleInfo
+        storageKey="reports"
+        title={t('reports.intro_title', {
+          defaultValue: 'Hand over a document, not a screenshot',
+        })}
+        more={
+          t('reports.intro_more', { defaultValue: '' })
+            ? <IntroRichText text={t('reports.intro_more')} />
+            : undefined
+        }
+        links={[
+          {
+            label: t('nav.boq', { defaultValue: 'BOQ' }),
+            onClick: () => navigate('/boq'),
+          },
+          {
+            label: t('nav.reporting', { defaultValue: 'Reporting' }),
+            onClick: () => navigate('/reporting'),
+          },
+        ]}
+      >
+        {t('reports.intro_body', {
+          defaultValue:
+            'Choose a project and BOQ, then generate the deliverable you need: detailed BOQ, cost breakdown by category, GAEB X83 for tender exchange, validation results, schedule summary or 5D budget-vs-actual. Each export downloads in the format your client or authority expects. The numbers come straight from the BOQ and cost data, so what you send matches the screen.',
+        })}
+      </DismissibleInfo>
 
-      {/* Project + BOQ selectors */}
+      {/* No project selected — point at the global top-bar project selector
+          rather than rendering a local picker (canon §4). */}
+      {!selectedProjectId ? (
+        <EmptyState
+          icon={<FileText size={28} strokeWidth={1.5} />}
+          title={t('reports.no_project_title', { defaultValue: 'Select a project' })}
+          description={
+            !loadingProjects && projects.length === 0
+              ? t('reports.no_projects', { defaultValue: 'No projects available' })
+              : t('reports.no_project_desc', {
+                  defaultValue:
+                    'Pick a project from the selector in the top bar to generate its reports.',
+                })
+          }
+        />
+      ) : (
+      <>
+      {/* BOQ selector — a within-project picker, kept per canon §4 exception. */}
       <div className="flex flex-wrap items-center gap-4">
-        <div className="flex flex-col gap-1">
-          <label
-            htmlFor="report-project"
-            className="text-xs font-medium text-content-secondary"
-          >
-            {t('projects.title', { defaultValue: 'Project' })}
-          </label>
-          <select
-            id="report-project"
-            value={selectedProjectId}
-            onChange={(e) => {
-              const id = e.target.value;
-              const name = projects.find((p) => p.id === id)?.name ?? '';
-              if (id) {
-                setActiveProject(id, name);
-              } else {
-                useProjectContextStore.getState().clearProject();
-              }
-            }}
-            disabled={loadingProjects}
-            className="h-9 min-w-[220px] rounded-lg border border-border-light bg-surface-primary px-3 text-sm text-content-primary outline-none transition-colors focus:border-oe-blue focus:ring-1 focus:ring-oe-blue disabled:opacity-50"
-          >
-            {loadingProjects && (
-              <option value="">
-                {t('common.loading', { defaultValue: 'Loading...' })}
-              </option>
-            )}
-            {!loadingProjects && projects.length === 0 && (
-              <option value="">
-                {t('reports.no_projects', { defaultValue: 'No projects available' })}
-              </option>
-            )}
-            {projects.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-        </div>
-
         <div className="flex flex-col gap-1">
           <label
             htmlFor="report-boq"
@@ -1155,7 +1155,7 @@ export function ReportsPage() {
 
               const htmlParts: string[] = [];
 
-              htmlParts.push(`<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>${esc(projectName)} — Project Report</title>`);
+              htmlParts.push(`<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>${esc(projectName)} - Project Report</title>`);
               htmlParts.push('<style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;max-width:900px;margin:0 auto;padding:40px 24px;color:#1a1a1a;line-height:1.6}h1{font-size:28px;border-bottom:3px solid #2563eb;padding-bottom:12px;margin-bottom:8px}h2{font-size:20px;color:#2563eb;margin-top:32px;border-bottom:1px solid #e5e7eb;padding-bottom:6px}h3{font-size:16px;margin-top:20px;color:#374151}table{width:100%;border-collapse:collapse;margin:12px 0}th,td{padding:8px 12px;text-align:left;border-bottom:1px solid #e5e7eb;font-size:14px}th{background:#f9fafb;font-weight:600;color:#374151}tr:hover{background:#f9fafb}.badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:12px;font-weight:600}.badge-success{background:#dcfce7;color:#166534}.badge-warning{background:#fef3c7;color:#92400e}.badge-error{background:#fee2e2;color:#991b1b}.badge-blue{background:#dbeafe;color:#1e40af}.badge-neutral{background:#f3f4f6;color:#4b5563}.metric{display:inline-block;margin:8px 16px 8px 0;padding:12px 20px;border:1px solid #e5e7eb;border-radius:8px;text-align:center}.metric-label{font-size:11px;text-transform:uppercase;color:#6b7280;letter-spacing:0.05em}.metric-value{font-size:22px;font-weight:700;color:#1a1a1a}p.generated{color:#9ca3af;font-size:12px;margin-top:40px;border-top:1px solid #e5e7eb;padding-top:12px}@media print{body{padding:0}}</style>');
               htmlParts.push('</head><body>');
               htmlParts.push(`<h1>${esc(projectName)}</h1>`);
@@ -1351,6 +1351,8 @@ export function ReportsPage() {
           disabled={!selectedProjectId}
           t={t}
         />
+      )}
+      </>
       )}
     </div>
   );

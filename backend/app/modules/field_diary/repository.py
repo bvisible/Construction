@@ -17,6 +17,7 @@ from app.modules.field_diary.models import (
     FieldMagicLink,
     FieldModuleGrant,
     FieldSession,
+    FieldSyncLedger,
 )
 
 
@@ -97,6 +98,9 @@ class DiaryActivityRepository(_BaseRepo):
         await self.session.refresh(activity)
         return activity
 
+    async def get_by_id(self, activity_id: uuid.UUID) -> DiaryActivity | None:
+        return await self.session.get(DiaryActivity, activity_id)
+
     async def list_for_entry(
         self,
         entry_id: uuid.UUID,
@@ -121,6 +125,56 @@ class DiaryAttachmentRepository(_BaseRepo):
         entry_id: uuid.UUID,
     ) -> list[DiaryAttachment]:
         stmt = select(DiaryAttachment).where(DiaryAttachment.entry_id == entry_id).order_by(DiaryAttachment.created_at)
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+
+# ── Sync ledger (offline idempotency) ─────────────────────────────────────
+
+
+class FieldSyncLedgerRepository(_BaseRepo):
+    async def get_by_client_op_id(self, client_op_id: str) -> FieldSyncLedger | None:
+        stmt = select(FieldSyncLedger).where(
+            FieldSyncLedger.client_op_id == client_op_id,
+        )
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def create(self, entry: FieldSyncLedger) -> FieldSyncLedger:
+        self.session.add(entry)
+        await self.session.flush()
+        await self.session.refresh(entry)
+        return entry
+
+    async def list_for_session_scope(
+        self,
+        project_id: uuid.UUID,
+        user_id: uuid.UUID,
+        *,
+        since: str | None = None,
+        limit: int = 200,
+    ) -> list[FieldSyncLedger]:
+        """List a worker's applied ops, newest first, optionally since an ISO time.
+
+        Scoped to ``(project_id, user_id)`` so a worker only ever sees their own
+        op history on the session project (no cross-project leak - the caller
+        passes the session's pinned project + user).
+        """
+        stmt = select(FieldSyncLedger).where(
+            FieldSyncLedger.project_id == project_id,
+            FieldSyncLedger.user_id == user_id,
+        )
+        if since is not None:
+            from datetime import datetime as _dt
+
+            try:
+                parsed = _dt.fromisoformat(since.replace("Z", "+00:00"))
+                stmt = stmt.where(FieldSyncLedger.created_at >= parsed)
+            except ValueError:
+                # Unparseable ``since`` is ignored rather than 500-ing; the
+                # client gets the full (capped) list.
+                pass
+        stmt = stmt.order_by(FieldSyncLedger.created_at.desc()).limit(limit)
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 

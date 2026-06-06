@@ -1,4 +1,4 @@
-"""AI Agents framework — Slice 1.
+"""AI Agents framework - Slice 1.
 
 Provides a generic ReAct-style agent loop on top of the single-call
 ``ai`` module LLM client. Adds a Tool protocol + ToolRegistry so each
@@ -8,18 +8,19 @@ UI can render a vertical timeline of every thought / tool call /
 observation / answer.
 
 The runner NEVER auto-applies an agent's output to the BOQ /
-project — it returns the proposal so the user can review it in the
+project - it returns the proposal so the user can review it in the
 review panel (the architecture guide "AI-augmented, human-confirmed" principle).
 """
 
 
 async def on_startup() -> None:
-    """Module startup hook — register permissions + built-in agents."""
+    """Module startup hook - register permissions + built-in agents."""
     from app.modules.ai_agents.agents.advisors import register_advisor_agents
     from app.modules.ai_agents.agents.boq_drafter import register_boq_drafter
     from app.modules.ai_agents.agents.cost_classifier import register_cost_classifier
     from app.modules.ai_agents.agents.document_analyst import register_document_analyst
     from app.modules.ai_agents.agents.estimate_reviewer import register_estimate_reviewer
+    from app.modules.ai_agents.agents.progress_reporter import register_progress_reporter
     from app.modules.ai_agents.agents.project_analyst import register_project_analyst
     from app.modules.ai_agents.agents.rate_benchmarker import register_rate_benchmarker
     from app.modules.ai_agents.permissions import register_ai_agents_permissions
@@ -36,5 +37,6 @@ async def on_startup() -> None:
     register_document_analyst()
     register_project_analyst()
     register_rate_benchmarker()
+    register_progress_reporter()
     # Prompt-only advisory agents (help me think / draft / structure):
     register_advisor_agents()

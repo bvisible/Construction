@@ -5,6 +5,9 @@
 Endpoints (auto-mounted at /api/v1/match_elements/ by the module loader):
 
     POST   /sessions                       Create session (auto-bind catalogue)
+    POST   /sessions/from-excel            Create session from an uploaded xlsx BoQ
+    POST   /sessions/from-pdf              Create session from an uploaded tender PDF
+    POST   /sessions/from-image            Create session from an uploaded photo/drawing
     GET    /sessions?project_id=...        List recent sessions for resume picker
     GET    /sessions/{id}                  Read one session
     PATCH  /sessions/{id}                  Update group_by / filters / archive / threshold
@@ -34,6 +37,7 @@ Endpoints (auto-mounted at /api/v1/match_elements/ by the module loader):
 from __future__ import annotations
 
 import uuid
+from pathlib import Path
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from sqlalchemy import select
@@ -45,11 +49,56 @@ from app.dependencies import CurrentUserId, SessionDep, verify_project_access
 from app.modules.match_elements import pipeline, schemas
 from app.modules.match_elements.analytics import compute_match_analytics
 from app.modules.match_elements.excel_import import parse_boq_xlsx
-from app.modules.match_elements.models import MatchPromptTemplate, MatchSession
+from app.modules.match_elements.models import MatchGroup, MatchPromptTemplate, MatchSession
 from app.modules.match_elements.pdf_import import parse_boq_pdf
 from app.modules.match_elements.service import get_service
+from app.modules.match_elements.signature_match_service import (
+    descriptor_from_group_row,
+    get_signature_service,
+)
 
 router = APIRouter(tags=["match_elements"])
+
+
+# Directory where uploaded /sessions/from-image photos / drawing
+# snapshots are stored on disk. The path form (over inline base64) keeps
+# large photos out of the MatchSession.metadata_ JSON column so session
+# listing pagination stays fast; the ImageSourceAdapter reads the file
+# back lazily on iter_elements. Mirrors the takeoff module's
+# ``_TAKEOFF_DOCUMENTS_DIR`` convention.
+_MATCH_IMAGES_DIR: Path = Path.home() / ".openestimator" / "match_images"
+
+# Per-image upload cap. Vision-LLM providers reject payloads well above
+# this, and a 10 MB photo already exceeds the resolution any model uses
+# internally, so we reject earlier to give the user a clear error rather
+# than a downstream provider 4xx. Mirrors the design's 10 MB limit.
+_MAX_IMAGE_BYTES: int = 10 * 1024 * 1024
+
+# Accepted upload MIME types and their magic-byte signatures. We gate on
+# the actual bytes (not just the Content-Type header or extension) so a
+# renamed ``.exe`` / ``.zip`` can't slip a non-image into the vision
+# pipeline. WebP carries a ``RIFF....WEBP`` container; the inner check
+# below handles the 4-byte gap.
+_IMAGE_MAGIC_PREFIXES: tuple[tuple[bytes, str], ...] = (
+    (b"\xff\xd8\xff", "image/jpeg"),
+    (b"\x89PNG\r\n\x1a\n", "image/png"),
+)
+
+
+def _detect_image_mime(content: bytes) -> str | None:
+    """Return the canonical image MIME from magic bytes, or ``None``.
+
+    Recognises JPEG, PNG and WebP (RIFF container). Anything else is
+    rejected upstream as an unsupported upload - better a clean 400 than
+    handing a non-image to the vision provider.
+    """
+    for prefix, mime in _IMAGE_MAGIC_PREFIXES:
+        if content.startswith(prefix):
+            return mime
+    # WebP: bytes 0..4 == "RIFF", bytes 8..12 == "WEBP".
+    if len(content) >= 12 and content[0:4] == b"RIFF" and content[8:12] == b"WEBP":
+        return "image/webp"
+    return None
 
 
 def _u(s: str) -> uuid.UUID:
@@ -112,7 +161,7 @@ async def create_session_from_excel(
     project_id: uuid.UUID = Form(...),
     file: UploadFile = File(..., description="Bill of Quantities .xlsx file"),
     name: str | None = Form(None),
-    # Accepts a CWICR v3 region id ("DE_BERLIN", ...) or a legacy UUID —
+    # Accepts a CWICR v3 region id ("DE_BERLIN", ...) or a legacy UUID -
     # the service layer routes each kind to its own storage slot. Was
     # ``uuid.UUID | None`` before, which 422'd every wizard submission.
     catalogue_id: str | None = Form(None),
@@ -120,12 +169,12 @@ async def create_session_from_excel(
 ) -> schemas.SessionRead:
     """‌⁠‍Upload an xlsx BoQ and create a match session in one round-trip.
 
-    Implements MAPPING_PROCESS.md §4.1.5 — the Excel BoQ source. Column
+    Implements MAPPING_PROCESS.md §4.1.5 - the Excel BoQ source. Column
     detection is multi-language (English/German/Russian/Spanish/Chinese
     /Japanese/Korean/Turkish/Polish/etc.); see
     :mod:`match_elements.excel_import` for the full alias table.
     Caller-side parsing is still supported via the regular
-    ``POST /sessions`` endpoint with ``boq_rows`` populated — this route
+    ``POST /sessions`` endpoint with ``boq_rows`` populated - this route
     is the convenience path for end users.
     """
     await verify_project_access(project_id, current_user_id, session)
@@ -255,6 +304,112 @@ async def create_session_from_pdf(
         raise HTTPException(status_code=501, detail=str(exc)) from exc
 
 
+@router.post(
+    "/sessions/from-image",
+    response_model=schemas.SessionRead,
+    status_code=201,
+    summary="Create a match session by uploading a photo or drawing snapshot",
+)
+async def create_session_from_image(
+    session: SessionDep,
+    current_user_id: CurrentUserId,
+    project_id: uuid.UUID = Form(...),
+    image: UploadFile = File(..., description="Site photo / drawing snapshot (PNG / JPG / WebP)"),
+    name: str | None = Form(None),
+    # Region id ("DE_BERLIN", ...) or a legacy UUID - the service routes
+    # each kind to its own storage slot (mirrors the Excel / PDF endpoints).
+    catalogue_id: str | None = Form(None),
+    construction_stage: str | None = Form(None),
+) -> schemas.SessionRead:
+    """‌⁠‍Upload one photo / drawing and create an image-source session.
+
+    Implements MAPPING_PROCESS.md §3.1 / §4.1.4 - the "Image" source.
+    The estimator uploads a single site photo, hand sketch or CAD
+    elevation screenshot; the saved file is bound to
+    ``MatchSession.metadata_["image"]`` as ``{"path", "mime",
+    "filename", "image_id"}`` and read back lazily by
+    :class:`ImageSourceAdapter`, which asks the configured vision-LLM to
+    enumerate the visible construction elements with rough quantity
+    estimates. Each element flows through the same matcher pipeline as
+    BIM / DWG / text envelopes.
+
+    Extraction is a *suggestion* the user reviews and confirms - the
+    adapter degrades to zero extracted elements (a usable but empty
+    session) when no AI provider is configured, never auto-applies a
+    match, and always reports ``ai_confidence="low"``.
+
+    Caller-side binding is still supported via the regular
+    ``POST /sessions`` endpoint with ``source="image"`` and an inline
+    ``image`` dict - this route is the convenience path for end users.
+    """
+    await verify_project_access(project_id, current_user_id, session)
+
+    content = await image.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+
+    if len(content) > _MAX_IMAGE_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                "Image is too large. The limit is 10 MB - downscale the photo "
+                "(most phones let you share a smaller copy) and re-upload."
+            ),
+        )
+
+    # Magic-byte gate - reject anything that is not actually a PNG / JPG /
+    # WebP before binding it to the session (mirrors the PDF / takeoff
+    # upload guards). We trust the bytes over the Content-Type header.
+    mime = _detect_image_mime(content)
+    if mime is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Only PNG, JPG or WebP images are supported. Upload a photo or "
+                "drawing snapshot (not a PDF, Office file or archive)."
+            ),
+        )
+
+    # Persist the file to disk so the adapter reads a path (large photos
+    # would otherwise bloat the metadata_ JSON column). The id doubles as
+    # the SourceElement raw_ref so the UI can link results back to the
+    # originating upload.
+    image_id = uuid.uuid4()
+    ext = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}[mime]
+    try:
+        _MATCH_IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+        file_path = _MATCH_IMAGES_DIR / f"{image_id}{ext}"
+        file_path.write_bytes(content)
+    except OSError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Could not store the uploaded image on the server.",
+        ) from exc
+
+    spec = schemas.SessionCreate(
+        project_id=project_id,
+        source="image",
+        name=name or (image.filename or "Photo / Drawing"),
+        catalogue_id=catalogue_id,
+        construction_stage=construction_stage,  # type: ignore[arg-type]
+        image={
+            "path": str(file_path),
+            "mime": mime,
+            "filename": image.filename or f"{image_id}{ext}",
+            "image_id": str(image_id),
+        },
+    )
+
+    try:
+        return await get_service().create_session(
+            session,
+            spec,
+            _u(current_user_id),
+        )
+    except NotImplementedError as exc:
+        raise HTTPException(status_code=501, detail=str(exc)) from exc
+
+
 @router.get("/sessions", response_model=list[schemas.SessionSummary])
 async def list_sessions(
     project_id: uuid.UUID,
@@ -320,10 +475,10 @@ async def get_match_progress(
 ) -> dict[str, object]:
     """Lightweight progress poll for an in-flight or finished match run.
 
-    Read-only — fetches from the process-local in-memory dict the
+    Read-only - fetches from the process-local in-memory dict the
     match runner writes to. The wizard's MatchProgressCard polls this
     every ~800ms while the match is running and stops as soon as
-    ``status`` flips to ``done`` or ``error``. Always 200 — an idle
+    ``status`` flips to ``done`` or ``error``. Always 200 - an idle
     session returns a neutral payload so the FE never has to
     special-case 404 vs "no run yet".
     """
@@ -344,11 +499,11 @@ async def debug_set_progress(
     MatchProgressCard at each of the 5 stages even when the real
     match completes in <2s on the local backend's tiny text fixture.
     Hidden from the OpenAPI schema (``include_in_schema=False``)
-    because it's not part of the public contract — the only legit
+    because it's not part of the public contract - the only legit
     caller is the QA probe.
 
     Safety: the same project-access check the real progress endpoint
-    runs gates this one — a stranger can't poison someone else's
+    runs gates this one - a stranger can't poison someone else's
     session.
     """
     await _assert_session_access(session, session_id, current_user_id)
@@ -683,7 +838,102 @@ async def delete_template(
         raise HTTPException(status_code=501, detail=str(exc)) from exc
 
 
-# ── Visible pipeline (v3034 — 7-stage match wizard) ──────────────────────
+# ── Symbol-signature suggestions (item #18) ──────────────────────────────
+
+
+@router.post(
+    "/suggest-symbols",
+    response_model=schemas.SymbolSuggestResponse,
+    summary="Rank symbol suggestions for an element / candidate descriptor",
+)
+async def suggest_symbols(
+    spec: schemas.SymbolSuggestRequest,
+    session: SessionDep,
+    current_user_id: CurrentUserId,
+) -> schemas.SymbolSuggestResponse:
+    """Deterministically rank a descriptor against the symbol library.
+
+    Computes a shape/symbol signature from the descriptor (category +
+    geometry quantities + property fingerprint) and ranks it against a
+    built-in library of known symbol archetypes (door, window, column,
+    beam, wall, pipe, duct, fixture). Each suggestion carries an honest
+    confidence score (0..1) and the contributing factors.
+
+    This is NOT computer vision. Raster CV symbol detection from drawing
+    pixels is the separate cv-pipeline service (YOLO / PaddleOCR, roadmap
+    Phase 3). The recogniser SUGGESTS; the human confirms downstream via
+    the existing confirm/apply path - nothing is auto-applied.
+
+    Provide either an inline descriptor, or a ``session_id`` + ``group_key``
+    pointing at a stored group whose geometry/properties are turned into a
+    descriptor. Group references are authorised first (IDOR -> 404). Inline
+    descriptor fields, when present, override the resolved group fields.
+    """
+    descriptor: dict[str, object] = {
+        "category": spec.category,
+        "quantities": dict(spec.quantities),
+        "properties": dict(spec.properties),
+    }
+
+    # If a stored group is referenced, authorise the owning session
+    # (404 on missing / denied so we never leak ids) and fold its stored
+    # geometry/properties into the descriptor. Inline fields win.
+    if spec.session_id is not None and spec.group_key is not None:
+        await _assert_session_access(session, spec.session_id, current_user_id)
+        row = (
+            await session.execute(
+                select(
+                    MatchGroup.group_key,
+                    MatchGroup.quantities,
+                    MatchGroup.metadata_,
+                ).where(
+                    MatchGroup.session_id == spec.session_id,
+                    MatchGroup.group_key == spec.group_key,
+                ),
+            )
+        ).first()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Match group not found")
+        resolved = descriptor_from_group_row(row[0], row[1], row[2])
+        # Inline overrides: only override category when the caller actually
+        # sent one; merge inline quantities/properties on top of resolved.
+        if not spec.category:
+            descriptor["category"] = resolved.get("category", "")
+        merged_q = dict(resolved.get("quantities") or {})
+        merged_q.update(spec.quantities)
+        descriptor["quantities"] = merged_q
+        merged_p = dict(resolved.get("properties") or {})
+        merged_p.update(spec.properties)
+        descriptor["properties"] = merged_p
+
+    result = get_signature_service().suggest(
+        descriptor,
+        top_k=spec.top_k,
+        min_confidence=spec.min_confidence,
+    )
+
+    return schemas.SymbolSuggestResponse(
+        signature=schemas.SymbolSignatureOut(
+            category=result.signature.category,
+            ratios=result.signature.ratios,
+            property_fingerprint=list(result.signature.property_fingerprint),
+            raw_dimensions=result.signature.raw_dimensions,
+        ),
+        suggestions=[
+            schemas.SymbolSuggestion(
+                symbol=s.symbol,
+                confidence=s.confidence,
+                confidence_band=s.confidence_band,  # type: ignore[arg-type]
+                factors=[schemas.SymbolFactor(**f) for f in s.factors],
+                rank=s.rank,
+            )
+            for s in result.suggestions
+        ],
+        note=result.note,
+    )
+
+
+# ── Visible pipeline (v3034 - 7-stage match wizard) ──────────────────────
 
 
 @router.get(
@@ -822,7 +1072,7 @@ async def create_prompt_template(
     session: SessionDep,
     current_user_id: CurrentUserId,
 ) -> schemas.PromptTemplateRead:
-    """Create a user-owned prompt — typically a fork of a system prompt.
+    """Create a user-owned prompt - typically a fork of a system prompt.
 
     The ``key`` is validated against the known stage hooks so a typo
     can't orphan a prompt that no stage will ever resolve.
@@ -878,14 +1128,14 @@ async def update_prompt_template(
     session: SessionDep,
     current_user_id: CurrentUserId,
 ) -> schemas.PromptTemplateRead:
-    """Edit a user-owned prompt. System prompts are immutable — fork first."""
+    """Edit a user-owned prompt. System prompts are immutable - fork first."""
     row = await session.get(MatchPromptTemplate, template_id)
     if row is None:
         raise HTTPException(status_code=404, detail=translate("errors.prompt_not_found", locale=get_locale()))
     if row.is_system:
         raise HTTPException(
             status_code=403,
-            detail="System prompts are read-only — fork it first",
+            detail="System prompts are read-only - fork it first",
         )
     try:
         uid = uuid.UUID(current_user_id)
@@ -945,7 +1195,7 @@ async def get_match_analytics(
     ``cwicr_DE``) further narrows the window when diagnosing one
     catalogue's recall.
 
-    Always 200 — empty windows return zero-counters with no alerts so
+    Always 200 - empty windows return zero-counters with no alerts so
     the dashboard renders cleanly on a fresh deploy.
     """
     if project_id is not None:
@@ -1016,7 +1266,7 @@ async def qdrant_install(_current_user_id: CurrentUserId) -> dict[str, object]:
     Mirrors the converter-install pattern used by /takeoff and /bim:
     one-click, no Docker. The download is signed by Qdrant and stored
     under ``~/.openestimator/qdrant``. After install we re-probe so the
-    response reflects the live binding state — front-end can branch on
+    response reflects the live binding state - front-end can branch on
     ``reachable`` to flip the card immediately.
 
     After a successful install we also drop the cached vector-client

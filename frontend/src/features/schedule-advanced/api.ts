@@ -634,3 +634,217 @@ export function baselineDelta(
     currentTasks,
   );
 }
+
+/* ── Takt / line-of-balance ───────────────────────────────────────────── */
+
+export type TaktStatus = 'draft' | 'active' | 'completed' | 'archived';
+export type TaktActivityStatus = 'planned' | 'in_progress' | 'completed';
+
+export interface TaktLocation {
+  id: string;
+  takt_schedule_id: string;
+  sequence_order: number;
+  name: string;
+  description: string;
+  work_area_sqm?: string | number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TaktSchedule {
+  id: string;
+  master_schedule_id: string;
+  name: string;
+  description: string;
+  target_cycle_days: number;
+  takt_rhythm_tolerance_days: number;
+  location_sequence_count: number;
+  status: TaktStatus;
+  created_by?: string | null;
+  locations: TaktLocation[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TaktActivity {
+  id: string;
+  takt_schedule_id: string;
+  name: string;
+  activity_code: string;
+  sequence_order: number;
+  planned_cycle_duration_days: number;
+  crew_size: number;
+  crew_skill_codes: string[];
+  buffer_days_before: number;
+  sequence_predecessor_activity_id?: string | null;
+  status: TaktActivityStatus;
+  actual_cycle_duration_days?: string | number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LineOfBalanceBar {
+  activity_id: string;
+  location_id: string;
+  activity_name: string;
+  location_name: string;
+  sequence_order: number;
+  start_day: number;
+  end_day: number;
+  crew_size: number;
+  is_critical: boolean;
+  has_rhythm_break: boolean;
+}
+
+export interface TaktViolation {
+  activity_id: string;
+  location_id?: string | null;
+  activity_name: string;
+  location_name: string;
+  violation_type: 'rhythm_break' | 'overlap' | 'buffer_infeasible';
+  deviation_days: number;
+  severity: 'warning' | 'error';
+  message: string;
+}
+
+export interface LineOfBalance {
+  takt_schedule_id: string;
+  total_makespan_days: number;
+  bars: LineOfBalanceBar[];
+  violations: TaktViolation[];
+  critical_path: string[];
+  total_locations: number;
+  total_activities: number;
+  average_cycle_days: number;
+}
+
+export interface TaktLocationInput {
+  sequence_order: number;
+  name: string;
+  description?: string;
+  work_area_sqm?: number | null;
+}
+
+export interface TaktActivityInput {
+  name: string;
+  activity_code?: string;
+  sequence_order?: number;
+  planned_cycle_duration_days: number;
+  crew_size?: number;
+  crew_skill_codes?: string[];
+  buffer_days_before?: number;
+}
+
+export function listTaktSchedules(
+  masterScheduleId: string,
+): Promise<TaktSchedule[]> {
+  return apiGet<TaktSchedule[]>(
+    `/v1/schedule-advanced/masters/${encodeURIComponent(
+      masterScheduleId,
+    )}/takt-schedules`,
+  );
+}
+
+export function getTaktSchedule(taktId: string): Promise<TaktSchedule> {
+  return apiGet<TaktSchedule>(
+    `/v1/schedule-advanced/takt-schedules/${encodeURIComponent(taktId)}`,
+  );
+}
+
+export function createTaktSchedule(data: {
+  master_schedule_id: string;
+  name: string;
+  description?: string;
+  target_cycle_days?: number;
+  takt_rhythm_tolerance_days?: number;
+  locations: TaktLocationInput[];
+}): Promise<TaktSchedule> {
+  return apiPost<TaktSchedule>('/v1/schedule-advanced/takt-schedules', data);
+}
+
+export function updateTaktSchedule(
+  taktId: string,
+  data: {
+    name?: string;
+    description?: string;
+    target_cycle_days?: number;
+    takt_rhythm_tolerance_days?: number;
+    status?: TaktStatus;
+  },
+): Promise<TaktSchedule> {
+  return apiPatch<TaktSchedule>(
+    `/v1/schedule-advanced/takt-schedules/${encodeURIComponent(taktId)}`,
+    data,
+  );
+}
+
+export function deleteTaktSchedule(taktId: string): Promise<void> {
+  return apiDelete(
+    `/v1/schedule-advanced/takt-schedules/${encodeURIComponent(taktId)}`,
+  );
+}
+
+export function listTaktActivities(taktId: string): Promise<TaktActivity[]> {
+  return apiGet<TaktActivity[]>(
+    `/v1/schedule-advanced/takt-schedules/${encodeURIComponent(
+      taktId,
+    )}/activities`,
+  );
+}
+
+export function importTaktActivities(
+  taktId: string,
+  activities: TaktActivityInput[],
+): Promise<TaktActivity[]> {
+  return apiPost<TaktActivity[]>(
+    `/v1/schedule-advanced/takt-schedules/${encodeURIComponent(
+      taktId,
+    )}/activities/import`,
+    { activities },
+  );
+}
+
+export function updateTaktActivity(
+  taktId: string,
+  activityId: string,
+  data: {
+    planned_cycle_duration_days?: number;
+    actual_cycle_duration_days?: number | null;
+    status?: TaktActivityStatus;
+  },
+): Promise<TaktActivity> {
+  return apiPatch<TaktActivity>(
+    `/v1/schedule-advanced/takt-schedules/${encodeURIComponent(
+      taktId,
+    )}/activities/${encodeURIComponent(activityId)}`,
+    data,
+  );
+}
+
+export function deleteTaktActivity(
+  taktId: string,
+  activityId: string,
+): Promise<void> {
+  return apiDelete(
+    `/v1/schedule-advanced/takt-schedules/${encodeURIComponent(
+      taktId,
+    )}/activities/${encodeURIComponent(activityId)}`,
+  );
+}
+
+export function computeLOB(taktId: string): Promise<LineOfBalance> {
+  return apiPost<LineOfBalance>(
+    `/v1/schedule-advanced/takt-schedules/${encodeURIComponent(
+      taktId,
+    )}/compute-lob`,
+    {},
+  );
+}
+
+export function getLOB(taktId: string): Promise<LineOfBalance> {
+  return apiGet<LineOfBalance>(
+    `/v1/schedule-advanced/takt-schedules/${encodeURIComponent(
+      taktId,
+    )}/line-of-balance`,
+  );
+}

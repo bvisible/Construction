@@ -20,8 +20,9 @@ import {
   FileText,
   AlertTriangle,
 } from 'lucide-react';
-import { Button, Card, Badge, EmptyState, RecoveryCard, Skeleton, InfoHint, SkeletonTable, Breadcrumb, ConfirmDialog } from '@/shared/ui';
+import { Button, Card, Badge, EmptyState, RecoveryCard, DismissibleInfo, IntroRichText, SkeletonTable, Breadcrumb, ConfirmDialog } from '@/shared/ui';
 import { RequiresProject } from '@/shared/auth/RequiresProject';
+import { PageHeader } from '@/shared/ui/PageHeader';
 import {
   WideModal,
   WideModalSection,
@@ -1207,13 +1208,13 @@ function PackageDetail({
           confidence === 'high'
             ? t('tendering.confidence_high', 'High confidence')
             : confidence === 'low'
-              ? t('tendering.confidence_low', 'Low confidence — review carefully')
+              ? t('tendering.confidence_low', 'Low confidence - review carefully')
               : t('tendering.confidence_medium', 'Medium confidence');
         const reasonText: Record<typeof reasonKey, string> = {
           single_bid: t('tendering.reason_single_bid', 'Only one eligible bid received.'),
           clear_winner: t('tendering.reason_clear_winner', 'Clearly the lowest competitive offer.'),
-          narrow_gap: t('tendering.reason_narrow_gap', 'Winner and runner-up are within 2% — consider non-price factors.'),
-          suspicious_low: t('tendering.reason_suspicious_low', 'Lowest bid is {{pct}}% below the median — verify scope and pricing before awarding.', { pct: belowMedianPct }),
+          narrow_gap: t('tendering.reason_narrow_gap', 'Winner and runner-up are within 2% - consider non-price factors.'),
+          suspicious_low: t('tendering.reason_suspicious_low', 'Lowest bid is {{pct}}% below the median - verify scope and pricing before awarding.', { pct: belowMedianPct }),
         };
         return (
           <Card className={`border ${palette}`}>
@@ -1279,15 +1280,17 @@ function PackageDetail({
 
 export function TenderingPage() {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const { activeProjectId, setActiveProject } = useProjectContextStore();
+  const { activeProjectId } = useProjectContextStore();
 
   const selectedProjectId = activeProjectId ?? '';
   const [selectedPackageId, setSelectedPackageId] = useState('');
   const [showCreateDialog, setShowCreateDialog] = useState(false);
 
-  // Fetch projects
-  const { data: projects, isLoading: projectsLoading } = useQuery({
+  // Fetch projects — used to resolve the active project's name + currency.
+  // Project SELECTION happens in the global top bar, not here.
+  const { data: projects } = useQuery({
     queryKey: ['projects'],
     queryFn: () => apiGet<Project[]>('/v1/projects/'),
     staleTime: 5 * 60_000,
@@ -1326,83 +1329,72 @@ export function TenderingPage() {
   // symbol-less number rather than mislabelling amounts as EUR.
   const currency = selectedProject?.currency || '';
 
-  const handleProjectChange = useCallback((id: string) => {
-    const name = projects?.find((p) => p.id === id)?.name ?? '';
-    if (id) {
-      setActiveProject(id, name);
-    } else {
-      useProjectContextStore.getState().clearProject();
-    }
-    setSelectedPackageId('');
-  }, [projects, setActiveProject]);
-
   const handlePackageCreated = useCallback(() => {
     queryClient.invalidateQueries({
       queryKey: ['tendering-packages', selectedProjectId],
     });
   }, [queryClient, selectedProjectId]);
 
-  const projectOptions = (projects || []).map((p) => ({
-    value: p.id,
-    label: p.name,
-  }));
-
   return (
-    <div className="w-full animate-fade-in">
+    <div className="space-y-5 animate-fade-in">
       <Breadcrumb items={[
-        { label: t('nav.dashboard', 'Dashboard'), to: '/' },
+        ...(selectedProject ? [{ label: selectedProject.name, to: `/projects/${selectedProject.id}` }] : []),
         { label: t('tendering.title', 'Tendering') },
-      ]} className="mb-4" />
+      ]} />
 
-      {/* Header */}
-      <div className="mb-6 flex items-start justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-content-primary">
-            {t('tendering.title', 'Tendering')}
-          </h1>
-          <p className="mt-1 text-sm text-content-secondary">
-            {t(
-              'tendering.subtitle',
-              'Manage bid packages, collect and compare subcontractor offers',
-            )}
-          </p>
-        </div>
-      </div>
+      {/* Header — project selection lives in the global top bar; the page
+          reads the shared project context, so there is no in-page project
+          picker. */}
+      <PageHeader
+        subtitle={t(
+          'tendering.subtitle',
+          'Manage bid packages, collect and compare subcontractor offers',
+        )}
+        actions={
+          <span title={!selectedProjectId ? t('tendering.select_project_first', { defaultValue: 'Select a project first' }) : undefined}>
+            <Button
+              variant="primary"
+              icon={<Plus size={16} />}
+              disabled={!selectedProjectId}
+              onClick={() => setShowCreateDialog(true)}
+            >
+              {t('tendering.new_package', 'New Tender Package')}
+            </Button>
+          </span>
+        }
+      />
 
       {/* Workflow explanation */}
-      <InfoHint className="mb-6" text={t('tendering.workflow_desc', { defaultValue: 'Tendering workflow: Draft (prepare package) → Issued (send to bidders) → Collecting (receive bids) → Evaluating (compare offers side-by-side) → Awarded (select winner). Create a package from a BOQ, add subcontractor bids, then use the comparison table to identify the best offer. Add 2+ bids to see a side-by-side analysis.' })} />
-
-      {/* Project selector + New package button */}
-      <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-end">
-        <div className="flex-1">
-          {projectsLoading ? (
-            <Skeleton height={40} className="w-full" rounded="md" />
-          ) : (
-            <div>
-              <label className="text-sm font-medium text-content-primary block mb-1.5">
-                {t('tendering.select_project', 'Project')}
-              </label>
-              <SelectDropdown
-                value={selectedProjectId}
-                onChange={handleProjectChange}
-                options={projectOptions}
-                placeholder={t('tendering.select_project_placeholder', 'Choose a project...')}
-              />
-            </div>
-          )}
-        </div>
-        <span title={!selectedProjectId ? t('tendering.select_project_first', { defaultValue: 'Select a project first' }) : undefined}>
-          <Button
-            variant="primary"
-            size="md"
-            icon={<Plus size={16} />}
-            disabled={!selectedProjectId}
-            onClick={() => setShowCreateDialog(true)}
-          >
-            {t('tendering.new_package', 'New Tender Package')}
-          </Button>
-        </span>
-      </div>
+      <DismissibleInfo
+        storageKey="tendering"
+        title={t('tendering.intro_title', {
+          defaultValue: 'Take a priced BOQ to market and back',
+        })}
+        more={
+          t('tendering.intro_more', { defaultValue: '' })
+            ? <IntroRichText text={t('tendering.intro_more')} />
+            : undefined
+        }
+        links={[
+          {
+            label: t('nav.boq', { defaultValue: 'BOQ' }),
+            onClick: () => navigate('/boq'),
+          },
+          {
+            label: t('nav.procurement', { defaultValue: 'Procurement' }),
+            onClick: () => navigate('/procurement'),
+          },
+          {
+            label: t('nav.bid_management', { defaultValue: 'Bid Management' }),
+            onClick: () => navigate('/bid-management'),
+          },
+        ]}
+      >
+        {t('tendering.intro_body', {
+          defaultValue:
+            'Build bid packages straight from a project BOQ, issue them to subcontractors, and compare offers side by side through Draft, Issued, Collecting, Evaluating and Awarded. Awarding a winner writes the agreed rates back to the BOQ and drafts a purchase order in Procurement, which is what sets this apart from the subcontractor-package flow in Bid Management.',
+        })}
+      </DismissibleInfo>
 
       {/* Empty state when no project chosen (page-internal selector above) */}
       {!selectedProjectId && (

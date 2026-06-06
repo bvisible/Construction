@@ -8,11 +8,35 @@
 // raw prompt instead, but it is never the default path.
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
-import { X, Loader2, Sparkles, ChevronDown, Wand2 } from 'lucide-react';
+import { X, Loader2, Sparkles, ChevronDown, Wand2, Clock, Wrench, Zap } from 'lucide-react';
 import clsx from 'clsx';
 
 import { resolveAgentIcon } from './agentMeta';
-import type { CustomAgent, CustomAgentInput, GuidedAgentSpec } from '../api';
+import { SchedulePanel } from './SchedulePanel';
+import { ToolPanel } from './ToolPanel';
+import { TriggerPanel } from './TriggerPanel';
+import type {
+  CustomAgent,
+  CustomAgentInput,
+  EventTriggerDescriptor,
+  GuidedAgentSpec,
+  ToolWithPermission,
+} from '../api';
+
+/** Schedule state collected by the builder and persisted by the parent. */
+export interface BuilderSchedule {
+  cron: string | null;
+  enabled: boolean;
+  scheduleInput: string;
+}
+
+/** Everything the builder emits on save: the agent + its automation. */
+export interface BuilderSubmit {
+  agent: CustomAgentInput;
+  schedule: BuilderSchedule;
+  allowedTools: string[];
+  triggers: string[];
+}
 
 // ── Pickable icons + categories ─────────────────────────────────────────────
 // A curated subset of the icons the gallery already knows how to render
@@ -61,8 +85,22 @@ interface CustomAgentBuilderProps {
   editing?: CustomAgent | null;
   saving: boolean;
   error?: string | null;
+  /** The full tool catalogue (with required permissions) for the Tools panel. */
+  tools?: ToolWithPermission[];
+  /** The event-trigger catalogue (with availability) for the Triggers panel. */
+  triggerCatalogue?: EventTriggerDescriptor[];
+  /** Initial schedule, pre-loaded by the parent when editing. */
+  initialSchedule?: BuilderSchedule | null;
+  /** Next scheduled run (ISO UTC) loaded by the parent when editing. */
+  initialNextRunAt?: string | null;
+  /** Initially-granted tool slugs, pre-loaded by the parent when editing. */
+  initialTools?: string[];
+  /** Initially-subscribed event triggers, pre-loaded by the parent when editing. */
+  initialTriggers?: string[];
+  /** True while the parent loads the agent's automation envelope. */
+  loadingAutomation?: boolean;
   onClose: () => void;
-  onSubmit: (input: CustomAgentInput) => void;
+  onSubmit: (submit: BuilderSubmit) => void;
 }
 
 const EMPTY_GUIDED: GuidedAgentSpec = {
@@ -77,11 +115,20 @@ const EMPTY_GUIDED: GuidedAgentSpec = {
  * The guided custom-agent builder modal. Beautiful, minimal, and forgiving:
  * only the name and the "what it helps with" goal are required.
  */
+const EMPTY_SCHEDULE: BuilderSchedule = { cron: null, enabled: false, scheduleInput: '' };
+
 export function CustomAgentBuilder({
   open,
   editing,
   saving,
   error,
+  tools = [],
+  triggerCatalogue = [],
+  initialSchedule = null,
+  initialNextRunAt = null,
+  initialTools = [],
+  initialTriggers = [],
+  loadingAutomation = false,
   onClose,
   onSubmit,
 }: CustomAgentBuilderProps): JSX.Element | null {
@@ -96,6 +143,13 @@ export function CustomAgentBuilder({
   const [examplesText, setExamplesText] = useState('');
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [rawPrompt, setRawPrompt] = useState('');
+  // Automation state (Item 29) — persisted by the parent after the agent saves.
+  const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [toolsOpen, setToolsOpen] = useState(false);
+  const [triggersOpen, setTriggersOpen] = useState(false);
+  const [schedule, setSchedule] = useState<BuilderSchedule>(EMPTY_SCHEDULE);
+  const [selectedTools, setSelectedTools] = useState<string[]>([]);
+  const [selectedTriggers, setSelectedTriggers] = useState<string[]>([]);
 
   // (Re)seed the form whenever the modal opens or the target changes.
   useEffect(() => {
@@ -122,7 +176,23 @@ export function CustomAgentBuilder({
       setAdvancedOpen(false);
       setRawPrompt('');
     }
+    // Reset the automation sections on (re)open; the parent pushes the editing
+    // agent's saved schedule/tools/triggers via the initial* props once loaded.
+    setScheduleOpen(false);
+    setToolsOpen(false);
+    setTriggersOpen(false);
   }, [open, editing]);
+
+  // Seed automation state from the parent-loaded envelope (edit mode).
+  useEffect(() => {
+    if (!open) return;
+    setSchedule(initialSchedule ?? EMPTY_SCHEDULE);
+    setSelectedTools(initialTools ?? []);
+    setSelectedTriggers(initialTriggers ?? []);
+    if (initialSchedule?.cron) setScheduleOpen(true);
+    if ((initialTools ?? []).length > 0) setToolsOpen(true);
+    if ((initialTriggers ?? []).length > 0) setTriggersOpen(true);
+  }, [open, initialSchedule, initialTools, initialTriggers]);
 
   // Close on Escape.
   useEffect(() => {
@@ -172,7 +242,7 @@ export function CustomAgentBuilder({
           },
       system_prompt: useRaw ? rawPrompt.trim() : '',
     };
-    onSubmit(input);
+    onSubmit({ agent: input, schedule, allowedTools: selectedTools, triggers: selectedTriggers });
   };
 
   const PreviewIcon = resolveAgentIcon(icon);
@@ -214,7 +284,7 @@ export function CustomAgentBuilder({
               </h2>
               <p className="text-xs text-content-tertiary">
                 {t('agents.builder.subtitle', {
-                  defaultValue: 'Answer a few questions — we turn them into a ready-to-run agent.',
+                  defaultValue: 'Answer a few questions - we turn them into a ready-to-run agent.',
                 })}
               </p>
             </div>
@@ -446,6 +516,109 @@ export function CustomAgentBuilder({
                 })}
                 className={inputClass}
               />
+            </div>
+
+            {/* Schedule (Item 29) — collapsible automation section */}
+            <div className="border-t border-border-light pt-3">
+              <button
+                type="button"
+                onClick={() => setScheduleOpen((v) => !v)}
+                className="flex w-full items-center gap-1.5 text-xs font-medium text-content-secondary hover:text-content-primary"
+                aria-expanded={scheduleOpen}
+              >
+                <ChevronDown
+                  className={clsx('h-3.5 w-3.5 transition-transform', scheduleOpen && 'rotate-180')}
+                  aria-hidden="true"
+                />
+                <Clock className="h-3.5 w-3.5 text-oe-blue" aria-hidden="true" />
+                {t('agents.builder.schedule_section', { defaultValue: 'Schedule (run automatically)' })}
+                {schedule.cron && (
+                  <span className="ml-auto rounded-full bg-oe-blue-subtle px-2 py-0.5 text-2xs font-medium text-oe-blue-text">
+                    {t('agents.builder.scheduled_badge', { defaultValue: 'On' })}
+                  </span>
+                )}
+              </button>
+              {scheduleOpen && (
+                <div className="mt-2">
+                  {loadingAutomation ? (
+                    <p className="text-xs text-content-tertiary">
+                      {t('agents.builder.loading_automation', { defaultValue: 'Loading…' })}
+                    </p>
+                  ) : (
+                    <SchedulePanel
+                      cron={schedule.cron}
+                      enabled={schedule.enabled}
+                      scheduleInput={schedule.scheduleInput}
+                      nextRunAt={initialNextRunAt}
+                      onChange={setSchedule}
+                    />
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Tools (Item 29) — collapsible tool-grant section */}
+            <div className="border-t border-border-light pt-3">
+              <button
+                type="button"
+                onClick={() => setToolsOpen((v) => !v)}
+                className="flex w-full items-center gap-1.5 text-xs font-medium text-content-secondary hover:text-content-primary"
+                aria-expanded={toolsOpen}
+              >
+                <ChevronDown
+                  className={clsx('h-3.5 w-3.5 transition-transform', toolsOpen && 'rotate-180')}
+                  aria-hidden="true"
+                />
+                <Wrench className="h-3.5 w-3.5 text-oe-blue" aria-hidden="true" />
+                {t('agents.builder.tools_section', { defaultValue: 'Tools (let it read your data)' })}
+                {selectedTools.length > 0 && (
+                  <span className="ml-auto rounded-full bg-oe-blue-subtle px-2 py-0.5 text-2xs font-medium text-oe-blue-text">
+                    {selectedTools.length}
+                  </span>
+                )}
+              </button>
+              {toolsOpen && (
+                <div className="mt-2">
+                  <ToolPanel
+                    tools={tools}
+                    selected={selectedTools}
+                    onChange={setSelectedTools}
+                    loading={loadingAutomation}
+                  />
+                </div>
+              )}
+            </div>
+
+            {/* Triggers (Item 29) — collapsible event-subscription section */}
+            <div className="border-t border-border-light pt-3">
+              <button
+                type="button"
+                onClick={() => setTriggersOpen((v) => !v)}
+                className="flex w-full items-center gap-1.5 text-xs font-medium text-content-secondary hover:text-content-primary"
+                aria-expanded={triggersOpen}
+              >
+                <ChevronDown
+                  className={clsx('h-3.5 w-3.5 transition-transform', triggersOpen && 'rotate-180')}
+                  aria-hidden="true"
+                />
+                <Zap className="h-3.5 w-3.5 text-oe-blue" aria-hidden="true" />
+                {t('agents.builder.triggers_section', { defaultValue: 'Triggers (run on an event)' })}
+                {selectedTriggers.length > 0 && (
+                  <span className="ml-auto rounded-full bg-oe-blue-subtle px-2 py-0.5 text-2xs font-medium text-oe-blue-text">
+                    {selectedTriggers.length}
+                  </span>
+                )}
+              </button>
+              {triggersOpen && (
+                <div className="mt-2">
+                  <TriggerPanel
+                    triggers={triggerCatalogue}
+                    selected={selectedTriggers}
+                    onChange={setSelectedTriggers}
+                    loading={loadingAutomation}
+                  />
+                </div>
+              )}
             </div>
 
             {/* Advanced: raw prompt escape hatch */}

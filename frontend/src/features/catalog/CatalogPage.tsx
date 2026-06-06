@@ -30,7 +30,8 @@ import {
   AlertTriangle,
   type LucideIcon,
 } from 'lucide-react';
-import { Button, Card, Badge, ConfirmDialog, EmptyState, Skeleton, InfoHint, CountryFlag } from '@/shared/ui';
+import { Button, Card, Badge, ConfirmDialog, EmptyState, Skeleton, DismissibleInfo, IntroRichText, CountryFlag, CountryFlagBackdrop, Breadcrumb } from '@/shared/ui';
+import { PageHeader } from '@/shared/ui/PageHeader';
 import { useConfirm } from '@/shared/hooks/useConfirm';
 import { apiGet, apiPost, apiPatch, apiDelete } from '@/shared/lib/api';
 import { getIntlLocale } from '@/shared/lib/formatters';
@@ -1604,24 +1605,27 @@ export function CatalogPage() {
   }, [queryClient]);
 
   return (
-    <div className="w-full animate-fade-in">
-      {/* Header */}
-      <div className="mb-5 flex items-start justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-content-primary">
-            {t('catalog.title', { defaultValue: 'Resource Catalog' })}
-          </h1>
-          <p className="mt-1 text-sm text-content-secondary">
-            {regionInfo
-              ? `${regionInfo.name} -- ${total.toLocaleString()} ${t('catalog.resources', { defaultValue: 'resources' })}`
-              : total > 0
-                ? `${total.toLocaleString()} ${t('catalog.resources_found', { defaultValue: 'resources found' })}`
-                : t('catalog.search_hint', {
-                    defaultValue: 'Browse materials, equipment, labor, and operators',
-                  })}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
+    <div className="relative space-y-5 animate-fade-in">
+      {/* Faint watermark of the selected resource-database country - reads
+          as a wash behind the catalog, never interactive. */}
+      <CountryFlagBackdrop code={region || null} />
+      <Breadcrumb items={[{ label: t('catalog.title', { defaultValue: 'Resource Catalog' }) }]} />
+      {/* Canonical top block — module name + icon are shown by the global top
+          app bar. The page renders only its (contextual) subtitle on the left
+          and the page actions on the right. */}
+      <PageHeader
+        srTitle={t('catalog.title', { defaultValue: 'Resource Catalog' })}
+        subtitle={
+          regionInfo
+            ? `${regionInfo.name}, ${total.toLocaleString()} ${t('catalog.resources', { defaultValue: 'resources' })}`
+            : total > 0
+              ? `${total.toLocaleString()} ${t('catalog.resources_found', { defaultValue: 'resources found' })}`
+              : t('catalog.search_hint', {
+                  defaultValue: 'Browse materials, equipment, labor, and operators',
+                })
+        }
+        actions={
+          <>
           {/* Region selector dropdown */}
           {hasAnyRegions && (
             <div className="relative">
@@ -1629,7 +1633,7 @@ export function CatalogPage() {
                 value={region}
                 onChange={(e) => handleRegionChange(e.target.value)}
                 aria-label={t('catalog.filter_region', { defaultValue: 'Filter by region' })}
-                className="h-9 appearance-none rounded-lg border border-border bg-surface-primary pl-3 pr-8 text-sm text-content-primary transition-all focus:outline-none focus:ring-2 focus:ring-oe-blue focus:border-transparent"
+                className="h-7 appearance-none rounded-lg border border-border bg-surface-primary pl-3 pr-8 text-sm text-content-primary transition-all focus:outline-none focus:ring-2 focus:ring-oe-blue focus:border-transparent"
               >
                 <option value="">
                   {t('catalog.all_regions', { defaultValue: 'All regions' })}
@@ -1692,17 +1696,26 @@ export function CatalogPage() {
           >
             {t('catalog.import_region', { defaultValue: 'Import Region' })}
           </Button>
-        </div>
-      </div>
-
-      {/* What is catalog info hint */}
-      <InfoHint
-        className="mb-4"
-        text={t('catalog.what_is_catalog', {
-          defaultValue:
-            'Resource Catalog contains atomic building blocks for estimates: individual materials, labor rates, and equipment costs. Use it to manage and update prices across all your projects -- apply inflation adjustments, regional coefficients, or group-level price changes.',
-        })}
+          </>
+        }
       />
+
+      {/* What is catalog info banner */}
+      <DismissibleInfo
+        storageKey="catalog"
+        title={t('catalog.intro_title', { defaultValue: 'Keep the building blocks priced right' })}
+        more={t('catalog.intro_more', { defaultValue: '' }) ? <IntroRichText text={t('catalog.intro_more')} /> : undefined}
+        links={[
+          { label: t('nav.assemblies', { defaultValue: 'Assemblies' }), onClick: () => navigate('/assemblies') },
+          { label: t('nav.costs', { defaultValue: 'Cost Database' }), onClick: () => navigate('/costs') },
+          { label: t('nav.boq', { defaultValue: 'Bill of Quantities' }), onClick: () => navigate('/boq') },
+        ]}
+      >
+        {t('catalog.intro_body', {
+          defaultValue:
+            'Maintain the atomic items behind every estimate, the individual materials, labour rates and equipment costs, sourced from CWICR regional databases or your own imports. Bulk inflation, regional and group price adjustments apply here, then feed assemblies, BOQ unit rates and cost matching across projects.',
+        })}
+      </DismissibleInfo>
 
       {/* Region Import Grid (expandable) */}
       {(showImportGrid || (!hasAnyRegions && totalCount === 0)) && (
@@ -1918,7 +1931,7 @@ export function CatalogPage() {
             })}
             {(stats?.by_category ?? []).length === 0 && (
               <div className="px-3 py-3 text-2xs text-content-tertiary">
-                {t('catalog.no_categories', { defaultValue: 'No categories yet — import a region to populate.' })}
+                {t('catalog.no_categories', { defaultValue: 'No categories yet - import a region to populate.' })}
               </div>
             )}
           </div>

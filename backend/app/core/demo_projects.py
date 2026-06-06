@@ -1,11 +1,11 @@
 """‌⁠‍Demo project templates that can be installed from the marketplace.
 
 Provides 5 complete demo projects with BOQ, Schedule, Budget, and Tendering data:
-  1. residential-berlin  — Wohnanlage Berlin-Mitte (existing seed, re-created)
-  2. office-london       — One Canary Square (existing seed, re-created)
-  3. medical-us          — Downtown Medical Center (new)
-  4. warehouse-dubai     — Logistics Hub Jebel Ali (new)
-  5. school-paris        — Ecole Primaire Belleville (new)
+  1. residential-berlin  - Wohnanlage Berlin-Mitte (existing seed, re-created)
+  2. office-london       - One Canary Square (existing seed, re-created)
+  3. medical-us          - Downtown Medical Center (new)
+  4. warehouse-dubai     - Logistics Hub Jebel Ali (new)
+  5. school-paris        - Ecole Primaire Belleville (new)
 """
 
 from __future__ import annotations
@@ -162,7 +162,7 @@ SectionDef = tuple[str, str, dict, list[tuple[str, str, str, float, float, dict]
 # (package_name, description, status, companies_list)
 TenderPackageDef = tuple[str, str, str, list[tuple[str, str, float]]]
 
-# (name, start_date_str, end_date_str)  — explicit schedule activities
+# (name, start_date_str, end_date_str)  - explicit schedule activities
 ScheduleActivityDef = tuple[str, str, str]
 
 # (code, title, description, category, probability, impact_cost,
@@ -2252,10 +2252,10 @@ DEMO_TEMPLATES: dict[str, DemoTemplate] = {t.demo_id: t for t in [_BERLIN, _LOND
 # POST /api/demo/install/office-london, but it isn't auto-seeded because
 # operators consistently asked us to drop it from the default workspace.
 DEFAULT_DEMO_IDS: tuple[str, ...] = (
-    "residential-berlin",  # residential — DACH DIN 276, EUR
-    "warehouse-dubai",  # industrial / infrastructure — AED
-    "school-paris",  # small renovation / education fit-out — FR EUR
-    "medical-us",  # international healthcare — US MasterFormat, USD
+    "residential-berlin",  # residential - DACH DIN 276, EUR
+    "warehouse-dubai",  # industrial / infrastructure - AED
+    "school-paris",  # small renovation / education fit-out - FR EUR
+    "medical-us",  # international healthcare - US MasterFormat, USD
 )
 
 # Catalog info for the marketplace / frontend
@@ -3800,13 +3800,13 @@ def _enrich_position_metadata(description: str, unit: str, unit_rate: float, cla
 def _clean_trade(section_title: str) -> str:
     """Extract a short, human trade label from a section title.
 
-    Section titles look like ``"KG 330 — Aussenwande"`` or
+    Section titles look like ``"KG 330 - Aussenwande"`` or
     ``"Division 03 - Concrete"`` or ``"2.1 Structural Steel"``. Strip a
     leading code token + separator so we keep the readable trade name.
     """
     title = " ".join(str(section_title or "").split())
     # Drop a parenthetical English gloss like "(External Walls)" -> keep core.
-    for sep in (" — ", " - ", " – ", ": "):
+    for sep in (" - ", " - ", " – ", ": "):
         if sep in title:
             head, _, tail = title.partition(sep)
             # If the head is a pure code (KG 330 / Division 03 / 2.1), use tail.
@@ -4384,7 +4384,7 @@ def _generate_module_data(
         )
 
     # ── GAP MODULES (no hand data anywhere today) ────────────────────────
-    # variations — issued variation orders derived from the first trades.
+    # variations - issued variation orders derived from the first trades.
     variations: list[dict] = []
     var_n = min(max(len(trades), 3), 5)
     for i in range(var_n):
@@ -4402,7 +4402,7 @@ def _generate_module_data(
             }
         )
 
-    # daily_diary — one diary header per spread day across the timeline.
+    # daily_diary - one diary header per spread day across the timeline.
     # Notes vary across entries: weather, manpower, the key activity tied to
     # the day's real trade, plus the occasional delay, instead of one repeated
     # boilerplate line.
@@ -4445,7 +4445,7 @@ def _generate_module_data(
             }
         )
 
-    # compliance (compliance_docs) — insurance / permit / bond tracker.
+    # compliance (compliance_docs) - insurance / permit / bond tracker.
     compliance: list[dict] = []
     comp_seeds = [
         ("insurance", "Contractor all-risk insurance (CAR)", "Insurer", 5_000_000),
@@ -4471,7 +4471,7 @@ def _generate_module_data(
             }
         )
 
-    # procurement — purchase orders to real subs in template currency.
+    # procurement - purchase orders to real subs in template currency.
     procurement: list[dict] = []
     po_n = min(max(len(trades), 4), 8)
     for i in range(po_n):
@@ -4509,7 +4509,7 @@ def _generate_module_data(
             }
         )
 
-    # contracts — main + a couple of trade subcontracts.
+    # contracts - main + a couple of trade subcontracts.
     contracts: list[dict] = []
     contract_total = _template_total(template)
     contracts.append(
@@ -4542,7 +4542,7 @@ def _generate_module_data(
             }
         )
 
-    # transmittals — document issues to real recipients.
+    # transmittals - document issues to real recipients.
     transmittals: list[dict] = []
     tr_n = min(max(len(trades), 4), 6)
     purposes = ["for_construction", "for_review", "for_approval", "for_information"]
@@ -4564,7 +4564,7 @@ def _generate_module_data(
             }
         )
 
-    # resources — people / crews / equipment / subcontractors.
+    # resources - people / crews / equipment / subcontractors.
     resources: list[dict] = [
         {"code": f"{demo_id}-PM", "name": "Project Manager", "resource_type": "person", "rate": 95.0},
         {"code": f"{demo_id}-SM", "name": "Site Manager", "resource_type": "person", "rate": 75.0},
@@ -4582,7 +4582,7 @@ def _generate_module_data(
             }
         )
 
-    # requirements — a requirement set with EAC triplets from real trades.
+    # requirements - a requirement set with EAC triplets from real trades.
     req_items: list[dict] = []
     for i, (code, trade, item) in enumerate(trades[:8]):
         req_items.append(
@@ -4607,7 +4607,7 @@ def _generate_module_data(
         }
     ]
 
-    # progress — percent-complete observations + planned S-curve per month.
+    # progress - percent-complete observations + planned S-curve per month.
     progress_entries: list[dict] = []
     progress_plan: list[dict] = []
     for m in range(1, months + 1):
@@ -7126,7 +7126,7 @@ async def _seed_module_data(
     except Exception:
         logger.debug("Inspections module not loaded, skipping")
 
-    # ── Finance — Invoices ───────────────────────────────────────────
+    # ── Finance - Invoices ───────────────────────────────────────────
     _INVOICES: dict[str, list[dict]] = {
         "residential-berlin": [
             {
@@ -7488,7 +7488,7 @@ async def _seed_module_data(
     except Exception:
         logger.debug("Finance module not loaded, skipping demo invoices")
 
-    # ── Finance — Project Budget Lines ───────────────────────────────
+    # ── Finance - Project Budget Lines ───────────────────────────────
     _BUDGETS: dict[str, list[dict]] = {
         "residential-berlin": [
             {
@@ -8441,13 +8441,13 @@ async def _seed_module_data(
         logger.debug("Correspondence module not loaded, skipping")
 
     # ──────────────────────────────────────────────────────────────────
-    # GAP MODULES — no hand-authored data anywhere today. Content comes
+    # GAP MODULES - no hand-authored data anywhere today. Content comes
     # straight from the generated dict so built-ins get them too. Each
     # block is fully fail-soft: a missing/disabled module or a column
     # mismatch only skips that block, never breaks the others.
     # ──────────────────────────────────────────────────────────────────
 
-    # ── Variations (issued variation orders) — dashboard card ─────────
+    # ── Variations (issued variation orders) - dashboard card ─────────
     try:
         from app.modules.variations.models import VariationOrder
 
@@ -8471,7 +8471,7 @@ async def _seed_module_data(
     except Exception:
         logger.debug("Variations module not loaded, skipping demo variations")
 
-    # ── Daily diary (diary headers) — dashboard card ──────────────────
+    # ── Daily diary (diary headers) - dashboard card ──────────────────
     try:
         from app.modules.daily_diary.models import DailyDiary
 
@@ -8494,7 +8494,7 @@ async def _seed_module_data(
     except Exception:
         logger.debug("Daily diary module not loaded, skipping demo diaries")
 
-    # ── Compliance docs (insurance/permits/bonds) — dashboard card ────
+    # ── Compliance docs (insurance/permits/bonds) - dashboard card ────
     try:
         from app.modules.compliance_docs.models import ComplianceDoc
 
@@ -8811,7 +8811,7 @@ async def install_demo_project(
                 proj.metadata_ = md
                 await session.flush()
         logger.info(
-            "Demo '%s' already installed as project %s — skipping duplicate creation",
+            "Demo '%s' already installed as project %s - skipping duplicate creation",
             demo_id,
             proj.id,
         )
@@ -8937,7 +8937,7 @@ async def install_demo_project(
     items_list = [p for p in positions if p.unit != ""]
     grand_total = _sum_positions(positions)
 
-    # ── 4b. Second BOQ — Budget Estimate (section-level lump sums) ───
+    # ── 4b. Second BOQ - Budget Estimate (section-level lump sums) ───
     budget_boq_id = _id()
     budget_boq_name = template.budget_boq_name or f"{template.boq_name} \u2014 Budget"
     budget_boq = BOQ(
@@ -8987,7 +8987,7 @@ async def install_demo_project(
     # Run the real validation engine over the just-seeded BOQ using the
     # project's configured rule sets and persist one ValidationReport. This
     # exercises product code so the validation dashboard is never empty.
-    # Resilient by design — a validation hiccup must never abort an install.
+    # Resilient by design - a validation hiccup must never abort an install.
     try:
         from app.core.validation.rules import register_builtin_rules
         from app.modules.validation.service import ValidationModuleService
@@ -9078,7 +9078,7 @@ async def install_demo_project(
                 start_date=current_start.strftime("%Y-%m-%d"),
                 end_date=end_date.strftime("%Y-%m-%d"),
                 duration_days=dur,
-                progress_pct=str(prog),  # see note above — String(10), asyncpg-strict
+                progress_pct=str(prog),  # see note above - String(10), asyncpg-strict
                 status="in_progress" if prog > 0 else "planned",
                 color="#ef4444" if i % 3 == 0 else "#0071e3",
                 dependencies=[str(prev_id)] if prev_id else [],
@@ -9938,7 +9938,7 @@ async def install_demo_project(
     # Attach a real BIM model with real geometry and a real plan-set PDF from
     # the committed flagship assets so /bim, /takeoff and /documents are never
     # blank. ``flagship-house`` owns its own dedicated seed path and is skipped
-    # by ``bundle_key_for``. Fully resilient — a missing asset never aborts.
+    # by ``bundle_key_for``. Fully resilient - a missing asset never aborts.
     asset_result: dict = {"status": "skipped"}
     try:
         from app.scripts.seed_demo_assets import attach_demo_assets, bundle_key_for

@@ -4,7 +4,7 @@ Mounted at ``/api/v1/schedule-advanced/`` by the module loader.
 
 All write endpoints are gated by :class:`RequirePermission`. Every
 project-scoped read/write/delete endpoint additionally enforces
-:func:`verify_project_access` (added in v3.0.x IDOR sweep — closes the
+:func:`verify_project_access` (added in v3.0.x IDOR sweep - closes the
 cross-tenant exfil hole where any authenticated user could read or
 mutate Last-Planner-System records belonging to another tenant's
 project just by guessing UUIDs).
@@ -47,6 +47,9 @@ from app.modules.schedule_advanced.schemas import (
     LevelResourcesRequest,
     LevelResourcesResponse,
     LevelResourcesShift,
+    LineOfBalanceResponse,
+    LocationCreate,
+    LocationResponse,
     LookAheadCreate,
     LookAheadResponse,
     LookAheadUpdate,
@@ -64,6 +67,13 @@ from app.modules.schedule_advanced.schemas import (
     RNCParetoSortedResponse,
     RNCResponse,
     RNCUpdate,
+    TaktActivityImport,
+    TaktActivityResponse,
+    TaktActivityUpdate,
+    TaktScheduleCreate,
+    TaktScheduleResponse,
+    TaktScheduleUpdate,
+    TaktViolation,
     TIARequest,
     TIAResponse,
     WeeklyCommitmentCreate,
@@ -74,6 +84,7 @@ from app.modules.schedule_advanced.schemas import (
 )
 from app.modules.schedule_advanced.service import (
     ScheduleAdvancedService,
+    TaktScheduleService,
     compute_evm,
     cpm_forward_backward_pass,
     time_impact_analysis,
@@ -86,6 +97,10 @@ router = APIRouter(tags=["schedule_advanced"])
 
 def _get_service(session: SessionDep) -> ScheduleAdvancedService:
     return ScheduleAdvancedService(session)
+
+
+def _get_takt_service(session: SessionDep) -> TaktScheduleService:
+    return TaktScheduleService(session)
 
 
 def _not_found(detail: str) -> HTTPException:
@@ -133,7 +148,7 @@ async def _project_id_for_constraint(
     if c is None:
         raise _not_found("Constraint not found")
     if c.look_ahead_id is None:
-        # Detached constraint — no project to verify against. Raise 404
+        # Detached constraint - no project to verify against. Raise 404
         # rather than silently grant access (defence-in-depth).
         raise _not_found("Constraint not found")
     return await _project_id_for_look_ahead(c.look_ahead_id, service)
@@ -519,7 +534,7 @@ async def create_constraint(
     _perm: None = Depends(RequirePermission("schedule_advanced.create")),
     service: ScheduleAdvancedService = Depends(_get_service),
 ) -> ConstraintResponse:
-    # ConstraintCreate may have nullable look_ahead_id — gate only if present.
+    # ConstraintCreate may have nullable look_ahead_id - gate only if present.
     if getattr(data, "look_ahead_id", None) is not None:
         project_id = await _project_id_for_look_ahead(data.look_ahead_id, service)
         await verify_project_access(project_id, user_id, session)
@@ -829,10 +844,10 @@ async def miss_commitment_endpoint(
 ) -> CommitmentResponse:
     project_id = await _project_id_for_commitment(cid, service)
     await verify_project_access(project_id, user_id, session)
-    # Caller passes a full RNCCreate body — overwrite the commitment_id
+    # Caller passes a full RNCCreate body - overwrite the commitment_id
     # with the URL value to ensure consistency.
     rnc_payload = rnc.model_copy(update={"commitment_id": cid})
-    c, _r = await service.mark_commitment_missed(cid, rnc_payload)
+    c, _r = await service.mark_commitment_missed(cid, rnc_payload, user_id=user_id)
     return CommitmentResponse.model_validate(c)
 
 
@@ -1137,7 +1152,7 @@ async def project_ppc_trend(
     ]
 
 
-# ── CPM / EVM / TIA — stateless analysis endpoints ────────────────────────
+# ── CPM / EVM / TIA - stateless analysis endpoints ────────────────────────
 
 
 @router.post("/cpm", response_model=CPMResponse)
@@ -1147,7 +1162,7 @@ async def run_cpm(
 ) -> CPMResponse:
     """‌⁠‍Run a CPM forward+backward pass on a supplied activity list.
 
-    Stateless — no DB I/O. Useful for what-if scheduling experiments,
+    Stateless - no DB I/O. Useful for what-if scheduling experiments,
     importing schedules from P6/MS Project, and powering the EoT/TIA
     analytic in :mod:`app.modules.variations`.
     """
@@ -1169,9 +1184,9 @@ async def run_tia(
     data: TIARequest,
     _perm: None = Depends(RequirePermission("schedule_advanced.read")),
 ) -> TIAResponse:
-    """‌⁠‍Time-Impact-Analysis — recompute completion date after a delay.
+    """‌⁠‍Time-Impact-Analysis - recompute completion date after a delay.
 
-    Stateless — no DB I/O. Inputs are the full schedule + a single delay
+    Stateless - no DB I/O. Inputs are the full schedule + a single delay
     event (impacted activity id + delay in working days). Used by the
     Variations EoT-claim workflow to drive granted-days decisions.
     """
@@ -1191,9 +1206,9 @@ async def run_evm(
     data: EVMRequest,
     _perm: None = Depends(RequirePermission("schedule_advanced.read")),
 ) -> EVMResponse:
-    """Earned Value Management — compute PV/EV/AC + SPI/CPI/EAC.
+    """Earned Value Management - compute PV/EV/AC + SPI/CPI/EAC.
 
-    Stateless — no DB I/O. Each activity contributes its BAC × PV-ramp
+    Stateless - no DB I/O. Each activity contributes its BAC × PV-ramp
     to the project Planned Value at ``today_workday``. EV = BAC × %
     complete; AC is reported directly.
     """
@@ -1244,7 +1259,7 @@ async def project_rnc_pareto_sorted(
     return RNCParetoSortedResponse(**payload)
 
 
-# ── CPM Slice 1 — persisted compute + leveling + weekly commitments ───────
+# ── CPM Slice 1 - persisted compute + leveling + weekly commitments ───────
 
 
 async def _project_id_for_schedule(
@@ -1254,7 +1269,7 @@ async def _project_id_for_schedule(
     """Resolve project_id for a ``oe_schedule_schedule`` row.
 
     Kept out of :class:`ScheduleAdvancedService` because that service only
-    owns LPS tables — Schedule lives in the sister ``schedule`` module.
+    owns LPS tables - Schedule lives in the sister ``schedule`` module.
     """
     from app.modules.schedule.models import Schedule as _Schedule
 
@@ -1382,7 +1397,7 @@ async def level_resources_for_schedule(
     user_id: CurrentUserId,
     _perm: None = Depends(RequirePermission("schedule_advanced.update")),
 ) -> LevelResourcesResponse:
-    """Run serial-greedy resource leveling — returns shifted ES for changed activities only."""
+    """Run serial-greedy resource leveling - returns shifted ES for changed activities only."""
     from sqlalchemy import select
 
     from app.modules.schedule.models import Activity as _Activity
@@ -1584,3 +1599,280 @@ async def get_weekly_ppc(
         avg_actual_pct=(sum_actual / n).quantize(_Decimal("0.0001")),
         ppc=(sum_ppc / n).quantize(_Decimal("0.0001")),
     )
+
+
+# ── Takt / line-of-balance scheduling ─────────────────────────────────────
+
+
+def _takt_response(ts: object, locations: list[object]) -> TaktScheduleResponse:
+    """Build a TaktScheduleResponse with its nested locations."""
+    payload = TaktScheduleResponse.model_validate(ts)
+    payload.locations = [LocationResponse.model_validate(loc) for loc in locations]
+    return payload
+
+
+async def _project_id_for_takt(
+    takt_id: uuid.UUID,
+    takt_service: TaktScheduleService,
+    service: ScheduleAdvancedService,
+) -> uuid.UUID:
+    ts = await takt_service.takt_repo.get_by_id(takt_id)
+    if ts is None:
+        raise _not_found("TaktSchedule not found")
+    return await _project_id_for_master(ts.master_schedule_id, service)
+
+
+async def _project_id_for_takt_activity(
+    activity_id: uuid.UUID,
+    takt_service: TaktScheduleService,
+    service: ScheduleAdvancedService,
+) -> uuid.UUID:
+    a = await takt_service.activity_repo.get_by_id(activity_id)
+    if a is None:
+        raise _not_found("TaktActivity not found")
+    return await _project_id_for_takt(a.takt_schedule_id, takt_service, service)
+
+
+@router.get(
+    "/masters/{master_id}/takt-schedules",
+    response_model=list[TaktScheduleResponse],
+)
+async def list_takt_schedules(
+    master_id: uuid.UUID,
+    session: SessionDep,
+    user_id: CurrentUserId,
+    service: ScheduleAdvancedService = Depends(_get_service),
+    takt_service: TaktScheduleService = Depends(_get_takt_service),
+) -> list[TaktScheduleResponse]:
+    """List takt schedules for a master schedule (with nested locations)."""
+    project_id = await _project_id_for_master(master_id, service)
+    await verify_project_access(project_id, user_id, session)
+    items = await takt_service.list_for_master(master_id)
+    locations_by_takt = await takt_service.list_locations_for_takts([ts.id for ts in items])
+    return [_takt_response(ts, locations_by_takt.get(ts.id, [])) for ts in items]
+
+
+@router.post(
+    "/takt-schedules",
+    response_model=TaktScheduleResponse,
+    status_code=201,
+)
+async def create_takt_schedule(
+    data: TaktScheduleCreate,
+    session: SessionDep,
+    user_id: CurrentUserId,
+    _perm: None = Depends(RequirePermission("schedule_advanced.create")),
+    service: ScheduleAdvancedService = Depends(_get_service),
+    takt_service: TaktScheduleService = Depends(_get_takt_service),
+) -> TaktScheduleResponse:
+    project_id = await _project_id_for_master(data.master_schedule_id, service)
+    await verify_project_access(project_id, user_id, session)
+    ts = await takt_service.create_takt_schedule(data, user_id=user_id)
+    locations = await takt_service.list_locations(ts.id)
+    return _takt_response(ts, locations)
+
+
+@router.get("/takt-schedules/{takt_id}", response_model=TaktScheduleResponse)
+async def get_takt_schedule(
+    takt_id: uuid.UUID,
+    session: SessionDep,
+    user_id: CurrentUserId,
+    service: ScheduleAdvancedService = Depends(_get_service),
+    takt_service: TaktScheduleService = Depends(_get_takt_service),
+) -> TaktScheduleResponse:
+    project_id = await _project_id_for_takt(takt_id, takt_service, service)
+    await verify_project_access(project_id, user_id, session)
+    ts = await takt_service.get_takt_schedule(takt_id)
+    locations = await takt_service.list_locations(takt_id)
+    return _takt_response(ts, locations)
+
+
+@router.patch("/takt-schedules/{takt_id}", response_model=TaktScheduleResponse)
+async def update_takt_schedule(
+    takt_id: uuid.UUID,
+    data: TaktScheduleUpdate,
+    session: SessionDep,
+    user_id: CurrentUserId,
+    _perm: None = Depends(RequirePermission("schedule_advanced.update")),
+    service: ScheduleAdvancedService = Depends(_get_service),
+    takt_service: TaktScheduleService = Depends(_get_takt_service),
+) -> TaktScheduleResponse:
+    project_id = await _project_id_for_takt(takt_id, takt_service, service)
+    await verify_project_access(project_id, user_id, session)
+    ts = await takt_service.update_takt_schedule(takt_id, data)
+    locations = await takt_service.list_locations(takt_id)
+    return _takt_response(ts, locations)
+
+
+@router.delete("/takt-schedules/{takt_id}", status_code=204)
+async def delete_takt_schedule(
+    takt_id: uuid.UUID,
+    session: SessionDep,
+    user_id: CurrentUserId,
+    _perm: None = Depends(RequirePermission("schedule_advanced.delete")),
+    service: ScheduleAdvancedService = Depends(_get_service),
+    takt_service: TaktScheduleService = Depends(_get_takt_service),
+) -> None:
+    project_id = await _project_id_for_takt(takt_id, takt_service, service)
+    await verify_project_access(project_id, user_id, session)
+    await takt_service.delete_takt_schedule(takt_id)
+
+
+@router.post(
+    "/takt-schedules/{takt_id}/locations",
+    response_model=LocationResponse,
+    status_code=201,
+)
+async def add_takt_location(
+    takt_id: uuid.UUID,
+    data: LocationCreate,
+    session: SessionDep,
+    user_id: CurrentUserId,
+    _perm: None = Depends(RequirePermission("schedule_advanced.update")),
+    service: ScheduleAdvancedService = Depends(_get_service),
+    takt_service: TaktScheduleService = Depends(_get_takt_service),
+) -> LocationResponse:
+    project_id = await _project_id_for_takt(takt_id, takt_service, service)
+    await verify_project_access(project_id, user_id, session)
+    loc = await takt_service.add_location(takt_id, data)
+    return LocationResponse.model_validate(loc)
+
+
+# ── Takt activities ───────────────────────────────────────────────────────
+
+
+@router.get(
+    "/takt-schedules/{takt_id}/activities",
+    response_model=list[TaktActivityResponse],
+)
+async def list_takt_activities(
+    takt_id: uuid.UUID,
+    session: SessionDep,
+    user_id: CurrentUserId,
+    service: ScheduleAdvancedService = Depends(_get_service),
+    takt_service: TaktScheduleService = Depends(_get_takt_service),
+) -> list[TaktActivityResponse]:
+    project_id = await _project_id_for_takt(takt_id, takt_service, service)
+    await verify_project_access(project_id, user_id, session)
+    items = await takt_service.list_activities(takt_id)
+    return [TaktActivityResponse.model_validate(a) for a in items]
+
+
+@router.post(
+    "/takt-schedules/{takt_id}/activities/import",
+    response_model=list[TaktActivityResponse],
+    status_code=201,
+)
+async def import_takt_activities(
+    takt_id: uuid.UUID,
+    data: TaktActivityImport,
+    session: SessionDep,
+    user_id: CurrentUserId,
+    _perm: None = Depends(RequirePermission("schedule_advanced.create")),
+    service: ScheduleAdvancedService = Depends(_get_service),
+    takt_service: TaktScheduleService = Depends(_get_takt_service),
+) -> list[TaktActivityResponse]:
+    project_id = await _project_id_for_takt(takt_id, takt_service, service)
+    await verify_project_access(project_id, user_id, session)
+    items = await takt_service.import_activities(takt_id, data.activities)
+    return [TaktActivityResponse.model_validate(a) for a in items]
+
+
+@router.patch(
+    "/takt-schedules/{takt_id}/activities/{activity_id}",
+    response_model=TaktActivityResponse,
+)
+async def update_takt_activity(
+    takt_id: uuid.UUID,
+    activity_id: uuid.UUID,
+    data: TaktActivityUpdate,
+    session: SessionDep,
+    user_id: CurrentUserId,
+    _perm: None = Depends(RequirePermission("schedule_advanced.update")),
+    service: ScheduleAdvancedService = Depends(_get_service),
+    takt_service: TaktScheduleService = Depends(_get_takt_service),
+) -> TaktActivityResponse:
+    project_id = await _project_id_for_takt(takt_id, takt_service, service)
+    await verify_project_access(project_id, user_id, session)
+    activity = await takt_service.get_activity(activity_id)
+    if activity.takt_schedule_id != takt_id:
+        raise _not_found("TaktActivity not found")
+    a = await takt_service.update_activity(activity_id, data)
+    return TaktActivityResponse.model_validate(a)
+
+
+@router.delete(
+    "/takt-schedules/{takt_id}/activities/{activity_id}",
+    status_code=204,
+)
+async def delete_takt_activity(
+    takt_id: uuid.UUID,
+    activity_id: uuid.UUID,
+    session: SessionDep,
+    user_id: CurrentUserId,
+    _perm: None = Depends(RequirePermission("schedule_advanced.delete")),
+    service: ScheduleAdvancedService = Depends(_get_service),
+    takt_service: TaktScheduleService = Depends(_get_takt_service),
+) -> None:
+    project_id = await _project_id_for_takt(takt_id, takt_service, service)
+    await verify_project_access(project_id, user_id, session)
+    activity = await takt_service.get_activity(activity_id)
+    if activity.takt_schedule_id != takt_id:
+        raise _not_found("TaktActivity not found")
+    await takt_service.delete_activity(activity_id)
+
+
+# ── Line-of-balance computation ───────────────────────────────────────────
+
+
+@router.post(
+    "/takt-schedules/{takt_id}/compute-lob",
+    response_model=LineOfBalanceResponse,
+)
+async def compute_takt_line_of_balance(
+    takt_id: uuid.UUID,
+    session: SessionDep,
+    user_id: CurrentUserId,
+    _perm: None = Depends(RequirePermission("schedule_advanced.update")),
+    service: ScheduleAdvancedService = Depends(_get_service),
+    takt_service: TaktScheduleService = Depends(_get_takt_service),
+) -> LineOfBalanceResponse:
+    """Compute line-of-balance geometry, violations and critical path."""
+    project_id = await _project_id_for_takt(takt_id, takt_service, service)
+    await verify_project_access(project_id, user_id, session)
+    return await takt_service.compute_line_of_balance(takt_id)
+
+
+@router.get(
+    "/takt-schedules/{takt_id}/line-of-balance",
+    response_model=LineOfBalanceResponse,
+)
+async def get_takt_line_of_balance(
+    takt_id: uuid.UUID,
+    session: SessionDep,
+    user_id: CurrentUserId,
+    _perm: None = Depends(RequirePermission("schedule_advanced.read")),
+    service: ScheduleAdvancedService = Depends(_get_service),
+    takt_service: TaktScheduleService = Depends(_get_takt_service),
+) -> LineOfBalanceResponse:
+    """Read the line-of-balance geometry (recomputed deterministically)."""
+    project_id = await _project_id_for_takt(takt_id, takt_service, service)
+    await verify_project_access(project_id, user_id, session)
+    return await takt_service.compute_line_of_balance(takt_id)
+
+
+@router.get(
+    "/takt-schedules/{takt_id}/violations",
+    response_model=list[TaktViolation],
+)
+async def get_takt_violations(
+    takt_id: uuid.UUID,
+    session: SessionDep,
+    user_id: CurrentUserId,
+    _perm: None = Depends(RequirePermission("schedule_advanced.read")),
+    service: ScheduleAdvancedService = Depends(_get_service),
+    takt_service: TaktScheduleService = Depends(_get_takt_service),
+) -> list[TaktViolation]:
+    project_id = await _project_id_for_takt(takt_id, takt_service, service)
+    await verify_project_access(project_id, user_id, session)
+    return await takt_service.detect_violations(takt_id)

@@ -2,12 +2,12 @@
 
 import math
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-# Round-6 audit (2026-05-22) — hard bound on per-axis coordinates inside a
+# Round-6 audit (2026-05-22) - hard bound on per-axis coordinates inside a
 # polygon. PDF pages render in PostScript points (72 dpi); ISO A0 at 72 dpi
 # is 3370 × 2384 px. The frontend zoom factor caps the visible canvas at
 # ~50× before WebGL gives up, so a legitimate point will never exceed
@@ -46,7 +46,7 @@ class ExtractedElement(BaseModel):
     quantity: float
     unit: str
     # R7 deep-improve: confidence must be a probability in [0, 1]. Out-of-
-    # range values from an AI model indicate a bug — fail loudly instead
+    # range values from an AI model indicate a bug - fail loudly instead
     # of silently allowing 1.5 or -3 to propagate through the UI.
     confidence: float = Field(..., ge=0.0, le=1.0)
 
@@ -113,7 +113,7 @@ class CadExtractResponse(BaseModel):
 class PointSchema(BaseModel):
     """A single 2D point in page coordinates.
 
-    Round-6 audit — both axes are clamped to ``±_MAX_COORD_ABS`` so a
+    Round-6 audit - both axes are clamped to ``±_MAX_COORD_ABS`` so a
     malicious payload (``x: 1e30``) cannot inflate polygon areas via
     the shoelace formula and contaminate BOQ totals. NaN and infinity
     are rejected outright (they would produce ``NaN`` areas that
@@ -126,7 +126,7 @@ class PointSchema(BaseModel):
     @field_validator("x", "y")
     @classmethod
     def _reject_nan_inf(cls, v: float) -> float:
-        # Pydantic's ge/le accept NaN through silently on some versions —
+        # Pydantic's ge/le accept NaN through silently on some versions -
         # belt-and-braces. Without this guard, a polygon with NaN points
         # produces NaN areas that the upstream Decimal cast turns into
         # ``Decimal('NaN')`` and the downstream rollup never errors.
@@ -238,6 +238,78 @@ class TakeoffMeasurementSummary(BaseModel):
     by_type: dict[str, int] = Field(default_factory=dict)
     by_group: dict[str, int] = Field(default_factory=dict)
     by_page: dict[int, int] = Field(default_factory=dict)
+
+
+# ── Revision compare (Item 17) ─────────────────────────────────────────
+
+
+class TakeoffMeasurementDiffRow(BaseModel):
+    """One measurement-level change between two takeoff documents.
+
+    Measurements are matched across the two documents by a stable key:
+    ``metadata.compare_key`` when present, otherwise the natural tuple
+    ``(page, type, group_name, annotation)``. A measurement present only
+    in the new document is ``added``; only in the old one ``removed``; a
+    measured-value change is ``modified``; identical value ``unchanged``.
+
+    When the measurement is linked to a BOQ position and its value
+    changed, ``cost_impact`` carries the signed money delta
+    ``(new - old) * unit_rate`` in the project's base currency (Decimal
+    string; never blended across currencies).
+    """
+
+    change_type: Literal["added", "removed", "modified", "unchanged"]
+    measurement_id: str
+    type: str
+    group_name: str = "General"
+    page: int = 1
+    label: str | None = None
+    old_value: float | None = None
+    new_value: float | None = None
+    measurement_unit: str | None = None
+    linked_boq_position_id: str | None = None
+    cost_impact: str | None = None  # signed Decimal string in base currency
+    cost_currency: str | None = None
+
+
+class TakeoffCompareResponse(BaseModel):
+    """Full revision-compare payload for two takeoff documents."""
+
+    project_id: UUID
+    from_document_id: str
+    to_document_id: str
+    measurement_rows: list[TakeoffMeasurementDiffRow] = Field(default_factory=list)
+    summary: dict[str, Any] = Field(default_factory=dict)
+
+
+# ── Create-variation-from-delta handoff (Item 17) ───────────────────────
+
+
+class CreateVariationFromCompareRequest(BaseModel):
+    """Turn a PDF revision-compare delta into a draft variation request.
+
+    The compare is recomputed server-side from the two document ids (the
+    deterministic :meth:`compare_documents` is the single source of
+    truth), so the client only carries the project + document pair and an
+    optional title override. The created variation is always a *draft* -
+    automation proposes, a human confirms and submits it.
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    project_id: UUID
+    from_document_id: str = Field(..., min_length=1, max_length=255)
+    to_document_id: str = Field(..., min_length=1, max_length=255)
+    title: str | None = Field(default=None, max_length=500)
+
+
+class CreateVariationFromCompareResponse(BaseModel):
+    """The draft variation request minted from a PDF revision-compare delta."""
+
+    variation_request_id: UUID
+    code: str
+    estimated_cost_impact: str = "0"  # signed Decimal string in base currency
+    currency: str = ""
 
 
 class LinkToBoqRequest(BaseModel):

@@ -73,6 +73,48 @@ export interface TakeoffDocumentResponse {
   uploaded_at: string | null;
 }
 
+/* ── Revision compare (Item 17) ────────────────────────────────────────── */
+
+/** One measurement-level change between two takeoff documents. */
+export interface TakeoffMeasurementDiffRow {
+  change_type: 'added' | 'removed' | 'modified' | 'unchanged';
+  measurement_id: string;
+  type: string;
+  group_name: string;
+  page: number;
+  label: string | null;
+  old_value: number | null;
+  new_value: number | null;
+  measurement_unit: string | null;
+  linked_boq_position_id: string | null;
+  /** Signed Decimal string in the project base currency, or null when the
+   *  measurement is unlinked / unpriced. */
+  cost_impact: string | null;
+  cost_currency: string | null;
+}
+
+export interface TakeoffCompareResponse {
+  project_id: string;
+  from_document_id: string;
+  to_document_id: string;
+  measurement_rows: TakeoffMeasurementDiffRow[];
+  summary: {
+    measurements: Record<'added' | 'removed' | 'modified' | 'unchanged', number>;
+    net_cost_impact: string | null;
+    cost_currency: string | null;
+    from_measurement_count: number;
+    to_measurement_count: number;
+  };
+}
+
+/** The draft variation request minted from a PDF revision-compare delta. */
+export interface CreateVariationFromCompareResult {
+  variation_request_id: string;
+  code: string;
+  estimated_cost_impact: string;
+  currency: string;
+}
+
 /* ── API functions ────────────────────────────────────────────────────── */
 
 export const takeoffApi = {
@@ -129,6 +171,38 @@ export const takeoffApi = {
   /** Delete an uploaded takeoff document. */
   deleteDocument: (docId: string) =>
     apiDelete(`/v1/takeoff/documents/${docId}`),
+
+  /** Compare the measurements of two takeoff documents (revision compare).
+   *  ``fromDocumentId`` is the baseline ('before'); ``toDocumentId`` the
+   *  target ('after'). Returns added / removed / modified / unchanged rows
+   *  plus a money cost impact for linked-to-BOQ measurements that changed. */
+  compare: (projectId: string, fromDocumentId: string, toDocumentId: string) =>
+    apiPost<TakeoffCompareResponse>(
+      `/v1/takeoff/measurements/compare/?project_id=${encodeURIComponent(projectId)}`
+        + `&from_document_id=${encodeURIComponent(fromDocumentId)}`
+        + `&to_document_id=${encodeURIComponent(toDocumentId)}`,
+    ),
+
+  /** Turn a PDF revision-compare delta into a DRAFT variation request.
+   *  The backend recomputes the deterministic compare and shapes its net
+   *  cost impact into a draft VariationRequest (never submitted - a human
+   *  confirms it in the variations module). Requires both ``takeoff.read``
+   *  and ``variations.create`` permissions. */
+  createVariation: (
+    projectId: string,
+    fromDocumentId: string,
+    toDocumentId: string,
+    title?: string,
+  ) =>
+    apiPost<CreateVariationFromCompareResult>(
+      '/v1/takeoff/measurements/create-variation',
+      {
+        project_id: projectId,
+        from_document_id: fromDocumentId,
+        to_document_id: toDocumentId,
+        ...(title ? { title } : {}),
+      },
+    ),
 
   /** Save a CAD takeoff session to a project as a BIM model. */
   saveToProject: (

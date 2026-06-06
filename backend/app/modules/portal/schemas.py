@@ -1,14 +1,14 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
-"""‌⁠‍Customer & Partner Portal Pydantic schemas — request / response models."""
+"""‌⁠‍Customer & Partner Portal Pydantic schemas - request / response models."""
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_serializer
 
 PORTAL_ROLES = r"^(client|investor|consultant|subcontractor|supplier|building_user)$"
 USER_STATUSES = r"^(invited|active|suspended|expired)$"
@@ -66,7 +66,7 @@ class PortalUserList(BaseModel):
 
 
 class PortalUserPatch(BaseModel):
-    """Body for PATCH /admin/users/{id} — suspend / reactivate / rename."""
+    """Body for PATCH /admin/users/{id} - suspend / reactivate / rename."""
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
@@ -78,7 +78,7 @@ class PortalUserPatch(BaseModel):
 
 
 class PortalSelfPatch(BaseModel):
-    """Body for PATCH /me — fields a portal user is allowed to change.
+    """Body for PATCH /me - fields a portal user is allowed to change.
 
     Deliberately narrower than :class:`PortalUserPatch`: a portal user
     must not be able to change their own ``status`` (only the GC admin can
@@ -102,7 +102,7 @@ class PortalUserInviteResponse(BaseModel):
 
     user: PortalUserResponse
     magic_link_token: str = Field(
-        description="Plaintext one-time token — caller must email this to the user",
+        description="Plaintext one-time token - caller must email this to the user",
     )
     magic_link_expires_at: datetime
 
@@ -117,7 +117,7 @@ class MagicLinkRequest(BaseModel):
 
 
 class MagicLinkResponse(BaseModel):
-    """Always returns 202 + this body — no email-enumeration leak."""
+    """Always returns 202 + this body - no email-enumeration leak."""
 
     accepted: bool = True
     message: str = "If the email is registered, a magic link has been sent."
@@ -130,10 +130,10 @@ class MagicLinkConsume(BaseModel):
 
 
 class SessionResponse(BaseModel):
-    """Response body for /auth/consume — gives the caller their session token."""
+    """Response body for /auth/consume - gives the caller their session token."""
 
     session_token: str = Field(
-        description="Bearer token — caller passes as 'Authorization: Bearer <token>'",
+        description="Bearer token - caller passes as 'Authorization: Bearer <token>'",
     )
     expires_at: datetime
     portal_user: PortalUserResponse
@@ -237,11 +237,11 @@ class DocumentAccessLogEntry(BaseModel):
 
 
 class PortalTicketCreate(BaseModel):
-    """Body for POST /me/tickets — a portal user files a service ticket.
+    """Body for POST /me/tickets - a portal user files a service ticket.
 
     The contract_id must belong to a ``service_contract`` access rule the
     caller holds; the service-layer RLS gate enforces this. ``priority``
-    defaults to ``med`` — portal users cannot file ``critical`` tickets
+    defaults to ``med`` - portal users cannot file ``critical`` tickets
     (escalation is internal staff's call to make).
     """
 
@@ -258,7 +258,7 @@ class PortalTicketCreate(BaseModel):
 
 
 class PortalTicketResponse(BaseModel):
-    """Buyer-side ticket view — strips internal-only fields."""
+    """Buyer-side ticket view - strips internal-only fields."""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -309,6 +309,191 @@ class PortalChangeOrderList(BaseModel):
     total: int = 0
 
 
+# ── Portal-side progress-report visibility ────────────────────────────────
+
+
+class PortalProgressReportEntry(BaseModel):
+    """Read-only client view of a generated progress report.
+
+    A flat projection of ``GeneratedReport`` carrying only what the client
+    needs to list and open a report: identity, title, generated timestamp,
+    output format, the reporting period (lifted from the snapshot when
+    present) and whether a rendered body is available to open or download.
+    """
+
+    id: UUID
+    title: str
+    generated_at: str
+    report_type: str
+    format: str = "pdf"
+    period: str | None = None
+    has_content: bool = False
+
+
+class PortalProgressReportList(BaseModel):
+    """List of progress reports the caller can see for a project."""
+
+    items: list[PortalProgressReportEntry] = Field(default_factory=list)
+    total: int = 0
+
+
+class PortalProjectSummary(BaseModel):
+    """A project the portal caller can see, with just enough to label it.
+
+    Backs the portal Progress Reports tab so the client can pick a project by
+    name instead of pasting a UUID. Scoped to the caller's non-expired
+    ``project`` access rules.
+    """
+
+    id: UUID
+    name: str
+    project_code: str | None = None
+
+
+class PortalProjectSummaryList(BaseModel):
+    """List of projects the portal caller can see."""
+
+    items: list[PortalProjectSummary] = Field(default_factory=list)
+    total: int = 0
+
+
+# ── Portal-side payment-application submission ────────────────────────────
+
+
+class PaymentApplicationListItem(BaseModel):
+    """One row in the subcontractor's payment-application list.
+
+    Money fields are serialised as strings so the frontend never receives a
+    lossy JSON float. Currency comes from the application / agreement, never
+    hardcoded.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    agreement_id: UUID
+    application_number: str
+    period_start: date | None = None
+    period_end: date | None = None
+    gross_amount: Decimal = Decimal("0")
+    net_amount: Decimal = Decimal("0")
+    currency: str = ""
+    status: str = "submitted"
+    submitted_at: datetime | None = None
+
+    @field_serializer("gross_amount", "net_amount")
+    def _ser_money(self, value: Decimal) -> str:
+        return str(value)
+
+
+class PaymentApplicationListResponse(BaseModel):
+    """Paginated list of payment applications for the portal user."""
+
+    items: list[PaymentApplicationListItem] = Field(default_factory=list)
+    total: int = 0
+
+
+class PaymentApplicationLineDetail(BaseModel):
+    """A single work-package line within a payment-application detail view."""
+
+    work_package_id: UUID
+    work_package_name: str = ""
+    planned_value: Decimal = Decimal("0")
+    claimed_amount: Decimal = Decimal("0")
+    certified_amount: Decimal = Decimal("0")
+    approved_amount: Decimal = Decimal("0")
+
+    @field_serializer(
+        "planned_value",
+        "claimed_amount",
+        "certified_amount",
+        "approved_amount",
+    )
+    def _ser_money(self, value: Decimal) -> str:
+        return str(value)
+
+
+class PaymentApplicationDetailResponse(BaseModel):
+    """Full payment-application view for the portal user."""
+
+    id: UUID
+    agreement_id: UUID
+    application_number: str
+    period_start: date | None = None
+    period_end: date | None = None
+    gross_amount: Decimal = Decimal("0")
+    retention_amount: Decimal = Decimal("0")
+    net_amount: Decimal = Decimal("0")
+    currency: str = ""
+    status: str = "submitted"
+    submitted_at: datetime | None = None
+    lines: list[PaymentApplicationLineDetail] = Field(default_factory=list)
+
+    @field_serializer("gross_amount", "retention_amount", "net_amount")
+    def _ser_money(self, value: Decimal) -> str:
+        return str(value)
+
+
+class PaymentApplicationSubmitLine(BaseModel):
+    """One work-package line in a submission payload."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    work_package_id: UUID
+    claimed_amount: Decimal = Field(..., ge=0)
+
+
+class PaymentApplicationSubmitPayload(BaseModel):
+    """Body for POST /me/payment-applications.
+
+    The gross amount is the sum of the line ``claimed_amount`` values; the
+    backend recomputes retention and net from the agreement so the client
+    cannot drive those numbers. ``currency`` is never accepted from the
+    client - it is taken from the agreement / project.
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    agreement_id: UUID
+    period_start: date | None = None
+    period_end: date | None = None
+    lines: list[PaymentApplicationSubmitLine] = Field(..., min_length=1)
+
+
+class PortalWorkPackageEntry(BaseModel):
+    """A work package the portal user can claim against, for the submit form."""
+
+    id: UUID
+    name: str
+    planned_value: Decimal = Decimal("0")
+
+    @field_serializer("planned_value")
+    def _ser_money(self, value: Decimal) -> str:
+        return str(value)
+
+
+class PortalAgreementSummary(BaseModel):
+    """Light agreement projection for the portal submit form (no internals)."""
+
+    id: UUID
+    title: str
+    currency: str = ""
+    retention_percent: Decimal = Decimal("0")
+    status: str = ""
+    work_packages: list[PortalWorkPackageEntry] = Field(default_factory=list)
+
+    @field_serializer("retention_percent")
+    def _ser_pct(self, value: Decimal) -> str:
+        return str(value)
+
+
+class PortalAgreementSummaryList(BaseModel):
+    """Agreements the portal user can submit / view, with their work packages."""
+
+    items: list[PortalAgreementSummary] = Field(default_factory=list)
+    total: int = 0
+
+
 __all__ = [
     "AccessRuleCreate",
     "AccessRuleList",
@@ -320,8 +505,18 @@ __all__ = [
     "MagicLinkResponse",
     "NotificationListResponse",
     "NotificationResponse",
+    "PaymentApplicationDetailResponse",
+    "PaymentApplicationLineDetail",
+    "PaymentApplicationListItem",
+    "PaymentApplicationListResponse",
+    "PaymentApplicationSubmitLine",
+    "PaymentApplicationSubmitPayload",
+    "PortalAgreementSummary",
+    "PortalAgreementSummaryList",
     "PortalChangeOrderEntry",
     "PortalChangeOrderList",
+    "PortalProgressReportEntry",
+    "PortalProgressReportList",
     "PortalSelfPatch",
     "PortalTicketCreate",
     "PortalTicketList",
@@ -331,5 +526,6 @@ __all__ = [
     "PortalUserList",
     "PortalUserPatch",
     "PortalUserResponse",
+    "PortalWorkPackageEntry",
     "SessionResponse",
 ]

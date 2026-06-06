@@ -49,7 +49,7 @@ logger = logging.getLogger(__name__)
 
 
 def _coerce_user_uuid(user_id: str) -> uuid.UUID:
-    """The JWT subject is a string — Pydantic schemas need a UUID."""
+    """The JWT subject is a string - Pydantic schemas need a UUID."""
     try:
         return uuid.UUID(user_id)
     except (ValueError, TypeError) as exc:
@@ -129,6 +129,7 @@ async def create_file_comment(
         file_kind=comment.file_kind,
         file_id=comment.file_id,
         file_version_snapshot=comment.file_version_snapshot,
+        file_version_id=comment.file_version_id,
         parent_id=comment.parent_id,
         author_id=comment.author_id,
         body=comment.body,
@@ -166,7 +167,7 @@ async def patch_file_comment(
     user_id: CurrentUserId,
     _w: None = Depends(RequirePermission("file_comments.write")),
     # The ``resolve`` permission gate runs only when the request toggles
-    # the resolved flag — see below.
+    # the resolved flag - see below.
 ) -> FileCommentResponse:
     """Edit body and/or toggle resolved.
 
@@ -218,6 +219,7 @@ async def patch_file_comment(
         file_kind=comment.file_kind,
         file_id=comment.file_id,
         file_version_snapshot=comment.file_version_snapshot,
+        file_version_id=comment.file_version_id,
         parent_id=comment.parent_id,
         author_id=comment.author_id,
         body=comment.body,

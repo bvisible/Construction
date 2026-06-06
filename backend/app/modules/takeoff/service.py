@@ -6,6 +6,7 @@ import math
 import os
 import re
 import uuid
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
@@ -30,8 +31,8 @@ def _is_encrypted_pdf(content: bytes) -> bool:
     """Detect password-protected PDFs by sniffing the trailer block.
 
     PDF encryption flags live in the trailer dictionary as:
-    * ``/Encrypt N N R``  — indirect reference form (most generators)
-    * ``/Encrypt <<``     — inline dict form (rare but valid)
+    * ``/Encrypt N N R``  - indirect reference form (most generators)
+    * ``/Encrypt <<``     - inline dict form (rare but valid)
 
     We scan only the LAST 8 KB of the file (where trailers live) to
     avoid false positives from "/Encrypt" appearing inside content
@@ -57,7 +58,7 @@ def _max_upload_bytes() -> int:
     """Effective per-upload byte cap from ``OE_TAKEOFF_MAX_UPLOAD_MB``.
 
     Returns 0 ("unlimited") when the env var is missing, empty,
-    unparseable, zero, or negative — matches the product policy
+    unparseable, zero, or negative - matches the product policy
     (v2.9.12) of NOT capping uploads by default. Operators on
     constrained deployments can opt in via the env var.
     """
@@ -86,7 +87,7 @@ def _ocr_dpi() -> int:
 
 
 def _ocr_langs() -> list[str]:
-    """Languages fed to PaddleOCR — defaults cover Indian + Arabic scripts.
+    """Languages fed to PaddleOCR - defaults cover Indian + Arabic scripts.
 
     English, Hindi (Devanagari), Tamil, Telugu, Arabic by default.
     Operators on locale-specific deployments can override via
@@ -135,7 +136,7 @@ def _parse_indian_number(value: Any) -> float:
 
     # Strip trailing unit suffix to expose the numeric core. Units may
     # carry digits themselves (m2, m3, ft2) so we allow that in the
-    # match group. The regex is intentionally permissive — anything
+    # match group. The regex is intentionally permissive - anything
     # after the first run of digits/separators is treated as a unit
     # suffix and discarded for the purpose of *number* parsing.
     m = re.match(r"^([\-+]?[\d.,]+)\s*([a-zA-Z²³.\d\s]*)$", text)
@@ -145,7 +146,7 @@ def _parse_indian_number(value: Any) -> float:
     if re.fullmatch(r"[\-+]?\d{1,3}(\.\d{3})+,\d+", numeric_part):
         return float(numeric_part.replace(".", "").replace(",", "."))
 
-    # Indian style: 1,23,45,678 — 2-digit groups give it away.
+    # Indian style: 1,23,45,678 - 2-digit groups give it away.
     if re.fullmatch(r"[\-+]?\d{1,3}(,\d{2})+,\d{3}", numeric_part):
         return float(numeric_part.replace(",", ""))
 
@@ -311,7 +312,7 @@ def _normalize_unit(raw: Any) -> str:
     """Map an arbitrary unit string to the canonical BOQ form.
 
     Returns ``"pcs"`` for empty / ``None`` input. Unknown units pass
-    through lowercased — rejecting a real-world unit would be worse
+    through lowercased - rejecting a real-world unit would be worse
     UX than letting the user edit post-import.
     """
     if raw is None:
@@ -336,7 +337,7 @@ def _points_to_xy(points: list[Any]) -> list[tuple[float, float]]:
 
     Accepts both Pydantic ``PointSchema`` and raw dicts (the bulk-create
     path passes the former, restored DB rows pass the latter). Bad
-    entries are dropped silently — geometry just falls back to whatever
+    entries are dropped silently - geometry just falls back to whatever
     is salvageable rather than rejecting the whole measurement.
     """
     out: list[tuple[float, float]] = []
@@ -392,7 +393,7 @@ def recompute_measurement_value(
 ) -> float | None:
     """Recompute ``measurement_value`` server-side from raw geometry.
 
-    Audit B8 — was a cost-integrity hole. The client used to send both
+    Audit B8 - was a cost-integrity hole. The client used to send both
     the raw ``points`` array AND the derived ``measurement_value``, so
     a malicious or buggy client could draw a tiny rectangle and claim
     9999 m² (which then flowed straight into BOQ totals via link-to-BOQ).
@@ -417,7 +418,7 @@ def recompute_measurement_value(
             return float(count_value)
         return client_value
 
-    # Annotation types don't carry a measurement value at all — but if
+    # Annotation types don't carry a measurement value at all - but if
     # the client sent one we preserve it (e.g. for "text" labels that
     # carry a numeric tag for downstream reporting).
     if mtype in {"cloud", "arrow", "text", "rectangle", "highlight"}:
@@ -434,7 +435,7 @@ def recompute_measurement_value(
         return _polyline_length(xy) / scale
 
     if mtype == "polyline":
-        # Same math as distance — explicit alias so the client can
+        # Same math as distance - explicit alias so the client can
         # signal intent ("walking path" vs "wall length").
         return _polyline_length(xy) / scale
 
@@ -449,7 +450,7 @@ def recompute_measurement_value(
         # to the caller (it lives in a separate field).
         return _shoelace_area(xy) / (scale * scale)
 
-    # Unknown type — preserve client value rather than nulling it out.
+    # Unknown type - preserve client value rather than nulling it out.
     return client_value
 
 
@@ -470,7 +471,7 @@ def recompute_volume_value(
     the dedicated ``volume`` column when pushing a quantity into a BOQ
     position. Persisting the raw client ``volume`` therefore let a client
     draw a tiny shape yet claim an arbitrary volume that flowed straight
-    into BOQ money math — the exact integrity gap B8 was meant to close.
+    into BOQ money math - the exact integrity gap B8 was meant to close.
 
     We derive ``volume = base_area * depth`` from the same (points × scale)
     geometry the area recompute uses, with a non-negative ``depth``. The
@@ -504,7 +505,7 @@ def recompute_volume_value(
         base_area = _shoelace_area(xy) / (scale * scale)
         return base_area * float(depth)
 
-    # Not recomputable — trust the client value but never let a negative
+    # Not recomputable - trust the client value but never let a negative
     # volume through into a BOQ quantity.
     if client_volume is not None and client_volume < 0:
         return None
@@ -516,13 +517,13 @@ def _pick_takeoff_value(measurement: Any) -> float | None:
 
     Dispatches on the measurement ``type`` to read the right column:
 
-    * ``volume`` — prefer the dedicated ``volume`` column (area × depth);
+    * ``volume`` - prefer the dedicated ``volume`` column (area × depth);
       fall back to ``measurement_value`` for legacy rows that predate the
       volume column.
-    * ``count`` — read ``count_value``. ``0`` is a valid count (e.g. "no
+    * ``count`` - read ``count_value``. ``0`` is a valid count (e.g. "no
       doors on this sheet") and round-trips as ``0.0`` rather than the
       ``None`` no-op.
-    * everything else (``distance`` / ``area`` / ``polyline`` / default) —
+    * everything else (``distance`` / ``area`` / ``polyline`` / default) -
       read the canonical ``measurement_value`` scalar.
 
     Every read is coerced through :func:`float` inside a try/except so a
@@ -587,7 +588,7 @@ def _extract_pdf_pages(content: bytes, *, filename: str | None = None) -> list[d
     Parsing failures are logged with the input fingerprint (size, magic
     bytes, filename hint) so a production incident can be triaged
     without needing access to the uploaded bytes themselves.  We return
-    an empty list on total failure — the caller still persists the
+    an empty list on total failure - the caller still persists the
     document row so the user can re-upload without losing ownership.
     """
     pages: list[dict] = []
@@ -620,12 +621,12 @@ def _extract_pdf_pages(content: bytes, *, filename: str | None = None) -> list[d
                     }
                 )
     except Exception:
-        # First-pass parser failed — log it with the full stack and fall
+        # First-pass parser failed - log it with the full stack and fall
         # back to pymupdf.  We log at WARNING (not EXCEPTION) because a
         # fallback is about to be attempted; the real red line is only
         # drawn if both parsers fail.
         logger.warning(
-            "takeoff.pdf_extract pdfplumber failed (%s) — falling back to pymupdf",
+            "takeoff.pdf_extract pdfplumber failed (%s) - falling back to pymupdf",
             input_fp,
             exc_info=True,
         )
@@ -639,7 +640,7 @@ def _extract_pdf_pages(content: bytes, *, filename: str | None = None) -> list[d
             doc.close()
         except Exception:
             logger.exception(
-                "takeoff.pdf_extract both pdfplumber and pymupdf failed (%s) — document will have no extracted pages",
+                "takeoff.pdf_extract both pdfplumber and pymupdf failed (%s) - document will have no extracted pages",
                 input_fp,
             )
 
@@ -658,7 +659,7 @@ def validate_page_for_document(doc: Any, page: int) -> None:
     validation (``ge=1``) catches the negative-page case earlier on the
     request edge.
     """
-    from fastapi import HTTPException  # local import — avoid cycle
+    from fastapi import HTTPException  # local import - avoid cycle
 
     pages = int(getattr(doc, "pages", 0) or 0)
     if page < 1:
@@ -669,7 +670,7 @@ def validate_page_for_document(doc: Any, page: int) -> None:
     if pages < 1:
         raise HTTPException(
             status_code=422,
-            detail="page out of range — document has 0 pages",
+            detail="page out of range - document has 0 pages",
         )
     if page > pages:
         raise HTTPException(
@@ -681,7 +682,7 @@ def validate_page_for_document(doc: Any, page: int) -> None:
 def _count_pdf_pages(content: bytes, *, filename: str | None = None) -> int:
     """Count the number of pages in a PDF.
 
-    Mirrors :func:`_extract_pdf_pages` — pdfplumber first, pymupdf as a
+    Mirrors :func:`_extract_pdf_pages` - pdfplumber first, pymupdf as a
     fallback, zero on double-failure.  Both failure paths log the input
     fingerprint so operators can correlate the log line with whatever
     the caller uploaded without leaking the bytes themselves.
@@ -694,7 +695,7 @@ def _count_pdf_pages(content: bytes, *, filename: str | None = None) -> int:
             return len(pdf.pages)
     except Exception:
         logger.warning(
-            "takeoff.pdf_count pdfplumber failed (%s) — falling back to pymupdf",
+            "takeoff.pdf_count pdfplumber failed (%s) - falling back to pymupdf",
             input_fp,
             exc_info=True,
         )
@@ -707,10 +708,101 @@ def _count_pdf_pages(content: bytes, *, filename: str | None = None) -> int:
             return count
         except Exception:
             logger.exception(
-                "takeoff.pdf_count both pdfplumber and pymupdf failed (%s) — reporting zero pages",
+                "takeoff.pdf_count both pdfplumber and pymupdf failed (%s) - reporting zero pages",
                 input_fp,
             )
             return 0
+
+
+# ── Revision compare (Item 17) ──────────────────────────────────────────────
+
+
+def _measurement_compare_key(m: Any) -> str:
+    """Stable match key for a measurement across two takeoff documents.
+
+    Prefers ``metadata.compare_key`` (a key an importer can stamp so the
+    same logical measurement matches across re-uploads), otherwise falls
+    back to the natural tuple ``(page, type, group_name, annotation)``.
+    Two distinct measurements that happen to share that tuple still match
+    - which is the correct behaviour for a single logical takeoff item
+    that was re-measured on the new revision.
+    """
+    meta = getattr(m, "metadata_", None) or {}
+    if isinstance(meta, dict):
+        ck = meta.get("compare_key")
+        if ck:
+            return f"ck:{str(ck).strip()}"
+    page = getattr(m, "page", None)
+    mtype = (getattr(m, "type", None) or "").strip().lower()
+    group = (getattr(m, "group_name", None) or "").strip().lower()
+    annotation = (getattr(m, "annotation", None) or "").strip().lower()
+    return f"nat:{page}|{mtype}|{group}|{annotation}"
+
+
+def _measure_to_float(value: Any) -> float | None:
+    """Coerce a ``Decimal``/number measurement to ``float`` or ``None``."""
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (ValueError, TypeError, InvalidOperation):
+        return None
+
+
+def _compute_cost_impact(
+    *,
+    old_value: float | None,
+    new_value: float | None,
+    unit_rate: str | int | float | Decimal | None,
+) -> str | None:
+    """Signed money delta ``(new - old) * unit_rate`` as a Decimal string.
+
+    Returns ``None`` when the impact cannot be computed (either value
+    missing, or the rate is unparseable / zero). Quantised to 2dp with
+    commercial rounding (ROUND_HALF_UP), expressed in the project base
+    currency - a BOQ position's ``unit_rate`` is already stored in base,
+    so no currency blending occurs.
+    """
+    if old_value is None or new_value is None:
+        return None
+    try:
+        rate = Decimal(str(unit_rate).strip()) if unit_rate not in (None, "") else Decimal("0")
+    except (InvalidOperation, ValueError, TypeError):
+        return None
+    if not rate.is_finite() or rate == 0:
+        return None
+    try:
+        delta = Decimal(repr(float(new_value))) - Decimal(repr(float(old_value)))
+    except (InvalidOperation, ValueError, TypeError):
+        return None
+    impact = (delta * rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    return str(impact)
+
+
+def _build_pdf_revision_narrative(
+    *,
+    measurement_tally: dict[str, Any],
+    changed_linked_count: int,
+) -> str:
+    """Plain-text description of a PDF revision delta for a draft variation.
+
+    Built only from the deterministic summary tally (no AI), so the
+    estimator sees what moved before confirming the variation.
+    """
+
+    def _n(key: str) -> int:
+        try:
+            return int(measurement_tally.get(key, 0) or 0)
+        except (ValueError, TypeError):
+            return 0
+
+    return (
+        "Auto-generated from a PDF takeoff revision compare. "
+        f"{_n('added')} measurements added, {_n('removed')} removed, "
+        f"{_n('modified')} changed; "
+        f"{changed_linked_count} priced (linked-to-BOQ) measurement values changed. "
+        "Review and confirm before submitting this variation."
+    )
 
 
 class TakeoffService:
@@ -740,7 +832,7 @@ class TakeoffService:
         3. Password-protected PDFs → 400 with a hint about Acrobat/qpdf.
 
         Scanned PDFs (no embedded text layer) are persisted with
-        ``status="needs_ocr"`` instead of erroring — the user sees the
+        ``status="needs_ocr"`` instead of erroring - the user sees the
         upload in the list and the operator gets a one-line log hint
         telling them to install the ``[cv]`` extra to enable OCR.
 
@@ -793,7 +885,7 @@ class TakeoffService:
         # the doc with ``needs_ocr`` so the user still sees it in the
         # list and can either install [cv] (PaddleOCR) or share the
         # source CAD with us. The OCR install hint is logged for the
-        # operator — not raised — because the upload should still
+        # operator - not raised - because the upload should still
         # succeed in this case.
         is_scanned = bool(page_data) and not full_text.strip()
         if is_scanned:
@@ -813,14 +905,14 @@ class TakeoffService:
                 )
 
         if page_count == 0 and not page_data:
-            # Both parsers failed — neither _count_pdf_pages nor
+            # Both parsers failed - neither _count_pdf_pages nor
             # _extract_pdf_pages raised (they log + swallow by design),
             # but the user uploaded something unreadable.  Tell the
             # caller in generic terms; the real diagnostic is already
             # in the server log.
             logger.warning(
                 "takeoff.upload_document produced zero pages and empty text for "
-                "filename=%r size=%dB — rejecting upload",
+                "filename=%r size=%dB - rejecting upload",
                 filename,
                 size_bytes,
             )
@@ -881,7 +973,7 @@ class TakeoffService:
             for table in page.get("tables", []):
                 if len(table) < 2:
                     continue
-                # D-TKC-014 — map columns by their header semantics
+                # D-TKC-014 - map columns by their header semantics
                 # instead of fixed indices, so a table ordered
                 # ``[Pos | Unit | Qty | Description]`` is read
                 # correctly (the v1.9.0 code computed ``headers`` then
@@ -904,7 +996,7 @@ class TakeoffService:
                     qty_str = _cell(row, qty_i)
                     unit = _cell(row, unit_i) or "pcs"
 
-                    # D-TKC-032 — a blank / unparseable quantity must
+                    # D-TKC-032 - a blank / unparseable quantity must
                     # NOT silently become 1.0 (the v1.9.0 behaviour
                     # fabricated a quantity of 1 that flowed straight
                     # into the BOQ on "select-all → add"). An empty or
@@ -940,7 +1032,7 @@ class TakeoffService:
                     else:
                         confidence = 0.6
 
-                    # Audit D4 — formula-injection defence.
+                    # Audit D4 - formula-injection defence.
                     #
                     # ``clean_desc`` and ``clean_unit`` come from PDF
                     # table extraction (pdfplumber / pymupdf), which
@@ -951,8 +1043,8 @@ class TakeoffService:
                     # strings later flow into BOQ exports (Excel / CSV)
                     # and execute when a downstream user opens the file.
                     #
-                    # We neutralise at the extraction boundary — the
-                    # earliest point the data enters our system — so
+                    # We neutralise at the extraction boundary - the
+                    # earliest point the data enters our system - so
                     # every downstream consumer (BOQ, takeoff, AI
                     # enrichment, AG-Grid editing) sees a safe string.
                     # The leading apostrophe is rendered invisibly by
@@ -970,11 +1062,11 @@ class TakeoffService:
                         }
                     )
 
-        # D-TKC-019 — aggregate PER (category, unit). The v1.9.0 code
+        # D-TKC-019 - aggregate PER (category, unit). The v1.9.0 code
         # lumped every row into one "general" bucket, took the unit
         # from only the FIRST element, and summed quantities across
         # heterogeneous units (m + m² + pcs) under that single arbitrary
-        # unit — a dimensionally meaningless total. We now key the
+        # unit - a dimensionally meaningless total. We now key the
         # bucket on (category, unit) so each unit is totalled
         # separately and never cross-summed.
         categories: dict = {}
@@ -1020,7 +1112,7 @@ class TakeoffService:
     ) -> TakeoffMeasurement:
         """Create a single takeoff measurement.
 
-        Audit B8 — server-side recompute of ``measurement_value`` from
+        Audit B8 - server-side recompute of ``measurement_value`` from
         the raw geometry. See ``recompute_measurement_value`` for the
         threat model: prevents client-supplied measurement_value from
         diverging from the actual drawn shape.
@@ -1032,7 +1124,7 @@ class TakeoffService:
             count_value=data.count_value,
             client_value=data.measurement_value,
         )
-        # B8 — derive the volume column server-side (area × depth) so the
+        # B8 - derive the volume column server-side (area × depth) so the
         # client-sent value can't bypass the geometry recompute when it is
         # pushed into a BOQ quantity via ``_pick_takeoff_value``.
         recomputed_volume = recompute_volume_value(
@@ -1114,14 +1206,14 @@ class TakeoffService:
     ) -> TakeoffMeasurement:
         """Update measurement fields.
 
-        Audit B8 — recompute ``measurement_value`` whenever any input
+        Audit B8 - recompute ``measurement_value`` whenever any input
         that feeds into the calculation changes (points, scale, type,
         count_value). We merge "current row state" with "patch fields"
         before calling the recompute so partial updates work correctly
         (e.g. caller bumps just ``scale_pixels_per_unit`` without
         re-sending the whole points array).
 
-        Round-6 audit (2026-05-22) — the router has already loaded the
+        Round-6 audit (2026-05-22) - the router has already loaded the
         row for the IDOR check via ``verify_project_access``. Re-fetching
         here doubles the query count on every PATCH and shows up as a
         sustained 2× SELECT load when a user is bulk-editing measurements
@@ -1162,7 +1254,7 @@ class TakeoffService:
             )
             fields["measurement_value"] = recomputed
 
-        # B8 — recompute the volume column (area × depth) server-side
+        # B8 - recompute the volume column (area × depth) server-side
         # whenever any input that feeds it is touched, so a PATCH cannot be
         # used to slip an arbitrary client volume into a BOQ quantity. This
         # runs independently of the measurement_value block above because a
@@ -1206,7 +1298,7 @@ class TakeoffService:
     ) -> None:
         """Delete a measurement.
 
-        Round-6 audit (2026-05-22) — accept a pre-fetched row from the
+        Round-6 audit (2026-05-22) - accept a pre-fetched row from the
         router's IDOR check to avoid the duplicate ``get_by_id`` query.
         """
         if existing is None:
@@ -1222,7 +1314,7 @@ class TakeoffService:
     ) -> list[TakeoffMeasurement]:
         """Bulk create measurements (e.g. importing from localStorage).
 
-        Audit B8 — recompute ``measurement_value`` for every row so
+        Audit B8 - recompute ``measurement_value`` for every row so
         the localStorage→server import path can't be used to bypass
         the per-row create guard.
         """
@@ -1245,7 +1337,7 @@ class TakeoffService:
                 ),
                 measurement_unit=data.measurement_unit,
                 depth=data.depth,
-                # B8 — recompute the volume column server-side so the
+                # B8 - recompute the volume column server-side so the
                 # localStorage→server import can't bypass the geometry check.
                 volume=recompute_volume_value(
                     measurement_type=data.type,
@@ -1335,10 +1427,10 @@ class TakeoffService:
     ) -> TakeoffMeasurement:
         """Link a measurement to a BOQ position.
 
-        Round-6 audit (2026-05-22) — accept a pre-fetched row from the
+        Round-6 audit (2026-05-22) - accept a pre-fetched row from the
         router's IDOR check to avoid the duplicate ``get_by_id`` query.
 
-        Estimation-cluster wave (2026-05-28) — opt-in ``push_quantity``.
+        Estimation-cluster wave (2026-05-28) - opt-in ``push_quantity``.
         When true, the measurement's measured value (per
         :func:`_pick_takeoff_value`) is copied into the target BOQ
         position's ``quantity`` and the position total is recomputed.
@@ -1347,8 +1439,8 @@ class TakeoffService:
         item = existing if existing is not None else await self.get_measurement(measurement_id)
         # IDOR guard: the target BOQ position must live in the SAME project as
         # the measurement. The router only verified access to the measurement's
-        # project, so without this a caller could link to — and, with
-        # push_quantity, overwrite the quantity of — a position in a project
+        # project, so without this a caller could link to - and, with
+        # push_quantity, overwrite the quantity of - a position in a project
         # they cannot access.
         await self._assert_position_in_project(boq_position_id, item.project_id)
         await self.measurement_repo.update_fields(measurement_id, linked_boq_position_id=boq_position_id)
@@ -1368,7 +1460,7 @@ class TakeoffService:
         IDOR defence for the takeoff→BOQ link: prevents linking/pushing a
         measurement onto a BOQ position in a project the caller cannot access.
         """
-        from app.modules.boq.service import BOQService  # noqa: PLC0415 — avoid import cycle
+        from app.modules.boq.service import BOQService  # noqa: PLC0415 - avoid import cycle
 
         try:
             position_uuid = uuid.UUID(str(boq_position_id))
@@ -1393,33 +1485,300 @@ class TakeoffService:
 
         Reuses the BOQ module's established total-recompute path so the
         money math stays in one place. A ``None`` picked value (empty or
-        garbage measurement) is a no-op — we never zero an existing BOQ
+        garbage measurement) is a no-op - we never zero an existing BOQ
         quantity from a measurement that carries no usable number.
         """
         value = _pick_takeoff_value(measurement)
         if value is None:
             logger.info(
-                "push_quantity: measurement %s has no usable value — leaving BOQ position %s untouched",
+                "push_quantity: measurement %s has no usable value - leaving BOQ position %s untouched",
                 getattr(measurement, "id", "?"),
                 boq_position_id,
             )
             return
 
-        from app.modules.boq.service import BOQService  # noqa: PLC0415 — avoid import cycle
+        from app.modules.boq.service import BOQService  # noqa: PLC0415 - avoid import cycle
 
         try:
             position_uuid = uuid.UUID(str(boq_position_id))
         except (ValueError, AttributeError):
-            logger.warning("push_quantity: BOQ position id %r is not a UUID — skipping", boq_position_id)
+            logger.warning("push_quantity: BOQ position id %r is not a UUID - skipping", boq_position_id)
             return
 
         boq_service = BOQService(self.session)
         position = await boq_service.position_repo.get_by_id(position_uuid)
         if position is None:
-            logger.warning("push_quantity: BOQ position %s not found — skipping", boq_position_id)
+            logger.warning("push_quantity: BOQ position %s not found - skipping", boq_position_id)
             return
 
         await boq_service.position_repo.update_fields(position.id, quantity=str(value))
         await self.session.refresh(position)
-        await boq_service._recompute_position_total(position)  # noqa: SLF001 — reuse the canonical recompute path
+        await boq_service._recompute_position_total(position)  # noqa: SLF001 - reuse the canonical recompute path
         logger.info("push_quantity: BOQ position %s quantity set to %s", boq_position_id, value)
+
+    # ── Revision compare (Item 17) ───────────────────────────────────────
+
+    async def compare_documents(
+        self,
+        project_id: uuid.UUID,
+        from_document_id: str,
+        to_document_id: str,
+    ) -> dict[str, Any]:
+        """Compare the measurements of two takeoff documents in one project.
+
+        PDF takeoffs have no version table, so a revision compare is run
+        between two uploaded documents (the user uploads revision A and
+        revision B as separate PDFs). Measurements are matched by
+        :func:`_measurement_compare_key` and classified
+        added / removed / modified / unchanged. A linked-to-BOQ
+        measurement whose value changed carries a money cost impact in
+        the project's base currency.
+
+        Both document ids must reference documents the project owns; an
+        empty result set is returned rather than an error when a document
+        has no measurements (a freshly uploaded, not-yet-measured PDF).
+        """
+        from_measurements = await self.measurement_repo.list_for_project(
+            project_id,
+            document_id=from_document_id,
+            limit=500,
+        )
+        to_measurements = await self.measurement_repo.list_for_project(
+            project_id,
+            document_id=to_document_id,
+            limit=500,
+        )
+
+        from_by_key = {_measurement_compare_key(m): m for m in from_measurements}
+        to_by_key = {_measurement_compare_key(m): m for m in to_measurements}
+
+        rate_cache: dict[str, tuple[str | None, str | None]] = {}
+
+        async def _rate_and_currency(position_id: str | None) -> tuple[str | None, str | None]:
+            if not position_id:
+                return None, None
+            if position_id in rate_cache:
+                return rate_cache[position_id]
+            result = await self._resolve_position_rate(position_id, project_id)
+            rate_cache[position_id] = result
+            return result
+
+        rows: list[dict[str, Any]] = []
+        for key in sorted(set(from_by_key) | set(to_by_key)):
+            old_m = from_by_key.get(key)
+            new_m = to_by_key.get(key)
+
+            if old_m is not None and new_m is None:
+                rows.append(
+                    {
+                        "change_type": "removed",
+                        "measurement_id": str(old_m.id),
+                        "type": old_m.type,
+                        "group_name": old_m.group_name,
+                        "page": old_m.page,
+                        "label": old_m.annotation,
+                        "old_value": _measure_to_float(_pick_takeoff_value(old_m)),
+                        "new_value": None,
+                        "measurement_unit": old_m.measurement_unit,
+                        "linked_boq_position_id": old_m.linked_boq_position_id,
+                        "cost_impact": None,
+                        "cost_currency": None,
+                    }
+                )
+                continue
+
+            if old_m is None and new_m is not None:
+                rows.append(
+                    {
+                        "change_type": "added",
+                        "measurement_id": str(new_m.id),
+                        "type": new_m.type,
+                        "group_name": new_m.group_name,
+                        "page": new_m.page,
+                        "label": new_m.annotation,
+                        "old_value": None,
+                        "new_value": _measure_to_float(_pick_takeoff_value(new_m)),
+                        "measurement_unit": new_m.measurement_unit,
+                        "linked_boq_position_id": new_m.linked_boq_position_id,
+                        "cost_impact": None,
+                        "cost_currency": None,
+                    }
+                )
+                continue
+
+            assert old_m is not None and new_m is not None  # noqa: S101
+            old_val = _measure_to_float(_pick_takeoff_value(old_m))
+            new_val = _measure_to_float(_pick_takeoff_value(new_m))
+            changed = old_val != new_val
+            position_id = new_m.linked_boq_position_id or old_m.linked_boq_position_id
+            cost_impact: str | None = None
+            cost_currency: str | None = None
+            if changed and position_id:
+                rate, cost_currency = await _rate_and_currency(position_id)
+                cost_impact = _compute_cost_impact(
+                    old_value=old_val,
+                    new_value=new_val,
+                    unit_rate=rate,
+                )
+            rows.append(
+                {
+                    "change_type": "modified" if changed else "unchanged",
+                    "measurement_id": str(new_m.id),
+                    "type": new_m.type,
+                    "group_name": new_m.group_name,
+                    "page": new_m.page,
+                    "label": new_m.annotation,
+                    "old_value": old_val,
+                    "new_value": new_val,
+                    "measurement_unit": new_m.measurement_unit or old_m.measurement_unit,
+                    "linked_boq_position_id": position_id,
+                    "cost_impact": cost_impact,
+                    "cost_currency": cost_currency if cost_impact is not None else None,
+                }
+            )
+
+        def _tally(diff_rows: list[dict[str, Any]]) -> dict[str, int]:
+            tally = {"added": 0, "removed": 0, "modified": 0, "unchanged": 0}
+            for row in diff_rows:
+                tally[row["change_type"]] = tally.get(row["change_type"], 0) + 1
+            return tally
+
+        net_impact = Decimal("0")
+        cost_currency_out: str | None = None
+        has_cost = False
+        for row in rows:
+            if row.get("cost_impact") is not None:
+                has_cost = True
+                cost_currency_out = row.get("cost_currency") or cost_currency_out
+                try:
+                    net_impact += Decimal(str(row["cost_impact"]))
+                except (InvalidOperation, ValueError, TypeError):
+                    continue
+
+        summary = {
+            "measurements": _tally(rows),
+            "net_cost_impact": str(net_impact.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)) if has_cost else None,
+            "cost_currency": cost_currency_out,
+            "from_measurement_count": len(from_measurements),
+            "to_measurement_count": len(to_measurements),
+        }
+
+        return {
+            "project_id": project_id,
+            "from_document_id": from_document_id,
+            "to_document_id": to_document_id,
+            "measurement_rows": rows,
+            "summary": summary,
+        }
+
+    async def _resolve_position_rate(
+        self,
+        position_id: str,
+        project_id: uuid.UUID,
+    ) -> tuple[str | None, str | None]:
+        """Resolve ``(unit_rate, base_currency)`` for a BOQ position.
+
+        The position must belong to ``project_id`` (a foreign-project
+        position is treated as "no rate" so a compare never prices a
+        measurement against another tenant's estimate). Best-effort: any
+        lookup failure returns ``(None, None)`` so the compare degrades to
+        "no cost shown" rather than a 500.
+        """
+        try:
+            position_uuid = uuid.UUID(str(position_id))
+        except (ValueError, TypeError, AttributeError):
+            return None, None
+
+        try:
+            from app.modules.boq.service import BOQService  # noqa: PLC0415 - avoid import cycle
+
+            boq_service = BOQService(self.session)
+            position = await boq_service.position_repo.get_by_id(position_uuid)
+            if position is None:
+                return None, None
+            boq = await boq_service.get_boq(position.boq_id)
+            if str(boq.project_id) != str(project_id):
+                return None, None
+            base_currency = await boq_service._resolve_project_currency(position.boq_id)  # noqa: SLF001
+            return str(position.unit_rate), (base_currency or None)
+        except HTTPException:
+            return None, None
+        except Exception:  # noqa: BLE001 - pricing is advisory, never break the compare
+            logger.debug("Cost-impact rate lookup failed for position %s", position_id, exc_info=True)
+            return None, None
+
+    async def create_variation_from_documents(
+        self,
+        project_id: uuid.UUID,
+        from_document_id: str,
+        to_document_id: str,
+        *,
+        title: str | None = None,
+        user_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Turn a PDF revision delta into a draft VariationRequest.
+
+        Mirrors the DWG handoff: the deterministic
+        :meth:`compare_documents` is the single source of truth (no
+        recompute of the diff math), and the result is shaped into a
+        *draft* VariationRequest (never submitted/approved - a human
+        confirms it in the variations module). Provenance is stamped into
+        ``metadata.source = "pdf_revision_compare"``.
+
+        Returns ``{variation_request_id, code, estimated_cost_impact,
+        currency}``.
+        """
+        diff = await self.compare_documents(project_id, from_document_id, to_document_id)
+        summary = diff.get("summary") or {}
+        measurement_tally = summary.get("measurements") or {}
+        net_impact_raw = summary.get("net_cost_impact")
+        currency = summary.get("cost_currency") or ""
+
+        rows = diff.get("measurement_rows", [])
+        changed_measurement_ids = [row["measurement_id"] for row in rows if row.get("change_type") == "modified"]
+        changed_linked_count = len(
+            [row for row in rows if row.get("change_type") == "modified" and row.get("linked_boq_position_id")]
+        )
+
+        try:
+            estimated_cost_impact = Decimal(str(net_impact_raw)) if net_impact_raw not in (None, "") else Decimal("0")
+        except (InvalidOperation, ValueError, TypeError):
+            estimated_cost_impact = Decimal("0")
+
+        resolved_title = title or "Drawing revision (PDF takeoff)"
+        description = _build_pdf_revision_narrative(
+            measurement_tally=measurement_tally,
+            changed_linked_count=changed_linked_count,
+        )
+
+        # Lazy import (mirrors the BOQService import) so the takeoff module
+        # load never depends on the variations module at import time.
+        from app.modules.variations.schemas import VariationRequestCreate
+        from app.modules.variations.service import VariationsService
+
+        vr_create = VariationRequestCreate(
+            project_id=project_id,
+            title=resolved_title[:500],
+            description=description[:20000],
+            classification="scope_change",
+            estimated_cost_impact=estimated_cost_impact,
+            estimated_schedule_days=0,
+            currency=currency[:10],
+            status="draft",
+            metadata={
+                "source": "pdf_revision_compare",
+                "from_document_id": str(from_document_id),
+                "to_document_id": str(to_document_id),
+                "changed_measurement_ids": changed_measurement_ids,
+                "net_cost_impact": str(estimated_cost_impact),
+            },
+        )
+        variations_service = VariationsService(self.session)
+        vr = await variations_service.create_request(vr_create, user_id=user_id)
+
+        return {
+            "variation_request_id": vr.id,
+            "code": vr.code,
+            "estimated_cost_impact": str(estimated_cost_impact),
+            "currency": currency,
+        }

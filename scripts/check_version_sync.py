@@ -41,6 +41,7 @@ PYPROJECT = REPO_ROOT / "backend" / "pyproject.toml"
 PACKAGE_JSON = REPO_ROOT / "frontend" / "package.json"
 CHANGELOG_MD = REPO_ROOT / "CHANGELOG.md"
 CHANGELOG_TSX = REPO_ROOT / "frontend" / "src" / "features" / "about" / "Changelog.tsx"
+TAURI_CONF = REPO_ROOT / "desktop" / "src-tauri" / "tauri.conf.json"
 
 # Match `version = "1.4.4"` in pyproject.toml — first occurrence only,
 # under the [project] table.  We deliberately stop at the first hit
@@ -57,6 +58,14 @@ def _read_pyproject_version(path: Path) -> str:
 
 
 def _read_package_json_version(path: Path) -> str:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    version = data.get("version")
+    if not isinstance(version, str) or not version.strip():
+        raise SystemExit(f"[FAIL] {path}: missing or non-string `version` field")
+    return version
+
+
+def _read_tauri_conf_version(path: Path) -> str:
     data = json.loads(path.read_text(encoding="utf-8"))
     version = data.get("version")
     if not isinstance(version, str) or not version.strip():
@@ -96,11 +105,13 @@ def main() -> int:
     frontend_version = _read_package_json_version(PACKAGE_JSON)
     changelog_md_version = _changelog_md_top_version(CHANGELOG_MD)
     changelog_tsx_version = _changelog_tsx_top_version(CHANGELOG_TSX)
+    tauri_version = _read_tauri_conf_version(TAURI_CONF)
 
     print(f"backend  ({PYPROJECT.name})       = {backend_version}")
     print(f"frontend ({PACKAGE_JSON.name})    = {frontend_version}")
     print(f"changelog ({CHANGELOG_MD.name})    = {changelog_md_version or '?'}")
     print(f"changelog ({CHANGELOG_TSX.name})   = {changelog_tsx_version or '?'}")
+    print(f"desktop  ({TAURI_CONF.name})    = {tauri_version}")
 
     failures: list[str] = []
 
@@ -108,6 +119,13 @@ def main() -> int:
         failures.append(
             f"[FAIL] backend/pyproject.toml ({backend_version}) does not match "
             f"frontend/package.json ({frontend_version})"
+        )
+
+    if tauri_version != backend_version:
+        failures.append(
+            f"[FAIL] desktop/src-tauri/tauri.conf.json ({tauri_version}) does not "
+            f"match backend version ({backend_version}) - bump the desktop app "
+            f"version so the installers report the right release"
         )
 
     # CHANGELOG drift is a softer warning — only flag if BOTH changelog
@@ -132,9 +150,10 @@ def main() -> int:
         print()
         print(
             "Fix: bump backend/pyproject.toml + frontend/package.json + "
-            "CHANGELOG.md + frontend/src/features/about/Changelog.tsx "
-            "in a single commit so the running app and the docs stay "
-            "honest about which version users are actually getting."
+            "CHANGELOG.md + frontend/src/features/about/Changelog.tsx + "
+            "desktop/src-tauri/tauri.conf.json in a single commit so the "
+            "running app, the desktop installers and the docs stay honest "
+            "about which version users are actually getting."
         )
         return 1
 

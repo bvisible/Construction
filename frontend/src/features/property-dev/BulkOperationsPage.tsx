@@ -22,7 +22,8 @@
  */
 
 import { useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { useMutation } from '@tanstack/react-query';
 import {
   AlertTriangle,
@@ -30,7 +31,6 @@ import {
   Download,
   FileText,
   GitMerge,
-  Mail,
   Map as MapIcon,
   RefreshCw,
   ShieldAlert,
@@ -42,8 +42,11 @@ import {
   Breadcrumb,
   Button,
   Card,
+  DismissibleInfo,
   EmptyState,
+  IntroRichText,
 } from '@/shared/ui';
+import { PageHeader } from '@/shared/ui/PageHeader';
 import { useToastStore } from '@/stores/useToastStore';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { getErrorMessage, triggerDownload, apiPost } from '@/shared/lib/api';
@@ -112,7 +115,7 @@ function BulkResultPanel({
     <div className="mt-4 rounded-lg border border-border-light bg-surface-secondary p-4">
       <div className="flex flex-wrap items-center gap-3">
         {dry_run && (
-          <Badge variant="blue">DRY RUN — no rows were written</Badge>
+          <Badge variant="blue">DRY RUN - no rows were written</Badge>
         )}
         <div className="text-sm font-semibold text-content-primary">
           {succeeded} / {requested} succeeded ({pct}%)
@@ -281,7 +284,7 @@ function PlotStatusChangeSection() {
       <SectionShell
         title="Bulk plot status change"
         icon={<RefreshCw size={16} />}
-        desc="Flip a set of plots to a new status (excludes hold/release — use the inventory map)."
+        desc="Flip a set of plots to a new status (excludes hold/release - use the inventory map)."
       >
         <EmptyState
           title="No plots selected"
@@ -308,7 +311,7 @@ function PlotStatusChangeSection() {
     <SectionShell
       title="Bulk plot status change"
       icon={<RefreshCw size={16} />}
-      desc="Flip a set of plots to a new status (excludes hold/release — use the inventory map)."
+      desc="Flip a set of plots to a new status (excludes hold/release - use the inventory map)."
     >
       <PlotIdsInput
         value={idsText}
@@ -502,7 +505,7 @@ function DocumentsRegenerateSection() {
     <SectionShell
       title="Bulk regenerate documents"
       icon={<FileText size={16} />}
-      desc="Re-render PDFs after a template fix — receipts, SPAs, certificates, NOCs."
+      desc="Re-render PDFs after a template fix - receipts, SPAs, certificates, NOCs."
     >
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div>
@@ -526,12 +529,12 @@ function DocumentsRegenerateSection() {
             onChange={(e) => setLocale(e.target.value)}
             className={inputCls}
           >
-            <option value="en">en — English</option>
-            <option value="de">de — Deutsch</option>
-            <option value="ru">ru — Русский</option>
-            <option value="fr">fr — Français</option>
-            <option value="es">es — Español</option>
-            <option value="ar">ar — العربية</option>
+            <option value="en">en - English</option>
+            <option value="de">de - Deutsch</option>
+            <option value="ru">ru - Русский</option>
+            <option value="fr">fr - Français</option>
+            <option value="es">es - Español</option>
+            <option value="ar">ar - العربية</option>
           </select>
         </div>
       </div>
@@ -641,7 +644,7 @@ function LeadsImportCsvSection() {
         </div>
         <div>
           <label className={labelCls}>
-            Development UUID (optional — scopes dedupe)
+            Development UUID (optional - scopes dedupe)
           </label>
           <input
             value={developmentId}
@@ -826,7 +829,7 @@ function PlotIdsInput({
       {plotIdsCount > BULK_MAX_ITEMS && (
         <div className="mt-1 text-xs text-red-600">
           <AlertTriangle size={12} className="mr-1 inline" />
-          Over the {BULK_MAX_ITEMS}-item cap — server will return 422.
+          Over the {BULK_MAX_ITEMS}-item cap - server will return 422.
         </div>
       )}
     </div>
@@ -876,7 +879,7 @@ function ActionBar({
         {phase !== 'idle' && (
           <span className="text-xs text-content-tertiary">
             {phase === 'dry-run-done'
-              ? 'Dry run complete — review below before executing'
+              ? 'Dry run complete - review below before executing'
               : 'Live run complete'}
           </span>
         )}
@@ -884,7 +887,7 @@ function ActionBar({
       {confirm.needsTypedConfirm && phase === 'dry-run-done' && (
         <div className="rounded-lg border border-red-300 bg-red-50 p-3 text-xs text-red-900 dark:border-red-700 dark:bg-red-900/30 dark:text-red-200">
           <AlertTriangle size={12} className="mr-1 inline" />
-          {plotIdsCount} items selected — type{' '}
+          {plotIdsCount} items selected - type{' '}
           <code className="rounded bg-white px-1 font-bold dark:bg-surface-primary">
             EXECUTE
           </code>{' '}
@@ -909,25 +912,43 @@ function ActionBar({
 /* ───────────── Page shell ───────────────────────────────────────────── */
 
 export function BulkOperationsPage() {
+  const { t } = useTranslation();
+  const navigate = useNavigate();
   const userRole = useAuthStore((s) => s.userRole);
   const isManagerPlus = useMemo(
     () => (userRole ? MANAGER_PLUS.has(userRole.toLowerCase()) : false),
     [userRole],
   );
 
+  const breadcrumb = (
+    <Breadcrumb
+      items={[
+        {
+          label: t('propdev.title', { defaultValue: 'Property Development' }),
+          to: '/property-dev',
+        },
+        {
+          label: t('propdev.bulk_ops.title', {
+            defaultValue: 'Bulk operations',
+          }),
+        },
+      ]}
+    />
+  );
+
   if (!isManagerPlus) {
     return (
-      <div className="space-y-4">
-        <Breadcrumb
-          items={[
-            { label: 'Property Development', to: '/property-dev' },
-            { label: 'Bulk operations' },
-          ]}
-        />
+      <div className="space-y-5 animate-fade-in">
+        {breadcrumb}
         <Card className="p-6">
           <EmptyState
-            title="Not authorized"
-            description="Bulk operations are MANAGER+ only. Contact your workspace admin if you need access."
+            title={t('propdev.bulk_ops.not_authorized_title', {
+              defaultValue: 'Not authorized',
+            })}
+            description={t('propdev.bulk_ops.not_authorized_desc', {
+              defaultValue:
+                'Bulk operations are MANAGER+ only. Contact your workspace admin if you need access.',
+            })}
           />
         </Card>
       </div>
@@ -935,29 +956,35 @@ export function BulkOperationsPage() {
   }
 
   return (
-    <div className="space-y-4">
-      <Breadcrumb
-        items={[
-          { label: 'Property Development', to: '/property-dev' },
-          { label: 'Bulk operations' },
-        ]}
+    <div className="space-y-5 animate-fade-in">
+      {breadcrumb}
+      <PageHeader
+        srTitle={t('propdev.bulk_ops.heading', {
+          defaultValue: 'Bulk operations console',
+        })}
+        subtitle={t('propdev.bulk_ops.subtitle', {
+          defaultValue:
+            'Manager-only batch actions across plots, reservations, documents, leads and buyers.',
+        })}
       />
-      <Card className="p-4">
-        <div className="flex flex-wrap items-center gap-3">
-          <Mail className="text-oe-blue" size={20} />
-          <div className="flex-1">
-            <h1 className="text-lg font-semibold text-content-primary">
-              Bulk operations console
-            </h1>
-            <p className="mt-0.5 text-xs text-content-tertiary">
-              Manager-only batch actions across plots, reservations, documents,
-              leads and buyers. Every section: dry-run first → review →
-              execute. Each batch is SAVEPOINT-atomic (the whole transaction
-              rolls back on hard DB failure).
-            </p>
-          </div>
-        </div>
-      </Card>
+      <DismissibleInfo
+        storageKey="propdev-bulk-operations"
+        title={t('propdev_bulk_ops.intro_title', {
+          defaultValue: 'Move many records safely at once',
+        })}
+        more={t('propdev_bulk_ops.intro_more', { defaultValue: '' }) ? <IntroRichText text={t('propdev_bulk_ops.intro_more')} /> : undefined}
+        links={[
+          {
+            label: t('propdev.title', { defaultValue: 'Property Development' }),
+            onClick: () => navigate('/property-dev'),
+          },
+        ]}
+      >
+        {t('propdev_bulk_ops.intro_body', {
+          defaultValue:
+            'Manager-only batch actions across plots, reservations, documents, leads and buyers, where every run is dry-run first, then review, then execute. Each batch is one atomic transaction that rolls back fully on failure, so a large change to the development never leaves it half-applied.',
+        })}
+      </DismissibleInfo>
 
       <PlotStatusChangeSection />
       <ReservationExtendExpirySection />

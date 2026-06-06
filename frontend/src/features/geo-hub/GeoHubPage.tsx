@@ -43,7 +43,7 @@ import {
 } from 'lucide-react';
 
 import { ApiError } from '@/shared/lib/api';
-import { BetaBanner, ModuleHelpButton } from '@/shared/ui';
+import { BetaBanner, DismissibleInfo, ModuleHelpButton } from '@/shared/ui';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { useToastStore } from '@/stores/useToastStore';
 
@@ -827,7 +827,7 @@ export function GeoHubPage() {
           <div>
             <h1 className="text-base font-semibold text-content-primary leading-tight">
               {t('geo_hub.global_title', {
-                defaultValue: 'Geo Hub — Global view',
+                defaultValue: 'Geo Hub - Global view',
               })}
             </h1>
             <p className="text-2xs uppercase tracking-[0.14em] text-content-tertiary">
@@ -850,6 +850,17 @@ export function GeoHubPage() {
           <ModuleHelpButton tourId="geo" />
         </div>
       </header>
+
+      <DismissibleInfo
+        storageKey="geo"
+        className="mx-5 mt-3"
+        title={t('info.geo.title', { defaultValue: 'Geo Hub' })}
+      >
+        {t('info.geo.body', {
+          defaultValue:
+            'See all your projects pinned on a shared 3D globe. Anchor a project by address or coordinates, then jump from its map location into its BOQ, BIM models, and the rest of the canonical project data.',
+        })}
+      </DismissibleInfo>
 
       {/* Stale-backend banner — distinct from the generic fetch-failed
           banner because the user fix is different: restart / update the
@@ -942,7 +953,7 @@ export function GeoHubPage() {
               </span>
               <span className="text-xs text-slate-400">
                 {t('geo_hub.loading_viewer_hint', {
-                  defaultValue: 'Streaming Cesium chunks (~3 MB) — first load only.',
+                  defaultValue: 'Streaming Cesium chunks (~3 MB) - first load only.',
                 })}
               </span>
             </div>

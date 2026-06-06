@@ -1,4 +1,4 @@
-"""‌⁠‍Risk Register Pydantic schemas — request/response models.
+"""‌⁠‍Risk Register Pydantic schemas - request/response models.
 
 Defines create, update, and response schemas for risk register items.
 Numeric values (probability, impact_cost, risk_score, response_cost) are stored
@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_serializer
 
 
 # ── v3 §10 money serialisation helper ─────────────────────────────────────
-# Mirrors backend/app/modules/boq/schemas.py — money fields are stored /
+# Mirrors backend/app/modules/boq/schemas.py - money fields are stored /
 # accepted as Decimal but emitted as plain decimal strings in JSON.
 def _serialise_money(v: Decimal | None) -> str | None:
     if v is None:
@@ -112,6 +112,9 @@ class RiskCreate(BaseModel):
     # time (see RiskService.create_risk). An explicit value here overrides
     # the project default; "" means "inherit from project / unknown".
     currency: str = Field(default="", max_length=10)
+    # Per-risk override of the auto-escalation threshold (1-25 PMBOK product
+    # scale). None inherits the project/global default (16 == critical tier).
+    escalation_threshold: int | None = Field(default=None, ge=1, le=25)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @field_serializer("impact_cost", "response_cost", when_used="json")
@@ -147,6 +150,7 @@ class RiskUpdate(BaseModel):
     owner_user_id: UUID | None = None
     response_cost: Decimal | None = Field(default=None, ge=0)
     currency: str | None = Field(default=None, max_length=10)
+    escalation_threshold: int | None = Field(default=None, ge=1, le=25)
     metadata: dict[str, Any] | None = None
 
     @field_serializer("impact_cost", "response_cost", when_used="json")
@@ -170,7 +174,7 @@ class RiskResponse(BaseModel):
     impact_schedule_days: int = 0
     impact_severity: str = "medium"
     risk_score: float = 0.0
-    # 5x5 PMBOK matrix scoring — computed server-side from probability +
+    # 5x5 PMBOK matrix scoring - computed server-side from probability +
     # impact_severity. The frontend heatmap depends on these being present.
     probability_score: int | None = None
     impact_score_cost: int | None = None
@@ -183,6 +187,11 @@ class RiskResponse(BaseModel):
     owner_user_id: UUID | None = None
     response_cost: Decimal = Decimal("0")
     currency: str = ""
+    # ── Auto-escalation (TOP-30 #24) ──────────────────────────────────────
+    escalated: bool = False
+    escalated_at: datetime | None = None
+    escalation_trigger: str | None = None
+    escalation_threshold: int | None = None
     metadata: dict[str, Any] = Field(default_factory=dict, validation_alias="metadata_")
     created_at: datetime
     updated_at: datetime
@@ -218,7 +227,7 @@ class RiskSummary(BaseModel):
     mitigated_count: int = 0
     top_risks: list[TopRisk] = Field(default_factory=list)
     # Project currency (data-driven, resolved from the owning project).
-    # "" means unknown — the UI must render a currency-less number rather
+    # "" means unknown - the UI must render a currency-less number rather
     # than mislabelling, e.g., AED exposure as EUR.
     currency: str = ""
     # Per-currency exposure breakdown. `total_exposure` is only meaningful
@@ -250,7 +259,30 @@ class RiskMatrixResponse(BaseModel):
     cells: list[RiskMatrixCell] = Field(default_factory=list)
 
 
-# ── Monte Carlo simulation (v3.11 — T1) ──────────────────────────────────
+# ── Auto-escalation (TOP-30 #24) ─────────────────────────────────────────
+
+
+class RiskEscalationSweepRequest(BaseModel):
+    """Body for a manual escalation sweep over a project's risks.
+
+    ``threshold`` overrides the default product threshold (1-25 PMBOK
+    scale) for this run only. The same sweep is what the central scheduler
+    calls on an interval; this endpoint lets a manager run it on demand.
+    """
+
+    threshold: int | None = Field(default=None, ge=1, le=25)
+
+
+class RiskEscalationSweepResult(BaseModel):
+    """Summary of an escalation sweep run."""
+
+    scanned: int = 0
+    escalated: int = 0
+    # Count of escalations by trigger ("severity" / "review_lapsed").
+    triggers: dict[str, int] = Field(default_factory=dict)
+
+
+# ── Monte Carlo simulation (v3.11 - T1) ──────────────────────────────────
 
 
 class RiskSimulateRequest(BaseModel):
@@ -270,7 +302,7 @@ class RiskTornadoEntry(BaseModel):
     """One bar in the tornado / sensitivity chart.
 
     ``contribution`` is the mean probability-weighted impact this risk
-    contributed across the simulation — i.e. the expected value the risk
+    contributed across the simulation - i.e. the expected value the risk
     adds to the project's contingency. Sorted descending in the response
     so the frontend can take the top N for the chart without re-sorting.
     """
@@ -291,7 +323,7 @@ class RiskHistogramBin(BaseModel):
 class RiskSimulationResult(BaseModel):
     """Persisted-style Monte Carlo result for a project.
 
-    ``currency`` is data-driven (resolved from the owning project) — the
+    ``currency`` is data-driven (resolved from the owning project) - the
     UI must render currency-less totals when this is empty rather than
     silently mislabelling, e.g., AED exposure as EUR.
     """

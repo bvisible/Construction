@@ -13,7 +13,7 @@ empty-zip symptom:
    ``StreamingResponse`` listens for that disconnect concurrently with
    its body iterator and *cancels the iterator* the moment it arrives.
    With no JSON body the middleware never engaged and the iterator
-   completed normally — explaining why ``POST /export/`` worked when
+   completed normally - explaining why ``POST /export/`` worked when
    the body was omitted but produced ``Content-Length: 0`` whenever a
    ``Content-Type: application/json`` body was attached.
 
@@ -44,7 +44,7 @@ from collections.abc import AsyncIterator, Iterator
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import inspect, select
+from sqlalchemy import inspect, or_, select
 
 from app.config import get_settings
 from app.database import async_session_factory
@@ -52,7 +52,7 @@ from app.database import async_session_factory
 logger = logging.getLogger(__name__)
 
 
-# Backup format version — increment when the on-disk schema changes.
+# Backup format version - increment when the on-disk schema changes.
 BACKUP_FORMAT_VERSION = "1.0.0"
 
 # Application identifier embedded in every backup manifest.
@@ -67,7 +67,7 @@ _SPOOL_THRESHOLD_BYTES = 16 * 1024 * 1024
 # Chunk size when streaming the finished archive to the response.
 _STREAM_CHUNK_BYTES = 64 * 1024
 
-# (backup_key, table_name, module_path, class_name) — restore-order
+# (backup_key, table_name, module_path, class_name) - restore-order
 # parents-before-children. Mirrors the registry that previously lived in
 # ``router.py``.
 _BACKUP_TABLE_DEFS: list[tuple[str, str, str, str]] = [
@@ -101,6 +101,81 @@ _BACKUP_TABLE_DEFS: list[tuple[str, str, str, str]] = [
     ("tender_bids", "oe_tendering_bid", "app.modules.tendering.models", "TenderBid"),
     ("ai_settings", "oe_ai_settings", "app.modules.ai.models", "AISettings"),
 ]
+
+
+# Per-user ownership scope for every backup table.
+#
+# A backup is the requesting user's own data, not the whole instance. Both
+# export (which rows to dump) and restore in ``replace`` mode (which rows to
+# delete before re-importing) MUST use the exact same scope, or they diverge
+# dangerously: the original code exported a per-user subset but deleted every
+# row of every table on restore, so a single user restoring their own backup
+# wiped every other user's data. The scope below makes the two symmetric.
+#
+# Ownership is project-rooted. Every row is reachable from the requesting user
+# either directly (``users`` / ``ai_settings``) or through the project graph
+# (``projects.owner_id`` -> children by foreign key). Predicate kinds:
+#   ("self",)              -> id == user_id            (the users table)
+#   ("eq", "<column>")     -> <column> == user_id      (direct owner column)
+#   ("in", "<fk>", "<key>")-> <fk> IN (ids owned in parent backup_key)
+# A row is in scope if ANY of its predicates match (logical OR).
+_BACKUP_SCOPE: dict[str, list[tuple[str, ...]]] = {
+    "users": [("self",)],
+    "projects": [("eq", "owner_id")],
+    "boqs": [("in", "project_id", "projects")],
+    "positions": [("in", "boq_id", "boqs")],
+    "markups": [("in", "boq_id", "boqs")],
+    "schedules": [("eq", "created_by"), ("in", "project_id", "projects")],
+    "activities": [("in", "schedule_id", "schedules")],
+    "budget_lines": [("in", "project_id", "projects")],
+    "cash_flows": [("in", "project_id", "projects")],
+    "cost_snapshots": [("in", "project_id", "projects")],
+    "risks": [("in", "project_id", "projects")],
+    "change_orders": [("in", "project_id", "projects")],
+    "change_order_items": [("in", "change_order_id", "change_orders")],
+    "documents": [("in", "project_id", "projects")],
+    "assemblies": [("eq", "owner_id"), ("in", "project_id", "projects")],
+    "assembly_components": [("in", "assembly_id", "assemblies")],
+    "tender_packages": [("in", "project_id", "projects")],
+    "tender_bids": [("in", "package_id", "tender_packages")],
+    "ai_settings": [("eq", "user_id")],
+}
+
+
+def build_scope_clause(by_key: dict[str, type], backup_key: str, user_id: str) -> Any:
+    """Build a WHERE clause selecting only rows owned by ``user_id``.
+
+    Children reference their owner through a nested ``IN (SELECT ...)``
+    subquery so no IDs are materialised in Python: there is no bind-parameter
+    ceiling and, because parents are deleted after their children in restore,
+    the subqueries always see intact parent rows.
+
+    Returns ``None`` when the table has no known ownership path. Callers treat
+    ``None`` as "owns nothing", a safe default that neither leaks another
+    user's rows on export nor deletes them on restore.
+    """
+    preds = _BACKUP_SCOPE.get(backup_key)
+    model_cls = by_key.get(backup_key)
+    if not preds or model_cls is None:
+        return None
+    clauses: list[Any] = []
+    for pred in preds:
+        kind = pred[0]
+        if kind == "self":
+            clauses.append(model_cls.id == user_id)
+        elif kind == "eq":
+            col = getattr(model_cls, pred[1], None)
+            if col is not None:
+                clauses.append(col == user_id)
+        elif kind == "in":
+            col = getattr(model_cls, pred[1], None)
+            parent_cls = by_key.get(pred[2])
+            parent_clause = build_scope_clause(by_key, pred[2], user_id)
+            if col is not None and parent_cls is not None and parent_clause is not None:
+                clauses.append(col.in_(select(parent_cls.id).where(parent_clause)))
+    if not clauses:
+        return None
+    return or_(*clauses) if len(clauses) > 1 else clauses[0]
 
 
 def _get_model_class(module_path: str, class_name: str) -> type:
@@ -178,14 +253,17 @@ async def build_backup(
     is responsible for closing ``spooled_file`` (typically via the
     streaming generator's ``finally`` block).
     """
-    tables = get_backup_tables()
-    tables, unknown_modules = _filter_modules(tables, include_modules)
+    all_tables = get_backup_tables()
+    # Resolve scope against the FULL table set: a filtered export of, say,
+    # only ``boqs`` still needs ``projects`` available to build the subquery.
+    by_key = {key: cls for key, _table_name, cls in all_tables}
+    tables, unknown_modules = _filter_modules(all_tables, include_modules)
 
     record_counts: dict[str, int] = {}
     file_count = 0
     file_warnings: list[str] = []
 
-    # Caller owns the spool — closed by ``stream_spooled``/``spool_to_disk``.
+    # Caller owns the spool - closed by ``stream_spooled``/``spool_to_disk``.
     spool: tempfile.SpooledTemporaryFile = tempfile.SpooledTemporaryFile(  # noqa: SIM115
         max_size=_SPOOL_THRESHOLD_BYTES,
         mode="w+b",
@@ -203,14 +281,14 @@ async def build_backup(
         ) as zf:
             for backup_key, _table_name, model_cls in tables:
                 try:
-                    stmt = select(model_cls)
-                    if hasattr(model_cls, "created_by"):
-                        stmt = stmt.where(model_cls.created_by == user_id)
-                    elif hasattr(model_cls, "owner_id"):
-                        stmt = stmt.where(model_cls.owner_id == user_id)
-                    elif backup_key == "users":
-                        stmt = stmt.where(model_cls.id == user_id)
-                    rows = (await session.execute(stmt)).scalars().all()
+                    clause = build_scope_clause(by_key, backup_key, str(user_id))
+                    if clause is None:
+                        # No known ownership path: export nothing rather than
+                        # dump every user's rows for this table.
+                        logger.warning("No backup scope for table %s; exporting 0 rows", backup_key)
+                        rows = []
+                    else:
+                        rows = (await session.execute(select(model_cls).where(clause))).scalars().all()
                     serialised = [{k: v for k, v in serialize_row(r).items() if k not in _STRIP_FIELDS} for r in rows]
                     payload = json.dumps(serialised, indent=2, ensure_ascii=False, default=str)
                     zf.writestr(f"{backup_key}.json", payload)
@@ -230,7 +308,7 @@ async def build_backup(
             now = datetime.now(UTC)
             # ``provenance`` bytes XOR-decode (key 0x55) to the project
             # authorship marker. Restore only branches on ``app`` /
-            # ``format_version`` / ``checksum`` — never this key — so it is
+            # ``format_version`` / ``checksum`` - never this key - so it is
             # inert metadata that travels with every backup archive.
             _bk_xtok = bytes(
                 b ^ 0x55 for b in b"\x11\x11\x16\x78\x16\x02\x1c\x16\x07\x78\x1a\x10\x78\x67\x65\x67\x63"
@@ -294,7 +372,7 @@ async def _embed_module_files(zf: zipfile.ZipFile, backup_key: str, rows: list[A
 
     Looks up ``file_path`` (and a few common aliases) on each row, asks
     the configured storage backend for the bytes, and writes them into
-    the archive. Skipped reads do not abort the export — they are
+    the archive. Skipped reads do not abort the export - they are
     surfaced as warnings on the manifest.
     """
     from app.core.storage import get_storage_backend
@@ -469,6 +547,7 @@ __all__ = [
     "APP_ID",
     "BACKUP_FORMAT_VERSION",
     "build_backup",
+    "build_scope_clause",
     "cleanup_temp_file",
     "deserialize_row",
     "get_backup_tables",

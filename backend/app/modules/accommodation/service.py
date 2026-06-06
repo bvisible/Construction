@@ -1,4 +1,4 @@
-"""Accommodation business logic — stateless service layer.
+"""Accommodation business logic - stateless service layer.
 
 All cross-table operations (booking creation with status gates, PropDev
 bootstrap, HR-driven room suggestion, state-machine transitions) live
@@ -51,7 +51,7 @@ def is_valid_booking_transition(current: str, target: str) -> bool:
 
 
 async def _user_is_admin(session: AsyncSession, user_id: str) -> bool:
-    """Lightweight admin probe — never raises."""
+    """Lightweight admin probe - never raises."""
     try:
         from app.modules.users.repository import UserRepository
 
@@ -71,7 +71,7 @@ async def _verify_project_access(
     project_id: uuid.UUID,
     user_id: str,
 ) -> None:
-    """404 on both 'project missing' and 'access denied' — Wave-5 IDOR."""
+    """404 on both 'project missing' and 'access denied' - Wave-5 IDOR."""
     from app.modules.projects.repository import ProjectRepository
 
     repo = ProjectRepository(session)
@@ -98,7 +98,7 @@ async def _accessible_project_ids(
 ) -> list[uuid.UUID] | None:
     """Return the project IDs the caller may see.
 
-    Returns ``None`` for admins (meaning "no filter — see everything")
+    Returns ``None`` for admins (meaning "no filter - see everything")
     and a list of UUIDs for regular users (their owned projects).
     """
     if await _user_is_admin(session, user_id):
@@ -179,7 +179,7 @@ def assert_room_bookable(room: Room) -> None:
 
 
 # Bookings that still hold the room. ``cancelled`` and ``checked_out``
-# free the slot — see the matching transitions in ``_BOOKING_TRANSITIONS``.
+# free the slot - see the matching transitions in ``_BOOKING_TRANSITIONS``.
 _LIVE_BOOKING_STATUSES: tuple[str, ...] = ("reserved", "checked_in")
 
 
@@ -210,7 +210,7 @@ async def assert_no_booking_overlap(
     stmt = stmt.where(
         or_(Booking.check_out.is_(None), Booking.check_out > check_in),
     )
-    # Our window must end strictly after the other's start — unless
+    # Our window must end strictly after the other's start - unless
     # we're open-ended, in which case no upper bound applies.
     if check_out is not None:
         stmt = stmt.where(Booking.check_in < check_out)
@@ -240,7 +240,7 @@ async def bootstrap_from_propdev_block(
     """
     try:
         from app.modules.property_dev.models import Block, Plot
-    except Exception:  # noqa: BLE001 — PropDev disabled / missing
+    except Exception:  # noqa: BLE001 - PropDev disabled / missing
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="PropDev module is not available",
@@ -327,7 +327,7 @@ async def suggest_room_for_employee(
     accommodations in projects the user can access.
 
     Returns the suggested room. Raises 404 if no room is available.
-    NOT a confirmation — the UI must follow up with a real
+    NOT a confirmation - the UI must follow up with a real
     ``POST /rooms/{id}/bookings``.
     """
     # The employee_contact_id arg is part of the public API so a future
@@ -336,7 +336,7 @@ async def suggest_room_for_employee(
     # and otherwise ignore it.
     #
     # IDOR posture (Wave-5): the contact must belong to the caller's
-    # tenant — otherwise a caller could probe the existence of any Contact
+    # tenant - otherwise a caller could probe the existence of any Contact
     # UUID (404 vs proceed). Admins bypass the scope. We return 404, never
     # 403, on a contact the caller is not allowed to see (consistent with
     # the module's 404-on-not-owned stance). The contacts module gates on
@@ -423,7 +423,7 @@ def _apply_booking_filters(
     Date overlap rule (half-open interval matching real booking semantics):
     a booking ``[check_in, check_out)`` overlaps a window
     ``[from_date, to_date]`` when ``check_in <= to_date`` AND
-    ``(check_out IS NULL OR check_out > from_date)`` — open-ended bookings
+    ``(check_out IS NULL OR check_out > from_date)`` - open-ended bookings
     (NULL ``check_out``) always overlap any future window whose start they
     precede.
     """
@@ -450,13 +450,16 @@ async def list_bookings_for_accommodation(
     to_date: date | None = None,
     limit: int = 50,
     offset: int = 0,
-) -> tuple[list[Booking], dict[uuid.UUID, str]]:
+) -> tuple[list[Booking], dict[uuid.UUID, str], int]:
     """List bookings across every room of an accommodation.
 
-    Returns ``(bookings, room_label_by_room_id)`` so the router can
-    decorate the response with ``room_label`` without a per-row N+1.
+    Returns ``(bookings, room_label_by_room_id, total)`` where ``total`` is
+    the count of all matching bookings (before ``limit``/``offset``) so the
+    router can populate ``BookingListResponse.total`` correctly across pages,
+    and ``room_label_by_room_id`` lets it decorate the response with
+    ``room_label`` without a per-row N+1.
 
-    IDOR-gated through :func:`get_accommodation_or_404` — a caller who
+    IDOR-gated through :func:`get_accommodation_or_404` - a caller who
     can't see the parent project gets a 404, never a 403.
     """
     accom = await get_accommodation_or_404(session, accommodation_id, user_id)
@@ -472,11 +475,23 @@ async def list_bookings_for_accommodation(
     ).all()
     room_label_by_id: dict[uuid.UUID, str] = {r[0]: r[1] for r in room_rows}
     if not room_label_by_id:
-        return [], {}
+        return [], {}, 0
+
+    room_ids = list(room_label_by_id.keys())
+
+    # Total matching count (same filters, no limit/offset) so pagination
+    # metadata reflects the full result set, not just the current page.
+    count_stmt = _apply_booking_filters(
+        select(func.count(Booking.id)).where(Booking.room_id.in_(room_ids)),
+        statuses=statuses,
+        from_date=from_date,
+        to_date=to_date,
+    )
+    total = int((await session.execute(count_stmt)).scalar() or 0)
 
     stmt = (
         select(Booking)
-        .where(Booking.room_id.in_(list(room_label_by_id.keys())))
+        .where(Booking.room_id.in_(room_ids))
         .order_by(Booking.check_in.desc(), Booking.created_at.desc())
         .limit(limit)
         .offset(offset)
@@ -488,7 +503,7 @@ async def list_bookings_for_accommodation(
         to_date=to_date,
     )
     rows = (await session.execute(stmt)).scalars().all()
-    return list(rows), room_label_by_id
+    return list(rows), room_label_by_id, total
 
 
 async def list_bookings_for_room(
@@ -501,13 +516,26 @@ async def list_bookings_for_room(
     to_date: date | None = None,
     limit: int = 50,
     offset: int = 0,
-) -> tuple[list[Booking], dict[uuid.UUID, str]]:
+) -> tuple[list[Booking], dict[uuid.UUID, str], int]:
     """List bookings for a single room.
 
-    Same IDOR posture as :func:`list_bookings_for_accommodation` — the
+    Returns ``(bookings, room_label_by_room_id, total)`` where ``total`` is
+    the count of all matching bookings (before ``limit``/``offset``).
+
+    Same IDOR posture as :func:`list_bookings_for_accommodation` - the
     caller must own the parent project or we 404.
     """
     room, _accom = await get_room_or_404(session, room_id, user_id)
+
+    # Total matching count (same filters, no limit/offset) so pagination
+    # metadata reflects the full result set, not just the current page.
+    count_stmt = _apply_booking_filters(
+        select(func.count(Booking.id)).where(Booking.room_id == room.id),
+        statuses=statuses,
+        from_date=from_date,
+        to_date=to_date,
+    )
+    total = int((await session.execute(count_stmt)).scalar() or 0)
 
     stmt = (
         select(Booking)
@@ -523,7 +551,7 @@ async def list_bookings_for_room(
         to_date=to_date,
     )
     rows = (await session.execute(stmt)).scalars().all()
-    return list(rows), {room.id: room.label}
+    return list(rows), {room.id: room.label}, total
 
 
 # ── Currency-inheritance helpers ─────────────────────────────────────────

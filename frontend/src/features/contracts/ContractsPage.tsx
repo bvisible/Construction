@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -32,6 +32,8 @@ import {
   Breadcrumb,
   RecoveryCard,
   SkeletonTable,
+  DismissibleInfo,
+  IntroRichText,
 } from '@/shared/ui';
 import { RequiresProject } from '@/shared/auth/RequiresProject';
 import {
@@ -42,21 +44,21 @@ import {
 import { MoneyDisplay } from '@/shared/ui/MoneyDisplay';
 import { MultiCurrencyTotal } from '@/shared/ui/MultiCurrencyTotal';
 import { DateDisplay } from '@/shared/ui/DateDisplay';
-import { PipelineBanner } from './PipelineBanner';
+import { PageHeader } from '@/shared/ui/PageHeader';
 import { ContractStatusPipeline } from './ContractStatusPipeline';
 import { ContractExpiryBadge } from './ContractExpiryBadge';
+import { ComplianceGate } from './ComplianceGate';
 import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { getErrorMessage } from '@/shared/lib/api';
-import { projectsApi, type Project } from '@/features/projects/api';
+import { projectsApi } from '@/features/projects/api';
 import {
   listContracts,
   listProgressClaims,
   listContractLines,
   createContract,
   createProgressClaim,
-  signContract,
   suspendContract,
   resumeContract,
   terminateContract,
@@ -92,6 +94,14 @@ const CONTRACT_TYPE_COLORS: Record<
   unit_price: { bg: 'bg-sky-50 dark:bg-sky-950/40', ring: 'ring-sky-200 dark:ring-sky-800', text: 'text-sky-700 dark:text-sky-300' },
   design_build: { bg: 'bg-fuchsia-50 dark:bg-fuchsia-950/40', ring: 'ring-fuchsia-200 dark:ring-fuchsia-800', text: 'text-fuchsia-700 dark:text-fuchsia-300' },
   combination: { bg: 'bg-slate-50 dark:bg-slate-800/60', ring: 'ring-slate-200 dark:ring-slate-700', text: 'text-slate-700 dark:text-slate-300' },
+  remeasurement: { bg: 'bg-teal-50 dark:bg-teal-950/40', ring: 'ring-teal-200 dark:ring-teal-800', text: 'text-teal-700 dark:text-teal-300' },
+};
+
+/** Neutral fallback so an unknown/missing contract type never crashes the chip. */
+const CONTRACT_TYPE_FALLBACK = {
+  bg: 'bg-slate-50 dark:bg-slate-800/60',
+  ring: 'ring-slate-200 dark:ring-slate-700',
+  text: 'text-slate-700 dark:text-slate-300',
 };
 
 const CONTRACT_STATUS_VARIANT: Record<
@@ -125,6 +135,7 @@ const CONTRACT_TYPES: ContractType[] = [
   'unit_price',
   'design_build',
   'combination',
+  'remeasurement',
 ];
 
 const CONTRACT_STATUSES: ContractStatus[] = [
@@ -198,9 +209,10 @@ function todayIso(): string {
 
 function ContractTypeChip({ type }: { type: ContractType }) {
   const { t } = useTranslation();
-  const c = CONTRACT_TYPE_COLORS[type];
-  const label = t(`contracts.type_${type}`, {
-    defaultValue: type === 'tm' ? 'T&M' : type.replace(/_/g, ' '),
+  const c = CONTRACT_TYPE_COLORS[type] ?? CONTRACT_TYPE_FALLBACK;
+  const safeType = type || 'unknown';
+  const label = t(`contracts.type_${safeType}`, {
+    defaultValue: safeType === 'tm' ? 'T&M' : safeType.replace(/_/g, ' '),
   });
   return (
     <span
@@ -220,6 +232,7 @@ function ContractTypeChip({ type }: { type: ContractType }) {
 
 export function ContractsPage() {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const [tab, setTab] = useState<Tab>('contracts');
   const activeProjectId = useProjectContextStore((s) => s.activeProjectId);
   const [projectId, setProjectId] = useState<string>('');
@@ -235,10 +248,13 @@ export function ContractsPage() {
     queryFn: () => projectsApi.list(),
   });
 
+  // Project selection lives in the global top bar (useProjectContextStore).
+  // Follow the active project when it changes; otherwise fall back to the
+  // first project the user can see so the page is never blank for a
+  // single-project tenant. No in-page project picker is rendered.
   useEffect(() => {
-    if (projectId) return;
     const seed = activeProjectId || projectsQ.data?.[0]?.id;
-    if (seed) setProjectId(seed);
+    if (seed && seed !== projectId) setProjectId(seed);
   }, [activeProjectId, projectsQ.data, projectId]);
 
   const contractsQ = useQuery({
@@ -248,6 +264,10 @@ export function ContractsPage() {
   });
 
   const contracts = contractsQ.data ?? [];
+  const selectedProject = useMemo(
+    () => (projectsQ.data ?? []).find((p) => p.id === projectId),
+    [projectsQ.data, projectId],
+  );
   const [claimsContractId, setClaimsContractId] = useState<string>('');
   const effectiveClaimsContract = claimsContractId || contracts[0]?.id || '';
 
@@ -316,61 +336,68 @@ export function ContractsPage() {
   };
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-5 animate-fade-in">
       <Breadcrumb
         items={[
-          { label: t('contracts.title', { defaultValue: 'Contracts' }) },
+          ...(selectedProject
+            ? [{ label: selectedProject.name, to: `/projects/${selectedProject.id}` }]
+            : []),
+          { label: t('nav.contracts', { defaultValue: 'Contracts' }) },
         ]}
       />
 
-      <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div>
-          <h1 className="text-2xl font-semibold text-content-primary">
-            {t('contracts.title', { defaultValue: 'Contracts' })}
-          </h1>
-          <p className="mt-1 text-sm text-content-secondary">
-            {t('contracts.subtitle', {
-              defaultValue:
-                'Type-aware contracts with schedule of values, retention, claims and final accounts.',
-            })}
-          </p>
-        </div>
-        <Button
-          variant="primary"
-          icon={<Plus size={14} />}
-          onClick={() => {
-            if (tab === 'claims') setNewClaimOpen(true);
-            else setCreateOpen(true);
-          }}
-          disabled={!projectId}
-        >
-          {tab === 'claims'
-            ? t('contracts.new_claim', { defaultValue: 'New Claim' })
-            : t('contracts.new_contract', { defaultValue: 'New Contract' })}
-        </Button>
-      </div>
-
-      <PipelineBanner
-        intro={t('contracts.pipeline_intro', {
+      <PageHeader
+        subtitle={t('contracts.subtitle', {
           defaultValue:
-            'A contract formalises a won opportunity or an awarded bid package. Build the schedule of values, then bill work through progress claims and settle in the final account. Variations adjust the contract sum mid-flight.',
+            'Type-aware contracts with schedule of values, retention, claims and final accounts.',
         })}
-        steps={[
-          { label: t('contracts.step_crm', { defaultValue: 'CRM' }), to: '/crm' },
+        actions={
+          <Button
+            variant="primary"
+            icon={<Plus size={14} />}
+            onClick={() => {
+              if (tab === 'claims') setNewClaimOpen(true);
+              else setCreateOpen(true);
+            }}
+            disabled={!projectId}
+          >
+            {tab === 'claims'
+              ? t('contracts.new_claim', { defaultValue: 'New Claim' })
+              : t('contracts.new_contract', { defaultValue: 'New Contract' })}
+          </Button>
+        }
+      />
+
+      <DismissibleInfo
+        storageKey="contracts"
+        title={t('contracts.intro_title', {
+          defaultValue: 'Keep the contract sum honest end to end',
+        })}
+        more={
+          t('contracts.intro_more', { defaultValue: '' })
+            ? <IntroRichText text={t('contracts.intro_more')} />
+            : undefined
+        }
+        links={[
           {
-            label: t('contracts.step_bid', { defaultValue: 'Bid Management' }),
-            to: '/bid-management',
+            label: t('nav.variations', { defaultValue: 'Variations' }),
+            onClick: () => navigate('/variations'),
           },
           {
-            label: t('contracts.step_contract', { defaultValue: 'Contracts' }),
-            current: true,
+            label: t('nav.bid_management', { defaultValue: 'Bid Management' }),
+            onClick: () => navigate('/bid-management'),
           },
           {
-            label: t('contracts.step_variations', { defaultValue: 'Variations' }),
-            to: '/variations',
+            label: t('nav.finance', { defaultValue: 'Finance' }),
+            onClick: () => navigate('/finance'),
           },
         ]}
-      />
+      >
+        {t('contracts.intro_body', {
+          defaultValue:
+            'Set up each commercial agreement with its type-aware schedule of values, retention and lifecycle, then bill the work through progress claims and settle in the final account. Variations adjust the contract sum mid-flight and approved claims push their net due into Finance, so what you signed and what you owe never drift apart.',
+        })}
+      </DismissibleInfo>
 
       {/* Tabs */}
       <div className="border-b border-border-light">
@@ -419,26 +446,10 @@ export function ContractsPage() {
         </nav>
       </div>
 
-      {/* Filters */}
+      {/* Filters — the project is chosen in the global top bar, so the
+          previous in-page project select is gone; only entity-level filters
+          (search / type / status) remain here. */}
       <div className="flex flex-wrap items-center gap-2">
-        <select
-          value={projectId}
-          onChange={(e) => setProjectId(e.target.value)}
-          aria-label={t('a11y.contracts.project_filter', {
-            defaultValue: 'Filter contracts by project',
-          })}
-          className={clsx(inputCls, 'max-w-[260px]')}
-        >
-          <option value="">
-            — {t('common.select_project')} —
-          </option>
-          {(projectsQ.data ?? []).map((p: Project) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
-        </select>
-
         <div className="relative flex-1 min-w-[200px] max-w-md">
           <Search
             size={14}
@@ -549,6 +560,7 @@ export function ContractsPage() {
             rows={filteredClaims}
             onCreate={() => setNewClaimOpen(true)}
             hasContract={!!effectiveClaimsContract}
+            projectId={projectId}
           />
         ) : (
           <FinalAccountsView
@@ -619,7 +631,7 @@ function ContractTable({
           title={t('contracts.empty', { defaultValue: 'No contracts yet' })}
           description={t('contracts.empty_desc', {
             defaultValue:
-              'Create your first contract — pick the contract type and the engine wires up the right schedule of values, fees and gainshare rules.',
+              'Create your first contract, pick the contract type and the engine wires up the right schedule of values, fees and gainshare rules.',
           })}
           action={{
             label: t('contracts.new_contract', { defaultValue: 'New Contract' }),
@@ -751,10 +763,12 @@ function ClaimsTable({
   rows,
   onCreate,
   hasContract,
+  projectId,
 }: {
   rows: ProgressClaimItem[];
   onCreate: () => void;
   hasContract: boolean;
+  projectId: string;
 }) {
   const { t } = useTranslation();
   if (!hasContract) {
@@ -813,7 +827,7 @@ function ClaimsTable({
         </thead>
         <tbody>
           {rows.map((r) => (
-            <ClaimRow key={r.id} claim={r} />
+            <ClaimRow key={r.id} claim={r} projectId={projectId} />
           ))}
         </tbody>
       </table>
@@ -821,7 +835,13 @@ function ClaimsTable({
   );
 }
 
-function ClaimRow({ claim }: { claim: ProgressClaimItem }) {
+function ClaimRow({
+  claim,
+  projectId,
+}: {
+  claim: ProgressClaimItem;
+  projectId: string;
+}) {
   const qc = useQueryClient();
   const { t } = useTranslation();
   const addToast = useToastStore((s) => s.addToast);
@@ -850,8 +870,17 @@ function ClaimRow({ claim }: { claim: ProgressClaimItem }) {
 
   return (
     <tr className="border-t border-border-light hover:bg-surface-secondary">
-      <td className="px-4 py-2 font-mono text-xs text-content-secondary">
-        {claim.claim_number}
+      <td className="px-4 py-2 font-mono text-xs">
+        {projectId ? (
+          <Link
+            to={`/projects/${projectId}/contracts/claims/${claim.id}`}
+            className="text-oe-blue hover:underline"
+          >
+            {claim.claim_number}
+          </Link>
+        ) : (
+          <span className="text-content-secondary">{claim.claim_number}</span>
+        )}
       </td>
       <td className="px-4 py-2 text-xs text-content-secondary">
         {claim.period_start ? <DateDisplay value={claim.period_start} /> : '—'}
@@ -962,7 +991,7 @@ function FinalAccountsView({
         })}
         description={t('contracts.empty_final_accounts_desc', {
           defaultValue:
-            'Final accounts are opened when a contract is closed — completed or terminated contracts will appear here.',
+            'Final accounts are opened when a contract is closed. Completed or terminated contracts will appear here.',
         })}
       />
     );
@@ -1037,6 +1066,10 @@ function ContractDetailDrawer({
   const qc = useQueryClient();
   const addToast = useToastStore((s) => s.addToast);
   const contract = contracts.find((c) => c.id === contractId);
+  // Item #27 — signing goes through the compliance gate modal, which runs
+  // the project's compliance rule packs against the SoV and only lets the
+  // user sign once there are no blocking errors.
+  const [gateOpen, setGateOpen] = useState(false);
 
   const linesQ = useQuery({
     queryKey: ['contracts', 'lines', contractId],
@@ -1058,18 +1091,6 @@ function ContractDetailDrawer({
     qc.invalidateQueries({ queryKey: ['contracts', 'list'] });
     qc.invalidateQueries({ queryKey: ['contracts', 'dashboard', contractId] });
   };
-
-  const signMut = useMutation({
-    mutationFn: () => signContract(contractId),
-    onSuccess: () => {
-      invalidate();
-      addToast({
-        type: 'success',
-        title: t('contracts.signed_ok', { defaultValue: 'Contract signed' }),
-      });
-    },
-    onError: (err) => addToast({ type: 'error', title: getErrorMessage(err) }),
-  });
 
   const suspendMut = useMutation({
     mutationFn: () => suspendContract(contractId),
@@ -1246,8 +1267,7 @@ function ContractDetailDrawer({
               <Button
                 variant="primary"
                 icon={<PenLine size={14} />}
-                onClick={() => signMut.mutate()}
-                loading={signMut.isPending}
+                onClick={() => setGateOpen(true)}
               >
                 {t('contracts.sign', { defaultValue: 'Sign' })}
               </Button>
@@ -1535,7 +1555,7 @@ function ContractDetailDrawer({
               <p className="text-sm text-content-secondary">
                 {t('contracts.gainshare_hint', {
                   defaultValue:
-                    'GMP contract — configure target cost, GMP cap and savings split via the API.',
+                    'GMP contract, configure target cost, GMP cap and savings split via the API.',
                 })}
               </p>
               {dashQ.data?.gainshare_estimate !== null &&
@@ -1557,6 +1577,21 @@ function ContractDetailDrawer({
           )}
         </div>
       </div>
+
+      {/* Compliance gate (Item #27) — runs the project rule packs before
+          allowing the draft → active signature. Rendered via a portal so it
+          stacks above the detail drawer. */}
+      {gateOpen && (
+        <ComplianceGate
+          contractId={contractId}
+          contractCode={contract.code}
+          onSigned={() => {
+            setGateOpen(false);
+            invalidate();
+          }}
+          onClose={() => setGateOpen(false)}
+        />
+      )}
     </div>
   );
 }

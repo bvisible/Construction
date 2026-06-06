@@ -114,6 +114,31 @@ _DEFAULT_DASHBOARDS: list[dict] = [
             ("line_chart", "safety_trir"),
         ],
     },
+    {
+        # Connective-tissue feature 09: the cross-module executive controls
+        # spine (cost + schedule + quality + safety + risk + changes) wired
+        # into the BI dashboards page so the alert engine and reports gain the
+        # new KPIs too. The dedicated /project-controls page renders the same
+        # spine status-banded with drill-down.
+        "name": "Executive Project Controls",
+        "description": "Cost, schedule, quality, safety, risk and change KPIs in one view.",
+        "scope": "role",
+        "role_ref": "admin",
+        "widgets": [
+            ("kpi_card", "cpi"),
+            ("kpi_card", "spi"),
+            ("kpi_card", "milestone_slippage_days"),
+            ("kpi_card", "ncr_open_count"),
+            ("kpi_card", "first_pass_yield"),
+            ("kpi_card", "incident_count"),
+            ("kpi_card", "risk_open_exposure"),
+            ("kpi_card", "risk_high_unmitigated_count"),
+            ("kpi_card", "pending_variation_value"),
+            ("kpi_card", "change_order_ratio"),
+            ("line_chart", "cpi"),
+            ("line_chart", "spi"),
+        ],
+    },
 ]
 
 
@@ -347,10 +372,10 @@ async def _seed_kpi_history(session: AsyncSession) -> int:
     violated the no-stubs / data-integrity rule.
 
     Instead we compute each KPI's real current value over the whole
-    portfolio and persist a single history point — but only when the KPI
+    portfolio and persist a single history point - but only when the KPI
     actually has source data (``source_record_count > 0``), exactly the same
     guard ``compute_kpi(persist=True)`` uses. A KPI with no underlying rows
-    yet gets no row: the library shows "—" with an empty sparkline rather
+    yet gets no row: the library shows "-" with an empty sparkline rather
     than an invented number. As real records accrue, on-demand computes
     (and dashboard renders) append further real points over time.
     """
@@ -366,7 +391,7 @@ async def _seed_kpi_history(session: AsyncSession) -> int:
         if (await session.execute(q)).scalar_one_or_none() is not None:
             continue
         result = await _kpis.compute(code, session, project_id=None)
-        # Never persist a fabricated/empty value — only real measurements.
+        # Never persist a fabricated/empty value - only real measurements.
         if result.source_record_count <= 0:
             continue
         kv = KPIValue(

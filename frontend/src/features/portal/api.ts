@@ -196,3 +196,316 @@ export function listDocumentAccessLog(params?: {
     `/v1/portal/admin/document-access-log${q ? `?${q}` : ''}`,
   );
 }
+
+/* ── Progress reports (client distribution) ──────────────────────────────
+ *
+ * The portal-user-facing list (RLS via PortalAccessRule) lives at
+ * /v1/portal/projects/{project_id}/progress-reports on a separate session
+ * token. The internal admin screen below uses the reporting module's
+ * JWT-gated endpoints to preview exactly what a client receives, filtered
+ * to the progress_report type.
+ */
+
+export interface ProgressReport {
+  id: string;
+  project_id: string;
+  template_id: string | null;
+  report_type: string;
+  title: string;
+  generated_at: string;
+  format: string;
+  storage_key: string | null;
+}
+
+export function listProgressReports(projectId: string): Promise<ProgressReport[]> {
+  return apiGet<ProgressReport[]>(
+    `/v1/reporting/reports/?project_id=${encodeURIComponent(projectId)}`,
+  ).then((reports) => reports.filter((r) => r.report_type === 'progress_report'));
+}
+
+/* ── Portal-user-facing (session-token) payment applications ───────────────
+ *
+ * Unlike the internal-admin helpers above (which ride the internal JWT via
+ * shared/lib/api), the subcontractor-portal payment endpoints authenticate
+ * with the magic-link SESSION token, kept in sessionStorage under
+ * PORTAL_SESSION_KEY. We use raw fetch so the internal JWT is never sent on
+ * these public-surface calls. Mirrors features/buyer-portal/api.ts.
+ */
+
+export const PORTAL_SESSION_KEY = 'oe.portal.session_token';
+
+export function getPortalSessionToken(): string | null {
+  try {
+    return sessionStorage.getItem(PORTAL_SESSION_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function setPortalSessionToken(token: string): void {
+  try {
+    sessionStorage.setItem(PORTAL_SESSION_KEY, token);
+  } catch {
+    /* sessionStorage unavailable (private mode) — caller still gets the token */
+  }
+}
+
+export function clearPortalSessionToken(): void {
+  try {
+    sessionStorage.removeItem(PORTAL_SESSION_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+const PORTAL_ME_BASE = '/api/v1/portal/me';
+
+export interface PaymentApplicationListItem {
+  id: string;
+  agreement_id: string;
+  application_number: string;
+  period_start: string | null;
+  period_end: string | null;
+  gross_amount: string;
+  net_amount: string;
+  currency: string;
+  status: string;
+  submitted_at: string | null;
+}
+
+export interface PaymentApplicationListResponse {
+  items: PaymentApplicationListItem[];
+  total: number;
+}
+
+export interface PaymentApplicationLineDetail {
+  work_package_id: string;
+  work_package_name: string;
+  planned_value: string;
+  claimed_amount: string;
+  certified_amount: string;
+  approved_amount: string;
+}
+
+export interface PaymentApplicationDetail {
+  id: string;
+  agreement_id: string;
+  application_number: string;
+  period_start: string | null;
+  period_end: string | null;
+  gross_amount: string;
+  retention_amount: string;
+  net_amount: string;
+  currency: string;
+  status: string;
+  submitted_at: string | null;
+  lines: PaymentApplicationLineDetail[];
+}
+
+export interface PaymentApplicationSubmitLine {
+  work_package_id: string;
+  claimed_amount: string;
+}
+
+export interface PaymentApplicationSubmitPayload {
+  agreement_id: string;
+  period_start?: string | null;
+  period_end?: string | null;
+  lines: PaymentApplicationSubmitLine[];
+}
+
+/** Raised when no portal session token is present — the UI must re-auth. */
+export class PortalUnauthorizedError extends Error {
+  constructor(message = 'Portal session expired') {
+    super(message);
+    this.name = 'PortalUnauthorizedError';
+  }
+}
+
+async function portalFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  const token = getPortalSessionToken();
+  if (!token) throw new PortalUnauthorizedError('No portal session');
+  const headers = new Headers(init?.headers);
+  headers.set('Authorization', `Bearer ${token}`);
+  headers.set('Accept', 'application/json');
+  if (init?.body && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json');
+  }
+  const res = await fetch(path, { ...init, headers });
+  if (res.status === 401) {
+    clearPortalSessionToken();
+    throw new PortalUnauthorizedError();
+  }
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { detail?: unknown };
+    const detail =
+      typeof body.detail === 'string' ? body.detail : `Request failed (${res.status})`;
+    throw new Error(detail);
+  }
+  return (await res.json()) as T;
+}
+
+export function listMyPaymentApplications(params?: {
+  agreement_id?: string;
+  status?: string;
+  offset?: number;
+  limit?: number;
+}): Promise<PaymentApplicationListResponse> {
+  const qs = new URLSearchParams();
+  if (params?.agreement_id) qs.set('agreement_id', params.agreement_id);
+  if (params?.status) qs.set('status', params.status);
+  if (params?.offset !== undefined) qs.set('offset', String(params.offset));
+  if (params?.limit !== undefined) qs.set('limit', String(params.limit));
+  const q = qs.toString();
+  return portalFetch<PaymentApplicationListResponse>(
+    `${PORTAL_ME_BASE}/payment-applications${q ? `?${q}` : ''}`,
+  );
+}
+
+export function getMyPaymentApplication(id: string): Promise<PaymentApplicationDetail> {
+  return portalFetch<PaymentApplicationDetail>(
+    `${PORTAL_ME_BASE}/payment-applications/${encodeURIComponent(id)}`,
+  );
+}
+
+export function submitMyPaymentApplication(
+  data: PaymentApplicationSubmitPayload,
+): Promise<PaymentApplicationDetail> {
+  return portalFetch<PaymentApplicationDetail>(`${PORTAL_ME_BASE}/payment-applications`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export interface PortalWorkPackage {
+  id: string;
+  name: string;
+  planned_value: string;
+}
+
+export interface PortalAgreementSummary {
+  id: string;
+  title: string;
+  currency: string;
+  retention_percent: string;
+  status: string;
+  work_packages: PortalWorkPackage[];
+}
+
+export interface PortalAgreementSummaryList {
+  items: PortalAgreementSummary[];
+  total: number;
+}
+
+/** List the agreements (with work packages) the user can submit against. */
+export function listMyPaymentAgreements(): Promise<PortalAgreementSummaryList> {
+  return portalFetch<PortalAgreementSummaryList>(`${PORTAL_ME_BASE}/payment-agreements`);
+}
+
+/* ── Portal-user-facing (session-token) progress reports ───────────────────
+ *
+ * The client / subcontractor sees the progress reports for any project they
+ * hold a `project` access rule on. Project resolution and the report list are
+ * both RLS-scoped server-side; a project the caller was not granted 404s.
+ */
+
+export interface PortalProjectSummary {
+  id: string;
+  name: string;
+  project_code: string | null;
+}
+
+export interface PortalProjectSummaryList {
+  items: PortalProjectSummary[];
+  total: number;
+}
+
+export interface PortalProgressReport {
+  id: string;
+  title: string;
+  generated_at: string;
+  report_type: string;
+  format: string;
+  period: string | null;
+  has_content: boolean;
+}
+
+export interface PortalProgressReportList {
+  items: PortalProgressReport[];
+  total: number;
+}
+
+/**
+ * List the projects the portal caller can see, by name. Falls back to the
+ * always-present `/me/accessible/project` (UUID-only) endpoint when the named
+ * variant is not deployed yet, so the tab still renders on older backends.
+ */
+export async function listMyProjects(): Promise<PortalProjectSummary[]> {
+  try {
+    const named = await portalFetch<PortalProjectSummaryList>(`${PORTAL_ME_BASE}/projects`);
+    return named.items;
+  } catch (err) {
+    // 404 = endpoint not deployed; anything else (e.g. 401) must bubble up so
+    // the session-expiry path still fires.
+    if (err instanceof PortalUnauthorizedError) throw err;
+    const ids = await portalFetch<string[]>(`${PORTAL_ME_BASE}/accessible/project`);
+    return ids.map((id) => ({ id, name: id, project_code: null }));
+  }
+}
+
+/** List the progress reports the caller can see for one accessible project. */
+export function listMyProgressReports(projectId: string): Promise<PortalProgressReportList> {
+  return portalFetch<PortalProgressReportList>(
+    `/api/v1/portal/projects/${encodeURIComponent(projectId)}/progress-reports`,
+  );
+}
+
+/**
+ * Fetch the rendered HTML body of one progress report with the session token.
+ * Returns the HTML string, or null when the body is not available (410).
+ */
+export async function fetchMyProgressReportHtml(
+  projectId: string,
+  reportId: string,
+): Promise<string | null> {
+  const token = getPortalSessionToken();
+  if (!token) throw new PortalUnauthorizedError('No portal session');
+  const res = await fetch(
+    `/api/v1/portal/projects/${encodeURIComponent(projectId)}/progress-reports/${encodeURIComponent(
+      reportId,
+    )}/content`,
+    { headers: { Authorization: `Bearer ${token}`, Accept: 'text/html' } },
+  );
+  if (res.status === 401) {
+    clearPortalSessionToken();
+    throw new PortalUnauthorizedError();
+  }
+  if (res.status === 410) return null;
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { detail?: unknown };
+    const detail =
+      typeof body.detail === 'string' ? body.detail : `Could not open report (${res.status})`;
+    throw new Error(detail);
+  }
+  return res.text();
+}
+
+/** Consume a magic-link token, persist the session, and return it. */
+export async function consumePortalMagicLink(
+  token: string,
+): Promise<{ session_token: string; expires_at: string }> {
+  const res = await fetch('/api/v1/portal/auth/consume', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ token }),
+  });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { detail?: unknown };
+    const detail =
+      typeof body.detail === 'string' ? body.detail : `Sign-in failed (${res.status})`;
+    throw new Error(detail);
+  }
+  const data = (await res.json()) as { session_token: string; expires_at: string };
+  setPortalSessionToken(data.session_token);
+  return data;
+}

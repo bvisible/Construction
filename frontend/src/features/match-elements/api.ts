@@ -66,7 +66,7 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
     const name = err instanceof Error ? err.name : '';
     if (name === 'AbortError' || name === 'TimeoutError') {
       throw new Error(
-        'Request cancelled or timed out — the backend did not respond in time.',
+        'Request cancelled or timed out - the backend did not respond in time.',
       );
     }
     throw err;
@@ -571,6 +571,51 @@ export const matchElementsApi = {
     return (await res.json()) as MatchSession;
   },
 
+  /** §3.1/§4.1.4 — upload a single photo or drawing snapshot and create
+   *  an 'image' source session in one call. The backend binds the saved
+   *  file to the session and a vision-LLM enumerates the visible
+   *  construction elements with rough quantity estimates. Extraction is
+   *  a suggestion the user reviews; the session is usable (empty) even
+   *  when no AI provider is configured. Accepts PNG / JPG / WebP up to
+   *  10 MB. */
+  createSessionFromImage: async (
+    spec: {
+      project_id: string;
+      file: File;
+      name?: string;
+      catalogue_id?: string | null;
+      construction_stage?: ConstructionStage | null;
+    },
+  ): Promise<MatchSession> => {
+    const token = useAuthStore.getState().accessToken;
+    const fd = new FormData();
+    fd.append('project_id', spec.project_id);
+    fd.append('image', spec.file);
+    if (spec.name) fd.append('name', spec.name);
+    if (spec.catalogue_id) fd.append('catalogue_id', spec.catalogue_id);
+    if (spec.construction_stage)
+      fd.append('construction_stage', spec.construction_stage);
+    const res = await fetch(`${PREFIX}/sessions/from-image`, {
+      method: 'POST',
+      headers: {
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        Accept: 'application/json',
+      },
+      body: fd,
+    });
+    if (!res.ok) {
+      let detail = res.statusText;
+      try {
+        const body = await res.json();
+        detail = formatErrorDetail(body) || res.statusText;
+      } catch {
+        /* ignore */
+      }
+      throw new Error(`${res.status} ${detail}`);
+    }
+    return (await res.json()) as MatchSession;
+  },
+
   listSessions: (
     projectId: string,
     params?: { include_archived?: boolean; limit?: number },
@@ -729,6 +774,8 @@ export const matchElementsApi = {
       custom_description?: string;
       custom_unit?: string;
       custom_rate?: number;
+      save_to_my_catalogue?: boolean;
+      rfq_supplier_ids?: string[];
     },
   ) =>
     call<GroupDetail>(`/sessions/${sessionId}/no-match`, {
@@ -803,6 +850,18 @@ export const matchElementsApi = {
 
   deletePromptTemplate: (id: string) =>
     call<void>(`/prompt-templates/${id}`, { method: 'DELETE' }),
+
+  /** Item #18 — deterministic symbol-signature recogniser. Ranks a
+   *  structured descriptor (category + geometry quantities + properties)
+   *  against the built-in symbol library and returns ranked suggestions
+   *  with honest confidence (0..1). NOT computer vision: raster CV symbol
+   *  detection is the separate cv-pipeline service. SUGGESTS only; the
+   *  human confirms via the existing confirm/apply path. */
+  suggestSymbols: (spec: SymbolSuggestRequest) =>
+    call<SymbolSuggestResponse>('/suggest-symbols', {
+      method: 'POST',
+      body: JSON.stringify(spec),
+    }),
 };
 
 // ── Visible pipeline types (mirror match_elements/schemas.py) ─────────
@@ -977,4 +1036,49 @@ export async function fetchQdrantHealth(): Promise<QdrantHealth> {
 
 export async function installQdrantNative(): Promise<QdrantHealth> {
   return call<QdrantHealth>('/qdrant/install', { method: 'POST' });
+}
+
+// ── Symbol-signature suggestions (item #18) ───────────────────────────
+// Shapes mirror backend match_elements/schemas.py exactly.
+
+export interface SymbolSuggestRequest {
+  /** Inline descriptor (canonical-format element shape). */
+  category?: string | null;
+  quantities?: Record<string, number>;
+  properties?: Record<string, unknown>;
+  /** OR reference an existing stored group (authorised server-side). */
+  session_id?: string | null;
+  group_key?: string | null;
+  top_k?: number;
+  min_confidence?: number;
+}
+
+export interface SymbolFactor {
+  name: string;
+  weight: number;
+  contribution: number;
+  detail: string;
+}
+
+export interface SymbolSuggestion {
+  symbol: string;
+  /** Honest confidence in [0, 1] — blend of category, geometry, keywords. */
+  confidence: number;
+  confidence_band: 'high' | 'medium' | 'low';
+  factors: SymbolFactor[];
+  rank: number;
+}
+
+export interface SymbolSignatureOut {
+  category: string;
+  ratios: Record<string, number>;
+  property_fingerprint: string[];
+  raw_dimensions: Record<string, number>;
+}
+
+export interface SymbolSuggestResponse {
+  signature: SymbolSignatureOut;
+  suggestions: SymbolSuggestion[];
+  /** Provenance: deterministic heuristic, not CV/ML pixel detection. */
+  note: string;
 }

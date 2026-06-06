@@ -1,12 +1,13 @@
 """‌⁠‍Full EVM ORM models.
 
 Tables:
-    oe_evm_forecast — advanced EVM forecast records with ETC, EAC, VAC, TCPI
+    oe_evm_forecast - advanced EVM forecast records with ETC, EAC, VAC, TCPI
 """
 
 import uuid
+from datetime import datetime
 
-from sqlalchemy import JSON, String, Text
+from sqlalchemy import JSON, DateTime, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import GUID, Base
@@ -36,6 +37,16 @@ class EVMForecast(Base):
     confidence_range_low: Mapped[str | None] = mapped_column(String(50), nullable=True)
     confidence_range_high: Mapped[str | None] = mapped_column(String(50), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # ── Predictive alert tracking (TOP-30 #19) ──────────────────────────────
+    # When a forecast breaches a project AlertRule the batch job stamps
+    # ``alert_status='triggered'`` + ``triggered_at`` and emits
+    # ``forecast.alert_triggered``. Users then move it to ``acknowledged`` or
+    # ``snoozed`` from the Forecasts tab. NULL means "no alert on this row".
+    alert_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    triggered_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
     metadata_: Mapped[dict] = mapped_column(  # type: ignore[assignment]
         "metadata",
         JSON,

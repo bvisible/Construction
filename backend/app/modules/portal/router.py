@@ -1,5 +1,5 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
-"""‌⁠‍Customer & Partner Portal — FastAPI routes.
+"""‌⁠‍Customer & Partner Portal - FastAPI routes.
 
 Two surfaces, mounted under ``/api/v1/portal/``:
 
@@ -17,8 +17,8 @@ Two surfaces, mounted under ``/api/v1/portal/``:
 
     Portal-user-facing (``RequirePortalSession``-gated unless noted)
     ---------------------------------------------------------------
-        POST   /auth/magic-link    — no auth (rate-limited upstream)
-        POST   /auth/consume       — no auth
+        POST   /auth/magic-link    - no auth (rate-limited upstream)
+        POST   /auth/consume       - no auth
         POST   /auth/logout
         GET    /me
         GET    /me/accessible/{resource_type}
@@ -33,7 +33,7 @@ import logging
 import uuid
 
 from fastapi import APIRouter, Depends, Query, Request, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 
 from app.dependencies import CurrentUserId, RequirePermission, SessionDep
 from app.modules.portal.dependencies import (
@@ -51,8 +51,19 @@ from app.modules.portal.schemas import (
     MagicLinkResponse,
     NotificationListResponse,
     NotificationResponse,
+    PaymentApplicationDetailResponse,
+    PaymentApplicationLineDetail,
+    PaymentApplicationListItem,
+    PaymentApplicationListResponse,
+    PaymentApplicationSubmitPayload,
+    PortalAgreementSummary,
+    PortalAgreementSummaryList,
     PortalChangeOrderEntry,
     PortalChangeOrderList,
+    PortalProgressReportEntry,
+    PortalProgressReportList,
+    PortalProjectSummary,
+    PortalProjectSummaryList,
     PortalSelfPatch,
     PortalTicketCreate,
     PortalTicketList,
@@ -62,6 +73,7 @@ from app.modules.portal.schemas import (
     PortalUserList,
     PortalUserPatch,
     PortalUserResponse,
+    PortalWorkPackageEntry,
     SessionResponse,
 )
 from app.modules.portal.service import PortalService
@@ -234,7 +246,7 @@ async def admin_list_access_rules(
     """List access rules (optionally filtered by user / resource type).
 
     Without this, the admin UI could only display grants made in the
-    current browser session — every rule vanished from the table on reload
+    current browser session - every rule vanished from the table on reload
     and seeded/previously-granted rules were never visible at all.
     """
     items, total = await service.list_access_rules(
@@ -440,7 +452,7 @@ async def portal_me_patch(
 ) -> PortalUserResponse:
     """Self-edit the small subset of profile fields a portal user can change.
 
-    Explicitly excludes ``status`` and ``email`` — only an internal admin
+    Explicitly excludes ``status`` and ``email`` - only an internal admin
     can suspend an account, and email changes go through the invite flow
     so the new address is verifiable.
     """
@@ -469,7 +481,7 @@ async def portal_create_ticket(
     rule for ``data.contract_id``. On success, a real ``ServiceTicket`` row
     is created with ``source="portal"`` and ``reported_by="<portal_user_id>"``
     so the dispatcher can triage portal vs phone tickets via the ``source``
-    column. ``reported_by`` holds the bare portal-user UUID (36 chars) — a
+    column. ``reported_by`` holds the bare portal-user UUID (36 chars) - a
     ``portal:`` prefix would overflow the 36-char ``reported_by`` field of
     ``ServiceTicketCreate`` / the ``ServiceTicket.reported_by`` column and
     422/500 every portal ticket.
@@ -522,7 +534,7 @@ async def portal_list_tickets(
 
     Returns only tickets where ``source == "portal"`` and
     ``reported_by == "<my_id>"`` AND the caller still has a
-    ``service_contract`` access rule on the parent contract — i.e. tickets
+    ``service_contract`` access rule on the parent contract - i.e. tickets
     stay visible to the buyer who filed them as long as their contract
     access has not been revoked. ``source == "portal"`` is part of the
     predicate so a portal user UUID can never alias an internal
@@ -547,7 +559,7 @@ async def portal_list_tickets(
         .where(_ST.reported_by == str(user.id))
     )
 
-    # Total via SQL aggregate — do not materialise every row just to count.
+    # Total via SQL aggregate - do not materialise every row just to count.
     count_stmt = _select(_func.count()).select_from(base.subquery())
     total = int((await session.execute(count_stmt)).scalar_one())
 
@@ -582,10 +594,10 @@ async def portal_list_change_orders(
     1. **Per-CO grants.** The caller has individual
        ``change_order`` resource rules for specific COs.
     2. **Per-project grants.** The caller has a ``project`` resource rule
-       — they then see every approved/executed CO under that project.
+       - they then see every approved/executed CO under that project.
 
     Returns only status in
-    (``approved``, ``executed``, ``rejected``, ``closed``) — drafts and
+    (``approved``, ``executed``, ``rejected``, ``closed``) - drafts and
     in-flight workflow rows stay invisible. Output is the buyer-facing
     redacted projection (no internal notes, no markup, no submission trail).
     """
@@ -610,7 +622,7 @@ async def portal_list_change_orders(
 
     # The caller may see a CO iff it is under a project they were granted
     # OR it is one of the specific COs granted to them. This predicate is
-    # ALWAYS applied — even when ``project_id`` is supplied — so that a
+    # ALWAYS applied - even when ``project_id`` is supplied - so that a
     # per-CO grant on project B cannot be used to read every CO of an
     # unrelated project A. (Previously, holding any per-CO grant disabled
     # the project-scope check entirely → cross-project data leak.)
@@ -650,6 +662,322 @@ async def portal_list_change_orders(
             )
         )
     return PortalChangeOrderList(items=items, total=total)
+
+
+# ── Portal-side progress-report visibility ────────────────────────────────
+
+
+def _report_period(snapshot: dict | None) -> str | None:
+    """Best-effort extraction of a human reporting period from a snapshot.
+
+    Looks for the period label written by the progress section, falling
+    back to ``None`` so the frontend can hide the field cleanly.
+    """
+    if not isinstance(snapshot, dict):
+        return None
+    progress = snapshot.get("progress")
+    if isinstance(progress, dict):
+        milestones = progress.get("milestone_status")
+        if isinstance(milestones, list) and milestones:
+            first = milestones[0]
+            if isinstance(first, dict) and first.get("period"):
+                return str(first["period"])
+        if progress.get("as_of_date"):
+            return str(progress["as_of_date"])
+    return None
+
+
+@router.get(
+    "/me/projects",
+    response_model=PortalProjectSummaryList,
+)
+async def portal_me_projects(
+    user: RequirePortalSession,
+    service: PortalService = Depends(_get_service),
+) -> PortalProjectSummaryList:
+    """List the projects the caller can see, by name.
+
+    Backs the portal Progress Reports tab so a client / subcontractor can pick
+    a project by name instead of pasting a UUID. Scoped server-side to the
+    caller's non-expired ``project`` access rules - it never reveals a project
+    the user was not explicitly granted.
+    """
+    projects = await service.list_accessible_projects(user.id)
+    items = [PortalProjectSummary(id=p.id, name=p.name, project_code=p.project_code) for p in projects]
+    return PortalProjectSummaryList(items=items, total=len(items))
+
+
+@router.get(
+    "/projects/{project_id}/progress-reports",
+    response_model=PortalProgressReportList,
+)
+async def portal_list_progress_reports(
+    project_id: uuid.UUID,
+    user: RequirePortalSession,
+    session: SessionDep,
+    service: PortalService = Depends(_get_service),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=200),
+) -> PortalProgressReportList:
+    """List generated progress reports for a project the caller can see.
+
+    Access is granted by a non-expired ``project`` access rule on
+    ``project_id``. A caller with no such rule gets a 404 (never 403) so
+    the endpoint never confirms the existence of projects the caller is
+    not entitled to. Only ``report_type == "progress_report"`` rows are
+    returned - other report types stay invisible to the client portal.
+    """
+    from fastapi import HTTPException
+    from sqlalchemy import func as _func
+    from sqlalchemy import select as _select
+
+    from app.modules.reporting.models import GeneratedReport as _GR
+
+    if not await service.enforce_rls(user.id, "project", project_id, required="view"):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Project not found",
+        )
+
+    base = _select(_GR).where(_GR.project_id == project_id).where(_GR.report_type == "progress_report")
+    count_stmt = _select(_func.count()).select_from(base.subquery())
+    total = int((await session.execute(count_stmt)).scalar_one())
+
+    stmt = base.order_by(_GR.created_at.desc()).offset(offset).limit(limit)
+    rows = list((await session.execute(stmt)).scalars().all())
+
+    items = [
+        PortalProgressReportEntry(
+            id=r.id,
+            title=r.title,
+            generated_at=r.generated_at,
+            report_type=r.report_type,
+            format=r.format,
+            period=_report_period(r.data_snapshot),
+            has_content=bool(r.storage_key),
+        )
+        for r in rows
+    ]
+    return PortalProgressReportList(items=items, total=total)
+
+
+@router.get(
+    "/projects/{project_id}/progress-reports/{report_id}/content",
+    response_class=HTMLResponse,
+    responses={
+        200: {"content": {"text/html": {}}},
+        404: {"description": "Report not found or no access"},
+        410: {"description": "Report body not yet rendered or removed from storage"},
+    },
+)
+async def portal_get_progress_report_content(
+    project_id: uuid.UUID,
+    report_id: uuid.UUID,
+    user: RequirePortalSession,
+    session: SessionDep,
+    service: PortalService = Depends(_get_service),
+) -> HTMLResponse:
+    """Return the rendered HTML body of one progress report.
+
+    Double-gated: the caller must hold a ``project`` access rule on
+    ``project_id`` (else 404) AND the report must belong to that project
+    and be a ``progress_report`` (else 404, never 403, so cross-tenant
+    probing learns nothing). 410 is surfaced when the metadata row exists
+    but the rendered body is not reachable from storage.
+    """
+    from fastapi import HTTPException
+
+    from app.modules.reporting.service import ReportingService
+
+    if not await service.enforce_rls(user.id, "project", project_id, required="view"):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Report not found",
+        )
+
+    reporting = ReportingService(session)
+    try:
+        report, html_body = await reporting.get_report_content(report_id)
+    except HTTPException as exc:
+        # Collapse the reporting module's 404/410. A 410 (body gone) is
+        # still useful to the client, so pass it through; a 404 stays 404.
+        if exc.status_code == status.HTTP_410_GONE:
+            raise
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Report not found",
+        ) from exc
+
+    # Cross-tenant / wrong-type guard: the report must live under the
+    # project the caller proved access to and be a progress report.
+    if report.project_id != project_id or report.report_type != "progress_report":
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Report not found",
+        )
+
+    return HTMLResponse(content=html_body)
+
+
+# ── Portal-side payment-application submission ────────────────────────────
+
+
+def _payment_application_detail(
+    pa: object,
+    wp_map: dict,
+    raw_lines: list,
+) -> PaymentApplicationDetailResponse:
+    """Project a PaymentApplication + its lines into the portal detail view."""
+    lines = []
+    for line in raw_lines:
+        name, planned = wp_map.get(line.work_package_id, ("", None))
+        lines.append(
+            PaymentApplicationLineDetail(
+                work_package_id=line.work_package_id,
+                work_package_name=name,
+                planned_value=planned if planned is not None else 0,
+                claimed_amount=line.claimed_amount,
+                certified_amount=line.certified_amount,
+                approved_amount=line.approved_amount,
+            )
+        )
+    return PaymentApplicationDetailResponse(
+        id=pa.id,
+        agreement_id=pa.agreement_id,
+        application_number=pa.application_number,
+        period_start=pa.period_start,
+        period_end=pa.period_end,
+        gross_amount=pa.gross_amount,
+        retention_amount=pa.retention_amount,
+        net_amount=pa.net_amount,
+        currency=pa.currency or "",
+        status=pa.status,
+        submitted_at=pa.submitted_at,
+        lines=lines,
+    )
+
+
+@router.get(
+    "/me/payment-applications",
+    response_model=PaymentApplicationListResponse,
+)
+async def portal_me_payment_applications_list(
+    user: RequirePortalSession,
+    service: PortalService = Depends(_get_service),
+    agreement_id: uuid.UUID | None = Query(default=None),
+    status_filter: str | None = Query(default=None, alias="status"),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=200),
+) -> PaymentApplicationListResponse:
+    """List the caller's payment applications.
+
+    RLS: scoped to the ``agreement`` resources the portal user holds. A
+    subcontractor never sees applications under another subcontractor's
+    agreement. An ``agreement_id`` outside the accessible set yields an empty
+    list (indistinguishable from one with no applications).
+    """
+    rows, total = await service.list_payment_applications_for_user(
+        user.id,
+        agreement_id=agreement_id,
+        status_filter=status_filter,
+        offset=offset,
+        limit=limit,
+    )
+    return PaymentApplicationListResponse(
+        items=[PaymentApplicationListItem.model_validate(r) for r in rows],
+        total=total,
+    )
+
+
+@router.get(
+    "/me/payment-applications/{payment_application_id}",
+    response_model=PaymentApplicationDetailResponse,
+)
+async def portal_me_payment_application_detail(
+    payment_application_id: uuid.UUID,
+    user: RequirePortalSession,
+    service: PortalService = Depends(_get_service),
+) -> PaymentApplicationDetailResponse:
+    """Return one payment application with its work-package lines.
+
+    RLS: 404 (never 403) on a missing id OR one whose agreement the caller
+    cannot access, so a portal user cannot probe for the existence of another
+    subcontractor's application.
+    """
+    from fastapi import HTTPException
+
+    pa = await service.get_payment_application_for_user(user.id, payment_application_id)
+    if pa is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Payment application not found",
+        )
+
+    wp_map = await service.work_package_names_for_agreement(pa.agreement_id)
+    raw_lines = await service.list_payment_application_lines(pa.id)
+    return _payment_application_detail(pa, wp_map, raw_lines)
+
+
+@router.post(
+    "/me/payment-applications",
+    response_model=PaymentApplicationDetailResponse,
+    status_code=201,
+)
+async def portal_me_payment_application_submit(
+    data: PaymentApplicationSubmitPayload,
+    request: Request,
+    user: RequirePortalSession,
+    service: PortalService = Depends(_get_service),
+) -> PaymentApplicationDetailResponse:
+    """Submit a new payment application against an accessible agreement.
+
+    RLS: the caller must hold ``submit`` permission on ``data.agreement_id``
+    and every line's work package must belong to that agreement; otherwise the
+    request 404s (never 403). Retention / net / application-number / currency
+    are computed server-side from the agreement - the client cannot drive them.
+    """
+    pa = await service.submit_payment_application_for_user(
+        user.id,
+        agreement_id=data.agreement_id,
+        period_start=data.period_start,
+        period_end=data.period_end,
+        lines=data.lines,
+        client_ip=_client_ip(request),
+    )
+    wp_map = await service.work_package_names_for_agreement(pa.agreement_id)
+    raw_lines = await service.list_payment_application_lines(pa.id)
+    return _payment_application_detail(pa, wp_map, raw_lines)
+
+
+@router.get(
+    "/me/payment-agreements",
+    response_model=PortalAgreementSummaryList,
+)
+async def portal_me_payment_agreements(
+    user: RequirePortalSession,
+    service: PortalService = Depends(_get_service),
+) -> PortalAgreementSummaryList:
+    """List the agreements the caller can submit payment applications against.
+
+    Scoped by RLS to the caller's ``agreement`` access rules and to claimable
+    (active / completed) agreements only. Each carries its work packages so the
+    submit form can render the line grid in one call.
+    """
+    pairs = await service.list_submittable_agreements_for_user(user.id)
+    items = [
+        PortalAgreementSummary(
+            id=agr.id,
+            title=agr.title,
+            currency=agr.currency or "",
+            retention_percent=agr.retention_percent,
+            status=agr.status,
+            work_packages=[
+                PortalWorkPackageEntry(id=wp.id, name=wp.name, planned_value=wp.planned_value) for wp in wps
+            ],
+        )
+        for agr, wps in pairs
+    ]
+    return PortalAgreementSummaryList(items=items, total=len(items))
 
 
 __all__ = ["router"]

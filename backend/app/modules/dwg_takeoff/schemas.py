@@ -1,11 +1,11 @@
-"""‌⁠‍DWG Takeoff Pydantic schemas — request/response models.
+"""‌⁠‍DWG Takeoff Pydantic schemas - request/response models.
 
 Defines create, update, and response schemas for DWG drawings,
 drawing versions, annotations, and measurement results.
 """
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -67,7 +67,7 @@ class DwgDrawingResponse(BaseModel):
 
 
 class DwgDrawingScaleUpdate(BaseModel):
-    """Persist the scale for a drawing — replaces localStorage-only storage."""
+    """Persist the scale for a drawing - replaces localStorage-only storage."""
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
@@ -302,13 +302,103 @@ class DwgOfflineReadinessResponse(BaseModel):
     version: str | None = None
     message: str
     # True only when the request reached the backend over the loopback
-    # interface AND the server is not a hosted/production deployment — i.e.
+    # interface AND the server is not a hosted/production deployment - i.e.
     # the browser and the server genuinely run on the same machine, so the
     # "your files never leave your computer" claim is literally true. On a
     # hosted demo this is False and the UI must show the honest "processed
     # on your OpenConstructionERP server" copy instead. Defaults to False so
     # the strong claim is never shown unless explicitly earned.
     local_only: bool = False
+
+
+# ── Revision compare (Item 17) ─────────────────────────────────────────
+
+
+class DwgEntityDiffRow(BaseModel):
+    """One entity-level change between two parsed drawing versions.
+
+    Entities have no stable identity across re-parses (ezdxf/DDC do not
+    preserve handles), so the diff is computed on the *layer profile*:
+    for each layer we compare the entity count in the old vs the new
+    version. ``entity_id`` is therefore the layer name (the unit the
+    user actually toggles in the LayerPanel) and ``delta`` carries the
+    signed change in entity count.
+    """
+
+    change_type: Literal["added", "removed", "modified", "unchanged"]
+    entity_id: str
+    entity_type: str
+    layer: str
+    old_count: int = 0
+    new_count: int = 0
+    delta: int = 0
+
+
+class DwgAnnotationDiffRow(BaseModel):
+    """One annotation-level change between two drawing versions.
+
+    Annotations DO carry a stable identity (``drawing_version_id`` links
+    each annotation to the version it was drawn on), so additions /
+    removals / measurement changes are detected per annotation. When an
+    annotation is linked to a BOQ position and its measured value
+    changed, ``cost_impact`` carries the signed money delta
+    ``(new - old) * unit_rate`` in the project's base currency (Decimal
+    string; never blended across currencies).
+    """
+
+    change_type: Literal["added", "removed", "modified", "unchanged"]
+    annotation_id: str
+    annotation_type: str
+    label: str | None = None
+    layer_name: str = "USER_MARKUP"
+    old_measurement: float | None = None
+    new_measurement: float | None = None
+    measurement_unit: str | None = None
+    linked_boq_position_id: str | None = None
+    cost_impact: str | None = None  # signed Decimal string in base currency
+    cost_currency: str | None = None
+
+
+class DwgDrawingDiffResponse(BaseModel):
+    """Full revision-compare payload for two versions of one drawing."""
+
+    drawing_id: UUID
+    from_version_id: UUID
+    from_version_number: int
+    to_version_id: UUID
+    to_version_number: int
+    entity_rows: list[DwgEntityDiffRow] = Field(default_factory=list)
+    annotation_rows: list[DwgAnnotationDiffRow] = Field(default_factory=list)
+    summary: dict[str, Any] = Field(default_factory=dict)
+
+
+# ── Create-variation-from-delta handoff (Item 17) ───────────────────────
+
+
+class CreateVariationFromDiffRequest(BaseModel):
+    """Turn a revision-compare delta into a draft variation request.
+
+    The diff itself is recomputed server-side from the two version ids
+    (the deterministic :meth:`compare_drawing_versions` is the single
+    source of truth), so the client only carries the version pair and an
+    optional title override. The created variation is always a *draft* -
+    AI/automation proposes, a human confirms and submits it.
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    from_version_id: UUID
+    to_version_id: UUID
+    title: str | None = Field(default=None, max_length=500)
+
+
+class CreateVariationFromDiffResponse(BaseModel):
+    """The draft variation request minted from a revision-compare delta."""
+
+    variation_request_id: UUID
+    code: str
+    estimated_cost_impact: str = "0"  # signed Decimal string in base currency
+    currency: str = ""
 
 
 # Forward reference resolution

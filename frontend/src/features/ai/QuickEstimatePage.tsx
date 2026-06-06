@@ -40,11 +40,11 @@ import {
   Database,
   Plus,
   Search,
-  BrainCircuit,
   Wand2,
 } from 'lucide-react';
 import clsx from 'clsx';
-import { Card, CardContent, Button, Badge, AIDisclaimerBanner } from '@/shared/ui';
+import { Card, CardContent, Button, Badge, AIDisclaimerBanner, DismissibleInfo, IntroRichText, Breadcrumb } from '@/shared/ui';
+import { PageHeader } from '@/shared/ui/PageHeader';
 import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { aiApi, type QuickEstimateRequest, type EstimateJobResponse, type EstimateItem, type CadExtractResponse, type EnrichResult, type EnrichedItem, type CostMatch, type CadColumnsResponse, type CadGroupResponse, type CadDynamicGroup, type CadGroupElementsResponse } from './api';
@@ -155,6 +155,26 @@ const FORMAT_LABELS: { [K in FileTab]: string } = {
 // `@/shared/lib/formatters` — they were lifted out of this file once it
 // became clear they were not AI-specific.
 
+/**
+ * Turn a raw cost-DB region code into a readable label.
+ *
+ * Codes are conventionally ``CC_CITY`` (e.g. "DE_BERLIN", "US_NEW_YORK").
+ * We render them as "DE / New York" without a hard-coded country/city table
+ * so any region the catalogue introduces (IN_*, BR_*, KE_*, ...) is shown
+ * sensibly rather than being dropped from the picker.
+ */
+function formatRegionLabel(code: string): string {
+  if (!code) return code;
+  const parts = code.split('_');
+  if (parts.length < 2) return code;
+  const country = (parts[0] ?? '').toUpperCase();
+  const place = parts
+    .slice(1)
+    .map((w) => (w ? w.charAt(0).toUpperCase() + w.slice(1).toLowerCase() : w))
+    .join(' ');
+  return `${country} / ${place}`;
+}
+
 // ── Shimmer loading rows ─────────────────────────────────────────────────────
 
 function ShimmerRow() {
@@ -201,7 +221,7 @@ function LoadingState({ isCad, fileName, fileSizeMB }: { isCad?: boolean; fileNa
     : t('ai.analyzing', { defaultValue: 'AI is analyzing your input...' });
   const subtitle = isCad && estimatedTotal > 0
     ? remaining > 0
-      ? t('ai.cad_progress_hint', { defaultValue: '~{{remaining}}s remaining — extracting elements and detecting columns', remaining })
+      ? t('ai.cad_progress_hint', { defaultValue: '~{{remaining}}s remaining - extracting elements and detecting columns', remaining })
       : t('ai.cad_finalizing', { defaultValue: 'Finalizing extraction...' })
     : isCad
       ? t('ai.cad_processing_hint', { defaultValue: 'Extracting elements, detecting columns. This may take 30-60 seconds for large files.' })
@@ -288,13 +308,183 @@ function LoadingState({ isCad, fileName, fileSizeMB }: { isCad?: boolean; fileNa
   );
 }
 
+// ── Recent estimates (server-side history) ───────────────────────────────────
+
+/**
+ * Server-side history panel. Replaces the dead localStorage-only history
+ * hook: estimate runs now persist on the backend (oe_ai_estimate_job) so they
+ * survive a reload / device switch. Each completed row can be reopened, which
+ * fetches the full job and re-renders the results table.
+ */
+function RecentEstimatesPanel({
+  onReopen,
+  reloadKey,
+  busy = false,
+}: {
+  onReopen: (jobId: string) => void;
+  reloadKey: number;
+  busy?: boolean;
+}) {
+  const { t } = useTranslation();
+  const { data, isLoading, isError, refetch } = useQuery({
+    queryKey: ['ai-estimates-history', reloadKey],
+    queryFn: () => aiApi.listEstimates({ limit: 8 }),
+    retry: false,
+    staleTime: 30_000,
+  });
+
+  const fmtMoney = (v: number | string, currency: string): string => {
+    const n = typeof v === 'string' ? parseFloat(v) : v;
+    if (!Number.isFinite(n)) return '-';
+    return formatNumber(n, currency || undefined);
+  };
+  const fmtWhen = (iso: string): string => {
+    try {
+      return new Intl.DateTimeFormat(getIntlLocale(), {
+        dateStyle: 'medium',
+        timeStyle: 'short',
+      }).format(new Date(iso));
+    } catch {
+      return iso;
+    }
+  };
+
+  // Hide the whole panel when there is genuinely nothing yet (keeps the
+  // first-run page clean) but still surface load errors so a broken history
+  // endpoint is not silent.
+  if (!isLoading && !isError && (!data || data.items.length === 0)) return null;
+
+  return (
+    <section
+      aria-label={t('ai.recent_estimates', { defaultValue: 'Recent estimates' })}
+      className="mt-6"
+    >
+      <div className="mb-2 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <FileText size={15} className="text-content-tertiary" aria-hidden="true" />
+          <h3 className="text-sm font-semibold text-content-primary">
+            {t('ai.recent_estimates', { defaultValue: 'Recent estimates' })}
+          </h3>
+          {data && data.total > 0 && (
+            <Badge variant="neutral" size="sm">
+              {data.total}
+            </Badge>
+          )}
+        </div>
+      </div>
+
+      {isError ? (
+        <Card className="border-semantic-error/20">
+          <CardContent className="!mt-0 flex items-center justify-between gap-3">
+            <p className="text-sm text-content-secondary">
+              {t('ai.recent_estimates_error', {
+                defaultValue: 'Could not load your estimate history.',
+              })}
+            </p>
+            <Button variant="ghost" size="sm" onClick={() => refetch()} icon={<RotateCcw size={13} />}>
+              {t('common.retry', { defaultValue: 'Retry' })}
+            </Button>
+          </CardContent>
+        </Card>
+      ) : isLoading ? (
+        <div className="space-y-2">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <div
+              key={i}
+              className="h-12 animate-pulse rounded-xl bg-slate-200/60 dark:bg-slate-700/30"
+            />
+          ))}
+        </div>
+      ) : (
+        <Card padding="none">
+          <ul className="divide-y divide-border-light">
+            {data!.items.map((job) => {
+              const failed = job.status !== 'completed';
+              return (
+                <li key={job.id}>
+                  <button
+                    type="button"
+                    onClick={() => !failed && !busy && onReopen(job.id)}
+                    disabled={failed || busy}
+                    className={clsx(
+                      'flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors',
+                      failed || busy
+                        ? 'cursor-default opacity-70'
+                        : 'hover:bg-surface-secondary/40 cursor-pointer',
+                    )}
+                  >
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm text-content-primary">
+                        {job.input_text?.trim() ||
+                          job.input_filename ||
+                          t('ai.untitled_estimate', { defaultValue: 'Untitled estimate' })}
+                      </p>
+                      <p className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-2xs text-content-tertiary">
+                        <span>{fmtWhen(job.created_at)}</span>
+                        {!failed && (
+                          <>
+                            <span aria-hidden="true">·</span>
+                            <span>
+                              {job.items_count}{' '}
+                              {t('ai.items', { defaultValue: 'items' })}
+                            </span>
+                          </>
+                        )}
+                        {job.tokens_used > 0 && (
+                          <>
+                            <span aria-hidden="true">·</span>
+                            <span>
+                              {t('ai.tokens_count', {
+                                defaultValue: '{{count}} tokens',
+                                count: job.tokens_used,
+                              })}
+                            </span>
+                          </>
+                        )}
+                        {Number(job.cost_usd_estimate) > 0 && (
+                          <>
+                            <span aria-hidden="true">·</span>
+                            <span title={t('ai.est_cost_hint', { defaultValue: 'Estimated AI spend for this run' })}>
+                              ~${Number(job.cost_usd_estimate).toFixed(4)}
+                            </span>
+                          </>
+                        )}
+                      </p>
+                    </div>
+                    {failed ? (
+                      <Badge variant="error" size="sm">
+                        {t('ai.status_failed', { defaultValue: 'Failed' })}
+                      </Badge>
+                    ) : (
+                      <div className="flex shrink-0 items-center gap-2">
+                        <span className="font-mono text-sm font-medium text-content-primary">
+                          {fmtMoney(job.grand_total, job.currency)}
+                        </span>
+                        <ArrowRight size={14} className="text-content-tertiary" aria-hidden="true" />
+                      </div>
+                    )}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </Card>
+      )}
+    </section>
+  );
+}
+
 // ── Save to BOQ dialog ───────────────────────────────────────────────────────
 
 interface SaveDialogProps {
   open: boolean;
   onClose: () => void;
-  onSave: (projectId: string, boqName: string) => void;
+  onSave: (projectId: string, boqName: string, applyEnriched: boolean) => void;
   saving: boolean;
+  /** Number of lines that matched a same-currency CWICR rate (0 hides the toggle). */
+  enrichedMatches?: number;
+  /** Region the matches came from (echoed in the toggle help text). */
+  enrichRegion?: string;
 }
 
 interface ProjectSummary {
@@ -302,10 +492,14 @@ interface ProjectSummary {
   name: string;
 }
 
-function SaveToBOQDialog({ open, onClose, onSave, saving }: SaveDialogProps) {
+function SaveToBOQDialog({ open, onClose, onSave, saving, enrichedMatches = 0, enrichRegion = '' }: SaveDialogProps) {
   const { t } = useTranslation();
   const [selectedProject, setSelectedProject] = useState('');
   const [boqName, setBOQName] = useState('AI Quick Estimate');
+  // Default the toggle ON when the user already ran enrichment and got
+  // same-currency matches - that is the whole point of having matched. They
+  // can still uncheck it to persist the raw AI rates.
+  const [applyEnriched, setApplyEnriched] = useState(enrichedMatches > 0);
 
   // a11y: stable ids let <label htmlFor> wire to inputs; useFocusTrap +
   // Escape handler + body-scroll-lock complete the modal contract
@@ -314,6 +508,12 @@ function SaveToBOQDialog({ open, onClose, onSave, saving }: SaveDialogProps) {
   const titleId = useId();
   const projectSelectId = useId();
   const boqNameId = useId();
+  const applyEnrichedId = useId();
+
+  // Sync the default when the dialog re-opens after a fresh enrichment.
+  useEffect(() => {
+    if (open) setApplyEnriched(enrichedMatches > 0);
+  }, [open, enrichedMatches]);
 
   const { data: projects } = useQuery({
     queryKey: ['projects-list-simple'],
@@ -420,6 +620,40 @@ function SaveToBOQDialog({ open, onClose, onSave, saving }: SaveDialogProps) {
               placeholder={t('ai.boq_name_placeholder', { defaultValue: 'Name for this BOQ...' })}
             />
           </div>
+
+          {/* Apply enriched CWICR rates — only offered once the user has run
+              cost-DB matching and at least one same-currency match exists, so
+              the saved BOQ persists the regional rates they reviewed instead
+              of the raw AI guesses. */}
+          {enrichedMatches > 0 && (
+            <label
+              htmlFor={applyEnrichedId}
+              className="flex items-start gap-2.5 rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3 cursor-pointer"
+            >
+              <input
+                id={applyEnrichedId}
+                type="checkbox"
+                checked={applyEnriched}
+                onChange={(e) => setApplyEnriched(e.target.checked)}
+                className="mt-0.5 h-4 w-4 shrink-0 rounded border-border text-emerald-600 focus:ring-emerald-500/40"
+              />
+              <span className="text-sm text-content-secondary">
+                <span className="font-medium text-content-primary">
+                  {t('ai.apply_cwicr_rates', { defaultValue: 'Use matched CWICR rates' })}
+                </span>
+                <span className="mt-0.5 block text-xs text-content-tertiary">
+                  {t('ai.apply_cwicr_rates_hint', {
+                    defaultValue:
+                      'Save {{count}} line(s) with the regional cost-database rate ({{region}}) instead of the AI estimate. The catalogue code is recorded on each position.',
+                    count: enrichedMatches,
+                    region: enrichRegion
+                      ? formatRegionLabel(enrichRegion)
+                      : t('ai.region_all', { defaultValue: 'All regions' }),
+                  })}
+                </span>
+              </span>
+            </label>
+          )}
         </div>
 
         <div className="flex items-center justify-end gap-3 mt-6">
@@ -428,7 +662,7 @@ function SaveToBOQDialog({ open, onClose, onSave, saving }: SaveDialogProps) {
           </Button>
           <Button
             variant="primary"
-            onClick={() => onSave(selectedProject, boqName)}
+            onClick={() => onSave(selectedProject, boqName, applyEnriched)}
             disabled={!selectedProject || !boqName.trim() || saving}
             loading={saving}
             icon={<Save size={15} />}
@@ -1248,11 +1482,11 @@ function CadConverterSection({
       </div>
 
       {/* Info note */}
-      <div className="flex items-start gap-2 rounded-lg bg-oe-blue-subtle/50 px-3 py-2.5">
-        <Info size={14} className="shrink-0 mt-0.5 text-oe-blue" />
-        <p className="text-xs text-oe-blue leading-relaxed">
+      <div className="flex items-start gap-2 rounded-lg bg-oe-blue/10 dark:bg-oe-blue/[0.14] px-3 py-2.5">
+        <Info size={14} className="shrink-0 mt-0.5 text-oe-blue-text" />
+        <p className="text-xs text-oe-blue-text leading-relaxed">
           {t('ai.cad_module_info_extract', {
-            defaultValue: 'CAD/BIM files are converted using DDC converters and quantities are extracted directly — no AI API key required.',
+            defaultValue: 'CAD/BIM files are converted using DDC converters and quantities are extracted directly - no AI API key required.',
           })}
         </p>
       </div>
@@ -1314,9 +1548,15 @@ export function QuickEstimatePage() {
   const [elementDetailLoading, setElementDetailLoading] = useState(false);
 
   // Cost DB enrichment state
-  const [enrichRegion, setEnrichRegion] = useState('DE_BERLIN');
+  const [enrichRegion, setEnrichRegion] = useState('');
   const [enrichResult, setEnrichResult] = useState<EnrichResult | null>(null);
   const [enriching, setEnriching] = useState(false);
+
+  // Server-side history: bump this key to force the Recent-estimates panel to
+  // re-fetch after a fresh run / a save. Also track a reopen-in-flight flag so
+  // the history rows can show a spinner while the full job is fetched.
+  const [historyReloadKey, setHistoryReloadKey] = useState(0);
+  const [reopening, setReopening] = useState(false);
 
   // a11y refs / ids — used by the textarea label, the disabled-submit
   // hint (aria-describedby), the tablist (role=tab + aria-controls), and
@@ -1372,6 +1612,19 @@ export function QuickEstimatePage() {
     queryFn: () => apiGet('/v1/takeoff/converters/'),
     staleTime: 60_000,
     enabled: activeTab === 'cad' || isCadRoute,
+  });
+
+  // ── Cost-DB regions for the enrich dropdown ───────────────────────────
+  // Drive the region picker from the regions actually loaded in this
+  // deployment's cost database instead of a hard-coded DACH/UK/US/UAE list
+  // that matches nothing on a non-Western catalogue (prior bug #95). Fetched
+  // lazily once an estimate result exists; degrades to "all regions" only.
+  const { data: costRegions } = useQuery({
+    queryKey: ['ai-cost-regions'],
+    queryFn: aiApi.costRegions,
+    retry: false,
+    staleTime: 5 * 60_000,
+    enabled: !!result,
   });
 
   // ── Converter install/uninstall state (for /data-explorer route) ──────
@@ -1479,6 +1732,8 @@ export function QuickEstimatePage() {
     focusRestoreRef: resultRegionRef,
     onSuccess: (data) => {
       setResult(data);
+      // Refresh the server-side history panel so the just-finished run shows up.
+      setHistoryReloadKey((k) => k + 1);
       addToast({
         type: 'success',
         title: t('ai.estimate_complete', { defaultValue: 'Estimate generated' }),
@@ -1503,6 +1758,8 @@ export function QuickEstimatePage() {
     focusRestoreRef: resultRegionRef,
     onSuccess: (data) => {
       setResult(data);
+      // Refresh the server-side history panel so the just-finished run shows up.
+      setHistoryReloadKey((k) => k + 1);
       addToast({
         type: 'success',
         title: t('ai.estimate_complete', { defaultValue: 'Estimate generated' }),
@@ -1527,6 +1784,8 @@ export function QuickEstimatePage() {
     focusRestoreRef: resultRegionRef,
     onSuccess: (data) => {
       setResult(data);
+      // Refresh the server-side history panel so the just-finished run shows up.
+      setHistoryReloadKey((k) => k + 1);
       addToast({
         type: 'success',
         title: t('ai.estimate_complete', { defaultValue: 'Estimate generated' }),
@@ -1608,20 +1867,39 @@ export function QuickEstimatePage() {
   // ── Save as BOQ mutation ──────────────────────────────────────────────
 
   const saveMutation = useMutation({
-    mutationFn: ({ projectId, boqName }: { projectId: string; boqName: string }) => {
+    mutationFn: ({
+      projectId,
+      boqName,
+      applyEnriched,
+    }: {
+      projectId: string;
+      boqName: string;
+      applyEnriched: boolean;
+    }) => {
       if (!result) throw new Error('No estimate to save');
       return aiApi.createBOQFromEstimate(result.id, {
         project_id: projectId,
         boq_name: boqName,
+        // When the user opted to persist matched rates, send the same region
+        // they enriched with so the backend resolves the identical match.
+        ...(applyEnriched ? { apply_enriched: true, region: enrichRegion || '' } : {}),
       });
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['projects'] });
       queryClient.invalidateQueries({ queryKey: ['boqs'] });
       setSaveDialogOpen(false);
+      const enriched = data.positions_enriched ?? 0;
       addToast({
         type: 'success',
         title: t('ai.boq_saved', { defaultValue: 'BOQ saved successfully' }),
+        message:
+          enriched > 0
+            ? t('ai.boq_saved_enriched_msg', {
+                defaultValue: '{{count}} line(s) saved with matched CWICR rates',
+                count: enriched,
+              })
+            : undefined,
       });
       navigate(`/boq/${data.boq_id}`);
     },
@@ -1664,6 +1942,21 @@ export function QuickEstimatePage() {
       setEnriching(false);
     }
   }, [result?.id, enrichRegion, currency, addToast, t]);
+
+  // Count enrich matches that share the estimate currency - only these can be
+  // safely persisted as the line rate (the rest are flagged but never folded
+  // into the total). Drives the "Use matched CWICR rates" toggle in the save
+  // dialog so it only appears when there is something real to apply.
+  const enrichedSameCurrencyCount = useMemo(() => {
+    if (!enrichResult?.items) return 0;
+    const estCurrency = (currency || result?.currency || '').trim();
+    return enrichResult.items.reduce((acc, ei) => {
+      const m = ei.best_match;
+      if (!m || !m.rate) return acc;
+      const mc = (m.currency || '').trim();
+      return mc === '' || mc === estCurrency ? acc + 1 : acc;
+    }, 0);
+  }, [enrichResult, currency, result?.currency]);
 
   // a11y — focus the result region as soon as new content arrives so
   // keyboard / SR users land on the freshly generated estimate rather
@@ -1901,6 +2194,7 @@ export function QuickEstimatePage() {
     setResult(null);
     setCadResult(null);
     setEnrichResult(null);
+    setEnrichRegion('');
     setCadColumnsData(null);
     setCadGroupResult(null);
     setSelectedGroupBy([]);
@@ -1932,6 +2226,34 @@ export function QuickEstimatePage() {
     cadExtractRun.reset();
     cadColumnsRun.reset();
   }, [textEstimateRun, photoEstimateRun, fileEstimateRun, cadExtractRun, cadColumnsRun]);
+
+  // ── Reopen a past estimate from the server-side history ───────────────
+  const handleReopenEstimate = useCallback(
+    async (jobId: string) => {
+      setReopening(true);
+      try {
+        const job = await aiApi.getEstimate(jobId);
+        setEnrichResult(null);
+        setCadResult(null);
+        setCadGroupResult(null);
+        setResult(job);
+        addToast({
+          type: 'success',
+          title: t('ai.estimate_reopened', { defaultValue: 'Estimate reopened' }),
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Failed to reopen estimate';
+        addToast({
+          type: 'error',
+          title: t('ai.reopen_failed', { defaultValue: 'Could not reopen estimate' }),
+          message: msg,
+        });
+      } finally {
+        setReopening(false);
+      }
+    },
+    [addToast, t],
+  );
 
   // ── Filtered groups for CAD QTO ──────────────────────────────────────
   const filteredGroups = useMemo(() => {
@@ -2020,7 +2342,7 @@ export function QuickEstimatePage() {
         const parts = Object.entries(g.key_parts || {}).map(([col, val]) =>
           col === 'category' ? (val || '').replace(/^OST_/, '') : val || '',
         );
-        const description = parts.filter(Boolean).join(' — ');
+        const description = parts.filter(Boolean).join(' - ');
 
         // Find primary quantity (volume > area > length > count)
         let unit = 'pcs';
@@ -2175,60 +2497,82 @@ export function QuickEstimatePage() {
         className="pointer-events-none absolute -bottom-40 -right-40 -z-10 h-96 w-96 rounded-full bg-gradient-radial from-emerald-400/15 to-transparent blur-3xl"
       />
 
-      <div className="space-y-6 px-4 py-5 lg:px-6 lg:py-6">
-      {/* Hero header — glass pill with title, subtitle, model pill */}
-      <header
-        className="animate-card-in relative overflow-hidden rounded-2xl border border-white/40 bg-white/60 px-5 py-4 backdrop-blur-xl shadow-lg shadow-slate-900/[0.04] dark:border-white/5 dark:bg-slate-900/40"
-        style={{ animationDelay: '0ms' }}
-      >
-        <div
-          aria-hidden="true"
-          className="pointer-events-none absolute -top-16 right-1/4 h-40 w-40 rounded-full bg-gradient-radial from-violet-400/20 to-transparent blur-3xl"
-        />
-        <div
-          aria-hidden="true"
-          className="pointer-events-none absolute -bottom-16 -left-10 h-40 w-40 rounded-full bg-gradient-radial from-sky-400/15 to-transparent blur-3xl"
-        />
-        <div className="relative flex flex-wrap items-start justify-between gap-3">
-          <div className="flex items-start gap-3">
-            <div
-              aria-hidden="true"
-              className="flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-violet-500 via-blue-500 to-sky-500 text-white shadow-md shadow-violet-500/25"
+      <div className="space-y-5 px-4 py-5 lg:px-6 lg:py-6">
+      <Breadcrumb
+        items={[
+          {
+            label: isCadRoute
+              ? t('nav.cad_bim_explorer', { defaultValue: 'CAD-BIM BI Explorer' })
+              : t('nav.ai_estimate', { defaultValue: 'Quick Estimate (AI)' }),
+          },
+        ]}
+      />
+      {/* Canonical top block — module name + icon live in the global top bar.
+          The page renders only its subtitle (left) + actions (right); the
+          model pill stays as the single action for the AI route. */}
+      <PageHeader
+        srTitle={
+          isCadRoute
+            ? t('ai.cad_takeoff_title', { defaultValue: 'CAD/BIM Takeoff' })
+            : t('ai.estimate_title', { defaultValue: 'AI Estimate' })
+        }
+        subtitle={
+          isCadRoute
+            ? t('ai.cad_takeoff_subtitle', { defaultValue: 'Extract quantities from 3D models and drawings' })
+            : t('ai.estimate_subtitle', { defaultValue: 'Create an estimate from any source' })
+        }
+        actions={
+          !isCadRoute && isConfigured && aiSettings?.preferred_model ? (
+            <span
+              data-testid="ai-quick-estimate-model-pill"
+              className="inline-flex items-center gap-1.5 rounded-full border border-border-light bg-surface-elevated px-3 py-1 text-xs font-medium text-content-secondary"
             >
-              <BrainCircuit size={22} />
-            </div>
-            <div>
-              <h1 className="text-xl font-bold tracking-tight text-content-primary">
-                {isCadRoute
-                  ? t('ai.cad_takeoff_title', { defaultValue: 'CAD/BIM Takeoff' })
-                  : t('ai.estimate_title', { defaultValue: 'AI Estimate' })
-                }
-              </h1>
-              <p className="mt-0.5 text-sm text-content-secondary">
-                {isCadRoute
-                  ? t('ai.cad_takeoff_subtitle', { defaultValue: 'Extract quantities from 3D models and drawings' })
-                  : t('ai.estimate_subtitle', { defaultValue: 'Create an estimate from any source' })
-                }
-              </p>
-            </div>
-          </div>
-          {!isCadRoute && isConfigured && aiSettings?.preferred_model && (
-            <div className="flex items-center gap-2">
-              <span
-                data-testid="ai-quick-estimate-model-pill"
-                className="inline-flex items-center gap-1.5 rounded-full border border-white/50 bg-white/70 px-3 py-1 text-xs font-medium text-content-secondary backdrop-blur dark:border-white/10 dark:bg-slate-800/60"
-              >
-                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                <Zap size={11} className="text-violet-500" />
-                {t('ai.model_pill', {
-                  defaultValue: 'model: {{model}}',
-                  model: aiSettings.preferred_model,
-                })}
-              </span>
-            </div>
-          )}
-        </div>
-      </header>
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              <Zap size={11} className="text-violet-500" />
+              {t('ai.model_pill', {
+                defaultValue: 'model: {{model}}',
+                model: aiSettings.preferred_model,
+              })}
+            </span>
+          ) : undefined
+        }
+      />
+
+      {isCadRoute ? (
+        <DismissibleInfo
+          storageKey="cad-takeoff"
+          title={t('cad_takeoff.intro_title', {
+            defaultValue: 'Pull quantities straight from the model',
+          })}
+          links={[
+            { label: t('cad_takeoff.intro_link_explorer', { defaultValue: 'Data Explorer' }), onClick: () => navigate('/data-explorer') },
+            { label: t('cad_takeoff.intro_link_boq', { defaultValue: 'Open BOQ' }), onClick: () => navigate('/boq') },
+          ]}
+        >
+          {t('cad_takeoff.intro_body', {
+            defaultValue:
+              'Upload a CAD or BIM file and DDC converters extract its elements and quantities directly, with no AI key required. Group the results, match them against the cost database, and save the confirmed lines as a BOQ on any project.',
+          })}
+        </DismissibleInfo>
+      ) : (
+        <DismissibleInfo
+          storageKey="ai-estimate"
+          title={t('ai_estimate.intro_title', {
+            defaultValue: 'From a rough brief to a first number fast',
+          })}
+          more={t('ai_estimate.intro_more', { defaultValue: '' }) ? <IntroRichText text={t('ai_estimate.intro_more')} /> : undefined}
+          links={[
+            { label: t('ai_estimate.intro_link_boq', { defaultValue: 'Open BOQ' }), onClick: () => navigate('/boq') },
+            { label: t('ai_estimate.intro_link_costs', { defaultValue: 'Cost database' }), onClick: () => navigate('/costs') },
+            { label: t('ai_estimate.intro_link_builder', { defaultValue: 'Estimate Builder' }), onClick: () => navigate('/ai-estimator') },
+          ]}
+        >
+          {t('ai_estimate.intro_body', {
+            defaultValue:
+              'Turn text, photos, PDFs, spreadsheets or CAD and BIM files into a structured estimate with quantities, units and rates. Lines are matched against the cost database for you to review, then saved as a BOQ on any project.',
+          })}
+        </DismissibleInfo>
+      )}
 
       {!isCadRoute && <AIDisclaimerBanner />}
 
@@ -2345,13 +2689,13 @@ export function QuickEstimatePage() {
             <div className="flex-1 min-w-0">
               <p className="text-xs font-semibold text-content-primary mb-1">
                 {t('ai.estimate_intro_title', {
-                  defaultValue: 'A first-pass estimate in seconds — then you refine it',
+                  defaultValue: 'A first-pass estimate in seconds - then you refine it',
                 })}
               </p>
               <p className="text-xs text-content-secondary leading-relaxed">
                 {t('ai.estimate_intro_desc', {
                   defaultValue:
-                    'Pick a source below. The AI returns a structured BOQ with quantities and indicative unit rates. Match those rates against the real CWICR cost database, save it as a project BOQ, then validate it. Treat AI numbers as a starting point — always review before pricing a tender.',
+                    'Pick a source below. The AI returns a structured BOQ with quantities and indicative unit rates. Match those rates against the real CWICR cost database, save it as a project BOQ, then validate it. Treat AI numbers as a starting point - always review before pricing a tender.',
                 })}
               </p>
               <div className="mt-2 flex flex-wrap items-center gap-1.5 text-2xs text-content-tertiary">
@@ -2808,7 +3152,7 @@ export function QuickEstimatePage() {
                         <p className="text-sm font-semibold text-content-primary">
                           {(convertersData.installed_count ?? 0) > 0
                             ? t('ai.converters_ready', { defaultValue: `${convertersData.installed_count} of ${convertersData.total_count} converters installed`, installed: convertersData.installed_count, total: convertersData.total_count })
-                            : t('ai.converters_none', { defaultValue: 'No converters installed — install below to enable CAD/BIM import' })}
+                            : t('ai.converters_none', { defaultValue: 'No converters installed - install below to enable CAD/BIM import' })}
                         </p>
                         <p className="text-xs text-content-tertiary mt-0.5">
                           {(convertersData.converters ?? []).filter((c: ConverterFull) => c.installed).map((c: ConverterFull) => c.name).join(', ') || t('ai.converters_hint', { defaultValue: 'Scroll down to install DDC converters for RVT, IFC, DWG, DGN' })}
@@ -2824,7 +3168,7 @@ export function QuickEstimatePage() {
                     onFileSelect={handleFileSelect}
                     disabled={isPending}
                     hint={t('ai.cad_extract_hint', {
-                      defaultValue: 'File will be converted and quantities extracted automatically — no AI key needed.',
+                      defaultValue: 'File will be converted and quantities extracted automatically - no AI key needed.',
                     })}
                   />
                 ) : (
@@ -2886,13 +3230,13 @@ export function QuickEstimatePage() {
                         </div>
                       ))}
                     </div>
-                    <div className="mt-2.5 flex items-start gap-2 rounded-lg bg-oe-blue-subtle/50 px-2.5 py-2">
-                      <Info size={13} className="shrink-0 mt-0.5 text-oe-blue" />
-                      <div className="text-[11px] text-oe-blue leading-relaxed">
+                    <div className="mt-2.5 flex items-start gap-2 rounded-lg bg-oe-blue/10 dark:bg-oe-blue/[0.14] px-2.5 py-2">
+                      <Info size={13} className="shrink-0 mt-0.5 text-oe-blue-text" />
+                      <div className="text-[11px] text-oe-blue-text leading-relaxed">
                         <p>
                           {t('ai.cad_module_info_extract', {
                             defaultValue:
-                              'CAD/BIM files are converted using DDC converters and quantities are extracted directly — no AI API key required.',
+                              'CAD/BIM files are converted using DDC converters and quantities are extracted directly - no AI API key required.',
                           })}
                         </p>
                         <Link
@@ -3045,6 +3389,14 @@ export function QuickEstimatePage() {
         </form>
       </section>
 
+      {/* Recent estimates — server-side history. Shown on the AI-estimate
+          surfaces (not the CAD/data-explorer route) when nothing is currently
+          loading and no result is on screen, so the page stays clean while an
+          estimate is active. */}
+      {!isCadRoute && !isPending && !result && !cadResult && !cadGroupResult && (
+        <RecentEstimatesPanel reloadKey={historyReloadKey} onReopen={handleReopenEstimate} busy={reopening} />
+      )}
+
       {/* Loading state */}
       {isPending && <LoadingState isCad={isCadRoute} fileName={selectedFile?.name} fileSizeMB={selectedFile ? selectedFile.size / (1024 * 1024) : undefined} />}
 
@@ -3191,7 +3543,7 @@ export function QuickEstimatePage() {
                         )}>
                         {col}
                         {conf != null && (
-                          <span className={clsx('text-2xs', isSelected ? 'opacity-70' : 'text-content-quaternary')} title={t('ai.confidence_tooltip', { defaultValue: 'Column detection confidence — higher % = more reliable data' })}>
+                          <span className={clsx('text-2xs', isSelected ? 'opacity-70' : 'text-content-quaternary')} title={t('ai.confidence_tooltip', { defaultValue: 'Column detection confidence - higher % = more reliable data' })}>
                             {Math.round(conf * 100)}%
                           </span>
                         )}
@@ -3214,7 +3566,7 @@ export function QuickEstimatePage() {
                         )}>
                         {col}{unit ? ` (${unit})` : ''}
                         {conf != null && (
-                          <span className={clsx('text-2xs', isSelected ? 'opacity-70' : 'text-content-quaternary')} title={t('ai.confidence_tooltip', { defaultValue: 'Column detection confidence — higher % = more reliable data' })}>
+                          <span className={clsx('text-2xs', isSelected ? 'opacity-70' : 'text-content-quaternary')} title={t('ai.confidence_tooltip', { defaultValue: 'Column detection confidence - higher % = more reliable data' })}>
                             {Math.round(conf * 100)}%
                           </span>
                         )}
@@ -3913,24 +4265,24 @@ export function QuickEstimatePage() {
                 )}
               </div>
               <div className="flex items-center gap-3">
+                {/* Region picker is driven by the regions actually loaded in
+                    this deployment's cost DB (GET /costs/regions/stats/) so it
+                    never offers DACH/UK/US options against a catalogue that
+                    only holds, say, IN_* or BR_* data (prior bug #95). Empty
+                    value = search across all regions. */}
                 <select
                   value={enrichRegion}
                   onChange={(e) => setEnrichRegion(e.target.value)}
                   className="h-8 rounded-lg border border-border bg-surface-primary px-2 text-xs text-content-primary transition-all duration-fast ease-oe focus:outline-none focus:ring-2 focus:ring-oe-blue/30 focus:border-oe-blue hover:border-content-tertiary cursor-pointer appearance-none"
                   disabled={enriching}
+                  aria-label={t('ai.enrich_region_label', { defaultValue: 'Cost database region' })}
                 >
-                  <option value="DE_BERLIN">{t('ai.region_de_berlin', { defaultValue: 'Germany (Berlin)' })}</option>
-                  <option value="DE_MUNICH">{t('ai.region_de_munich', { defaultValue: 'Germany (Munich)' })}</option>
-                  <option value="DE_HAMBURG">{t('ai.region_de_hamburg', { defaultValue: 'Germany (Hamburg)' })}</option>
-                  <option value="DE_FRANKFURT">{t('ai.region_de_frankfurt', { defaultValue: 'Germany (Frankfurt)' })}</option>
-                  <option value="AT_VIENNA">{t('ai.region_at_vienna', { defaultValue: 'Austria (Vienna)' })}</option>
-                  <option value="CH_ZURICH">{t('ai.region_ch_zurich', { defaultValue: 'Switzerland (Zurich)' })}</option>
-                  <option value="UK_LONDON">{t('ai.region_uk_london', { defaultValue: 'UK (London)' })}</option>
-                  <option value="UK_MANCHESTER">{t('ai.region_uk_manchester', { defaultValue: 'UK (Manchester)' })}</option>
-                  <option value="US_NEW_YORK">{t('ai.region_us_new_york', { defaultValue: 'USA (New York)' })}</option>
-                  <option value="US_LOS_ANGELES">{t('ai.region_us_la', { defaultValue: 'USA (Los Angeles)' })}</option>
-                  <option value="US_CHICAGO">{t('ai.region_us_chicago', { defaultValue: 'USA (Chicago)' })}</option>
-                  <option value="AE_DUBAI">{t('ai.region_ae_dubai', { defaultValue: 'UAE (Dubai)' })}</option>
+                  <option value="">{t('ai.region_all', { defaultValue: 'All regions' })}</option>
+                  {(costRegions ?? []).map((r) => (
+                    <option key={r.region} value={r.region}>
+                      {formatRegionLabel(r.region)} ({formatNumber(r.count)})
+                    </option>
+                  ))}
                 </select>
                 <Button
                   variant="secondary"
@@ -3985,7 +4337,7 @@ export function QuickEstimatePage() {
                 <span className="text-oe-blue font-bold shrink-0">2.</span>
                 {t('ai.estimate_after_2', {
                   defaultValue:
-                    'Save as a project BOQ — then review every quantity and rate in the BOQ editor before relying on the total.',
+                    'Save as a project BOQ - then review every quantity and rate in the BOQ editor before relying on the total.',
                 })}
               </li>
               <li className="flex gap-2">
@@ -4072,8 +4424,12 @@ export function QuickEstimatePage() {
       <SaveToBOQDialog
         open={saveDialogOpen}
         onClose={() => setSaveDialogOpen(false)}
-        onSave={(projectId, boqName) => saveMutation.mutate({ projectId, boqName })}
+        onSave={(projectId, boqName, applyEnriched) =>
+          saveMutation.mutate({ projectId, boqName, applyEnriched })
+        }
         saving={saveMutation.isPending}
+        enrichedMatches={enrichedSameCurrencyCount}
+        enrichRegion={enrichRegion}
       />
       </div>
     </div>

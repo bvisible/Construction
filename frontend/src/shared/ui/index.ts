@@ -56,6 +56,12 @@ export { CommandPalette } from './CommandPalette';
 
 export { InfoHint } from './InfoHint';
 
+export { DismissibleInfo, IntroRichText } from './DismissibleInfo';
+export type { DismissibleInfoLink } from './DismissibleInfo';
+
+export { PageHeader } from './PageHeader';
+export type { PageHeaderProps } from './PageHeader';
+
 export { FeedbackDialog } from './FeedbackDialog';
 
 export { BOQPicker } from './BOQPicker';
@@ -95,6 +101,7 @@ export { ErrorBoundary } from './ErrorBoundary';
 export { NotFoundPage } from './NotFoundPage';
 
 export { CountryFlag } from './CountryFlag';
+export { CountryFlagBackdrop } from './CountryFlagBackdrop';
 
 export { CountryCombobox, CUSTOM_SENTINEL } from './CountryCombobox';
 export type { CountryComboboxProps } from './CountryCombobox';

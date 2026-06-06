@@ -1,4 +1,4 @@
-"""‌⁠‍Submittals service — business logic for submittal management."""
+"""‌⁠‍Submittals service - business logic for submittal management."""
 
 import logging
 import uuid
@@ -53,7 +53,7 @@ def _log_state_change(
     The log payload is JSON-friendly (flat key/value pairs) so the prod
     log shipper can index ``from_status`` / ``to_status`` / ``actor`` for
     submittal-cycle dashboards. Calling this in addition to
-    :func:`audit_log.log_activity` is intentional — the audit row lands
+    :func:`audit_log.log_activity` is intentional - the audit row lands
     in a DB table the customer can wipe, the log line lands on the
     immutable log-shipper sink.
     """
@@ -120,6 +120,14 @@ class SubmittalService:
             elif user_id is not None:
                 ball_in_court = user_id
 
+        # Description has no dedicated column; persist it into metadata so the
+        # create modal's Description textarea is no longer silently dropped.
+        create_meta = dict(data.metadata or {})
+        if data.description is not None:
+            desc = data.description.strip()
+            if desc:
+                create_meta["description"] = desc
+
         last_exc: Exception | None = None
         for attempt in range(_MAX_NUMBER_RETRIES):
             submittal_number = await self.repo.next_submittal_number(data.project_id)
@@ -140,7 +148,7 @@ class SubmittalService:
                 date_returned=data.date_returned,
                 linked_boq_item_ids=data.linked_boq_item_ids,
                 created_by=user_id,
-                metadata_=data.metadata,
+                metadata_=create_meta,
             )
             try:
                 submittal = await self.repo.create(submittal)
@@ -159,9 +167,19 @@ class SubmittalService:
                 data.submittal_type,
                 data.project_id,
             )
+            # Publish submittal.created so the vector indexer embeds the new
+            # row for semantic search / the floating-chat assistant (item 16).
+            await _safe_publish(
+                "submittal.created",
+                {
+                    "project_id": str(data.project_id),
+                    "submittal_id": str(submittal.id),
+                    "submittal_number": submittal_number,
+                },
+            )
             return submittal
 
-        # All retries exhausted — translate to 409 so the caller can retry
+        # All retries exhausted - translate to 409 so the caller can retry
         # at the HTTP layer with a clear contract.
         logger.error(
             "Submittal-number collision still unresolved after %d retries for project %s",
@@ -218,6 +236,19 @@ class SubmittalService:
         if "metadata" in fields:
             fields["metadata_"] = fields.pop("metadata")
 
+        # Description lives in metadata (no dedicated column). Merge it into a
+        # copy of the existing metadata so the edit modal persists it without
+        # clobbering review_notes / attachments etc.
+        if "description" in fields:
+            desc = fields.pop("description")
+            meta = dict(fields.get("metadata_") or getattr(submittal, "metadata_", {}) or {})
+            cleaned = (desc or "").strip()
+            if cleaned:
+                meta["description"] = cleaned
+            else:
+                meta.pop("description", None)
+            fields["metadata_"] = meta
+
         # Validate status transition if status is being changed
         new_status = fields.get("status")
         if new_status is not None and new_status != submittal.status:
@@ -232,7 +263,7 @@ class SubmittalService:
                     ),
                 )
             # Approval / rejection / closure must go through the role-
-            # gated handlers — a plain editor with ``submittals.update``
+            # gated handlers - a plain editor with ``submittals.update``
             # would otherwise be able to PATCH ``status=approved`` and
             # bypass the MANAGER gate on ``/approve`` + the rate limiter.
             if new_status not in _PATCH_ALLOWED_STATUSES:
@@ -249,7 +280,7 @@ class SubmittalService:
 
         prior_status = submittal.status
         await self.repo.update_fields(submittal_id, **fields)
-        # ``update_fields`` expires the row — any subsequent lazy attribute
+        # ``update_fields`` expires the row - any subsequent lazy attribute
         # access on the stale ORM object triggers MissingGreenlet under
         # async context. Re-fetch a fresh row instead of calling
         # ``session.refresh`` so downstream callers see loaded columns.
@@ -265,12 +296,32 @@ class SubmittalService:
                 actor_id=None,  # PATCH path: actor visible only at router layer
                 extra={"source": "patch"},
             )
+        # Publish submittal.updated so the vector indexer re-embeds the
+        # edited row (title / spec section may have changed) - item 16.
+        await _safe_publish(
+            "submittal.updated",
+            {
+                "project_id": str(getattr(fresh or submittal, "project_id", "") or ""),
+                "submittal_id": str(submittal_id),
+                "submittal_number": getattr(fresh or submittal, "submittal_number", None),
+            },
+        )
         return fresh or submittal
 
     async def delete_submittal(self, submittal_id: uuid.UUID) -> None:
-        await self.get_submittal(submittal_id)
+        submittal = await self.get_submittal(submittal_id)
+        project_id_s = str(submittal.project_id) if submittal.project_id is not None else ""
         await self.repo.delete(submittal_id)
         logger.info("Submittal deleted: %s", submittal_id)
+        # Publish submittal.deleted so the vector indexer drops the
+        # embedding for the removed row (item 16).
+        await _safe_publish(
+            "submittal.deleted",
+            {
+                "project_id": project_id_s,
+                "submittal_id": str(submittal_id),
+            },
+        )
 
     async def submit_submittal(self, submittal_id: uuid.UUID) -> Submittal:
         """Move submittal from draft (or revise_and_resubmit) to submitted.
@@ -319,11 +370,11 @@ class SubmittalService:
         await self.repo.update_fields(submittal_id, **fields)
         fresh = await self.repo.get_by_id(submittal_id)
 
-        # Epic H — universal audit trail. The try/except: pass wrapper
+        # Epic H - universal audit trail. The try/except: pass wrapper
         # has been removed: the helper now raises only for real DB
         # failures, and silently swallowing those would lose the
         # compliance trail right when we need it most. If the audit
-        # write actually fails the business write rolls back too — that
+        # write actually fails the business write rolls back too - that
         # is the documented atomicity contract.
         from app.core.audit_log import log_activity as _log_activity
 
@@ -445,7 +496,7 @@ class SubmittalService:
         await self.repo.update_fields(submittal_id, **fields)
         fresh = await self.repo.get_by_id(submittal_id)
 
-        # Epic H — universal audit trail (drop the try/except: pass
+        # Epic H - universal audit trail (drop the try/except: pass
         # wrapper; the helper raises only for real DB failures).
         from app.core.audit_log import log_activity as _log_activity
 
@@ -457,7 +508,7 @@ class SubmittalService:
             action="status_changed",
             from_status=prior_status,
             to_status=new_status,
-            reason=(f"Submittal reviewed: decision={new_status}" + (f" — {review_notes}" if review_notes else "")),
+            reason=(f"Submittal reviewed: decision={new_status}" + (f" - {review_notes}" if review_notes else "")),
             metadata={"reviewer_id": reviewer_id, "review_notes": review_notes or None},
             module="submittals",
             parent_entity_type="project",
@@ -525,11 +576,15 @@ class SubmittalService:
         self,
         submittal_id: uuid.UUID,
         approver_id: str,
+        notes: str | None = None,
     ) -> Submittal:
         """Final approval of a submittal.
 
         Only submittals that are currently ``submitted`` or ``under_review``
         can receive final approval.  Ball-in-court is cleared on approval.
+        Optional reviewer ``notes`` are persisted into metadata under
+        ``review_notes`` (mirroring :meth:`review_submittal`) so an approval
+        with comments does not silently drop them.
         Publishes ``submittal.approved`` event.
         """
         submittal = await self.get_submittal(submittal_id)
@@ -539,7 +594,7 @@ class SubmittalService:
         # timeout should see success instead of a confusing error.
         if submittal.status == "approved":
             logger.info(
-                "Submittal %s already approved — returning existing state (idempotent)",
+                "Submittal %s already approved - returning existing state (idempotent)",
                 submittal_id,
             )
             return submittal
@@ -561,6 +616,13 @@ class SubmittalService:
             "date_returned": datetime.now(UTC).strftime("%Y-%m-%d"),
             "ball_in_court": None,
         }
+        approve_notes = (notes or "").strip()
+        if approve_notes:
+            # Merge into a copy of the existing metadata so attachments etc.
+            # are not clobbered, mirroring review_submittal.
+            meta = dict(getattr(submittal, "metadata_", {}) or {})
+            meta["review_notes"] = approve_notes
+            fields["metadata_"] = meta
         project_id_s = str(submittal.project_id)
         title_s = submittal.title
         created_by_s = str(submittal.created_by) if submittal.created_by else None
@@ -584,12 +646,12 @@ class SubmittalService:
             .values(**fields)
         )
         if result.rowcount == 0:  # type: ignore[union-attr]
-            # Concurrent writer already transitioned this row — re-read and
+            # Concurrent writer already transitioned this row - re-read and
             # return idempotently if it's now "approved", else 409.
             fresh_check = await self.repo.get_by_id(submittal_id)
             if fresh_check and fresh_check.status == "approved":
                 logger.info(
-                    "Submittal %s concurrently approved — returning existing state (idempotent)",
+                    "Submittal %s concurrently approved - returning existing state (idempotent)",
                     submittal_id,
                 )
                 return fresh_check
@@ -600,7 +662,7 @@ class SubmittalService:
 
         fresh = await self.repo.get_by_id(submittal_id)
 
-        # Epic H — universal audit trail (drop the try/except: pass wrapper).
+        # Epic H - universal audit trail (drop the try/except: pass wrapper).
         from app.core.audit_log import log_activity as _log_activity
 
         await _log_activity(
@@ -611,8 +673,8 @@ class SubmittalService:
             action="status_changed",
             from_status=prior_status,
             to_status="approved",
-            reason="Submittal approved via approve_submittal()",
-            metadata={"approver_id": approver_id},
+            reason=("Submittal approved via approve_submittal()" + (f" - {approve_notes}" if approve_notes else "")),
+            metadata={"approver_id": approver_id, "review_notes": approve_notes or None},
             module="submittals",
             parent_entity_type="project",
             parent_entity_id=project_id_s,
@@ -642,3 +704,137 @@ class SubmittalService:
             extra={"source": "approve"},
         )
         return fresh or submittal
+
+    async def start_approval(
+        self,
+        submittal_id: uuid.UUID,
+        route_id: uuid.UUID,
+        *,
+        started_by: str | None = None,
+    ) -> Any:
+        """Start a routed approval workflow against this submittal (feature 06).
+
+        Delegates to the generic ``approval_routes`` engine. The engine
+        validates that the route is active, that its ``target_kind`` is
+        ``submittal``, that it has steps, and that no workflow is already
+        pending on this target (409). On success the submittal is moved into
+        the review flow through the *existing* FSM: a ``draft`` submittal is
+        submitted first (``draft -> submitted``) so the state machine stays
+        honest; a submittal already in ``submitted`` / ``under_review`` is
+        left where it is while the workflow runs. The new instance id is
+        recorded in ``metadata_["approval_instance_id"]`` so the detail
+        screen can deep-link without a second query.
+
+        Returns the created approval ``Instance`` (the engine row) so the
+        router can serialise it through the engine's ``InstanceResponse``.
+        The FSM transition and the instance insert share this request
+        session, so they commit together.
+        """
+        from app.modules.approval_routes.schemas import InstanceCreate
+        from app.modules.approval_routes.service import ApprovalRouteService
+
+        submittal = await self.get_submittal(submittal_id)
+
+        # Reviewable states only. ``approved`` / ``closed`` / ``rejected``
+        # are not sensible places to begin a fresh routed sign-off.
+        if submittal.status not in ("draft", "submitted", "under_review", "revise_and_resubmit"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"Cannot start an approval workflow on a submittal with status "
+                    f"'{submittal.status}'. Expected draft, submitted, under_review, or "
+                    f"revise_and_resubmit."
+                ),
+            )
+
+        engine = ApprovalRouteService(self.session)
+        instance = await engine.start_instance(
+            InstanceCreate(
+                route_id=route_id,
+                target_kind="submittal",
+                target_id=submittal_id,
+            ),
+            started_by=uuid.UUID(started_by) if started_by else None,
+        )
+
+        # Move the submittal into the review flow through the existing FSM.
+        if submittal.status in ("draft", "revise_and_resubmit"):
+            await self.submit_submittal(submittal_id)
+
+        # Record the instance id for deep-linking. Re-fetch to merge against
+        # the latest metadata (submit_submittal above may have touched it).
+        fresh = await self.get_submittal(submittal_id)
+        meta = dict(getattr(fresh, "metadata_", {}) or {})
+        meta["approval_instance_id"] = str(instance.id)
+        await self.repo.update_fields(submittal_id, metadata_=meta)
+
+        return instance
+
+    async def get_latest_approval(self, submittal_id: uuid.UUID) -> Any:
+        """Return the most recent approval instance for this submittal, or None.
+
+        Reuses the engine's instance listing (already ordered newest-first)
+        filtered by ``target_kind='submittal'`` and this submittal id.
+        """
+        from app.modules.approval_routes.service import ApprovalRouteService
+
+        # 404 the submittal first so a caller without project access never
+        # learns whether an instance exists.
+        await self.get_submittal(submittal_id)
+        engine = ApprovalRouteService(self.session)
+        instances = await engine.list_instances(
+            target_kind="submittal",
+            target_id=submittal_id,
+            limit=1,
+        )
+        return instances[0] if instances else None
+
+    async def apply_approval_decision(
+        self,
+        submittal_id: uuid.UUID,
+        *,
+        decision: str,
+        decided_by: str | None,
+        comment: str | None = None,
+    ) -> Submittal | None:
+        """Drive the submittal FSM from a terminal routed approval decision.
+
+        Called by the approval subscriber when the engine fires
+        ``approval_routes.instance.completed`` (``decision='approved'``) or
+        ``approval_routes.instance.rejected`` (``decision='rejected'``) for a
+        ``submittal`` target. Only ever drives transitions the existing FSM
+        already permits, so a stray or duplicate event can never corrupt
+        state:
+
+        * ``approved`` and the submittal is ``submitted`` / ``under_review`` →
+          the idempotent :meth:`approve_submittal` (a duplicate event is a
+          no-op, not a double-approval).
+        * ``rejected`` and the submittal is ``submitted`` / ``under_review`` →
+          :meth:`review_submittal` with ``rejected``, which returns
+          ball-in-court to the submitter and persists the step comment.
+
+        Any other current status (already approved, closed, draft, …) is a
+        deliberate no-op: the routed decision arrived for a submittal the FSM
+        has already moved past, so there is nothing to do.
+        """
+        submittal = await self.get_submittal(submittal_id)
+        if submittal.status not in ("submitted", "under_review"):
+            logger.info(
+                "Submittal %s not in a reviewable state (%s); approval decision %r is a no-op",
+                submittal_id,
+                submittal.status,
+                decision,
+            )
+            return None
+
+        actor = decided_by or str(submittal.approver_id or submittal.reviewer_id or "")
+        if decision == "approved":
+            return await self.approve_submittal(submittal_id, approver_id=actor, notes=comment)
+        if decision == "rejected":
+            return await self.review_submittal(
+                submittal_id,
+                "rejected",
+                reviewer_id=actor,
+                notes=comment,
+            )
+        return None

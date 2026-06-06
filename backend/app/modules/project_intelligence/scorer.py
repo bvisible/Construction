@@ -1,4 +1,4 @@
-"""‌⁠‍Project scoring engine — computes weighted scores and detects gaps.
+"""‌⁠‍Project scoring engine - computes weighted scores and detects gaps.
 
 Takes a ProjectState and produces a ProjectScore with:
 - Overall weighted score (0-100)
@@ -17,10 +17,10 @@ logger = logging.getLogger(__name__)
 
 # ── Domain weights (must sum to 1.0) ──────────────────────────────────────
 
-# RFC 25 — reweighted for the Estimation Dashboard (v1.9.1): BOQ / Cost Model /
+# RFC 25 - reweighted for the Estimation Dashboard (v1.9.1): BOQ / Cost Model /
 # Validation / Risk are the four domains shown in the reshaped ring. The four
 # remaining domains keep 0 weight so they no longer influence the headline
-# score — the detail tabs still show them when data is present.
+# score - the detail tabs still show them when data is present.
 DOMAIN_WEIGHTS: dict[str, float] = {
     "boq": 0.40,
     "cost_model": 0.30,
@@ -182,6 +182,18 @@ _GAP_RULES: list[dict[str, Any]] = [
         "action_id": None,
     },
     {
+        # TOP-30 #19 - surface a live predictive-forecast alert as a gap so
+        # it shows in Critical Gaps, not only in the Forecasts tab.
+        "id": "forecast_alert_active",
+        "domain": "cost_model",
+        "severity": "critical",
+        "condition": lambda s: s.cost_model.forecast_alert_active,
+        "title": "Forecast breaches a cost/schedule threshold",
+        "description": "The latest predictive EVM forecast triggered an active alert.",
+        "impact": "The project is forecast to miss a configured cost or schedule target.",
+        "action_id": None,
+    },
+    {
         "id": "no_documents",
         "domain": "documents",
         "severity": "suggestion",
@@ -217,7 +229,7 @@ _ACHIEVEMENT_RULES: list[dict[str, Any]] = [
         "domain": "boq",
         "condition": lambda s: s.boq.export_ready,
         "title": "BOQ is export-ready",
-        "description": "All items have prices and quantities — ready for tender.",
+        "description": "All items have prices and quantities - ready for tender.",
     },
     {
         "domain": "validation",
@@ -342,7 +354,7 @@ def compute_score(state: ProjectState) -> ProjectScore:
     result.domain_scores = {domain: round(pct * 100, 1) for domain, pct in domain_pcts.items()}
 
     # ── Overall weighted score ─────────────────────────────────────────
-    # Essential domains always count even if zero — they're required for any
+    # Essential domains always count even if zero - they're required for any
     # serious project. Optional domains (tendering, documents, reports) only
     # contribute to the denominator when they have been touched, so a project
     # that skips optional phases isn't unfairly penalized.

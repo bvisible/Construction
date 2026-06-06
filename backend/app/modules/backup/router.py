@@ -9,7 +9,7 @@ BUG-018: ``POST /export/`` previously returned ``Content-Length: 0`` when
 the request had a JSON body. The handler did not declare a body
 parameter (so the OpenAPI surface was empty and the bug looked like
 "endpoint is a stub"), and it returned ``StreamingResponse`` over an
-``io.BytesIO`` — a combination that interacts badly with
+``io.BytesIO`` - a combination that interacts badly with
 ``BaseHTTPMiddleware`` when the request also carries a body. The fix
 moves the build-the-archive logic into ``service.build_backup`` (which
 streams into a ``tempfile.SpooledTemporaryFile``) and exposes a typed
@@ -22,7 +22,7 @@ import hashlib
 import logging
 import uuid
 
-from fastapi import APIRouter, Body, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 
@@ -32,6 +32,7 @@ from app.modules.backup.service import (
     APP_ID,
     BACKUP_FORMAT_VERSION,
     build_backup,
+    build_scope_clause,
     cleanup_temp_file,
     deserialize_row,
     get_backup_tables,
@@ -62,13 +63,13 @@ async def export_backup(
 
     The archive contains:
 
-    * ``manifest.json`` — backup metadata: app id, app version, format
+    * ``manifest.json`` - backup metadata: app id, app version, format
       version, ISO-8601 timestamp, list of modules included, record
       counts per module, file count, SHA-256 checksum, warnings.
-    * ``<module>.json`` — one file per module containing the SQLAlchemy
+    * ``<module>.json`` - one file per module containing the SQLAlchemy
       rows for that module's tables (generic dump via
       :func:`sqlalchemy.inspect`).
-    * ``files/<module>/<storage-key>`` — only when
+    * ``files/<module>/<storage-key>`` - only when
       ``include_files=true``: binary blobs referenced by the module's
       ``file_path`` columns.
 
@@ -78,7 +79,7 @@ async def export_backup(
     the project's JSON-body sanitiser middleware emits an
     ``http.disconnect`` after replaying the request body, which
     Starlette interprets as a client hang-up and uses to cancel
-    streaming bodies — the original BUG-018 ``Content-Length: 0``.
+    streaming bodies - the original BUG-018 ``Content-Length: 0``.
     """
     spool, manifest, _size = await build_backup(
         user_id=str(user_id),
@@ -114,15 +115,21 @@ async def export_backup(
 async def restore_backup(
     user_id: CurrentUserId,
     file: UploadFile = File(...),
-    mode: str = "replace",
+    mode: str = Form("replace"),
 ) -> RestoreResponse:
     """Upload and restore from a backup ZIP.
 
     Args:
         file: ZIP backup file (multipart/form-data).
-        mode: ``replace`` (default) deletes all existing data first, then
-            inserts. ``merge`` skips records whose UUID already exists,
-            inserts new ones.
+        mode: ``replace`` (default) deletes the requesting user's own data
+            first, then inserts. ``merge`` skips records whose UUID already
+            exists, inserts new ones.
+
+    A backup belongs to the user who created it (export is scoped to the
+    user's own project graph), so ``replace`` only ever clears that same
+    scope. It never touches another user's rows - the earlier behaviour
+    deleted every row of every table globally, which let one user wipe the
+    whole instance on restore.
     """
     if mode not in ("replace", "merge"):
         raise HTTPException(status_code=400, detail="mode must be 'replace' or 'merge'")
@@ -135,6 +142,7 @@ async def restore_backup(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     tables = get_backup_tables()
+    by_key = {key: cls for key, _table_name, cls in tables}
 
     imported: dict[str, int] = {}
     skipped: dict[str, int] = {}
@@ -155,10 +163,17 @@ async def restore_backup(
             if mode == "replace":
                 # FK-safe ordering: delete children before parents (reverse
                 # of the import order). A failure to clear any table aborts
-                # the whole restore — a half-wiped DB must never be committed.
+                # the whole restore - a half-wiped DB must never be committed.
+                # Each delete is scoped to the requesting user's own rows via
+                # the SAME ownership graph the export used, so restore can
+                # never delete another user's data. Tables with no known
+                # ownership path (scope clause None) are left untouched.
                 for backup_key, _table_name, model_cls in reversed(tables):
+                    scope = build_scope_clause(by_key, backup_key, str(user_id))
+                    if scope is None:
+                        continue
                     try:
-                        await session.execute(delete(model_cls))
+                        await session.execute(delete(model_cls).where(scope))
                     except Exception as exc:
                         await session.rollback()
                         logger.exception("Backup restore failed clearing %s: %s", backup_key, exc)
@@ -181,24 +196,29 @@ async def restore_backup(
                     if mode == "merge":
                         record_id = record.get("id")
                         if record_id:
+                            # Resolve the PK value first. If a string id is not
+                            # a valid UUID for a UUID-keyed table we cannot run
+                            # the duplicate check, so we must NOT silently fall
+                            # through and insert it as a new row - that would
+                            # break merge semantics by importing a duplicate.
+                            # Treat an un-checkable record as skipped instead.
                             try:
-                                existing = (
-                                    await session.execute(
-                                        select(model_cls).where(
-                                            model_cls.id == uuid.UUID(record_id)
-                                            if isinstance(record_id, str)
-                                            else model_cls.id == record_id
-                                        )
-                                    )
-                                ).scalar_one_or_none()
-                                if existing is not None:
-                                    count_skipped += 1
-                                    continue
-                            except Exception:
+                                lookup_id = uuid.UUID(record_id) if isinstance(record_id, str) else record_id
+                            except (ValueError, TypeError):
+                                count_skipped += 1
                                 logger.debug(
-                                    "Duplicate check failed for %s, attempting insert",
+                                    "Skipping un-checkable record id in %s (merge mode): %r",
                                     backup_key,
+                                    record_id,
                                 )
+                                continue
+
+                            existing = (
+                                await session.execute(select(model_cls).where(model_cls.id == lookup_id))
+                            ).scalar_one_or_none()
+                            if existing is not None:
+                                count_skipped += 1
+                                continue
 
                     try:
                         obj = deserialize_row(model_cls, record)

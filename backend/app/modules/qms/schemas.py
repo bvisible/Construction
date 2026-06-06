@@ -1,4 +1,4 @@
-"""‌⁠‍QMS Pydantic schemas — request / response models.
+"""‌⁠‍QMS Pydantic schemas - request / response models.
 
 All UUIDs are :class:`uuid.UUID`; cost amounts use :class:`Decimal`.
 Read schemas declare ``from_attributes=True`` so they hydrate directly
@@ -107,6 +107,29 @@ class ITPItemCreate(BaseModel):
     )
     responsible_role: str | None = Field(default=None, max_length=100)
     signatories_required: int = Field(default=1, ge=1, le=10)
+    # Spec linkage + hold-point sequencing (item 12). All optional so an
+    # item can be created bare and linked later.
+    boq_position_id: UUID | None = None
+    csi_section_ref: str | None = Field(default=None, max_length=64)
+    spec_drawing_ref: str | None = Field(default=None, max_length=255)
+    bim_element_id: str | None = Field(default=None, max_length=255)
+    predecessor_itp_item_id: UUID | None = None
+
+
+class ITPItemLinkSpec(BaseModel):
+    """Link an ITP control point to its spec sources and a predecessor.
+
+    Every field is optional; an omitted field leaves the existing value
+    untouched. Passing an explicit ``null`` clears the link.
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    boq_position_id: UUID | None = None
+    csi_section_ref: str | None = Field(default=None, max_length=64)
+    spec_drawing_ref: str | None = Field(default=None, max_length=255)
+    bim_element_id: str | None = Field(default=None, max_length=255)
+    predecessor_itp_item_id: UUID | None = None
 
 
 class ITPItemRead(BaseModel):
@@ -125,6 +148,11 @@ class ITPItemRead(BaseModel):
     hold_witness_point: str
     responsible_role: str | None = None
     signatories_required: int
+    boq_position_id: UUID | None = None
+    csi_section_ref: str | None = None
+    spec_drawing_ref: str | None = None
+    bim_element_id: str | None = None
+    predecessor_itp_item_id: UUID | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -184,6 +212,7 @@ class InspectionRead(BaseModel):
     drawing_ref: str | None = None
     notes: str | None = None
     photos_json: list[dict[str, Any]] = Field(default_factory=list)
+    attachment_document_ids: list[str] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 
@@ -225,6 +254,11 @@ class InspectionSignatureRead(BaseModel):
     signed_at: datetime | None = None
     signature_method: str
     comments: str | None = None
+    # Non-repudiation context (item 12). Populated at sign time when the
+    # request carries the client metadata; NULL for older signatures.
+    timestamp_utc: str | None = None
+    signer_ip: str | None = None
+    signer_user_agent: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -241,6 +275,91 @@ class InspectionSignaturesEnvelope(BaseModel):
     required: int
     collected: int
     signatures: list[InspectionSignatureRead] = Field(default_factory=list)
+
+
+# ── Inspection evidence attachments (item 12) ─────────────────────────────
+
+
+class InspectionAttachmentCreate(BaseModel):
+    """Link an already-stored document to an inspection as evidence.
+
+    The document itself is uploaded via the existing
+    ``POST /inspections/{id}/attachments`` (or the documents module); this
+    endpoint records the auditable link with an optional integrity hash.
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    document_id: UUID
+    caption: str | None = Field(default=None, max_length=500)
+    file_hash_sha256: str | None = Field(
+        default=None,
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-fA-F]{64}$",
+    )
+
+
+class InspectionAttachmentRead(BaseModel):
+    """Inspection evidence attachment returned from the API."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    inspection_id: UUID
+    document_id: UUID
+    caption: str | None = None
+    file_hash_sha256: str | None = None
+    uploaded_by: UUID | None = None
+    attached_at: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+# ── Hold-point sequencing + release (item 12) ─────────────────────────────
+
+
+class HoldPointStatus(BaseModel):
+    """Predecessor / hold-point gate status for an inspection.
+
+    ``blocked`` is True when the linked ITP item declares a predecessor
+    whose own inspection has not yet passed - the dependent inspection must
+    not be completed until then. ``released`` mirrors whether a manual
+    hold-point release record exists.
+    """
+
+    inspection_id: UUID
+    itp_item_id: UUID | None = None
+    is_hold_point: bool = False
+    predecessor_itp_item_id: UUID | None = None
+    predecessor_passed: bool = True
+    blocked: bool = False
+    blocking_reason: str | None = None
+    released: bool = False
+
+
+class HoldPointReleaseCreate(BaseModel):
+    """Release a passed hold point so dependent work can proceed."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    justification: str = Field(..., min_length=1, max_length=2000)
+    approval_route_id: UUID | None = None
+
+
+class HoldPointReleaseRead(BaseModel):
+    """Hold-point release record returned from the API."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    inspection_id: UUID
+    released_by: UUID | None = None
+    released_at: str | None = None
+    justification: str | None = None
+    approval_route_id: UUID | None = None
+    created_at: datetime
+    updated_at: datetime
 
 
 # ── NCR ───────────────────────────────────────────────────────────────────

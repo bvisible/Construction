@@ -105,7 +105,7 @@ const TIMELINE = {
     {
       ts: '2026-05-21T12:00:00Z',
       type: 'clash_run',
-      summary: 'Run X completed — 5 clashes',
+      summary: 'Run X completed - 5 clashes',
       user_id: 'u-1',
       target: '/clash?run=r1',
     },
@@ -252,6 +252,39 @@ describe('CoordinationHubPage', () => {
     // missing-project branch takes precedence so the user sees a CTA
     // instead of a retry-card dead-end.
     expect(screen.queryByTestId('coordination-error')).not.toBeInTheDocument();
+  });
+
+  it('renders the export-CSV button in the header', async () => {
+    configureMocks();
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByTestId('coordination-export')).toBeInTheDocument();
+    });
+  });
+
+  it('renders the timeline window selector and re-queries on change', async () => {
+    configureMocks();
+    renderPage();
+    await waitFor(() => {
+      expect(
+        screen.getByTestId('coordination-timeline-window-7'),
+      ).toBeInTheDocument();
+    });
+    const before = apiGetMock.mock.calls.filter((c: unknown[]) =>
+      String(c[0]).includes('/timeline'),
+    ).length;
+    fireEvent.click(screen.getByTestId('coordination-timeline-window-7'));
+    // Switching the window fires a fresh timeline fetch with days=7.
+    await waitFor(() => {
+      const sevenDayCalls = apiGetMock.mock.calls.filter((c: unknown[]) =>
+        String(c[0]).includes('days=7'),
+      );
+      expect(sevenDayCalls.length).toBeGreaterThanOrEqual(1);
+    });
+    const after = apiGetMock.mock.calls.filter((c: unknown[]) =>
+      String(c[0]).includes('/timeline'),
+    ).length;
+    expect(after).toBeGreaterThan(before);
   });
 
   it('renders KPI cards even when only the trade-matrix fetch fails', async () => {

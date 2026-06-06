@@ -25,7 +25,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Download, Loader2, Mail, X } from 'lucide-react';
+import { Download, Loader2, Mail, Send, X } from 'lucide-react';
 
 import { Button } from '@/shared/ui';
 import { WideModal } from '@/shared/ui/WideModal';
@@ -33,10 +33,15 @@ import { useToastStore } from '@/stores/useToastStore';
 
 import {
   downloadPropDevDocument,
+  emailPropDevDocument,
   previewPropDevDocument,
   type PropDevDocPreview,
   type PropDevDocType,
 } from './api';
+
+// RFC 5322-lite — matches the backend guard; rejects obvious typos before
+// the request so the user gets instant inline feedback.
+const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
 const SUPPORTED_LOCALES = ['en', 'de', 'ru', 'fr', 'ar', 'es'] as const;
 type SupportedLocale = (typeof SUPPORTED_LOCALES)[number];
@@ -144,11 +149,24 @@ export function DocumentPreviewModal({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Email-to-buyer flow. The composer is collapsed until the user clicks
+  // "Email to buyer"; the recipient address is validated inline before the
+  // request and the result toast reflects the backend delivery outcome.
+  const [emailOpen, setEmailOpen] = useState(false);
+  const [recipient, setRecipient] = useState('');
+  const [recipientName, setRecipientName] = useState('');
+  const [emailNote, setEmailNote] = useState('');
+  const [sending, setSending] = useState(false);
+
   // Fetch on open + whenever locale changes.
   useEffect(() => {
     if (!open) {
       setPreview(null);
       setError(null);
+      setEmailOpen(false);
+      setRecipient('');
+      setRecipientName('');
+      setEmailNote('');
       return;
     }
     let cancelled = false;
@@ -217,11 +235,64 @@ export function DocumentPreviewModal({
     }
   };
 
-  const emailDisabledHint = t('propdev.documents.email_disabled_hint', {
-    defaultValue:
-      'Email-to-buyer is not available yet. Download the PDF and attach it ' +
-      'manually for now.',
-  });
+  const recipientValid = EMAIL_RE.test(recipient.trim());
+
+  const handleSendEmail = async () => {
+    if (!recipientValid) return;
+    setSending(true);
+    try {
+      const result = await emailPropDevDocument({
+        doc_type: docType,
+        contract_id: contractId,
+        reservation_id: reservationId,
+        handover_id: handoverId,
+        instalment_id: instalmentId,
+        locale,
+        recipient_email: recipient.trim(),
+        recipient_name: recipientName.trim() || undefined,
+        note: emailNote.trim() || undefined,
+        ...extraParams,
+      });
+      // ``delivered: false`` = the server fell back to the console backend
+      // (SMTP not configured). Be honest: the message was logged, not sent.
+      if (result.delivered) {
+        addToast({
+          type: 'success',
+          title: t('propdev.documents.email_sent', { defaultValue: 'Document emailed' }),
+          message: t('propdev.documents.email_sent_to', {
+            defaultValue: 'Sent to {{email}}',
+            email: result.recipient,
+          }),
+        });
+      } else {
+        addToast({
+          type: 'info',
+          title: t('propdev.documents.email_logged', {
+            defaultValue: 'Email logged (SMTP not configured)',
+          }),
+          message: t('propdev.documents.email_logged_hint', {
+            defaultValue:
+              'Outbound email is not configured on this server, so the message ' +
+              'was logged instead of delivered. Configure SMTP in settings to ' +
+              'send for real.',
+          }),
+        });
+      }
+      setEmailOpen(false);
+      setRecipient('');
+      setRecipientName('');
+      setEmailNote('');
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      addToast({
+        type: 'error',
+        title: t('propdev.documents.email_failed', { defaultValue: 'Could not email document' }),
+        message,
+      });
+    } finally {
+      setSending(false);
+    }
+  };
 
   const title = t(DOC_TITLES[docType].key, {
     defaultValue: DOC_TITLES[docType].defaultValue,
@@ -247,22 +318,17 @@ export function DocumentPreviewModal({
           <Button variant="ghost" onClick={onClose}>
             {t('common.close', { defaultValue: 'Close' })}
           </Button>
-          {/* Email-to-buyer automation is not wired yet. Render the control
-              honestly disabled with an explanatory tooltip rather than ship a
-              button that only shows a "coming soon" toast. The title lives on a
-              wrapper because a disabled button has pointer-events: none. */}
-          <span title={emailDisabledHint} className="inline-flex">
-            <Button
-              variant="ghost"
-              disabled
-              icon={<Mail className="h-4 w-4" />}
-              aria-label={emailDisabledHint}
-            >
-              {t('propdev.documents.email_to_buyer', {
-                defaultValue: 'Email to buyer',
-              })}
-            </Button>
-          </span>
+          <Button
+            variant="ghost"
+            onClick={() => setEmailOpen((v) => !v)}
+            disabled={!preview || loading}
+            aria-expanded={emailOpen}
+            icon={<Mail className="h-4 w-4" />}
+          >
+            {t('propdev.documents.email_to_buyer', {
+              defaultValue: 'Email to buyer',
+            })}
+          </Button>
           <Button
             variant="primary"
             onClick={handleDownload}
@@ -304,6 +370,102 @@ export function DocumentPreviewModal({
             </span>
           )}
         </div>
+
+        {/* Email composer — collapsed until "Email to buyer" is clicked */}
+        {emailOpen && (
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              void handleSendEmail();
+            }}
+            className="space-y-3 rounded-lg border border-border bg-surface-secondary/60 p-4"
+          >
+            <p className="text-sm font-medium text-content-primary">
+              {t('propdev.documents.email_compose_title', {
+                defaultValue: 'Email this document',
+              })}
+            </p>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="flex flex-col gap-1 text-sm">
+                <span className="font-medium text-content-secondary">
+                  {t('propdev.documents.email_recipient', {
+                    defaultValue: 'Recipient email',
+                  })}
+                  <span className="text-error"> *</span>
+                </span>
+                <input
+                  type="email"
+                  required
+                  value={recipient}
+                  onChange={(e) => setRecipient(e.target.value)}
+                  placeholder="buyer@example.com"
+                  className="h-9 rounded-lg border border-border bg-surface-primary px-3 text-sm focus:outline-none focus:ring-2 focus:ring-oe-blue/30 focus:border-oe-blue"
+                  disabled={sending}
+                  aria-invalid={recipient.length > 0 && !recipientValid}
+                />
+                {recipient.length > 0 && !recipientValid && (
+                  <span className="text-xs text-error">
+                    {t('propdev.documents.email_invalid', {
+                      defaultValue: 'Enter a valid email address',
+                    })}
+                  </span>
+                )}
+              </label>
+              <label className="flex flex-col gap-1 text-sm">
+                <span className="font-medium text-content-secondary">
+                  {t('propdev.documents.email_recipient_name', {
+                    defaultValue: 'Recipient name (optional)',
+                  })}
+                </span>
+                <input
+                  type="text"
+                  value={recipientName}
+                  onChange={(e) => setRecipientName(e.target.value)}
+                  className="h-9 rounded-lg border border-border bg-surface-primary px-3 text-sm focus:outline-none focus:ring-2 focus:ring-oe-blue/30 focus:border-oe-blue"
+                  disabled={sending}
+                />
+              </label>
+            </div>
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="font-medium text-content-secondary">
+                {t('propdev.documents.email_note', {
+                  defaultValue: 'Note (optional)',
+                })}
+              </span>
+              <textarea
+                value={emailNote}
+                onChange={(e) => setEmailNote(e.target.value)}
+                rows={2}
+                className="rounded-lg border border-border bg-surface-primary px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-oe-blue/30 focus:border-oe-blue"
+                disabled={sending}
+              />
+            </label>
+            <div className="flex items-center justify-end gap-2">
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => setEmailOpen(false)}
+                disabled={sending}
+              >
+                {t('common.cancel', { defaultValue: 'Cancel' })}
+              </Button>
+              <Button
+                type="submit"
+                variant="primary"
+                disabled={!recipientValid || sending || !preview}
+                icon={
+                  sending ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Send className="h-4 w-4" />
+                  )
+                }
+              >
+                {t('propdev.documents.email_send', { defaultValue: 'Send' })}
+              </Button>
+            </div>
+          </form>
+        )}
 
         {/* Preview surface */}
         <div className="min-h-[60vh] rounded-lg border border-border bg-surface-secondary">

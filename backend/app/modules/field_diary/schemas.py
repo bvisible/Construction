@@ -95,6 +95,12 @@ class DiaryActivityCreate(BaseModel):
     started_at: datetime | None = None
     ended_at: datetime | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    # Device-generated idempotency key, set by the offline field shell on a
+    # queued write. When present the server records the applied op in the sync
+    # ledger and returns the original result on a replay, so an at-least-once
+    # queue drain never duplicates a logged activity. Absent for direct
+    # (online) callers, which are not deduplicated.
+    client_op_id: str | None = Field(default=None, max_length=128)
 
 
 class DiaryActivityResponse(BaseModel):
@@ -175,7 +181,7 @@ class FieldMagicLinkRequest(BaseModel):
 
 
 class FieldMagicLinkRequestResponse(BaseModel):
-    """Always 202 — does not reveal whether the phone is provisioned.
+    """Always 202 - does not reveal whether the phone is provisioned.
 
     In dev / test the plaintext link + PIN are returned so the caller can
     drive the consume flow without an SMS provider; in production these
@@ -202,6 +208,96 @@ class FieldSessionResponse(BaseModel):
     module_key: str
 
 
+# ── Field capture (cross-module offline write surface) ─────────────────────
+
+
+class FieldCapture(BaseModel):
+    """The capture envelope embedded in every cross-module field write.
+
+    ``client_op_id`` is the durable idempotency key the offline queue assigns
+    before the op enters IndexedDB; the server records the applied op against it
+    so an at-least-once queue drain never double-applies. ``captured_at`` is the
+    device's local capture time (ISO string), kept distinct from server time so
+    a clock-skewed device does not land an entry on the wrong day.
+    """
+
+    client_op_id: str = Field(..., min_length=8, max_length=128)
+    captured_at: str | None = Field(default=None, max_length=40)
+    lat: float | None = Field(default=None, ge=-90, le=90)
+    lon: float | None = Field(default=None, ge=-180, le=180)
+    accuracy_m: float | None = Field(default=None, ge=0)
+    device_hint: str | None = Field(default=None, max_length=120)
+
+
+class FieldPunchCreate(FieldCapture):
+    title: str = Field(..., min_length=1, max_length=255)
+    description: str = Field(default="", max_length=10_000)
+    priority: Literal["low", "medium", "high", "critical"] = "medium"
+    trade: str | None = Field(default=None, max_length=100)
+
+
+class FieldInspectionCreate(FieldCapture):
+    inspection_type: str = Field(..., min_length=1, max_length=50)
+    title: str = Field(..., min_length=1, max_length=500)
+    location: str | None = Field(default=None, max_length=500)
+    checklist_data: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class FieldCaptureResponse(BaseModel):
+    """Per-op outcome returned to the client (and stored in the ledger).
+
+    ``result_id`` is stable across replays: a duplicated op returns the same
+    downstream row id so the client can reconcile its optimistic placeholder.
+    """
+
+    client_op_id: str
+    status: Literal["applied", "conflict", "rejected"]
+    target_module: str
+    target_kind: str
+    result_id: uuid.UUID | None = None
+    http_status: int
+
+
+class FieldSyncOpItem(FieldCapture):
+    """One op in a batch drain. Mirrors the IndexedDB ``QueuedOp`` plus the
+    routed ``target_kind`` so the server can dispatch it.
+    """
+
+    target_kind: Literal["punch_item", "inspection"]
+    # The op-specific payload (a FieldPunchCreate / FieldInspectionCreate body
+    # minus the capture envelope, which is carried on this item directly).
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class FieldSyncBatch(BaseModel):
+    """A bulk drain, capped at 50 ops to bound a huge backlog per request."""
+
+    ops: list[FieldSyncOpItem] = Field(..., max_length=50)
+
+
+class FieldSyncOpResponse(BaseModel):
+    model_config = _RESPONSE_CONFIG
+
+    id: uuid.UUID
+    client_op_id: str
+    project_id: uuid.UUID
+    op_kind: str
+    result_type: str
+    result_id: uuid.UUID | None = None
+    created_at: datetime
+
+
+class FieldTodayResponse(BaseModel):
+    """Single round-trip seed for the Today screen, cached client-side."""
+
+    project_id: uuid.UUID
+    diary: DiaryEntryResponse | None = None
+    open_punch_count: int = 0
+    top_punch: list[dict[str, Any]] = Field(default_factory=list)
+    open_inspection_count: int = 0
+    server_time: str
+
+
 __all__ = [
     "ACTIVITY_TYPES",
     "DIARY_STATUSES",
@@ -218,4 +314,12 @@ __all__ = [
     "FieldModuleGrantCreate",
     "FieldModuleGrantResponse",
     "FieldSessionResponse",
+    "FieldCapture",
+    "FieldPunchCreate",
+    "FieldInspectionCreate",
+    "FieldCaptureResponse",
+    "FieldSyncOpItem",
+    "FieldSyncBatch",
+    "FieldSyncOpResponse",
+    "FieldTodayResponse",
 ]
