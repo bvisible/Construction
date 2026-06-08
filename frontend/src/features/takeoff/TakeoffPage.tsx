@@ -1144,7 +1144,7 @@ export function TakeoffPage() {
     if (!match) return;
     setActiveDocId(match.id);
     setViewerDoc({
-      url: `/api/v1/takeoff/documents/${match.id}/download/`,
+      url: `${API_BASE}/v1/takeoff/documents/${match.id}/download/`,
       name: match.filename,
     });
     setActiveTab('measurements');
@@ -1165,7 +1165,7 @@ export function TakeoffPage() {
     const match = serverDocuments.find((d) => d.id === docId);
     if (!match) return;
     setViewerDoc({
-      url: `/api/v1/takeoff/documents/${docId}/download/`,
+      url: `${API_BASE}/v1/takeoff/documents/${docId}/download/`,
       name: match.filename,
     });
     setActiveTab('measurements');
@@ -1198,7 +1198,7 @@ export function TakeoffPage() {
           t('takeoff.document_placeholder', { defaultValue: 'Document' });
         setActiveDocId(docId);
         setViewerDoc({
-          url: `/api/v1/documents/${encodeURIComponent(docId)}/download/`,
+          url: `${API_BASE}/v1/documents/${encodeURIComponent(docId)}/download/`,
           name: displayName,
         });
         setActiveTab('measurements');
@@ -1264,7 +1264,7 @@ export function TakeoffPage() {
       setDeepLinkNotFound(false);
       setActiveDocId(match.id);
       setViewerDoc({
-        url: `/api/v1/takeoff/documents/${match.id}/download/`,
+        url: `${API_BASE}/v1/takeoff/documents/${match.id}/download/`,
         name: match.filename,
       });
       setActiveTab('measurements');
@@ -1445,7 +1445,7 @@ export function TakeoffPage() {
 
   // BUG-DUAL-UPLOAD-PDF — the takeoff upload mutation already persists
   // the PDF on the server.  An earlier helper (``createDocumentRecord``)
-  // re-uploaded the same file to ``/api/v1/documents/upload`` for
+  // re-uploaded the same file to ``${API_BASE}/v1/documents/upload`` for
   // "cross-referencing", which doubled the bytes-on-disk and showed two
   // identical entries in the Documents module.  Removed.  If a takeoff
   // doc needs to surface in the Documents module, do it backend-side at
@@ -1715,7 +1715,7 @@ export function TakeoffPage() {
       }
       setActiveDocId(docId);
       setViewerDoc({
-        url: `/api/v1/takeoff/documents/${docId}/download/`,
+        url: `${API_BASE}/v1/takeoff/documents/${docId}/download/`,
         name: doc.filename,
       });
       setActiveTab('measurements');

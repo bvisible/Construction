@@ -504,7 +504,11 @@ export default function TakeoffViewerModule({
         const token = useAuthStore.getState().accessToken;
         const headers: HeadersInit = {};
         if (token) headers['Authorization'] = `Bearer ${token}`;
-        const response = await fetch(initialPdfUrl, { headers });
+        // //// NEOFFICE PATCH — send the Frappe session cookie so the unified
+        // proxy (/neoconstruction/api/v1/.../download/) authenticates the PDF
+        // fetch. Without this, reopening a takeoff via ?doc= silently fails to
+        // reload the PDF (the document "disappeared" on refresh).
+        const response = await fetch(initialPdfUrl, { headers, credentials: 'include' });
         if (!response.ok) {
           throw new Error(`Failed to fetch PDF (${response.status})`);
         }
