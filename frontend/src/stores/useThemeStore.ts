@@ -72,6 +72,49 @@ function getSystemPreference(): 'light' | 'dark' {
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
 
+// //// NEOFFICE PATCH — Frappe SERVER preference is the single source of truth on load.
+// `frappe.boot.user_desk_theme` ("Light" | "Dark" | "Automatic") is the desk theme
+// the user picked in Frappe, injected into the SPA boot by the www controller. It
+// MUST win over a stale localStorage: `theme_active`/`desk_theme` can drift to dark
+// (an old toggle on this browser) while the server preference is Light — that drift
+// is the recurring "/neoconstruction is dark but the Frappe desk is light" desync.
+function readFrappeServerTheme(): 'light' | 'dark' | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    // Primary: `window.__OCE_DESK_THEME__` is injected synchronously into the page
+    // HTML by the Neoconstruction www controller (= User.desk_theme). It is present
+    // on EVERY load, unlike `frappe.boot.user_desk_theme` which is absent on the
+    // website boot (only the Desk boot carries it) — that's why the boot-only
+    // version silently no-op'd. Fall back to the boot value if the inject is missing.
+    const injected = (window as { __OCE_DESK_THEME__?: string }).__OCE_DESK_THEME__;
+    const raw =
+      typeof injected === 'string' && injected
+        ? injected
+        : (window as { frappe?: { boot?: { user_desk_theme?: string } } })
+            .frappe?.boot?.user_desk_theme;
+    if (typeof raw === 'string') {
+      const v = raw.toLowerCase();
+      if (v === 'dark' || v === 'light') return v;
+      if (v === 'automatic') return getSystemPreference();
+    }
+  } catch {
+    // boot may be absent on non-embedded loads.
+  }
+  return null;
+}
+
+// //// NEOFFICE PATCH — Re-sync every theme key neoffice-theme.js / Frappe read, so a
+// stale dark value can no longer override the server preference on the next load.
+function syncFrappeThemeKeys(resolved: 'light' | 'dark'): void {
+  try {
+    window.localStorage.setItem('theme_active', resolved);
+    window.localStorage.setItem('desk_theme', resolved);
+    window.localStorage.setItem(STORAGE_KEY, resolved);
+  } catch {
+    // noop — sandboxed contexts.
+  }
+}
+
 function resolveTheme(mode: ThemeMode): 'light' | 'dark' {
   // //// NEOFFICE PATCH — Frappe theme wins over our store when embedded.
   // When embedded we must NEVER fall back to the OS preference: a mac in dark
@@ -130,9 +173,15 @@ export const useThemeStore = create<ThemeState>((set, get) => ({
   },
 
   init: () => {
+    // //// NEOFFICE PATCH — Frappe server preference wins on load (fixes the
+    // recurring stale-localStorage desync: /neoconstruction dark while the Frappe
+    // desk is light). When present it overrides everything and we re-sync every
+    // theme key to it, so neoffice-theme.js and our store agree from now on.
+    const serverTheme = isFrappeEmbedded() ? readFrappeServerTheme() : null;
     const stored = localStorage.getItem(STORAGE_KEY) as ThemeMode | null;
     const theme: ThemeMode = stored && ['light', 'dark', 'system'].includes(stored) ? stored : 'system';
-    const resolved = resolveTheme(theme);
+    if (serverTheme) syncFrappeThemeKeys(serverTheme);
+    const resolved = serverTheme ?? resolveTheme(theme);
 
     // Apply immediately (no transition on initial load)
     if (resolved === 'dark') {
@@ -143,7 +192,7 @@ export const useThemeStore = create<ThemeState>((set, get) => ({
     // //// NEOFFICE PATCH — Mirror onto [data-theme] for neoffice-theme.css
     document.documentElement.setAttribute('data-theme', resolved);
 
-    set({ theme, resolved });
+    set({ theme: serverTheme ?? theme, resolved });
 
     // Listen for OS-level preference changes when in "system" mode
     const mql = window.matchMedia('(prefers-color-scheme: dark)');
