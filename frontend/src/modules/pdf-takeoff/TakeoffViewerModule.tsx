@@ -265,6 +265,28 @@ interface PlanVisionResponse {
   elements: unknown[];
   tokens_used: number;
 }
+
+/** Vector-geometry room detection (oe_neoffice detect-rooms). */
+const ROOMS_GROUP = 'Pièces';
+const ROOMS_GROUP_COLOR = '#10B981';
+
+interface DetectedRoom {
+  name?: string | null;
+  /** [[x, y], …] normalised in [0, 1] of the page. */
+  polygon: number[][];
+  area_m2?: number | null;
+}
+
+interface RoomDetectionResponse {
+  document_id: string;
+  page: number;
+  page_width_pt: number;
+  page_height_pt: number;
+  scale_ratio?: number | null;
+  scale_pixels_per_unit?: number | null;
+  rooms: DetectedRoom[];
+  stats: Record<string, number>;
+}
 // //// END NEOFFICE PATCH
 
 interface TakeoffViewerModuleProps {
@@ -329,6 +351,8 @@ export default function TakeoffViewerModule({
 
   // //// NEOFFICE PATCH — AI vision analysis in-flight flag
   const [visionLoading, setVisionLoading] = useState(false);
+  // //// NEOFFICE PATCH — vector room detection in-flight flag
+  const [roomsLoading, setRoomsLoading] = useState(false);
 
   // Sidebar right-panel tab: "Properties" (existing) or "Ledger" (new).
   // Persisted to localStorage so the choice survives reloads.
@@ -1672,6 +1696,86 @@ export default function TakeoffViewerModule({
       });
     } finally {
       setVisionLoading(false);
+    }
+  }, [visionDocumentId, pdfDoc, currentPage, scale, addToast, t]);
+
+  /** Detect room polygons from the PDF VECTOR layer (geometry, not vision) and
+   *  pre-draw them as 'area' measurements (group "Pièces"). Contours follow the
+   *  real walls — far more precise than the vision boxes. */
+  const handleDetectRooms = useCallback(async () => {
+    if (!visionDocumentId || !pdfDoc) {
+      addToast({
+        type: 'info',
+        title: t('takeoff_viewer.rooms_need_doc', {
+          defaultValue: 'Veuillez d’abord ouvrir un document enregistré.',
+        }),
+      });
+      return;
+    }
+    setRoomsLoading(true);
+    try {
+      const res = await apiPost<RoomDetectionResponse>(
+        '/v1/neoffice/takeoff/detect-rooms/',
+        { document_id: visionDocumentId, page: currentPage },
+      );
+      const page = await pdfDoc.getPage(currentPage);
+      const vp = page.getViewport({ scale: 1 });
+      const pw = vp.width;
+      const ph = vp.height;
+
+      const effScale = res.scale_ratio ? presetScale(res.scale_ratio) : scale;
+      if (res.scale_ratio && !effScale.invalid) {
+        setScale(effScale);
+        setIsCalibrated(true);
+        setLastCalibration(null);
+      }
+
+      const ts = Date.now();
+      const newMeasurements: Measurement[] = (res.rooms || [])
+        .filter((r) => Array.isArray(r.polygon) && r.polygon.length >= 3)
+        .map((r, i) => {
+          const pts: Point[] = r.polygon.map((xy) => ({
+            x: (xy[0] ?? 0) * pw,
+            y: (xy[1] ?? 0) * ph,
+          }));
+          const realArea = r.area_m2 ?? toRealArea(polygonAreaPixels(pts), effScale);
+          return {
+            id: `r_${ts}_${i}`,
+            type: 'area' as const,
+            points: pts,
+            value: realArea,
+            unit: `${effScale.unitLabel}²`,
+            label: formatMeasurement(realArea, `${effScale.unitLabel}²`),
+            annotation: r.name || 'Pièce',
+            page: currentPage,
+            group: ROOMS_GROUP,
+            color: ROOMS_GROUP_COLOR,
+          };
+        });
+
+      if (newMeasurements.length > 0) {
+        setMeasurements((prev) => [...prev, ...newMeasurements]);
+      }
+
+      addToast({
+        type: 'success',
+        title: t('takeoff_viewer.rooms_done_title', { defaultValue: 'Pièces détectées' }),
+        message: t('takeoff_viewer.rooms_done_msg', {
+          defaultValue:
+            '{{count}} pièce(s) détectée(s) (contours vectoriels). Ajustez si nécessaire.',
+          count: newMeasurements.length,
+        }),
+      });
+    } catch (err) {
+      addToast({
+        type: 'error',
+        title: t('takeoff_viewer.rooms_failed', {
+          defaultValue: 'La détection des pièces a échoué.',
+        }),
+        message: getErrorMessage(err),
+      });
+    } finally {
+      setRoomsLoading(false);
     }
   }, [visionDocumentId, pdfDoc, currentPage, scale, addToast, t]);
 
@@ -3258,6 +3362,27 @@ export default function TakeoffViewerModule({
                   {visionLoading
                     ? t('takeoff_viewer.vision_analyzing', { defaultValue: 'Analyse…' })
                     : t('takeoff_viewer.vision_analyze_short', { defaultValue: 'Analyse IA' })}
+                </span>
+              </button>
+
+              {/* //// NEOFFICE PATCH — vector room detection (precise wall-following contours) */}
+              <button
+                onClick={handleDetectRooms}
+                disabled={roomsLoading || !visionDocumentId}
+                className={`flex items-center gap-1 px-2 py-1.5 rounded text-xs transition-colors disabled:opacity-40 ${
+                  roomsLoading ? 'bg-emerald-500 text-white' : 'hover:bg-surface-secondary text-content-secondary'
+                }`}
+                title={t('takeoff_viewer.detect_rooms', {
+                  defaultValue: 'Détecter les pièces (contours vectoriels, suit les murs)',
+                })}
+                aria-label={t('takeoff_viewer.detect_rooms', { defaultValue: 'Détecter les pièces' })}
+                data-testid="detect-rooms-button"
+              >
+                {roomsLoading ? <Loader2 size={14} className="animate-spin" /> : <Scan size={14} />}
+                <span className="hidden sm:inline">
+                  {roomsLoading
+                    ? t('takeoff_viewer.detecting_rooms', { defaultValue: 'Détection…' })
+                    : t('takeoff_viewer.detect_rooms_short', { defaultValue: 'Pièces' })}
                 </span>
               </button>
 

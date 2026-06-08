@@ -11,6 +11,7 @@ Planned (Phase 2):
     POST /bim/export-ifc/        — Generate an .ifc IFC4 model from a scan
 """
 
+import asyncio
 import hmac
 import logging
 import os
@@ -32,6 +33,8 @@ from app.modules.neoffice.schemas import (
     FieldReportFromActivitiesRequest,
     PlanVisionRequest,
     PlanVisionResponse,
+    RoomDetectionRequest,
+    RoomDetectionResponse,
     RoomPlanImportRequest,
     ScheduleProgressBridgeRequest,
 )
@@ -323,5 +326,66 @@ async def analyze_takeoff_plan_vision(
         ) from exc
 
     return PlanVisionResponse(
+        document_id=request.document_id, page=request.page, **result
+    )
+
+
+@router.post("/takeoff/detect-rooms/", response_model=RoomDetectionResponse)
+async def detect_takeoff_rooms(
+    request: RoomDetectionRequest,
+    session: SessionDep,
+    settings: SettingsDep,
+    user_id: str = Depends(get_current_user_id),
+) -> RoomDetectionResponse:
+    """Detect room polygons from a takeoff PDF's vector layer (geometry, not vision).
+
+    Reads the wall strokes, closes doorways and polygonises into room contours
+    that follow the real walls — far more precise than the vision boxes. The
+    drawing scale is read off the plan via the vision model when not supplied.
+    """
+    from app.modules.neoffice.room_detection import detect_rooms
+    from app.modules.takeoff.service import TakeoffService
+
+    takeoff = TakeoffService(session)
+    doc = await takeoff.get_document(request.document_id)
+    if doc is None or not doc.file_path:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Takeoff document not found"
+        )
+    if doc.project_id is not None:
+        await _verify_project_access(session, doc.project_id, user_id)
+
+    pdf_path = Path(doc.file_path)
+    if not pdf_path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Stored PDF file not found on server",
+        )
+    pdf_bytes = pdf_path.read_bytes()
+
+    scale_ratio = request.scale_override
+    if scale_ratio is None:
+        # Read the drawing scale off the plan via the vision model (best-effort).
+        try:
+            vision = await analyze_plan_vision(pdf_bytes, request.page - 1, settings)
+            scale_ratio = vision.get("scale_ratio")
+        except Exception:
+            logger.exception("Scale read via vision failed for %s", request.document_id)
+            scale_ratio = None
+
+    try:
+        # CPU-bound geometry — run off the event loop.
+        result = await asyncio.to_thread(
+            detect_rooms, pdf_bytes, request.page - 1, scale_ratio
+        )
+    except IndexError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    except Exception as exc:
+        logger.exception("Room detection failed for %s", request.document_id)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail="Room detection failed"
+        ) from exc
+
+    return RoomDetectionResponse(
         document_id=request.document_id, page=request.page, **result
     )

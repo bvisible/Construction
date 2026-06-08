@@ -119,29 +119,39 @@ class PlanVisionRequest(BaseModel):
 
 
 class PlanVisionRoom(BaseModel):
-    """One room detected on the plan, with an approximate pixel bounding box."""
+    """One room detected on the plan.
+
+    ``bbox`` is ``[x0, y0, x1, y1]`` normalised in [0, 1] relative to the page
+    (origin top-left). Multiply by the page dimensions (PDF points) to obtain
+    measurement points in the takeoff drawing frame.
+    """
 
     name: str
     zone: str | None = None
     usage: str | None = None
-    bbox: list[float] | None = None  # [x0, y0, x1, y1] in rendered-image pixels
+    bbox: list[float] | None = None
     approx_area_m2: float | None = None
 
 
 class PlanVisionElement(BaseModel):
-    """A notable element detected on the plan (door, window, wall, other)."""
+    """A notable element detected on the plan (door, window, wall, other).
+
+    ``bbox`` is normalised in [0, 1] relative to the page (see PlanVisionRoom).
+    """
 
     type: str
     label: str | None = None
-    bbox: list[float] | None = None  # [x0, y0, x1, y1] in rendered-image pixels
+    bbox: list[float] | None = None
 
 
 class PlanVisionResponse(BaseModel):
     """Structured result of the vision analysis of a plan page.
 
-    ``scale_pixels_per_unit`` is the takeoff calibration (px per metre) derived
-    from the scale read off the plan; the frontend can use it to pre-calibrate
-    the measurement layer and pre-draw the detected rooms.
+    ``scale_pixels_per_unit`` is the takeoff calibration in **PDF points per
+    metre** (matches the frontend ``presetScale()``), derived from the scale
+    read off the plan. ``page_width_pt``/``page_height_pt`` are the page
+    dimensions in PDF points; the frontend multiplies the normalised bboxes by
+    them to pre-draw the detected rooms aligned with the drawing.
     """
 
     document_id: str
@@ -150,8 +160,51 @@ class PlanVisionResponse(BaseModel):
     scale_label: str | None = None
     scale_ratio: float | None = None
     scale_pixels_per_unit: float | None = None
+    page_width_pt: float
+    page_height_pt: float
     image_width: int
     image_height: int
     rooms: list[PlanVisionRoom] = Field(default_factory=list)
     elements: list[PlanVisionElement] = Field(default_factory=list)
     tokens_used: int = 0
+
+
+# ── Takeoff vector-geometry room detection (Piste B) ──────────────────────────
+
+
+class RoomDetectionRequest(BaseModel):
+    """Body for POST /api/v1/neoffice/takeoff/detect-rooms/.
+
+    Detects room polygons from the PDF vector layer (walls). ``scale_override``
+    sets the drawing scale ratio (e.g. 50 for 1:50); when omitted the scale is
+    read off the plan via the vision model.
+    """
+
+    document_id: str = Field(..., description="Takeoff document UUID")
+    page: int = Field(default=1, ge=1, description="1-based page number")
+    scale_override: float | None = Field(default=None, gt=0)
+
+
+class DetectedRoom(BaseModel):
+    """One room polygon detected from the vectors.
+
+    ``polygon`` is a list of [x, y] points normalised in [0, 1] of the page
+    (multiply by the page dimensions / pdfjs viewport to draw).
+    """
+
+    name: str | None = None
+    polygon: list[list[float]]
+    area_m2: float | None = None
+
+
+class RoomDetectionResponse(BaseModel):
+    """Structured result of the vector room detection."""
+
+    document_id: str
+    page: int
+    page_width_pt: float
+    page_height_pt: float
+    scale_ratio: float | None = None
+    scale_pixels_per_unit: float | None = None
+    rooms: list[DetectedRoom] = Field(default_factory=list)
+    stats: dict[str, int] = Field(default_factory=dict)
