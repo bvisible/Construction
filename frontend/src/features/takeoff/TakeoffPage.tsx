@@ -31,7 +31,7 @@ import {
 import { Button, Card, Badge, Input, Skeleton, DismissibleInfo, IntroRichText, Breadcrumb } from '@/shared/ui';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { PdfCompareDrawer } from './PdfCompareDrawer';
-import { apiGet, apiPost } from '@/shared/lib/api';
+import { apiGet, apiPost, API_BASE } from '@/shared/lib/api';
 import { formatFileSize } from '@/shared/lib/formatters';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useToastStore } from '@/stores/useToastStore';
@@ -1288,10 +1288,19 @@ export function TakeoffPage() {
         headers['Authorization'] = `Bearer ${token}`;
       }
 
-      const response = await fetch(`/api/v1/takeoff/documents/upload/`, {
+      // //// NEOFFICE PATCH — route the upload through the unified base URL.
+      // This is the only takeoff call that used a hardcoded /api/v1/ (direct
+      // OCE) instead of the shared client. Since the move to the Frappe proxy
+      // the direct /api/v1/ path is no longer routed (404), so this upload
+      // hung forever on "Uploading…". API_BASE resolves to /neoconstruction/api
+      // when embedded (cookie-authenticated via the proxy, no CSRF needed —
+      // verified) and /api otherwise. credentials:'include' sends the Frappe
+      // session cookie.
+      const response = await fetch(`${API_BASE}/v1/takeoff/documents/upload/`, {
         method: 'POST',
         headers,
         body: formData,
+        credentials: 'include',
       });
 
       if (!response.ok) {
