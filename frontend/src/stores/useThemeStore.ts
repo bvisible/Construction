@@ -43,8 +43,19 @@ function isFrappeEmbedded(): boolean {
 function readFrappeTheme(): 'light' | 'dark' | null {
   if (typeof window === 'undefined') return null;
   try {
+    // 1. theme_active — neoffice-theme.js writes this to localStorage when the
+    //    user toggles the theme from the apps menu. Authoritative once chosen.
     const active = window.localStorage.getItem('theme_active');
     if (active === 'dark' || active === 'light') return active;
+    // 2. //// NEOFFICE PATCH — the LIVE value neoffice-theme.js applied to the
+    //    host <html data-theme="…"> of the Frappe page that embeds us. This is
+    //    the real source of truth (neoffice-theme.js: `documentElement
+    //    .getAttribute("data-theme") || "light"`) and is always present, even
+    //    when the user never toggled (so theme_active is absent). Read it
+    //    before our own applyTheme() overwrites the attribute on first init.
+    const domTheme = document.documentElement.getAttribute('data-theme');
+    if (domTheme === 'dark' || domTheme === 'light') return domTheme;
+    // 3. Frappe Desk standard keys (rarely set on website pages).
     const appearance = window.localStorage.getItem('appearance');
     if (appearance === 'dark' || appearance === 'light') return appearance;
     if (appearance === 'automatic' || appearance === '"automatic"') {
@@ -62,10 +73,13 @@ function getSystemPreference(): 'light' | 'dark' {
 }
 
 function resolveTheme(mode: ThemeMode): 'light' | 'dark' {
-  // //// NEOFFICE PATCH — Frappe theme wins over our store when embedded
+  // //// NEOFFICE PATCH — Frappe theme wins over our store when embedded.
+  // When embedded we must NEVER fall back to the OS preference: a mac in dark
+  // mode would turn the SPA dark while the Frappe shell around it stays light
+  // (the desync bug). neoffice-theme defaults to light, so when we cannot read
+  // an explicit Frappe theme we default to light too — keeping both in sync.
   if (isFrappeEmbedded()) {
-    const frappe = readFrappeTheme();
-    if (frappe) return frappe;
+    return readFrappeTheme() ?? 'light';
   }
   if (mode === 'system') return getSystemPreference();
   return mode;
