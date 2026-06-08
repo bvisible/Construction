@@ -9,9 +9,22 @@ elements"). This module instead renders the plan page to an image and sends it
 to the multimodal model (Olares "nora", Gemma 4 12B vision), which reads rooms,
 elements and the drawing scale directly off the drawing.
 
-It also auto-derives the takeoff calibration (pixels-per-metre) from the scale
-read off the title block, so a freshly analysed plan is pre-calibrated and the
+It also derives the takeoff calibration (pixels-per-metre) from the scale read
+off the title block, so a freshly analysed plan is pre-calibrated and the
 detected rooms can be pre-drawn as measurements.
+
+Coordinate convention — IMPORTANT
+----------------------------------
+Bounding boxes are returned **normalised in [0, 1]** relative to the page
+(origin top-left). The frontend multiplies them by the pdfjs page dimensions
+(``getViewport({scale: 1})``, i.e. PDF points) to obtain measurement points in
+the exact same reference frame it uses when the user draws by hand
+(``x = (clientX - rect.left) / zoom`` → PDF points). This keeps the pre-drawn
+rooms aligned with the drawing regardless of render resolution.
+
+``scale_pixels_per_unit`` is given in **PDF points per metre**
+(``72 / (0.0254 * ratio)``), matching the frontend ``presetScale()`` so it can
+be applied directly as the takeoff calibration.
 
 Kept in oe_neoffice (Neoservice custom) to avoid patching the upstream core.
 """
@@ -35,12 +48,16 @@ logger = logging.getLogger(__name__)
 NORA_VISION_MODEL = "nora"
 
 # Render target: longest side in pixels. 1600px keeps the PNG ~280 KB and the
-# vision round-trip ~5-10s while staying legible for room/scale detection.
+# vision round-trip a few seconds while staying legible for room/scale detection.
 DEFAULT_TARGET_PX = 1600
 
 # Gemma/PaliGemma emit bounding boxes in an integer 0..1000 reference frame
-# (origin top-left). We normalise by this to map back onto the rendered image.
+# (origin top-left). We normalise by this to a [0, 1] page fraction.
 _BBOX_REFERENCE = 1000.0
+
+# 1 inch = 0.0254 m; PDF user space is 72 points per inch.
+_METRES_PER_INCH = 0.0254
+_POINTS_PER_INCH = 72.0
 
 SYSTEM_PROMPT = (
     "Tu es un expert en lecture de plans d'architecture et de metre (takeoff) "
@@ -76,14 +93,14 @@ def render_pdf_page_to_png(
     pdf_bytes: bytes,
     page_index: int = 0,
     target_px: int = DEFAULT_TARGET_PX,
-) -> tuple[bytes, float, int, int]:
+) -> tuple[bytes, int, int, float, float]:
     """Render one PDF page to a PNG sized so its longest side is ``target_px``.
 
-    Returns ``(png_bytes, zoom, width_px, height_px)`` where ``zoom`` is the
-    rendering scale in pixels-per-point (PDF user space is in 1/72 inch points).
-    The zoom is needed to derive the real-world calibration from the drawing
-    scale. Raises ``IndexError`` if the page does not exist, ``ValueError`` if
-    the PDF cannot be opened.
+    Returns ``(png_bytes, width_px, height_px, page_width_pt, page_height_pt)``.
+    The page dimensions are in PDF points (1/72 inch) and are echoed back so the
+    frontend/clients know the reference frame the normalised bboxes map onto.
+    Raises ``IndexError`` if the page does not exist, ``ValueError`` if the PDF
+    cannot be opened.
     """
     try:
         doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
@@ -100,26 +117,21 @@ def render_pdf_page_to_png(
         longest = max(rect.width, rect.height) or 1.0
         zoom = float(target_px) / longest
         pix = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom))
-        return pix.tobytes("png"), zoom, pix.width, pix.height
+        return pix.tobytes("png"), pix.width, pix.height, rect.width, rect.height
 
 
-def derive_scale_pixels_per_unit(zoom: float, scale_ratio: float) -> float:
-    """Derive the takeoff calibration (pixels-per-metre) from the drawing scale.
+def derive_scale_pixels_per_unit(scale_ratio: float) -> float:
+    """Derive the takeoff calibration (PDF points per metre) from a drawing scale.
 
-    A drawing at 1:``scale_ratio`` means 1 unit on paper = ``scale_ratio`` units
-    in reality. PDF user space is in points (1/72 inch). At rendering ``zoom``
-    (px per point)::
-
-        1 px = (1/zoom) pt = (1/zoom) * (0.0254/72) m on paper
-             = (1/zoom) * (0.0254/72) * scale_ratio m in reality
-
-    so pixels-per-metre = ``zoom / ((0.0254/72) * scale_ratio)``.
+    A drawing at 1:``scale_ratio`` means 1 unit on paper equals ``scale_ratio``
+    units in reality. Measurement points are stored in PDF points (1/72 inch),
+    so the calibration is ``72 / (0.0254 * scale_ratio)`` points-per-metre —
+    identical to the frontend ``presetScale()``. Independent of render zoom.
 
     Assumes the PDF is at true paper size (standard for architectural exports).
     The user can still recalibrate manually with the 2-point tool.
     """
-    metres_per_point_real = (0.0254 / 72.0) * scale_ratio
-    return zoom / metres_per_point_real
+    return _POINTS_PER_INCH / (_METRES_PER_INCH * scale_ratio)
 
 
 def _safe_float(value: Any) -> float | None:
@@ -148,11 +160,12 @@ def _coerce_scale_ratio(parsed: dict[str, Any]) -> float | None:
     return None
 
 
-def _bbox_to_pixels(bbox: Any, width_px: int, height_px: int) -> list[float] | None:
-    """Map a model bbox (0..1000 reference) onto the rendered image pixels.
+def _normalize_bbox(bbox: Any) -> list[float] | None:
+    """Normalise a model bbox to a ``[x0, y0, x1, y1]`` page fraction in [0, 1].
 
-    Robust to the model occasionally emitting normalised 0..1 floats: the
-    reference frame is detected from the magnitude of the values.
+    The model emits a 0..1000 integer frame; we divide by 1000. Robust to the
+    model occasionally returning already-normalised 0..1 floats (detected from
+    the magnitude of the values). Coordinates are clamped to [0, 1].
     """
     if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
         return None
@@ -161,13 +174,8 @@ def _bbox_to_pixels(bbox: Any, width_px: int, height_px: int) -> list[float] | N
     except (TypeError, ValueError):
         return None
     ref = 1.0 if max(abs(v) for v in vals) <= 1.0 else _BBOX_REFERENCE
-    x0, y0, x1, y1 = vals
-    return [
-        round(x0 / ref * width_px, 1),
-        round(y0 / ref * height_px, 1),
-        round(x1 / ref * width_px, 1),
-        round(y1 / ref * height_px, 1),
-    ]
+    norm = [min(1.0, max(0.0, v / ref)) for v in vals]
+    return [round(v, 4) for v in norm]
 
 
 async def analyze_plan_vision(
@@ -181,11 +189,11 @@ async def analyze_plan_vision(
     """Run the vision analysis on one PDF page and return a structured result.
 
     Renders the page, sends the image to the multimodal model, parses the JSON,
-    maps bboxes onto image pixels and derives the calibration from the scale.
-    Raises ``RuntimeError`` if the model output cannot be parsed as a JSON
-    object, ``IndexError`` if the page is out of range.
+    normalises bboxes to page fractions and derives the calibration from the
+    scale. Raises ``RuntimeError`` if the output is not a JSON object,
+    ``IndexError`` if the page is out of range.
     """
-    png_bytes, zoom, width_px, height_px = render_pdf_page_to_png(
+    png_bytes, width_px, height_px, page_w_pt, page_h_pt = render_pdf_page_to_png(
         pdf_bytes, page_index=page_index, target_px=target_px
     )
     image_b64 = base64.b64encode(png_bytes).decode("ascii")
@@ -209,7 +217,7 @@ async def analyze_plan_vision(
 
     scale_ratio = scale_override or _coerce_scale_ratio(parsed)
     scale_pixels_per_unit = (
-        derive_scale_pixels_per_unit(zoom, scale_ratio) if scale_ratio else None
+        derive_scale_pixels_per_unit(scale_ratio) if scale_ratio else None
     )
 
     rooms: list[dict[str, Any]] = []
@@ -221,7 +229,7 @@ async def analyze_plan_vision(
                 "name": str(room.get("name") or "").strip() or "Sans nom",
                 "zone": str(room["zone"]).strip() if room.get("zone") else None,
                 "usage": str(room["usage"]).strip() if room.get("usage") else None,
-                "bbox": _bbox_to_pixels(room.get("bbox"), width_px, height_px),
+                "bbox": _normalize_bbox(room.get("bbox")),
                 "approx_area_m2": _safe_float(room.get("approx_area_m2")),
             }
         )
@@ -234,12 +242,12 @@ async def analyze_plan_vision(
             {
                 "type": str(element.get("type") or "other").strip().lower(),
                 "label": str(element["label"]).strip() if element.get("label") else None,
-                "bbox": _bbox_to_pixels(element.get("bbox"), width_px, height_px),
+                "bbox": _normalize_bbox(element.get("bbox")),
             }
         )
 
     logger.info(
-        "Vision plan analysis: rooms=%d elements=%d scale=%s ppm=%s tokens=%d",
+        "Vision plan analysis: rooms=%d elements=%d scale=%s ppu=%s tokens=%d",
         len(rooms), len(elements), scale_ratio, scale_pixels_per_unit, tokens,
     )
 
@@ -248,6 +256,8 @@ async def analyze_plan_vision(
         "scale_label": str(parsed["scale_label"]).strip() if parsed.get("scale_label") else None,
         "scale_ratio": scale_ratio,
         "scale_pixels_per_unit": scale_pixels_per_unit,
+        "page_width_pt": round(page_w_pt, 2),
+        "page_height_pt": round(page_h_pt, 2),
         "image_width": width_px,
         "image_height": height_px,
         "rooms": rooms,
