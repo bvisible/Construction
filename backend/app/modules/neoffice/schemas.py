@@ -93,3 +93,65 @@ class FieldReportFromActivitiesRequest(BaseModel):
     workforce: list[FieldReportWorkforceEntry] = Field(default_factory=list)
     equipment_on_site: list[str] = Field(default_factory=list)
     materials_used: list[str] = Field(default_factory=list)
+
+
+# ── Takeoff plan vision analysis ──────────────────────────────────────────────
+
+
+class PlanVisionRequest(BaseModel):
+    """Body for POST /api/v1/neoffice/takeoff/analyze-vision/.
+
+    Runs a multimodal (vision) analysis of one page of an uploaded takeoff PDF:
+    the page is rendered to an image and read by the vision model, which returns
+    the rooms, elements and the drawing scale.
+    """
+
+    document_id: str = Field(..., description="Takeoff document UUID")
+    page: int = Field(default=1, ge=1, description="1-based page number to analyse")
+    scale_override: float | None = Field(
+        default=None,
+        gt=0,
+        description=(
+            "Optional manual scale ratio (e.g. 50 for 1:50) that overrides the "
+            "scale read off the plan when deriving the pixel-per-metre calibration."
+        ),
+    )
+
+
+class PlanVisionRoom(BaseModel):
+    """One room detected on the plan, with an approximate pixel bounding box."""
+
+    name: str
+    zone: str | None = None
+    usage: str | None = None
+    bbox: list[float] | None = None  # [x0, y0, x1, y1] in rendered-image pixels
+    approx_area_m2: float | None = None
+
+
+class PlanVisionElement(BaseModel):
+    """A notable element detected on the plan (door, window, wall, other)."""
+
+    type: str
+    label: str | None = None
+    bbox: list[float] | None = None  # [x0, y0, x1, y1] in rendered-image pixels
+
+
+class PlanVisionResponse(BaseModel):
+    """Structured result of the vision analysis of a plan page.
+
+    ``scale_pixels_per_unit`` is the takeoff calibration (px per metre) derived
+    from the scale read off the plan; the frontend can use it to pre-calibrate
+    the measurement layer and pre-draw the detected rooms.
+    """
+
+    document_id: str
+    page: int
+    plan_type: str | None = None
+    scale_label: str | None = None
+    scale_ratio: float | None = None
+    scale_pixels_per_unit: float | None = None
+    image_width: int
+    image_height: int
+    rooms: list[PlanVisionRoom] = Field(default_factory=list)
+    elements: list[PlanVisionElement] = Field(default_factory=list)
+    tokens_used: int = 0

@@ -15,19 +15,23 @@ import hmac
 import logging
 import os
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 
-from app.dependencies import SessionDep, get_current_user_id
+from app.dependencies import SessionDep, SettingsDep, get_current_user_id
 from app.modules.bim_hub import file_storage as bim_file_storage
 from app.modules.bim_hub.router import _verify_project_access
 from app.modules.bim_hub.schemas import BIMModelCreate, BIMModelResponse
 from app.modules.bim_hub.service import BIMHubService
+from app.modules.neoffice.plan_vision import analyze_plan_vision
 from app.modules.neoffice.roomplan_glb_builder import build_glb_bytes
 from app.modules.neoffice.roomplan_importer import parse_roomplan_scan
 from app.modules.neoffice.schemas import (
     FieldReportFromActivitiesRequest,
+    PlanVisionRequest,
+    PlanVisionResponse,
     RoomPlanImportRequest,
     ScheduleProgressBridgeRequest,
 )
@@ -261,3 +265,63 @@ async def upsert_fieldreport_from_activities(
     await session.commit()
     logger.info("Activity bridge FieldReport created: %s", report.id)
     return {"success": True, "created": True, "report_id": str(report.id)}
+
+
+@router.post("/takeoff/analyze-vision/", response_model=PlanVisionResponse)
+async def analyze_takeoff_plan_vision(
+    request: PlanVisionRequest,
+    session: SessionDep,
+    settings: SettingsDep,
+    user_id: str = Depends(get_current_user_id),
+) -> PlanVisionResponse:
+    """Analyse one page of a takeoff plan PDF with the multimodal model (vision).
+
+    Unlike the text-only core takeoff analysis, this renders the page to an
+    image and asks the vision model to read the rooms, elements and the drawing
+    scale, then derives the pixel-per-metre calibration so the plan is
+    pre-calibrated and the detected rooms can be pre-drawn as measurements.
+    """
+    # Lazy import to avoid coupling the module load order to oe_takeoff.
+    from app.modules.takeoff.service import TakeoffService
+
+    takeoff = TakeoffService(session)
+    doc = await takeoff.get_document(request.document_id)
+    if doc is None or not doc.file_path:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Takeoff document not found",
+        )
+
+    # Authorise via the document's project when one is set.
+    if doc.project_id is not None:
+        await _verify_project_access(session, doc.project_id, user_id)
+
+    pdf_path = Path(doc.file_path)
+    if not pdf_path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Stored PDF file not found on server",
+        )
+    pdf_bytes = pdf_path.read_bytes()
+
+    try:
+        result = await analyze_plan_vision(
+            pdf_bytes,
+            page_index=request.page - 1,
+            settings=settings,
+            scale_override=request.scale_override,
+        )
+    except IndexError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    except Exception as exc:  # LLM/parse failure — surface as upstream error
+        logger.exception(
+            "Vision plan analysis failed for doc %s", request.document_id
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Vision analysis failed",
+        ) from exc
+
+    return PlanVisionResponse(
+        document_id=request.document_id, page=request.page, **result
+    )
