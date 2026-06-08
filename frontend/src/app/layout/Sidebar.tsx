@@ -200,9 +200,9 @@ const navGroups: NavGroup[] = [
     defaultOpen: false,
     items: [
       { labelKey: 'boq.title', to: '/boq', icon: Table2, tourId: 'boq' },
-      { labelKey: 'nav.match_elements', to: '/match-elements', icon: Link2, badge: 'BETA' },
-      { labelKey: 'nav.ai_estimator', to: '/ai-estimator', icon: Wand2, badge: 'NEW' },
+      { labelKey: 'nav.ai_estimator', to: '/ai-estimator', icon: Wand2, badge: 'BETA' },
       { labelKey: 'nav.ai_estimate', to: '/ai-estimate', icon: Sparkles, badge: 'BETA' },
+      { labelKey: 'nav.match_elements', to: '/match-elements', icon: Link2, badge: 'BETA' },
       { labelKey: 'nav.estimation_dashboard', to: '/project-intelligence', icon: BrainCircuit, badge: 'BETA' },
     ],
   },
@@ -235,7 +235,7 @@ const navGroups: NavGroup[] = [
       { labelKey: 'nav.dwg_takeoff', to: '/dwg-takeoff', icon: PencilRuler },
       { labelKey: 'nav.bim_viewer', to: '/bim', icon: Box },
       { labelKey: 'nav.cad_bim_explorer', to: '/data-explorer', icon: TableProperties, advancedOnly: true },
-      { labelKey: 'sidebar.geo_hub', to: '/geo', icon: Globe, badge: 'NEW' },
+      { labelKey: 'sidebar.geo_hub', to: '/geo', icon: Globe },
     ],
   },
   // ── 5. MODEL COORDINATION ──────────────────────────────────────────
@@ -248,8 +248,8 @@ const navGroups: NavGroup[] = [
     defaultOpen: false,
     hideInSimple: true,
     items: [
-      { labelKey: 'nav.coordination_hub', to: '/coordination', icon: LayoutDashboard, badge: 'NEW' },
-      { labelKey: 'nav.bim_federations', to: '/bim/federations', icon: Layers, badge: 'NEW' },
+      { labelKey: 'nav.coordination_hub', to: '/coordination', icon: LayoutDashboard, badge: 'BETA' },
+      { labelKey: 'nav.bim_federations', to: '/bim/federations', icon: Layers, badge: 'BETA' },
       { labelKey: 'nav.clash_detection', to: '/clash', icon: Radar, badge: 'BETA' },
       { labelKey: 'nav.bim_rules', to: '/bim/rules?mode=requirements', icon: SlidersHorizontal, badge: 'BETA' },
       { labelKey: 'nav.eir_matrix', to: '/requirements/matrix', icon: FileCheck, advancedOnly: true },
@@ -438,7 +438,7 @@ const navGroups: NavGroup[] = [
     ],
   },
   // ── 17. FINANCE ────────────────────────────────────────────────────
-  // Money roll-up: finance, reports, reporting dashboards, snapshots.
+  // Money roll-up: finance, reports, reporting dashboards.
   {
     id: 'grp_finance',
     labelKey: 'sidebar.group.finance',
@@ -450,11 +450,11 @@ const navGroups: NavGroup[] = [
       { labelKey: 'nav.analytics', to: '/analytics', icon: LineChart, advancedOnly: true },
       { labelKey: 'nav.reports', to: '/reports', icon: FileBarChart, advancedOnly: true },
       { labelKey: 'nav.reporting_dashboards', to: '/reporting', icon: BarChart3, advancedOnly: true },
-      { labelKey: 'nav.snapshots', to: '/dashboards', icon: TrendingUp, advancedOnly: true },
     ],
   },
   // ── 18. CONTROLS & BI ──────────────────────────────────────────────
-  // Project controls, BI dashboards, and the admin-only architecture map.
+  // Project controls, BI dashboards, the model snapshots (parquet/CAD-BIM
+  // baseline) tool, and the admin-only architecture map.
   {
     id: 'grp_controls_bi',
     labelKey: 'sidebar.group.controls_bi',
@@ -464,6 +464,7 @@ const navGroups: NavGroup[] = [
     items: [
       { labelKey: 'nav.project_controls', to: '/project-controls', icon: Gauge, advancedOnly: true },
       { labelKey: 'nav.bi_dashboards', to: '/bi-dashboards', icon: BarChart3, advancedOnly: true },
+      { labelKey: 'nav.snapshots', to: '/dashboards', icon: TrendingUp, advancedOnly: true },
       // Architecture Map — internal/dev tool, admin-only so a regular
       // customer's sidebar isn't cluttered with the dependency graph.
       // The route itself is also wrapped in <AdminOnly> in App.tsx.
@@ -481,7 +482,7 @@ const navGroups: NavGroup[] = [
     defaultOpen: false,
     hideInSimple: true,
     items: [
-      { labelKey: 'nav.ai_agents', to: '/ai-agents', icon: Bot, badge: 'NEW' },
+      { labelKey: 'nav.ai_agents', to: '/ai-agents', icon: Bot, badge: 'BETA' },
       { labelKey: 'nav.ai_advisor', to: '/advisor', icon: MessageSquare },
       { labelKey: 'nav.erp_chat', to: '/chat', icon: MessageSquare, badge: 'BETA' },
       { labelKey: 'nav.pipelines', to: '/pipelines', icon: GitBranch, moduleKey: 'pipelines', advancedOnly: true },

@@ -1,6 +1,6 @@
-import React, { useState, useMemo, useCallback, useEffect } from 'react';
+import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import {
@@ -33,6 +33,7 @@ import {
   WideModalSection,
   WideModalField,
   SkeletonTable,
+  IntroRichText,
 } from '@/shared/ui';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { RequiresProject } from '@/shared/auth/RequiresProject';
@@ -149,6 +150,91 @@ const textareaCls =
 
 type ViewMode = 'list' | 'kanban';
 
+/* ── Source provenance badge ──────────────────────────────────────────── */
+
+/**
+ * Resolve the deep-link target for a punch item raised automatically from
+ * another module. Reads the source ids the backend stamps into `metadata_`:
+ *   - clash: `run_id` (-> the clash run that produced it) / `result_id`
+ *   - inspection: `inspection_id` (-> the originating inspection, highlighted)
+ *   - ncr: `ncr_id` when present (-> the NCR, highlighted), else the register
+ * Returns null for an unknown / source-less item so the caller renders nothing.
+ */
+function resolvePunchSourceLink(item: PunchItem): { source: string; to: string } | null {
+  const md = item.metadata ?? {};
+  const source = typeof md.source === 'string' ? md.source : '';
+  if (source === 'clash') {
+    const runId = typeof md.run_id === 'string' ? md.run_id : '';
+    return { source, to: runId ? `/clash?run=${runId}` : '/clash' };
+  }
+  if (source === 'inspection') {
+    const inspectionId = typeof md.inspection_id === 'string' ? md.inspection_id : '';
+    return {
+      source,
+      to: inspectionId
+        ? `/projects/${item.project_id}/inspections?highlight=${inspectionId}`
+        : '/inspections',
+    };
+  }
+  if (source === 'ncr') {
+    // Backend does not yet stamp an ncr id onto punch metadata; fall back to
+    // the register and highlight the NCR when an id is available.
+    const ncrId =
+      typeof md.ncr_id === 'string'
+        ? md.ncr_id
+        : typeof md.source_ncr_id === 'string'
+        ? md.source_ncr_id
+        : '';
+    return { source, to: ncrId ? `/ncr?highlight=${ncrId}` : '/ncr' };
+  }
+  return null;
+}
+
+function PunchSourceBadge({
+  item,
+  className,
+}: {
+  item: PunchItem;
+  className?: string;
+}) {
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+  const link = resolvePunchSourceLink(item);
+  if (!link) return null;
+
+  const config: Record<string, { variant: 'error' | 'blue' | 'warning'; label: string }> = {
+    clash: { variant: 'error', label: t('punch.source_clash', { defaultValue: 'From clash' }) },
+    inspection: {
+      variant: 'blue',
+      label: t('punch.source_inspection', { defaultValue: 'From Inspection' }),
+    },
+    ncr: { variant: 'warning', label: t('punch.source_ncr', { defaultValue: 'From NCR' }) },
+  };
+  const cfg = config[link.source];
+  if (!cfg) return null;
+
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        navigate(link.to);
+      }}
+      className={clsx(
+        'rounded-md transition-opacity hover:opacity-80 focus:outline-none focus-visible:ring-2 focus-visible:ring-oe-blue/40',
+        className,
+      )}
+      title={t('punch.source_open_hint', {
+        defaultValue: 'Open the record this item was raised from',
+      })}
+    >
+      <Badge variant={cfg.variant} size="sm">
+        {cfg.label}
+      </Badge>
+    </button>
+  );
+}
+
 /* ── Stats Cards ──────────────────────────────────────────────────────── */
 
 function StatsCards({ summary }: { summary: PunchSummary | undefined }) {
@@ -220,6 +306,11 @@ interface PunchFormData {
   due_date: string;
   document_id: string;
   location: string;
+  /** Sheet page the pin sits on (1-based). Empty string when no pin. */
+  page: string;
+  /** Normalised pin coordinates on the sheet (0..1), as entered text. */
+  location_x: string;
+  location_y: string;
 }
 
 const EMPTY_FORM: PunchFormData = {
@@ -231,7 +322,31 @@ const EMPTY_FORM: PunchFormData = {
   due_date: '',
   document_id: '',
   location: '',
+  page: '',
+  location_x: '',
+  location_y: '',
 };
+
+/** Minimal drawing/document option for the punch-pin picker. */
+interface PunchDrawingOption {
+  id: string;
+  filename: string;
+}
+
+/**
+ * Build the markups deep-link that reopens the drawing a punch pin sits on.
+ * Mirrors the file-manager consumer in MarkupsPage (`?openDoc=<id>&page=<n>`).
+ * Returns null when there is no document to open.
+ */
+function punchDrawingLink(item: {
+  document_id: string | null;
+  page: number | null;
+}): string | null {
+  if (!item.document_id) return null;
+  const params = new URLSearchParams({ openDoc: item.document_id });
+  if (item.page != null) params.set('page', String(item.page));
+  return `/markups?${params.toString()}`;
+}
 
 const PRIORITY_RADIO_COLORS: Record<PunchPriority, string> = {
   low: 'bg-gray-100 text-gray-700 border-gray-300 peer-checked:bg-gray-200 peer-checked:border-gray-500 dark:bg-gray-800 dark:text-gray-300 dark:border-gray-600',
@@ -245,11 +360,13 @@ function AddPunchModal({
   onSubmit,
   isPending,
   teamMembers,
+  drawings,
 }: {
   onClose: () => void;
   onSubmit: (data: PunchFormData) => void;
   isPending: boolean;
   teamMembers: TeamMember[];
+  drawings: PunchDrawingOption[];
 }) {
   const { t } = useTranslation();
   const [form, setForm] = useState<PunchFormData>(EMPTY_FORM);
@@ -259,7 +376,15 @@ function AddPunchModal({
     setForm((prev) => ({ ...prev, [key]: value }));
 
   const titleError = touched && form.title.trim().length === 0;
-  const canSubmit = form.title.trim().length > 0;
+  // A normalised pin coordinate must sit in the 0..1 range the backend accepts.
+  const coordError = (v: string) => {
+    if (!v.trim()) return false;
+    const n = Number(v);
+    return !Number.isFinite(n) || n < 0 || n > 1;
+  };
+  const xError = touched && coordError(form.location_x);
+  const yError = touched && coordError(form.location_y);
+  const canSubmit = form.title.trim().length > 0 && !coordError(form.location_x) && !coordError(form.location_y);
 
   const handleSubmit = () => {
     setTouched(true);
@@ -429,6 +554,87 @@ function AddPunchModal({
             className={inputCls}
           />
         </WideModalField>
+
+        {/* ── Pin on drawing ──────────────────────────────────────────────
+            Tie the snag to a sheet and an optional normalised pin so it can
+            be reopened on the drawing. The document picker reuses the project
+            documents list (no raw UUID input). */}
+        <WideModalField
+          label={t('punch.field_drawing', { defaultValue: 'Pin on drawing (optional)' })}
+          htmlFor="punch-drawing"
+          span={2}
+        >
+          <select
+            id="punch-drawing"
+            value={form.document_id}
+            onChange={(e) => set('document_id', e.target.value)}
+            className={inputCls}
+          >
+            <option value="">
+              {t('punch.no_drawing', { defaultValue: 'No drawing' })}
+            </option>
+            {drawings.map((d) => (
+              <option key={d.id} value={d.id}>
+                {d.filename || d.id.slice(0, 8)}
+              </option>
+            ))}
+          </select>
+        </WideModalField>
+
+        {form.document_id && (
+          <>
+            <WideModalField
+              label={t('punch.field_page', { defaultValue: 'Sheet page' })}
+              htmlFor="punch-page"
+            >
+              <input
+                id="punch-page"
+                type="number"
+                min={1}
+                step={1}
+                value={form.page}
+                onChange={(e) => set('page', e.target.value)}
+                placeholder="1"
+                className={inputCls}
+              />
+            </WideModalField>
+            <WideModalField
+              label={t('punch.field_pin', { defaultValue: 'Pin X / Y (0-1)' })}
+              error={
+                xError || yError
+                  ? t('punch.pin_range_error', {
+                      defaultValue: 'Coordinates must be between 0 and 1',
+                    })
+                  : undefined
+              }
+            >
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  min={0}
+                  max={1}
+                  step="0.001"
+                  value={form.location_x}
+                  onChange={(e) => set('location_x', e.target.value)}
+                  placeholder="0.50"
+                  aria-label={t('punch.field_pin_x', { defaultValue: 'Pin X (0-1)' })}
+                  className={clsx(inputCls, xError && 'border-semantic-error focus:ring-red-300 focus:border-semantic-error')}
+                />
+                <input
+                  type="number"
+                  min={0}
+                  max={1}
+                  step="0.001"
+                  value={form.location_y}
+                  onChange={(e) => set('location_y', e.target.value)}
+                  placeholder="0.50"
+                  aria-label={t('punch.field_pin_y', { defaultValue: 'Pin Y (0-1)' })}
+                  className={clsx(inputCls, yError && 'border-semantic-error focus:ring-red-300 focus:border-semantic-error')}
+                />
+              </div>
+            </WideModalField>
+          </>
+        )}
       </WideModalSection>
     </WideModal>
   );
@@ -477,26 +683,11 @@ const PunchKanbanCard = React.memo(function PunchKanbanCard({
         </p>
       )}
 
-      {/* Source badge */}
-      {item.metadata?.source === 'clash' && (
+      {/* Source provenance — a button that deep-links back to the clash,
+          inspection or NCR this item was raised from. */}
+      {resolvePunchSourceLink(item) && (
         <div className="mt-1">
-          <Badge variant="error" size="sm">
-            {t('punch.source_clash', { defaultValue: 'From clash' })}
-          </Badge>
-        </div>
-      )}
-      {item.metadata?.source === 'inspection' && (
-        <div className="mt-1">
-          <Badge variant="blue" size="sm">
-            {t('punch.source_inspection', { defaultValue: 'From Inspection' })}
-          </Badge>
-        </div>
-      )}
-      {item.metadata?.source === 'ncr' && (
-        <div className="mt-1">
-          <Badge variant="warning" size="sm">
-            {t('punch.source_ncr', { defaultValue: 'From NCR' })}
-          </Badge>
+          <PunchSourceBadge item={item} />
         </div>
       )}
 
@@ -655,10 +846,15 @@ function KanbanView({
 export function PunchListPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const qc = useQueryClient();
   const addToast = useToastStore((s) => s.addToast);
   const { confirm, ...confirmProps } = useConfirm();
   const activeProjectId = useProjectContextStore((s) => s.activeProjectId);
+
+  // Deep-link target (e.g. from an inspection's "Open punch item" toast). The
+  // matching row scrolls into view and flashes once the data has loaded.
+  const highlightId = searchParams.get('highlight');
 
   // State
   const [viewMode, setViewMode] = useState<ViewMode>('list');
@@ -709,6 +905,22 @@ export function PunchListPage() {
     enabled: !!projectId,
   });
 
+  // Project documents, used to pin a punch item to a drawing sheet (CONN-57).
+  const { data: drawings = [] } = useQuery({
+    queryKey: ['punchlist-drawings', projectId],
+    queryFn: async (): Promise<PunchDrawingOption[]> => {
+      const rows = await apiGet<{ id: string; filename?: string; name?: string }[]>(
+        `/v1/documents/?project_id=${projectId}`,
+      );
+      return (Array.isArray(rows) ? rows : []).map((r) => ({
+        id: r.id,
+        filename: r.filename ?? r.name ?? '',
+      }));
+    },
+    enabled: !!projectId && showAddModal,
+    staleTime: 60_000,
+  });
+
   // Client-side search
   const filteredItems = useMemo(() => {
     if (!searchQuery.trim()) return punchItems;
@@ -725,6 +937,31 @@ export function PunchListPage() {
   useEffect(() => {
     setSelectedIds(new Set());
   }, [projectId]);
+
+  // A deep-link highlight only renders in the list view (the table row carries
+  // the flash); switch to it so the targeted item is actually visible.
+  useEffect(() => {
+    if (highlightId) setViewMode('list');
+  }, [highlightId]);
+
+  // Once the highlighted item is present, let the row flash then drop the
+  // ?highlight param (replace, preserving other params) so a refresh or
+  // back-navigation does not re-trigger the highlight.
+  useEffect(() => {
+    if (!highlightId) return;
+    if (!punchItems.some((it) => it.id === highlightId)) return;
+    const timer = window.setTimeout(() => {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          next.delete('highlight');
+          return next;
+        },
+        { replace: true },
+      );
+    }, 2600);
+    return () => window.clearTimeout(timer);
+  }, [highlightId, punchItems, setSearchParams]);
 
   // Invalidation
   const invalidateAll = useCallback(() => {
@@ -852,6 +1089,9 @@ export function PunchListPage() {
   // Handlers
   const handleCreateSubmit = useCallback(
     (formData: PunchFormData) => {
+      const pageNum = formData.page.trim() ? Number(formData.page) : undefined;
+      const xNum = formData.location_x.trim() ? Number(formData.location_x) : undefined;
+      const yNum = formData.location_y.trim() ? Number(formData.location_y) : undefined;
       createMut.mutate({
         project_id: projectId,
         title: formData.title,
@@ -861,6 +1101,12 @@ export function PunchListPage() {
         assigned_to: formData.assigned_to || undefined,
         due_date: formData.due_date || undefined,
         document_id: formData.document_id || undefined,
+        // Pin is only meaningful when tied to a drawing.
+        page: formData.document_id && pageNum != null && Number.isFinite(pageNum) ? pageNum : undefined,
+        location_x:
+          formData.document_id && xNum != null && Number.isFinite(xNum) ? xNum : undefined,
+        location_y:
+          formData.document_id && yNum != null && Number.isFinite(yNum) ? yNum : undefined,
       });
     },
     [createMut, projectId],
@@ -946,6 +1192,14 @@ export function PunchListPage() {
         title={t('punch.intro_title', {
           defaultValue: 'Nothing slips through at handover',
         })}
+        more={
+          <IntroRichText
+            text={t('punch.intro_more', {
+              defaultValue:
+                'Near the end of a job the small stuff piles up: a scuffed door, a missing fire seal, a tile that is not bedded right, a socket that does not work. These are not formal non-conformances, they are snags that just need someone to go and fix them and someone else to confirm they are done. The Punch List is the running register of that outstanding work, so handover is not held up by a hundred half-remembered items on a clipboard.\n\n**You put in:**\n- Punch items with a title, description and a photo or two of the problem\n- A priority (low to critical), a category (structural, MEP, finishing and so on) and a location\n- An assignee and a due date so each item has an owner and a deadline\n- Items raised automatically from a failed inspection, an NCR or a model clash, tagged with their source\n\n**You get out:**\n- A KPI strip showing total, open, in-progress, resolved, overdue and average days to close\n- A Kanban board to manage flow and a list view for bulk triage and close-out\n- A clear status lifecycle for every item, with overdue items flagged in red\n- Bulk close, per-item photos and a map view to see snags by location on site\n\n**How it works day to day:**\n1. Capture the snag during a walkthrough, set its priority and location, and assign it.\n2. The owner moves it Open to In Progress to Resolved as they work it.\n3. A checker verifies the fix and moves it Resolved to Verified to Closed.\n4. If the fix does not hold up on a re-check, reopen it straight back to Open from Resolved, Verified or Closed.\n5. Use the list view to multi-select and bulk close a batch once a zone is signed off.\n\nThe status flow is enforced by the backend, so only legal moves are offered, and reopen always goes back to Open rather than an invalid intermediate state. Items that came from a failed Inspection or an NCR keep a source badge so you can trace them to their origin, which keeps the inspect, defect and close-out loop honest right through to handover.',
+            })}
+          />
+        }
         links={[
           {
             label: t('punch.intro_link_inspections', { defaultValue: 'Inspections' }),
@@ -1255,6 +1509,7 @@ export function PunchListPage() {
                       onDelete={handleDelete}
                       selected={selectedIds.has(item.id)}
                       onToggleSelect={toggleSelect}
+                      highlight={highlightId === item.id}
                     />
                   ))}
                 </tbody>
@@ -1271,6 +1526,7 @@ export function PunchListPage() {
           onSubmit={handleCreateSubmit}
           isPending={createMut.isPending}
           teamMembers={teamMembers}
+          drawings={drawings}
         />
       )}
 
@@ -1299,15 +1555,31 @@ const PunchTableRow = React.memo(function PunchTableRow({
   onDelete,
   selected,
   onToggleSelect,
+  highlight,
 }: {
   item: PunchItem;
   onTransition: (id: string, status: PunchStatus) => void;
   onDelete: (id: string) => void;
   selected: boolean;
   onToggleSelect: (id: string) => void;
+  /** When set (from a ?highlight deep-link) the row scrolls into view and
+   *  flashes a highlight ring. */
+  highlight?: boolean;
 }) {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const transitions = STATUS_TRANSITION[item.status] ?? [];
+  const rowRef = useRef<HTMLTableRowElement>(null);
+  const [flash, setFlash] = useState(false);
+  const drawingLink = punchDrawingLink(item);
+
+  useEffect(() => {
+    if (!highlight) return;
+    setFlash(true);
+    rowRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const timer = window.setTimeout(() => setFlash(false), 2400);
+    return () => window.clearTimeout(timer);
+  }, [highlight]);
 
   const isOverdue =
     item.due_date &&
@@ -1329,14 +1601,20 @@ const PunchTableRow = React.memo(function PunchTableRow({
   }, [item.due_date]);
 
   return (
-    <tr className={clsx(
-      'transition-colors',
-      selected
-        ? 'bg-oe-blue/5 hover:bg-oe-blue/10'
-        : isOverdue
-        ? 'bg-red-50/40 hover:bg-red-50/70 dark:bg-red-950/10 dark:hover:bg-red-950/20'
-        : 'hover:bg-surface-secondary/50',
-    )}>
+    <tr
+      ref={rowRef}
+      className={clsx(
+        'transition-colors scroll-mt-24',
+        flash && 'ring-2 ring-inset ring-oe-blue/50',
+        flash
+          ? 'bg-oe-blue/10'
+          : selected
+          ? 'bg-oe-blue/5 hover:bg-oe-blue/10'
+          : isOverdue
+          ? 'bg-red-50/40 hover:bg-red-50/70 dark:bg-red-950/10 dark:hover:bg-red-950/20'
+          : 'hover:bg-surface-secondary/50',
+      )}
+    >
       <td className="px-3 py-3 w-8">
         <input
           type="checkbox"
@@ -1360,21 +1638,24 @@ const PunchTableRow = React.memo(function PunchTableRow({
             {`(${item.location_x ?? '-'}, ${item.location_y ?? '-'})`}
           </p>
         )}
-        {item.metadata?.source === 'clash' && (
-          <Badge variant="error" size="sm" className="mt-0.5">
-            {t('punch.source_clash', { defaultValue: 'From clash' })}
-          </Badge>
+        {/* Reopen the pinned drawing in the markups viewer (CONN-57). */}
+        {drawingLink && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              navigate(drawingLink);
+            }}
+            className="mt-0.5 inline-flex items-center gap-1 rounded-md text-xs text-oe-blue hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-oe-blue/40"
+            title={t('punch.open_drawing_hint', {
+              defaultValue: 'Open the drawing this item is pinned to',
+            })}
+          >
+            <MapPin size={11} className="shrink-0" />
+            {t('punch.open_drawing', { defaultValue: 'Open drawing' })}
+          </button>
         )}
-        {item.metadata?.source === 'inspection' && (
-          <Badge variant="blue" size="sm" className="mt-0.5">
-            {t('punch.source_inspection', { defaultValue: 'From Inspection' })}
-          </Badge>
-        )}
-        {item.metadata?.source === 'ncr' && (
-          <Badge variant="warning" size="sm" className="mt-0.5">
-            {t('punch.source_ncr', { defaultValue: 'From NCR' })}
-          </Badge>
-        )}
+        <PunchSourceBadge item={item} className="mt-0.5 inline-block" />
       </td>
       <td className="px-4 py-3">
         <Badge variant={PRIORITY_BADGE_VARIANT[item.priority]} size="sm" className={PRIORITY_BADGE_CLS[item.priority]}>

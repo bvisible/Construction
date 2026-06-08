@@ -1,7 +1,7 @@
-import React, { useState, useMemo, useCallback, useEffect } from 'react';
+import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import clsx from 'clsx';
 import {
   ClipboardCheck,
@@ -31,7 +31,7 @@ import {
   ListChecks,
   MinusCircle,
 } from 'lucide-react';
-import { Button, Card, Badge, EmptyState, Breadcrumb, ConfirmDialog, RecoveryCard, SkeletonTable } from '@/shared/ui';
+import { Button, Card, Badge, EmptyState, Breadcrumb, ConfirmDialog, RecoveryCard, SkeletonTable, IntroRichText } from '@/shared/ui';
 import { RequiresProject } from '@/shared/auth/RequiresProject';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { SectionIntro } from '@/features/validation';
@@ -703,6 +703,7 @@ const InspectionRow = React.memo(function InspectionRow({
   onCreateNcr,
   onEdit,
   onDelete,
+  highlight,
 }: {
   inspection: Inspection;
   onComplete: (id: string) => void;
@@ -711,9 +712,29 @@ const InspectionRow = React.memo(function InspectionRow({
   onCreateNcr: (id: string) => void;
   onEdit: (inspection: Inspection) => void;
   onDelete: (id: string) => void;
+  /** When this matches the row id (from a ?highlight deep-link) the row
+   *  auto-expands, scrolls into view and flashes a highlight ring. */
+  highlight?: boolean;
 }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
+  const rowRef = useRef<HTMLDivElement>(null);
+  // Temporary visual flash that fades out after the deep-link lands the user
+  // on the right inspection. Cleared once it has fired so re-renders are calm.
+  const [flash, setFlash] = useState(false);
+
+  useEffect(() => {
+    if (!highlight) return;
+    setExpanded(true);
+    setFlash(true);
+    const node = rowRef.current;
+    if (node) {
+      node.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+    const timer = window.setTimeout(() => setFlash(false), 2400);
+    return () => window.clearTimeout(timer);
+  }, [highlight]);
+
   const statusCfg = STATUS_CONFIG[inspection.status] ?? STATUS_CONFIG.scheduled;
   const typeCfg = INSPECTION_TYPE_COLORS[inspection.inspection_type] ?? 'neutral';
   const resultCfg = inspection.result ? RESULT_CONFIG[inspection.result] : null;
@@ -724,7 +745,13 @@ const InspectionRow = React.memo(function InspectionRow({
     inspection.status === 'completed' || inspection.status === 'failed';
 
   return (
-    <div className="border-b border-border-light last:border-b-0">
+    <div
+      ref={rowRef}
+      className={clsx(
+        'border-b border-border-light last:border-b-0 scroll-mt-24 transition-colors duration-500',
+        flash && 'bg-oe-blue/10 ring-2 ring-inset ring-oe-blue/40',
+      )}
+    >
       {/* Main row */}
       <div
         role="button"
@@ -996,9 +1023,14 @@ export function InspectionsPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { projectId: routeProjectId } = useParams<{ projectId: string }>();
+  const [searchParams, setSearchParams] = useSearchParams();
   const qc = useQueryClient();
   const addToast = useToastStore((s) => s.addToast);
   const activeProjectId = useProjectContextStore((s) => s.activeProjectId);
+
+  // Deep-link target (e.g. from an NCR's "View Inspection"). The matching row
+  // auto-expands, scrolls into view and flashes once the data has loaded.
+  const highlightId = searchParams.get('highlight');
 
   // State
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -1239,11 +1271,22 @@ export function InspectionsPage() {
         {},
       ),
     onSuccess: (data) => {
-      addToast({
-        type: 'success',
-        title: t('inspections.defect_created', { defaultValue: 'Punchlist item created' }),
-        message: data.title,
-      });
+      addToast(
+        {
+          type: 'success',
+          title: t('inspections.defect_created', { defaultValue: 'Punchlist item created' }),
+          message: data.title,
+          // Deep-link straight to the new punch item so the user opens it
+          // rather than hunting the register.
+          action: data.punch_item_id
+            ? {
+                label: t('inspections.open_punch_item', { defaultValue: 'Open punch item' }),
+                onClick: () => navigate(`/punchlist?highlight=${data.punch_item_id}`),
+              }
+            : undefined,
+        },
+        { duration: 8000 },
+      );
     },
     onError: (e: Error) =>
       addToast({
@@ -1265,17 +1308,23 @@ export function InspectionsPage() {
   const createNcrMut = useMutation({
     mutationFn: (inspectionId: string) => createNcrFromInspection(inspectionId),
     onSuccess: (data) => {
-      addToast({
-        type: 'success',
-        title: data.created
-          ? t('inspections.ncr_created', { defaultValue: 'NCR raised' })
-          : t('inspections.ncr_exists', { defaultValue: 'NCR already exists for this inspection' }),
-        message: data.ncr_number,
-        action: {
-          label: t('inspections.view_ncr', { defaultValue: 'Open NCRs' }),
-          onClick: () => navigate('/ncr'),
+      addToast(
+        {
+          type: 'success',
+          title: data.created
+            ? t('inspections.ncr_created', { defaultValue: 'NCR raised' })
+            : t('inspections.ncr_exists', { defaultValue: 'NCR already exists for this inspection' }),
+          message: data.ncr_number,
+          // Deep-link to the exact created NCR (highlight the row) rather than
+          // the whole register.
+          action: {
+            label: t('inspections.view_ncr', { defaultValue: 'Open NCR' }),
+            onClick: () =>
+              navigate(data.ncr_id ? `/ncr?highlight=${data.ncr_id}` : '/ncr'),
+          },
         },
-      });
+        { duration: 8000 },
+      );
     },
     onError: (e: Error) =>
       addToast({
@@ -1316,6 +1365,26 @@ export function InspectionsPage() {
   const completingInspection = completingId
     ? inspections.find((i) => i.id === completingId) ?? null
     : null;
+
+  // Once the highlighted inspection is present in the loaded set, let the row
+  // flash, then clear the ?highlight param so a refresh or back-navigation does
+  // not re-trigger the highlight. Replace (no history entry) and preserve any
+  // other query params.
+  useEffect(() => {
+    if (!highlightId) return;
+    if (!inspections.some((i) => i.id === highlightId)) return;
+    const timer = window.setTimeout(() => {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          next.delete('highlight');
+          return next;
+        },
+        { replace: true },
+      );
+    }, 2600);
+    return () => window.clearTimeout(timer);
+  }, [highlightId, inspections, setSearchParams]);
 
   return (
     <div className="space-y-5 animate-fade-in">
@@ -1370,6 +1439,14 @@ export function InspectionsPage() {
         title={t('inspections.intro_title', {
           defaultValue: 'Close the inspect-to-fix loop',
         })}
+        more={
+          <IntroRichText
+            text={t('inspections.intro_more', {
+              defaultValue:
+                'Quality on site is won or lost at the inspection. A pour is checked before the concrete goes in, a fire-stopping run is verified before it is boarded over, a unit is walked at handover. The problem is what happens after a fail: the note gets lost, the defect is never tracked, and the same issue turns up at the final account. This page makes the inspection the start of a loop, not a dead end, so every fail becomes a tracked defect that someone has to close.\n\n**You put in:**\n- A scheduled inspection with a type (structural, electrical, plumbing, fire safety, concrete, waterproofing, MEP, handover and more)\n- A planned date, an inspector and a location\n- A checklist of items to verify on site, with critical items flagged as hold points\n- The outcome when the work is checked: pass, partial or fail\n\n**You get out:**\n- An inspection register with status from scheduled through in-progress to completed, plus a clear pass/fail/partial result\n- Counts of total, scheduled, passed and failed inspections at the top of the page\n- One-click creation of a Punch List item or a formal NCR from any failed or partial result, pre-filled from the inspection\n- An Excel export of the full inspection log for records and client reporting\n\n**How it works day to day:**\n1. Schedule the inspection, choose its type and add the checklist of things to verify.\n2. Start it when the inspector goes to site, then record the result as pass, partial or fail.\n3. On a fail or partial, raise a Punch List item for a minor snag, or an NCR for a formal non-conformance.\n4. The follow-up record is pre-filled from the inspection, so the defect traces straight back to the check.\n5. Re-inspect once the fix is done and the trail shows the full inspect-defect-close cycle.\n\nFailed inspections feed directly into the Punch List for minor defects and into NCRs for non-conformances needing root-cause analysis, and the same control points can be tied to ITP hold points in the QMS overview. That keeps the inspect, defect and close-out loop fully traceable across the quality cluster rather than scattered across separate tools.',
+            })}
+          />
+        }
         links={[
           {
             label: t('inspections.intro_link_punch', { defaultValue: 'Punch List' }),
@@ -1395,27 +1472,27 @@ export function InspectionsPage() {
       <>
       {/* Stats */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <Card className="p-4 animate-card-in">
+        <div className="rounded-xl border border-border-light bg-surface-elevated/90 p-4 shadow-xs transition-shadow duration-normal ease-oe hover:shadow-sm animate-card-in">
           <p className="text-2xs font-medium text-content-tertiary uppercase tracking-wide">
             {t('inspections.stat_total', { defaultValue: 'Total' })}
           </p>
           <p className="text-lg font-semibold mt-1 tabular-nums text-content-primary">{stats.total}</p>
-        </Card>
-        <Card className="p-4 animate-card-in">
+        </div>
+        <div className="rounded-xl border border-border-light bg-surface-elevated/90 p-4 shadow-xs transition-shadow duration-normal ease-oe hover:shadow-sm animate-card-in">
           <p className="text-2xs font-medium text-content-tertiary uppercase tracking-wide">
             {t('inspections.stat_scheduled', { defaultValue: 'Scheduled' })}
           </p>
           <p className="text-lg font-semibold mt-1 tabular-nums text-oe-blue">{stats.scheduled}</p>
-        </Card>
-        <Card className="p-4 animate-card-in">
+        </div>
+        <div className="rounded-xl border border-border-light bg-surface-elevated/90 p-4 shadow-xs transition-shadow duration-normal ease-oe hover:shadow-sm animate-card-in">
           <p className="text-2xs font-medium text-content-tertiary uppercase tracking-wide">
             {t('inspections.stat_passed', { defaultValue: 'Passed' })}
           </p>
           <p className="text-lg font-semibold mt-1 tabular-nums text-semantic-success">
             {stats.passed}
           </p>
-        </Card>
-        <Card className="p-4 animate-card-in">
+        </div>
+        <div className="rounded-xl border border-border-light bg-surface-elevated/90 p-4 shadow-xs transition-shadow duration-normal ease-oe hover:shadow-sm animate-card-in">
           <p className="text-2xs font-medium text-content-tertiary uppercase tracking-wide">
             {t('inspections.stat_failed', { defaultValue: 'Failed' })}
           </p>
@@ -1427,7 +1504,7 @@ export function InspectionsPage() {
           >
             {stats.failed}
           </p>
-        </Card>
+        </div>
       </div>
 
       {/* Toolbar */}
@@ -1576,6 +1653,7 @@ export function InspectionsPage() {
                   onCreateNcr={handleCreateNcr}
                   onEdit={handleEditInspection}
                   onDelete={handleDeleteInspection}
+                  highlight={highlightId === inspection.id}
                 />
               ))}
             </Card>

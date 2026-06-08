@@ -1855,6 +1855,10 @@ export function RFIPage() {
             onClick: () => navigate('/variations'),
           },
           {
+            label: t('submittals.title', { defaultValue: 'Submittals' }),
+            onClick: () => navigate('/submittals'),
+          },
+          {
             label: t('correspondence.title', { defaultValue: 'Correspondence' }),
             onClick: () => navigate('/correspondence'),
           },
@@ -1870,21 +1874,21 @@ export function RFIPage() {
       <>
       {/* Stats */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <Card className="p-4 animate-card-in">
+        <div className="rounded-xl border border-border-light bg-surface-elevated/90 p-4 shadow-xs transition-shadow duration-normal ease-oe hover:shadow-sm animate-card-in">
           <p className="text-2xs font-medium text-content-tertiary uppercase tracking-wide">
             {t('rfi.stat_total', { defaultValue: 'Total RFIs' })}
           </p>
           <p className="text-lg font-semibold mt-1 tabular-nums text-content-primary">
             {stats.total}
           </p>
-        </Card>
-        <Card className="p-4 animate-card-in">
+        </div>
+        <div className="rounded-xl border border-border-light bg-surface-elevated/90 p-4 shadow-xs transition-shadow duration-normal ease-oe hover:shadow-sm animate-card-in">
           <p className="text-2xs font-medium text-content-tertiary uppercase tracking-wide">
             {t('rfi.stat_open', { defaultValue: 'Open' })}
           </p>
           <p className="text-lg font-semibold mt-1 tabular-nums text-oe-blue">{stats.open}</p>
-        </Card>
-        <Card className="p-4 animate-card-in">
+        </div>
+        <div className="rounded-xl border border-border-light bg-surface-elevated/90 p-4 shadow-xs transition-shadow duration-normal ease-oe hover:shadow-sm animate-card-in">
           <p className="text-2xs font-medium text-content-tertiary uppercase tracking-wide">
             {t('rfi.stat_overdue', { defaultValue: 'Overdue' })}
           </p>
@@ -1896,15 +1900,15 @@ export function RFIPage() {
           >
             {stats.overdue}
           </p>
-        </Card>
-        <Card className="p-4 animate-card-in">
+        </div>
+        <div className="rounded-xl border border-border-light bg-surface-elevated/90 p-4 shadow-xs transition-shadow duration-normal ease-oe hover:shadow-sm animate-card-in">
           <p className="text-2xs font-medium text-content-tertiary uppercase tracking-wide">
             {t('rfi.stat_avg_days', { defaultValue: 'Avg. Days Open' })}
           </p>
           <p className="text-lg font-semibold mt-1 tabular-nums text-content-primary">
             {stats.avgDays}
           </p>
-        </Card>
+        </div>
       </div>
 
       {/* Quick-view chips — saved-view shortcuts for the most common

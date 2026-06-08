@@ -14,6 +14,7 @@ import {
   Send,
   Link2,
   FileText,
+  FileCheck,
   Check,
   File,
 } from 'lucide-react';
@@ -956,6 +957,23 @@ const ContainerRow = React.memo(function ContainerRow({
               <Send size={13} className="mr-1" />
               {t('cde.send_transmittal', { defaultValue: 'Send via Transmittal' })}
             </Button>
+            {/* Submit for approval — hands the container off into the
+                Submittals review workflow with the create flow prefilled,
+                closing the CDE -> Submittal -> Transmittal loop. */}
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={(e) => {
+                e.stopPropagation();
+                navigate(`/submittals?create=true&container_id=${container.id}`);
+              }}
+              title={t('cde.submit_for_approval_hint', {
+                defaultValue: 'Raise a submittal for this container',
+              })}
+            >
+              <FileCheck size={13} className="mr-1" />
+              {t('cde.submit_for_approval', { defaultValue: 'Submit for approval' })}
+            </Button>
             {/* History drawer */}
             <Button
               variant="ghost"
@@ -1359,6 +1377,10 @@ export function CDEPage() {
             onClick: () => navigate('/files'),
           },
           {
+            label: t('submittals.title', { defaultValue: 'Submittals' }),
+            onClick: () => navigate('/submittals'),
+          },
+          {
             label: t('files.transmittals.open_log', { defaultValue: 'Transmittal log' }),
             onClick: () => navigate('/files/transmittals'),
           },
@@ -1373,38 +1395,38 @@ export function CDEPage() {
       {/* Summary cards — fed by the /cde/stats aggregate endpoint */}
       {projectId && stats && stats.total > 0 && (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <Card padding="sm" className="flex flex-col">
+          <div className="flex flex-col rounded-xl border border-border-light bg-surface-elevated/90 p-3 shadow-xs transition-shadow duration-normal ease-oe hover:shadow-sm">
             <span className="text-2xs font-medium uppercase tracking-wide text-content-tertiary">
               {t('cde.stat_total', { defaultValue: 'Total containers' })}
             </span>
             <span className="mt-1 text-2xl font-bold tabular-nums text-content-primary">
               {stats.total}
             </span>
-          </Card>
-          <Card padding="sm" className="flex flex-col">
+          </div>
+          <div className="flex flex-col rounded-xl border border-border-light bg-surface-elevated/90 p-3 shadow-xs transition-shadow duration-normal ease-oe hover:shadow-sm">
             <span className="text-2xs font-medium uppercase tracking-wide text-content-tertiary">
               {t('cde.state_published', { defaultValue: 'Published' })}
             </span>
             <span className="mt-1 text-2xl font-bold tabular-nums text-content-primary">
               {stats.by_state?.published ?? 0}
             </span>
-          </Card>
-          <Card padding="sm" className="flex flex-col">
+          </div>
+          <div className="flex flex-col rounded-xl border border-border-light bg-surface-elevated/90 p-3 shadow-xs transition-shadow duration-normal ease-oe hover:shadow-sm">
             <span className="text-2xs font-medium uppercase tracking-wide text-content-tertiary">
               {t('cde.state_wip', { defaultValue: 'WIP' })}
             </span>
             <span className="mt-1 text-2xl font-bold tabular-nums text-content-primary">
               {stats.by_state?.wip ?? 0}
             </span>
-          </Card>
-          <Card padding="sm" className="flex flex-col">
+          </div>
+          <div className="flex flex-col rounded-xl border border-border-light bg-surface-elevated/90 p-3 shadow-xs transition-shadow duration-normal ease-oe hover:shadow-sm">
             <span className="text-2xs font-medium uppercase tracking-wide text-content-tertiary">
               {t('cde.stat_with_revisions', { defaultValue: 'With revisions' })}
             </span>
             <span className="mt-1 text-2xl font-bold tabular-nums text-content-primary">
               {stats.latest_revisions}
             </span>
-          </Card>
+          </div>
         </div>
       )}
 

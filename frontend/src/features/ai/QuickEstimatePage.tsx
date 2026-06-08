@@ -56,6 +56,7 @@ import {
   getIntlLocale,
 } from '@/shared/lib/formatters';
 import { useLLMRun } from './hooks/useLLMRun';
+import { IntakePanel } from './intake';
 
 // ── Tab types ────────────────────────────────────────────────────────────────
 
@@ -1503,21 +1504,30 @@ export function QuickEstimatePage() {
   const queryClient = useQueryClient();
 
   // Active tab — read initial value from ?tab= URL param
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const routeLocation = useLocation();
   const isCadRoute = routeLocation.pathname === '/data-explorer';
   const initialTab = isCadRoute ? 'cad' : ((searchParams.get('tab') as InputTab | null) ?? 'text');
   const [activeTab, setActiveTab] = useState<InputTab>(
     ['text', 'photo', 'pdf', 'excel', 'cad', 'paste'].includes(initialTab) ? initialTab : 'text',
   );
+  // ?q=<text> deep-link (e.g. "Use in Quick Estimate" from the AI Advisor,
+  // CONN-81) pre-fills the free-text estimate input. We never auto-submit: the
+  // user reviews and runs it themselves. Read once for the initial value.
+  const queryFromUrl = searchParams.get('q') ?? '';
 
   // Text form state
-  const [description, setDescription] = useState('');
+  const [description, setDescription] = useState(queryFromUrl);
   const [location, setLocation] = useState('');
   const [currency, setCurrency] = useState('');
   const [standard, setStandard] = useState('');
   const [buildingType, setBuildingType] = useState('');
   const [areaM2, setAreaM2] = useState('');
+
+  // Conversational intake v2 — turns a one-line request into a confirmed,
+  // vector-grounded group board through a short guided dialogue. Opt-in from
+  // the text tab so the plain quick-estimate path stays unchanged.
+  const [guidedMode, setGuidedMode] = useState(false);
 
   // Paste form state
   const [pasteText, setPasteText] = useState('');
@@ -1557,6 +1567,21 @@ export function QuickEstimatePage() {
   // the history rows can show a spinner while the full job is fetched.
   const [historyReloadKey, setHistoryReloadKey] = useState(0);
   const [reopening, setReopening] = useState(false);
+
+  // The ?q seed has been copied into `description`; strip the param so a reload
+  // or a save-history reopen does not re-pin it over the user's edits.
+  useEffect(() => {
+    if (!queryFromUrl) return;
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete('q');
+        return next;
+      },
+      { replace: true },
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // a11y refs / ids — used by the textarea label, the disabled-submit
   // hint (aria-describedby), the tablist (role=tab + aria-controls), and
@@ -2831,8 +2856,59 @@ export function QuickEstimatePage() {
         >
           <div className="relative px-6 py-5">
             {/* ── Tab 1: Text Description ─────────────────────────── */}
-            {activeTab === 'text' && (
+            {activeTab === 'text' && guidedMode && (
               <div className="space-y-4">
+                <IntakePanel
+                  projectId={globalProjectId || ''}
+                  initialText={description}
+                  region={location || undefined}
+                  currency={currency || undefined}
+                  onClose={() => setGuidedMode(false)}
+                  onFinished={(runId) => {
+                    addToast({
+                      type: 'success',
+                      title: t('aiest.intake.finished_title', {
+                        defaultValue: 'Work packages confirmed',
+                      }),
+                      message: t('aiest.intake.finished_msg', {
+                        defaultValue: 'Continuing in the AI Estimate Builder to match rates.',
+                      }),
+                    });
+                    navigate(`/ai-estimator?run=${runId}`);
+                  }}
+                />
+              </div>
+            )}
+
+            {activeTab === 'text' && !guidedMode && (
+              <div className="space-y-4">
+                {/* Conversational intake v2 — opt-in guided flow that turns a
+                    one-line request into a confirmed, vector-grounded group
+                    board through a short dialogue (max 3 rounds). */}
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-violet-200/60 bg-gradient-to-r from-violet-500/5 to-cyan-500/5 px-4 py-3 dark:border-violet-500/20">
+                  <div className="flex items-center gap-2">
+                    <Wand2 size={18} className="text-violet-500" />
+                    <div>
+                      <p className="text-sm font-semibold text-content-primary">
+                        {t('aiest.intake.cta_title', { defaultValue: 'Guided estimate (new)' })}
+                      </p>
+                      <p className="text-xs text-content-secondary">
+                        {t('aiest.intake.cta_subtitle', {
+                          defaultValue:
+                            'One line in, a few questions, then editable vector-grounded work packages you confirm.',
+                        })}
+                      </p>
+                    </div>
+                  </div>
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    icon={<Sparkles size={14} />}
+                    onClick={() => setGuidedMode(true)}
+                  >
+                    {t('aiest.intake.cta_button', { defaultValue: 'Try guided estimate' })}
+                  </Button>
+                </div>
                 <div className="relative">
                   {/* a11y: visually-hidden label associates the textarea
                       with a programmatic name. Placeholder text alone
@@ -4354,7 +4430,7 @@ export function QuickEstimatePage() {
                 className="inline-flex items-center gap-1.5 rounded-lg border border-border-light bg-surface-primary px-3 py-1.5 text-xs font-medium text-content-secondary hover:border-oe-blue/40 hover:text-oe-blue transition-colors"
               >
                 <Database size={13} />
-                {t('ai.estimate_link_match', { defaultValue: 'Match Elements' })}
+                {t('ai.estimate_link_match', { defaultValue: 'CAD-BIM Match → Cost' })}
               </Link>
               <Link
                 to="/validation"

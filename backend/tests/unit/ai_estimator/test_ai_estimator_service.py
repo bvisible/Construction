@@ -31,6 +31,7 @@ from decimal import Decimal
 
 import pytest
 
+from app.modules.ai_estimator import schemas
 from app.modules.ai_estimator import service as svc
 from app.modules.ai_estimator.service import (
     CONFIDENCE_HIGH_THRESHOLD,
@@ -117,6 +118,20 @@ def test_candidate_unit_rate_divides_by_multiplier():
     assert _dec(AiEstimatorService._candidate_unit_rate(_Cand())) == Decimal("185")
 
 
+def test_candidate_unit_rate_is_none_when_unpriced():
+    """An unpriced grounded code yields None, never "0" (no fabricated $0.00)."""
+
+    class _Zero:
+        unit_rate = "0"
+        unit = "m3"
+
+    class _Missing:
+        unit = "m2"  # no unit_rate attribute at all
+
+    assert AiEstimatorService._candidate_unit_rate(_Zero()) is None
+    assert AiEstimatorService._candidate_unit_rate(_Missing()) is None
+
+
 # ── Confidence (real score or None, never a placeholder) ─────────────────────
 
 
@@ -175,6 +190,30 @@ def test_candidate_out_serialises_grounded_only_fields():
     assert out["currency"] == "EUR"
     assert out["score"] == pytest.approx(0.8346, abs=1e-4)  # rounded to 4 dp
     assert out["confidence_band"] == "high"
+
+
+def test_candidate_out_emits_null_rate_when_unpriced():
+    """A grounded code with no price serialises unit_rate as None, not "0".
+
+    The override UI then renders "no price" instead of a misleading $0.00; the
+    CandidateOut schema accepts the null and serialises it back as null.
+    """
+
+    class _Unpriced:
+        id = "cand-2"
+        code = "WALL-002"
+        description = "Unpriced wall code"
+        unit = "m3"
+        unit_rate = "0"
+        currency = "EUR"
+        score = 0.51
+        confidence_band = "low"
+
+    out = AiEstimatorService._candidate_out(_Unpriced())
+    assert out["unit_rate"] is None
+    # Round-trips through the schema as JSON null (never "0").
+    dumped = schemas.CandidateOut(**out).model_dump(mode="json")
+    assert dumped["unit_rate"] is None
 
 
 # ── Trade taxonomy (deterministic, works with no AI) ─────────────────────────
@@ -293,6 +332,30 @@ def test_quantities_from_row_maps_unit_to_canonical_key():
     assert f("m3", "abc") == {}
 
 
+# ── WorkGroup source standardisation (design 3.1 / 4.1) ──────────────────────
+
+
+@pytest.mark.parametrize(
+    ("envelope_source", "expected"),
+    [
+        ("bim", "cad"),
+        ("dwg", "cad"),
+        ("pdf", "file"),
+        ("boq", "file"),
+        ("text", "file"),
+        ("photo", "photo"),
+        ("image", "photo"),
+        # A measured group never carries dialogue; unknown / blank -> file.
+        ("dialogue", "file"),
+        ("", "file"),
+        (None, "file"),
+    ],
+)
+def test_workgroup_source_maps_envelope_to_standard_source(envelope_source, expected):
+    """Every measured envelope source maps to one of cad / file / photo."""
+    assert svc._workgroup_source(envelope_source) == expected
+
+
 def test_group_envelope_carries_project_currency_hard_filter():
     """The matcher envelope must carry the project currency so a USD project
     never gets EUR rates (the never-blend currency hard filter)."""
@@ -408,7 +471,7 @@ def test_meta_payload_sources_every_value_from_one_definition():
     """The /meta payload mirrors the API contract and reuses the single existing
     definition for each value (thresholds, stage enum, group cap) - no
     duplicated magic numbers."""
-    from app.modules.ai_estimator import schemas
+    from app.modules.ai_estimator import benchmarks, schemas
 
     meta = schemas.MetaResponse(
         score_thresholds=schemas.ScoreThresholds(
@@ -417,6 +480,7 @@ def test_meta_payload_sources_every_value_from_one_definition():
         ),
         construction_stages=list(schemas.CONSTRUCTION_STAGES),
         match_group_cap=schemas.DEFAULT_MATCH_GROUP_CAP,
+        rate_sanity_band_factor=benchmarks.DEFAULT_BAND_FACTOR,
     )
     # Thresholds come straight off the service constants (the contract: ~0.78 / ~0.62).
     assert meta.score_thresholds.high == pytest.approx(0.78)
@@ -472,3 +536,289 @@ def test_run_create_rejects_unknown_construction_stage():
     # Unknown value rejected.
     with pytest.raises(pydantic.ValidationError):
         schemas.RunCreate(project_id=uuid.uuid4(), construction_stage="nonsense")
+
+
+# ── Multi-pass mapping pipeline (semantic -> unit/scale -> rate sanity) ───────
+#
+# These pin the two NEW deterministic passes (pass 1 needs the live ranker, so
+# it is exercised end-to-end in the integration suite). A fake candidate mirrors
+# the load-bearing surface of ``MatchCandidate``: a reassignable ``score`` and
+# ``confidence_band`` (both declared fields on the real model) plus ``unit`` /
+# ``unit_rate`` for the per-base-unit rate. The passes only ever read/reassign
+# those declared fields - never an arbitrary attribute - so this fake is faithful.
+
+
+class _FakeCandidate:
+    """Stand-in for MatchCandidate with the fields the passes touch."""
+
+    def __init__(self, code, unit, unit_rate, score, confidence_band="high"):
+        self.id = code
+        self.code = code
+        self.description = code
+        self.unit = unit
+        self.unit_rate = unit_rate
+        self.currency = "EUR"
+        self.score = score
+        self.confidence_band = confidence_band
+        self.classification = {}
+
+
+def _grp(trade="finishes", chosen_unit="m2"):
+    """A minimal group-like object carrying only what the passes read."""
+
+    class _G:
+        pass
+
+    g = _G()
+    g.trade = trade
+    g.chosen_unit = chosen_unit
+    g.group_key = f"{trade}|{chosen_unit}"
+    return g
+
+
+def test_reconcile_units_demotes_dimension_mismatch_to_below_correct():
+    """A volume (m3) rate for an area (m2) group is DEMOTED, not dropped: the
+    dimensionally-correct candidate rises to top-1 while the m3 row survives."""
+    service = AiEstimatorService.__new__(AiEstimatorService)
+    # The m3 candidate has the HIGHER raw score; after demotion the m2 one wins.
+    m3 = _FakeCandidate("VOL", "m3", "120.00", score=0.90)
+    m2 = _FakeCandidate("AREA", "m2", "45.00", score=0.70)
+    candidates = [m3, m2]
+    passes: list[dict] = []
+
+    service._reconcile_units(_grp(trade="finishes", chosen_unit="m2"), candidates, passes)
+
+    # The dimensionally-correct m2 candidate is now top-1; the m3 one survives
+    # (never dropped) but sank below it.
+    assert candidates[0].code == "AREA"
+    assert candidates[1].code == "VOL"
+    assert len(candidates) == 2  # nothing dropped
+    pass_entry = passes[0]
+    assert pass_entry["pass"] == "unit_scale"
+    assert pass_entry["dropped"] == 1
+    assert pass_entry["kept"] == 2
+
+
+def test_reconcile_units_keeps_compatible_and_unknown_dimensions():
+    """Same-dimension candidates and unmapped/lump-sum units are never demoted
+    (we never guess a dimension we cannot read)."""
+    service = AiEstimatorService.__new__(AiEstimatorService)
+    a = _FakeCandidate("A", "m2", "40.00", score=0.80)
+    b = _FakeCandidate("B", "100 m2", "4000.00", score=0.75)  # multiplier, still area
+    c = _FakeCandidate("C", "lsum", "9000.00", score=0.60)  # unknown dim -> never demoted
+    candidates = [a, b, c]
+    passes: list[dict] = []
+
+    service._reconcile_units(_grp(trade="finishes", chosen_unit="m2"), candidates, passes)
+
+    assert passes[0]["dropped"] == 0
+    # Order preserved (all scores unchanged, stable sort).
+    assert [x.code for x in candidates] == ["A", "B", "C"]
+
+
+def test_rate_sanity_flags_outlier_caps_band_and_keeps_real_rate():
+    """An injected ~100x outlier is flagged, capped at LOW band, and kept - the
+    real DB rate is never dropped and never invented."""
+    service = AiEstimatorService.__new__(AiEstimatorService)
+    # Cluster around 50; one gross 100x outlier at 6000 (median ~ 50, 8x band).
+    normal1 = _FakeCandidate("N1", "m2", "48.00", score=0.85)
+    normal2 = _FakeCandidate("N2", "m2", "52.00", score=0.80)
+    outlier = _FakeCandidate("OUT", "m2", "6000.00", score=0.90, confidence_band="high")
+    candidates = [normal1, normal2, outlier]
+    passes: list[dict] = []
+
+    flagged = service._rate_sanity(_grp(trade="finishes", chosen_unit="m2"), candidates, passes)
+
+    # Index 2 (the 6000 outlier) is flagged; the two normal rows are not.
+    assert flagged == {2}
+    # The outlier is capped at LOW band but still present (never dropped).
+    assert outlier.confidence_band == "low"
+    assert len(candidates) == 3
+    pe = passes[0]
+    assert pe["pass"] == "rate_sanity"
+    assert pe["benchmark"]["outliers"] == 1
+    assert pe["benchmark"]["trade"] == "finishes"
+    assert pe["benchmark"]["unit"] == "m2"
+    # The band bounds are real (median-relative), not None, when there is a median.
+    assert pe["benchmark"]["band_low"] is not None
+    assert pe["benchmark"]["band_high"] is not None
+
+
+def test_rate_sanity_single_candidate_is_never_an_outlier():
+    """A lone candidate is its own median, so it can never be flagged."""
+    service = AiEstimatorService.__new__(AiEstimatorService)
+    only = _FakeCandidate("ONLY", "m2", "999999.00", score=0.80)
+    passes: list[dict] = []
+    flagged = service._rate_sanity(_grp(chosen_unit="m2"), [only], passes)
+    assert flagged == set()
+    assert passes[0]["benchmark"]["outliers"] == 0
+
+
+def test_first_non_outlier_skips_flagged_then_falls_back_to_zero():
+    service = AiEstimatorService
+    cands = [object(), object(), object()]
+    # Index 0 flagged -> pick the first clean one (1).
+    assert service._first_non_outlier(cands, {0}) == 1
+    # Nothing flagged -> top-1.
+    assert service._first_non_outlier(cands, set()) == 0
+    # Every candidate flagged -> fall back to 0 (a real, if suspect, rate).
+    assert service._first_non_outlier(cands, {0, 1, 2}) == 0
+    # Empty list -> 0.
+    assert service._first_non_outlier([], set()) == 0
+
+
+def test_candidate_out_carries_rate_outlier_flag():
+    """The serialised candidate exposes the pass-3 rate_outlier marker."""
+    cand = _FakeCandidate("X", "m2", "45.00", score=0.83)
+    clean = AiEstimatorService._candidate_out(cand)
+    assert clean["rate_outlier"] is False
+    flagged = AiEstimatorService._candidate_out(cand, rate_outlier=True)
+    assert flagged["rate_outlier"] is True
+
+
+# ── GroupDetail mapping-trace serialisation (WP4, design 3.3) ──────────────
+#
+# The matcher (WP3) writes the multi-pass trace into the group's free
+# ``metadata_.mapping_trace`` JSON. WP4 surfaces it on GroupDetail as a typed
+# ``MappingTrace`` (passes + final_method + optional needs_human_reason). These
+# pin that serialisation, including the ``pass`` key alias and the defensive
+# read path (a display-only trace must never crash the detail endpoint).
+
+
+class _FakeGroup:
+    """A minimal AiEstimatorGroup-like row carrying what the serialisers read."""
+
+    def __init__(self, metadata_=None, candidates=None):
+        import uuid as _uuid
+
+        self.id = _uuid.uuid4()
+        self.run_id = _uuid.uuid4()
+        self.group_key = "finishes|m2"
+        self.description = "Floor tiling"
+        self.trade = "finishes"
+        self.signature = "finishes|m2"
+        self.element_count = 1
+        self.quantities = {"area": 20.0}
+        self.chosen_unit = "m2"
+        self.chosen_code = "TILE-1"
+        self.unit_rate = "45.00"
+        self.currency = "EUR"
+        self.score = 0.84
+        self.confidence = 0.84
+        self.confidence_band = "high"
+        self.match_method = "vector"
+        self.status = "suggested"
+        self.boq_position_id = None
+        self.sort_order = 0
+        self.element_ids = []
+        self.envelope = {}
+        self.resources = []
+        self.candidates = candidates or []
+        self.confirmed_by = None
+        self.confirmed_at = None
+        self.notes = None
+        self.metadata_ = metadata_ or {}
+
+
+def _three_pass_trace():
+    """The canonical three-pass trace shape the matcher persists."""
+    return {
+        "passes": [
+            {"pass": "semantic", "kept": 2, "dropped": 0, "notes": "2 grounded", "benchmark": None},
+            {"pass": "unit_scale", "kept": 2, "dropped": 1, "notes": "1 demoted", "benchmark": None},
+            {
+                "pass": "rate_sanity",
+                "kept": 2,
+                "dropped": 0,
+                "notes": "1 outlier",
+                "benchmark": {"trade": "finishes", "unit": "m2", "band_low": 0.5, "band_high": 8.0, "outliers": 1},
+            },
+        ],
+        "final_method": "vector",
+    }
+
+
+def test_mapping_trace_out_round_trips_three_named_passes():
+    """A stored three-pass trace serialises into a typed MappingTrace whose
+    passes keep their order, names (via the ``pass`` alias), counts and the
+    rate-sanity benchmark band."""
+    trace = AiEstimatorService._mapping_trace_out(_three_pass_trace())
+    assert trace is not None
+    assert [p.pass_ for p in trace.passes] == ["semantic", "unit_scale", "rate_sanity"]
+    assert trace.passes[1].dropped == 1
+    assert trace.final_method == "vector"
+    # The rate-sanity pass carries the real (median-relative) benchmark band.
+    rs = trace.passes[2]
+    assert rs.benchmark is not None
+    assert rs.benchmark.trade == "finishes"
+    assert rs.benchmark.unit == "m2"
+    assert rs.benchmark.outliers == 1
+
+
+def test_mapping_trace_serialises_pass_key_with_alias_in_json():
+    """The JSON contract uses ``pass`` (not the ``pass_`` field name) for every
+    pass, and emits all five structured keys including a null benchmark."""
+    trace = AiEstimatorService._mapping_trace_out(_three_pass_trace())
+    dumped = trace.model_dump(mode="json", by_alias=True)
+    names = [p["pass"] for p in dumped["passes"]]
+    assert names == ["semantic", "unit_scale", "rate_sanity"]
+    for p in dumped["passes"]:
+        assert {"pass", "kept", "dropped", "notes", "benchmark"} <= set(p)
+    # A pass with no benchmark still emits the key (as null), never omits it.
+    assert dumped["passes"][0]["benchmark"] is None
+
+
+def test_mapping_trace_out_carries_needs_human_reason():
+    """When every candidate was a benchmark outlier the matcher parks the group
+    and records the reason; the trace surfaces it read-only."""
+    raw = _three_pass_trace()
+    raw["needs_human_reason"] = "every candidate rate is a benchmark-band outlier"
+    raw["final_method"] = "manual"
+    trace = AiEstimatorService._mapping_trace_out(raw)
+    assert trace is not None
+    assert trace.final_method == "manual"
+    assert trace.needs_human_reason == "every candidate rate is a benchmark-band outlier"
+
+
+@pytest.mark.parametrize("raw", [None, {}, "not-a-dict", 42, []])
+def test_mapping_trace_out_is_none_for_unmatched_or_junk(raw):
+    """An absent / empty / non-dict trace yields None (the group is not matched
+    yet, or the stored provenance is unusable) - never an error."""
+    assert AiEstimatorService._mapping_trace_out(raw) is None
+
+
+def test_mapping_trace_out_degrades_on_malformed_trace():
+    """A structurally-broken stored trace is dropped to None rather than ever
+    crashing the detail view (display-only provenance is best-effort)."""
+    # ``passes`` must be a list of objects; a string here is unparseable.
+    bad = {"passes": "totally-broken", "final_method": "vector"}
+    assert AiEstimatorService._mapping_trace_out(bad) is None
+
+
+def test_group_to_detail_surfaces_typed_mapping_trace():
+    """group_to_detail exposes the multi-pass trace as a typed MappingTrace read
+    from metadata_, alongside the per-candidate rate_outlier flag."""
+    service = AiEstimatorService.__new__(AiEstimatorService)
+    candidates = [
+        AiEstimatorService._candidate_out(_FakeCandidate("TILE-1", "m2", "45.00", score=0.84)),
+        AiEstimatorService._candidate_out(_FakeCandidate("OUT", "m2", "6000.00", score=0.90), rate_outlier=True),
+    ]
+    grp = _FakeGroup(metadata_={"mapping_trace": _three_pass_trace(), "source": "file"}, candidates=candidates)
+
+    detail = service.group_to_detail(grp)
+
+    assert detail.mapping_trace is not None
+    assert [p.pass_ for p in detail.mapping_trace.passes] == ["semantic", "unit_scale", "rate_sanity"]
+    assert detail.source == "file"
+    # The outlier candidate's flag rode through onto the detail.
+    flags = {c.code: c.rate_outlier for c in detail.candidates}
+    assert flags == {"TILE-1": False, "OUT": True}
+
+
+def test_group_to_detail_omits_trace_until_matched():
+    """A group with no mapping_trace in metadata_ (not yet matched) reports None,
+    keeping the field honest rather than fabricating an empty trace."""
+    service = AiEstimatorService.__new__(AiEstimatorService)
+    detail = service.group_to_detail(_FakeGroup(metadata_={"source": "dialogue"}))
+    assert detail.mapping_trace is None
+    assert detail.source == "dialogue"

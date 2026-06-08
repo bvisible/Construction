@@ -204,7 +204,9 @@ class RunRead(BaseModel):
     provider: str | None = None
     model_used: str | None = None
     total_tokens: int = 0
-    cost_usd_estimate: float = 0.0
+    # v3 §10 - money on the wire is Decimal-as-string (the DB column stays
+    # Float: tiny USD values, no precision risk; the contract is uniform).
+    cost_usd_estimate: Decimal = Decimal("0")
     duration_ms: int = 0
     validation_report: dict[str, Any] | None = None
     # Decimal-as-string in JSON.
@@ -216,7 +218,7 @@ class RunRead(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    @field_serializer("grand_total", when_used="json")
+    @field_serializer("grand_total", "cost_usd_estimate", when_used="json")
     def _ser_grand_total(self, v: Decimal | None) -> str | None:
         return _serialise_money(v)
 
@@ -325,14 +327,21 @@ class CandidateOut(BaseModel):
     code: str = ""
     description: str = ""
     unit: str = ""
-    # Decimal-as-string in JSON.
-    unit_rate: Decimal = Decimal("0")
+    # Decimal-as-string in JSON, or null when the grounded code carries no
+    # price (e.g. the code resolved by vector search but the cost table has no
+    # priced row for it). Null is the honest "matched, not priced" state - the
+    # UI shows that rather than a fabricated $0.00.
+    unit_rate: Decimal | None = None
     currency: str = ""
     score: float = 0.0
     confidence_band: ConfidenceBand = "low"
+    # Set by the multi-pass mapping's rate-sanity pass when this candidate's
+    # per-base-unit rate sits outside the per-run benchmark band. The rate is
+    # never altered; this only flags it for human review in the override UI.
+    rate_outlier: bool = False
 
     @field_serializer("unit_rate", when_used="json")
-    def _ser_unit_rate(self, v: Decimal) -> str | None:
+    def _ser_unit_rate(self, v: Decimal | None) -> str | None:
         return _serialise_money(v)
 
 
@@ -384,8 +393,73 @@ class GroupSummary(BaseModel):
         return _serialise_money(v)
 
 
+# ── Multi-pass mapping trace (design 3.3) ─────────────────────────────────
+
+
+class MappingBenchmark(BaseModel):
+    """The rate-sanity benchmark band evaluated for one group's candidates.
+
+    Populated only on the ``rate_sanity`` pass. The band is catalogue-relative
+    (computed from the per-run median rate for the group ``(trade, unit)``); it
+    never holds an absolute price book, only the bounds used to flag outliers.
+    """
+
+    trade: str = ""
+    unit: str = ""
+    # Median-relative bounds (``None`` when there is no usable median, e.g. a
+    # lone candidate). Real floats, never a fabricated placeholder.
+    band_low: float | None = None
+    band_high: float | None = None
+    # How many candidates fell outside the band (flagged, never dropped).
+    outliers: int = 0
+
+
+class MappingPass(BaseModel):
+    """One named pass of the multi-pass mapping pipeline (design 4.3).
+
+    Display-only provenance read from the group ``metadata_.mapping_trace`` the
+    matcher writes. ``pass_`` is the pass name (``semantic`` / ``unit_scale`` /
+    ``rate_sanity``); it is serialised back as ``pass`` to match the stored key
+    and the frontend contract (``pass`` is a Python soft keyword, hence the
+    field alias). ``kept`` / ``dropped`` are candidate counts; ``notes`` is a
+    short human sentence; ``benchmark`` is set only on the rate-sanity pass.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    pass_: str = Field(default="", alias="pass", serialization_alias="pass")
+    kept: int = 0
+    dropped: int = 0
+    notes: str = ""
+    benchmark: MappingBenchmark | None = None
+
+
+class MappingTrace(BaseModel):
+    """The assembled multi-pass mapping log for one matched group (design 3.3).
+
+    Read-only on :class:`GroupDetail`: the matcher writes it to the group
+    ``metadata_.mapping_trace`` so the UI can show "why this rate". ``passes``
+    is the ordered pass log (semantic -> unit/scale -> rate sanity);
+    ``final_method`` is how the top-1 was chosen (``vector`` deterministic,
+    ``llm`` agent-reasoned, ``manual`` when no candidate grounded);
+    ``needs_human_reason`` is set only when every candidate was a benchmark-band
+    outlier so the group was parked for human review.
+    """
+
+    passes: list[MappingPass] = Field(default_factory=list)
+    final_method: str | None = None
+    needs_human_reason: str | None = None
+
+
 class GroupDetail(GroupSummary):
-    """Full detail for the per-group slide-over / match-review card."""
+    """Full detail for the per-group slide-over / match-review card.
+
+    The WorkGroup provenance fields (design section 3.1) are surfaced read-only
+    from the group ``metadata_``: ``source`` (how the group originated),
+    ``derivation`` (a short human formula sentence), ``assumptions`` (the
+    proxies applied) and ``mapping_trace`` (the multi-pass mapping log the
+    matcher writes). They are display-only; the UI never writes them back.
+    """
 
     run_id: uuid.UUID
     element_ids: list[str] = Field(default_factory=list)
@@ -395,6 +469,13 @@ class GroupDetail(GroupSummary):
     confirmed_by: uuid.UUID | None = None
     confirmed_at: datetime | None = None
     notes: str | None = None
+    # WorkGroup provenance (read-only, from metadata_).
+    source: str | None = None
+    derivation: str | None = None
+    assumptions: list[str] = Field(default_factory=list)
+    # The multi-pass mapping trace (design 3.3), typed so the contract is
+    # explicit; ``None`` until the matcher has run on the group.
+    mapping_trace: MappingTrace | None = None
 
 
 class GroupListResponse(BaseModel):
@@ -681,6 +762,11 @@ class MetaResponse(BaseModel):
     score_thresholds: ScoreThresholds
     construction_stages: list[str] = Field(default_factory=list)
     match_group_cap: int
+    # The rate-sanity band factor (decision 2 of the v3 design): a mapping
+    # candidate whose per-base-unit rate is more than this multiple away from
+    # the per-run catalogue median for its (trade, unit) is flagged a low-
+    # confidence outlier for human review. Never replaces a real DB rate.
+    rate_sanity_band_factor: float
 
 
 # ── Intake v2 (conversational intake in front of stage 1) ──────────────────

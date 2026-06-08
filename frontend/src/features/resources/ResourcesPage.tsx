@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   useQuery,
   useMutation,
@@ -302,6 +302,7 @@ function downloadCsv(filename: string, csv: string) {
 export function ResourcesPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [tab, setTab] = useState<Tab>('resources');
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState<ResourceType | ''>('');
@@ -327,6 +328,19 @@ export function ResourcesPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Deep link: /resources?resourceId=<id> opens the matching resource drawer
+  // (used by Capacity Planning's clickable resource labels). Consume the param
+  // once so a back/forward or manual close does not re-open the drawer, and
+  // the URL stays clean.
+  useEffect(() => {
+    const rid = searchParams.get('resourceId');
+    if (!rid) return;
+    setSelectedId(rid);
+    const next = new URLSearchParams(searchParams);
+    next.delete('resourceId');
+    setSearchParams(next, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
   const [createOpen, setCreateOpen] = useState(false);
   const [proposeOpen, setProposeOpen] = useState(false);
   // Per-row edit / delete state. Lifted up here so the modal / confirm
@@ -546,14 +560,26 @@ export function ResourcesPage() {
         actions={
           <>
             {tab === 'assignments' && (
-              <Button
-                variant="primary"
-                size="sm"
-                icon={<Plus size={14} />}
-                onClick={() => setProposeOpen(true)}
-              >
-                {t('resources.propose', { defaultValue: 'Propose Assignment' })}
-              </Button>
+              <>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  icon={<CalendarRange size={14} />}
+                  onClick={() => navigate('/portfolio/capacity')}
+                >
+                  {t('resources.assignments_capacity', {
+                    defaultValue: 'Portfolio capacity',
+                  })}
+                </Button>
+                <Button
+                  variant="primary"
+                  size="sm"
+                  icon={<Plus size={14} />}
+                  onClick={() => setProposeOpen(true)}
+                >
+                  {t('resources.propose', { defaultValue: 'Propose Assignment' })}
+                </Button>
+              </>
             )}
             {tab === 'resources' && (
               <Button
@@ -598,6 +624,14 @@ export function ResourcesPage() {
             : undefined
         }
         links={[
+          {
+            label: t('resources.intro_link_capacity', { defaultValue: 'Capacity Planning' }),
+            onClick: () => navigate('/portfolio/capacity'),
+          },
+          {
+            label: t('resources.intro_link_leveling', { defaultValue: 'Resource Leveling' }),
+            onClick: () => navigate('/portfolio/leveling'),
+          },
           {
             label: t('resources.intro_link_schedule', { defaultValue: '4D Schedule' }),
             onClick: () => navigate('/schedule'),
@@ -2826,6 +2860,7 @@ function AssignmentsTab({
   onSelectResource: (id: string) => void;
 }) {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const qc = useQueryClient();
   const addToast = useToastStore((s) => s.addToast);
   const userRole = useAuthStore((s) => s.userRole);
@@ -3072,7 +3107,7 @@ function AssignmentsTab({
 
             {isLoading ? (
               <div className="p-4">
-                <SkeletonTable rows={6} columns={6} />
+                <SkeletonTable rows={6} columns={7} />
               </div>
             ) : filtered.length === 0 ? (
               <EmptyState
@@ -3112,6 +3147,11 @@ function AssignmentsTab({
                       )}
                       <th className="px-3 py-2 text-left">
                         {t('resources.col_resource', { defaultValue: 'Resource' })}
+                      </th>
+                      <th className="px-3 py-2 text-left">
+                        {t('resources.col_project_task', {
+                          defaultValue: 'Project / Task',
+                        })}
                       </th>
                       <th className="px-3 py-2 text-left">
                         {t('resources.start', { defaultValue: 'Start' })}
@@ -3174,6 +3214,57 @@ function AssignmentsTab({
                             >
                               {a.resource_name}
                             </button>
+                          </td>
+                          <td className="px-3 py-1.5 text-xs">
+                            <div className="flex flex-col gap-0.5">
+                              {a.project_id ? (
+                                <button
+                                  type="button"
+                                  className="inline-flex w-fit items-center gap-1 text-left text-content-primary hover:text-oe-blue hover:underline"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    navigate(`/projects/${a.project_id}`);
+                                  }}
+                                  title={t('resources.open_project', {
+                                    defaultValue: 'Open project',
+                                  })}
+                                >
+                                  {a.project_name ||
+                                    t('resources.untitled_project', {
+                                      defaultValue: 'Project',
+                                    })}
+                                </button>
+                              ) : (
+                                <span className="text-content-tertiary">
+                                  {t('resources.no_project', {
+                                    defaultValue: 'Unassigned',
+                                  })}
+                                </span>
+                              )}
+                              {a.task_id && (
+                                <button
+                                  type="button"
+                                  className="inline-flex w-fit items-center gap-1 text-left text-2xs text-content-tertiary hover:text-oe-blue hover:underline"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    // Emits ?taskId for the Tasks page; the deep-link
+                                    // consumer is owned by the tasks batch and lands
+                                    // separately - until then this opens the Tasks list.
+                                    navigate(
+                                      `/tasks?taskId=${encodeURIComponent(a.task_id as string)}`,
+                                    );
+                                  }}
+                                  title={t('resources.open_task', {
+                                    defaultValue: 'Open task',
+                                  })}
+                                >
+                                  {a.task_name ||
+                                    t('resources.linked_task', {
+                                      defaultValue: 'Linked task',
+                                    })}
+                                </button>
+                              )}
+                            </div>
                           </td>
                           <td className="px-3 py-1.5 text-xs tabular-nums">
                             <DateDisplay value={a.start_at} />

@@ -34,6 +34,15 @@ import type { CoordinationDashboard } from './types';
 export interface CoordinationKPICardsProps {
   data: CoordinationDashboard | undefined;
   isLoading?: boolean;
+  /** Active project id — used to scope the clash drill-down deep-link. */
+  projectId?: string | null;
+  /**
+   * Drill-down navigation. The big number people instinctively click takes
+   * them into the list that explains it (clashes / cost impact -> filtered
+   * clash list, rule packs -> /bim/rules, federations -> /bim/federations).
+   * Optional so the cards still render read-only where no navigation is wired.
+   */
+  onNavigate?: (to: string) => void;
 }
 
 type Accent = 'rose' | 'amber' | 'emerald' | 'sky';
@@ -78,21 +87,56 @@ interface KPICardProps {
   /** Optional one-line caveat surfaced via an (i) tooltip next to the label. */
   hint?: string;
   testId?: string;
+  /**
+   * Optional drill-down. When set the whole card becomes a button: the big
+   * number people instinctively click navigates into the list that explains
+   * it. `onClickTitle` is the accessible action label (tooltip + aria-label).
+   */
+  onClick?: () => void;
+  onClickTitle?: string;
 }
 
-function KPICard({ accent, icon, label, primary, delta, secondary, hint, testId }: KPICardProps) {
+function KPICard({
+  accent,
+  icon,
+  label,
+  primary,
+  delta,
+  secondary,
+  hint,
+  testId,
+  onClick,
+  onClickTitle,
+}: KPICardProps) {
   const styles = ACCENT_STYLES[accent];
+  const clickable = !!onClick;
   return (
     <div
       data-testid={testId}
+      onClick={onClick}
+      onKeyDown={
+        onClick
+          ? (e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                onClick();
+              }
+            }
+          : undefined
+      }
+      role={clickable ? 'button' : undefined}
+      tabIndex={clickable ? 0 : undefined}
+      aria-label={clickable ? onClickTitle : undefined}
+      title={clickable ? onClickTitle : undefined}
       className={clsx(
         'group relative overflow-hidden rounded-2xl',
-        'border border-white/40 dark:border-white/5',
-        'bg-white/60 dark:bg-slate-900/40 backdrop-blur-xl',
-        'shadow-lg shadow-slate-900/[0.04] dark:shadow-slate-950/30',
-        'transition-all duration-300',
-        'hover:-translate-y-0.5 hover:shadow-xl hover:shadow-slate-900/[0.08]',
-        'hover:border-white/60 dark:hover:border-white/10',
+        'border border-border-light',
+        'bg-surface-elevated/90',
+        'shadow-xs',
+        'transition-shadow duration-normal ease-oe',
+        'hover:shadow-sm',
+        clickable &&
+          'cursor-pointer hover:border-border-strong hover:-translate-y-0.5 transition-transform focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus',
       )}
     >
       {/* Top accent bar */}
@@ -146,6 +190,12 @@ function KPICard({ accent, icon, label, primary, delta, secondary, hint, testId 
               {delta.direction === 'flat' && <Minus size={11} />}
               {Math.abs(delta.value)}
             </span>
+          ) : clickable ? (
+            <ArrowUpRight
+              aria-hidden
+              size={16}
+              className="text-content-tertiary opacity-0 transition-opacity group-hover:opacity-100"
+            />
           ) : null}
         </div>
         <div className="mt-4 text-3xl font-bold tracking-tight text-content-primary">
@@ -163,7 +213,7 @@ function KPICard({ accent, icon, label, primary, delta, secondary, hint, testId 
 
 function SkeletonCard() {
   return (
-    <div className="relative overflow-hidden rounded-2xl border border-white/40 bg-white/60 backdrop-blur-xl shadow-lg shadow-slate-900/[0.04] p-5 dark:border-white/5 dark:bg-slate-900/40">
+    <div className="relative overflow-hidden rounded-2xl border border-border-light bg-surface-elevated/90 p-5 shadow-xs transition-shadow duration-normal ease-oe hover:shadow-sm">
       <div className="absolute inset-x-0 top-0 h-[2px] bg-gradient-to-r from-slate-200 to-slate-100 dark:from-slate-700 dark:to-slate-800" />
       <div className="flex items-center gap-2.5">
         <div className="h-9 w-9 animate-pulse rounded-xl bg-slate-200 dark:bg-slate-700" />
@@ -189,7 +239,7 @@ interface StatTileProps {
  *  less visual weight (no accent bar, smaller type). */
 function StatTile({ icon, label, value, footer, hint }: StatTileProps) {
   return (
-    <div className="relative overflow-hidden rounded-xl border border-white/40 bg-white/50 px-4 py-3 backdrop-blur-xl dark:border-white/5 dark:bg-slate-900/30">
+    <div className="relative overflow-hidden rounded-xl border border-border-light bg-surface-elevated/90 px-4 py-3 shadow-xs transition-shadow duration-normal ease-oe hover:shadow-sm">
       <div className="flex items-center gap-2 text-content-tertiary">
         <span className="flex h-6 w-6 items-center justify-center rounded-md bg-slate-100 text-content-secondary dark:bg-slate-800">
           {icon}
@@ -212,8 +262,20 @@ function StatTile({ icon, label, value, footer, hint }: StatTileProps) {
 export function CoordinationKPICards({
   data,
   isLoading,
+  projectId,
+  onNavigate,
 }: CoordinationKPICardsProps) {
   const { t } = useTranslation();
+  // Clashes / cost impact drill into the open-clash list, scoped to the
+  // active project. Rule packs and federations drill into their own pages.
+  const clashOpenTo = projectId
+    ? `/clash?project=${projectId}&status=open`
+    : '/clash?status=open';
+  const goClashOpen = onNavigate ? () => onNavigate(clashOpenTo) : undefined;
+  const goRules = onNavigate ? () => onNavigate('/bim/rules') : undefined;
+  const goFederations = onNavigate
+    ? () => onNavigate('/bim/federations')
+    : undefined;
 
   if (isLoading || !data) {
     return (
@@ -262,6 +324,10 @@ export function CoordinationKPICards({
         label={t('coordination.open_clashes', { defaultValue: 'Open Clashes' })}
         primary={data.clashes.open_count.toLocaleString()}
         delta={clashDelta}
+        onClick={goClashOpen}
+        onClickTitle={t('coordination.open_clashes_drill', {
+          defaultValue: 'View open clashes',
+        })}
         secondary={
           data.clashes.last_run_at ? (
             <span className="inline-flex items-center gap-1">
@@ -288,6 +354,10 @@ export function CoordinationKPICards({
         label={t('coordination.cost_impact_open', {
           defaultValue: 'Open Cost Impact',
         })}
+        onClick={goClashOpen}
+        onClickTitle={t('coordination.cost_impact_drill', {
+          defaultValue: 'View the open clashes behind this cost',
+        })}
         primary={
           <MoneyDisplay
             amount={data.open_cost_impact_total}
@@ -306,6 +376,10 @@ export function CoordinationKPICards({
         icon={<ClipboardCheck size={18} />}
         label={t('coordination.rule_pack_status', { defaultValue: 'Rule Packs' })}
         primary={data.rule_packs.installed_count.toLocaleString()}
+        onClick={goRules}
+        onClickTitle={t('coordination.rule_pack_drill', {
+          defaultValue: 'Open BIM rule packs',
+        })}
         secondary={t('coordination_hub.rules_active_disabled', {
           defaultValue: '{{p}} active · {{f}} disabled',
           p: data.rule_packs.last_check_pass_count,
@@ -322,6 +396,10 @@ export function CoordinationKPICards({
         icon={<Layers size={18} />}
         label={t('coordination.federations_count', { defaultValue: 'Federations' })}
         primary={data.federations.count.toLocaleString()}
+        onClick={goFederations}
+        onClickTitle={t('coordination.federations_drill', {
+          defaultValue: 'Open BIM federations',
+        })}
         secondary={t('coordination.federations_members', {
           defaultValue: '{{m}} members · {{e}} elements',
           m: data.federations.total_members,

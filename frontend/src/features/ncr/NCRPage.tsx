@@ -1,7 +1,7 @@
-import React, { useState, useMemo, useCallback, useEffect } from 'react';
+import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import clsx from 'clsx';
 import {
   AlertOctagon,
@@ -25,7 +25,7 @@ import {
   ListChecks,
   Link2,
 } from 'lucide-react';
-import { Button, Card, Badge, EmptyState, Breadcrumb, ConfirmDialog, RecoveryCard, SkeletonTable } from '@/shared/ui';
+import { Button, Card, Badge, EmptyState, Breadcrumb, ConfirmDialog, RecoveryCard, SkeletonTable, IntroRichText } from '@/shared/ui';
 import { RequiresProject } from '@/shared/auth/RequiresProject';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { SectionIntro } from '@/features/validation';
@@ -415,20 +415,48 @@ const NCRRow = React.memo(function NCRRow({
   ncr,
   onClose,
   onCreateVariation,
+  highlight,
 }: {
   ncr: NCR;
   onClose: (id: string) => void;
   onCreateVariation: (id: string) => void;
+  /** When set (from a ?highlight deep-link) the row auto-expands, scrolls into
+   *  view and flashes a highlight ring. */
+  highlight?: boolean;
 }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const [expanded, setExpanded] = useState(false);
+  const rowRef = useRef<HTMLDivElement>(null);
+  const [flash, setFlash] = useState(false);
+
+  useEffect(() => {
+    if (!highlight) return;
+    setExpanded(true);
+    setFlash(true);
+    rowRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const timer = window.setTimeout(() => setFlash(false), 2400);
+    return () => window.clearTimeout(timer);
+  }, [highlight]);
+
   const statusCfg = STATUS_CONFIG[ncr.status] ?? STATUS_CONFIG.identified;
   const typeCfg = NCR_TYPE_COLORS[ncr.ncr_type] ?? 'neutral';
   const severityCfg = SEVERITY_CONFIG[ncr.severity] ?? SEVERITY_CONFIG.minor;
+  // Deep-link to the exact originating inspection (scoped to the NCR's project
+  // and highlighting the linked inspection row). Falls back to the project
+  // route even when the inspection number is unknown.
+  const inspectionDeepLink = ncr.linked_inspection_id
+    ? `/projects/${ncr.project_id}/inspections?highlight=${ncr.linked_inspection_id}`
+    : '/inspections';
 
   return (
-    <div className="border-b border-border-light last:border-b-0">
+    <div
+      ref={rowRef}
+      className={clsx(
+        'border-b border-border-light last:border-b-0 scroll-mt-24 transition-colors duration-500',
+        flash && 'bg-oe-blue/10 ring-2 ring-inset ring-oe-blue/40',
+      )}
+    >
       {/* Main row */}
       <div
         className={clsx(
@@ -548,16 +576,34 @@ const NCRRow = React.memo(function NCRRow({
             </div>
           )}
 
-          {/* Linked Inspection */}
+          {/* Linked Inspection — the INS badge deep-links straight to the
+              originating inspection so the user lands on the exact failed
+              check, not the full register. */}
           {ncr.linked_inspection_number != null && (
             <div className="flex items-center gap-2">
               <ClipboardCheck size={13} className="text-content-tertiary" />
               <span className="text-xs text-content-tertiary">
                 {t('ncr.linked_inspection', { defaultValue: 'Linked Inspection' })}:
               </span>
-              <Badge variant="neutral" size="sm">
-                INS-{String(ncr.linked_inspection_number).padStart(3, '0')}
-              </Badge>
+              {ncr.linked_inspection_id ? (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    navigate(inspectionDeepLink);
+                  }}
+                  className="rounded-md transition-opacity hover:opacity-80 focus:outline-none focus-visible:ring-2 focus-visible:ring-oe-blue/40"
+                  title={t('ncr.view_inspection', { defaultValue: 'View Inspection' })}
+                >
+                  <Badge variant="blue" size="sm">
+                    INS-{String(ncr.linked_inspection_number).padStart(3, '0')}
+                  </Badge>
+                </button>
+              ) : (
+                <Badge variant="neutral" size="sm">
+                  INS-{String(ncr.linked_inspection_number).padStart(3, '0')}
+                </Badge>
+              )}
             </div>
           )}
 
@@ -650,7 +696,7 @@ const NCRRow = React.memo(function NCRRow({
                 className="text-2xs"
                 onClick={(e) => {
                   e.stopPropagation();
-                  navigate('/inspections');
+                  navigate(inspectionDeepLink);
                 }}
               >
                 <ClipboardCheck size={11} className="mr-1" />
@@ -694,13 +740,22 @@ export function NCRPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { projectId: routeProjectId } = useParams<{ projectId: string }>();
+  const [searchParams, setSearchParams] = useSearchParams();
   const qc = useQueryClient();
   const addToast = useToastStore((s) => s.addToast);
   const activeProjectId = useProjectContextStore((s) => s.activeProjectId);
 
+  // Deep-link target (e.g. from an inspection's "Open NCR" toast). The matching
+  // row auto-expands, scrolls into view and flashes once the data has loaded.
+  const highlightId = searchParams.get('highlight');
+  // Subcontractor name passed from the rating "Quality NCRs" cross-link
+  // (CONN-44). Seeds the search box once so the register opens filtered to that
+  // firm; the user can then clear or refine it like any other search.
+  const subParam = searchParams.get('sub');
+
   // State
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
+  const [searchQuery, setSearchQuery] = useState(() => subParam ?? '');
   const [statusFilter, setStatusFilter] = useState<NCRStatus | ''>('');
 
   // Data
@@ -859,6 +914,40 @@ export function NCRPage() {
     [createVariationMut],
   );
 
+  // The ?sub seed has been copied into searchQuery on first render; drop the
+  // param (replace, preserving other params) so the search becomes a normal,
+  // user-editable filter and a refresh does not re-pin it.
+  useEffect(() => {
+    if (!subParam) return;
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete('sub');
+        return next;
+      },
+      { replace: true },
+    );
+  }, [subParam, setSearchParams]);
+
+  // Once the highlighted NCR is present, let the row flash then drop the
+  // ?highlight param (replace, preserving other params) so a refresh or
+  // back-navigation does not re-trigger the highlight.
+  useEffect(() => {
+    if (!highlightId) return;
+    if (!ncrs.some((n) => n.id === highlightId)) return;
+    const timer = window.setTimeout(() => {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          next.delete('highlight');
+          return next;
+        },
+        { replace: true },
+      );
+    }, 2600);
+    return () => window.clearTimeout(timer);
+  }, [highlightId, ncrs, setSearchParams]);
+
   return (
     <div className="space-y-5 animate-fade-in">
       {/* Breadcrumb */}
@@ -895,6 +984,14 @@ export function NCRPage() {
         title={t('ncr.intro_title', {
           defaultValue: 'Catch defective work, fix the cause',
         })}
+        more={
+          <IntroRichText
+            text={t('ncr.intro_more', {
+              defaultValue:
+                'A non-conformance is work that does not meet the specification: concrete below strength, a duct run that clashes, a missing test certificate, a safety breach. Left as a verbal "we will sort it out", these turn into disputes, rejected work and arguments over who pays. A Non-Conformance Report makes the defect a formal record with a number, a severity and an owner, so it cannot quietly disappear and the cause gets fixed rather than just the symptom.\n\n**You put in:**\n- The non-conformance type (material, workmanship, design, documentation or safety) and a severity from observation up to critical\n- A clear title and description of what was observed, where, and which specification was not met\n- The location on site and, if known, a preliminary root cause\n- Corrective and preventive actions as the investigation progresses\n\n**You get out:**\n- A numbered NCR register with status from identified through review, corrective action and verification to closed\n- At-a-glance counts of total, open, under-review and closed NCRs\n- Traceability badges when an NCR was auto-raised from a clash or a blocking validation error\n- A one-click Variation when the defect carries a cost, linking the quality record to the commercial one\n\n**How it works day to day:**\n1. Raise the NCR, classify it and describe the defect against the spec it breaches.\n2. Investigate the root cause and record the corrective action that fixes this instance.\n3. Add a preventive action so the same failure does not recur on the next pour or run.\n4. If the fix costs money, create a Variation straight from the NCR to capture the commercial impact.\n5. Verify the work and close the NCR, leaving a dated record of the whole cycle.\n\nNCRs are frequently raised straight from a failed Inspection, which pre-fills the defect from the checklist. Minor snags that just need a re-check belong on the Punch List instead, while genuine non-conformances that need root-cause analysis stay here. When there is a cost, the trail runs on to Change Orders so quality and money never separate.',
+            })}
+          />
+        }
         links={[
           {
             label: t('ncr.intro_link_inspections', { defaultValue: 'Inspections' }),
@@ -920,13 +1017,13 @@ export function NCRPage() {
       <>
       {/* Stats */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <Card className="p-4 animate-card-in">
+        <div className="rounded-xl border border-border-light bg-surface-elevated/90 p-4 shadow-xs transition-shadow duration-normal ease-oe hover:shadow-sm animate-card-in">
           <p className="text-2xs font-medium text-content-tertiary uppercase tracking-wide">
             {t('ncr.stat_total', { defaultValue: 'Total' })}
           </p>
           <p className="text-lg font-semibold mt-1 tabular-nums text-content-primary">{stats.total}</p>
-        </Card>
-        <Card className="p-4 animate-card-in">
+        </div>
+        <div className="rounded-xl border border-border-light bg-surface-elevated/90 p-4 shadow-xs transition-shadow duration-normal ease-oe hover:shadow-sm animate-card-in">
           <p className="text-2xs font-medium text-content-tertiary uppercase tracking-wide">
             {t('ncr.stat_open', { defaultValue: 'Open' })}
           </p>
@@ -938,21 +1035,21 @@ export function NCRPage() {
           >
             {stats.open}
           </p>
-        </Card>
-        <Card className="p-4 animate-card-in">
+        </div>
+        <div className="rounded-xl border border-border-light bg-surface-elevated/90 p-4 shadow-xs transition-shadow duration-normal ease-oe hover:shadow-sm animate-card-in">
           <p className="text-2xs font-medium text-content-tertiary uppercase tracking-wide">
             {t('ncr.stat_under_review', { defaultValue: 'Under Review' })}
           </p>
           <p className="text-lg font-semibold mt-1 tabular-nums text-amber-500">{stats.underReview}</p>
-        </Card>
-        <Card className="p-4 animate-card-in">
+        </div>
+        <div className="rounded-xl border border-border-light bg-surface-elevated/90 p-4 shadow-xs transition-shadow duration-normal ease-oe hover:shadow-sm animate-card-in">
           <p className="text-2xs font-medium text-content-tertiary uppercase tracking-wide">
             {t('ncr.stat_closed', { defaultValue: 'Closed' })}
           </p>
           <p className="text-lg font-semibold mt-1 tabular-nums text-semantic-success">
             {stats.closed}
           </p>
-        </Card>
+        </div>
       </div>
 
       {/* Toolbar */}
@@ -1063,7 +1160,13 @@ export function NCRPage() {
 
               {/* Rows */}
               {filtered.map((ncr) => (
-                <NCRRow key={ncr.id} ncr={ncr} onClose={handleClose} onCreateVariation={handleCreateVariation} />
+                <NCRRow
+                  key={ncr.id}
+                  ncr={ncr}
+                  onClose={handleClose}
+                  onCreateVariation={handleCreateVariation}
+                  highlight={highlightId === ncr.id}
+                />
               ))}
             </Card>
           </>

@@ -532,6 +532,13 @@ export function VariationsPage() {
             label: t('nav.finance', { defaultValue: 'Finance' }),
             onClick: () => navigate('/finance'),
           },
+          {
+            // CONN-48: keep the three change pipelines connected. A variation
+            // is the contractual sibling of a Management-of-Change item; one
+            // click reaches the MoC register that may have triggered it.
+            label: t('moc.title', { defaultValue: 'Management of Change' }),
+            onClick: () => navigate('/moc'),
+          },
         ]}
       >
         {t('variations.intro_body', {
@@ -1333,6 +1340,7 @@ function DetailDrawer({
 }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
+  const navigate = useNavigate();
   const addToast = useToastStore((s) => s.addToast);
 
   const notice = selected.kind === 'notices' ? notices.find((n) => n.id === selected.id) : null;
@@ -1785,6 +1793,38 @@ function DetailDrawer({
                   }
                 />
               </div>
+
+              {/* Linked records — turn the already-fetched FKs into deep links
+                  (mirrors MoCPage). The Change Order drives the budget; the
+                  contract is the one this order amends. */}
+              {(order.reference_change_order_id || order.affected_contract_id) && (
+                <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-border-light">
+                  <span className="text-xs uppercase tracking-wide text-content-tertiary">
+                    {t('variations.linked_records', { defaultValue: 'Linked records' })}
+                  </span>
+                  {order.reference_change_order_id && (
+                    <button
+                      type="button"
+                      className="flex items-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 dark:bg-blue-950/20 dark:border-blue-800 px-2.5 py-1.5 text-xs text-blue-700 dark:text-blue-300 hover:bg-blue-100 transition-colors"
+                      onClick={() => navigate('/changeorders')}
+                    >
+                      <ArrowRight size={12} />
+                      {t('variations.linked_change_order', { defaultValue: 'Change order' })}
+                    </button>
+                  )}
+                  {order.affected_contract_id && (
+                    <button
+                      type="button"
+                      className="flex items-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 dark:bg-blue-950/20 dark:border-blue-800 px-2.5 py-1.5 text-xs text-blue-700 dark:text-blue-300 hover:bg-blue-100 transition-colors"
+                      onClick={() => navigate('/contracts')}
+                    >
+                      <ArrowRight size={12} />
+                      {t('variations.linked_contract', { defaultValue: 'Contract' })}
+                    </button>
+                  )}
+                </div>
+              )}
+
               <div className="flex flex-wrap gap-2 pt-2 border-t border-border-light">
                 {order.status === 'issued' && (
                   <Button

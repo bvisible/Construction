@@ -171,6 +171,14 @@ class _StubResourceSkillRepo:
     async def list_for_resource(self, rid: uuid.UUID) -> list[Any]:
         return [r for r in self.rows.values() if r.resource_id == rid]
 
+    async def list_for_resources(self, rids: list[uuid.UUID]) -> dict[uuid.UUID, list[Any]]:
+        # Bulk variant (N+1 fix) - mapping resource_id -> [link, ...].
+        out: dict[uuid.UUID, list[Any]] = {}
+        for r in self.rows.values():
+            if r.resource_id in rids:
+                out.setdefault(r.resource_id, []).append(r)
+        return out
+
     async def find_pair(self, rid: uuid.UUID, sid: uuid.UUID) -> Any:
         for r in self.rows.values():
             if r.resource_id == rid and r.skill_id == sid:
@@ -250,6 +258,21 @@ class _StubWindowRepo:
             out = [r for r in out if r.start_at <= end_at]
         return out
 
+    async def list_for_resources(
+        self,
+        rids: list[uuid.UUID],
+        *,
+        start_at: datetime | None = None,
+        end_at: datetime | None = None,
+    ) -> dict[uuid.UUID, list[Any]]:
+        # Bulk variant (N+1 fix) - same overlap filter, grouped by resource.
+        out: dict[uuid.UUID, list[Any]] = {}
+        for rid in rids:
+            rows = await self.list_for_resource(rid, start_at=start_at, end_at=end_at)
+            if rows:
+                out[rid] = rows
+        return out
+
     async def create(self, w: Any) -> Any:
         if getattr(w, "id", None) is None:
             w.id = uuid.uuid4()
@@ -321,6 +344,22 @@ class _StubAssignmentRepo:
                 continue
             if a.start_at < end and a.end_at > start:
                 out.append(a)
+        return out
+
+    async def assignments_for_resources_in_window(
+        self,
+        rids: list[uuid.UUID],
+        start: datetime,
+        end: datetime,
+        *,
+        active_only: bool = True,
+    ) -> dict[uuid.UUID, list[Any]]:
+        # Bulk variant (N+1 fix) - mapping resource_id -> overlapping assignments.
+        out: dict[uuid.UUID, list[Any]] = {}
+        for rid in rids:
+            rows = await self.assignments_for_resource_in_window(rid, start, end, active_only=active_only)
+            if rows:
+                out[rid] = rows
         return out
 
     async def list_in_window(
@@ -1988,3 +2027,92 @@ async def test_propose_assignment_explicit_zero_cost_rate_is_preserved() -> None
         f"explicit zero cost_rate was overwritten with {assignment.cost_rate!r} — "
         f"the resource catalogue default leaked through `or`-coalesce"
     )
+
+
+# ── board() surfaces project / task labels for clickable dispatcher rows ────
+
+
+class _NamingSession(_StubSession):
+    """Session stub whose execute() returns id->name rows for the label join."""
+
+    def __init__(self, names: dict[uuid.UUID, str]) -> None:
+        super().__init__()
+        self._names = names
+
+    async def execute(self, stmt: Any) -> Any:  # noqa: ARG002 - stmt not inspected
+        rows = list(self._names.items())
+        return SimpleNamespace(all=lambda: rows)
+
+
+@pytest.mark.asyncio
+async def test_board_annotates_project_and_task_labels() -> None:
+    """The dispatcher board must attach human-readable project_name / task_name
+    to each assignment so the UI renders clickable rows instead of bare UUIDs.
+    """
+    svc = _make_service()
+    r = _make_resource(svc)
+    pid = uuid.uuid4()
+    tid = uuid.uuid4()
+    await svc.assignment_repo.create(
+        SimpleNamespace(
+            id=uuid.uuid4(),
+            resource_id=r.id,
+            project_id=pid,
+            task_id=tid,
+            work_order_id=None,
+            start_at=datetime(2026, 5, 10, 8, 0, tzinfo=UTC),
+            end_at=datetime(2026, 5, 10, 17, 0, tzinfo=UTC),
+            allocation_percent=100,
+            status="confirmed",
+            cost_rate=Decimal("0"),
+            currency="EUR",
+            notes="",
+            created_by=None,
+            metadata_={},
+        )
+    )
+    svc.session = _NamingSession({pid: "Riverside Tower", tid: "Pour slab L3"})
+
+    entries = await svc.board(
+        datetime(2026, 5, 1, tzinfo=UTC),
+        datetime(2026, 6, 1, tzinfo=UTC),
+    )
+    assignments = [a for e in entries for a in e["assignments"]]
+    assert len(assignments) == 1
+    a = assignments[0]
+    assert a.project_name == "Riverside Tower"
+    assert a.task_name == "Pour slab L3"
+
+
+@pytest.mark.asyncio
+async def test_board_labels_blank_when_unassigned() -> None:
+    """Assignments with no project/task get empty labels (no DB round-trip),
+    so the UI falls back to a non-linked 'Unassigned' cell rather than a UUID.
+    """
+    svc = _make_service()
+    r = _make_resource(svc)
+    await svc.assignment_repo.create(
+        SimpleNamespace(
+            id=uuid.uuid4(),
+            resource_id=r.id,
+            project_id=None,
+            task_id=None,
+            work_order_id=None,
+            start_at=datetime(2026, 5, 10, 8, 0, tzinfo=UTC),
+            end_at=datetime(2026, 5, 10, 17, 0, tzinfo=UTC),
+            allocation_percent=100,
+            status="confirmed",
+            cost_rate=Decimal("0"),
+            currency="EUR",
+            notes="",
+            created_by=None,
+            metadata_={},
+        )
+    )
+    entries = await svc.board(
+        datetime(2026, 5, 1, tzinfo=UTC),
+        datetime(2026, 6, 1, tzinfo=UTC),
+    )
+    a = next(a for e in entries for a in e["assignments"])
+    assert a.project_name == ""
+    assert a.task_name == ""

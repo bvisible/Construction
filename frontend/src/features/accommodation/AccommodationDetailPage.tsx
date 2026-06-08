@@ -47,6 +47,9 @@ import {
   Users,
   CircleCheck,
   Layers,
+  ExternalLink,
+  Wallet,
+  FileText,
 } from 'lucide-react';
 
 import {
@@ -93,6 +96,12 @@ import {
   type ChargeKind,
   type ChargeStatus,
 } from './api';
+import { fetchBIMModels } from '@/features/bim/api';
+import {
+  listDevelopments,
+  listPhases,
+  listBlocks,
+} from '@/features/property-dev/api';
 import { BulkRoomAddModal } from './BulkRoomAddModal';
 import { AccommodationCalendar } from './AccommodationCalendar';
 
@@ -438,6 +447,55 @@ function HeaderKpi({ icon, label, value, accent }: HeaderKpiProps) {
         </div>
       </div>
     </div>
+  );
+}
+
+/* ── Occupant reference ──────────────────────────────────────────────── */
+
+/**
+ * Render a booking's occupant. When the booking is tied to a real
+ * directory contact (``occupant_contact_id`` present), the name becomes
+ * a deep link into the Contacts directory so an operator can open the
+ * housed worker's record. Falls back to plain text for free-text
+ * occupants (no contact behind the name).
+ *
+ * The link carries the contact id as a ``?contactId=`` hint - the
+ * Contacts page resolves it to open the matching record. The label is
+ * always the human name, so the user sees who it is regardless.
+ */
+function OccupantRef({
+  contactId,
+  name,
+  className,
+}: {
+  contactId: string | null;
+  name: string | null;
+  className?: string;
+}) {
+  const { t } = useTranslation();
+  const label =
+    name ||
+    t('accommodation.bookings.unnamed_occupant', { defaultValue: '(unnamed)' });
+
+  if (!contactId) {
+    return <span className={className}>{label}</span>;
+  }
+
+  return (
+    <Link
+      to={`/contacts?contactId=${encodeURIComponent(contactId)}`}
+      className={clsx(
+        'inline-flex items-center gap-1 text-oe-blue hover:underline',
+        className,
+      )}
+      title={t('accommodation.bookings.open_contact', {
+        defaultValue: 'Open contact record',
+      })}
+      data-testid="occupant-contact-link"
+    >
+      <span className="truncate">{label}</span>
+      <ExternalLink size={11} aria-hidden="true" className="shrink-0" />
+    </Link>
   );
 }
 
@@ -1115,10 +1173,10 @@ function BookingsList({
                   {b.room_label ?? '—'}
                 </td>
                 <td className="px-3 py-2">
-                  {b.occupant_name ||
-                    t('accommodation.bookings.unnamed_occupant', {
-                      defaultValue: '(unnamed)',
-                    })}
+                  <OccupantRef
+                    contactId={b.occupant_contact_id}
+                    name={b.occupant_name}
+                  />
                 </td>
                 <td className="px-3 py-2 tabular-nums">{b.check_in}</td>
                 <td className="px-3 py-2 tabular-nums">
@@ -1174,10 +1232,10 @@ function BookingsList({
                     </span>
                   </div>
                   <div className="mt-1 text-sm">
-                    {b.occupant_name ||
-                      t('accommodation.bookings.unnamed_occupant', {
-                        defaultValue: '(unnamed)',
-                      })}
+                    <OccupantRef
+                      contactId={b.occupant_contact_id}
+                      name={b.occupant_name}
+                    />
                   </div>
                   <div className="mt-0.5 text-xs text-content-tertiary tabular-nums">
                     {b.check_in} {'→'} {b.check_out ?? '∞'}
@@ -1489,6 +1547,8 @@ function ChargesTab({ data }: { data: AccommodationDetail }) {
                   <div className="text-2xs text-content-tertiary tabular-nums">
                     {b.check_in} {'→'} {b.check_out ?? '∞'}
                   </div>
+                  {/* occupant deep link lives in the panel header to keep
+                      the rail button a single click target */}
                 </button>
               </li>
             );
@@ -1500,6 +1560,7 @@ function ChargesTab({ data }: { data: AccommodationDetail }) {
       {selectedBookingId ? (
         <BookingChargesPanel
           accommodationId={data.id}
+          projectId={data.project_id}
           bookingId={selectedBookingId}
         />
       ) : (
@@ -1522,15 +1583,28 @@ function ChargesTab({ data }: { data: AccommodationDetail }) {
 
 function BookingChargesPanel({
   accommodationId,
+  projectId,
   bookingId,
 }: {
   accommodationId: string;
+  projectId: string;
   bookingId: string;
 }) {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const [editorOpen, setEditorOpen] = useState(false);
   const queryClient = useQueryClient();
   const addToast = useToastStore((s) => s.addToast);
+
+  // Finance deep link for this accommodation's project. Charges are not
+  // FK-linked to a specific invoice row on the backend (the charge only
+  // carries a status enum), so we route to the project's Finance invoices
+  // register rather than faking a per-invoice id. From there the operator
+  // raises the invoice (pending charges) or finds the issued one
+  // (invoiced / paid charges).
+  const financeInvoicesPath = projectId
+    ? `/projects/${projectId}/finance?tab=invoices`
+    : '/finance?tab=invoices';
 
   const bookingDetail = useQuery({
     queryKey: ['accommodation', 'booking-detail', bookingId],
@@ -1557,10 +1631,10 @@ function BookingChargesPanel({
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border-light p-3">
         <div className="min-w-0">
           <div className="text-sm font-semibold text-content-primary truncate">
-            {data.occupant_name ||
-              t('accommodation.bookings.unnamed_occupant', {
-                defaultValue: '(unnamed)',
-              })}
+            <OccupantRef
+              contactId={data.occupant_contact_id}
+              name={data.occupant_name}
+            />
           </div>
           <div className="text-2xs text-content-tertiary tabular-nums">
             {data.check_in} {'→'} {data.check_out ?? '∞'}
@@ -1619,6 +1693,9 @@ function BookingChargesPanel({
                     defaultValue: 'Status',
                   })}
                 </th>
+                <th className="px-3 py-2 font-medium text-right">
+                  <span className="sr-only">{t('common.actions')}</span>
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border-light">
@@ -1651,6 +1728,42 @@ function BookingChargesPanel({
                         defaultValue: c.status,
                       })}
                     </span>
+                  </td>
+                  <td className="px-3 py-2 text-right">
+                    {c.status === 'pending' ? (
+                      <button
+                        type="button"
+                        onClick={() => navigate(financeInvoicesPath)}
+                        data-testid={`charge-invoice-${c.id}`}
+                        className="inline-flex items-center gap-1 rounded-md border border-oe-blue/30 bg-oe-blue/5 px-2 py-1 text-2xs font-medium text-oe-blue hover:bg-oe-blue/10"
+                        title={t('accommodation.charges.invoice_hint', {
+                          defaultValue:
+                            'Raise this charge as an invoice in Finance.',
+                        })}
+                      >
+                        <Wallet size={11} aria-hidden="true" />
+                        {t('accommodation.charges.invoice_in_finance', {
+                          defaultValue: 'Invoice in Finance',
+                        })}
+                      </button>
+                    ) : c.status === 'invoiced' || c.status === 'paid' ? (
+                      <button
+                        type="button"
+                        onClick={() => navigate(financeInvoicesPath)}
+                        data-testid={`charge-view-invoice-${c.id}`}
+                        className="inline-flex items-center gap-1 text-2xs font-medium text-oe-blue hover:underline"
+                        title={t('accommodation.charges.view_invoice_hint', {
+                          defaultValue: 'Open the Finance invoices register.',
+                        })}
+                      >
+                        <FileText size={11} aria-hidden="true" />
+                        {t('accommodation.charges.view_invoice', {
+                          defaultValue: 'View in Finance',
+                        })}
+                      </button>
+                    ) : (
+                      <span className="text-2xs text-content-tertiary">—</span>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -1864,6 +1977,238 @@ function AddChargeModal({
   );
 }
 
+/* ── Cross-module pickers (replace raw UUID inputs) ──────────────────── */
+
+const PICKER_INPUT_CLS =
+  'h-10 w-full rounded-lg border border-border bg-surface-primary px-3 text-sm focus:outline-none focus:ring-2 focus:ring-oe-blue/30 focus:border-oe-blue';
+
+/**
+ * BIM model picker — replaces the raw "Linked BIM model id" text input.
+ *
+ * Lists the project's BIM models so the operator selects by name instead
+ * of pasting a UUID. If the currently-saved id is no longer in the
+ * project's model list (deleted / cross-project legacy value), it is
+ * preserved as a "kept" option so saving the form does not silently drop
+ * it. Falls back to a plain text input when the model list cannot be
+ * loaded so the field never becomes unusable.
+ */
+function BimModelPicker({
+  projectId,
+  value,
+  onChange,
+}: {
+  projectId: string;
+  value: string;
+  onChange: (next: string) => void;
+}) {
+  const { t } = useTranslation();
+  const modelsQuery = useQuery({
+    queryKey: ['accommodation', 'bim-models', projectId],
+    queryFn: () => fetchBIMModels(projectId),
+    enabled: !!projectId,
+    staleTime: 30_000,
+  });
+
+  if (modelsQuery.isError) {
+    // Degrade gracefully — keep the value editable as text.
+    return (
+      <input
+        type="text"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className={`${PICKER_INPUT_CLS} font-mono`}
+        data-testid="accommodation-bim-model-input"
+        placeholder={t('accommodation.field.bim_model_id', {
+          defaultValue: 'Linked BIM model id',
+        })}
+      />
+    );
+  }
+
+  const models = modelsQuery.data?.items ?? [];
+  const known = value && models.some((m) => m.id === value);
+
+  return (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className={PICKER_INPUT_CLS}
+      data-testid="accommodation-bim-model-select"
+      disabled={modelsQuery.isLoading}
+    >
+      <option value="">
+        {modelsQuery.isLoading
+          ? t('common.loading', { defaultValue: 'Loading…' })
+          : t('accommodation.bim_picker.none', {
+              defaultValue: 'No linked model',
+            })}
+      </option>
+      {/* Preserve a previously-saved id that is no longer in the list so
+          the user does not lose it just by opening the form. */}
+      {value && !known && (
+        <option value={value}>
+          {t('accommodation.bim_picker.kept', {
+            defaultValue: 'Current link ({{id}})',
+            id: value.slice(0, 8),
+          })}
+        </option>
+      )}
+      {models.map((m) => (
+        <option key={m.id} value={m.id}>
+          {m.name || m.filename || m.id.slice(0, 8)}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+/**
+ * PropDev block picker — replaces the raw "PropDev block UUID" input.
+ *
+ * A block lives under a phase, which lives under a development, so the
+ * picker cascades Development → Phase → Block. On mount it seeds the
+ * cascade from the currently-saved block id where possible (best effort:
+ * we can only resolve the parents by walking the lists). Selecting a
+ * block reports its id up; clearing the development clears the block.
+ *
+ * Falls back to a plain text input if developments cannot be loaded.
+ */
+function PropDevBlockPicker({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (next: string) => void;
+}) {
+  const { t } = useTranslation();
+  const [devId, setDevId] = useState('');
+  const [phaseId, setPhaseId] = useState('');
+
+  const developmentsQuery = useQuery({
+    queryKey: ['accommodation', 'propdev-developments'],
+    queryFn: () => listDevelopments({ limit: 100 }),
+    staleTime: 30_000,
+  });
+  const phasesQuery = useQuery({
+    queryKey: ['accommodation', 'propdev-phases', devId],
+    queryFn: () => listPhases(devId),
+    enabled: !!devId,
+  });
+  const blocksQuery = useQuery({
+    queryKey: ['accommodation', 'propdev-blocks', phaseId],
+    queryFn: () => listBlocks(phaseId),
+    enabled: !!phaseId,
+  });
+
+  if (developmentsQuery.isError) {
+    return (
+      <input
+        type="text"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className={`${PICKER_INPUT_CLS} font-mono`}
+        data-testid="accommodation-block-input"
+        placeholder={t('accommodation.bootstrap.block_id', {
+          defaultValue: 'PropDev block UUID',
+        })}
+      />
+    );
+  }
+
+  const developments = developmentsQuery.data ?? [];
+  const phases = phasesQuery.data ?? [];
+  const blocks = blocksQuery.data ?? [];
+
+  return (
+    <div className="space-y-2" data-testid="accommodation-block-picker">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+        <select
+          value={devId}
+          onChange={(e) => {
+            setDevId(e.target.value);
+            setPhaseId('');
+            onChange('');
+          }}
+          className={PICKER_INPUT_CLS}
+          data-testid="accommodation-block-dev-select"
+          disabled={developmentsQuery.isLoading}
+          aria-label={t('propdev.developments', {
+            defaultValue: 'Developments',
+          })}
+        >
+          <option value="">
+            {t('accommodation.block_picker.pick_development', {
+              defaultValue: 'Development…',
+            })}
+          </option>
+          {developments.map((d) => (
+            <option key={d.id} value={d.id}>
+              {d.code} - {d.name}
+            </option>
+          ))}
+        </select>
+        <select
+          value={phaseId}
+          onChange={(e) => {
+            setPhaseId(e.target.value);
+            onChange('');
+          }}
+          className={PICKER_INPUT_CLS}
+          data-testid="accommodation-block-phase-select"
+          disabled={!devId || phasesQuery.isLoading}
+          aria-label={t('propdev.phases', { defaultValue: 'Phases' })}
+        >
+          <option value="">
+            {t('accommodation.block_picker.pick_phase', {
+              defaultValue: 'Phase…',
+            })}
+          </option>
+          {phases.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.code} - {p.name}
+            </option>
+          ))}
+        </select>
+        <select
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          className={PICKER_INPUT_CLS}
+          data-testid="accommodation-block-block-select"
+          disabled={!phaseId || blocksQuery.isLoading}
+          aria-label={t('propdev.blocks', { defaultValue: 'Blocks' })}
+        >
+          <option value="">
+            {t('accommodation.block_picker.pick_block', {
+              defaultValue: 'Block…',
+            })}
+          </option>
+          {value && !blocks.some((b) => b.id === value) && (
+            <option value={value}>
+              {t('accommodation.block_picker.kept', {
+                defaultValue: 'Current block ({{id}})',
+                id: value.slice(0, 8),
+              })}
+            </option>
+          )}
+          {blocks.map((b) => (
+            <option key={b.id} value={b.id}>
+              {b.code} - {b.name}
+            </option>
+          ))}
+        </select>
+      </div>
+      {value && (
+        <p className="text-2xs text-content-tertiary">
+          {t('accommodation.block_picker.selected', {
+            defaultValue: 'Selected block: {{id}}',
+            id: value,
+          })}
+        </p>
+      )}
+    </div>
+  );
+}
+
 /* ── Settings tab ────────────────────────────────────────────────────── */
 
 function SettingsTab({
@@ -2031,17 +2376,20 @@ function SettingsTab({
                 placeholder="-180 to 180"
               />
             </label>
-            <label className="text-xs font-medium text-content-primary sm:col-span-2">
-              {t('accommodation.field.bim_model_id', {
-                defaultValue: 'Linked BIM model id',
-              })}
-              <input
-                type="text"
-                value={bimModelId}
-                onChange={(e) => setBimModelId(e.target.value)}
-                className={`${inputCls} mt-1 font-mono`}
-              />
-            </label>
+            <div className="text-xs font-medium text-content-primary sm:col-span-2">
+              <label htmlFor="accommodation-bim-model" className="block">
+                {t('accommodation.field.bim_model', {
+                  defaultValue: 'Linked BIM model',
+                })}
+              </label>
+              <div className="mt-1" id="accommodation-bim-model">
+                <BimModelPicker
+                  projectId={data.project_id}
+                  value={bimModelId}
+                  onChange={setBimModelId}
+                />
+              </div>
+            </div>
             <label className="text-xs font-medium text-content-primary sm:col-span-2">
               {t('accommodation.field.notes', { defaultValue: 'Notes' })}
               <textarea
@@ -2081,29 +2429,27 @@ function SettingsTab({
               })}
             </p>
           </div>
-          <div className="flex flex-wrap items-end gap-2">
-            <label className="text-xs font-medium text-content-primary flex-1 min-w-[20rem]">
-              {t('accommodation.bootstrap.block_id', {
-                defaultValue: 'PropDev block UUID',
+          <div className="space-y-2">
+            <div className="text-xs font-medium text-content-primary">
+              {t('accommodation.bootstrap.block_label', {
+                defaultValue: 'PropDev block',
               })}
-              <input
-                type="text"
-                value={blockId}
-                onChange={(e) => setBlockId(e.target.value)}
-                className={`${inputCls} mt-1 font-mono`}
-                data-testid="accommodation-bootstrap-block-id"
-              />
-            </label>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => bootstrapMutation.mutate()}
-              loading={bootstrapMutation.isPending}
-              disabled={!blockId.trim()}
-              data-testid="accommodation-bootstrap-run"
-            >
-              {t('accommodation.bootstrap.run', { defaultValue: 'Bootstrap' })}
-            </Button>
+              <div className="mt-1">
+                <PropDevBlockPicker value={blockId} onChange={setBlockId} />
+              </div>
+            </div>
+            <div className="flex justify-end">
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => bootstrapMutation.mutate()}
+                loading={bootstrapMutation.isPending}
+                disabled={!blockId.trim()}
+                data-testid="accommodation-bootstrap-run"
+              >
+                {t('accommodation.bootstrap.run', { defaultValue: 'Bootstrap' })}
+              </Button>
+            </div>
           </div>
         </div>
       </Card>

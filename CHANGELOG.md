@@ -5,6 +5,55 @@ All notable changes to OpenConstructionERP are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [7.2.0] - 2026-06-08
+
+### Fixed
+
+- The desktop app could get stuck on "Recovering the local database" forever on Windows PCs whose regional format is set to Turkish. The bundled database tool rejected the non-ASCII locale name ("Turkish_Türkiye.1254") during first-time setup, so the local database never finished initialising. Setup now always creates the database with a neutral locale, and on top of that it clears a half-finished database folder left by an earlier failed attempt, so a machine that was already stuck heals itself on the next launch instead of failing the same way. Verified end to end against a real local PostgreSQL on a fresh install and on an upgrade from a broken folder.
+- The AI Estimate Builder no longer shows a fake $0.00 for a matched code that has no price in the catalogue. The match step and the alternatives list now say "matched, no price in catalogue", so an unpriced code reads honestly and you can pick a priced alternative. The rollup still treats it as zero so totals stay correct and the line stays flagged for review.
+- The RVT converter stopped reporting "Converter is out of date" when it was actually current.
+- Filters and groupings on IFC models in the BIM viewer behave correctly again across storeys, categories and entity groups.
+
+### Changed
+
+- Moving between modules is faster. The sidebar and header stay mounted as you navigate instead of being rebuilt on every page, so switching modules no longer tears down and re-creates the whole shell each time.
+- The BIM viewer's filter and property-search panel is now fully translated in all 26 languages. The search box, the category, level and grouping controls, and the property-search operators were showing in English everywhere because their text lived only in code; that text is now in the catalogue and translated. The remaining stage-2 translation gaps were closed in the same pass.
+- The AI Estimate Builder is clearer end to end: parameter names read as plain words instead of code-style snake_case, the match step shows a live progress bar so a long run no longer looks frozen, and matched rates are grouped by trade instead of one long list.
+- Element matching can use your own AI key to re-rank candidates for better results. You turn it on at the match step, and the key stays scoped to your own workspace so it is never shared across tenants.
+- Module badges were tidied: well-developed modules dropped the BETA tag, rougher ones keep it, and the old NEW tag is gone.
+- The DWG takeoff drawing card reads clearly on the dark canvas now, and the PDF takeoff toolbar wraps to two rows instead of showing a scrollbar.
+
+## [7.1.0] - 2026-06-07
+
+### Added
+
+- The desktop app finally has a real first launch. A fresh install no longer opens on a login form: the app provisions a local workspace owner on its own, signs it in, and lands directly in the setup wizard, language first, then company profile, modules, cost databases, country packs and demo data. A persistent "Skip setup - open in English" button sits on every step of the wizard, one click marks setup complete and opens the app in English. Returning launches go straight to the dashboard, logging out always returns to the normal login form, and the automatic sign-in only ever happens for a local desktop backend that has no real registered accounts.
+- The AI Estimate Builder opens with a conversation instead of a bare form. You describe the job in your own words, the intake asks up to three short rounds of clarifying questions as chips, toggles and numeric inputs, then walks through two explicit confirmation checkpoints: a parameter sheet, and a work-package board organised by foreman stage from demolition to commissioning where every package shows its real catalogue coverage. Without an AI key the same flow degrades to a curated form, and you can switch to the form at any time.
+- Rate matching in the AI Estimate Builder now runs three named passes, semantic match, unit reconciliation and a rate sanity check against benchmark bands, and shows its work. Every matched rate carries a "why this rate" trace you can expand, suspicious outliers are flagged and capped at low confidence instead of silently winning, and a candidate with the wrong unit dimension is demoted rather than dropped. Each work group also records where its quantity came from, with the formula and any assumptions spelled out.
+- Clash detection can turn a whole spatial cluster of clashes into one tracked work item, a punch-list item or a task, instead of leaving dozens of raw clashes to chase individually. The draft title, priority and assignee are proposed with a confidence score and the coordinator edits anything before confirming; every member clash records the link both ways and the run summary stays true.
+- BIM federations gained a health report that classifies every member model, ready, processing, failed, stale or empty, into a readiness score with a worst-state headline, plus a portable snapshot you can download and later diff against the live federation to see exactly which models were added, removed or changed between coordination meetings.
+- BIM quantity rules gained a testing sandbox that runs a draft rule against the live model before saving, a unit-dimension guard that warns when an area rule declares a volume unit, a coverage report listing element categories no active rule selects, and a formula version history with one-click restore. BOQ positions generated by rules now carry an honest confidence stamp instead of none.
+- A usage badge on every cost database row. A quiet neutral dot means the position is not used anywhere yet; once it lands in an estimate the badge becomes a green check with the real count of estimate positions using it, refreshed immediately after each add.
+- A connectivity program across the whole platform: more than 80 places where related records sat side by side without a link are now wired in both directions. Variations, change orders and contracts cross-reference each other, clashes jump to coordination tasks, NCRs open their inspection, daily diary entries link field reports, procurement lines link supplier catalog items, BI tiles drill into the records behind the number, and dozens of pages accept deep links that scroll to and highlight the exact row they point at. The goal is the same everywhere: any related record is one click away.
+- Quantity takeoff ties where an estimator actually needs them: 5D cost model, capacity planning, procurement and carbon pages link straight into BOQ quantities and the CAD-BIM matching flow.
+- An asset operations module, plus deeper logic across coordination, ERP chat, geo, element matching and project intelligence from the module-deepening wave.
+- Long-form "Show more" walkthroughs for six more modules: QMS, advanced HSE, management of change, NCR, punch list and inspections.
+
+### Changed
+
+- Navigation now answers every click immediately. Moving to a module whose code is still loading shows a progress bar, a spinner on the clicked sidebar row and a busy cursor instead of a second of nothing, so slow transitions read as loading rather than broken.
+- KPI cards across the platform share one modern style: a slightly translucent surface that lets the page texture show through, consistent radii and spacing, and a soft hover. Info blocks got the same treatment, fixing the washed-out opaque look they had on dashboards.
+- Element matching is now called CAD-BIM Match → Cost and sits next to the other estimating tools in the sidebar. The external portal is now called Client & Partner Portal everywhere, one name in the sidebar, breadcrumbs, search and the module registry.
+- The changelog inside the app reads in seconds: each release is a few short plain sentences instead of paragraphs.
+- A translation sweep brought roughly seventeen hundred interface strings per language to native copy in all 26 app languages, closing the gap to English entirely, and consolidated several hundred strings that previously lived only in code so they can stay translated. The website's download and partners pages were translated into all 19 site languages as well.
+- Typography swept across all user-visible text: long dashes replaced with plain hyphens everywhere.
+
+### Fixed
+
+- Adding a position from the cost database into an estimate now carries everything the position owns. Before, only a coarse three-line labor/material/equipment split survived and the variant reference was lost; now every resource comes across, resources with variants default to the mean rate and keep the full variant catalogue so a specific variant can be picked later in the BOQ editor.
+- The usage indicator on the cost database never changed color because usage was never recorded on add. It is now.
+- Registration metadata, the ip, user agent and referrer captured at sign-up, was silently dropped and never stored. It persists now.
+
 ## [7.0.1] - 2026-06-06
 
 ### Fixed

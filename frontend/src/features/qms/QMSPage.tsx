@@ -33,6 +33,7 @@ import {
   WideModal,
   WideModalSection,
   WideModalField,
+  IntroRichText,
 } from '@/shared/ui';
 import { RequiresProject } from '@/shared/auth/RequiresProject';
 import { PageHeader } from '@/shared/ui/PageHeader';
@@ -163,6 +164,9 @@ export function QMSPage() {
   const [selectedNcrId, setSelectedNcrId] = useState<string | null>(null);
   const [selectedInspectionId, setSelectedInspectionId] = useState<string | null>(null);
   const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
+  // When raising an NCR straight from a failed inspection (CONN-64) we seed the
+  // create modal's linked_inspection_id so the quality chain stays connected.
+  const [ncrPrefillInspectionId, setNcrPrefillInspectionId] = useState<string | null>(null);
   const activeProjectId = useProjectContextStore((s) => s.activeProjectId);
 
   const { data: projects = [] } = useQuery({
@@ -276,6 +280,14 @@ export function QMSPage() {
         title={t('qms.intro_title', {
           defaultValue: 'One quality chain, not five silos',
         })}
+        more={
+          <IntroRichText
+            text={t('qms.intro_more', {
+              defaultValue:
+                'On most jobs the quality records live in five different places: the ITP is a spreadsheet, inspections are on paper, NCRs are emailed around, the punch list is a separate app and the audit file sits with the QA manager. When the client asks for proof that a hold point was released before the pour, nobody can reconstruct the chain. This page keeps all five in one register so every check links back to the plan it came from and forward to the defect it raised.\n\n**You put in:**\n- Inspection and Test Plans (ITP) with their hold, witness and review points for each work package\n- Inspections booked against those control points, with pass, fail or conditional sign-offs\n- Non-conformance reports for work that fails, with a severity and any cost impact\n- Punch items for snags found on walkthroughs, and internal, external or supplier audits\n\n**You get out:**\n- A live status for every ITP plan and a hold-point dependency tree showing what is cleared to proceed\n- NCRs routed through corrective actions to close-out, with escalation to a Variation when there is a cost\n- A Cost of Poor Quality rollup that adds NCR cost, rework estimate and open punch count into one figure\n- An audit-ready compliance dossier you can export to CSV per ITP plan\n\n**How it works day to day:**\n1. Build the ITP for a work package and activate it so its hold and witness points become live gates.\n2. Schedule an inspection against a control point and record the result when the work is checked.\n3. If it fails, raise an NCR, assign corrective actions and verify them before you close it.\n4. Where the defect carries a cost, escalate the NCR to a Variation so the money trail stays attached.\n5. Track snags on the Punch List and run periodic Audits over the management system itself.\n\nThe tabs mirror the standalone modules, so the same records appear in Inspections, NCRs and the Punch List. Cost escalations land in Variations, and the COPQ figure feeds back into project cost reporting. Work the tabs left to right and the whole ISO 9001 chain stays connected.',
+            })}
+          />
+        }
         links={[
           { label: t('inspections.title', { defaultValue: 'Inspections' }), onClick: () => navigate('/inspections') },
           { label: t('ncr.title', { defaultValue: 'NCRs' }), onClick: () => navigate('/ncr') },
@@ -431,7 +443,11 @@ export function QMSPage() {
           projectId={projectId}
           itpPlans={itpQ.data ?? []}
           inspections={inspQ.data ?? []}
-          onClose={() => setCreateOpen(false)}
+          prefillInspectionId={ncrPrefillInspectionId}
+          onClose={() => {
+            setCreateOpen(false);
+            setNcrPrefillInspectionId(null);
+          }}
         />
       )}
 
@@ -448,6 +464,15 @@ export function QMSPage() {
           id={selectedInspectionId}
           inspections={inspQ.data ?? []}
           onClose={() => setSelectedInspectionId(null)}
+          onRaiseNcr={(inspectionId) => {
+            setSelectedInspectionId(null);
+            setNcrPrefillInspectionId(inspectionId);
+            setTab('ncrs');
+            setStatusFilter('');
+            setSearch('');
+            setCategoryFilter('');
+            setCreateOpen(true);
+          }}
         />
       )}
 
@@ -1480,10 +1505,13 @@ function InspectionDrawer({
   id,
   inspections,
   onClose,
+  onRaiseNcr,
 }: {
   id: string;
   inspections: Inspection[];
   onClose: () => void;
+  /** Raise an NCR pre-filled with this inspection as the linked source. */
+  onRaiseNcr: (inspectionId: string) => void;
 }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
@@ -1632,6 +1660,32 @@ function InspectionDrawer({
                 )}
               </div>
             </div>
+          )}
+
+          {/* Failed (or conditional) inspection -> raise an NCR pre-filled with
+              this inspection as the linked source (CONN-64). */}
+          {(insp.status === 'failed' || insp.status === 'conditional') && (
+            <Card padding="sm" className="border-semantic-error/30 bg-semantic-error/5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-start gap-2">
+                  <AlertOctagon size={15} className="mt-0.5 shrink-0 text-semantic-error" />
+                  <p className="text-xs text-content-secondary">
+                    {t('qms.inspection_failed_ncr_hint', {
+                      defaultValue:
+                        'This inspection did not pass. Raise an NCR so the defect is tracked to close-out.',
+                    })}
+                  </p>
+                </div>
+                <Button
+                  variant="primary"
+                  size="sm"
+                  icon={<AlertOctagon size={14} />}
+                  onClick={() => onRaiseNcr(id)}
+                >
+                  {t('qms.raise_ncr_from_inspection', { defaultValue: 'Raise NCR' })}
+                </Button>
+              </div>
+            </Card>
           )}
 
           <Card padding="sm">
@@ -1844,12 +1898,15 @@ function CreateModal({
   projectId,
   itpPlans,
   inspections,
+  prefillInspectionId,
   onClose,
 }: {
   kind: Tab;
   projectId: string;
   itpPlans: ITPPlan[];
   inspections: Inspection[];
+  /** When set, seeds the NCR form's linked inspection (CONN-64). */
+  prefillInspectionId?: string | null;
   onClose: () => void;
 }) {
   const { t } = useTranslation();
@@ -1879,7 +1936,7 @@ function CreateModal({
     severity: 'minor' as NCRSeverity,
     cost_impact_amount: '',
     cost_impact_currency: '',
-    linked_inspection_id: '',
+    linked_inspection_id: prefillInspectionId ?? '',
   });
   const [punchForm, setPunchForm] = useState({
     title: '',

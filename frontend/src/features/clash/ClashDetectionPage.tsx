@@ -628,6 +628,26 @@ export function ClashDetectionPage() {
     setParams(next, { replace: true });
   }, [projectId, params, setParams]);
 
+  // ── Coordination-Hub KPI deep-link (``?status=open``) ───────────────────
+  // The Coordination Hub "Open Clashes" / "Open Cost Impact" cards drill in
+  // here filtered to open. We park the requested KPI filter in a ref so the
+  // run-change reset below can re-apply it once a run is opened (the reset
+  // otherwise forces every filter back to "all"), then strip the param so a
+  // refresh / back-forward does not keep re-pinning it.
+  const pendingKpiFilterRef = useRef<'open' | null>(null);
+  const statusDeepLinkRef = useRef(false);
+  useEffect(() => {
+    if (statusDeepLinkRef.current) return;
+    const status = params.get('status') ?? '';
+    if (status !== 'open') return;
+    statusDeepLinkRef.current = true;
+    pendingKpiFilterRef.current = 'open';
+    setKpiFilter('open');
+    const next = new URLSearchParams(params);
+    next.delete('status');
+    setParams(next, { replace: true });
+  }, [params, setParams]);
+
   // Flush any pending write when this page unmounts so the last edit
   // isn't lost between an "apply filter → navigate away" beat.
   useEffect(() => {
@@ -734,19 +754,45 @@ export function ClashDetectionPage() {
     }
   }, [resultsQ.isError]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Default the model selection once models load. When the file manager
-  // deep-links a specific model via ``?model=<id>`` (the "Clash
-  // Detection" action on a BIM file), pre-select THAT model so the run
-  // config is already focused on what the user clicked; otherwise select
-  // every non-empty parsed model.
+  // Default the model selection once models load. Two deep-link shapes
+  // pre-seed the run-config scope:
+  //   * ``?model=<id>`` - the file manager's "Clash Detection" action on a
+  //     single BIM file; pre-select THAT model.
+  //   * ``?models=<id1,id2,...>`` - the BIM Federations "Run clash detection"
+  //     action (CONN-28); pre-select every member model that exists in this
+  //     project's parsed-model list so the federated run is one click away.
+  // Either way we fall back to "every non-empty parsed model" when no
+  // deep-link id matches an actual model.
   const deepLinkModelId = params.get('model') ?? '';
+  const deepLinkModelIds = params.get('models') ?? '';
   useEffect(() => {
     if (modelsQ.data && selModels.length === 0) {
       const nonEmpty = modelsQ.data.filter((m) => m.element_count > 0);
-      const focused =
-        deepLinkModelId && nonEmpty.some((m) => m.id === deepLinkModelId)
-          ? [deepLinkModelId]
-          : nonEmpty.map((m) => m.id);
+      // ``?models=`` (comma-separated) wins over the singular ``?model=``
+      // when both are present. Intersect against the project's real models
+      // so a stale / cross-project id is silently dropped rather than
+      // poisoning the selection.
+      const requestedMulti = deepLinkModelIds
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const multiFocused =
+        requestedMulti.length > 0
+          ? nonEmpty
+              .filter((m) => requestedMulti.includes(m.id))
+              .map((m) => m.id)
+          : [];
+      let focused: string[];
+      if (multiFocused.length > 0) {
+        focused = multiFocused;
+      } else if (
+        deepLinkModelId &&
+        nonEmpty.some((m) => m.id === deepLinkModelId)
+      ) {
+        focused = [deepLinkModelId];
+      } else {
+        focused = nonEmpty.map((m) => m.id);
+      }
       setSelModels(focused);
     }
   }, [modelsQ.data]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -759,7 +805,9 @@ export function ClashDetectionPage() {
     setFPair('');
     setFMinPen(0);
     setFSearch('');
-    setKpiFilter('all');
+    // Honour a pending ``?status=open`` deep-link from the Coordination Hub
+    // KPI cards; otherwise reset to the unfiltered view.
+    setKpiFilter(pendingKpiFilterRef.current ?? 'all');
     setSortKey('idx');
     setSortDir('asc');
     setPage(0);
@@ -1895,6 +1943,20 @@ export function ClashDetectionPage() {
         title={t('info.clash.title', {
           defaultValue: 'Clash detection',
         })}
+        links={[
+          {
+            label: t('clash.link_coordination_hub', {
+              defaultValue: 'Coordination Hub',
+            }),
+            onClick: () => navigate('/coordination'),
+          },
+          {
+            label: t('clash.link_bim_federations', {
+              defaultValue: 'BIM Federations',
+            }),
+            onClick: () => navigate('/bim/federations'),
+          },
+        ]}
       >
         {t('info.clash.body', {
           defaultValue:
@@ -4360,7 +4422,7 @@ function Kpi({
       disabled={!interactive}
       onClick={onClick}
       className={clsx(
-        'rounded-xl border bg-surface-elevated p-3 text-left shadow-xs transition-all',
+        'rounded-xl border bg-surface-elevated/90 p-3 text-left shadow-xs transition-all',
         interactive && 'hover:-translate-y-0.5 hover:shadow-md',
         active
           ? 'border-oe-blue ring-2 ring-oe-blue/20'

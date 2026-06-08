@@ -1,10 +1,11 @@
 import { useState, useCallback, useMemo, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useNavigate, useLocation, useParams } from 'react-router-dom';
+import { useNavigate, useLocation, useParams, useSearchParams } from 'react-router-dom';
 import {
   Table, Table2, ArrowRight, Copy, Trash2, Plus,
   Search, ArrowUpDown, ChevronDown, GitCompareArrows, X, Loader2,
+  CalendarDays,
 } from 'lucide-react';
 import { Card, Badge, EmptyState, Skeleton, Button, Breadcrumb, FileTypeChips, DismissibleInfo, IntroRichText } from '@/shared/ui';
 import { PageHeader } from '@/shared/ui/PageHeader';
@@ -377,6 +378,52 @@ export function BOQListPage() {
       window.history.replaceState({}, '');
     }
   }, [location.state]);
+
+  // Deep link: /boq?positionId=<id> (or the older ?position=<id> from the BIM
+  // viewer). A position id alone does not tell us which BOQ owns it, so we
+  // resolve the owning boq_id from the API and redirect to that BOQ's editor
+  // with the per-position ?highlight convention BOQEditorPage already reads.
+  // Invalid or missing ids leave the user on the list with the param cleared,
+  // never a crash or a hang.
+  const [searchParams, setSearchParams] = useSearchParams();
+  useEffect(() => {
+    const positionId = searchParams.get('positionId') ?? searchParams.get('position');
+    if (!positionId) return;
+    let cancelled = false;
+    const clearParam = () => {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          next.delete('positionId');
+          next.delete('position');
+          return next;
+        },
+        { replace: true },
+      );
+    };
+    boqApi
+      .getPosition(positionId)
+      .then((pos) => {
+        if (cancelled) return;
+        if (pos?.boq_id) {
+          // Replace (no extra history entry) so Back returns to wherever the
+          // user came from, not to this transient list state.
+          navigate(`/boq/${pos.boq_id}?highlight=${encodeURIComponent(positionId)}`, {
+            replace: true,
+          });
+        } else {
+          clearParam();
+        }
+      })
+      .catch(() => {
+        if (cancelled) return;
+        // Unknown / deleted position: stay on the list, drop the param.
+        clearParam();
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [searchParams, navigate, setSearchParams]);
 
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -764,19 +811,19 @@ export function BOQListPage() {
           Canon KPI tile: shared Card, top-aligned label+value, text-lg value. */}
       {stats && allBoqs && allBoqs.length > 0 && (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          <Card padding="sm" className="flex flex-col justify-start">
+          <div className="flex flex-col justify-start rounded-xl border border-border-light bg-surface-elevated/90 p-4 shadow-xs transition-shadow duration-normal ease-oe hover:shadow-sm">
             <div className="text-2xs font-medium text-content-tertiary uppercase tracking-wide">
               {isFiltered
                 ? t('boq.matching_estimates', { defaultValue: 'Matching Estimates' })
                 : t('boq.total_estimates', { defaultValue: 'Total Estimates' })}
             </div>
             <div className="mt-1 text-lg font-semibold text-content-primary tabular-nums">{stats.count}</div>
-          </Card>
-          <Card padding="sm" className="flex flex-col justify-start">
+          </div>
+          <div className="flex flex-col justify-start rounded-xl border border-border-light bg-surface-elevated/90 p-4 shadow-xs transition-shadow duration-normal ease-oe hover:shadow-sm">
             <div className="text-2xs font-medium text-content-tertiary uppercase tracking-wide">{t('boq.total_positions', { defaultValue: 'Total Positions' })}</div>
             <div className="mt-1 text-lg font-semibold text-content-primary tabular-nums">{stats.totalPositions.toLocaleString()}</div>
-          </Card>
-          <Card padding="sm" className="flex flex-col justify-start">
+          </div>
+          <div className="flex flex-col justify-start rounded-xl border border-border-light bg-surface-elevated/90 p-4 shadow-xs transition-shadow duration-normal ease-oe hover:shadow-sm">
             <div className="text-2xs font-medium text-content-tertiary uppercase tracking-wide">{t('boq.total_value', { defaultValue: 'Total Value' })}</div>
             {/* Money rule: never blend currencies into one scalar. One
                 labelled total when all share a currency; the dominant
@@ -806,14 +853,14 @@ export function BOQListPage() {
                 </span>
               </div>
             )}
-          </Card>
-          <Card padding="sm" className="flex flex-col justify-start">
+          </div>
+          <div className="flex flex-col justify-start rounded-xl border border-border-light bg-surface-elevated/90 p-4 shadow-xs transition-shadow duration-normal ease-oe hover:shadow-sm">
             <div className="text-2xs font-medium text-content-tertiary uppercase tracking-wide">{t('boq.status', { defaultValue: 'Status' })}</div>
             <div className="mt-1 flex items-center gap-2">
               <Badge variant="blue" size="sm" dot>{stats.drafts} {t('boq.draft', { defaultValue: 'draft' })}</Badge>
               <Badge variant="success" size="sm" dot>{stats.finals} {t('boq.final', { defaultValue: 'final' })}</Badge>
             </div>
-          </Card>
+          </div>
         </div>
       )}
 
@@ -999,6 +1046,24 @@ export function BOQListPage() {
                     }
                   >
                     <GitCompareArrows size={13} />
+                  </button>
+
+                  {/* CONN-34: build a 4D schedule straight from this BOQ.
+                      Deep-links into /schedule pre-selecting the project and
+                      pre-opening Generate-from-BOQ with this BOQ chosen, so
+                      the estimate-to-programme step is one click instead of a
+                      manual hunt for the right schedule and BOQ. */}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      navigate(
+                        `/schedule?project_id=${encodeURIComponent(boq.project_id)}&generateBoqId=${encodeURIComponent(boq.id)}`,
+                      );
+                    }}
+                    className="flex h-7 w-7 items-center justify-center rounded-md text-content-tertiary hover:text-oe-blue-text hover:bg-oe-blue-subtle transition-all"
+                    title={t('boq.build_schedule', { defaultValue: 'Build schedule from this BOQ' })}
+                  >
+                    <CalendarDays size={13} />
                   </button>
 
                   <button

@@ -35,10 +35,11 @@ from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any
 
 from fastapi import HTTPException
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.ai_estimator import benchmarks, schemas
 from app.modules.ai_estimator import events as estimator_events
-from app.modules.ai_estimator import schemas
 from app.modules.ai_estimator.models import (
     AiEstimatorGroup,
     AiEstimatorRun,
@@ -57,6 +58,13 @@ logger = logging.getLogger(__name__)
 # frontend never hardcodes them (matches the core match_service config).
 CONFIDENCE_HIGH_THRESHOLD = 0.78
 CONFIDENCE_MEDIUM_THRESHOLD = 0.62
+
+# Pass-2 (unit/scale reconcile) demotion penalty. A candidate whose unit
+# dimension is incompatible with the group's chosen-unit dimension keeps its
+# real rate but has its score multiplied by this factor so the dimensionally
+# correct candidate rises to top-1. It is a re-rank, never a drop: the demoted
+# candidate stays in the override list for the human.
+_UNIT_MISMATCH_PENALTY = 0.1
 
 # Per-pass caps (a vector search over hundreds of groups blocks the request
 # thread; the UI repeats the action to walk through the full set).
@@ -124,6 +132,35 @@ def _quantity_for_unit(quantities: dict[str, float], unit: str) -> float:
         "t": (quantities.get("mass_kg", 0.0) or 0.0) / 1000.0,
         "pcs": quantities.get("count", 0.0),
     }.get(unit, quantities.get("count", 0.0))
+
+
+# Envelope source kind -> standardised WorkGroup source (design 3.1 / 4.1).
+# CAD/BIM models are ``cad``; parsed files (BOQ rows, PDF/DWG takeoff, free
+# text) are ``file``; site photos are ``photo``. The dialogue path tags
+# ``dialogue`` directly in the intake composer.
+_ENVELOPE_SOURCE_TO_WORKGROUP: dict[str, str] = {
+    "bim": "cad",
+    "dwg": "cad",
+    "pdf": "file",
+    "boq": "file",
+    "text": "file",
+    "image": "photo",
+    "photo": "photo",
+}
+
+
+def _workgroup_source(envelope_source: Any) -> str:
+    """Map an envelope ``source`` to the standardised WorkGroup source.
+
+    Args:
+        envelope_source: The ``source`` field of the representative envelope
+            (``bim`` / ``dwg`` / ``pdf`` / ``boq`` / ``text`` / ``photo``).
+
+    Returns:
+        One of ``cad`` / ``file`` / ``photo``; an unknown / missing source
+        defaults to ``file`` (a measured group never carries ``dialogue``).
+    """
+    return _ENVELOPE_SOURCE_TO_WORKGROUP.get(str(envelope_source or ""), "file")
 
 
 def _pick_unit(quantities: dict[str, float]) -> str:
@@ -729,6 +766,10 @@ class AiEstimatorService:
                     trade=trade,
                     status="unmatched",
                     sort_order=sort_order,
+                    # WorkGroup provenance (design 3.1 / 4.1): a measured group
+                    # carries its origin source (file | cad | photo) uniformly,
+                    # mapped from the envelope's own source kind.
+                    metadata_={"source": _workgroup_source(sample.get("source"))},
                 )
             )
         if groups:
@@ -816,10 +857,11 @@ class AiEstimatorService:
         candidates first; its pick is resolved back to a real stored candidate
         (the agent can only choose ids the tools returned). No rate is ever
         fabricated; groups with no grounded rate come back ``needs_human``.
-        """
-        from app.core.match_service.envelope import ElementEnvelope, MatchRequest
-        from app.core.match_service.ranker_qdrant import rank
 
+        This orchestrates the three named mapping passes per group (semantic,
+        unit/scale reconcile, rate sanity) via :meth:`_map_group`; the heavy
+        retrieval imports live in :meth:`_pass_semantic`.
+        """
         # Bind the catalogue the user picked at stage 1 to the project's match
         # settings, because ``rank()`` resolves the catalogue from
         # ``MatchProjectSettings.cost_database_id`` (not from the request). The
@@ -860,51 +902,7 @@ class AiEstimatorService:
             agent_runner = await self._build_agent_runner(run)
 
         for grp in groups:
-            env_data = dict(grp.envelope or {})
-            try:
-                envelope = ElementEnvelope(
-                    source=env_data.get("source", "text"),
-                    description=env_data.get("description", grp.description or grp.group_key),
-                    category=env_data.get("category", ""),
-                    unit_hint=env_data.get("unit_hint"),
-                    exact_code=env_data.get("exact_code"),
-                    # v3 structured fields carried from BIM/CAD sources so the
-                    # grounded ranker's hard filters / soft boosts fire.
-                    ifc_class=env_data.get("ifc_class"),
-                    material_class=env_data.get("material_class"),
-                    classifier_hint=env_data.get("classifier_hint"),
-                    project_currency=env_data.get("project_currency", ""),
-                    project_region=env_data.get("project_region", ""),
-                    construction_stage_hint=env_data.get("construction_stage_hint"),
-                )
-                resp = await rank(
-                    MatchRequest(
-                        envelope=envelope,
-                        project_id=run.project_id,
-                        top_k=spec.top_k,
-                        use_reranker=spec.use_reranker,
-                    ),
-                    db=self.session,
-                )
-                candidates = resp.candidates
-                # The Qdrant payload carries classification only; the priced
-                # CWICR snapshot (parquet) is optional in some installs, so the
-                # ranker can return a grounded code with unit_rate 0 when the
-                # parquet is absent. Backfill the REAL stored rate / currency /
-                # unit / resource components from the SQL cost table for the
-                # exact grounded code + bound catalogue. This reads the real
-                # stored rate, never fabricates one.
-                await self._enrich_candidates_from_costdb(candidates, run.catalogue_id)
-            except Exception as exc:  # noqa: BLE001 - degrade per group, never crash the pass
-                logger.warning("ai_estimator match: group %s rank failed: %s", grp.group_key, exc)
-                candidates = []
-
-            chosen_idx = 0
-            agent_method = None
-            if candidates and agent_runner is not None:
-                chosen_idx, agent_method = await self._agent_pick(run, grp, candidates, agent_runner)
-
-            await self._apply_match_result(grp, candidates, chosen_idx, agent_method)
+            await self._map_group(run, grp, spec, agent_runner)
 
         await self.run_repo.update_fields(run.id, status="matching", current_stage="matching")
         # Honest cap disclosure on the terminal step too: how many groups this
@@ -916,6 +914,276 @@ class AiEstimatorService:
             "stage_complete",
             {"matched": len(groups), "eligible_total": eligible_total, "remaining": remaining},
         )
+
+    # ── Multi-pass mapping (design 4.3): semantic -> unit/scale -> rate sanity ──
+
+    async def _map_group(
+        self,
+        run: AiEstimatorRun,
+        grp: AiEstimatorGroup,
+        spec: schemas.RunMatchRequest,
+        agent_runner: dict[str, Any] | None,
+    ) -> None:
+        """Map one group's rate through the three named, observable passes.
+
+        The pipeline is explicit and logged so the founder's "in several passes"
+        is literal: pass 1 retrieves real candidates from the cost DB, pass 2
+        reconciles their unit/scale against the group dimension, pass 3 sanity
+        checks the surviving rates against a per-run benchmark band. No pass ever
+        invents a rate; passes 2 and 3 only re-rank, rescale or flag the real
+        candidates pass 1 retrieved. Each pass writes a structured trace entry
+        (kept/dropped/notes) and an observation step onto the run timeline, and
+        the assembled trace is persisted on the group ``metadata_.mapping_trace``.
+
+        Args:
+            run: The owning run (carries the bound catalogue + project context).
+            grp: The group being mapped.
+            spec: The match request (top_k / reranker / agent flags).
+            agent_runner: The resolved agent bundle, or ``None`` when no AI key
+                is present (the whole pipeline then stays deterministic).
+        """
+        passes: list[dict[str, Any]] = []
+
+        candidates = await self._pass_semantic(run, grp, spec, passes)
+        if candidates:
+            self._reconcile_units(grp, candidates, passes)
+            outlier_idx = self._rate_sanity(grp, candidates, passes)
+        else:
+            outlier_idx = set()
+
+        # The chosen top-1 is the highest-scoring candidate that is NOT a flagged
+        # outlier; only when every candidate is an outlier do we keep the highest
+        # score (and pass 3 has already marked the group's reason in the trace).
+        chosen_idx = self._first_non_outlier(candidates, outlier_idx)
+
+        # The agent (when present) reasons over the survivors of pass 3 - it can
+        # only pick an id the tools returned, recorded as final_method=llm.
+        agent_method = None
+        if candidates and agent_runner is not None:
+            agent_idx, agent_method = await self._agent_pick(run, grp, candidates, agent_runner)
+            if agent_method == "llm":
+                chosen_idx = agent_idx
+
+        final_method = agent_method or ("vector" if candidates else "manual")
+        all_outliers = bool(candidates) and len(outlier_idx) == len(candidates)
+        trace: dict[str, Any] = {"passes": passes, "final_method": final_method}
+        if all_outliers:
+            trace["needs_human_reason"] = "every candidate rate is a benchmark-band outlier"
+
+        await self._apply_match_result(
+            grp,
+            candidates,
+            chosen_idx,
+            agent_method,
+            mapping_trace=trace,
+            force_needs_human=all_outliers,
+            outlier_idx=outlier_idx,
+        )
+
+    async def _pass_semantic(
+        self,
+        run: AiEstimatorRun,
+        grp: AiEstimatorGroup,
+        spec: schemas.RunMatchRequest,
+        passes: list[dict[str, Any]],
+    ) -> list[Any]:
+        """Pass 1 - semantic candidates: grounded vector rank + cost-DB enrich.
+
+        Builds the group's :class:`ElementEnvelope`, calls the verified grounded
+        ranker for the top-K real candidates, then backfills the real stored
+        rate / currency / unit / components from the SQL cost table. This is the
+        existing single-shot behaviour, now explicitly labelled and logged as
+        pass 1. It never fabricates a candidate; a rank failure degrades this
+        group to an empty candidate list (honest ``needs_human`` downstream).
+
+        Args:
+            run: The owning run.
+            grp: The group being mapped.
+            spec: The match request (top_k / reranker).
+            passes: The accumulating trace list this pass appends to.
+
+        Returns:
+            The retrieved, cost-DB-enriched candidate list (possibly empty).
+        """
+        from app.core.match_service.envelope import ElementEnvelope, MatchRequest
+        from app.core.match_service.ranker_qdrant import rank
+
+        env_data = dict(grp.envelope or {})
+        try:
+            envelope = ElementEnvelope(
+                source=env_data.get("source", "text"),
+                description=env_data.get("description", grp.description or grp.group_key),
+                category=env_data.get("category", ""),
+                unit_hint=env_data.get("unit_hint"),
+                exact_code=env_data.get("exact_code"),
+                # v3 structured fields carried from BIM/CAD sources so the
+                # grounded ranker's hard filters / soft boosts fire.
+                ifc_class=env_data.get("ifc_class"),
+                material_class=env_data.get("material_class"),
+                classifier_hint=env_data.get("classifier_hint"),
+                project_currency=env_data.get("project_currency", ""),
+                project_region=env_data.get("project_region", ""),
+                construction_stage_hint=env_data.get("construction_stage_hint"),
+            )
+            resp = await rank(
+                MatchRequest(
+                    envelope=envelope,
+                    project_id=run.project_id,
+                    top_k=spec.top_k,
+                    use_reranker=spec.use_reranker,
+                ),
+                db=self.session,
+            )
+            candidates = list(resp.candidates)
+            # The Qdrant payload carries classification only; the priced CWICR
+            # snapshot (parquet) is optional in some installs, so the ranker can
+            # return a grounded code with unit_rate 0 when the parquet is absent.
+            # Backfill the REAL stored rate / currency / unit / resource
+            # components from the SQL cost table for the exact grounded code +
+            # bound catalogue. This reads the real stored rate, never fabricates.
+            await self._enrich_candidates_from_costdb(candidates, run.catalogue_id)
+        except Exception as exc:  # noqa: BLE001 - degrade per group, never crash the pass
+            logger.warning("ai_estimator match: group %s rank failed: %s", grp.group_key, exc)
+            candidates = []
+
+        notes = (
+            f"{len(candidates)} grounded candidate(s) retrieved" if candidates else "no grounded candidate retrieved"
+        )
+        passes.append({"pass": "semantic", "kept": len(candidates), "dropped": 0, "notes": notes, "benchmark": None})
+        await self._log(
+            run.id,
+            "matching",
+            "observation",
+            {"pass": "semantic", "group": grp.group_key, "kept": len(candidates), "notes": notes},
+        )
+        return candidates
+
+    def _reconcile_units(self, grp: AiEstimatorGroup, candidates: list[Any], passes: list[dict[str, Any]]) -> None:
+        """Pass 2 - unit/scale reconcile: rescale to per-base-unit, demote misfits.
+
+        For each candidate the catalogue unit's leading numeric multiplier is
+        peeled (``"100 CY"`` -> ``(100, "CY")``) and the base unit mapped to a
+        dimension bucket (Area / Volume / Linear / Mass / Count, reusing the
+        :func:`query_builder.unit_type_for` vocabulary). A candidate whose
+        dimension is incompatible with the group's chosen-unit dimension (for
+        example an ``m3`` rate for an ``m2`` tiling group) is DEMOTED, not
+        dropped: its ``score`` is multiplied by a penalty so the dimensionally
+        correct candidate rises to top-1, while the real rate stays in the
+        override list for the human. The per-base-unit rate is already computed
+        by :meth:`_candidate_unit_rate` at apply time; this pass only re-ranks.
+        Candidates are re-sorted by the adjusted score (stable, highest first).
+
+        Args:
+            grp: The group being mapped (carries ``chosen_unit``).
+            candidates: The pass-1 candidate list, mutated in place (scores and
+                order change; rates are untouched).
+            passes: The accumulating trace list this pass appends to.
+        """
+        # Warm the match_service package before importing query_builder: the
+        # package __init__ eagerly imports ranker_qdrant, which imports
+        # build_search_plan back from query_builder. Importing query_builder
+        # first (cold) would hit that as a partial-init cycle. Production always
+        # loads the match stack before matching, so this only matters when this
+        # pass is the first match_service consumer (e.g. an isolated unit test).
+        import app.core.match_service  # noqa: F401
+        from app.modules.costs.query_builder import unit_type_for
+
+        group_dim = unit_type_for(grp.chosen_unit)
+        demoted = 0
+        for cand in candidates:
+            _mult, base_unit = _split_unit_multiplier(getattr(cand, "unit", "") or "")
+            cand_dim = unit_type_for(base_unit)
+            # Only demote on a genuine dimension MISMATCH: both sides known and
+            # different. An unknown dimension on either side (lump sum, unmapped
+            # unit) is never penalised - we never guess a dimension we cannot read.
+            if group_dim and cand_dim and group_dim != cand_dim:
+                try:
+                    cand.score = float(getattr(cand, "score", 0.0) or 0.0) * _UNIT_MISMATCH_PENALTY
+                except (TypeError, ValueError):
+                    cand.score = 0.0
+                demoted += 1
+        # Stable sort by adjusted score so a demoted candidate sinks below every
+        # dimensionally-correct one while equal-score ties keep their rank-1 order.
+        candidates.sort(key=lambda c: float(getattr(c, "score", 0.0) or 0.0), reverse=True)
+
+        notes = (
+            f"{demoted} dimensionally-incompatible candidate(s) demoted vs group unit {grp.chosen_unit or '?'}"
+            if demoted
+            else f"all candidate units compatible with group unit {grp.chosen_unit or '?'}"
+        )
+        passes.append(
+            {"pass": "unit_scale", "kept": len(candidates), "dropped": demoted, "notes": notes, "benchmark": None}
+        )
+
+    def _rate_sanity(self, grp: AiEstimatorGroup, candidates: list[Any], passes: list[dict[str, Any]]) -> set[int]:
+        """Pass 3 - rate sanity: flag benchmark-band outliers, cap their confidence.
+
+        Computes the per-run median per-base-unit rate across the surviving
+        candidates, then flags any candidate more than the ``(trade, unit)`` band
+        factor away from that median (see :mod:`benchmarks`). A flagged candidate
+        is NOT dropped: its serialised ``confidence_band`` is capped at ``low``
+        and an ``outlier`` annotation is recorded on it, so the real DB rate stays
+        available for human override while the dimensionally- and price-plausible
+        candidate is preferred for the top-1. This keeps "rates only from the DB":
+        it is a sanity flag, not a price book.
+
+        Args:
+            grp: The group being mapped (provides trade + chosen unit).
+            candidates: The pass-2 candidate list, mutated in place (flagged
+                candidates get a capped band + outlier marker; rates untouched).
+            passes: The accumulating trace list this pass appends to.
+
+        Returns:
+            The set of candidate indices flagged as outliers (empty when none).
+        """
+        rates = [float(_dec(self._candidate_unit_rate(c))) for c in candidates]
+        trade = grp.trade or "other"
+        unit = grp.chosen_unit or "pcs"
+        band_low, band_high, factor = benchmarks.evaluate_band(trade, unit, rates)
+        median_rate = benchmarks.candidate_median(rates)
+
+        outliers: set[int] = set()
+        for idx, (cand, rate) in enumerate(zip(candidates, rates, strict=False)):
+            if benchmarks.is_outlier(rate, median_rate, factor):
+                outliers.add(idx)
+                # Cap the flagged candidate at the LOW band so the override UI
+                # reads "low" for a suspect rate. ``confidence_band`` is a declared
+                # field (safe to reassign); the rate itself is never altered. The
+                # per-candidate ``rate_outlier`` marker is threaded by index into
+                # the serialised candidate dicts (a MatchCandidate forbids new
+                # attributes), so we never mutate an undeclared field here.
+                cand.confidence_band = "low"
+
+        benchmark_block = {
+            "trade": trade,
+            "unit": unit,
+            "band_low": round(band_low, 4) if band_low is not None else None,
+            "band_high": round(band_high, 4) if band_high is not None else None,
+            "outliers": len(outliers),
+        }
+        notes = (
+            f"{len(outliers)} rate outlier(s) flagged against median band"
+            if outliers
+            else "all candidate rates within the benchmark band"
+        )
+        passes.append(
+            {"pass": "rate_sanity", "kept": len(candidates), "dropped": 0, "notes": notes, "benchmark": benchmark_block}
+        )
+        return outliers
+
+    @staticmethod
+    def _first_non_outlier(candidates: list[Any], outlier_idx: set[int]) -> int:
+        """Index of the highest-scoring non-outlier candidate (0 when all flagged).
+
+        Candidates are already ordered best-first by passes 1-2. The chosen top-1
+        is the first that is not a rate-sanity outlier; if every candidate is an
+        outlier (or the list is empty) we fall back to index 0 so a real - if
+        suspect - rate is still surfaced for human review, never an invented one.
+        """
+        for idx in range(len(candidates)):
+            if idx not in outlier_idx:
+                return idx
+        return 0
 
     async def _bind_run_catalogue(self, run: AiEstimatorRun) -> None:
         """Propagate the run's stage-1 catalogue choice to project match settings.
@@ -1036,13 +1304,34 @@ class AiEstimatorService:
         candidates: list[Any],
         chosen_idx: int,
         agent_method: str | None,
+        *,
+        mapping_trace: dict[str, Any] | None = None,
+        force_needs_human: bool = False,
+        outlier_idx: set[int] | None = None,
     ) -> None:
-        """Persist a group's match outcome from real candidates (never invents)."""
+        """Persist a group's match outcome from real candidates (never invents).
+
+        Args:
+            grp: The group whose match result is being written.
+            candidates: The pass-3 surviving candidate list (best-first).
+            chosen_idx: Index of the human-preferred top-1 (first non-outlier).
+            agent_method: ``"llm"`` when an agent reasoned the pick, else ``None``.
+            mapping_trace: The multi-pass trace (design 3.3) written to
+                ``metadata_.mapping_trace`` so the run timeline + GroupDetail can
+                show "why this rate". ``None`` leaves any prior trace untouched.
+            force_needs_human: When every candidate is a rate-sanity outlier, the
+                group is parked ``needs_human`` and the chosen rate's confidence
+                is capped at the LOW band - the real rate is still surfaced, never
+                dropped, and never auto-confirmed.
+            outlier_idx: Indices of candidates the rate-sanity pass flagged, so
+                each serialised candidate carries a ``rate_outlier`` marker for
+                the override UI without mutating the candidate object.
+        """
+        flagged = outlier_idx or set()
         # Serialise the top-K candidates for the override UI (grounded only).
-        cand_dicts = [self._candidate_out(c) for c in candidates]
+        cand_dicts = [self._candidate_out(c, rate_outlier=idx in flagged) for idx, c in enumerate(candidates)]
         if not candidates:
-            await self.group_repo.update_fields(
-                grp.id,
+            empty_fields: dict[str, Any] = dict(
                 candidates=[],
                 status="needs_human",
                 match_method=None,
@@ -1055,6 +1344,9 @@ class AiEstimatorService:
                 confidence_band="none",
                 resources=[],
             )
+            if mapping_trace is not None:
+                empty_fields["metadata_"] = {**dict(grp.metadata_ or {}), "mapping_trace": mapping_trace}
+            await self.group_repo.update_fields(grp.id, **empty_fields)
             return
 
         chosen_idx = max(0, min(chosen_idx, len(candidates) - 1))
@@ -1075,6 +1367,14 @@ class AiEstimatorService:
         method = agent_method or "vector"
         status = "needs_human" if not currency_ok else "suggested"
 
+        # Pass 3 sanity: when every candidate is a benchmark-band outlier the
+        # chosen (still real) rate is suspect, so cap its band at LOW and park the
+        # group needs_human for review. The rate is surfaced, never dropped or
+        # auto-confirmed - the human decides.
+        if force_needs_human:
+            band = "low"
+            status = "needs_human"
+
         # Persist the chosen candidate's standard classification (MasterFormat /
         # DIN / NRM) the grounded CWICR row carries, so the position written to
         # the BOQ is classified by the real catalogue code rather than blank.
@@ -1084,6 +1384,8 @@ class AiEstimatorService:
             meta["classification"] = {k: str(v) for k, v in chosen_classification.items() if v}
         else:
             meta.pop("classification", None)
+        if mapping_trace is not None:
+            meta["mapping_trace"] = mapping_trace
 
         await self.group_repo.update_fields(
             grp.id,
@@ -1103,24 +1405,41 @@ class AiEstimatorService:
 
     @staticmethod
     def _candidate_unit_rate(candidate: Any) -> str | None:
-        """Per-base-unit rate as a Decimal-string, stripping any unit multiplier."""
+        """Per-base-unit rate as a Decimal-string, stripping any unit multiplier.
+
+        Returns ``None`` when there is no real rate (a non-positive value), so a
+        grounded-but-unpriced code stores a NULL rate rather than ``"0"``. A
+        ``"0"`` would surface in the UI as a fabricated $0.00; null reads as the
+        honest "matched, no price" state and the apply/preview path coerces it
+        back to ``Decimal("0")`` for the rollup via :func:`_dec`.
+        """
         raw_rate = _dec(getattr(candidate, "unit_rate", 0))
         mult, _unit = _split_unit_multiplier(getattr(candidate, "unit", "") or "")
         rate = (raw_rate / mult) if mult > 0 else raw_rate
-        return format(rate, "f")
+        return format(rate, "f") if rate > 0 else None
 
     @staticmethod
-    def _candidate_out(candidate: Any) -> dict[str, Any]:
-        """Serialise a MatchCandidate for storage / the override UI."""
+    def _candidate_out(candidate: Any, *, rate_outlier: bool = False) -> dict[str, Any]:
+        """Serialise a MatchCandidate for storage / the override UI.
+
+        ``rate_outlier`` is the pass-3 rate-sanity flag (see :meth:`_rate_sanity`)
+        so the override UI can badge a candidate whose rate sits outside the
+        benchmark band. It is only ``True`` on a candidate the sanity pass flagged;
+        the rate itself is never altered.
+        """
+        raw_rate = _dec(getattr(candidate, "unit_rate", 0))
         return {
             "candidate_id": getattr(candidate, "id", None),
             "code": getattr(candidate, "code", "") or "",
             "description": (getattr(candidate, "description", "") or "")[:300],
             "unit": getattr(candidate, "unit", "") or "",
-            "unit_rate": format(_dec(getattr(candidate, "unit_rate", 0)), "f"),
+            # Null, not "0", when the grounded code is unpriced - the override UI
+            # shows "no price" rather than a fabricated $0.00.
+            "unit_rate": format(raw_rate, "f") if raw_rate > 0 else None,
             "currency": getattr(candidate, "currency", "") or "",
             "score": round(float(getattr(candidate, "score", 0.0) or 0.0), 4),
             "confidence_band": getattr(candidate, "confidence_band", "low"),
+            "rate_outlier": bool(rate_outlier),
         }
 
     @staticmethod
@@ -2051,6 +2370,32 @@ class AiEstimatorService:
             updated_at=run.updated_at,
         )
 
+    @staticmethod
+    def _mapping_trace_out(raw: Any) -> schemas.MappingTrace | None:
+        """Serialise the stored multi-pass trace into the typed schema (design 3.3).
+
+        The trace lives in the group's free ``metadata_.mapping_trace`` JSON the
+        matcher writes (passes + final_method + optional needs_human_reason). It
+        is display-only provenance, so this read path is deliberately defensive:
+        an absent, non-dict or partially-malformed trace yields ``None`` rather
+        than ever crashing the group-detail endpoint. The pass key ``pass`` is
+        mapped onto the ``pass_`` field alias by the model.
+
+        Args:
+            raw: The ``metadata_.mapping_trace`` value (any JSON-decoded type).
+
+        Returns:
+            The typed :class:`schemas.MappingTrace`, or ``None`` when the group
+            has not been matched yet or the stored trace is unusable.
+        """
+        if not isinstance(raw, dict) or not raw:
+            return None
+        try:
+            return schemas.MappingTrace.model_validate(raw)
+        except ValidationError as exc:  # never break the detail view over bad provenance
+            logger.warning("ai_estimator: unreadable mapping_trace, omitting: %s", exc)
+            return None
+
     def group_to_summary(self, grp: AiEstimatorGroup) -> schemas.GroupSummary:
         """Serialise a group to the grid-row GroupSummary."""
         unit = grp.chosen_unit or "pcs"
@@ -2065,7 +2410,9 @@ class AiEstimatorService:
             chosen_unit=unit,
             primary_quantity=float(_quantity_for_unit(grp.quantities or {}, unit) or 0.0),
             chosen_code=grp.chosen_code,
-            unit_rate=(Decimal(grp.unit_rate) if grp.unit_rate else None),
+            # Treat a stored "0" (legacy rows / manual override of an unpriced
+            # code) as no rate, so the grid never shows a fabricated $0.00.
+            unit_rate=(_dec(grp.unit_rate) if grp.unit_rate and _dec(grp.unit_rate) > 0 else None),
             currency=grp.currency,
             score=grp.score,
             confidence=grp.confidence,
@@ -2077,13 +2424,24 @@ class AiEstimatorService:
         )
 
     def group_to_detail(self, grp: AiEstimatorGroup) -> schemas.GroupDetail:
-        """Serialise a group to the full GroupDetail (candidates + resources)."""
+        """Serialise a group to the full GroupDetail (candidates + resources).
+
+        Surfaces the WorkGroup provenance (design 3.1) read-only from
+        ``metadata_``: ``source``, ``derivation``, ``assumptions`` and the
+        ``mapping_trace`` the matcher writes.
+        """
         summary = self.group_to_summary(grp)
+        meta = grp.metadata_ or {}
+        assumptions = meta.get("assumptions")
         return schemas.GroupDetail(
             **summary.model_dump(),
             run_id=grp.run_id,
             element_ids=[str(e) for e in (grp.element_ids or [])],
             envelope=grp.envelope or {},
+            source=(str(meta["source"]) if meta.get("source") else None),
+            derivation=(str(meta["derivation"]) if meta.get("derivation") else None),
+            assumptions=[str(a) for a in assumptions] if isinstance(assumptions, list) else [],
+            mapping_trace=self._mapping_trace_out(meta.get("mapping_trace")),
             resources=[
                 schemas.ResourceOut(
                     name=str(r.get("name") or ""),
@@ -2103,10 +2461,17 @@ class AiEstimatorService:
                     code=str(c.get("code") or ""),
                     description=str(c.get("description") or ""),
                     unit=str(c.get("unit") or ""),
-                    unit_rate=_dec(c.get("unit_rate")),
+                    # Preserve a null rate (unpriced code) instead of coercing it
+                    # back to 0; only a positive stored value is a real rate.
+                    unit_rate=(
+                        _dec(c.get("unit_rate"))
+                        if c.get("unit_rate") not in (None, "") and _dec(c.get("unit_rate")) > 0
+                        else None
+                    ),
                     currency=str(c.get("currency") or ""),
                     score=float(c.get("score", 0.0) or 0.0),
                     confidence_band=c.get("confidence_band") or "low",
+                    rate_outlier=bool(c.get("rate_outlier", False)),
                 )
                 for c in (grp.candidates or [])
                 if isinstance(c, dict)
