@@ -407,19 +407,14 @@ async def detect_takeoff_rooms(
             stats={"vision": 1, "rooms": len(vrooms)},
         )
 
-    # Vector pathway: geometry. Read the drawing scale off the plan when absent.
-    scale_ratio = request.scale_override
-    if scale_ratio is None:
-        try:
-            vision = await analyze_plan_vision(pdf_bytes, page_idx, settings)
-            scale_ratio = vision.get("scale_ratio")
-        except Exception:
-            logger.exception("Scale read via vision failed for %s", request.document_id)
-            scale_ratio = None
-
+    # Vector pathway: geometry. detect_rooms derives the TRUE scale from the plan's
+    # dimension lines (§1d) and only falls back to scale_override when none are
+    # found — so the slow vision scale-read is no longer needed on this path.
     try:
         # CPU-bound geometry — run off the event loop.
-        result = await asyncio.to_thread(detect_rooms, pdf_bytes, page_idx, scale_ratio)
+        result = await asyncio.to_thread(
+            detect_rooms, pdf_bytes, page_idx, request.scale_override
+        )
     except IndexError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
     except Exception as exc:
