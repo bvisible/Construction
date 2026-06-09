@@ -8,28 +8,28 @@ real walls — far more precise on CAD plans.
 
 Pipeline (rebuilt 2026-06-09 after a measured spike on a real Protti plan — see
 Obsidian note 64 + the metre_pdf spike):
-  1. §1b  Isolate real walls by their DOUBLE-LINE signature: keep only dark
-          strokes that have a parallel partner at wall-thickness offset. This
-          drops furniture, fixtures, hatching and dimension lines cleanly
-          (7690 → ~870 segments on Protti), far better than a length/connected-
-          component filter (which dropped real walls fragmented by doors).
+  1. §1b  Isolate likely walls by their DOUBLE-LINE signature: keep only dark
+          strokes that have a parallel partner at wall-thickness offset. This is
+          the strongest PDF-only signal found so far (7690 → ~870 segments on
+          Protti), but it is not a truth layer: some furniture/agencement and
+          dimension fragments can still survive on flattened ArchiCAD PDFs.
   2. §1d  TRUE scale from dimension lines (a number like "5.03" m centred on a
           line of known pt length). Independent of room detection — no circular
           calibration. On Protti: exactly 1:50. Falls back to the passed
           scale_ratio when too few dimensions are found.
-  3. Rasterise the clean walls → morphological close (seal corner gaps, merge the
-     double lines into solid bands) → connected components of the free space =
-     wall-aligned room regions → contour each into a simplified polygon.
+  3. Rasterise the likely walls → morphological close (seal corner gaps, merge
+     the double lines into solid bands) → connected components of the free space
+     = wall-aligned room candidates → contour each into a simplified polygon.
   4. §1c  Open-plan split: a region holding ≥2 room labels (open kitchen/séjour,
-          no dividing wall) is Voronoi-split by its labels into separate
-          approximate rooms.
+          no dividing wall) is split by straight axis-aligned virtual cuts,
+          weighted by declared printed areas when available.
   5. Label by point-in-polygon against the PDF text; m² from the §1d scale.
 
-STATUS: contours follow the walls; rooms with no physical separation (open plan)
-or no enclosure (balconies) stay approximate — the user adjusts them with the
-in-canvas measurement editor. This is a clear precision jump over the vision boxes.
-Measured ceiling of pure geometry is low ONLY because some rooms have no wall to
-detect (cf. note 64) — not a code defect.
+STATUS: this is a candidate generator, not a trusted quantity engine. Some
+contours follow walls well; rooms with no physical separation (open plan), no
+closed enclosure (balconies), or labels landing outside any generated region are
+flagged for review. The endpoint returns per-room confidence and aggregate label
+coverage so tests do not treat all candidates as equally meaningful.
 
 Kept in oe_neoffice (Neoservice custom) — no core patch. Uses cv2/shapely/pymupdf.
 """
@@ -38,7 +38,7 @@ from __future__ import annotations
 
 import math
 import re
-from typing import Any
+from typing import Any, Literal
 
 import cv2
 import numpy as np
@@ -77,6 +77,8 @@ ROOM_KEYWORDS = re.compile(
     r"couloir|palier|office|cellier|loggia|douche",
     re.I,
 )
+
+Confidence = Literal["high", "medium", "low"]
 
 
 def _hex(color: Any) -> str | None:
@@ -340,6 +342,57 @@ def _split_region(poly, idxs, pts, declared, min_part):
     return out
 
 
+def _quality(area_m2: float, declared_m2: float | None) -> tuple[float | None, Confidence, bool, str | None]:
+    """Compare a candidate against the printed room area when available."""
+    if declared_m2 is None or declared_m2 <= 0:
+        return None, "low", True, "no_declared_area"
+    error_pct = abs(area_m2 - declared_m2) / declared_m2 * 100.0
+    if error_pct <= 5.0:
+        return round(error_pct, 1), "high", False, None
+    if error_pct <= 10.0:
+        return round(error_pct, 1), "medium", True, "area_mismatch_5_10pct"
+    return round(error_pct, 1), "low", True, "area_mismatch_gt_10pct"
+
+
+def _label_summary(labels, rooms: list[dict[str, Any]], page_width: float, page_height: float) -> dict[str, Any]:
+    """Coverage and declared-area QA anchored on the printed room labels."""
+    emitted_polys: list[Polygon] = []
+    for room in rooms:
+        try:
+            emitted_polys.append(
+                Polygon([(x * page_width, y * page_height) for x, y in room["polygon"]])
+            )
+        except Exception:
+            continue
+
+    declared_labels = [label for label in labels if label[3] is not None]
+    missed: list[str] = []
+    covered = 0
+    for name, cx, cy, _declared in labels:
+        pt = Point(cx, cy)
+        if any(poly.covers(pt) for poly in emitted_polys):
+            covered += 1
+        else:
+            missed.append(name)
+
+    errors = [
+        float(room["error_pct"])
+        for room in rooms
+        if room.get("error_pct") is not None and room.get("declared_m2") is not None
+    ]
+    return {
+        "label_count": len(labels),
+        "labels_with_declared_area": len(declared_labels),
+        "anchors_covered": covered,
+        "anchors_missed": len(labels) - covered,
+        "missed_labels": ", ".join(missed[:10]),
+        "within_5pct": sum(1 for err in errors if err <= 5.0),
+        "within_10pct": sum(1 for err in errors if err <= 10.0),
+        "rooms_high_confidence": sum(1 for room in rooms if room.get("confidence") == "high"),
+        "rooms_needs_review": sum(1 for room in rooms if room.get("needs_review")),
+    }
+
+
 def _iter_polys(geom):
     if geom is None or geom.is_empty:
         return []
@@ -402,23 +455,39 @@ def detect_rooms(
 
         rooms_out: list[dict[str, Any]] = []
 
-        def emit(poly: Polygon, name: str | None) -> None:
+        def emit(poly: Polygon, label_idx: int | None) -> None:
+            name = labels[label_idx][0] if label_idx is not None else None
+            declared_m2 = labels[label_idx][3] if label_idx is not None else None
+            area_m2 = round(poly.area * conv, 2)
+            error_pct, confidence, needs_review, review_reason = _quality(area_m2, declared_m2)
+            if label_idx is None:
+                confidence = "low"
+                needs_review = True
+                review_reason = "no_label"
             rooms_out.append({
                 "name": name,
                 "polygon": [[round(x / pw, 5), round(y / ph, 5)] for x, y in poly.exterior.coords],
-                "area_m2": round(poly.area * conv, 2),
+                "area_m2": area_m2,
+                "declared_m2": round(declared_m2, 2) if declared_m2 is not None else None,
+                "error_pct": error_pct,
+                "confidence": confidence,
+                "needs_review": needs_review,
+                "review_reason": review_reason,
+                "source": "vector",
             })
 
         for poly in regions:
             inside = [i for i, p in enumerate(pts) if poly.contains(p)]
             if len(inside) <= 1:
-                emit(poly, labels[inside[0]][0] if inside else None)
+                emit(poly, inside[0] if inside else None)
                 continue
             # §1c — split an open-plan region by STRAIGHT virtual walls, positioned
             # by the declared surfaces when known (area correct by construction).
             # Each cut edge is editable; later the ML places this line (note 65).
             for pg, owner in _split_region(poly, inside, pts, declared, min_part_pt2):
-                emit(pg, labels[owner][0])
+                emit(pg, owner)
+
+        qa = _label_summary(labels, rooms_out, pw, ph)
 
         return {
             "page_width_pt": round(pw, 2),
@@ -431,5 +500,6 @@ def detect_rooms(
                 "regions": len(regions),
                 "rooms": len(rooms_out),
                 "scale_source": scale_src,
+                **qa,
             },
         }

@@ -394,6 +394,10 @@ async def detect_takeoff_rooms(
                     name=r.get("name"),
                     polygon=[[x0, y0], [x1, y0], [x1, y1], [x0, y1]],
                     area_m2=r.get("approx_area_m2"),
+                    confidence="low",
+                    needs_review=True,
+                    review_reason="vision_bbox",
+                    source="vision",
                 )
             )
         return RoomDetectionResponse(

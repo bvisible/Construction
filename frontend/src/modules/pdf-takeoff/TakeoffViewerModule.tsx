@@ -166,6 +166,13 @@ interface Measurement {
   linkedBoqId?: string;
   /** Human label of the linked position (description), for tooltip. */
   linkedPositionLabel?: string;
+  /** Auto-detection QA metadata for pre-drawn room candidates. */
+  detectionSource?: 'vector' | 'vision';
+  detectionConfidence?: 'high' | 'medium' | 'low';
+  detectionNeedsReview?: boolean;
+  detectionReviewReason?: string;
+  detectionDeclaredAreaM2?: number;
+  detectionErrorPct?: number;
 }
 
 // //// NEOFFICE PATCH — geometry hit-testing helpers for in-canvas measurement
@@ -300,12 +307,19 @@ interface PlanVisionResponse {
 /** Vector-geometry room detection (oe_neoffice detect-rooms). */
 const ROOMS_GROUP = 'Pièces';
 const ROOMS_GROUP_COLOR = '#10B981';
+const ROOMS_REVIEW_COLOR = '#F59E0B';
 
 interface DetectedRoom {
   name?: string | null;
   /** [[x, y], …] normalised in [0, 1] of the page. */
   polygon: number[][];
   area_m2?: number | null;
+  declared_m2?: number | null;
+  error_pct?: number | null;
+  confidence?: 'high' | 'medium' | 'low' | null;
+  needs_review?: boolean;
+  review_reason?: string | null;
+  source?: 'vector' | 'vision' | null;
 }
 
 interface RoomDetectionResponse {
@@ -316,7 +330,21 @@ interface RoomDetectionResponse {
   scale_ratio?: number | null;
   scale_pixels_per_unit?: number | null;
   rooms: DetectedRoom[];
-  stats: Record<string, number>;
+  stats: Record<string, number | string>;
+}
+
+function roomDetectionNotes(room: DetectedRoom): string | undefined {
+  const parts: string[] = [];
+  if (room.source) parts.push(`source=${room.source}`);
+  if (room.confidence) parts.push(`confidence=${room.confidence}`);
+  if (typeof room.declared_m2 === 'number') {
+    parts.push(`declared=${room.declared_m2.toFixed(2)} m2`);
+  }
+  if (typeof room.error_pct === 'number') {
+    parts.push(`error=${room.error_pct.toFixed(1)}%`);
+  }
+  if (room.review_reason) parts.push(`review=${room.review_reason}`);
+  return parts.length ? parts.join(' | ') : undefined;
 }
 // //// END NEOFFICE PATCH
 
@@ -1980,6 +2008,7 @@ export default function TakeoffViewerModule({
             y: (xy[1] ?? 0) * ph,
           }));
           const realArea = r.area_m2 ?? toRealArea(polygonAreaPixels(pts), effScale);
+          const needsReview = r.needs_review ?? r.confidence !== 'high';
           return {
             id: `r_${ts}_${i}`,
             type: 'area' as const,
@@ -1990,7 +2019,14 @@ export default function TakeoffViewerModule({
             annotation: r.name || 'Pièce',
             page: currentPage,
             group: ROOMS_GROUP,
-            color: ROOMS_GROUP_COLOR,
+            color: needsReview ? ROOMS_REVIEW_COLOR : ROOMS_GROUP_COLOR,
+            notes: roomDetectionNotes(r),
+            detectionSource: r.source ?? 'vector',
+            detectionConfidence: r.confidence ?? (needsReview ? 'low' : 'high'),
+            detectionNeedsReview: needsReview,
+            detectionReviewReason: r.review_reason ?? undefined,
+            detectionDeclaredAreaM2: r.declared_m2 ?? undefined,
+            detectionErrorPct: r.error_pct ?? undefined,
           };
         });
 
@@ -1998,13 +2034,22 @@ export default function TakeoffViewerModule({
         setMeasurements((prev) => [...prev, ...newMeasurements]);
       }
 
+      const needsReview = Number(res.stats?.rooms_needs_review ?? newMeasurements.filter((m) => m.detectionNeedsReview).length);
+      const highConfidence = Number(res.stats?.rooms_high_confidence ?? newMeasurements.filter((m) => m.detectionConfidence === 'high').length);
+      const labels = Number(res.stats?.label_count ?? 0);
+      const covered = Number(res.stats?.anchors_covered ?? 0);
+
       addToast({
-        type: 'success',
-        title: t('takeoff_viewer.rooms_done_title', { defaultValue: 'Pièces détectées' }),
+        type: needsReview > 0 ? 'info' : 'success',
+        title: t('takeoff_viewer.rooms_done_title', { defaultValue: 'Candidats de pièces générés' }),
         message: t('takeoff_viewer.rooms_done_msg', {
           defaultValue:
-            '{{count}} pièce(s) détectée(s) (contours vectoriels). Ajustez si nécessaire.',
+            '{{count}} candidat(s), {{high}} fiable(s), {{review}} à vérifier. Labels couverts: {{covered}}/{{labels}}.',
           count: newMeasurements.length,
+          high: highConfidence,
+          review: needsReview,
+          covered,
+          labels,
         }),
       });
     } catch (err) {
@@ -4182,6 +4227,47 @@ export default function TakeoffViewerModule({
                   />
                 </div>
 
+                {selectedMeasurement.detectionSource && (
+                  <div className="rounded border border-border/70 bg-surface-secondary/50 px-2 py-1.5 text-xs">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[10px] font-semibold text-content-tertiary uppercase">
+                        {t('takeoff_viewer.room_detection_qa', { defaultValue: 'Détection' })}
+                      </span>
+                      <span
+                        className={clsx(
+                          'inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[9px] font-semibold',
+                          selectedMeasurement.detectionNeedsReview
+                            ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200'
+                            : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300',
+                        )}
+                      >
+                        {selectedMeasurement.detectionNeedsReview ? <AlertTriangle size={8} /> : <Check size={8} />}
+                        {selectedMeasurement.detectionNeedsReview
+                          ? t('takeoff_viewer.room_needs_review_short', { defaultValue: 'À vérifier' })
+                          : 'OK'}
+                      </span>
+                    </div>
+                    <div className="mt-1 grid grid-cols-2 gap-x-2 gap-y-0.5 text-[10px] text-content-secondary">
+                      <span>{t('takeoff_viewer.room_detection_source', { defaultValue: 'Source' })}</span>
+                      <span className="text-right font-medium">{selectedMeasurement.detectionSource}</span>
+                      <span>{t('takeoff_viewer.room_detection_confidence', { defaultValue: 'Confiance' })}</span>
+                      <span className="text-right font-medium">{selectedMeasurement.detectionConfidence || '—'}</span>
+                      {typeof selectedMeasurement.detectionDeclaredAreaM2 === 'number' && (
+                        <>
+                          <span>{t('takeoff_viewer.room_declared_area', { defaultValue: 'Surface imprimée' })}</span>
+                          <span className="text-right font-medium">{selectedMeasurement.detectionDeclaredAreaM2.toFixed(2)} m²</span>
+                        </>
+                      )}
+                      {typeof selectedMeasurement.detectionErrorPct === 'number' && (
+                        <>
+                          <span>{t('takeoff_viewer.room_area_error', { defaultValue: 'Écart' })}</span>
+                          <span className="text-right font-medium">{selectedMeasurement.detectionErrorPct.toFixed(1)}%</span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                )}
+
                 {/* Notes */}
                 <div>
                   <label className="text-[10px] font-semibold text-content-tertiary block mb-0.5">
@@ -4370,6 +4456,24 @@ export default function TakeoffViewerModule({
                                   <span className="text-2xs text-content-tertiary capitalize truncate shrink">
                                     {m.label}
                                   </span>
+                                  {m.detectionNeedsReview && (
+                                    <span
+                                      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200 text-[9px] font-semibold shrink-0"
+                                      title={m.detectionReviewReason || t('takeoff_viewer.room_needs_review', { defaultValue: 'À vérifier' })}
+                                    >
+                                      <AlertTriangle size={8} />
+                                      {t('takeoff_viewer.room_needs_review_short', { defaultValue: 'À vérifier' })}
+                                    </span>
+                                  )}
+                                  {m.detectionConfidence === 'high' && !m.detectionNeedsReview && (
+                                    <span
+                                      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300 text-[9px] font-semibold shrink-0"
+                                      title={t('takeoff_viewer.room_high_confidence', { defaultValue: 'Surface proche de la surface imprimée' })}
+                                    >
+                                      <Check size={8} />
+                                      OK
+                                    </span>
+                                  )}
                                   {m.linkedPositionOrdinal && (
                                     <button
                                       type="button"

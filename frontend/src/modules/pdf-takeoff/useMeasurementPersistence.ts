@@ -33,6 +33,12 @@ interface Measurement {
   linkedPositionOrdinal?: string;
   linkedBoqId?: string;
   linkedPositionLabel?: string;
+  detectionSource?: 'vector' | 'vision';
+  detectionConfidence?: 'high' | 'medium' | 'low';
+  detectionNeedsReview?: boolean;
+  detectionReviewReason?: string;
+  detectionDeclaredAreaM2?: number;
+  detectionErrorPct?: number;
 }
 
 interface ScaleConfig {
@@ -184,6 +190,12 @@ function toApiFormat(
       linked_boq_id: m.linkedBoqId,
       linked_position_ordinal: m.linkedPositionOrdinal,
       linked_position_label: m.linkedPositionLabel,
+      detection_source: m.detectionSource,
+      detection_confidence: m.detectionConfidence,
+      detection_needs_review: m.detectionNeedsReview,
+      detection_review_reason: m.detectionReviewReason,
+      detection_declared_area_m2: m.detectionDeclaredAreaM2,
+      detection_error_pct: m.detectionErrorPct,
     },
   };
 }
@@ -216,6 +228,12 @@ function fromApiFormat(r: MeasurementResponse): Measurement {
     linkedBoqId: (meta.linked_boq_id as string) ?? undefined,
     linkedPositionOrdinal: (meta.linked_position_ordinal as string) ?? undefined,
     linkedPositionLabel: (meta.linked_position_label as string) ?? undefined,
+    detectionSource: (meta.detection_source as 'vector' | 'vision') ?? undefined,
+    detectionConfidence: (meta.detection_confidence as 'high' | 'medium' | 'low') ?? undefined,
+    detectionNeedsReview: (meta.detection_needs_review as boolean) ?? undefined,
+    detectionReviewReason: (meta.detection_review_reason as string) ?? undefined,
+    detectionDeclaredAreaM2: (meta.detection_declared_area_m2 as number) ?? undefined,
+    detectionErrorPct: (meta.detection_error_pct as number) ?? undefined,
   };
 }
 

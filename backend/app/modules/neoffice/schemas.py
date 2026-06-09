@@ -195,6 +195,18 @@ class DetectedRoom(BaseModel):
     name: str | None = None
     polygon: list[list[float]]
     area_m2: float | None = None
+    declared_m2: float | None = None
+    error_pct: float | None = None
+    confidence: str | None = Field(
+        default=None,
+        description='"high", "medium" or "low" QA confidence for the area candidate',
+    )
+    needs_review: bool = Field(
+        default=True,
+        description="True when the candidate should be checked before use as quantity truth",
+    )
+    review_reason: str | None = None
+    source: str = Field(default="vector", description='"vector" or "vision"')
 
 
 class RoomDetectionResponse(BaseModel):
@@ -207,4 +219,4 @@ class RoomDetectionResponse(BaseModel):
     scale_ratio: float | None = None
     scale_pixels_per_unit: float | None = None
     rooms: list[DetectedRoom] = Field(default_factory=list)
-    stats: dict[str, int | str] = Field(default_factory=dict)
+    stats: dict[str, int | float | str] = Field(default_factory=dict)
