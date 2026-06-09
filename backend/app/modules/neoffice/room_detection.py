@@ -43,8 +43,8 @@ from typing import Any
 import cv2
 import numpy as np
 import pymupdf
-from shapely.geometry import LineString, MultiPoint, Point, Polygon
-from shapely.ops import voronoi_diagram
+from shapely.geometry import LineString, Point, Polygon, box
+from shapely.ops import split as shp_split
 from shapely.strtree import STRtree
 
 # ── Wall layer ───────────────────────────────────────────────────────────
@@ -66,7 +66,7 @@ DIM_MIN_VOTES = 8
 M_PER_PT_AT_72 = 0.0254 / 72.0                # paper metres per point
 
 # ── Raster room extraction ───────────────────────────────────────────────
-RENDER_DPI = 200
+RENDER_DPI = 150
 WALL_CLOSE_PT = 8.0              # seal corner gaps + merge double lines
 MIN_ROOM_M2 = 2.5               # drop noise fragments / wall pockets
 MAX_ROOM_M2 = 90.0              # drop the building envelope / frame
@@ -163,10 +163,17 @@ def _double_line_walls(segments):
 # ── §1d — scale from dimension lines ─────────────────────────────────────
 
 def _dimension_scale_m_per_pt(page: "pymupdf.Page") -> float | None:
-    segs = _black_segments(page) + [
+    segs = [
         ((it[1].x, it[1].y), (it[2].x, it[2].y))
         for d in page.get_drawings() for it in d.get("items", []) if it[0] == "l"
     ]
+    if not segs:
+        return None
+    # Spatial index so each dimension number only tests the few lines passing
+    # near it (the O(N²) scan over ~30k segments was the latency bottleneck).
+    geoms = [LineString(s) for s in segs]
+    tree = STRtree(geoms)
+    pad = DIM_PERP_TOL_PT + 4.0
     votes = []
     for x0, y0, x1, y1, w, *_ in page.get_text("words"):
         m = DIM_RE.match(w.strip())
@@ -177,16 +184,17 @@ def _dimension_scale_m_per_pt(page: "pymupdf.Page") -> float | None:
             continue
         cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
         best_len = 0.0
-        for (ax, ay), (bx, by) in segs:
-            length = math.hypot(bx - ax, by - ay)
-            if not (v / SCALE_MAX_MPP <= length <= v / SCALE_MIN_MPP):
-                continue
+        for j in tree.query(box(cx - pad, cy - pad, cx + pad, cy + pad)):
+            (ax, ay), (bx, by) = segs[int(j)]
             dx, dy = bx - ax, by - ay
             l2 = dx * dx + dy * dy
             if l2 == 0:
                 continue
+            length = math.sqrt(l2)
+            if not (v / SCALE_MAX_MPP <= length <= v / SCALE_MIN_MPP):
+                continue
             t = ((cx - ax) * dx + (cy - ay) * dy) / l2
-            perp = abs((cx - ax) * dy - (cy - ay) * dx) / math.sqrt(l2)
+            perp = abs((cx - ax) * dy - (cy - ay) * dx) / length
             if perp < DIM_PERP_TOL_PT and DIM_PROJ_MIN < t < DIM_PROJ_MAX and length > best_len:
                 best_len = length
         if best_len:
@@ -232,12 +240,103 @@ def _wall_regions(page, walls, conv) -> list[Polygon]:
     return polys
 
 
-def _room_label_points(page: "pymupdf.Page") -> list[tuple[str, float, float]]:
+_SURFACE_RE = re.compile(r"Surface[:\s]*(\d+[.,]\d+|\d+)\s*m", re.I)
+
+
+def _room_labels(page: "pymupdf.Page") -> list[tuple[str, float, float, float | None]]:
+    """Room labels with their declared surface (m²) when printed nearby.
+
+    ArchiCAD prints the room name and 'Surface: X m²' as separate text blocks in
+    the same column; pair each name with the nearest surface block just below it.
+    The declared surface is used as weak supervision to place open-plan cuts so
+    the split areas match the architect's figures (area correct by construction).
+    """
+    names: list[tuple[str, float, float]] = []
+    surfs: list[tuple[float, float, float]] = []
+    for x0, y0, x1, y1, text, *_ in page.get_text("blocks"):
+        t = (text or "").strip()
+        if not t:
+            continue
+        first = t.split("\n")[0].strip()
+        low = first.lower()
+        if "surface" not in low and not low.startswith("sol") and ROOM_KEYWORDS.search(first):
+            names.append((first, (x0 + x1) / 2, (y0 + y1) / 2))
+        m = _SURFACE_RE.search(t)
+        if m:
+            surfs.append(((x0 + x1) / 2, (y0 + y1) / 2, float(m.group(1).replace(",", "."))))
+    out: list[tuple[str, float, float, float | None]] = []
+    for name, cx, cy in names:
+        best, best_dy = None, 1e9
+        for sx, sy, val in surfs:
+            dy = sy - cy
+            if abs(sx - cx) < 45 and 0 < dy < 45 and dy < best_dy:
+                best, best_dy = val, dy
+        out.append((name, cx, cy, best))
+    return out
+
+
+# ── Open-plan straight cut (hybrid deterministic half, area-weighted) ─────
+
+def _area_left(poly: Polygon, axis: str, c: float) -> float:
+    minx, miny, maxx, maxy = poly.bounds
+    clip = box(minx - 1, miny - 1, c, maxy + 1) if axis == "x" \
+        else box(minx - 1, miny - 1, maxx + 1, c)
+    return poly.intersection(clip).area
+
+
+def _weighted_pos(poly: Polygon, axis: str, frac_left: float, iters: int = 34) -> float:
+    minx, miny, maxx, maxy = poly.bounds
+    lo, hi = (minx, maxx) if axis == "x" else (miny, maxy)
+    target = frac_left * poly.area
+    for _ in range(iters):
+        mid = (lo + hi) / 2
+        if _area_left(poly, axis, mid) < target:
+            lo = mid
+        else:
+            hi = mid
+    return (lo + hi) / 2
+
+
+def _split_region(poly, idxs, pts, declared, min_part):
+    """Split an open-plan region among its room anchors with STRAIGHT axis-aligned
+    cuts, positioned by the declared surfaces when known. Recurses for 3+ rooms."""
+    if len(idxs) <= 1:
+        return [(poly, idxs[0])] if idxs else []
+    xs = [pts[i].x for i in idxs]
+    ys = [pts[i].y for i in idxs]
+    axis = "x" if (max(xs) - min(xs)) >= (max(ys) - min(ys)) else "y"
+    key = (lambda i: pts[i].x) if axis == "x" else (lambda i: pts[i].y)
+    order = sorted(idxs, key=key)
+    _, kbest = max((key(order[k + 1]) - key(order[k]), k) for k in range(len(order) - 1))
+    left, right = order[: kbest + 1], order[kbest + 1:]
+    da = sum(declared[i] or 0 for i in left)
+    db = sum(declared[i] or 0 for i in right)
+    if da > 0 and db > 0:
+        c = _weighted_pos(poly, axis, da / (da + db))
+        c = min(max(c, key(order[kbest])), key(order[kbest + 1]))
+    else:
+        c = (key(order[kbest]) + key(order[kbest + 1])) / 2
+    minx, miny, maxx, maxy = poly.bounds
+    cutter = LineString([(c, miny - 1), (c, maxy + 1)]) if axis == "x" \
+        else LineString([(minx - 1, c), (maxx + 1, c)])
+    try:
+        pieces = [pg for pg in shp_split(poly, cutter).geoms
+                  if pg.geom_type == "Polygon" and not pg.is_empty]
+    except Exception:
+        return [(poly, idxs[0])]
+    if len(pieces) < 2:
+        return [(poly, min(idxs, key=lambda i: pts[i].distance(poly.representative_point())))]
     out = []
-    for w in page.get_text("words"):
-        text = w[4].strip()
-        if text and ROOM_KEYWORDS.search(text):
-            out.append((text, (w[0] + w[2]) / 2, (w[1] + w[3]) / 2))
+    for pg in pieces:
+        if pg.area < min_part:
+            continue
+        contained = [i for i in idxs if pg.contains(pts[i])]
+        if len(contained) >= 2:
+            out += _split_region(pg, contained, pts, declared, min_part)
+        elif len(contained) == 1:
+            out.append((pg, contained[0]))
+        else:
+            out.append((pg, min(idxs, key=lambda i: pts[i].distance(pg.representative_point()))))
     return out
 
 
@@ -296,8 +395,9 @@ def detect_rooms(
         segments = _black_segments(page)
         walls = _double_line_walls(segments)
         regions = _wall_regions(page, walls, conv) if walls else []
-        labels = _room_label_points(page)
-        pts = [Point(cx, cy) for _t, cx, cy in labels]
+        labels = _room_labels(page)
+        pts = [Point(cx, cy) for _n, cx, cy, _d in labels]
+        declared = [d for _n, _cx, _cy, d in labels]
         min_part_pt2 = MIN_ROOM_M2 / conv if conv else 0.0
 
         rooms_out: list[dict[str, Any]] = []
@@ -314,17 +414,11 @@ def detect_rooms(
             if len(inside) <= 1:
                 emit(poly, labels[inside[0]][0] if inside else None)
                 continue
-            # §1c — split an open-plan region by its room labels.
-            try:
-                vor = voronoi_diagram(MultiPoint([pts[i] for i in inside]), envelope=poly)
-                for cell in vor.geoms:
-                    for pg in _iter_polys(cell.intersection(poly)):
-                        if pg.area < min_part_pt2:
-                            continue
-                        owner = min(inside, key=lambda i: pts[i].distance(pg.centroid))
-                        emit(pg, labels[owner][0])
-            except Exception:
-                emit(poly, labels[inside[0]][0])
+            # §1c — split an open-plan region by STRAIGHT virtual walls, positioned
+            # by the declared surfaces when known (area correct by construction).
+            # Each cut edge is editable; later the ML places this line (note 65).
+            for pg, owner in _split_region(poly, inside, pts, declared, min_part_pt2):
+                emit(pg, labels[owner][0])
 
         return {
             "page_width_pt": round(pw, 2),
