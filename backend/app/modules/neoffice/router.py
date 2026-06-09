@@ -30,6 +30,7 @@ from app.modules.neoffice.plan_vision import analyze_plan_vision
 from app.modules.neoffice.roomplan_glb_builder import build_glb_bytes
 from app.modules.neoffice.roomplan_importer import parse_roomplan_scan
 from app.modules.neoffice.schemas import (
+    DetectedRoom,
     FieldReportFromActivitiesRequest,
     PlanVisionRequest,
     PlanVisionResponse,
@@ -343,7 +344,7 @@ async def detect_takeoff_rooms(
     that follow the real walls — far more precise than the vision boxes. The
     drawing scale is read off the plan via the vision model when not supplied.
     """
-    from app.modules.neoffice.room_detection import detect_rooms
+    from app.modules.neoffice.room_detection import detect_rooms, page_has_vectors
     from app.modules.takeoff.service import TakeoffService
 
     takeoff = TakeoffService(session)
@@ -362,12 +363,55 @@ async def detect_takeoff_rooms(
             detail="Stored PDF file not found on server",
         )
     pdf_bytes = pdf_path.read_bytes()
+    page_idx = request.page - 1
 
+    # Route by PDF type: a vector CAD export goes to the geometry pathway
+    # (precise wall-following contours); a raster/scan PDF (image only, no walls
+    # to polygonise) goes to the vision pathway. One button, two engines.
+    is_vector = await asyncio.to_thread(page_has_vectors, pdf_bytes, page_idx)
+
+    if not is_vector:
+        try:
+            vision = await analyze_plan_vision(
+                pdf_bytes, page_idx, settings, scale_override=request.scale_override
+            )
+        except Exception as exc:
+            logger.exception("Vision room detection failed for %s", request.document_id)
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Vision room detection failed",
+            ) from exc
+        # Each vision box (normalised [0,1]) becomes a rectangular polygon so the
+        # frontend renders it exactly like a geometry-detected room.
+        vrooms: list[DetectedRoom] = []
+        for r in vision.get("rooms", []):
+            bbox = r.get("bbox")
+            if not bbox or len(bbox) != 4:
+                continue
+            x0, y0, x1, y1 = bbox
+            vrooms.append(
+                DetectedRoom(
+                    name=r.get("name"),
+                    polygon=[[x0, y0], [x1, y0], [x1, y1], [x0, y1]],
+                    area_m2=r.get("approx_area_m2"),
+                )
+            )
+        return RoomDetectionResponse(
+            document_id=request.document_id,
+            page=request.page,
+            page_width_pt=vision.get("page_width_pt", 0.0),
+            page_height_pt=vision.get("page_height_pt", 0.0),
+            scale_ratio=vision.get("scale_ratio"),
+            scale_pixels_per_unit=vision.get("scale_pixels_per_unit"),
+            rooms=vrooms,
+            stats={"vision": 1, "rooms": len(vrooms)},
+        )
+
+    # Vector pathway: geometry. Read the drawing scale off the plan when absent.
     scale_ratio = request.scale_override
     if scale_ratio is None:
-        # Read the drawing scale off the plan via the vision model (best-effort).
         try:
-            vision = await analyze_plan_vision(pdf_bytes, request.page - 1, settings)
+            vision = await analyze_plan_vision(pdf_bytes, page_idx, settings)
             scale_ratio = vision.get("scale_ratio")
         except Exception:
             logger.exception("Scale read via vision failed for %s", request.document_id)
@@ -375,9 +419,7 @@ async def detect_takeoff_rooms(
 
     try:
         # CPU-bound geometry — run off the event loop.
-        result = await asyncio.to_thread(
-            detect_rooms, pdf_bytes, request.page - 1, scale_ratio
-        )
+        result = await asyncio.to_thread(detect_rooms, pdf_bytes, page_idx, scale_ratio)
     except IndexError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
     except Exception as exc:

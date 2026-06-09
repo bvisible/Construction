@@ -147,6 +147,21 @@ def _room_label_points(page: "pymupdf.Page") -> list[tuple[str, float, float]]:
     return out
 
 
+def page_has_vectors(pdf_bytes: bytes, page_index: int, min_drawings: int = 20) -> bool:
+    """True if the page carries a usable vector layer (CAD export), False for a
+    raster/scan PDF (image only).
+
+    Lets the detect-rooms endpoint route a vector plan to the geometry pathway
+    and an image/scan plan to the vision pathway. The threshold avoids treating
+    a few incidental vector marks (logo, frame) as a real CAD drawing.
+    """
+    doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
+    with doc:
+        if page_index < 0 or page_index >= doc.page_count:
+            return False
+        return len(doc[page_index].get_drawings()) >= min_drawings
+
+
 def detect_rooms(
     pdf_bytes: bytes,
     page_index: int,
