@@ -168,6 +168,37 @@ interface Measurement {
   linkedPositionLabel?: string;
 }
 
+// //// NEOFFICE PATCH — geometry hit-testing helpers for in-canvas measurement
+// editing (vertex drag / shape move). NOT in upstream OCE: the native viewer can
+// only create + delete measurements, never reshape them. We need this so that
+// AI-detected rooms whose contour is imperfect can be corrected by hand.
+
+/** Ray-casting point-in-polygon test (logical coordinates). */
+function pointInPolygon(pt: Point, poly: Point[]): boolean {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const pi = poly[i]!;
+    const pj = poly[j]!;
+    const intersect =
+      pi.y > pt.y !== pj.y > pt.y &&
+      pt.x < ((pj.x - pi.x) * (pt.y - pi.y)) / (pj.y - pi.y) + pi.x;
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
+/** Shortest distance from point p to segment ab (logical coordinates). */
+function distToSegment(p: Point, a: Point, b: Point): number {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq === 0) return Math.hypot(p.x - a.x, p.y - a.y);
+  let t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / lenSq;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+}
+// //// END NEOFFICE PATCH
+
 /* ── Annotation Colors ───────────────────────────────────────────── */
 
 interface AnnotationColor {
@@ -416,6 +447,17 @@ export default function TakeoffViewerModule({
 
   // Selected measurement (drives the right-side Properties panel).
   const [selectedMeasurementId, setSelectedMeasurementId] = useState<string | null>(null);
+
+  // //// NEOFFICE PATCH — geometry editing state (not in upstream OCE).
+  // Drag a vertex (vertexIndex set) or move the whole measurement (vertexIndex
+  // null). lastX/lastY track the previous mouse position for incremental body
+  // translation; editDragMovedRef distinguishes a plain selecting click from a
+  // real geometry edit (so we only persist on real edits).
+  const [editDrag, setEditDrag] = useState<
+    { id: string; vertexIndex: number | null; lastX: number; lastY: number } | null
+  >(null);
+  const editDragMovedRef = useRef(false);
+  // //// END NEOFFICE PATCH
 
   // Legend overlay visibility (bottom-left of canvas).
   const [showLegend, setShowLegend] = useState(true);
@@ -1081,7 +1123,29 @@ export default function TakeoffViewerModule({
         ctx.stroke();
       }
     }
-  }, [measurements, activePoints, currentPage, zoom, settingScale, scalePoints, activeTool, hiddenGroups, scale, annotationColor, rectStartPoint, isDraggingRect]);
+
+    // //// NEOFFICE PATCH — draw draggable vertex handles on the selected
+    // measurement (visual affordance for the in-canvas editing above). NOT in
+    // upstream OCE.
+    if (selectedMeasurementId) {
+      const selM = measurements.find(
+        (m) => m.id === selectedMeasurementId && m.page === currentPage,
+      );
+      if (selM && !hiddenGroups.has(selM.group)) {
+        const hColor = GROUP_COLOR_MAP[selM.group] || '#3B82F6';
+        ctx.lineWidth = 2 * dpr;
+        for (const p of selM.points) {
+          ctx.beginPath();
+          ctx.arc(p.x * dpr * zoom, p.y * dpr * zoom, 5 * dpr, 0, Math.PI * 2);
+          ctx.fillStyle = '#ffffff';
+          ctx.fill();
+          ctx.strokeStyle = hColor;
+          ctx.stroke();
+        }
+      }
+    }
+    // //// END NEOFFICE PATCH
+  }, [measurements, activePoints, currentPage, zoom, settingScale, scalePoints, activeTool, hiddenGroups, scale, annotationColor, rectStartPoint, isDraggingRect, selectedMeasurementId]);
 
   /* ── Canvas click handler ────────────────────────────────────────── */
 
@@ -1128,6 +1192,156 @@ export default function TakeoffViewerModule({
     },
     [pushUndo],
   );
+
+  // //// NEOFFICE PATCH — in-canvas measurement editing (recompute on edit,
+  // hit-testing, vertex/shape drag handlers). NOT in upstream OCE; lets the user
+  // reshape/move AI-detected rooms & manual measurements directly on the plan.
+  // Paired with: the editDrag branch in handleCanvasMouseMove, the vertex handles
+  // in the overlay render effect, and the onMouseDown/Up wiring on the overlay
+  // canvas (all marked NEOFFICE PATCH).
+
+  /** Recompute value + label after a measurement's points changed. */
+  const recomputeMeasurement = useCallback(
+    (m: Measurement): Measurement => {
+      if ((m.type === 'area' || m.type === 'volume') && m.points.length >= 3) {
+        const realArea = toRealArea(polygonAreaPixels(m.points), scale);
+        const realPerim = toRealDistance(polygonPerimeterPixels(m.points), scale);
+        if (m.type === 'volume') {
+          const vol = realArea * (m.depth ?? 0);
+          return {
+            ...m,
+            area: realArea,
+            value: vol,
+            label: `${formatMeasurement(vol, scale.unitLabel + '³')} (${formatMeasurement(realArea, scale.unitLabel + '²')})`,
+          };
+        }
+        return {
+          ...m,
+          value: realArea,
+          label: `${formatMeasurement(realArea, scale.unitLabel + '²')} (P: ${formatMeasurement(realPerim, scale.unitLabel)})`,
+        };
+      }
+      if (m.type === 'distance' && m.points.length === 2) {
+        const d = toRealDistance(
+          pixelDistance(m.points[0]!.x, m.points[0]!.y, m.points[1]!.x, m.points[1]!.y),
+          scale,
+        );
+        return { ...m, value: d, label: formatMeasurement(d, scale.unitLabel) };
+      }
+      if (m.type === 'polyline' && m.points.length >= 2) {
+        let total = 0;
+        for (let i = 0; i < m.points.length - 1; i++) {
+          total += pixelDistance(
+            m.points[i]!.x,
+            m.points[i]!.y,
+            m.points[i + 1]!.x,
+            m.points[i + 1]!.y,
+          );
+        }
+        const d = toRealDistance(total, scale);
+        return { ...m, value: d, label: formatMeasurement(d, scale.unitLabel) };
+      }
+      // count / annotations: geometry move doesn't change the value.
+      return m;
+    },
+    [scale],
+  );
+
+  /** Index of a vertex of `m` within `tol` (logical units) of `pt`, or -1. */
+  const vertexIndexAt = useCallback((pt: Point, m: Measurement, tol: number): number => {
+    for (let i = 0; i < m.points.length; i++) {
+      const v = m.points[i]!;
+      if (Math.hypot(v.x - pt.x, v.y - pt.y) <= tol) return i;
+    }
+    return -1;
+  }, []);
+
+  /** Topmost editable measurement under `pt` (logical), or null. */
+  const measurementAt = useCallback(
+    (pt: Point, tol: number): Measurement | null => {
+      const visible = measurements.filter(
+        (m) =>
+          m.page === currentPage &&
+          !hiddenGroups.has(m.group) &&
+          !(isAnnotationType(m.type) && hiddenGroups.has('__annotations__')),
+      );
+      // Reverse: topmost (last drawn) wins.
+      for (let i = visible.length - 1; i >= 0; i--) {
+        const m = visible[i]!;
+        if ((m.type === 'area' || m.type === 'volume') && m.points.length >= 3) {
+          if (pointInPolygon(pt, m.points)) return m;
+          for (let j = 0; j < m.points.length; j++) {
+            const a = m.points[j]!;
+            const b = m.points[(j + 1) % m.points.length]!;
+            if (distToSegment(pt, a, b) <= tol) return m;
+          }
+        } else if ((m.type === 'distance' || m.type === 'polyline') && m.points.length >= 2) {
+          for (let j = 0; j < m.points.length - 1; j++) {
+            if (distToSegment(pt, m.points[j]!, m.points[j + 1]!) <= tol) return m;
+          }
+        } else if ((m.type === 'rectangle' || m.type === 'highlight') && m.points.length === 2) {
+          const x0 = Math.min(m.points[0]!.x, m.points[1]!.x);
+          const x1 = Math.max(m.points[0]!.x, m.points[1]!.x);
+          const y0 = Math.min(m.points[0]!.y, m.points[1]!.y);
+          const y1 = Math.max(m.points[0]!.y, m.points[1]!.y);
+          if (pt.x >= x0 && pt.x <= x1 && pt.y >= y0 && pt.y <= y1) return m;
+        } else {
+          // count / text / arrow: grab near any point.
+          for (const p of m.points) {
+            if (Math.hypot(p.x - pt.x, p.y - pt.y) <= tol * 2) return m;
+          }
+        }
+      }
+      return null;
+    },
+    [measurements, currentPage, hiddenGroups],
+  );
+
+  /** Mouse down on the canvas with the select tool: grab a vertex or a shape. */
+  const handleCanvasMouseDown = useCallback(
+    (e: React.MouseEvent<HTMLCanvasElement>) => {
+      if (activeTool !== 'select' || settingScale) return;
+      const rect = overlayRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const pt: Point = { x: (e.clientX - rect.left) / zoom, y: (e.clientY - rect.top) / zoom };
+      const tol = 8 / zoom; // 8 screen px grab radius
+
+      // 1. Grab a vertex of the currently selected measurement.
+      const sel = measurements.find(
+        (m) => m.id === selectedMeasurementId && m.page === currentPage,
+      );
+      if (sel) {
+        const vi = vertexIndexAt(pt, sel, tol);
+        if (vi >= 0) {
+          editDragMovedRef.current = false;
+          setEditDrag({ id: sel.id, vertexIndex: vi, lastX: pt.x, lastY: pt.y });
+          e.preventDefault();
+          return;
+        }
+      }
+      // 2. Hit a measurement body → select it and prepare to move it.
+      const hit = measurementAt(pt, tol);
+      if (hit) {
+        editDragMovedRef.current = false;
+        setSelectedMeasurementId(hit.id);
+        setEditDrag({ id: hit.id, vertexIndex: null, lastX: pt.x, lastY: pt.y });
+        e.preventDefault();
+        return;
+      }
+      // 3. Empty space → deselect (leave panning/scroll to the container).
+      setSelectedMeasurementId(null);
+    },
+    [activeTool, settingScale, zoom, measurements, selectedMeasurementId, currentPage, vertexIndexAt, measurementAt],
+  );
+
+  /** Mouse up: finish an edit drag and persist if the geometry actually moved. */
+  const handleCanvasMouseUp = useCallback(() => {
+    if (!editDrag) return;
+    const moved = editDragMovedRef.current;
+    setEditDrag(null);
+    if (moved) saveNow?.();
+  }, [editDrag, saveNow]);
+  // //// END NEOFFICE PATCH
 
   /** Start inline editing of an annotation. */
   const startEditAnnotation = useCallback((m: Measurement) => {
@@ -1539,6 +1753,33 @@ export default function TakeoffViewerModule({
 
   const handleCanvasMouseMove = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
+      // //// NEOFFICE PATCH — geometry edit drag (select tool): move a vertex or
+      // translate the whole shape. NOT in upstream OCE. Returns early so it never
+      // interferes with the upstream rectangle/highlight preview below.
+      if (editDrag) {
+        const rect = overlayRef.current?.getBoundingClientRect();
+        if (!rect) return;
+        const x = (e.clientX - rect.left) / zoom;
+        const y = (e.clientY - rect.top) / zoom;
+        editDragMovedRef.current = true;
+        const dx = x - editDrag.lastX;
+        const dy = y - editDrag.lastY;
+        setMeasurements((prev) =>
+          prev.map((m) => {
+            if (m.id !== editDrag.id) return m;
+            const pts =
+              editDrag.vertexIndex === null
+                ? m.points.map((p) => ({ x: p.x + dx, y: p.y + dy }))
+                : m.points.map((p, i) => (i === editDrag.vertexIndex ? { x, y } : p));
+            return recomputeMeasurement({ ...m, points: pts });
+          }),
+        );
+        if (editDrag.vertexIndex === null) {
+          setEditDrag({ ...editDrag, lastX: x, lastY: y });
+        }
+        return;
+      }
+      // //// END NEOFFICE PATCH
       if ((activeTool === 'rectangle' || activeTool === 'highlight') && rectStartPoint) {
         const rect = overlayRef.current?.getBoundingClientRect();
         if (!rect) return;
@@ -1548,7 +1789,7 @@ export default function TakeoffViewerModule({
         setIsDraggingRect(true);
       }
     },
-    [activeTool, rectStartPoint, zoom],
+    [activeTool, rectStartPoint, zoom, editDrag, recomputeMeasurement],
   );
 
   /* ── Confirm text annotation ──────────────────────────────────────── */
@@ -3496,8 +3737,14 @@ export default function TakeoffViewerModule({
               <canvas
                 ref={overlayRef}
                 className="absolute top-0 left-0"
-                style={{ cursor: activeTool === 'select' ? 'default' : 'crosshair' }}
+                // //// NEOFFICE PATCH — 'grabbing' cursor during a measurement edit drag
+                style={{ cursor: editDrag ? 'grabbing' : activeTool === 'select' ? 'default' : 'crosshair' }}
                 onClick={handleCanvasClick}
+                // //// NEOFFICE PATCH — in-canvas measurement editing (vertex/shape drag)
+                onMouseDown={handleCanvasMouseDown}
+                onMouseUp={handleCanvasMouseUp}
+                onMouseLeave={handleCanvasMouseUp}
+                // //// END NEOFFICE PATCH
                 onDoubleClick={handleCanvasDblClick}
                 onContextMenu={handleCanvasContextMenu}
                 onMouseMove={handleCanvasMouseMove}
