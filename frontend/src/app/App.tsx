@@ -40,7 +40,7 @@ import { SwissPackPage } from '@/features/swiss-pack';
 // import { SettingsPage } from '@/features/settings';
 // //// END NEOFFICE PATCH
 import { DatabaseSetupPage } from '@/features/setup';
-import { Logo, ShortcutsDialog, CommandPalette, ToastContainer, ErrorBoundary, NotFoundPage, ProductTour, OfflineBanner, PWAInstallPrompt } from '@/shared/ui';
+import { Logo, ShortcutsDialog, CommandPalette, ToastContainer, BackgroundInstallBanner, ErrorBoundary, NotFoundPage, ProductTour, OfflineBanner, PWAInstallPrompt } from '@/shared/ui';
 import { AdminOnly } from '@/shared/auth/AdminOnly';
 import GlobalSearchModal from '@/features/search/GlobalSearchModal';
 import { useGlobalSearchStore } from '@/stores/useGlobalSearchStore';
@@ -79,6 +79,9 @@ const TakeoffPage = lazy(() =>
 );
 const CadDataExplorerPage = lazy(() =>
   import('@/features/cad-explorer/CadDataExplorerPage').then((m) => ({ default: m.CadDataExplorerPage }))
+);
+const PointCloudPage = lazy(() =>
+  import('@/features/pointcloud/PointCloudPage').then((m) => ({ default: m.PointCloudPage }))
 );
 const MatchElementsPage = lazy(() =>
   import('@/features/match-elements/MatchElementsPage').then((m) => ({ default: m.MatchElementsPage }))
@@ -916,6 +919,7 @@ export default function App() {
         <Route path="/cad-explorer" element={<Navigate to="/data-explorer" replace />} />
         <Route path="/data-explorer" element={<P title="Data Explorer"><CadDataExplorerPage /></P>} />
         <Route path="/match-elements" element={<P title="Match Elements"><MatchElementsPage /></P>} />
+        <Route path="/pointcloud" element={<P title="Point Cloud"><PointCloudPage /></P>} />
         <Route path="/bim" element={<P title="BIM Viewer"><BIMPage /></P>} />
         <Route path="/bim/federations" element={<P title="BIM Federations"><FederationsPage /></P>} />
         <Route path="/bim/rules" element={<P title="BIM Rules"><BIMQuantityRulesPage /></P>} />
@@ -1212,6 +1216,11 @@ export default function App() {
         </Route>
       </Routes>
       <ToastContainer />
+      {/* Non-blocking progress for a ready-made pack that keeps provisioning
+          (cost databases, modules, sample projects) in the background after the
+          user has already entered the app from onboarding. Mounted at the root
+          so it survives navigation; no-op until an install is in flight. */}
+      <BackgroundInstallBanner />
       <FloatingQueuePanel />
       {/* Mobile PWA — Slice 1.  Single, discrete install nudge handled
           entirely inside <PWAInstallPrompt /> (cooldown, iOS branch,

@@ -37,6 +37,7 @@ import hashlib
 import hmac
 import json
 import logging
+import os
 import secrets
 import shutil
 import time
@@ -458,6 +459,28 @@ class StorageBackend(ABC):
         _ = (key, content_type, expires_seconds)
         raise NotImplementedError(f"{type(self).__name__} does not support presigned PUT URLs")
 
+    async def presigned_upload_part_url(
+        self,
+        session: MultipartSession,
+        part_number: int,
+        expires_seconds: int = 3600,
+    ) -> PresignedUrl:
+        """Return a short-lived URL the caller can ``PUT`` one multipart part to.
+
+        This is the presigned-direct path for very large uploads (5-200 GB
+        reality-capture scans): the server opens a multipart upload via
+        :meth:`initiate_multipart`, mints one of these URLs per part, and the
+        browser / CLI ``PUT``\\ s each part straight to object storage without
+        the FastAPI core ever touching the bytes.  ``part_number`` is 1-based to
+        match the S3 multipart API.
+
+        The default implementation refuses - backends that support direct
+        browser uploads MUST override.  See :class:`LocalStorageBackend` and
+        :class:`S3StorageBackend` for the two shipped implementations.
+        """
+        _ = (session, part_number, expires_seconds)
+        raise NotImplementedError(f"{type(self).__name__} does not support presigned multipart part URLs")
+
 
 # ──────────────────────────────────────────────────────────────────────────
 # Local filesystem implementation
@@ -843,6 +866,41 @@ class LocalStorageBackend(StorageBackend):
             headers=headers,
         )
 
+    async def presigned_upload_part_url(
+        self,
+        session: MultipartSession,
+        part_number: int,
+        expires_seconds: int = 3600,
+    ) -> PresignedUrl:
+        """Return a same-origin signed URL for one multipart part.
+
+        The token carries ``upload_id`` and ``part_number`` so the matching
+        PUT endpoint at ``/api/v1/uploads/local/{token}`` routes the body
+        through :meth:`upload_part` for the staged session instead of writing
+        the canonical key.  This keeps the local backend at full parity with
+        the S3 presigned-part flow used for direct-to-MinIO uploads.
+        """
+        if session.backend != "local":
+            raise ValueError(f"Cannot presign local part for session backed by {session.backend!r}")
+        if part_number < 1:
+            raise ValueError(f"part_number must be >= 1, got {part_number}")
+        normalised = _normalise_key(session.key)
+        expires_at = datetime.now(UTC) + timedelta(seconds=int(expires_seconds))
+        payload = {
+            "key": normalised,
+            "expires_at": int(expires_at.timestamp()),
+            "content_type": "",
+            "upload_id": session.upload_id,
+            "part_number": int(part_number),
+        }
+        token = _sign_local_upload_token(payload)
+        return PresignedUrl(
+            url=f"/api/v1/uploads/local/{token}",
+            method="PUT",
+            expires_at=expires_at,
+            headers={},
+        )
+
 
 # ──────────────────────────────────────────────────────────────────────────
 # S3 implementation (optional dependency: aioboto3)
@@ -1216,6 +1274,57 @@ class S3StorageBackend(StorageBackend):
             headers=headers,
         )
 
+    async def presigned_upload_part_url(
+        self,
+        session: MultipartSession,
+        part_number: int,
+        expires_seconds: int = 3600,
+    ) -> PresignedUrl:
+        """Presign a single ``UploadPart`` request (SigV4).
+
+        The browser / CLI ``PUT``\\ s the part body straight to S3/MinIO with
+        this URL; the bytes never transit the FastAPI core.  Signing is a
+        pure-CPU string operation - no network call happens here.
+        """
+        if session.backend != "s3":
+            raise ValueError(f"Cannot presign S3 part for session backed by {session.backend!r}")
+        if part_number < 1:
+            raise ValueError(f"part_number must be >= 1, got {part_number}")
+        expires_at = datetime.now(UTC) + timedelta(seconds=int(expires_seconds))
+        try:
+            import boto3
+            from botocore.config import Config
+        except ImportError as exc:  # pragma: no cover - aioboto3 pulls boto3 in
+            raise ImportError(
+                "S3StorageBackend.presigned_upload_part_url requires boto3 (installed transitively via aioboto3)"
+            ) from exc
+
+        cfg = Config(signature_version="s3v4", region_name=self._region or None)
+        client = boto3.client(
+            "s3",
+            endpoint_url=self._endpoint or None,
+            aws_access_key_id=self._access_key or None,
+            aws_secret_access_key=self._secret_key or None,
+            region_name=self._region or None,
+            config=cfg,
+        )
+        url = client.generate_presigned_url(
+            "upload_part",
+            Params={
+                "Bucket": self._bucket,
+                "Key": session.key,
+                "UploadId": session.upload_id,
+                "PartNumber": int(part_number),
+            },
+            ExpiresIn=int(expires_seconds),
+        )
+        return PresignedUrl(
+            url=str(url),
+            method="PUT",
+            expires_at=expires_at,
+            headers={},
+        )
+
 
 def _is_not_found(exc: BaseException) -> bool:
     """Best-effort ``404``/``NoSuchKey`` detection for aioboto3 errors."""
@@ -1241,10 +1350,17 @@ def _is_not_found(exc: BaseException) -> bool:
 def _default_local_base_dir() -> Path:
     """Where local blobs live by default.
 
-    Resolves to ``<repo>/data/`` - same layout as v1.3.x so upgrading
-    installs don't need to touch disk.  ``app/core/storage.py`` →
-    ``parents[3]`` == repo root.
+    The desktop and CLI runtimes export ``OE_CLI_DATA_DIR`` (a writable
+    per-user directory such as ``~/.openestimate``); honour it first so a
+    per-machine install under a read-only location like Program Files still
+    has somewhere to write its blobs. ``DATA_DIR`` is respected next for
+    custom deployments. Otherwise resolve to ``<repo>/data/`` - the same
+    layout as v1.3.x so upgrading installs don't need to touch disk.
+    ``app/core/storage.py`` -> ``parents[3]`` == repo root.
     """
+    override = os.environ.get("OE_CLI_DATA_DIR") or os.environ.get("DATA_DIR")
+    if override:
+        return Path(override)
     return Path(__file__).resolve().parents[3] / "data"
 
 
@@ -1255,6 +1371,85 @@ def _resolved_local_base_dir(settings: Settings) -> Path:
     root = (getattr(settings, "storage_local_root", "") or "").strip()
     return Path(root).expanduser() if root else _default_local_base_dir()
 # //// END NEOFFICE PATCH
+
+
+def safe_data_roots() -> list[Path]:
+    """Return the set of directories the platform is allowed to serve files from.
+
+    A single download route in one module frequently has to serve a blob that a
+    different module wrote (a /files mirror document pointing at a takeoff PDF,
+    a dwg upload, or a bim artifact). Those files live under sibling roots, not
+    just the one module's own upload base, so a route that only whitelists its
+    own base 404s perfectly valid files.
+
+    The roots returned here are every place the platform itself writes blobs:
+
+    * the active storage base dir (``OE_CLI_DATA_DIR`` / ``DATA_DIR`` / repo
+      ``data/``) - this is where dwg uploads and bim artifacts land,
+    * both brand-namespace home dirs ``~/.openestimate`` and
+      ``~/.openestimator`` - takeoff PDFs and document uploads land here,
+    * any operator-supplied ``OE_DATA_DIR``.
+
+    Callers use :func:`is_within_safe_root` to gate a resolved path before
+    streaming it. This never widens access beyond directories the platform
+    owns; it does not accept arbitrary absolute paths.
+    """
+    roots: list[Path] = []
+
+    def _add(candidate: Path | None) -> None:
+        if candidate is None:
+            return
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            return
+        if resolved not in roots:
+            roots.append(resolved)
+
+    _add(_default_local_base_dir())
+    # //// NEOFFICE PATCH — also trust the operator-configured `storage_local_root`
+    # (osiris: /mnt/neoffice/private/files/oce). Without it the v7.5 download gate
+    # (`is_within_safe_root`) rejects every blob stored under the custom mount.
+    try:
+        from app.config import get_settings  # local import: avoids a module cycle
+
+        _add(_resolved_local_base_dir(get_settings()))
+    except Exception:  # pragma: no cover - settings unavailable in some tests
+        pass
+    # //// END NEOFFICE PATCH
+    home = Path.home()
+    _add(home / ".openestimate")
+    _add(home / ".openestimator")
+    for env_name in ("OE_DATA_DIR", "DATA_DIR", "OE_CLI_DATA_DIR"):
+        value = os.environ.get(env_name)
+        if value:
+            _add(Path(value))
+    return roots
+
+
+def is_within_safe_root(path: Path, *, extra_roots: list[Path] | None = None) -> bool:
+    """Return True iff ``path`` is contained in one of the safe data roots.
+
+    ``path`` must already be resolved by the caller. Containment is checked
+    with ``Path.relative_to`` (not ``str.startswith``) so a sibling directory
+    whose name merely shares a prefix cannot pass, and symlink escapes are
+    defeated because the caller resolves first. ``extra_roots`` lets a caller
+    add its own already-resolved base (e.g. the documents upload base) without
+    re-deriving the platform-wide set.
+    """
+    roots = list(safe_data_roots())
+    if extra_roots:
+        for root in extra_roots:
+            if root not in roots:
+                roots.append(root)
+    for root in roots:
+        try:
+            path.relative_to(root)
+        except ValueError:
+            continue
+        else:
+            return True
+    return False
 
 
 def build_storage_backend(settings: Settings) -> StorageBackend:

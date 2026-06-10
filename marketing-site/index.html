@@ -1162,11 +1162,11 @@
     }
     .hf-trace path {
       fill: none;
-      stroke: color-mix(in oklab, var(--accent) 28%, transparent);
+      stroke: color-mix(in oklab, var(--accent) 20%, transparent);
       stroke-width: 1;
-      stroke-dasharray: 2 5;
+      stroke-dasharray: 1 6;
       stroke-linecap: round;
-      opacity: 0.5;
+      opacity: 0.22;
     }
     .hf-pulse {
       fill: none;
@@ -2100,6 +2100,10 @@
       letter-spacing: -0.01em;
       color: var(--ink-0);
       line-height: 1.1;
+      min-width: 0;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
     .d-label .s {
       font-family: 'JetBrains Mono', ui-monospace, monospace;
@@ -2108,6 +2112,10 @@
       letter-spacing: 0.03em;
       line-height: 1.2;
       text-transform: uppercase;
+      min-width: 0;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
 
     /* Connector line svg below */
@@ -2191,14 +2199,14 @@
 
     .headline {
       font-family: 'Inter Tight', 'Inter', sans-serif;
-      font-weight: 500;
+      font-weight: 580;
       color: var(--ink-0);
-      font-size: clamp(34px, 4.4vw, 68px);
-      line-height: 1.12;
+      font-size: clamp(34px, 4.4vw, 64px);
+      line-height: 1.05;
       letter-spacing: -0.035em;
-      max-width: 13ch;
+      max-width: 15ch;
       margin: 0;
-      padding-bottom: 0.1em;
+      padding-bottom: 0.12em;
       text-align: left;
     }
     .headline .italic {
@@ -9584,6 +9592,7 @@
     .gnf-card-inner img {
       display: block;
       width: 100%;
+      height: auto;
       aspect-ratio: 4/3;
       object-fit: cover;
       border-radius: 3px;
@@ -10207,12 +10216,19 @@
       margin-inline: auto;
     }
     .final-cta-row {
-      display: inline-flex;
+      display: flex;
       flex-wrap: wrap;
       justify-content: center;
       gap: 12px;
       align-items: center;
+      /* Constrain to exactly the same width as the install-from-source panel
+         below (620px) so the two blocks line up edge to edge. The big
+         download button flexes to fill the leftover space next to the
+         platform icons. */
+      width: min(100%, 620px);
+      margin-inline: auto;
     }
+    .final-cta-row .btn-hero-dl { flex: 1 1 320px; }
     .final-cta-row .btn-primary {
       position: relative;
       overflow: visible;
@@ -10235,31 +10251,80 @@
       0%, 100% { opacity: 0.4; transform: scale(1); }
       50%      { opacity: 0.9; transform: scale(1.08); }
     }
+    /* Install-from-source panel: prominent terminal-style command chips with
+       working copy buttons. Sits above the download button, clearly framed so
+       the pip line reads as a real, copyable command rather than a tiny pill. */
     .final-cta-install {
-      display: inline-flex;
-      align-items: center;
-      gap: 12px;
-      margin-top: 20px;
-      padding: 11px 18px;
-      border-radius: 999px;
-      border: 1px solid var(--line-1);
-      background: color-mix(in oklab, #ffffff 65%, transparent);
+      max-width: 620px;
+      margin: 24px auto 26px;
+      padding: 20px 22px 18px;
+      border-radius: 18px;
+      border: 1px solid color-mix(in oklab, var(--accent) 16%, var(--line-1));
+      background: color-mix(in oklab, #ffffff 60%, transparent);
+      box-shadow: 0 24px 56px -36px color-mix(in oklab, var(--accent) 42%, rgba(15, 23, 42, 0.3)), inset 0 1px 0 rgba(255, 255, 255, 0.5);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      text-align: left;
+    }
+    [data-theme="dark"] .final-cta-install {
+      border-color: color-mix(in oklab, var(--accent) 22%, var(--line-1));
+      box-shadow: 0 24px 56px -36px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+    }
+    .final-cta-install-head {
+      display: inline-flex; align-items: center; gap: 8px;
+      margin: 0 0 13px;
       font-family: 'JetBrains Mono', ui-monospace, monospace;
-      font-size: 13px;
-      color: var(--ink-1);
-      cursor: pointer;
-      transition: transform 0.2s ease, border-color 0.2s ease, background 0.2s ease;
+      font-size: 11px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase;
+      color: var(--accent-3);
     }
-    .final-cta-install:hover {
-      transform: translateY(-1px);
-      border-color: color-mix(in oklab, var(--accent) 50%, var(--line-1));
-      background: color-mix(in oklab, #ffffff 82%, transparent);
+    .final-cta-install-head svg { width: 14px; height: 14px; flex: none; fill: none; stroke: currentColor; stroke-width: 2.2; }
+    .fci-row { display: flex; align-items: stretch; gap: 9px; }
+    .fci-row + .fci-row { margin-top: 10px; }
+    .fci-term {
+      flex: 1; min-width: 0;
+      display: flex; align-items: center; gap: 10px;
+      background: var(--code-bg, #0f172a);
+      border: 1px solid var(--line-1);
+      border-radius: 12px;
+      padding: 13px 15px;
     }
-    .final-cta-install.is-copied {
-      border-color: #22c55e;
-      background: color-mix(in oklab, #22c55e 12%, transparent);
+    .fci-tag {
+      flex: none;
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      font-size: 10px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase;
+      color: var(--accent-2);
+      padding: 3px 7px; border-radius: 6px;
+      background: color-mix(in srgb, var(--accent-2) 18%, transparent);
     }
-    .final-cta-install .dollar { color: var(--accent-2); font-weight: 500; }
+    .fci-dollar { flex: none; font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 14px; font-weight: 600; color: var(--accent-2); }
+    .fci-cmd {
+      flex: 1; min-width: 0;
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      font-size: 14px; line-height: 1.45; color: #e2e8f0;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    /* Reuse the shared .dl-copy button + .is-copied flash, with a "Copied"
+       tooltip via ::after so the state reads on the dark CTA background. */
+    .final-cta-install .dl-copy { position: relative; flex: none; width: 44px; height: 44px; align-self: center; }
+    .final-cta-install .dl-copy.is-copied::after {
+      content: "Copied"; position: absolute; bottom: calc(100% + 7px); left: 50%;
+      transform: translateX(-50%); white-space: nowrap;
+      font-family: Inter, sans-serif; font-size: 11px; font-weight: 600;
+      color: #fff; background: var(--accent-3);
+      padding: 3px 8px; border-radius: 6px; pointer-events: none;
+      box-shadow: 0 6px 16px -6px rgba(15, 23, 42, 0.5);
+    }
+    .fci-foot {
+      margin: 13px 0 0;
+      font-size: 12.5px; line-height: 1.5; color: var(--ink-2);
+      text-align: center;
+    }
+    .fci-foot a { color: var(--accent-3); text-decoration: none; border-bottom: 1px solid color-mix(in srgb, var(--accent-3) 35%, transparent); }
+    .fci-foot a:hover { border-bottom-color: var(--accent-3); }
+    @media (max-width: 520px) {
+      .final-cta-install { padding: 16px 14px 14px; }
+      .fci-cmd { font-size: 13px; }
+    }
 
     /* Install method tabs (pip/docker/curl/git) + "also works with" footer */
     .final-install-wrap {
@@ -10299,7 +10364,6 @@
       box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
     }
     .final-install-tab svg { color: currentColor; }
-    .final-cta-install { margin-top: 0; }
 
     .final-install-alt {
       display: inline-flex;
@@ -11384,8 +11448,8 @@
         "operatingSystem": "Linux, macOS, Windows, Docker, Kubernetes",
         "url": "https://openconstructionerp.com/",
         "description": "Open-source construction ERP with AI-powered BOQ, multi-CAD ingest (DWG, RVT, IFC), 55,000+ cost items, real-time collaboration and 20-language i18n. Self-host under AGPL-3.0.",
-        "softwareVersion": "3.0.4",
-        "releaseNotes": "New AI takeoff, multi-CAD canonical format, real-time multiplayer via Yjs CRDT.",
+        "softwareVersion": "7.3.0",
+        "releaseNotes": "Reliable desktop install with self-healing upgrade, AI estimator showing real cost matches, and BIM element grouping and search working across 26 languages.",
         "license": "https://www.gnu.org/licenses/agpl-3.0.html",
         "author": { "@id": "https://datadrivenconstruction.io/#organization" },
         "publisher": { "@id": "https://datadrivenconstruction.io/#organization" },
@@ -11505,7 +11569,7 @@
             "name": "How often do you ship updates?",
             "acceptedAnswer": {
               "@type": "Answer",
-              "text": "Minor releases roughly every 2–3 weeks, patch releases as needed. The changelog lives on GitHub, every tagged version has a Docker image, and migrations are reversible. You decide when to upgrade - self-hosted means nobody forces a deploy window on you."
+              "text": "Minor releases roughly every 2-3 weeks, patch releases as needed. The changelog lives on GitHub, every tagged version has a Docker image, and migrations are reversible. You decide when to upgrade - self-hosted means nobody forces a deploy window on you."
             }
           },
           {
@@ -11543,7 +11607,7 @@
             "@type": "HowToStep",
             "position": 2,
             "name": "Run the install command",
-            "text": "Pip path: run 'pip install openconstructionerp' (SQLite, no extra services). Docker path: 'git clone https://github.com/datadrivenconstruction/OpenConstructionERP && cd OpenConstructionERP && make quickstart'. Shell path: 'curl -fsSL https://raw.githubusercontent.com/datadrivenconstruction/OpenConstructionERP/main/scripts/install.sh | bash' (auto-detects Docker / uv / pip). Each path bootstraps the database, seeds the CWICR cost database with 55,000+ items, and serves the app at port 8080.",
+            "text": "Pip path: run 'pip install openconstructionerp' (embedded PostgreSQL, no extra services). Docker path: 'git clone https://github.com/datadrivenconstruction/OpenConstructionERP && cd OpenConstructionERP && make quickstart'. Shell path: 'curl -fsSL https://raw.githubusercontent.com/datadrivenconstruction/OpenConstructionERP/main/scripts/install.sh | bash' (auto-detects Docker / uv / pip). Each path bootstraps the database, seeds the CWICR cost database with 55,000+ items, and serves the app at port 8080.",
             "url": "https://openconstructionerp.com/#download"
           },
           {
@@ -11684,9 +11748,9 @@
     <a href="#demo"      data-label="Demo"></a>
     <a href="#tour"      data-label="Tour"></a>
     <a href="#compare"   data-label="Compare"></a>
-    <a href="#developers" data-label="Developers"></a>
+    <a href="#developers" data-label="Developers" aria-label="Developers"></a>
     <a href="#voices"    data-label="Why"></a>
-    <a href="#community" data-label="Community"></a>
+    <a href="#community" data-label="Community" aria-label="Community"></a>
     <a href="#pricing"   data-label="Pricing"></a>
     <a href="#license"   data-label="License"></a>
     <a href="#faq"       data-label="FAQ"></a>
@@ -11920,7 +11984,7 @@
 
       <div class="eyebrow" id="fx-eyebrow">
         <span class="dot" aria-hidden="true"></span>
-        <span><b id="latest-version">Latest release</b> &middot; <span id="latest-version-meta" data-i18n="hero.version_meta">open source on GitHub</span></span>
+        <span><b id="latest-version">v7.3.0</b> &middot; <span id="latest-version-meta" data-i18n="hero.version_meta">open source on GitHub</span></span>
       </div>
 
       <h1 class="headline" id="headline" data-i18n-html="hero.headline">
@@ -11939,78 +12003,292 @@
 
       <!-- One big OS-detected download CTA + quiet "All platforms" + tertiary star -->
       <style>
-        .hero-cta-stack { display: flex; flex-direction: column; gap: 14px; margin-top: 4px; }
-        .hero-cta-main { display: flex; align-items: center; flex-wrap: wrap; gap: 16px 22px; }
+        /* The whole CTA column is sized to one consistent width so the install
+           card, the download button and the [macOS][Linux][star] row all line
+           up. 503px = 335 (download) + 72 + 72 + 2x12 gap, the old full row. */
+        .hero-cta-stack { display: flex; flex-direction: column; gap: 12px; margin-top: 4px; width: 503px; max-width: 100%; }
+        .hero-cta-main { width: 100%; }
         /* The big primary download button */
         .btn-hero-dl {
-          display: inline-flex; align-items: center; gap: 13px;
-          padding: 17px 30px; border-radius: 16px;
+          position: relative; overflow: hidden; isolation: isolate;
+          display: flex; align-items: center; gap: 13px;
+          width: 100%; box-sizing: border-box;
+          min-height: 72px;
+          height: 72px;
+          padding: 12px 24px; border-radius: 16px;
           font-family: 'Inter Tight', Inter, sans-serif;
-          font-size: 18px; font-weight: 640; letter-spacing: -0.01em;
+          font-size: 18px; font-weight: 680; letter-spacing: -0.01em;
           color: #fff; text-decoration: none; cursor: pointer;
-          background: linear-gradient(135deg, var(--accent), var(--accent-3));
-          box-shadow: 0 14px 34px -12px color-mix(in srgb, var(--accent-3) 70%, transparent),
-                      inset 0 1px 0 rgba(255, 255, 255, 0.18);
+          background: linear-gradient(135deg, var(--accent) 0%, var(--accent-2) 46%, var(--accent-3) 100%);
+          box-shadow: 0 18px 42px -14px color-mix(in srgb, var(--accent-3) 82%, transparent),
+                      0 2px 6px rgba(15, 23, 42, 0.12),
+                      inset 0 1px 0 rgba(255, 255, 255, 0.30);
           transition: transform 0.22s ease, box-shadow 0.25s ease, filter 0.25s ease;
           border: 1px solid transparent;
         }
+        .btn-hero-dl > * { position: relative; z-index: 1; }
+        .btn-hero-dl::after {
+          content: ""; position: absolute; inset: 0; z-index: 0; pointer-events: none;
+          background: linear-gradient(115deg, transparent 32%, rgba(255, 255, 255, 0.28) 50%, transparent 68%);
+          transform: translateX(-130%);
+          transition: transform 0.7s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .btn-hero-dl:hover::after { transform: translateX(130%); }
         .btn-hero-dl:hover {
           transform: translateY(-2px);
-          box-shadow: 0 22px 48px -12px color-mix(in srgb, var(--accent-3) 78%, transparent),
-                      inset 0 1px 0 rgba(255, 255, 255, 0.22);
-          filter: saturate(1.04);
+          box-shadow: 0 26px 54px -14px color-mix(in srgb, var(--accent-3) 86%, transparent),
+                      0 3px 8px rgba(15, 23, 42, 0.14),
+                      inset 0 1px 0 rgba(255, 255, 255, 0.34);
+          filter: saturate(1.05);
         }
         .btn-hero-dl:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
         .btn-hero-dl .dl-glyph-i { width: 24px; height: 24px; fill: currentColor; flex: none; }
         .btn-hero-dl .hero-dl-sub { display: block; font-size: 11.5px; font-weight: 500; opacity: 0.86; margin-top: 2px; letter-spacing: 0.01em; }
         .btn-hero-dl .hero-dl-stack { display: flex; flex-direction: column; line-height: 1.15; text-align: left; }
-        /* Quiet "All platforms" secondary link */
-        .hero-allplatforms {
-          display: inline-flex; align-items: center; gap: 7px;
-          font-size: 14.5px; font-weight: 560; color: var(--ink-2);
-          text-decoration: none; cursor: pointer;
-          transition: color 0.2s ease, gap 0.2s ease;
+        /* Bottom row of the CTA stack: [macOS] [Linux] [star pill], one line,
+           same total width as the download button above. The two platform
+           icons stay compact (72px squares); the star pill takes the rest. */
+        .hero-secondary-row {
+          display: flex;
+          align-items: stretch;
+          gap: 12px;
+          width: 100%;
         }
-        .hero-allplatforms svg { width: 15px; height: 15px; flex: none; transition: transform 0.2s ease; }
-        .hero-allplatforms:hover { color: var(--accent); gap: 9px; }
-        .hero-allplatforms:hover svg { transform: translateY(2px); }
-        [data-theme="light"] .hero-allplatforms:hover { color: var(--accent-3); }
-        /* Tertiary GitHub star pill */
-        .hero-star-pill {
-          display: inline-flex; align-items: center; gap: 8px;
-          padding: 8px 15px; border-radius: 999px;
-          font-size: 13px; font-weight: 540; color: var(--ink-2);
-          background: transparent; border: 1px solid var(--line-1);
+        .hero-platform-icons {
+          display: flex;
+          align-items: stretch;
+          gap: 12px;
+          flex: none;
+        }
+        .hero-platform-icon {
+          position: relative;
+          min-height: 72px;
+          height: 72px;
+          width: 72px;
+          display: inline-flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          gap: 4px;
+          padding: 9px 8px;
+          color: var(--ink-1);
+          background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(255, 255, 255, 0.80));
+          border: 1px solid var(--line-1);
+          border-radius: 16px;
+          box-shadow: 0 14px 34px -22px rgba(15, 23, 42, 0.38), inset 0 1px 0 rgba(255,255,255,.7);
           text-decoration: none;
-          transition: border-color 0.2s ease, color 0.2s ease, background 0.2s ease;
+          backdrop-filter: blur(10px);
+          font-family: 'Inter Tight', Inter, sans-serif;
+          font-size: 18px;
+          font-weight: 700;
+          line-height: 1.14;
+          letter-spacing: 0;
+          transition: transform 0.18s ease, border-color 0.18s ease, color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
         }
-        .hero-star-pill svg { width: 15px; height: 15px; fill: currentColor; flex: none; }
-        .hero-star-pill:hover { color: var(--ink-0); border-color: var(--line-2); background: color-mix(in oklab, var(--accent) 5%, transparent); }
+        .hero-platform-icon svg { width: 26px; height: 26px; fill: currentColor; flex: none; }
+        /* Show the platform name in words under the glyph (Apple, Linux) instead
+           of leaving it screen-reader-only. Keeps the 72px square tidy. */
+        .hero-platform-icon span { font-size: 11px; font-weight: 700; line-height: 1; letter-spacing: 0.01em; white-space: nowrap; }
+        .hero-platform-icon:hover {
+          transform: translateY(-2px);
+          color: var(--accent-3);
+          border-color: color-mix(in srgb, var(--accent-3) 38%, var(--line-1));
+          box-shadow: 0 16px 34px -20px color-mix(in srgb, var(--accent-3) 52%, transparent);
+        }
+        [data-theme="dark"] .hero-platform-icon {
+          color: var(--ink-1);
+          background: rgba(255, 255, 255, 0.08);
+          border-color: var(--line-1);
+        }
+        .hero-star-pill {
+          display: inline-flex;
+          align-items: center;
+          justify-content: flex-start;
+          gap: 12px;
+          flex: 1 1 auto;
+          min-width: 0;
+          height: 72px;
+          min-height: 72px;
+          padding: 12px 18px;
+          border-radius: 16px;
+          font-family: 'Inter Tight', Inter, sans-serif;
+          font-size: 16px;
+          font-weight: 700;
+          letter-spacing: 0;
+          color: var(--ink-1);
+          background: linear-gradient(180deg, rgba(255, 255, 255, 0.86), rgba(255, 255, 255, 0.66));
+          border: 1px solid var(--line-1);
+          box-shadow: 0 12px 28px -22px rgba(15, 23, 42, 0.36), inset 0 1px 0 rgba(255,255,255,.7);
+          text-decoration: none;
+          backdrop-filter: blur(10px);
+          transition: transform 0.18s ease, border-color 0.18s ease, color 0.18s ease, background 0.18s ease, box-shadow 0.18s ease;
+        }
+        .hero-star-pill svg { width: 21px; height: 21px; fill: currentColor; flex: none; }
+        .hero-star-text { display: flex; flex-direction: column; line-height: 1.13; min-width: 0; }
+        .hero-star-title { color: var(--ink-0); }
+        .hero-star-sub { margin-top: 3px; font-family: Inter, sans-serif; font-size: 12px; font-weight: 600; color: var(--ink-2); }
+        .hero-star-pill:hover {
+          transform: translateY(-2px);
+          color: var(--accent-3);
+          border-color: color-mix(in srgb, var(--accent-3) 34%, var(--line-1));
+          background: rgba(255, 255, 255, 0.9);
+          box-shadow: 0 18px 38px -24px color-mix(in srgb, var(--accent-3) 50%, transparent);
+        }
+        [data-theme="dark"] .hero-star-pill {
+          color: var(--ink-1);
+          background: rgba(255, 255, 255, 0.08);
+          border-color: var(--line-1);
+          box-shadow: none;
+        }
         @media (max-width: 560px) {
-          .btn-hero-dl { width: 100%; justify-content: center; padding: 16px 22px; font-size: 17px; }
-          .hero-cta-main { gap: 13px 18px; }
+          .btn-hero-dl { width: 100%; height: 72px; justify-content: center; padding: 12px 18px; font-size: 17px; }
+          .hero-cta-stack { width: 100%; gap: 10px; }
+          .hero-cta-main { width: 100%; }
+          .hero-secondary-row { gap: 10px; flex-wrap: wrap; }
+          .hero-platform-icons { flex: 1 1 100%; }
+          .hero-platform-icon { flex: 1 1 0; width: auto; min-height: 62px; padding: 14px 12px; font-size: 16px; }
+          .hero-star-pill { flex: 1 1 100%; width: 100%; height: 64px; min-height: 64px; font-size: 15px; justify-content: center; }
+          .hero-star-sub { font-size: 11.5px; }
+        }
+
+        /* "Up and running in one command" install card. Sits as the first row
+           of the CTA stack, directly above the download button. It spans the
+           full width of the stack column so the install card, the download
+           button and the [macOS][Linux][star] row all line up to one edge. */
+        .hero-install {
+          width: 100%;
+          align-self: stretch;
+          box-sizing: border-box;
+          display: flex;
+          flex-direction: column;
+          gap: 10px;
+          padding: 14px 16px 15px;
+          background: var(--card-bg);
+          border: 1px solid var(--line-1);
+          border-radius: 16px;
+          box-shadow: 0 14px 34px -24px rgba(15, 23, 42, 0.36), inset 0 1px 0 rgba(255, 255, 255, 0.6);
+          backdrop-filter: blur(10px);
+        }
+        [data-theme="dark"] .hero-install {
+          background: rgba(255, 255, 255, 0.06);
+          box-shadow: 0 14px 34px -24px rgba(0, 0, 0, 0.6);
+        }
+        .hero-install-eyebrow {
+          display: inline-flex; align-items: center; gap: 8px;
+          margin: 0;
+          font-family: Inter, sans-serif;
+          font-size: 12px; font-weight: 700; line-height: 1.2; letter-spacing: 0.01em;
+          color: var(--ink-1);
+        }
+        .hero-install-eyebrow svg {
+          flex: none; width: 15px; height: 15px;
+          fill: none; stroke: var(--accent-3); stroke-width: 2.2;
+          stroke-linecap: round; stroke-linejoin: round;
+        }
+        .hero-cmd-lane { display: flex; flex-direction: column; gap: 8px; }
+        .hero-cmd { display: flex; align-items: stretch; gap: 8px; }
+        .hero-cmd-chip {
+          flex: 1; min-width: 0;
+          display: flex; align-items: center; gap: 9px;
+          background: var(--code-bg, #0f172a);
+          border: 1px solid var(--line-1);
+          border-radius: 11px;
+          padding: 9px 12px;
+        }
+        .hero-cmd-tag {
+          flex: none;
+          font-family: "JetBrains Mono", ui-monospace, monospace;
+          font-size: 9.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+          color: var(--accent-2);
+          padding: 2px 7px; border-radius: 5px;
+          background: color-mix(in srgb, var(--accent-2) 18%, transparent);
+        }
+        .hero-cmd-pfx {
+          font-family: "JetBrains Mono", ui-monospace, monospace;
+          font-size: 13px; font-weight: 600; color: var(--accent-2); flex: none;
+        }
+        .hero-cmd-code {
+          font-family: "JetBrains Mono", ui-monospace, monospace;
+          font-size: 12.5px; line-height: 1.5; color: #e2e8f0;
+          flex: 1; min-width: 0;
+          white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .hero-install .dl-copy {
+          position: relative; flex: none;
+          width: 40px; min-width: 40px;
+        }
+        .hero-install .dl-copy.is-copied::after {
+          content: "Copied"; position: absolute; bottom: calc(100% + 7px); left: 50%;
+          transform: translateX(-50%); white-space: nowrap;
+          font-family: Inter, sans-serif; font-size: 11px; font-weight: 600;
+          color: #fff; background: var(--accent-3);
+          padding: 3px 8px; border-radius: 6px; pointer-events: none;
+          box-shadow: 0 6px 16px -6px rgba(15, 23, 42, 0.5);
+        }
+        @media (max-width: 560px) {
+          .hero-install { max-width: none; }
+          .hero-cmd-code { white-space: normal; word-break: break-word; overflow-wrap: anywhere; text-overflow: clip; }
         }
       </style>
       <div class="hero-cta-stack" id="fx-ctas">
+        <div class="hero-install" id="hero-install">
+          <p class="hero-install-eyebrow" data-i18n="hero.install_eyebrow">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>
+            <span>Up and running in one command</span>
+          </p>
+          <div class="hero-cmd-lane">
+            <div class="hero-cmd">
+              <div class="hero-cmd-chip">
+                <span class="hero-cmd-tag" aria-hidden="true">pip</span>
+                <span class="hero-cmd-pfx" aria-hidden="true">$</span>
+                <code class="hero-cmd-code">pip install openconstructionerp</code>
+              </div>
+              <button type="button" class="dl-copy" data-copy="pip install openconstructionerp" aria-label="Copy the pip install command">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+              </button>
+            </div>
+            <div class="hero-cmd">
+              <div class="hero-cmd-chip">
+                <span class="hero-cmd-tag" aria-hidden="true">docker</span>
+                <span class="hero-cmd-pfx" aria-hidden="true">$</span>
+                <code class="hero-cmd-code">docker run -p 8080:8080 ghcr.io/datadrivenconstruction/openconstructionerp</code>
+              </div>
+              <button type="button" class="dl-copy" data-copy="docker run -d -p 8080:8080 -v oe_data:/data ghcr.io/datadrivenconstruction/openconstructionerp:latest" aria-label="Copy the docker run command">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+              </button>
+            </div>
+          </div>
+        </div>
         <div class="hero-cta-main">
           <a class="btn-hero-dl" id="hero-dl-btn" href="#download" rel="noopener" aria-label="Download for your platform">
-            <svg class="dl-glyph-i" id="hero-dl-glyph" viewBox="0 0 24 24" aria-hidden="true"><path d="M11 3v10.2L7.5 9.7 6 11.2 12 17l6-5.8-1.5-1.5L13 13.2V3zM5 18.5V20a1.5 1.5 0 0 0 1.5 1.5h11A1.5 1.5 0 0 0 19 20v-1.5h-2V19H7v-.5z"/></svg>
+            <svg class="dl-glyph-i" id="hero-dl-glyph" viewBox="0 0 24 24" aria-hidden="true"><path fill-rule="evenodd" clip-rule="evenodd" d="M11 3v10.2L7.5 9.7 6 11.2 12 17l6-5.8-1.5-1.5L13 13.2V3zM5 18.5V20a1.5 1.5 0 0 0 1.5 1.5h11A1.5 1.5 0 0 0 19 20v-1.5h-2V19H7v-.5z"/></svg>
             <span class="hero-dl-stack">
               <span id="hero-dl-label" data-i18n="hero.dl_btn_generic">Download the desktop app</span>
               <span class="hero-dl-sub" data-i18n="hero.dl_btn_sub">Free - no Python, no Docker, nothing to set up</span>
             </span>
           </a>
-          <a class="hero-allplatforms" href="#download" data-i18n="hero.all_platforms">
-            All platforms
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"></line><polyline points="19 12 12 19 5 12"></polyline></svg>
-          </a>
         </div>
-        <a class="hero-star-pill" href="https://github.com/datadrivenconstruction" target="_blank" rel="noopener">
+        <div class="hero-secondary-row">
+          <span class="hero-platform-icons" aria-label="Other platform downloads">
+            <a class="hero-platform-icon" href="/download#card-macos" aria-label="Download for macOS">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16.4 12.6c0-2.1 1.7-3.1 1.8-3.2-1-1.4-2.5-1.6-3-1.6-1.3-.1-2.5.7-3.1.7-.6 0-1.6-.7-2.7-.7-1.4 0-2.6.8-3.3 2-1.4 2.4-.4 6 1 8 .7 1 1.4 2 2.5 2 1 0 1.4-.6 2.6-.6 1.2 0 1.5.6 2.6.6 1.1 0 1.8-1 2.4-2 .8-1.1 1.1-2.2 1.1-2.3 0-.1-2.1-.8-2.1-3.1zM14.5 6.3c.6-.7 1-1.6.9-2.6-.8 0-1.8.5-2.4 1.2-.5.6-1 1.6-.9 2.5.9.1 1.8-.4 2.4-1.1z"/></svg>
+              <span>macOS</span>
+            </a>
+            <a class="hero-platform-icon" href="/download#card-linux" aria-label="Linux install options">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path fill-rule="evenodd" clip-rule="evenodd" d="M12 2.3c-2.05 0-3.55 1.6-3.55 3.95 0 .95.3 1.55.3 2.3 0 .85-.55 1.4-1.3 2.4-.9 1.2-1.95 2.7-1.95 4.75 0 1.45.5 2.55 1.3 3.35l-1.2 2.05c-.22.38.05.85.49.85H7.1c.18.5.62.85 1.2.95 1.05.18 2.2-.05 2.85-.6.27-.22.5-.32.85-.32s.58.1.85.32c.65.55 1.8.78 2.85.6.58-.1 1.02-.45 1.2-.95h1.01c.44 0 .71-.47.49-.85l-1.2-2.05c.8-.8 1.3-1.9 1.3-3.35 0-2.05-1.05-3.55-1.95-4.75-.75-1-1.3-1.55-1.3-2.4 0-.75.3-1.35.3-2.3C15.55 3.9 14.05 2.3 12 2.3Zm-1.65 3.5c.48 0 .82.45.82 1s-.34 1-.82 1-.83-.45-.83-1 .35-1 .83-1Zm3.3 0c.48 0 .83.45.83 1s-.35 1-.83 1-.82-.45-.82-1 .34-1 .82-1Zm-1.65 2.45c.6 0 1.55.3 1.95.85.12.17-.02.38-.25.45l-1.4.45c-.2.06-.4.06-.6 0l-1.4-.45c-.23-.07-.37-.28-.25-.45.4-.55 1.35-.85 1.95-.85Z"/></svg>
+              <span>Linux</span>
+            </a>
+          </span>
+          <a class="hero-star-pill" href="https://github.com/datadrivenconstruction" target="_blank" rel="noopener" aria-label="Support the project - star it on GitHub">
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path d="M12 0.5C5.65 0.5 0.5 5.65 0.5 12a11.5 11.5 0 0 0 7.86 10.92c.58.1.79-.25.79-.56v-2c-3.2.7-3.87-1.36-3.87-1.36-.52-1.32-1.28-1.68-1.28-1.68-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.18 1.76 1.18 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.7 0-1.26.45-2.29 1.18-3.1-.12-.29-.51-1.47.11-3.05 0 0 .97-.31 3.18 1.18A11 11 0 0 1 12 6.8a11 11 0 0 1 2.9.39c2.2-1.5 3.17-1.18 3.17-1.18.63 1.58.24 2.76.12 3.05.74.81 1.18 1.84 1.18 3.1 0 4.43-2.7 5.4-5.27 5.69.42.36.78 1.07.78 2.15v3.19c0 .31.21.67.8.56A11.5 11.5 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5Z"/>
           </svg>
-          <span data-i18n="hero.cta_star">Star on GitHub</span>
+          <span class="hero-star-text">
+            <span class="hero-star-title">Support the project</span>
+            <span class="hero-star-sub">Star it on GitHub</span>
+          </span>
         </a>
+        </div>
       </div>
 
       <div class="meta-row" id="fx-meta">
@@ -12390,7 +12668,6 @@
 
   </section>
 
-
   <!-- ================================================================ -->
   <!-- SECTION 1.05 - DOWNLOAD THE DESKTOP APP (native, no setup)        -->
   <!-- Full platform cards ported from /download so people can grab a    -->
@@ -12398,7 +12675,7 @@
   <!-- rewires each button to the real latest .exe/.dmg/.deb/.AppImage.  -->
   <!-- ================================================================ -->
   <style>
-    .home-dl{position:relative;z-index:1;max-width:1120px;margin:0 auto;padding:46px 24px 24px;}
+    .home-dl{position:relative;z-index:1;width:100%;max-width:1360px;margin:0 auto;padding:50px clamp(24px,4.2vw,56px) 28px;}
     [data-theme="light"] .home-dl{--card-bg:rgba(255,255,255,.74);--shadow-card:0 2px 4px rgba(15,23,42,.05),0 18px 44px -24px rgba(15,23,42,.22);}
     [data-theme="dark"]  .home-dl{--card-bg:rgba(20,33,55,.62);--shadow-card:0 2px 4px rgba(0,0,0,.25),0 18px 44px -24px rgba(0,0,0,.6);}
     .home-dl-head{text-align:center;margin:0 0 26px;}
@@ -12419,32 +12696,33 @@
     .dl-chip{display:inline-flex;align-items:center;gap:8px;font-size:13px;color:var(--ink-2);background:var(--card-bg);border:1px solid var(--line-0);border-radius:8px;padding:7px 12px;backdrop-filter:blur(6px);}
     .dl-chip-i{width:15px;height:15px;flex:none;fill:var(--accent-2);}
 
-    .dl-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;}
-    .dl-card{position:relative;display:flex;flex-direction:column;background:var(--card-bg);border:1px solid var(--line-1);border-radius:16px;padding:22px 20px 20px;box-shadow:var(--shadow-card);backdrop-filter:blur(10px);transition:transform .25s ease,box-shadow .25s ease,border-color .25s ease;overflow:hidden;}
-    .dl-card::before{content:"";position:absolute;inset:0 0 auto;height:3px;background:linear-gradient(90deg,var(--accent),var(--accent-3));opacity:0;transition:opacity .25s ease;}
-    .dl-card:hover{transform:translateY(-3px);box-shadow:0 2px 4px rgba(15,23,42,.05),0 24px 50px -22px rgba(15,23,42,.34);border-color:var(--line-2);}
-    .dl-card.is-rec{border-color:color-mix(in srgb,var(--accent) 42%,var(--line-2));box-shadow:0 2px 4px rgba(15,23,42,.05),0 24px 52px -22px color-mix(in srgb,var(--accent) 40%,transparent);}
+    .dl-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:24px;align-items:stretch;}
+    .dl-card{position:relative;display:flex;flex-direction:column;min-height:100%;background:linear-gradient(180deg,color-mix(in srgb,var(--card-bg) 92%,#fff 8%),var(--card-bg));border:1px solid var(--line-1);border-radius:18px;padding:24px 22px 24px;box-shadow:var(--shadow-card);backdrop-filter:blur(10px);transition:transform .25s ease,box-shadow .25s ease,border-color .25s ease;overflow:hidden;}
+    [data-theme="dark"] .dl-card{background:linear-gradient(180deg,color-mix(in srgb,var(--card-bg) 90%,#fff 4%),var(--card-bg));}
+    .dl-card::before{content:"";position:absolute;inset:0 0 auto;height:4px;background:linear-gradient(90deg,var(--accent),var(--accent-2),var(--accent-3));opacity:.36;transition:opacity .25s ease;}
+    .dl-card:hover{transform:translateY(-3px);box-shadow:0 2px 4px rgba(15,23,42,.05),0 28px 58px -22px rgba(15,23,42,.36);border-color:var(--line-2);}
+    .dl-card.is-rec{border-color:color-mix(in srgb,var(--accent) 48%,var(--line-2));box-shadow:0 2px 4px rgba(15,23,42,.05),0 28px 60px -22px color-mix(in srgb,var(--accent) 44%,transparent);}
     .dl-card.is-rec::before{opacity:1;}
-    .dl-card-head{display:flex;align-items:flex-start;gap:13px;margin-bottom:16px;}
-    .dl-glyph{flex:none;width:44px;height:44px;display:grid;place-items:center;border-radius:11px;background:color-mix(in srgb,var(--accent) 9%,transparent);border:1px solid var(--line-1);}
-    .dl-glyph svg{width:24px;height:24px;fill:var(--ink-0);}
+    .dl-card-head{display:flex;align-items:flex-start;gap:14px;min-height:86px;margin-bottom:16px;}
+    .dl-glyph{flex:none;width:50px;height:50px;display:grid;place-items:center;border-radius:14px;background:color-mix(in srgb,var(--accent) 11%,transparent);border:1px solid var(--line-1);box-shadow:inset 0 1px 0 rgba(255,255,255,.18);}
+    .dl-glyph svg{width:27px;height:27px;fill:var(--ink-0);}
     .dl-card-id{flex:1;min-width:0;}
-    .dl-card-name{font-family:"Inter Tight",Inter,sans-serif;font-size:19px;font-weight:640;color:var(--ink-0);margin:1px 0 4px;letter-spacing:-.01em;}
-    .dl-card-note{font-size:12.5px;line-height:1.45;color:var(--ink-2);margin:0;}
+    .dl-card-name{font-family:"Inter Tight",Inter,sans-serif;font-size:21px;font-weight:680;color:var(--ink-0);margin:0 0 5px;letter-spacing:0;}
+    .dl-card-note{font-size:13.5px;line-height:1.45;color:var(--ink-2);margin:0;}
     .dl-rec-flag{display:none;position:absolute;top:14px;right:14px;font-family:"JetBrains Mono",ui-monospace,monospace;font-size:10px;letter-spacing:.12em;text-transform:uppercase;font-weight:600;color:#fff;background:linear-gradient(135deg,var(--accent),var(--accent-3));padding:4px 9px;border-radius:999px;}
     .dl-card.is-rec .dl-rec-flag{display:inline-block;}
     .dl-card.is-rec .dl-card-head{padding-right:96px;}
-    .dl-badges{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 18px;}
-    .dl-badge{font-family:"JetBrains Mono",ui-monospace,monospace;font-size:10.5px;letter-spacing:.04em;color:var(--ink-2);background:var(--bg-2);border:1px solid var(--line-0);border-radius:6px;padding:3px 7px;}
-    .dl-dl{display:inline-flex;align-items:center;justify-content:center;gap:10px;width:100%;min-height:54px;font-family:'Inter Tight',Inter,sans-serif;font-size:16.5px;font-weight:640;letter-spacing:-.005em;padding:15px 18px;border-radius:13px;text-decoration:none;cursor:pointer;transition:transform .18s ease,box-shadow .18s ease,background .18s ease;}
-    .dl-dl-i{width:18px;height:18px;flex:none;fill:currentColor;}
-    a.dl-dl.dl-primary{color:#fff;background:linear-gradient(135deg,var(--accent),var(--accent-3));box-shadow:0 8px 20px -10px color-mix(in srgb,var(--accent-3) 70%,transparent);}
-    a.dl-dl.dl-primary:hover{transform:translateY(-2px);box-shadow:0 12px 26px -10px color-mix(in srgb,var(--accent-3) 75%,transparent);}
+    .dl-badges{display:flex;flex-wrap:wrap;gap:7px;margin:0 0 18px;}
+    .dl-badge{font-family:"JetBrains Mono",ui-monospace,monospace;font-size:11px;letter-spacing:.04em;color:var(--ink-2);background:var(--bg-2);border:1px solid var(--line-0);border-radius:8px;padding:4px 8px;}
+    .dl-dl{display:inline-flex;align-items:center;justify-content:center;gap:12px;width:100%;min-height:64px;font-family:'Inter Tight',Inter,sans-serif;font-size:18px;font-weight:700;letter-spacing:0;padding:17px 20px;border-radius:16px;text-decoration:none;cursor:pointer;transition:transform .18s ease,box-shadow .18s ease,background .18s ease,filter .18s ease;}
+    .dl-dl-i{width:21px;height:21px;flex:none;fill:currentColor;}
+    a.dl-dl.dl-primary{color:#fff;background:linear-gradient(135deg,var(--accent),var(--accent-2) 52%,var(--accent-3));box-shadow:0 16px 34px -14px color-mix(in srgb,var(--accent-3) 78%,transparent),inset 0 1px 0 rgba(255,255,255,.22);}
+    a.dl-dl.dl-primary:hover{transform:translateY(-2px);filter:saturate(1.04);box-shadow:0 22px 42px -14px color-mix(in srgb,var(--accent-3) 82%,transparent),inset 0 1px 0 rgba(255,255,255,.26);}
     a.dl-dl.dl-ghost{background:transparent;color:var(--accent);border:1px solid var(--line-2);}
     [data-theme="light"] a.dl-dl.dl-ghost{color:var(--accent-3);}
     a.dl-dl.dl-ghost:hover{background:color-mix(in srgb,var(--accent) 8%,transparent);border-color:var(--accent);transform:translateY(-2px);}
     .dl-split{display:grid;grid-template-columns:1fr 1fr;gap:9px;}
-    .dl-meta{font-family:"JetBrains Mono",ui-monospace,monospace;font-size:11.5px;color:var(--ink-2);margin:11px 0 0;min-height:16px;text-align:center;}
+    .dl-meta{font-family:"JetBrains Mono",ui-monospace,monospace;font-size:11.5px;color:var(--ink-2);margin:13px 0 0;min-height:17px;text-align:center;}
     .dl-meta b{color:var(--ink-1);font-weight:600;}
     .dl-meta-skel{opacity:.7;}
     .dl-card-foot{font-size:11.5px;color:var(--ink-2);margin:9px 0 0;text-align:center;}
@@ -12458,12 +12736,12 @@
     .dl-dl:focus-visible,.dl-allnote a:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:8px;}
 
     /* Short, visible numbered install steps under each card */
-    .dl-steps{list-style:none;margin:16px 0 0;padding:14px 0 0;border-top:1px solid var(--line-0);counter-reset:dlstep;display:flex;flex-direction:column;gap:11px;}
+    .dl-steps{list-style:none;margin:18px 0 0;padding:18px 0 0;border-top:1px solid var(--line-0);counter-reset:dlstep;display:flex;flex-direction:column;gap:11px;}
     .dl-steps li{display:flex;align-items:flex-start;gap:11px;font-size:13.5px;line-height:1.45;color:var(--ink-1);counter-increment:dlstep;}
     .dl-steps li::before{content:counter(dlstep);flex:none;width:23px;height:23px;display:grid;place-items:center;border-radius:999px;font-family:"JetBrains Mono",ui-monospace,monospace;font-size:12px;font-weight:700;color:#fff;background:linear-gradient(135deg,var(--accent),var(--accent-3));margin-top:1px;}
     .dl-steps-title{font-size:11.5px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3);margin:0 0 2px;}
     /* Linux terminal command line with copy button (under the Linux card) */
-    .dl-termrow{display:flex;align-items:center;gap:8px;margin-top:13px;}
+    .dl-termrow{display:flex;align-items:center;gap:8px;margin-top:14px;margin-bottom:2px;}
     .dl-term{flex:1;display:flex;align-items:center;gap:9px;min-width:0;background:var(--code-bg,#0f172a);border:1px solid var(--line-1);border-radius:11px;padding:11px 13px;font-family:"JetBrains Mono",ui-monospace,monospace;font-size:12.5px;color:#e2e8f0;overflow:hidden;}
     .dl-term .dollar{color:var(--accent-2);font-weight:600;flex:none;}
     .dl-term code{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
@@ -12472,17 +12750,49 @@
     .dl-copy.is-copied{color:#fff;background:var(--accent-2);border-color:var(--accent-2);}
     .dl-copy svg{width:15px;height:15px;}
 
-    /* For-developers sub-block (pip / docker copyable commands) */
-    .dl-dev{margin:34px auto 0;max-width:760px;padding:24px 22px;background:var(--card-bg);border:1px solid var(--line-1);border-radius:16px;box-shadow:var(--shadow-card);backdrop-filter:blur(10px);}
-    .dl-dev-head{display:flex;align-items:center;gap:10px;margin:0 0 4px;}
-    .dl-dev-head svg{width:17px;height:17px;flex:none;stroke:var(--accent-2);}
-    .dl-dev-h3{font-family:"Inter Tight",Inter,sans-serif;font-size:17px;font-weight:640;color:var(--ink-0);margin:0;letter-spacing:-.01em;}
-    .dl-dev-lede{font-size:13.5px;line-height:1.5;color:var(--ink-2);margin:0 0 16px;}
-    .dl-dev-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
-    .dl-dev-col{display:flex;flex-direction:column;gap:8px;}
-    .dl-dev-label{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:640;color:var(--ink-1);}
-    .dl-dev-label .dl-dev-tag{font-family:"JetBrains Mono",ui-monospace,monospace;font-size:10px;letter-spacing:.05em;color:var(--ink-3);background:var(--bg-2);border:1px solid var(--line-0);border-radius:5px;padding:2px 6px;}
-    @media(max-width:560px){.dl-dev-grid{grid-template-columns:1fr;}}
+    /* "Install via pip or Docker" panel. Spans the exact same width as the
+       three OS download cards above (.dl-grid) - both are direct children of
+       .home-dl, so dropping the max-width lines this block up edge to edge
+       with that card row. Premium, balanced, Apple-tier hierarchy. */
+    .dl-dev{position:relative;width:100%;margin:40px 0 0;padding:40px clamp(24px,3.4vw,46px) 38px;background:linear-gradient(180deg,color-mix(in srgb,var(--card-bg) 94%,#fff 6%),var(--card-bg));border:1px solid var(--line-1);border-radius:22px;box-shadow:0 2px 4px rgba(15,23,42,.05),0 34px 80px -42px rgba(15,23,42,.4),inset 0 1px 0 rgba(255,255,255,.5);backdrop-filter:blur(12px);overflow:hidden;}
+    .dl-dev::before{content:"";position:absolute;inset:0 0 auto 0;height:3px;background:linear-gradient(90deg,var(--accent),var(--accent-2),var(--accent-3));}
+    [data-theme="dark"] .dl-dev{box-shadow:0 2px 4px rgba(0,0,0,.25),0 34px 80px -44px rgba(0,0,0,.7),inset 0 1px 0 rgba(255,255,255,.06);}
+    /* Centered header for cohesion with the section's own centered head. */
+    .dl-dev-headwrap{text-align:center;max-width:64ch;margin:0 auto 30px;}
+    .dl-dev-eyebrow{display:inline-flex;align-items:center;gap:7px;margin:0 0 14px;font-family:"JetBrains Mono",ui-monospace,monospace;font-size:11.5px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:var(--accent-3);}
+    .dl-dev-eyebrow svg{width:14px;height:14px;flex:none;fill:none;stroke:currentColor;stroke-width:2.2;}
+    .dl-dev-head{display:inline-flex;align-items:center;justify-content:center;gap:12px;margin:0 0 12px;}
+    .dl-dev-head svg{width:22px;height:22px;flex:none;stroke:var(--accent-2);}
+    .dl-dev-h3{font-family:"Inter Tight",Inter,sans-serif;font-size:clamp(24px,2.6vw,30px);font-weight:680;color:var(--ink-0);margin:0;letter-spacing:-.02em;}
+    .dl-dev-lede{font-size:clamp(14px,1.4vw,15.5px);line-height:1.6;color:var(--ink-2);margin:0;}
+    /* Two evenly sized, aligned columns. */
+    .dl-dev-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:22px;align-items:stretch;}
+    .dl-dev-col{min-width:0;display:flex;flex-direction:column;min-height:100%;padding:22px 22px 20px;background:linear-gradient(180deg,color-mix(in srgb,var(--bg-0) 60%,transparent),transparent);border:1px solid var(--line-1);border-radius:16px;transition:border-color .2s ease,box-shadow .2s ease,transform .2s ease;}
+    .dl-dev-col:hover{border-color:color-mix(in srgb,var(--accent-3) 32%,var(--line-1));box-shadow:0 22px 48px -30px color-mix(in srgb,var(--accent-3) 55%,transparent);transform:translateY(-2px);}
+    /* Column header: icon chip + title, badge pinned right. */
+    .dl-dev-colhead{display:flex;align-items:center;gap:11px;padding:0 0 16px;margin:0 0 16px;border-bottom:1px solid var(--line-0);}
+    .dl-dev-colicon{flex:none;width:34px;height:34px;display:grid;place-items:center;border-radius:10px;color:var(--accent-3);background:color-mix(in srgb,var(--accent-3) 11%,transparent);border:1px solid color-mix(in srgb,var(--accent-3) 22%,transparent);}
+    .dl-dev-colicon svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;}
+    .dl-dev-label{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px;font-family:"Inter Tight",Inter,sans-serif;font-size:16px;font-weight:660;color:var(--ink-0);letter-spacing:-.01em;}
+    .dl-dev-label .dl-dev-sub{font-family:Inter,sans-serif;font-size:12px;font-weight:500;color:var(--ink-2);letter-spacing:0;}
+    .dl-dev-tag{flex:none;font-family:"JetBrains Mono",ui-monospace,monospace;font-size:10.5px;letter-spacing:.05em;color:var(--accent-3);background:color-mix(in srgb,var(--accent-3) 12%,transparent);border:1px solid color-mix(in srgb,var(--accent-3) 28%,transparent);border-radius:6px;padding:4px 9px;}
+    /* Step rail inside each column: small step number per command.
+       flex:1 lets the hint line pin to the bottom so both columns'
+       footnotes align even when one command wraps taller. */
+    .dl-dev-steps{flex:1;display:flex;flex-direction:column;gap:12px;}
+    .dl-dev-step{display:flex;align-items:flex-start;gap:12px;}
+    .dl-dev-stepno{flex:none;width:22px;height:22px;margin-top:9px;display:grid;place-items:center;border-radius:999px;font-family:"JetBrains Mono",ui-monospace,monospace;font-size:11px;font-weight:700;color:#fff;background:linear-gradient(135deg,var(--accent),var(--accent-3));box-shadow:0 4px 10px -4px color-mix(in srgb,var(--accent-3) 60%,transparent);}
+    .dl-dev-stepbody{flex:1;min-width:0;}
+    .dl-dev-hint{font-size:12.5px;line-height:1.5;color:var(--ink-2);margin:18px 0 0;padding:14px 0 0;border-top:1px solid var(--line-0);display:flex;align-items:flex-start;gap:8px;}
+    .dl-dev-hint svg{width:15px;height:15px;flex:none;margin-top:1px;fill:none;stroke:var(--accent-3);stroke-width:2;}
+    /* Bigger command chips inside the dev panel. The chip grows to fit and
+       the command wraps to a second line, never clips or ellipses. */
+    .dl-dev .dl-termrow{min-width:0;margin:0;align-items:flex-start;}
+    .dl-dev .dl-term{min-width:0;align-items:flex-start;padding:13px 15px;font-size:13.5px;line-height:1.5;border-radius:12px;overflow:visible;}
+    .dl-dev .dl-term .dollar{line-height:1.5;}
+    .dl-dev .dl-term code{white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;overflow:visible;text-overflow:clip;}
+    .dl-dev .dl-copy{width:42px;height:42px;}
+    @media(max-width:820px){.dl-dev{padding:30px 18px 26px;}.dl-dev-grid{grid-template-columns:1fr;gap:16px;}}
 
     @media(max-width:980px){.dl-grid{grid-template-columns:1fr 1fr;}#card-linux{grid-column:1 / -1;}}
     @media(max-width:720px){.dl-grid{grid-template-columns:1fr;}#card-linux{grid-column:auto;}}
@@ -12562,7 +12872,7 @@
       <!-- Linux -->
       <article class="dl-card" id="card-linux" data-os="linux">
         <header class="dl-card-head">
-          <span class="dl-glyph" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 2c-2 0-3.3 1.7-3.3 3.9 0 1.4.5 2.2.5 3.2 0 1-1.1 1.9-2 3.6-.8 1.6-1.8 3.3-1.8 4.8 0 .9.5 1.4 1.2 1.6.2.6.1 1.3.9 1.6 1 .4 2.6.5 3.6-.2.3-.2.6-.3.9-.3.3 0 .6.1.9.3 1 .7 2.6.6 3.6.2.8-.3.7-1 .9-1.6.7-.2 1.2-.7 1.2-1.6 0-1.5-1-3.2-1.8-4.8-.9-1.7-2-2.6-2-3.6 0-1 .5-1.8.5-3.2C15.3 3.7 14 2 12 2zm-1.3 4c.4 0 .7.4.7.9s-.3.9-.7.9-.7-.4-.7-.9.3-.9.7-.9zm2.6 0c.4 0 .7.4.7.9s-.3.9-.7.9-.7-.4-.7-.9.3-.9.7-.9zM12 9.3c.8 0 1.7.5 1.7.9 0 .3-.9.7-1.7.7s-1.7-.4-1.7-.7c0-.4.9-.9 1.7-.9z"/></svg></span>
+          <span class="dl-glyph" aria-hidden="true"><svg viewBox="0 0 24 24"><path fill-rule="evenodd" clip-rule="evenodd" d="M12 2.3c-2.05 0-3.55 1.6-3.55 3.95 0 .95.3 1.55.3 2.3 0 .85-.55 1.4-1.3 2.4-.9 1.2-1.95 2.7-1.95 4.75 0 1.45.5 2.55 1.3 3.35l-1.2 2.05c-.22.38.05.85.49.85H7.1c.18.5.62.85 1.2.95 1.05.18 2.2-.05 2.85-.6.27-.22.5-.32.85-.32s.58.1.85.32c.65.55 1.8.78 2.85.6.58-.1 1.02-.45 1.2-.95h1.01c.44 0 .71-.47.49-.85l-1.2-2.05c.8-.8 1.3-1.9 1.3-3.35 0-2.05-1.05-3.55-1.95-4.75-.75-1-1.3-1.55-1.3-2.4 0-.75.3-1.35.3-2.3C15.55 3.9 14.05 2.3 12 2.3Zm-1.65 3.5c.48 0 .82.45.82 1s-.34 1-.82 1-.83-.45-.83-1 .35-1 .83-1Zm3.3 0c.48 0 .83.45.83 1s-.35 1-.83 1-.82-.45-.82-1 .34-1 .82-1Zm-1.65 2.45c.6 0 1.55.3 1.95.85.12.17-.02.38-.25.45l-1.4.45c-.2.06-.4.06-.6 0l-1.4-.45c-.23-.07-.37-.28-.25-.45.4-.55 1.35-.85 1.95-.85Z"/></svg></span>
           <div class="dl-card-id">
             <h3 class="dl-card-name">Linux</h3>
             <p class="dl-card-note" data-i18n="home.download_cards.linux_note">AppImage, deb and rpm</p>
@@ -12580,40 +12890,104 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
           </button>
         </div>
+        <p class="dl-meta" id="meta-linux"><span class="dl-meta-skel" data-i18n="home.download_cards.reading">Reading latest release&hellip;</span></p>
         <ol class="dl-steps" aria-label="How to install on Linux">
           <li data-i18n="home.download_cards.linux_step1">Paste the command above into your terminal</li>
           <li data-i18n="home.download_cards.linux_step2">It picks the right package (deb, rpm or AppImage)</li>
           <li data-i18n="home.download_cards.linux_step3">Launch OpenConstructionERP from your app menu</li>
         </ol>
-        <p class="dl-meta" id="meta-linux"><span class="dl-meta-skel" data-i18n="home.download_cards.reading">Reading latest release&hellip;</span></p>
       </article>
     </div>
 
-    <!-- For developers: pip / docker copyable commands (merged from the old install section) -->
-    <div class="dl-dev">
-      <div class="dl-dev-head">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="8 6 2 12 8 18"></polyline><polyline points="16 6 22 12 16 18"></polyline></svg>
-        <h3 class="dl-dev-h3" data-i18n="home.download_cards.dev_title">For developers</h3>
+    <!-- Install via pip or docker - the same one-command offer, enlarged
+         and given clear hierarchy. Copy buttons reuse the shared .dl-copy
+         handler. The hero block above carries the short version. -->
+    <div class="dl-dev" id="dl-dev">
+      <div class="dl-dev-headwrap">
+        <p class="dl-dev-eyebrow" data-i18n="home.download_cards.dev_eyebrow">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>
+          <span>One command and you are running</span>
+        </p>
+        <div class="dl-dev-head">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="8 6 2 12 8 18"></polyline><polyline points="16 6 22 12 16 18"></polyline></svg>
+          <h3 class="dl-dev-h3" data-i18n="home.download_cards.dev_title">Install via pip or Docker</h3>
+        </div>
+        <p class="dl-dev-lede" data-i18n="home.download_cards.dev_lede">Already have Python or Docker? Pick a line, paste it, and the full ERP is up. No build step, no extra database to set up, your data stays on your machine.</p>
       </div>
-      <p class="dl-dev-lede" data-i18n="home.download_cards.dev_lede">Prefer the source? Install with pip or run the full stack with Docker.</p>
       <div class="dl-dev-grid">
         <div class="dl-dev-col">
-          <span class="dl-dev-label" data-i18n="home.download_cards.dev_pip_label">Python package<span class="dl-dev-tag">pip</span></span>
-          <div class="dl-termrow">
-            <div class="dl-term"><span class="dollar" aria-hidden="true">$</span><code>pip install openconstructionerp</code></div>
-            <button type="button" class="dl-copy" data-copy="pip install openconstructionerp" aria-label="Copy pip install command">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-            </button>
+          <div class="dl-dev-colhead">
+            <span class="dl-dev-colicon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M4 17l6-5-6-5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+            </span>
+            <span class="dl-dev-label"><span data-i18n="home.download_cards.dev_pip_label">Python package</span><span class="dl-dev-sub" data-i18n="home.download_cards.dev_pip_sub">Install, then run</span></span>
+            <span class="dl-dev-tag" aria-hidden="true">pip</span>
           </div>
+          <div class="dl-dev-steps">
+            <div class="dl-dev-step">
+              <span class="dl-dev-stepno" aria-hidden="true">1</span>
+              <div class="dl-dev-stepbody">
+                <div class="dl-termrow">
+                  <div class="dl-term"><span class="dollar" aria-hidden="true">$</span><code>pip install openconstructionerp</code></div>
+                  <button type="button" class="dl-copy" data-copy="pip install openconstructionerp" aria-label="Copy the pip install command">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div class="dl-dev-step">
+              <span class="dl-dev-stepno" aria-hidden="true">2</span>
+              <div class="dl-dev-stepbody">
+                <div class="dl-termrow">
+                  <div class="dl-term"><span class="dollar" aria-hidden="true">$</span><code>openconstructionerp</code></div>
+                  <button type="button" class="dl-copy" data-copy="openconstructionerp" aria-label="Copy the run command">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <p class="dl-dev-hint">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><line x1="12" y1="11" x2="12" y2="16"/><line x1="12" y1="8" x2="12" y2="8"/></svg>
+            <span data-i18n="home.download_cards.dev_pip_hint">Needs Python 3.12+. Installs, then opens at http://localhost:8080.</span>
+          </p>
         </div>
         <div class="dl-dev-col">
-          <span class="dl-dev-label" data-i18n="home.download_cards.dev_docker_label">Full stack<span class="dl-dev-tag">docker</span></span>
-          <div class="dl-termrow">
-            <div class="dl-term"><span class="dollar" aria-hidden="true">$</span><code>git clone &hellip;/OpenConstructionERP &amp;&amp; make quickstart</code></div>
-            <button type="button" class="dl-copy" data-copy="git clone https://github.com/datadrivenconstruction/OpenConstructionERP && cd OpenConstructionERP && make quickstart" aria-label="Copy docker quickstart command">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-            </button>
+          <div class="dl-dev-colhead">
+            <span class="dl-dev-colicon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><rect x="3" y="8" width="18" height="11" rx="2"/><line x1="7" y1="8" x2="7" y2="5"/><line x1="12" y1="8" x2="12" y2="4"/><line x1="17" y1="8" x2="17" y2="5"/></svg>
+            </span>
+            <span class="dl-dev-label"><span data-i18n="home.download_cards.dev_docker_label">Full stack</span><span class="dl-dev-sub" data-i18n="home.download_cards.dev_docker_sub">One line, app plus database</span></span>
+            <span class="dl-dev-tag" aria-hidden="true">docker</span>
           </div>
+          <div class="dl-dev-steps">
+            <div class="dl-dev-step">
+              <span class="dl-dev-stepno" aria-hidden="true">A</span>
+              <div class="dl-dev-stepbody">
+                <div class="dl-termrow">
+                  <div class="dl-term"><span class="dollar" aria-hidden="true">$</span><code>docker compose -f docker-compose.quickstart.yml up</code></div>
+                  <button type="button" class="dl-copy" data-copy="docker compose -f docker-compose.quickstart.yml up" aria-label="Copy the docker compose command">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div class="dl-dev-step">
+              <span class="dl-dev-stepno" aria-hidden="true">B</span>
+              <div class="dl-dev-stepbody">
+                <div class="dl-termrow">
+                  <div class="dl-term"><span class="dollar" aria-hidden="true">$</span><code>docker run -d -p 8080:8080 -v oe_data:/data ghcr.io/datadrivenconstruction/openconstructionerp:latest</code></div>
+                  <button type="button" class="dl-copy" data-copy="docker run -d -p 8080:8080 -v oe_data:/data ghcr.io/datadrivenconstruction/openconstructionerp:latest" aria-label="Copy the docker run command">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <p class="dl-dev-hint">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><line x1="12" y1="11" x2="12" y2="16"/><line x1="12" y1="8" x2="12" y2="8"/></svg>
+            <span data-i18n="home.download_cards.dev_docker_hint">Bundles PostgreSQL and the app. Open http://localhost:8080 when it boots.</span>
+          </p>
         </div>
       </div>
     </div>
@@ -12662,7 +13036,7 @@
     var OS_GLYPH = {
       windows: "M3 5.4 10.4 4.3v6.6H3zM10.4 11.6v6.6L3 17.1V11.6zM11.5 4.1 21 2.7v8.2h-9.5zM21 11.9v8.2l-9.5-1.4v-6.8z",
       macos:   "M16.4 12.6c0-2.1 1.7-3.1 1.8-3.2-1-1.4-2.5-1.6-3-1.6-1.3-.1-2.5.7-3.1.7-.6 0-1.6-.7-2.7-.7-1.4 0-2.6.8-3.3 2-1.4 2.4-.4 6 1 8 .7 1 1.4 2 2.5 2 1 0 1.4-.6 2.6-.6 1.2 0 1.5.6 2.6.6 1.1 0 1.8-1 2.4-2 .8-1.1 1.1-2.2 1.1-2.3 0-.1-2.1-.8-2.1-3.1zM14.5 6.3c.6-.7 1-1.6.9-2.6-.8 0-1.8.5-2.4 1.2-.5.6-1 1.6-.9 2.5.9.1 1.8-.4 2.4-1.1z",
-      linux:   "M12 2c-2 0-3.3 1.7-3.3 3.9 0 1.4.5 2.2.5 3.2 0 1-1.1 1.9-2 3.6-.8 1.6-1.8 3.3-1.8 4.8 0 .9.5 1.4 1.2 1.6.2.6.1 1.3.9 1.6 1 .4 2.6.5 3.6-.2.3-.2.6-.3.9-.3.3 0 .6.1.9.3 1 .7 2.6.6 3.6.2.8-.3.7-1 .9-1.6.7-.2 1.2-.7 1.2-1.6 0-1.5-1-3.2-1.8-4.8-.9-1.7-2-2.6-2-3.6 0-1 .5-1.8.5-3.2C15.3 3.7 14 2 12 2zm-1.3 4c.4 0 .7.4.7.9s-.3.9-.7.9-.7-.4-.7-.9.3-.9.7-.9zm2.6 0c.4 0 .7.4.7.9s-.3.9-.7.9-.7-.4-.7-.9.3-.9.7-.9zM12 9.3c.8 0 1.7.5 1.7.9 0 .3-.9.7-1.7.7s-1.7-.4-1.7-.7c0-.4.9-.9 1.7-.9z"
+      linux:   "M12 2.3c-2.05 0-3.55 1.6-3.55 3.95 0 .95.3 1.55.3 2.3 0 .85-.55 1.4-1.3 2.4-.9 1.2-1.95 2.7-1.95 4.75 0 1.45.5 2.55 1.3 3.35l-1.2 2.05c-.22.38.05.85.49.85H7.1c.18.5.62.85 1.2.95 1.05.18 2.2-.05 2.85-.6.27-.22.5-.32.85-.32s.58.1.85.32c.65.55 1.8.78 2.85.6.58-.1 1.02-.45 1.2-.95h1.01c.44 0 .71-.47.49-.85l-1.2-2.05c.8-.8 1.3-1.9 1.3-3.35 0-2.05-1.05-3.55-1.95-4.75-.75-1-1.3-1.55-1.3-2.4 0-.75.3-1.35.3-2.3C15.55 3.9 14.05 2.3 12 2.3Zm-1.65 3.5c.48 0 .82.45.82 1s-.34 1-.82 1-.83-.45-.83-1 .35-1 .83-1Zm3.3 0c.48 0 .83.45.83 1s-.35 1-.83 1-.82-.45-.82-1 .34-1 .82-1Zm-1.65 2.45c.6 0 1.55.3 1.95.85.12.17-.02.38-.25.45l-1.4.45c-.2.06-.4.06-.6 0l-1.4-.45c-.23-.07-.37-.28-.25-.45.4-.55 1.35-.85 1.95-.85Z"
     };
     var EN_DL = { generic:"Download the desktop app", windows:"Download for Windows", macos:"Download for macOS", linux:"Download for Linux" };
     function dictKey(dict, key){
@@ -12941,7 +13315,7 @@
           <p class="hp-now" aria-live="polite">
             <span class="hp-now-num" id="hp-now-num">01</span>
             <span class="hp-now-name" id="hp-now-name" data-i18n="demo.now_name_default">BOQ editor</span>
-            <span class="hp-now-sep" aria-hidden="true">&mdash;</span>
+            <span class="hp-now-sep" aria-hidden="true">-</span>
             <span class="hp-now-desc" id="hp-now-desc" data-i18n="demo.now_desc_default">Build bills of quantities, priced rows</span>
           </p>
         </div>
@@ -14083,7 +14457,7 @@
               <path class="df-mini-out-st df-mini-st" d="M 4 6 L 9 12 L 4 18 M 24 6 L 19 12 L 24 18 M 17 4 L 11 20"/>
             </g>
             <text class="df-name" x="1048" y="343">REST &middot; webhooks</text>
-            <text class="df-tag"  x="1048" y="358">to ERP / SAP / Procore</text>
+            <text class="df-tag"  x="1048" y="358">to ERP / accounting / PM tools</text>
 
             <!-- JSON · Parquet canonical -->
             <rect class="df-rect-out" x="1000" y="372" width="200" height="48" rx="10"/>
@@ -14352,40 +14726,40 @@
         </a>
       </div>
       <ul class="release-ticker-list">
-        <li id="latest-release-row">
-          <span class="ver" id="latest-release-tag">v4.0.0</span>
-          <span class="note" id="latest-release-note">Stable 4.0 milestone, 103 modules, public /api/v1 contract, multi-tenant security pass complete, BIM serve-validation, BI starter pack</span>
-          <span class="date" id="latest-release-date">2026-05-20</span>
+                <li id="latest-release-row">
+          <span class="ver" id="latest-release-tag">v7.3.0</span>
+          <span class="note" id="latest-release-note">Schedule-quality validation pack with seven checks, in-app guidance across the platform (confidence badges, plain-language errors, glossary), and BIM grouping and search fixed in 26 languages.</span>
+          <span class="date" id="latest-release-date">2026-06-08</span>
         </li>
         <li>
-          <span class="ver">v3.12.1</span>
-          <span class="note">BIM serve-time magic-byte validation, /match-elements catalogue + currency pickers, BI Dashboards install-starter-pack, 34-card module grid</span>
-          <span class="date">2026-05-20</span>
+          <span class="ver">v7.2.0</span>
+          <span class="note">Windows desktop install no longer hangs on a Turkish regional format, the AI Estimate Builder stops showing a fake price for an unpriced match, and the BIM filter panel is translated in all 26 languages.</span>
+          <span class="date">2026-06-08</span>
         </li>
         <li>
-          <span class="ver">v3.12.0</span>
-          <span class="note">Wave 5/6/7 pro-grade rollup, BOQ bulk ops, Cost Intelligence, Clash A4, BIM viewpoints, Files CDE, Takeoff PDF/Excel exports</span>
-          <span class="date">2026-05-20</span>
+          <span class="ver">v7.1.0</span>
+          <span class="note">A real desktop first launch with a provisioned local workspace, a conversational AI Estimate Builder with three named matching passes, and clash clusters tracked as one work item.</span>
+          <span class="date">2026-06-07</span>
         </li>
         <li>
-          <span class="ver">v3.11.0</span>
-          <span class="note">Wave 3/4 modules, Validation@Import (GAEB/Excel), GAEB X84 writer, RVT converter diagnostics, /about redesign</span>
-          <span class="date">2026-05-20</span>
+          <span class="ver">v7.0.1</span>
+          <span class="note">Desktop hotfix: the Windows app no longer exits silently after launch, reuses a running backend only when version and health match, and bundles the WebView2 runtime so first install needs no download.</span>
+          <span class="date">2026-06-06</span>
         </li>
         <li>
-          <span class="ver">v2.9.39</span>
-          <span class="note">12 African catalogues (registry 30 &rarr; 42) + ranker monkeypatch fixes</span>
-          <span class="date">2026-05-11</span>
+          <span class="ver">v7.0.0</span>
+          <span class="note">AI Estimate Builder that walks any starting point to a priced bill, a useful module information card on every page, and a real collaboration hub with live comments, viewpoints and presence.</span>
+          <span class="date">2026-06-06</span>
         </li>
         <li>
-          <span class="ver">v2.9.38</span>
-          <span class="note">11 classification standards data-driven from catalogues + 80-entry macro bridge + per-encoder thresholds</span>
-          <span class="date">2026-05-11</span>
+          <span class="ver">v6.10.0</span>
+          <span class="note">Field time and attendance with a payroll lifecycle, a cross-module project-controls dashboard, compliance enforced at contract gates, and AIA G702 and G703 payment applications.</span>
+          <span class="date">2026-06-05</span>
         </li>
         <li>
-          <span class="ver">v2.9.36</span>
-          <span class="note">/match-elements 10-pass polish, a11y, perf, toasts, UX</span>
-          <span class="date">2026-05-10</span>
+          <span class="ver">v6.9.0</span>
+          <span class="note">Management of Change register screen, cost matching fixed for projects outside the US, per-user scoped backup restore, and several access and purchase-order hardening fixes.</span>
+          <span class="date">2026-06-05</span>
         </li>
       </ul>
       <button type="button" class="release-ticker-toggle" data-release-toggle aria-expanded="false">
@@ -14575,23 +14949,23 @@
           <tr>
             <td class="feature-col" data-i18n="compare.row_cost_label">Typical cost / seat / yr</td>
             <td class="us-cell" style="color: var(--accent); font-weight: 500;" data-i18n="compare.row_cost_us">&euro; 0 &middot; self-host</td>
-            <td>&euro; 10&ndash;15k</td>
-            <td>&euro; 6&ndash;12k</td>
-            <td>&euro; 3&ndash;8k</td>
+            <td>&euro; 10-15k</td>
+            <td>&euro; 6-12k</td>
+            <td>&euro; 3-8k</td>
           </tr>
           <tr>
             <td class="feature-col" data-i18n="compare.row_impl_label">Implementation / onboarding</td>
             <td class="us-cell" style="color: var(--accent); font-weight: 500;" data-i18n="compare.row_impl_us">&euro; 0 &middot; docs + community</td>
-            <td>&euro; 20&ndash;80k</td>
-            <td>&euro; 15&ndash;40k</td>
-            <td>&euro; 30&ndash;150k</td>
+            <td>&euro; 20-80k</td>
+            <td>&euro; 15-40k</td>
+            <td>&euro; 30-150k</td>
           </tr>
           <tr>
             <td class="feature-col" data-i18n="compare.row_term_label">Contract term</td>
             <td class="us-cell" style="color: var(--accent); font-weight: 500;" data-i18n="compare.row_term_us">None &middot; cancel anytime</td>
-            <td data-i18n="compare.row_term_enterprise">1&ndash;3 yr lock-in</td>
-            <td data-i18n="compare.row_term_heavy">1&ndash;3 yr lock-in</td>
-            <td data-i18n="compare.row_term_legacy">3&ndash;5 yr lock-in</td>
+            <td data-i18n="compare.row_term_enterprise">1-3 yr lock-in</td>
+            <td data-i18n="compare.row_term_heavy">1-3 yr lock-in</td>
+            <td data-i18n="compare.row_term_legacy">3-5 yr lock-in</td>
           </tr>
         </tbody>
       </table>
@@ -15600,7 +15974,7 @@ manifest = <span class="tok-fn">ModuleManifest</span>(
         <div class="cb-svc-meta" data-i18n="custom.svc1_meta">FROM 4 WEEKS</div>
         <p data-i18n="custom.svc1_desc">Discovery → workshop → modules picked → built → deployed on your hardware. Source delivered.</p>
         <ul>
-          <li data-i18n="custom.svc1_li1">4–12 weeks total</li>
+          <li data-i18n="custom.svc1_li1">4-12 weeks total</li>
           <li data-i18n="custom.svc1_li2">AGPL or commercial license</li>
           <li data-i18n="custom.svc1_li3">30 days post-launch support</li>
         </ul>
@@ -15611,7 +15985,7 @@ manifest = <span class="tok-fn">ModuleManifest</span>(
           <span class="cb-svc-num">02</span>
         </div>
         <h3 data-i18n="custom.svc2_title">Workshops</h3>
-        <div class="cb-svc-meta" data-i18n="custom.svc2_meta">1–3 DAYS · ON-SITE OR REMOTE</div>
+        <div class="cb-svc-meta" data-i18n="custom.svc2_meta">1-3 DAYS · ON-SITE OR REMOTE</div>
         <p data-i18n="custom.svc2_desc">Hands-on sessions: estimating, BIM-to-BOQ, AI takeoff, GAEB pipelines. Recorded for your team library.</p>
         <ul>
           <li data-i18n="custom.svc2_li1">Up to 12 participants</li>
@@ -15642,14 +16016,14 @@ manifest = <span class="tok-fn">ModuleManifest</span>(
         <div class="gnf-card" style="--rot: -2.5deg; z-index: 3;"><div class="gnf-card-inner"><img src="https://datadrivenconstruction.io/wp-content/uploads/2026/03/Lindner-scaled.png" alt="Lindner Group" loading="lazy" decoding="async" width="800" height="600"><div class="gnf-cap"><span>Lindner Group</span></div></div></div>
         <div class="gnf-card" style="--rot: 2.5deg; z-index: 4;"><div class="gnf-card-inner"><img src="https://datadrivenconstruction.io/wp-content/uploads/2026/03/OTWB-1-scaled.png" alt="OTWB" loading="lazy" decoding="async" width="800" height="600"><div class="gnf-cap"><span>OTWB</span></div></div></div>
         <div class="gnf-card" style="--rot: 5deg; z-index: 3;"><div class="gnf-card-inner"><img src="https://datadrivenconstruction.io/wp-content/uploads/2026/03/ShapeMaker-1-scaled.png" alt="ShapeMaker" loading="lazy" decoding="async" width="800" height="600"><div class="gnf-cap"><span>ShapeMaker</span></div></div></div>
-        <div class="gnf-card gnf-card-nda" style="--rot: 7deg; z-index: 2;" aria-label="Confidential workshop &mdash; Tier-1 GC DACH"><div class="gnf-card-inner"><div class="gnf-nda-img"><svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4.5" y="11" width="15" height="9" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg><div class="gnf-nda-bars"><span></span><span></span><span></span></div></div><div class="gnf-cap"><span>Under NDA</span></div></div></div>
+        <div class="gnf-card gnf-card-nda" style="--rot: 7deg; z-index: 2;" aria-label="Confidential workshop - Tier-1 GC DACH"><div class="gnf-card-inner"><div class="gnf-nda-img"><svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4.5" y="11" width="15" height="9" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg><div class="gnf-nda-bars"><span></span><span></span><span></span></div></div><div class="gnf-cap"><span>Under NDA</span></div></div></div>
       </div>
       <div class="gnf-track">
         <div class="gnf-card" style="--rot: -4deg; z-index: 2;"><div class="gnf-card-inner"><img src="https://datadrivenconstruction.io/wp-content/uploads/2026/03/Bauindustrie-scaled.png" alt="Bauindustrie Bayern &amp; TUM" loading="lazy" decoding="async" width="800" height="600"><div class="gnf-cap"><span>Bauindustrie Bayern &amp; TUM</span></div></div></div>
         <div class="gnf-card" style="--rot: -1.5deg; z-index: 3;"><div class="gnf-card-inner"><img src="https://datadrivenconstruction.io/wp-content/uploads/2026/03/BIMClusterBW-scaled.png" alt="BIM Cluster BW" loading="lazy" decoding="async" width="800" height="600"><div class="gnf-cap"><span>BIM Cluster BW</span></div></div></div>
         <div class="gnf-card" style="--rot: 3deg; z-index: 4;"><div class="gnf-card-inner"><img src="https://datadrivenconstruction.io/wp-content/uploads/2026/03/BIMDAYGVA-scaled.png" alt="BIM DAY GENF" loading="lazy" decoding="async" width="800" height="600"><div class="gnf-cap"><span>BIM DAY GENF</span></div></div></div>
         <div class="gnf-card" style="--rot: 6deg; z-index: 3;"><div class="gnf-card-inner"><img src="https://datadrivenconstruction.io/wp-content/uploads/2026/04/Herbert_workshop.png" alt="Herbert Gruppe" loading="lazy" decoding="async" width="800" height="600"><div class="gnf-cap"><span>Herbert Gruppe</span></div></div></div>
-        <div class="gnf-card gnf-card-nda" style="--rot: 8deg; z-index: 2;" aria-label="Confidential workshop &mdash; Public infrastructure agency CH"><div class="gnf-card-inner"><div class="gnf-nda-img"><svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4.5" y="11" width="15" height="9" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg><div class="gnf-nda-bars"><span></span><span></span><span></span></div></div><div class="gnf-cap"><span>Under NDA</span></div></div></div>
+        <div class="gnf-card gnf-card-nda" style="--rot: 8deg; z-index: 2;" aria-label="Confidential workshop - Public infrastructure agency CH"><div class="gnf-card-inner"><div class="gnf-nda-img"><svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4.5" y="11" width="15" height="9" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg><div class="gnf-nda-bars"><span></span><span></span><span></span></div></div><div class="gnf-cap"><span>Under NDA</span></div></div></div>
       </div>
 
     </div>
@@ -15667,7 +16041,7 @@ manifest = <span class="tok-fn">ModuleManifest</span>(
         </div>
       </article>
       <article class="gnf-tst">
-        <p class="gnf-tst-quote" data-i18n="workshops.t2_quote">What happens when you not only organize construction processes, but also analyse them intelligently? This was the topic of our workshop with Artem Boiko on &ldquo;Data-Driven Construction&rdquo;. The focus was on the question of how we can make better use of existing data &ndash; to make construction projects more efficient, more transparent and less error-prone. Using specific application examples, Artem showed how structured construction data can help to maintain an overview, identify supplements at an early stage and improve communication between planning and execution. Particularly exciting: how digital tools and models can already be used today to automate processes. Data-driven construction is no longer a topic for the future &ndash; we are right in the middle of it. The workshop showed how great the potential is if we work together and really make data work for us.</p>
+        <p class="gnf-tst-quote" data-i18n="workshops.t2_quote">What happens when you not only organize construction processes, but also analyse them intelligently? This was the topic of our workshop with Artem Boiko on &ldquo;Data-Driven Construction&rdquo;. The focus was on the question of how we can make better use of existing data - to make construction projects more efficient, more transparent and less error-prone. Using specific application examples, Artem showed how structured construction data can help to maintain an overview, identify supplements at an early stage and improve communication between planning and execution. Particularly exciting: how digital tools and models can already be used today to automate processes. Data-driven construction is no longer a topic for the future - we are right in the middle of it. The workshop showed how great the potential is if we work together and really make data work for us.</p>
         <button type="button" class="gnf-tst-toggle" data-gnf-toggle aria-expanded="false"><span class="more-label" data-i18n="workshops.read_more">Read more</span><span class="less-label" data-i18n="workshops.read_less">Show less</span></button>
         <div class="gnf-tst-author">
           <div class="gnf-tst-avatar"><img src="assets/stills/people/stefan.jpg" alt="Stefan Traxinger" loading="lazy" decoding="async" width="48" height="48" /></div>
@@ -15830,10 +16204,10 @@ manifest = <span class="tok-fn">ModuleManifest</span>(
             <label for="cb-size" data-i18n="custom.field_team_size">Team size</label>
             <select id="cb-size" name="team_size">
               <option value="" data-i18n="custom.field_select">Select…</option>
-              <option value="1-5">1 – 5</option>
-              <option value="6-20">6 – 20</option>
-              <option value="21-100">21 – 100</option>
-              <option value="101-500">101 – 500</option>
+              <option value="1-5">1 - 5</option>
+              <option value="6-20">6 - 20</option>
+              <option value="21-100">21 - 100</option>
+              <option value="101-500">101 - 500</option>
               <option value="500+">500+</option>
             </select>
           </div>
@@ -16051,7 +16425,7 @@ manifest = <span class="tok-fn">ModuleManifest</span>(
           </span>
         </summary>
         <div class="faq-a" data-i18n-html="faq.a11">
-          Minor releases roughly every 2&ndash;3 weeks, patch releases as needed. Changelog lives on
+          Minor releases roughly every 2-3 weeks, patch releases as needed. Changelog lives on
           GitHub, every tagged version has a Docker image, and migrations are reversible. You decide
           when to upgrade. Self-hosted means nobody forces a deploy window on you.
         </div>
@@ -16887,7 +17261,7 @@ manifest = <span class="tok-fn">ModuleManifest</span>(
                 <h3>Partner-paid layer - <em>where the margin lives.</em></h3>
                 <p class="p8020-row-sub">
                   Services and commercial SKUs sold by partners on top of the open
-                  core. Partners keep <strong>25–100%</strong> depending on the line.
+                  core. Partners keep <strong>25-100%</strong> depending on the line.
                 </p>
               </div>
             </div>
@@ -16926,7 +17300,7 @@ manifest = <span class="tok-fn">ModuleManifest</span>(
               <div class="p8020-paid-head">
                 <span class="p8020-paid-ico"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg></span>
                 <span class="p8020-paid-name">Commercial licences</span>
-                <span class="p8020-paid-margin">25–65%</span>
+                <span class="p8020-paid-margin">25-65%</span>
               </div>
               <p class="p8020-paid-desc">OCERP commercial licence, CWICR cost DB and cad2data converters (DWG · RVT · IFC · DGN). Resold by partners at tier rate.</p>
             </div>
@@ -16980,6 +17354,7 @@ manifest = <span class="tok-fn">ModuleManifest</span>(
         Download the free desktop app, or install from source. Run on your laptop, VPS,
         or the cloud of your choice. Self-host forever, or let us do it.
       </p>
+
       <div class="final-cta-row">
         <a class="btn-hero-dl" href="#download">
           <svg class="dl-glyph-i" viewBox="0 0 24 24" aria-hidden="true"><path d="M11 3v10.2L7.5 9.7 6 11.2 12 17l6-5.8-1.5-1.5L13 13.2V3zM5 18.5V20a1.5 1.5 0 0 0 1.5 1.5h11A1.5 1.5 0 0 0 19 20v-1.5h-2V19H7v-.5z"/></svg>
@@ -16988,11 +17363,53 @@ manifest = <span class="tok-fn">ModuleManifest</span>(
             <span class="hero-dl-sub" data-i18n="final_cta.btn_download_sub">Windows, macOS, Linux - free and open source</span>
           </span>
         </a>
-        <a class="hero-allplatforms" href="#download" data-i18n="hero.all_platforms">
-          All platforms
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"></line><polyline points="19 12 12 19 5 12"></polyline></svg>
-        </a>
+        <span class="hero-platform-icons" aria-label="Other platform downloads">
+          <a class="hero-platform-icon" href="/download#card-macos" aria-label="Download for macOS (Apple)">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16.4 12.6c0-2.1 1.7-3.1 1.8-3.2-1-1.4-2.5-1.6-3-1.6-1.3-.1-2.5.7-3.1.7-.6 0-1.6-.7-2.7-.7-1.4 0-2.6.8-3.3 2-1.4 2.4-.4 6 1 8 .7 1 1.4 2 2.5 2 1 0 1.4-.6 2.6-.6 1.2 0 1.5.6 2.6.6 1.1 0 1.8-1 2.4-2 .8-1.1 1.1-2.2 1.1-2.3 0-.1-2.1-.8-2.1-3.1zM14.5 6.3c.6-.7 1-1.6.9-2.6-.8 0-1.8.5-2.4 1.2-.5.6-1 1.6-.9 2.5.9.1 1.8-.4 2.4-1.1z"/></svg>
+            <span>Apple</span>
+          </a>
+          <a class="hero-platform-icon" href="/download#card-linux" aria-label="Linux install options">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path fill-rule="evenodd" clip-rule="evenodd" d="M12 2.3c-2.05 0-3.55 1.6-3.55 3.95 0 .95.3 1.55.3 2.3 0 .85-.55 1.4-1.3 2.4-.9 1.2-1.95 2.7-1.95 4.75 0 1.45.5 2.55 1.3 3.35l-1.2 2.05c-.22.38.05.85.49.85H7.1c.18.5.62.85 1.2.95 1.05.18 2.2-.05 2.85-.6.27-.22.5-.32.85-.32s.58.1.85.32c.65.55 1.8.78 2.85.6.58-.1 1.02-.45 1.2-.95h1.01c.44 0 .71-.47.49-.85l-1.2-2.05c.8-.8 1.3-1.9 1.3-3.35 0-2.05-1.05-3.55-1.95-4.75-.75-1-1.3-1.55-1.3-2.4 0-.75.3-1.35.3-2.3C15.55 3.9 14.05 2.3 12 2.3Zm-1.65 3.5c.48 0 .82.45.82 1s-.34 1-.82 1-.83-.45-.83-1 .35-1 .83-1Zm3.3 0c.48 0 .83.45.83 1s-.35 1-.83 1-.82-.45-.82-1 .34-1 .82-1Zm-1.65 2.45c.6 0 1.55.3 1.95.85.12.17-.02.38-.25.45l-1.4.45c-.2.06-.4.06-.6 0l-1.4-.45c-.23-.07-.37-.28-.25-.45.4-.55 1.35-.85 1.95-.85Z"/></svg>
+            <span>Linux</span>
+          </a>
+        </span>
       </div>
+
+      <!-- Install-from-source: prominent terminal chips with working copy
+           buttons. The .dl-copy buttons here are wired by the dedicated
+           binding right after this section (the shared download-section
+           handler runs before this markup is parsed). -->
+      <div class="final-cta-install" id="final-cta-install">
+        <p class="final-cta-install-head">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>
+          <span data-i18n="final_cta.install_label">Or install from source</span>
+        </p>
+        <div class="fci-row">
+          <div class="fci-term">
+            <span class="fci-tag" aria-hidden="true">pip</span>
+            <span class="fci-dollar" aria-hidden="true">$</span>
+            <code class="fci-cmd">pip install openconstructionerp</code>
+          </div>
+          <button type="button" class="dl-copy" data-copy="pip install openconstructionerp" aria-label="Copy the pip install command">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+          </button>
+        </div>
+        <div class="fci-row">
+          <div class="fci-term">
+            <span class="fci-tag" aria-hidden="true">docker</span>
+            <span class="fci-dollar" aria-hidden="true">$</span>
+            <code class="fci-cmd">docker run -p 8080:8080 ghcr.io/datadrivenconstruction/openconstructionerp</code>
+          </div>
+          <button type="button" class="dl-copy" data-copy="docker run -d -p 8080:8080 -v oe_data:/data ghcr.io/datadrivenconstruction/openconstructionerp:latest" aria-label="Copy the docker run command">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+          </button>
+        </div>
+        <p class="fci-foot" data-i18n-html="final_cta.install_foot">
+          One command and the full ERP is running. PostgreSQL is built in, nothing else to set up.
+          See the <a href="/docs.html">install docs</a>.
+        </p>
+      </div>
+
       <div class="final-cta-reassure">
         <span>
           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"></polyline></svg>
@@ -17009,6 +17426,43 @@ manifest = <span class="tok-fn">ModuleManifest</span>(
       </div>
     </div>
   </section>
+
+  <!-- Copy-to-clipboard for the final-CTA install chips. The shared .dl-copy
+       handler is bound inside the download section's script which runs before
+       this markup is parsed, so these chips get their own binding using the
+       same copy + is-copied flash pattern as the rest of the page. -->
+  <script>
+  (function(){
+    var panel = document.getElementById("final-cta-install");
+    if(!panel) return;
+    panel.querySelectorAll(".dl-copy").forEach(function(btn){
+      btn.addEventListener("click", function(){
+        var cmd = btn.getAttribute("data-copy") || "";
+        var done = function(){
+          btn.classList.add("is-copied");
+          setTimeout(function(){ btn.classList.remove("is-copied"); }, 1500);
+        };
+        try{
+          navigator.clipboard.writeText(cmd).then(done, function(){
+            try{
+              var ta = document.createElement("textarea");
+              ta.value = cmd; ta.style.position = "fixed"; ta.style.opacity = "0";
+              document.body.appendChild(ta); ta.select();
+              document.execCommand("copy"); document.body.removeChild(ta); done();
+            }catch(e){}
+          });
+        }catch(e){
+          try{
+            var ta2 = document.createElement("textarea");
+            ta2.value = cmd; ta2.style.position = "fixed"; ta2.style.opacity = "0";
+            document.body.appendChild(ta2); ta2.select();
+            document.execCommand("copy"); document.body.removeChild(ta2); done();
+          }catch(_){}
+        }
+      });
+    });
+  })();
+  </script>
 
 
   <!-- ================================================================ -->
@@ -17408,7 +17862,7 @@ manifest = <span class="tok-fn">ModuleManifest</span>(
         <p class="pa-eyebrow">Practice atlas · the deeper view</p>
         <h2>Where to look <em>after</em> the homepage.</h2>
         <p class="pa-lede">
-          Four reference pages built on what OCERP actually ships in v2.9.x -
+          Four reference pages built on what OCERP actually ships in v7.3.0 -
           <b>code‑level audited, no marketing fiction.</b> Take the assessment to find your starting point,
           then go deeper into practices, industries and standards.
         </p>
@@ -17449,23 +17903,23 @@ manifest = <span class="tok-fn">ModuleManifest</span>(
               <div class="pa-bands-mini">
                 <div class="pa-band-mini">
                   <div class="pa-band-mini-name">Found.</div>
-                  <div class="pa-band-mini-range">0–11</div>
+                  <div class="pa-band-mini-range">0-11</div>
                 </div>
                 <div class="pa-band-mini">
                   <div class="pa-band-mini-name">Devel.</div>
-                  <div class="pa-band-mini-range">12–22</div>
+                  <div class="pa-band-mini-range">12-22</div>
                 </div>
                 <div class="pa-band-mini">
                   <div class="pa-band-mini-name">Estab.</div>
-                  <div class="pa-band-mini-range">23–32</div>
+                  <div class="pa-band-mini-range">23-32</div>
                 </div>
                 <div class="pa-band-mini">
                   <div class="pa-band-mini-name">Advan.</div>
-                  <div class="pa-band-mini-range">33–39</div>
+                  <div class="pa-band-mini-range">33-39</div>
                 </div>
                 <div class="pa-band-mini">
                   <div class="pa-band-mini-name">Leader</div>
-                  <div class="pa-band-mini-range">40–44</div>
+                  <div class="pa-band-mini-range">40-44</div>
                 </div>
               </div>
               <div style="margin-top:12px; font-family:'JetBrains Mono',monospace; font-size:11px; color:#475569; letter-spacing:0.04em;">
@@ -17498,7 +17952,7 @@ manifest = <span class="tok-fn">ModuleManifest</span>(
             <div class="pa-side-body">
               <div class="pa-side-eyebrow">▸ P‑01 .. P‑05</div>
               <h4 class="pa-side-title"><em>Practice</em> areas</h4>
-              <p class="pa-side-desc">5 disciplines with <b>platform vs partner</b> column per practice. What ships in v2.9.x, what's still partner work.</p>
+              <p class="pa-side-desc">5 disciplines with <b>platform vs partner</b> column per practice. What ships in v7.3.0, what's still partner work.</p>
               <div class="pa-side-tags">
                 <span class="pa-side-tag is-accent">110+ modules</span>
                 <span class="pa-side-tag">BIM · Cost · Takeoff</span>
@@ -17546,7 +18000,7 @@ manifest = <span class="tok-fn">ModuleManifest</span>(
             <div class="pa-side-body">
               <div class="pa-side-eyebrow">▸ Code‑audit</div>
               <h4 class="pa-side-title"><em>Standards</em> reference</h4>
-              <p class="pa-side-desc">Every standard with a registered reader, writer or validator in v2.9.x. <b>46 rules · 5 packs</b>. Roadmap items called out separately.</p>
+              <p class="pa-side-desc">Every standard with a registered reader, writer or validator in v7.3.0. <b>46 rules · 5 packs</b>. Roadmap items called out separately.</p>
               <div class="pa-side-tags">
                 <span class="pa-side-tag is-accent">IFC · GAEB · BCF</span>
                 <span class="pa-side-tag">DIN · NRM · CSI</span>
@@ -19934,8 +20388,15 @@ manifest = <span class="tok-fn">ModuleManifest</span>(
           const tooCloseToText = screenX < MIN_SCREEN_X;
           const labelRight = tx + LABEL_W;
           const labelBottom = ty + LABEL_H;
-          const labelClipped = tx < panelRect.left - 4
-                            || labelRight > panelRect.right + 4
+          // Keep tags fully inside both the panel and the viewport so a label
+          // can never bleed past the right edge of the page (the panel itself
+          // can extend beyond the viewport on wide screens). Out-of-bounds
+          // labels are cycled out rather than clamped - clamping would detach
+          // the tag from its building anchor and bend the leader line.
+          const clipRight = Math.min(panelRect.right, viewportW) - 6;
+          const clipLeft = Math.max(panelRect.left, 0) + 2;
+          const labelClipped = tx < clipLeft
+                            || labelRight > clipRight
                             || ty < panelRect.top - 10
                             || labelBottom > panelRect.bottom + 10;
 

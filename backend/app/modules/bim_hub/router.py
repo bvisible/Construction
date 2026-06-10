@@ -68,6 +68,7 @@ from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.demo_placeholders import materialize_placeholder
 from app.core.http_headers import content_disposition_attachment
 from app.core.i18n import get_locale
 from app.core.rate_limiter import upload_limiter
@@ -1277,6 +1278,43 @@ async def _process_cad_in_background(
                 return
         except Exception:  # noqa: BLE001 - pre-flight is best-effort
             logger.exception("RVT converter pre-flight check failed for %s", model_id)
+
+    # IFC pre-provision: always try to get the real DDC IfcExporter so the
+    # viewer shows accurate meshes, not the crude box placeholder. IFC has a
+    # text fallback (so we do NOT gate the import on the converter the way RVT
+    # does), but on a fresh install the converter is missing and the inline
+    # ``ensure_converter`` call inside ``process_ifc_file`` would race a cold
+    # ~30 MB download. Provisioning it here, up front and off the request path,
+    # means the conversion below uses the real converter on the first upload
+    # instead of silently degrading to placeholder geometry. This is
+    # best-effort: a genuine failure (offline / locked-down host) just falls
+    # through to the text fallback, so the import still completes.
+    if ext.lower() == ".ifc":
+        try:
+            from app.modules.boq.cad_import import (
+                ensure_converter as _ensure,
+            )
+            from app.modules.boq.cad_import import (
+                find_converter as _fc,
+            )
+
+            if _fc("ifc") is None:
+                logger.info(
+                    "IFC converter not present for model %s - provisioning the DDC IfcExporter before conversion",
+                    model_id,
+                )
+                converter_path = await asyncio.to_thread(_ensure, "ifc")
+                logger.info("IFC converter provisioned at %s for model %s", converter_path, model_id)
+        except Exception as exc:  # noqa: BLE001 - provisioning is best-effort
+            # Do NOT fail the import here: the text fallback still produces a
+            # usable (placeholder) result, and the metadata path below will
+            # honestly flag it as placeholder so the UI nudges the user.
+            logger.warning(
+                "IFC converter auto-provision failed for model %s (%s) - "
+                "falling back to the built-in text parser (placeholder geometry)",
+                model_id,
+                exc,
+            )
 
     try:
         content = await get_storage_backend().get(cad_storage_key)
@@ -3603,6 +3641,102 @@ async def export_cobie_xlsx(
             # the ASGI server 500 while encoding this header.
             "Content-Disposition": content_disposition_attachment(filename),
             "Content-Length": str(len(xlsx_bytes)),
+        },
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Model download (source CAD / geometry artifact, for the /files manager)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@router.get("/models/{model_id}/download/")
+async def download_model(
+    model_id: uuid.UUID,
+    user_id: CurrentUserId = None,  # type: ignore[assignment]
+    _perm: None = Depends(RequirePermission("bim.read")),
+    service: BIMHubService = Depends(_get_service),
+) -> StreamingResponse:
+    """Download the source/canonical file backing a BIM model.
+
+    Resolution order, all gated by project access (``_verify_model_access``
+    404s on missing or foreign-tenant):
+
+    1. the original CAD upload (``original.{ext}``) when it is still retained,
+    2. the converted geometry artifact (GLB/DAE/glTF) - what the viewer loads,
+    3. a minimal materialized stub (IFC/STEP for ifc-family models, otherwise
+       a short text note) when neither blob is present, so demo/showcase rows
+       download something valid instead of a 404.
+
+    Everything flows through the storage backend, so the local filesystem and
+    S3 deployments both work without a route change.
+    """
+    model = await _verify_model_access(service, model_id, user_id or "")
+    project_id = str(model.project_id)
+    backend_store = bim_file_storage._backend()
+    model_format = (model.model_format or "").lower().lstrip(".")
+
+    # 1. Original CAD upload, if retained. This is the like-for-like source the
+    #    user uploaded (IFC / RVT / DWG), preferred over the converted mesh.
+    if model_format:
+        ext = f".{model_format}"
+        cad_key = bim_file_storage.original_cad_key(project_id, model_id, ext)
+        try:
+            has_cad = await backend_store.exists(cad_key)
+        except Exception:  # noqa: BLE001 - probing storage must never raise to the client
+            has_cad = False
+        if has_cad:
+            blob = await backend_store.get(cad_key)
+            filename = f"{model.name or 'model'}{ext}"
+            return StreamingResponse(
+                io.BytesIO(blob),
+                media_type="application/octet-stream",
+                headers={
+                    "Content-Disposition": content_disposition_attachment(filename),
+                    "Content-Length": str(len(blob)),
+                },
+            )
+
+    # 2. Converted geometry artifact (GLB/DAE/glTF).
+    found = await bim_file_storage.find_geometry_key(project_id, model_id)
+    if found is not None:
+        key, geo_ext = found
+        blob = await backend_store.get(key)
+        media_type = bim_file_storage.GEOMETRY_MEDIA_TYPES.get(geo_ext, "application/octet-stream")
+        filename = f"{model.name or 'model'}{geo_ext}"
+        return StreamingResponse(
+            io.BytesIO(blob),
+            media_type=media_type,
+            headers={
+                "Content-Disposition": content_disposition_attachment(filename),
+                "Content-Length": str(len(blob)),
+            },
+        )
+
+    # 3. Nothing on disk: materialize a typed stub so the /files row still
+    #    downloads a valid file. ifc-family -> IFC/STEP text, else a text note.
+    import tempfile
+
+    stub_ext = f".{model_format}" if model_format in ("ifc", "step", "stp") else ".ifc"
+    name = model.name or "BIM model"
+    with tempfile.TemporaryDirectory(prefix="oe-bim-dl-") as tmp:
+        stub = pathlib.Path(tmp) / f"{model_id}{stub_ext}"
+        try:
+            materialize_placeholder(stub, name)
+        except Exception:  # pragma: no cover - degrade to 404 on unexpected failure
+            logger.warning("Failed to materialize BIM placeholder for %s", model_id, exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="File not found on disk",
+            ) from None
+        blob = stub.read_bytes()
+    filename = f"{name}{stub_ext}"
+    return StreamingResponse(
+        io.BytesIO(blob),
+        media_type="application/octet-stream",
+        headers={
+            "Content-Disposition": content_disposition_attachment(filename),
+            "Content-Length": str(len(blob)),
         },
     )
 

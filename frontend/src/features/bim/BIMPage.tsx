@@ -91,6 +91,7 @@ import { useToastStore } from '@/stores/useToastStore';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useBIMLinkSelectionStore } from '@/stores/useBIMLinkSelectionStore';
 import { useBIMUploadStore, type BIMUploadJob } from '@/stores/useBIMUploadStore';
+import { useDwgUploadStore } from '@/stores/useDwgUploadStore';
 import { apiGet } from '@/shared/lib/api';
 import {
   fetchBIMModels,
@@ -104,6 +105,7 @@ import {
   deleteElementGroup,
   installBIMConverter,
   retryBIMModelProcessing,
+  isNon3DBimFormat,
   type BIMElementGroup,
 } from './api';
 
@@ -486,19 +488,36 @@ function UploadPanel({
   const handleFileSelect = useCallback((f: File) => {
     const ext = getFileExtension(f.name);
     if (DWG_EXTENSIONS.has(ext)) {
+      // DWG/DXF are 2D takeoff drawings, not 3D BIM models. Hand the picked
+      // file straight to the DWG Takeoff module so the user does not have to
+      // re-pick it there, then open that module where the upload is already
+      // running.
+      if (projectId) {
+        useDwgUploadStore.getState().startUpload({
+          file: f,
+          projectId,
+          modelName: f.name.replace(/\.[^.]+$/, ''),
+          discipline,
+        });
+      }
       addToast({
         type: 'info',
         title: t('bim.dwg_redirect_title', { defaultValue: 'DWG files are handled in the DWG Takeoff module' }),
-        message: t('bim.dwg_redirect_msg', { defaultValue: 'Redirecting to DWG Takeoff...' }),
+        message: projectId
+          ? t('bim.dwg_handoff_msg', { defaultValue: 'Sending your drawing to DWG Takeoff...' })
+          : t('bim.dwg_redirect_msg', { defaultValue: 'Opening DWG Takeoff...' }),
       });
       navigate('/dwg-takeoff');
       return;
     }
-    if (!CAD_EXTENSIONS.has(ext) && !DATA_EXTENSIONS.has(ext)) { setUploadError(t('bim.upload_unsupported_format', { defaultValue: 'Unsupported file format. Please upload .rvt or .ifc files.' })); return; }
+    // Simple picker accepts native 3D BIM only (RVT/IFC). Tabular data
+    // (CSV/XLSX) lives behind the explicit "Advanced" toggle, which uses its
+    // own file input, so anything else dropped here is rejected up front.
+    if (!CAD_EXTENSIONS.has(ext)) { setUploadError(t('bim.upload_unsupported_format', { defaultValue: 'Unsupported file format. Please upload RVT, IFC or DWG files.' })); return; }
     setFile(f);
     setUploadError(ext === '.rvt' ? t('bim.upload_rvt_note') : null);
     if (!modelName) setModelName(f.name.replace(/\.[^.]+$/, ''));
-  }, [modelName, t, addToast, navigate]);
+  }, [modelName, t, addToast, navigate, projectId, discipline]);
 
   const resetForm = useCallback(() => {
     setFile(null); setDataFile(null); setGeometryFile(null); setModelName(''); setUploadError(null);
@@ -521,7 +540,12 @@ function UploadPanel({
   }, [globalJobs, projectId]);
 
   const handleUpload = useCallback(async () => {
-    if (!projectId) return;
+    if (!projectId) {
+      // Without a resolved project the upload silently did nothing before,
+      // which read as "the button is dead". Surface the real reason instead.
+      setUploadError(t('bim.upload_no_project', { defaultValue: 'No active project yet. Open a project, then upload again.' }));
+      return;
+    }
     setUploading(true);
     setUploadError(null);
     setUploadProgress(0);
@@ -751,7 +775,7 @@ function UploadPanel({
             htmlFor="bim-upload-file-input"
             role="button"
             tabIndex={0}
-            aria-label={t('bim.upload_dropzone_aria', { defaultValue: 'Upload BIM file (RVT, IFC, CSV, XLSX)' })}
+            aria-label={t('bim.upload_dropzone_aria', { defaultValue: 'Upload BIM file (RVT, IFC, DWG)' })}
             onKeyDown={(e) => {
               if (e.key === 'Enter' || e.key === ' ') {
                 e.preventDefault();
@@ -780,12 +804,11 @@ function UploadPanel({
                 <div className="flex items-center gap-1.5 mt-1">
                   <span className="text-[9px] font-mono px-1 py-0.5 rounded bg-oe-blue/10 text-oe-blue border border-oe-blue/20">.rvt</span>
                   <span className="text-[9px] font-mono px-1 py-0.5 rounded bg-oe-blue/10 text-oe-blue border border-oe-blue/20">.ifc</span>
-                  <span className="text-[9px] font-mono px-1 py-0.5 rounded bg-surface-tertiary text-content-quaternary">.csv</span>
-                  <span className="text-[9px] font-mono px-1 py-0.5 rounded bg-surface-tertiary text-content-quaternary">.xlsx</span>
+                  <span className="text-[9px] font-mono px-1 py-0.5 rounded bg-oe-blue/10 text-oe-blue border border-oe-blue/20">.dwg</span>
                 </div>
               </>
             )}
-            <input id="bim-upload-file-input" ref={fileInputRef} type="file" accept=".rvt,.ifc,.csv,.xlsx,.xls" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFileSelect(f); }} />
+            <input id="bim-upload-file-input" ref={fileInputRef} type="file" accept=".rvt,.ifc,.dwg,.dxf" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFileSelect(f); }} />
           </label>
         ) : (
           <div className="grid grid-cols-2 gap-3">
@@ -871,7 +894,7 @@ function UploadPanel({
 
       {/* Footer */}
       <div className="px-5 py-4 border-t border-border-light">
-        <button onClick={handleUpload} disabled={!canUpload} className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-semibold transition-all disabled:opacity-30 disabled:cursor-not-allowed bg-oe-blue text-white hover:bg-oe-blue-dark active:scale-[0.98] shadow-sm hover:shadow-md">
+        <button data-testid="bim-upload-submit" onClick={handleUpload} disabled={!canUpload} className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-semibold transition-all disabled:opacity-30 disabled:cursor-not-allowed bg-oe-blue text-white hover:bg-oe-blue-dark active:scale-[0.98] shadow-sm hover:shadow-md">
           {uploading ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
           {uploading ? t('bim.uploading') : t('bim.upload_panel_title')}
         </button>
@@ -1046,6 +1069,22 @@ function NonReadyOverlay({ model, onUploadConverted, onDelete, onRetry, onInstal
         })
       : null;
 
+  // Zero-elements is NOT a converter-availability problem: the file was
+  // read fine, it simply yielded no convertible building elements (empty
+  // model, only spatial containers like project/site/building, or geometry
+  // the converter does not extract). The generic "converter unavailable"
+  // copy below would be actively misleading here (issue #197), so we lead
+  // with a specific, honest explanation and still surface the raw backend
+  // detail through the disclosure toggle.
+  const zeroElementsDescription =
+    !isProcessing && errorCode === 'zero_elements'
+      ? t('bim.overlay_zero_elements_clean', {
+          defaultValue:
+            'We read this {{format}} file but found no building elements to convert. The model may be empty, contain only spatial containers (project, site, building) or hold geometry the converter does not extract. Open it in your authoring tool to confirm it has modelled elements, then re-upload.',
+          format: fmt || 'BIM',
+        })
+      : null;
+
   // We deliberately do NOT dump the raw backend error into the headline
   // paragraph any more. A failed CAD conversion typically means the DDC
   // cad2data converter is not installed in this environment (it is a
@@ -1053,9 +1092,12 @@ function NonReadyOverlay({ model, onUploadConverted, onDelete, onRetry, onInstal
   // dev machines). We lead with that calm explanation and tuck the raw
   // backend string — e.g. "CAD conversion failed for .rvt file. Ensure the
   // converter is properly installed and the file is valid." — behind the
-  // collapsible "Show details" toggle below.
+  // collapsible "Show details" toggle below. This generic copy must never
+  // fire for a code with its own tailored message (e.g. zero_elements).
   const calmFailureDescription =
-    !isProcessing && (errorCode === 'ddc_not_found' || !!backendMessage)
+    !isProcessing
+    && errorCode !== 'zero_elements'
+    && (errorCode === 'ddc_not_found' || !!backendMessage)
       ? t('bim.overlay_converter_unavailable_calm', {
           defaultValue:
             "We couldn't convert this {{format}} file. The CAD converter (DDC cad2data) isn't available in this environment - it's an optional, separate install. Add it, then retry the conversion.",
@@ -1064,7 +1106,7 @@ function NonReadyOverlay({ model, onUploadConverted, onDelete, onRetry, onInstal
       : null;
 
   const description =
-    cleanDescription ?? calmFailureDescription ?? c.desc;
+    cleanDescription ?? zeroElementsDescription ?? calmFailureDescription ?? c.desc;
   // The raw backend message is now ALWAYS surfaced through the collapsible
   // disclosure (when present) rather than inline — both for the outdated
   // case and the generic failure case.
@@ -1240,6 +1282,27 @@ function LandingPage({ projectId, onUploadComplete: _onUploadComplete, breadcrum
     if (fileInputRef.current) fileInputRef.current.value = '';
   }, []);
 
+  // DWG/DXF are 2D drawings, not 3D BIM. Hand the file to the DWG Takeoff
+  // module so it is not lost on the redirect, then open that module.
+  const handleLandingDwg = useCallback((f: File) => {
+    if (projectId) {
+      useDwgUploadStore.getState().startUpload({
+        file: f,
+        projectId,
+        modelName: f.name.replace(/\.[^.]+$/, ''),
+        discipline: 'architecture',
+      });
+    }
+    addToast({
+      type: 'info',
+      title: t('bim.dwg_redirect_title', { defaultValue: 'DWG files are handled in the DWG Takeoff module' }),
+      message: projectId
+        ? t('bim.dwg_handoff_msg', { defaultValue: 'Sending your drawing to DWG Takeoff...' })
+        : t('bim.dwg_redirect_msg', { defaultValue: 'Opening DWG Takeoff...' }),
+    });
+    navigate('/dwg-takeoff');
+  }, [projectId, addToast, t, navigate]);
+
   const handleUpload = useCallback(async () => {
     if (!file || !projectId) return;
     setUploading(true); setUploadError(null);
@@ -1357,13 +1420,9 @@ function LandingPage({ projectId, onUploadComplete: _onUploadComplete, breadcrum
                     const f = e.dataTransfer.files?.[0];
                     if (f) {
                       const ext = getFileExtension(f.name);
-                      if (DWG_EXTENSIONS.has(ext)) {
-                        addToast({ type: 'info', title: t('bim.dwg_redirect_title', { defaultValue: 'DWG files are handled in the DWG Takeoff module' }), message: t('bim.dwg_redirect_msg', { defaultValue: 'Redirecting to DWG Takeoff...' }) });
-                        navigate('/dwg-takeoff');
-                        return;
-                      }
-                      if (!CAD_EXTENSIONS.has(ext) && !DATA_EXTENSIONS.has(ext)) {
-                        addToast({ type: 'error', title: t('bim.upload_unsupported_format', { defaultValue: 'Unsupported file format. Please upload .rvt or .ifc files.' }) });
+                      if (DWG_EXTENSIONS.has(ext)) { handleLandingDwg(f); return; }
+                      if (!CAD_EXTENSIONS.has(ext)) {
+                        addToast({ type: 'error', title: t('bim.upload_unsupported_format', { defaultValue: 'Unsupported file format. Please upload RVT, IFC or DWG files.' }) });
                         return;
                       }
                       setFile(f);
@@ -1401,7 +1460,7 @@ function LandingPage({ projectId, onUploadComplete: _onUploadComplete, breadcrum
                       </p>
                     </>
                   )}
-                  <input ref={fileInputRef} type="file" accept=".rvt,.ifc" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) { setFile(f); if (!modelName) setModelName(f.name.replace(/\.[^.]+$/, '')); } }} />
+                  <input ref={fileInputRef} type="file" accept=".rvt,.ifc,.dwg,.dxf" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (!f) return; if (DWG_EXTENSIONS.has(getFileExtension(f.name))) { handleLandingDwg(f); return; } setFile(f); if (!modelName) setModelName(f.name.replace(/\.[^.]+$/, '')); }} />
                 </label>
                 {file && (
                   <div className="mt-4 space-y-3">
@@ -1913,7 +1972,16 @@ export function BIMPage() {
   const clearBIMLinkSelection = useBIMLinkSelectionStore((s) => s.clear);
 
   const modelsQuery = useQuery({ queryKey: ['bim-models', projectId], queryFn: () => fetchBIMModels(projectId), enabled: !!projectId, staleTime: 5 * 60_000 });
-  const models = modelsQuery.data?.items ?? [];
+  // Defense in depth: never surface 2D drawing formats (DWG/DXF/DGN) in the
+  // BIM 3D Takeoff filmstrip, picker or deep-link resolver. Those belong to the
+  // DWG Takeoff module and carry no 3D mesh, so the viewer must never try to
+  // load geometry for them. The backend list query already filters these out;
+  // this guard keeps the UI correct even against a stale cache or a backend
+  // that predates the server-side filter.
+  const models = useMemo(
+    () => (modelsQuery.data?.items ?? []).filter((m) => !isNon3DBimFormat(m.model_format || m.format)),
+    [modelsQuery.data],
+  );
   const hasModels = models.length > 0;
   const showFullPageUpload = showUploadOverride !== null ? showUploadOverride : !hasModels;
 
@@ -1969,6 +2037,12 @@ export function BIMPage() {
   // from the top selector (which would otherwise snap the user back to this model's project).
   const setActiveProject = useProjectContextStore((s) => s.setActiveProject);
   const autoDetectedRef = useRef<string | null>(null);
+  // Set only when auto-detect has CONFIRMED the deep-linked model genuinely
+  // does not exist (404). Until then the model pick effect must not fall back
+  // to models[0] of a (still-resolving, possibly other-project) list - doing so
+  // briefly activates an unrelated model and fires the model-switch reset
+  // effect, which wipes a filter/grouping the user just applied.
+  const urlModelMissingRef = useRef(false);
   useEffect(() => {
     if (!urlModelId) return;
     if (autoDetectedRef.current === urlModelId) return;
@@ -1976,15 +2050,18 @@ export function BIMPage() {
     const modelInList = models.find((m) => m.id === urlModelId);
     if (modelInList) {
       autoDetectedRef.current = urlModelId;
+      urlModelMissingRef.current = false;
       return;
     }
     fetchBIMModel(urlModelId).then((model) => {
       autoDetectedRef.current = urlModelId;
+      urlModelMissingRef.current = false;
       if (model?.project_id && model.project_id !== projectId) {
         setActiveProject(model.project_id, '');
       }
     }).catch(() => {
       autoDetectedRef.current = urlModelId;
+      urlModelMissingRef.current = true;
       // Surface the missing-model state so the user doesn't think the
       // model is "empty" — previously a 404 here was silent and the UI
       // fell back to "No elements to display" (audit P1-13).
@@ -2008,8 +2085,22 @@ export function BIMPage() {
     if (urlModelId && autoDetectedRef.current !== urlModelId) return;
     const currentInList = activeModelId && models.some((m) => m.id === activeModelId);
     if (currentInList) return;
-    const target = urlModelId && models.find((m) => m.id === urlModelId) ? urlModelId : models[0]!.id;
-    setActiveModelId(target);
+    if (urlModelId) {
+      // Deep link to a specific model. Activate it the moment it appears in the
+      // list. Until then - while its project is still resolving and `models`
+      // may be the wrong project's list - do NOT fall back to models[0]: that
+      // briefly activates an unrelated model and fires the model-switch reset
+      // effect, wiping the user's just-applied filter/grouping (the "grouping
+      // reverts to the whole project a second later" bug). Only fall back once
+      // auto-detect has CONFIRMED the model is genuinely missing (404), so the
+      // user still sees something instead of an empty viewer.
+      if (models.some((m) => m.id === urlModelId)) {
+        setActiveModelId(urlModelId);
+        return;
+      }
+      if (!urlModelMissingRef.current) return;
+    }
+    setActiveModelId(models[0]!.id);
   }, [models, activeModelId, urlModelId]);
 
   // Sync URL when active model changes

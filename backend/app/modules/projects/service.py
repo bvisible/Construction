@@ -237,6 +237,7 @@ class ProjectService:
             actual_end_date=data.actual_end_date,
             budget_estimate=data.budget_estimate,
             contingency_pct=data.contingency_pct,
+            gross_floor_area=data.gross_floor_area,
             custom_fields=data.custom_fields,
             work_calendar_id=data.work_calendar_id,
             # ── v2.6.0 multi-currency / VAT (RFC 37) ────────────────────
@@ -298,19 +299,23 @@ class ProjectService:
                 source_module="oe_projects",
             )
 
-        # Auto-create a default team for the new project
+        # Auto-create a default team for the new project. Wrapped in a
+        # SAVEPOINT so a team-layer failure (missing teams table on minimal
+        # installs, etc.) rolls back only the savepoint instead of poisoning
+        # the outer transaction and 500-ing the whole project create.
         try:
             from app.modules.teams.models import Team, TeamMembership
 
-            default_team = Team(
-                project_id=project.id,
-                name="Default Team",
-                is_default=True,
-            )
-            self.session.add(default_team)
-            await self.session.flush()
-            self.session.add(TeamMembership(team_id=default_team.id, user_id=owner_id, role="lead"))
-            await self.session.flush()
+            async with self.session.begin_nested():
+                default_team = Team(
+                    project_id=project.id,
+                    name="Default Team",
+                    is_default=True,
+                )
+                self.session.add(default_team)
+                await self.session.flush()
+                self.session.add(TeamMembership(team_id=default_team.id, user_id=owner_id, role="lead"))
+                await self.session.flush()
             logger.info("Default team created for project %s", project.id)
         except Exception:
             logger.debug("Auto-create default team skipped (teams module may not be loaded)")
@@ -666,6 +671,7 @@ class ProjectService:
             actual_end_date=source.actual_end_date,
             budget_estimate=source.budget_estimate,
             contingency_pct=source.contingency_pct,
+            gross_floor_area=source.gross_floor_area,
             custom_fields=(dict(source.custom_fields) if source.custom_fields else None),
             work_calendar_id=source.work_calendar_id,
             # v2.6.0 multi-currency / VAT

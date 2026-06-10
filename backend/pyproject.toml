@@ -1,6 +1,6 @@
 [project]
 name = "openconstructionerp"
-version = "7.2.0"
+version = "7.5.0"
 description = "Open-source construction cost estimation, multi-currency BOQ, AI vector matching, CAD/BIM takeoff without IfcOpenShell, resource-based cost DB import with example templates, 48 regional catalogues, 27 languages. AGPL-3.0. After install, run: openconstructionerp"
 license = "AGPL-3.0-or-later"
 requires-python = ">=3.12"
@@ -68,9 +68,18 @@ dependencies = [
     "structlog>=24.4.0",
     "pyyaml>=6.0",
     "defusedxml>=0.7.1",
-    "pandas>=2.2.0,<4",
+    # Capped below 3.0: pandas 3.0 changed string-column type inference (a
+    # numeric-looking string column now infers as "string" not "numeric"),
+    # which the dashboards integrity detector and its tests were written
+    # against. Revisit and lift the cap when adopting pandas 3 deliberately.
+    "pandas>=2.2.0,<3",
     "pyarrow>=23.0.1,<25",
     "trimesh>=4.0.0",
+    # trimesh's COLLADA loader is a thin wrapper over pycollada (imported as
+    # "collada"); without it trimesh.load() of a .dae raises ImportError and the
+    # BIM Hub DAE-to-GLB conversion silently degrades to serving the larger raw
+    # DAE. Required so the GLB path actually runs.
+    "pycollada>=0.8",
     "ezdxf>=0.18.0",
     "duckdb>=1.2.0,<2",
     "rapidfuzz>=3.0.0",
@@ -171,6 +180,11 @@ dev = [
     # single hung test into a reported failure so the run finishes and the
     # durations report points at the real slow spots.
     "pytest-timeout>=2.3.0",
+    # Splits the unit tree across the Backend CI shard matrix (--splits/--group)
+    # so the ~6300 mostly database-bound unit tests finish inside the job budget
+    # instead of being cancelled at the timeout on every push. Without a
+    # .test_durations file it splits by test count, which is enough here.
+    "pytest-split>=0.8.2",
     "httpx>=0.28.0",
     "factory-boy>=3.3.0",
     # Pinned exactly: the CI "ruff format --check" gate compares against the
@@ -342,6 +356,19 @@ testpaths = ["tests"]
 # package, never a stale ``pip install openconstructionerp`` in site-packages.
 pythonpath = ["."]
 asyncio_mode = "auto"
+# Restore a single shared event loop for the whole test session. These suites
+# were written against pytest-asyncio 0.21, where one session-wide loop was the
+# default, so many of them use module-scoped async fixtures that yield an
+# AsyncSession reused by every test in the module. pytest-asyncio 1.x defaults
+# each test and fixture to its own function-scoped loop, which left those
+# module-scoped connections bound to a loop that was already closed and
+# surfaced as "attached to a different loop" and "another operation is in
+# progress" cascades once the sharded gate actually ran the suite to
+# completion. Pinning both loop scopes to "session" puts every test and fixture
+# back on one loop. NullPool (set in conftest) still opens a fresh connection
+# per checkout, so nothing leaks across that shared loop.
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
 # Run serially. The suite shares one PostgreSQL database that conftest sets
 # up at import time, and the first user it registers is bootstrapped as the
 # admin every later test depends on. Under pytest-xdist each worker is a

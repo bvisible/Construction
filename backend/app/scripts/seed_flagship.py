@@ -10,8 +10,9 @@ SQLite). It restores a real CAD-to-BOQ project from committed assets:
     app/scripts/flagship_assets/house_plans.pdf      reference plan set
 
 It creates: the project (+ WGS84 geo anchor so it shows on the map), the IFC
-and RVT BIM models with their real converted elements and geometry, a DWG
-drawing entry, a costed BOQ whose positions carry real CWICR rates +
+and RVT BIM 3D models with their real converted elements and geometry, a DWG
+drawing entry in the dedicated DWG Takeoff module (never the BIM 3D Hub, since
+a 2D drawing has no mesh), a costed BOQ whose positions carry real CWICR rates +
 material/labour/equipment resource breakdowns, BIM<->BOQ links for every
 element in each priced group (bidirectional navigation), project resources,
 and the PDF plan set.
@@ -52,6 +53,152 @@ def _money(x: Any) -> str:
         return "0.00"
 
 
+def _dec(x: Any) -> Decimal:
+    try:
+        d = Decimal(str(x))
+    except Exception:  # noqa: BLE001
+        return Decimal("0")
+    if not d.is_finite():
+        return Decimal("0")
+    return d
+
+
+# Founder principle: "Все позиции мы делаем с ресурсами" - every BOQ position
+# must carry a resource buildup. The flagship positions ship raw CWICR
+# components in flagship.json, but those sum to whatever the source catalogue
+# row cost, not to the position's converted unit_rate. The BOQ resource
+# contract (boq/service.py) treats every leaf's ``unit_rate`` as a PER-UNIT
+# norm and re-derives the position rate as Sum(leaf.quantity * leaf.unit_rate);
+# for that to stay consistent the buildup must sum EXACTLY to the position
+# unit_rate. So we keep the real component names/codes/types but scale every
+# leaf by one deterministic factor so the buildup sums to the unit_rate, and
+# we flag the scaling transparently (never silently authoritative).
+_RES_TYPES = ("material", "labor", "equipment")
+
+
+def _normalize_type(raw: Any) -> str:
+    t = str(raw or "").strip().lower()
+    if t in _RES_TYPES:
+        return t
+    if t in ("plant", "machine", "equip"):
+        return "equipment"
+    if t in ("worker", "crew", "operator"):
+        return "labor"
+    return "material"
+
+
+def _build_resource_leaves(raw_resources: list[dict], unit_rate: Decimal) -> list[dict[str, Any]]:
+    """Return per-unit resource leaves that sum EXACTLY to ``unit_rate``.
+
+    Preserves the real CWICR component detail (name, code, type, unit) and its
+    natural material/labour/equipment proportions, but rescales every leaf so
+    Sum(quantity * unit_rate) == unit_rate, satisfying the BOQ resource
+    contract. When the source carries no usable components, falls back to a
+    transparent labour/material split that still sums to the rate so no
+    flagship position is ever stored without a buildup.
+    """
+    rate = _dec(unit_rate)
+    if rate <= 0:
+        return []
+
+    leaves: list[dict[str, Any]] = []
+    src_subtotal = Decimal("0")
+    for r in raw_resources or []:
+        if not isinstance(r, dict):
+            continue
+        qty = _dec(r.get("quantity"))
+        leaf_rate = _dec(r.get("unit_rate"))
+        sub = qty * leaf_rate
+        if sub <= 0:
+            continue
+        src_subtotal += sub
+        leaves.append(
+            {
+                "name": str(r.get("name") or "Component"),
+                "code": str(r.get("code") or ""),
+                "type": _normalize_type(r.get("type")),
+                "unit": str(r.get("unit") or ""),
+                "quantity": float(qty),
+                "unit_rate": leaf_rate,  # Decimal for now; scaled + stringified below
+            }
+        )
+
+    if not leaves or src_subtotal <= 0:
+        # Transparent fallback: labour 35% / material 65% of the unit rate,
+        # one leaf each (quantity 1), summing exactly to the rate. Flagged
+        # ``estimated`` so the split is never read as catalogue-grounded.
+        out: list[dict[str, Any]] = []
+        mat = (rate * Decimal("0.65")).quantize(Decimal("0.01"))
+        lab = rate - mat  # remainder keeps the pair penny-exact
+        for rtype, share_rate in (("labor", lab), ("material", mat)):
+            out.append(
+                {
+                    "name": f"{rtype.capitalize()} allowance",
+                    "code": "",
+                    "type": rtype,
+                    "unit": "ls",
+                    "quantity": 1.0,
+                    "unit_rate": _money(share_rate),
+                    "estimated": True,
+                }
+            )
+        return out
+
+    # Scale every leaf rate by one factor so the buildup sums to the unit rate,
+    # preserving each component's relative weight. ``quantity`` stays the real
+    # component quantity; the scale folds into the per-unit ``unit_rate``. Round
+    # each leaf's CONTRIBUTION (quantity * rate) to cents and absorb the residual
+    # into the largest leaf's rate (un-rounded) so the buildup is penny-exact and
+    # Sum(quantity * unit_rate) == unit_rate holds without float drift.
+    factor = rate / src_subtotal
+    booked = Decimal("0")
+    biggest_idx = 0
+    biggest_sub = Decimal("-1")
+    for i, leaf in enumerate(leaves):
+        q = _dec(leaf["quantity"])
+        sub = (q * leaf["unit_rate"] * factor).quantize(Decimal("0.01"))
+        leaf["_sub"] = sub
+        leaf["scaled_to_rate"] = True
+        booked += sub
+        if sub > biggest_sub:
+            biggest_sub = sub
+            biggest_idx = i
+    # Push the rounding residual onto the largest leaf's contribution.
+    leaves[biggest_idx]["_sub"] += rate - booked
+    # Derive each leaf's per-unit rate from its (now exact) contribution.
+    for leaf in leaves:
+        q = _dec(leaf["quantity"])
+        if q > 0:
+            leaf["unit_rate"] = format(leaf["_sub"] / q, "f")
+        else:
+            # Degenerate zero-quantity component: carry the money as a 1-unit
+            # leaf so its contribution still counts toward the rate.
+            leaf["quantity"] = 1.0
+            leaf["unit_rate"] = _money(leaf["_sub"])
+        leaf.pop("_sub", None)
+    return leaves
+
+
+def _resource_rollup(resources: list[dict[str, Any]]) -> dict[str, dict[str, float]]:
+    """Roll resource leaves up to a per-type ``{total, pct}`` map for the
+    material / labour / equipment badge on the BOQ, mirroring the assembly and
+    ai-estimator apply paths so the flagship renders the same M/L/E split.
+    """
+    totals: dict[str, Decimal] = {}
+    for r in resources:
+        if not isinstance(r, dict):
+            continue
+        rtype = _normalize_type(r.get("type"))
+        sub = _dec(r.get("quantity")) * _dec(r.get("unit_rate"))
+        totals[rtype] = totals.get(rtype, Decimal("0")) + sub
+    subtotal = sum(totals.values(), Decimal("0"))
+    out: dict[str, dict[str, float]] = {}
+    if subtotal > 0:
+        for rtype, ttl in totals.items():
+            out[rtype] = {"total": float(ttl), "pct": float((ttl / subtotal) * Decimal("100"))}
+    return out
+
+
 def _spec() -> dict | None:
     if not SPEC_PATH.exists():
         return None
@@ -68,6 +215,7 @@ async def _purge(session: AsyncSession, pid: uuid.UUID) -> None:
     """
     from app.modules.bim_hub.models import BIMElement, BIMModel, BOQElementLink
     from app.modules.boq.models import BOQ, Position
+    from app.modules.dwg_takeoff.models import DwgDrawing
     from app.modules.projects.models import Project
     from app.modules.resources.models import Resource
 
@@ -81,12 +229,370 @@ async def _purge(session: AsyncSession, pid: uuid.UUID) -> None:
     if model_ids:
         await session.execute(delete(BIMElement).where(BIMElement.model_id.in_(model_ids)))
         await session.execute(delete(BIMModel).where(BIMModel.id.in_(model_ids)))
+    # DWG Takeoff drawings cascade on the project delete below, but a prior
+    # install may have seeded the flagship DWG as a BIM model under the same
+    # deterministic id; the BIMModel delete above already cleared that. Drop
+    # any DWG drawing rows explicitly too so a forced re-seed never PK-collides.
+    await session.execute(delete(DwgDrawing).where(DwgDrawing.project_id == pid))
     # Resources FK is ON DELETE SET NULL, so drop them explicitly.
     await session.execute(delete(Resource).where(Resource.home_project_id == pid))
     proj = await session.get(Project, pid)
     if proj is not None:
         await session.delete(proj)  # cascades BOQ (-> positions), GeoAnchor, Document
     await session.flush()
+
+
+def _flagship_template(spec: dict) -> Any:
+    """Build a minimal ``DemoTemplate`` for the flagship so the shared module
+    seeders (``_seed_module_data`` -> ``_generate_module_data``) can populate
+    its operational modules (RFIs, change orders, daily diary, safety, NCRs,
+    compliance, procurement, risks, tendering, meetings, submittals, ...).
+
+    The generators read only a handful of template fields: ``sections`` (to
+    derive trades + representative item titles), ``tender_companies`` (firms),
+    ``address`` (country code), ``project_name``, ``currency``,
+    ``total_months`` and ``project_metadata``. We map those off the baked spec
+    so the derived data cites the flagship's real trades and addresses.
+    """
+    from app.core.demo_projects import DemoTemplate  # local import: avoid cycle
+
+    pj = spec["project"]
+    addr = pj.get("address") or {}
+    template_addr = {
+        "street": addr.get("line1", ""),
+        "city": addr.get("city", ""),
+        "postcode": addr.get("postcode", ""),
+        "country": addr.get("country", ""),
+        "lat": addr.get("lat"),
+        "lng": addr.get("lng"),
+    }
+
+    # Map BOQ sections -> SectionDef tuples
+    # (code, title, classification, [ (ordinal, desc, unit, qty, rate, class) ]).
+    sections: list[tuple] = []
+    for sec in spec["boq"]["sections"]:
+        items: list[tuple] = []
+        for p in sec.get("positions", []):
+            items.append(
+                (
+                    p.get("ordinal", ""),
+                    p.get("description", ""),
+                    p.get("unit", "ea"),
+                    float(_dec(p.get("quantity", 0))),
+                    float(_dec(p.get("unit_rate", 0))),
+                    p.get("classification", {}),
+                )
+            )
+        sections.append((sec.get("ordinal", ""), sec.get("title", ""), sec.get("classification", {}), items))
+
+    # A couple of plausible bidders so the tendering module and the firm-derived
+    # records (subcontract RFIs, NCRs, submittals) have companies to cite.
+    tender_companies = [
+        ("Summit Residential Builders", "estimating@summitresidential.example", 1.00),
+        ("Front Range Construction", "bids@frontrangeconstruction.example", 1.04),
+        ("Mile High General Contractors", "tenders@milehighgc.example", 0.97),
+    ]
+
+    return DemoTemplate(
+        demo_id=FLAGSHIP_DEMO_ID,
+        project_name=pj.get("name", "Residential House - Reference Build"),
+        project_description=pj.get("description", ""),
+        region="United States",
+        classification_standard="masterformat",
+        currency=pj.get("currency", "USD"),
+        locale="en",
+        validation_rule_sets=["masterformat", "boq_quality"],
+        boq_name=spec["boq"].get("name", "Construction Estimate"),
+        boq_description=spec["boq"].get("description", ""),
+        boq_metadata={},
+        sections=sections,
+        markups=[],
+        total_months=9,
+        tender_name="Residential House - Main Works",
+        tender_companies=tender_companies,
+        project_metadata={
+            "client": "Riverside Drive Holdings",
+            "architect": "Denver Design Studio",
+            "structural_engineer": "Rocky Mountain Structures",
+            "main_contractor": "Summit Residential Builders",
+        },
+        address=template_addr,
+    )
+
+
+async def _seed_flagship_modules(
+    session: AsyncSession,
+    pid: uuid.UUID,
+    owner: uuid.UUID,
+    spec: dict,
+) -> dict:
+    """Populate the flagship's per-project operational modules.
+
+    Reuses the shared demo seeders so the flagship hub (RFIs, change orders,
+    daily diary, safety, NCRs, compliance, procurement, risks, tendering, ...)
+    arrives populated like every showcase project. Fully resilient and
+    idempotent: it skips when the flagship already has RFIs (a representative
+    module) so a non-forced re-run never duplicates rows, and any failure is
+    swallowed so a missing/disabled module never aborts the flagship install.
+    """
+    try:
+        from app.core.demo_projects import _seed_module_data
+        from app.modules.rfi.models import RFI
+    except Exception:  # noqa: BLE001 - module set unavailable; skip decoration
+        logger.debug("flagship: shared module seeders unavailable, skipping", exc_info=True)
+        return {"status": "skipped", "reason": "seeders unavailable"}
+
+    # Idempotency guard: if the flagship already carries RFIs, the modules were
+    # seeded on a prior run. Re-seeding would duplicate (rows use random ids),
+    # so skip. A forced re-seed (_purge) does not clear these decoration rows,
+    # so this guard also prevents force-reseed duplication.
+    try:
+        existing = (await session.execute(select(RFI.id).where(RFI.project_id == pid).limit(1))).scalar_one_or_none()
+        if existing is not None:
+            return {"status": "already", "reason": "modules present"}
+    except Exception:  # noqa: BLE001 - table may not exist; fall through to seed
+        logger.debug("flagship: RFI presence check failed, attempting seed", exc_info=True)
+
+    try:
+        template = _flagship_template(spec)
+        result = await _seed_module_data(session, pid, owner, FLAGSHIP_DEMO_ID, template)
+        await session.flush()
+        return {"status": "ok", "modules": result}
+    except Exception:  # noqa: BLE001 - never break the flagship install
+        logger.warning("flagship: operational module seeding failed (non-fatal)", exc_info=True)
+        return {"status": "error"}
+
+
+async def _seed_flagship_schedule_risk_co(
+    session: AsyncSession,
+    pid: uuid.UUID,
+    owner: uuid.UUID,
+    spec: dict,
+) -> dict:
+    """Seed the flagship's programme, risk register, change orders and a
+    validation report.
+
+    install_flagship builds the BOQ, BIM and operational modules, but unlike the
+    showcase installer (install_demo_project) it never laid down a schedule, a
+    risk register, change orders or a validation report, so those pages opened
+    empty on the reference project users land on first. This fills them from the
+    flagship's own sections so the figures read against its real trades and
+    total, and runs the real validation engine over its BOQ so the traffic-light
+    dashboard (the platform's signature feature) is populated. Fully idempotent:
+    it skips when a schedule already exists, and every failure is swallowed so a
+    missing or disabled module never aborts the flagship install.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    try:
+        from app.core.demo_projects import _generate_module_data
+        from app.modules.changeorders.models import ChangeOrder, ChangeOrderItem
+        from app.modules.risk.models import RiskItem
+        from app.modules.schedule.models import Activity, Schedule
+    except Exception:  # noqa: BLE001 - module set unavailable; skip decoration
+        logger.debug("flagship: schedule/risk/co models unavailable, skipping", exc_info=True)
+        return {"status": "skipped", "reason": "models unavailable"}
+
+    # Idempotency guard: a schedule already present means this ran before.
+    try:
+        existing = (
+            await session.execute(select(Schedule.id).where(Schedule.project_id == pid).limit(1))
+        ).scalar_one_or_none()
+        if existing is not None:
+            return {"status": "already", "reason": "schedule present"}
+    except Exception:  # noqa: BLE001 - table may not exist; fall through to seed
+        logger.debug("flagship: schedule presence check failed, attempting seed", exc_info=True)
+
+    counts = {"activities": 0, "risks": 0, "change_orders": 0, "validation": 0}
+    try:
+        template = _flagship_template(spec)
+        base = datetime(2026, 4, 1)
+        months = max(int(getattr(template, "total_months", 9) or 9), 1)
+        cur = template.currency or "USD"
+
+        def _sec_total(sec: tuple) -> float:
+            items = sec[3] if len(sec) > 3 else []
+            return sum(float(it[3]) * float(it[4]) for it in items)
+
+        # ── Programme + one activity per BOQ section (front-loaded overlap) ──
+        secs = list(getattr(template, "sections", []) or [])
+        schedule = Schedule(
+            id=uuid.uuid4(),
+            project_id=pid,
+            name=f"Programme - {template.project_name}",
+            schedule_type="master",
+            description=f"{months}-month construction programme",
+            start_date=base.strftime("%Y-%m-%d"),
+            end_date=(base + timedelta(days=months * 30)).strftime("%Y-%m-%d"),
+            status="active",
+            created_by=owner,
+            metadata_={},
+        )
+        session.add(schedule)
+        await session.flush()
+
+        grand = sum(_sec_total(s) for s in secs) or 1.0
+        now = datetime.now()
+        start = base
+        prev_end = base
+        prev_id = None
+        for i, sec in enumerate(secs):
+            sec_total = _sec_total(sec)
+            n_items = len(sec[3]) if len(sec) > 3 else 0
+            pct = sec_total / grand
+            dur = max(14, int(months * 30 * pct))
+            if i > 0:
+                # Overlap each phase with the previous one (realistic build
+                # sequence) but never start before the programme window opens.
+                start = max(base, prev_end - timedelta(days=int(dur * 0.35)))
+            end = start + timedelta(days=dur)
+            prev_end = end
+            # Progress relative to the real current date so finished phases read
+            # complete and future ones planned - no false "delayed" badges from
+            # backdated activities sitting at low progress.
+            if end <= now:
+                prog = 100
+            elif start >= now:
+                prog = 0
+            else:
+                prog = max(0, min(99, int((now - start).days / max(dur, 1) * 100)))
+            status = "completed" if prog >= 100 else "in_progress" if prog > 0 else "planned"
+            critical = i % 3 == 0
+            session.add(
+                Activity(
+                    id=uuid.uuid4(),
+                    schedule_id=schedule.id,
+                    name=(sec[1] if len(sec) > 1 else "") or f"Phase {i + 1}",
+                    description=f"{n_items} pos, {sec_total:,.0f} {cur}",
+                    wbs_code=(sec[0] if sec else "") or str(i + 1),
+                    start_date=start.strftime("%Y-%m-%d"),
+                    end_date=end.strftime("%Y-%m-%d"),
+                    duration_days=dur,
+                    # progress_pct is String(10) in the schema; asyncpg is strict,
+                    # so it must be a str, not an int.
+                    progress_pct=str(prog),
+                    status=status,
+                    color="#ef4444" if critical else "#0071e3",
+                    dependencies=[str(prev_id)] if prev_id else [],
+                    boq_position_ids=[],
+                    is_critical=critical,
+                    sort_order=i + 1,
+                    metadata_={"is_critical": critical},
+                )
+            )
+            await session.flush()
+            prev_id = (
+                await session.execute(
+                    select(Activity.id)
+                    .where(Activity.schedule_id == schedule.id)
+                    .order_by(Activity.sort_order.desc())
+                    .limit(1)
+                )
+            ).scalar_one()
+            counts["activities"] += 1
+
+        # ── Risk register + change orders, derived from the same template ───
+        generated = _generate_module_data(template, pid, owner, FLAGSHIP_DEMO_ID, base)
+
+        for r in generated.get("risks", []):
+            r_code, r_title, r_desc, r_cat, r_prob, r_cost, r_days, r_sev, r_mitig, r_status = r
+            risk_score = round(r_prob * (r_cost + r_days * 5000), 2)
+            session.add(
+                RiskItem(
+                    id=uuid.uuid4(),
+                    project_id=pid,
+                    code=r_code,
+                    title=r_title,
+                    description=r_desc,
+                    category=r_cat,
+                    probability=str(r_prob),
+                    impact_cost=str(round(r_cost, 2)),
+                    impact_schedule_days=r_days,
+                    impact_severity=r_sev,
+                    risk_score=str(risk_score),
+                    status=r_status,
+                    mitigation_strategy=r_mitig,
+                    contingency_plan="",
+                    owner_name="Project Manager",
+                    response_cost="0",
+                    currency=cur,
+                    metadata_={},
+                )
+            )
+            counts["risks"] += 1
+        await session.flush()
+
+        now_iso = datetime.now(UTC).isoformat()
+        for co in generated.get("change_orders", []):
+            co_code, co_title, co_desc, co_reason, co_status, co_cost, co_days, co_items = co
+            change = ChangeOrder(
+                id=uuid.uuid4(),
+                project_id=pid,
+                code=co_code,
+                title=co_title,
+                description=co_desc,
+                reason_category=co_reason,
+                status=co_status,
+                submitted_by=str(owner),
+                approved_by=str(owner) if co_status == "approved" else None,
+                submitted_at=now_iso,
+                approved_at=now_iso if co_status == "approved" else None,
+                cost_impact=str(round(co_cost, 2)),
+                schedule_impact_days=co_days,
+                currency=cur,
+                metadata_={},
+            )
+            session.add(change)
+            await session.flush()
+            for idx, item in enumerate(co_items):
+                ci_desc, ci_type, ci_oq, ci_nq, ci_or, ci_nr, ci_unit = item
+                delta = round(float(ci_nq) * float(ci_nr) - float(ci_oq) * float(ci_or), 2)
+                session.add(
+                    ChangeOrderItem(
+                        id=uuid.uuid4(),
+                        change_order_id=change.id,
+                        description=ci_desc,
+                        change_type=ci_type,
+                        original_quantity=ci_oq,
+                        new_quantity=ci_nq,
+                        original_rate=ci_or,
+                        new_rate=ci_nr,
+                        cost_delta=str(delta),
+                        unit=ci_unit,
+                        sort_order=idx + 1,
+                        metadata_={},
+                    )
+                )
+            counts["change_orders"] += 1
+        await session.flush()
+
+        # ── Validation report (run the real engine over the flagship BOQ) ───
+        # Mirrors install_demo_project: exercises product code so the flagship's
+        # validation dashboard - the platform's signature traffic-light view -
+        # is never empty. Resilient: a validation hiccup never aborts the seed.
+        try:
+            from app.core.validation.rules import register_builtin_rules
+            from app.modules.boq.models import BOQ
+            from app.modules.validation.service import ValidationModuleService
+
+            boq_id = (await session.execute(select(BOQ.id).where(BOQ.project_id == pid).limit(1))).scalar_one_or_none()
+            if boq_id is not None:
+                register_builtin_rules()
+                rule_sets = list(getattr(template, "validation_rule_sets", None) or ["boq_quality"])
+                await ValidationModuleService(session).run_validation(
+                    project_id=pid,
+                    boq_id=boq_id,
+                    rule_sets=rule_sets,
+                    user_id=owner,
+                )
+                counts["validation"] = 1
+        except Exception:  # noqa: BLE001 - validation hiccup never aborts install
+            logger.warning("flagship: validation report not seeded (non-fatal)", exc_info=True)
+
+        return {"status": "ok", **counts}
+    except Exception:  # noqa: BLE001 - never break the flagship install
+        logger.warning("flagship: schedule/risk/co seeding failed (non-fatal)", exc_info=True)
+        return {"status": "error", **counts}
 
 
 async def install_flagship(
@@ -101,9 +607,10 @@ async def install_flagship(
         return {"status": "skipped", "reason": "no flagship assets"}
 
     from app.modules.bim_hub.file_storage import save_geometry
-    from app.modules.bim_hub.models import BIMElement, BIMModel, BOQElementLink
+    from app.modules.bim_hub.models import BIMElement, BIMModel, BOQElementLink, is_non_3d_format
     from app.modules.boq.models import BOQ, Position
     from app.modules.documents.models import Document
+    from app.modules.dwg_takeoff.models import DwgDrawing
     from app.modules.geo_hub.models import GeoAnchor
     from app.modules.projects.models import Project
     from app.modules.resources.models import Resource
@@ -126,6 +633,10 @@ async def install_flagship(
             name=pj["name"],
             description=pj["description"],
             region="US",
+            # The column defaults to "DE"; set it from the baked US address so a
+            # US (Denver) reference project does not look German to the country
+            # rules and the AIA G702/G703 payment eligibility logic.
+            country_code=(addr.get("country_code") or "US"),
             classification_standard="masterformat",
             currency=pj.get("currency", "USD"),
             locale="en",
@@ -154,11 +665,48 @@ async def install_flagship(
         )
 
     # ── BIM models + elements + geometry ────────────────────────────────
+    # Only true 3D formats (IFC, RVT, ...) become BIM 3D models. 2D drawing
+    # formats (DWG/DXF/DGN) belong to the dedicated DWG Takeoff module: they
+    # carry no 3D mesh, so seeding them as ready BIM models made the 3D viewer
+    # request geometry that can never exist and fire the "marked ready but its
+    # 3D geometry file is no longer on the server" 404 on a fresh install.
     elem_uuid: dict[tuple[str, str], uuid.UUID] = {}
     model_count = 0
     elem_count = 0
+    dwg_count = 0
     for m in spec["models"]:
         mid = uuid.UUID(m["id"])
+
+        # Route 2D drawings to the DWG Takeoff module, never the BIM 3D Hub.
+        if is_non_3d_format(m.get("model_format")):
+            fmt = (m.get("model_format") or "dwg").lower().lstrip(".")
+            session.add(
+                DwgDrawing(
+                    id=mid,
+                    project_id=pid,
+                    name=m["name"],
+                    filename=f"{m['name']}.{fmt}",
+                    file_format=fmt,
+                    # No source file ships with the flagship assets - this is a
+                    # metadata-only reference row so the DWG Takeoff module
+                    # lists the drawing. Status "uploaded" (not "ready") keeps
+                    # the UI honest: there are no parsed entities to render yet.
+                    file_path="",
+                    size_bytes=0,
+                    status="uploaded",
+                    discipline=m.get("discipline"),
+                    created_by=str(owner),
+                    metadata_={
+                        "source": "flagship_seed",
+                        "seed_reference_only": True,
+                        "element_count": m.get("element_count", 0),
+                    },
+                )
+            )
+            dwg_count += 1
+            await session.flush()
+            continue
+
         canonical_key: str | None = None
         if m.get("geometry_asset"):
             gpath = ASSETS / m["geometry_asset"]
@@ -169,12 +717,12 @@ async def install_flagship(
         # geometry blob was written can be "ready" - the geometry endpoint
         # treats a "ready" model with no blob as a data-loss error and
         # returns the alarming `geometry_missing` 404 ("marked ready but its
-        # 3D geometry file is no longer on the server"). The flagship DWG is
-        # a data-only drawing with no bundled mesh; mark it "needs_converter"
-        # so the same endpoint returns the honest `geometry_absent` state
-        # ("no 3D geometry: the converter for its format is not available")
-        # instead of pretending geometry was lost. The BOQ "Linked Geometry"
-        # preview reads the same endpoint and so becomes honest too.
+        # 3D geometry file is no longer on the server"). A 3D model with no
+        # bundled mesh is marked "needs_converter" so the same endpoint
+        # returns the honest `geometry_absent` state ("no 3D geometry: the
+        # converter for its format is not available") instead of pretending
+        # geometry was lost. The BOQ "Linked Geometry" preview reads the same
+        # endpoint and so becomes honest too.
         model_status = "ready" if canonical_key else "needs_converter"
         session.add(
             BIMModel(
@@ -229,6 +777,7 @@ async def install_flagship(
     sort = 0
     pos_links: list[tuple[uuid.UUID, list[str]]] = []
     npos = 0
+    npos_res = 0
     for sec in boq["sections"]:
         sec_id = _u(boq["id"], "sec", sec["ordinal"])
         session.add(
@@ -261,6 +810,15 @@ async def install_flagship(
                     eu = elem_uuid.get((grp["model_id"], sid))
                     if eu:
                         el_ids.append(str(eu))
+            # Founder principle: every position carries a resource buildup.
+            # Re-shape the raw CWICR components into per-unit leaves that sum
+            # exactly to the unit_rate (the BOQ resource contract), and roll
+            # them up to the M/L/E badge map - same shape the assembly and
+            # ai-estimator apply paths write.
+            unit_rate_dec = _dec(p.get("unit_rate", 0))
+            res_leaves = _build_resource_leaves(p.get("resources", []), unit_rate_dec)
+            res_breakdown = _resource_rollup(res_leaves)
+            npos_res += 1 if res_leaves else 0
             session.add(
                 Position(
                     id=pid_pos,
@@ -286,7 +844,11 @@ async def install_flagship(
                         "cost_item_id": p.get("cwicr_item_id"),
                         "cwicr_code": p.get("cwicr_code"),
                         "cwicr_description": p.get("cwicr_description"),
-                        "resources": p.get("resources", []),
+                        "resources": res_leaves,
+                        "resource_breakdown": res_breakdown,
+                        # Keep the unscaled source components for provenance so a
+                        # reviewer can see the original CWICR cost driver detail.
+                        "resources_source": p.get("resources", []),
                         "source": "cad_import",
                         "linked_groups": p.get("link_groups", []),
                     },
@@ -368,15 +930,31 @@ async def install_flagship(
         except Exception:  # noqa: BLE001 - PDF is non-critical
             logger.warning("flagship: PDF attach skipped", exc_info=True)
 
+    # ── operational modules (RFIs, change orders, daily diary, safety, ...) ─
+    # Make the flagship hub as rich as the showcase projects. Wrapped so a
+    # failure never breaks the core install; flushed (not committed) so it
+    # lands in the single transaction below.
+    modules_result = await _seed_flagship_modules(session, pid, owner, spec)
+
+    # ── programme, risk register and change orders ──────────────────────
+    # The operational seeder above does not lay these down, so the reference
+    # project opened on Schedule/Risks/Change Orders empty. Seed them from the
+    # flagship's own sections. Same single transaction; non-fatal on failure.
+    schedule_result = await _seed_flagship_schedule_risk_co(session, pid, owner, spec)
+
     await session.commit()
     result = {
         "status": "ok",
         "project_id": str(pid),
         "models": model_count,
         "elements": elem_count,
+        "dwg_drawings": dwg_count,
         "positions": npos,
+        "positions_with_resources": npos_res,
         "links": nlinks,
         "resources": len(spec.get("resources", [])),
+        "modules": modules_result,
+        "schedule_risk_co": schedule_result,
     }
     logger.info("Flagship installed: %s", result)
     return result

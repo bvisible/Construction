@@ -5,6 +5,55 @@ All notable changes to OpenConstructionERP are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [7.5.0] - 2026-06-10
+
+### Added
+
+- Recognition on scanned drawings. The takeoff Recognize tool now reads scanned floor plans that have no vector layer, detecting room outlines and wall lines from the image, so a paper-scan PDF returns usable measurement candidates instead of nothing. Vector PDFs keep using the precise vector path, so nothing changes for drawings that already carry geometry.
+- Edit measurements directly on the drawing. You can select a placed measurement and reshape it on the canvas: drag a vertex, pull an edge to add a point, move the whole shape, or reposition a count marker, with the value updating live as you drag. The server re-derives the billed quantity on save, so an on-canvas edit can never inflate a number.
+- Save the marked-up PDF. A new Save PDF button in the takeoff toolbar exports the drawing with your measurements and annotations baked into the file.
+- Cost Benchmarks from your own projects. The benchmarks page now compares a project against the real distribution of your own portfolio, cost per square metre by currency, and shows where the project sits as a percentile. It falls back to the industry reference when you do not yet have enough priced projects, and it never mixes currencies or invents a number.
+- A project picker on the dashboard quick-upload, so a dropped file can go to any project without leaving the dashboard.
+
+### Fixed
+
+- Downloads in the file manager work again. Files are now fetched with your sign-in, so a download no longer fails with a "you need to log in" or "file not available" message. Every file in a project downloads, including DWG and IFC files and the entries that previously returned a not-found error.
+- The Estimate Builder is clearly marked as beta, in the menu and inside the module, with a short note that its grouping and matching are still maturing while every rate still comes from your own cost database.
+- A clearer message when a CAD or BIM file converts but contains no building elements, in place of the misleading "converter not available" text.
+- Faster, quieter startup. Two demo seeders that re-ran on every boot and logged an error are now properly idempotent, so a restart is quicker and the log stays clean.
+
+## [7.4.0] - 2026-06-10
+
+### Added
+
+- Real site photos everywhere. Every example project now opens with real construction photos in its gallery, and the dashboard carries a "Latest site photos" strip that pulls the newest photos across your projects with the project name and date. The placeholder swatches that used to fill the gallery are gone, so a photo opens to a real image instead of a blank tile.
+- Point Cloud, in beta. A new reality-capture page registers laser scan, photogrammetry and LIDAR clouds against the project, with a scan registry and direct-to-storage ingest. The cloud viewer, model registration and deviation analysis follow in later releases.
+- Demo data for every module that used to start empty. Cost models, management-of-change entries, tender packages, takeoff measurements, accommodation, markups, the resource catalogue, BIM federations and clash runs all arrive populated, so each screen shows real example data out of the box.
+
+### Fixed
+
+- Cross-module links now open the real file. A takeoff measurement or a markup opened from the markups hub lands on the actual drawing PDF with the measurement or annotation in view, instead of an empty "file not found" viewer. The cause was twofold: the example documents pointed at files that were never written to disk, and two deep links carried the wrong address. Both are corrected and verified end to end on a fresh install.
+- The AI Estimate Builder no longer fails when you confirm the parameter sheet. Confirming the parameters now reaches the work-package board reliably. A single database session was being used by several lookups at once and crashed the request, which is fixed by running the lookups in sequence.
+- Quality pass on the accommodation, formwork, closeout and markups modules: charge edit and delete on accommodation, currency inheritance, reuse caps on formwork, and a completeness count on closeout that no longer overstates progress.
+
+## [7.3.0] - 2026-06-08
+
+### Added
+
+- A schedule-quality validation pack with seven checks for project schedules: missing logic links, dangling activities, negative or excessive lag, hard date constraints that fight the logic, and out-of-sequence progress among them. Schedules now go through the same traffic-light validation as a BOQ or a BIM import, so a weak schedule is flagged instead of trusted.
+- Self-explaining modules. A shared set of in-app guidance pieces now runs across the platform: confidence badges, suggestion chips, plain-language error states, an inline glossary tooltip and consistent grid headers. The first wave of construction glossary terms landed in all languages so the same word means the same thing on every screen.
+
+### Changed
+
+- Interface text, documentation and code comments were swept to neutral, format-level names (IFC, DWG, RVT, GAEB, NRM) rather than specific product names, and a repository check keeps new contributions on the same footing.
+
+### Fixed
+
+- Grouping and filtering on uploaded IFC models in the BIM viewer line up with the geometry again. Each shape is matched to its element by a stable id, so picking a storey, a category or an entity type isolates exactly those elements and the view stays on that selection instead of snapping back to the whole model a moment later. Verified end to end on a real IFC model: a wall, member or storey filter keeps just that subset on screen and holds.
+- The BIM upload picker accepts RVT, IFC and DWG only now, and a dropped DWG is routed straight to the Drawings takeoff where it belongs instead of failing as an unsupported 3D model.
+- Appending a maintenance entry to an asset now verifies you have access to that asset's project first, closing a gap where that one endpoint skipped the per-project access check.
+- More interface text is translated: the converter install progress labels and a validation page introduction that were still showing in English.
+
 ## [7.2.0] - 2026-06-08
 
 ### Fixed
@@ -281,7 +330,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Removed the coming-soon connector teasers (Microsoft 365, Google Workspace, WhatsApp, and the Procore and MS Project marketplace placeholders) so nothing in the interface is a dead end.
+- Removed the coming-soon connector teasers (Microsoft 365, Google Workspace, WhatsApp, and the construction management platform and MS Project marketplace placeholders) so nothing in the interface is a dead end.
 
 ## [6.3.0] - 2026-06-01
 
@@ -1491,7 +1540,7 @@ Single head at `v3098`.
 - **Request correlation IDs.** New `app/middleware/request_id.py` (`RequestIDMiddleware`) generates `uuid4().hex[:16]` (or honours a client-supplied `X-Request-ID` matching `^[A-Za-z0-9_-]{1,64}$`), stores it in a `ContextVar`, echoes it on every response. Wired into the root logger via `RequestIDLogFilter` so every log line in the process gets the request ID injected. Format prefix is now `[%(request_id)s]`.
 - **Slow-query logging.** SQLAlchemy `before_cursor_execute` / `after_cursor_execute` event listeners measure each statement; anything over `OE_SLOW_QUERY_MS` (default 500 ms) is logged at WARNING with structured `extra={elapsed_ms, statement[:200], executemany}`. Covers both async and sync engines.
 - **`/api/health` deepened.** Adds `alembic_head_matches` (script head vs DB current rev) and `frontend_dist_present` (`_frontend_dist/index.html` exists). Either being false flips top-level `status` to `"degraded"` (still 200 - load balancers can probe without page-flapping).
-- **Operator runbook.** New `docs/RUNBOOK.md` (156 lines): service basics, restart / logs / health probes, deploy procedure, sqlite backup-restore, alembic `DATABASE_SYNC_URL` gotcha, rollback, common-500 causes. Extracted from internal memory so on-call doesn't need Claude or Artem to recover the box.
+- **Operator runbook.** New `docs/RUNBOOK.md` (156 lines): service basics, restart / logs / health probes, deploy procedure, sqlite backup-restore, alembic `DATABASE_SYNC_URL` gotcha, rollback, common-500 causes. Extracted from internal memory so on-call can recover the box without paging the original author.
 - **Client-error sink endpoint.** New module `oe_client_errors`: `POST /api/v1/client-errors/` accepts anonymised payloads (length-capped: message ≤ 2048, ≤ 64 stack lines, ua / path ≤ 512), per-IP 30/min rate limit, logs at WARNING with structured `extra`. Frontend `errorLogger.ts` now POSTs alongside localStorage (fire-and-forget, `keepalive: true`, gated by `VITE_ENABLE_ERROR_REPORTING`).
 - **FK indexes migration (`v3096_round3_fk_indexes`).** Adds 6 missing indexes: `oe_contracts_progress_claim_line.contract_line_id`, `oe_clash_issue.{first_seen,last_seen,resolved}_run_id`, `oe_crm_opportunity.lost_reason_code`, `oe_equipment_work_order.schedule_id`. Inspector-guarded so re-running is safe. The other 8 audit-flagged FKs turned out to be already covered by composite indexes.
 
@@ -1796,11 +1845,11 @@ Identical to 3.12.1: no migration steps required. Existing 3.12.x installs upgra
 
 - /match-elements: the "How matching works - read this first" explainer is now collapsed by default with a white background, keeping the wizard's first screen tidy. Click to expand the full 8-stage tour.
 
-## [3.10.0] - 2026-05-19 · /files ACC-grade wave + Clash collab/metadata + match-elements polish
+## [3.10.0] - 2026-05-19 · /files enterprise-CDE-grade wave + Clash collab/metadata + match-elements polish
 
 ### Added
 
-- /files: 10 new sub-modules bringing the document hub to ACC/Aconex parity - `file_versions` (rollback + diff metadata), `file_trash` (30-day soft-delete + recycle bin route), `file_search` (cross-project + content search, /files/search), `file_tags` (polymorphic tags + bulk tag drawer), `file_saved_views` (per-project filter snapshots), `file_distribution` (named distribution lists + bulk recipients), `file_comments` (threaded comments anchored to file_kind+file_id), `file_references` (referenced-in panel from BOQ/Punch/RFI/etc.), `file_transmittals` (formal transmittal wizard + PDF cover, /files/transmittals), `file_approvals` (multi-step approval drawer with stamp burn + sidecar JSON fallback).
+- /files: 10 new sub-modules bringing the document hub to construction-CDE-platform parity - `file_versions` (rollback + diff metadata), `file_trash` (30-day soft-delete + recycle bin route), `file_search` (cross-project + content search, /files/search), `file_tags` (polymorphic tags + bulk tag drawer), `file_saved_views` (per-project filter snapshots), `file_distribution` (named distribution lists + bulk recipients), `file_comments` (threaded comments anchored to file_kind+file_id), `file_references` (referenced-in panel from BOQ/Punch/RFI/etc.), `file_transmittals` (formal transmittal wizard + PDF cover, /files/transmittals), `file_approvals` (multi-step approval drawer with stamp burn + sidecar JSON fallback).
 - /files page: ISO 19650 naming-violation banner, Save-view button, extension overflow popover (RVT/RFA/NWD/DWF/DOCX/MPP/PPTX/ZIP), Recently Viewed strip, keyboard-shortcut sheet, bulk soft-delete & bulk-tag bar, drag-drop into folder cards, FileTree with SavedViews rail and Trash node.
 - Clash A2/A3: per-result collaboration locks (`a1b2c3d4e5f6_add_collab_lock_table`) and result-level metadata (`v3048_clash_a2_metadata`, `v3049_clash_collab`) - assignment, status, severity ladder.
 - Sidebar: subdued "beta" badges on recently shipped modules.
@@ -3454,7 +3503,7 @@ Phase 3 + Phase 4 of vector match + concurrent-match perf hardening, shipped tog
 ### Fixed
 - **GAEB import / export - 8 concrete fixes uncovered by deep audit.**
   - Encoding sniff on import: `decodeXmlBuffer()` now reads the `<?xml encoding=...?>` prolog and uses the matching `TextDecoder`. Legacy DACH GAEB files in ISO-8859-1/Windows-1252 no longer corrupt ä/ö/ü/ß into `U+FFFD`.
-  - Unit codes: `GAEB_UNIT_CODES` map translates internal canonical units (`m2`/`m3`/`pcs`/`lsum`/`hr`) to GAEB DA short codes (`m²`/`m³`/`Stk`/`psch`/`Std`) on export, with reverse map on import. RIB iTWO / Sirados / ORCA round-trip works.
+  - Unit codes: `GAEB_UNIT_CODES` map translates internal canonical units (`m2`/`m3`/`pcs`/`lsum`/`hr`) to GAEB DA short codes (`m²`/`m³`/`Stk`/`psch`/`Std`) on export, with reverse map on import. Round-trip with common DACH GAEB tools works.
   - Hierarchy: `buildSectionTree()` walks dotted ordinals and creates arbitrarily-deep section nodes with recursive `renderSection()`. Multi-level Los → Titel → Position structures no longer flatten on export.
   - Line breaks: import-side `normaliseRunWhitespace()` collapses only horizontal whitespace, preserves `\n`. Export emits one `<Text>` per paragraph instead of one blob.
   - Version & namespace: emits spec-compliant `<VersMajor>3</VersMajor><VersMinor>3</VersMinor>` (was non-standard `<Version>3.3</Version>`); namespace correctly uses `DA81` for X81, `DA83` for X83 etc.
@@ -3564,7 +3613,7 @@ Phase 3 + Phase 4 of vector match + concurrent-match perf hardening, shipped tog
 ## [2.6.18] - 2026-04-28
 
 ### Fixed
-- **BOQ resource calculation model - corrected to per-unit norms** (CostX / Candy / iTWO / ProEst convention). Resources are now stored as quantities-per-1-unit-of-position. Position `unit_rate = Σ(r.quantity × r.unit_rate)` (no division by qty). Position `total = quantity × unit_rate`. Changing position quantity no longer scales resource quantities or recomputes unit_rate - only the total scales. Three sites fixed:
+- **BOQ resource calculation model - corrected to per-unit norms** (the standard estimating-suite convention). Resources are now stored as quantities-per-1-unit-of-position. Position `unit_rate = Σ(r.quantity × r.unit_rate)` (no division by qty). Position `total = quantity × unit_rate`. Changing position quantity no longer scales resource quantities or recomputes unit_rate - only the total scales. Three sites fixed:
   - `frontend/.../BOQGrid.tsx` `onCellValueChanged`: removed proportional resource scaling on qty edit.
   - `frontend/.../BOQEditorPage.tsx` `handleUpdateResource`: dropped `/ posQty` divisor.
   - `backend/.../service.py` `update_position`: only `triggered_by_resources` (not `triggered_by_qty`) recomputes unit_rate; formula is `sum`, no division.
@@ -4002,7 +4051,7 @@ Stability release. No migration needed for 2.4.0 upgrades.
 - New modules: `oe_dashboards`, `oe_compliance_ai`, `oe_cost_match` (auto-discovered).
 - `snapshot_storage.py` + `duckdb_pool.py` core primitives.
 - `duckdb>=1.2.0` + `rapidfuzz>=3.0.0` promoted to base deps.
-- ADR-001 (snapshot storage model) + `CLAUDE-DASHBOARDS.md` 13-task plan.
+- ADR-001 (snapshot storage model) + `DASHBOARDS_PLAN.md` 13-task plan.
 - 25 new unit tests. Full suite: 1470/1470 green.
 
 ## [2.4.0] - 2026-04-22

@@ -1701,11 +1701,25 @@ def _convert_dae_to_glb(dae_path: Path, output_dir: Path) -> Path | None:
         # Post-process: reassign GLB node/mesh names using bbox matching
         # against DAE shapes.  This replaces the previous approach which
         # blindly trusted trimesh's scene-graph names.
+        #
+        # Trimesh reorders meshes, so an unpatched GLB carries scrambled
+        # names that force the viewer into positional fallback - the same
+        # "grouping snaps back to the whole model" failure the DAE node-name
+        # fix addresses.  Track whether the names can be trusted: if patching
+        # has bboxes to work with but matches none, or the patch step throws,
+        # we drop the GLB and let the viewer load the DAE, whose <node name>
+        # equals the element id by construction.
+        patch_failed = False
+        had_element_bboxes = False
+        total_mesh_nodes = 0
+        mesh_bbox_read = 0
+        matched = 0
         try:
             import json as _json
             import struct as _struct
 
             element_bboxes, _element_to_shape = _dae_element_bboxes(dae_path)
+            had_element_bboxes = bool(element_bboxes)
             if element_bboxes:
                 # Parse GLB: header(12) + json_chunk_header(8) + json
                 json_len = _struct.unpack("<I", glb_data[12:16])[0]
@@ -1713,6 +1727,102 @@ def _convert_dae_to_glb(dae_path: Path, output_dir: Path) -> Path | None:
                 glb_nodes = gltf.get("nodes", [])
                 glb_meshes = gltf.get("meshes", [])
                 accessors = gltf.get("accessors", [])
+                buffer_views = gltf.get("bufferViews", [])
+
+                # Locate the binary (BIN) chunk so we can decode POSITION data
+                # when the accessor omits min/max. The JSON chunk is padded to a
+                # 4-byte boundary; the BIN chunk header (8 bytes: length + type)
+                # follows it. Newer trimesh / numpy combinations frequently emit
+                # POSITION accessors WITHOUT the optional min/max bounds, so we
+                # can no longer rely on those fields alone.
+                bin_chunk_data = b""
+                try:
+                    bin_off = 20 + json_len
+                    if len(glb_data) >= bin_off + 8:
+                        bin_len = _struct.unpack("<I", glb_data[bin_off : bin_off + 4])[0]
+                        bin_type = glb_data[bin_off + 4 : bin_off + 8]
+                        if bin_type == b"BIN\x00":
+                            bin_chunk_data = glb_data[bin_off + 8 : bin_off + 8 + bin_len]
+                except Exception:  # noqa: BLE001 - decode fallback is best-effort
+                    bin_chunk_data = b""
+
+                # glTF componentType -> (struct format char, byte size).
+                _COMPONENT_FMT = {
+                    5120: ("b", 1),  # BYTE
+                    5121: ("B", 1),  # UNSIGNED_BYTE
+                    5122: ("h", 2),  # SHORT
+                    5123: ("H", 2),  # UNSIGNED_SHORT
+                    5125: ("I", 4),  # UNSIGNED_INT
+                    5126: ("f", 4),  # FLOAT
+                }
+
+                def _accessor_bbox(
+                    acc_idx: int,
+                ) -> tuple[float, float, float, float, float, float] | None:
+                    """Bbox for one accessor, decoding the buffer if min/max are absent.
+
+                    Prefers the accessor's optional ``min``/``max`` bounds (cheap,
+                    no buffer read). When they are missing - the common case under
+                    newer trimesh/numpy - decode the POSITION VEC3 stream straight
+                    from the BIN chunk and take coordinate extrema. The bbox is
+                    invariant under vertex reordering, so it stays a stable
+                    fingerprint either way.
+                    """
+                    if acc_idx >= len(accessors):
+                        return None
+                    acc = accessors[acc_idx]
+                    mn = acc.get("min")
+                    mx = acc.get("max")
+                    if mn and mx and len(mn) >= 3 and len(mx) >= 3:
+                        return (mn[0], mn[1], mn[2], mx[0], mx[1], mx[2])
+
+                    # Fallback: decode the POSITION stream from the buffer.
+                    if not bin_chunk_data:
+                        return None
+                    if acc.get("type") != "VEC3":
+                        return None
+                    comp = _COMPONENT_FMT.get(acc.get("componentType"))
+                    if comp is None:
+                        return None
+                    fmt_char, comp_size = comp
+                    count = acc.get("count", 0)
+                    if count <= 0:
+                        return None
+                    bv_idx = acc.get("bufferView")
+                    if bv_idx is None or bv_idx >= len(buffer_views):
+                        return None
+                    bv = buffer_views[bv_idx]
+                    base = bv.get("byteOffset", 0) + acc.get("byteOffset", 0)
+                    vec_size = comp_size * 3
+                    stride = bv.get("byteStride") or vec_size
+                    lo = [float("inf")] * 3
+                    hi = [float("-inf")] * 3
+                    found = False
+                    for v in range(count):
+                        start = base + v * stride
+                        chunk = bin_chunk_data[start : start + vec_size]
+                        if len(chunk) < vec_size:
+                            break
+                        try:
+                            x, y, z = _struct.unpack("<" + fmt_char * 3, chunk)
+                        except _struct.error:
+                            break
+                        if x < lo[0]:
+                            lo[0] = x
+                        if y < lo[1]:
+                            lo[1] = y
+                        if z < lo[2]:
+                            lo[2] = z
+                        if x > hi[0]:
+                            hi[0] = x
+                        if y > hi[1]:
+                            hi[1] = y
+                        if z > hi[2]:
+                            hi[2] = z
+                        found = True
+                    if not found:
+                        return None
+                    return (lo[0], lo[1], lo[2], hi[0], hi[1], hi[2])
 
                 def _mesh_bbox(
                     mesh_idx: int,
@@ -1728,16 +1838,14 @@ def _convert_dae_to_glb(dae_path: Path, output_dir: Path) -> Path | None:
                         pos_idx = prim.get("attributes", {}).get("POSITION")
                         if pos_idx is None or pos_idx >= len(accessors):
                             continue
-                        acc = accessors[pos_idx]
-                        mn = acc.get("min")
-                        mx = acc.get("max")
-                        if not mn or not mx or len(mn) < 3 or len(mx) < 3:
+                        bb = _accessor_bbox(pos_idx)
+                        if bb is None:
                             continue
                         for i in range(3):
-                            if mn[i] < lo[i]:
-                                lo[i] = mn[i]
-                            if mx[i] > hi[i]:
-                                hi[i] = mx[i]
+                            if bb[i] < lo[i]:
+                                lo[i] = bb[i]
+                            if bb[i + 3] > hi[i]:
+                                hi[i] = bb[i + 3]
                         any_found = True
                     if not any_found:
                         return None
@@ -1796,6 +1904,7 @@ def _convert_dae_to_glb(dae_path: Path, output_dir: Path) -> Path | None:
                 match_tol = 0.01
                 matched = 0
                 total_mesh_nodes = 0
+                mesh_bbox_read = 0
                 assigned_mesh: set[int] = set()
                 for node in glb_nodes:
                     if "mesh" not in node:
@@ -1805,6 +1914,7 @@ def _convert_dae_to_glb(dae_path: Path, output_dir: Path) -> Path | None:
                     mb = _mesh_bbox(mi)
                     if mb is None:
                         continue
+                    mesh_bbox_read += 1
                     eid, s = _find_element(mb)
                     if eid is not None and s <= match_tol:
                         node["name"] = eid
@@ -1814,9 +1924,11 @@ def _convert_dae_to_glb(dae_path: Path, output_dir: Path) -> Path | None:
                         matched += 1
 
                 logger.info(
-                    "GLB post-process: bbox-matched %d/%d mesh nodes to DAE element ids (of %d DAE elements)",
+                    "GLB post-process: bbox-matched %d/%d mesh nodes (read %d bboxes) "
+                    "to DAE element ids (of %d DAE elements)",
                     matched,
                     total_mesh_nodes,
+                    mesh_bbox_read,
                     len(element_bboxes),
                 )
 
@@ -1837,7 +1949,32 @@ def _convert_dae_to_glb(dae_path: Path, output_dir: Path) -> Path | None:
                         + bin_chunk
                     )
         except Exception as patch_err:  # noqa: BLE001 - non-fatal post-process
-            logger.debug("GLB node-name patching skipped: %s", patch_err, exc_info=True)
+            patch_failed = True
+            logger.warning("GLB node-name patching failed: %s - serving the DAE instead", patch_err)
+
+        # If the names are unreliable, prefer the DAE: its <node name> equals
+        # the element id, so mesh matching (and therefore filtering/grouping)
+        # stays correct.  A larger wire transfer is the right trade for that.
+        #
+        # Two distinct failure shapes, only ONE of which justifies dropping:
+        #   * patch threw, OR we READ mesh bboxes but matched NONE -> a genuine
+        #     name scramble; drop the GLB so the DAE (correct names) is served.
+        #   * we could not read ANY mesh bbox (accessor lacks min/max AND the
+        #     POSITION buffer was undecodable - an exporter-shape quirk of some
+        #     trimesh/numpy combinations) -> this is NOT proof the names are
+        #     wrong, so keep the GLB rather than discard usable geometry. The
+        #     node-name happy path stays non-None.
+        scrambled = mesh_bbox_read > 0 and matched == 0
+        if patch_failed or (had_element_bboxes and scrambled):
+            logger.warning(
+                "GLB node names unreliable (patch_failed=%s, bbox-matched %d/%d, read %d) - "
+                "dropping GLB so the viewer loads the DAE with correct element ids",
+                patch_failed,
+                matched,
+                total_mesh_nodes,
+                mesh_bbox_read,
+            )
+            return None
 
         glb_target.write_bytes(glb_data)
 
@@ -3323,9 +3460,9 @@ def _generate_collada_boxes(
         g_max_y = max(g_max_y, y + w)
         g_max_z = max(g_max_z, z + h)
 
-        # Use the element's original mesh_ref (Revit ElementId) as the
-        # COLLADA node id so the frontend viewer can match meshes to
-        # elements by name. Fall back to stable_id or index.
+        # Use the element's original mesh_ref (Revit ElementId / IFC GlobalId)
+        # as the COLLADA node identity so the frontend viewer can match meshes
+        # to elements. Fall back to stable_id or index.
         node_id = str(elem.get("mesh_ref") or elem.get("stable_id") or f"n{i}")
         elem["mesh_ref"] = node_id
         elem["bounding_box"] = {
@@ -3370,7 +3507,16 @@ def _generate_collada_boxes(
         p = ET.SubElement(tri, "p")
         p.text = "0 1 2 0 2 3 4 6 5 4 7 6 0 4 5 0 5 1 2 6 7 2 7 3 0 3 7 0 7 4 1 5 6 1 6 2"
 
-        node = ET.SubElement(vscene, "node", id=node_id, name=elem.get("name", f"e{i}"))
+        # Three.js ColladaLoader sets Object3D.name from the node's ``name``
+        # attribute (NOT ``id``), and the frontend matches meshes to elements
+        # on that name against ``mesh_ref``. So the node name MUST be node_id,
+        # not the human label - otherwise matching falls back to the positional
+        # nearest-bbox pairing and filtering/grouping stops lining up with the
+        # geometry (the IFC "grouping shows the whole model" symptom). This is
+        # the same correction _patch_collada_node_names applies to the DDC/Revit
+        # real-DAE path; here we just emit it correctly at generation time. The
+        # human label is preserved on the <geometry name=...> above.
+        node = ET.SubElement(vscene, "node", id=node_id, name=node_id)
         mat = ET.SubElement(node, "matrix", sid="transform")
         mat.text = f"1 0 0 {x:.4f} 0 1 0 {y:.4f} 0 0 1 {z:.4f} 0 0 0 1"
         ET.SubElement(node, "instance_geometry", url=f"#{gid}")
