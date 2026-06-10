@@ -24,7 +24,7 @@
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^8.0.0",
     "@dnd-kit/utilities": "^3.2.2",
-    "@neoffice/frappe-sidebar-react": "github:bvisible/frappe-sidebar-react#4a585ac911043e2f0ba2a6d404d3ab2b17990266",
+    "@neoffice/frappe-sidebar-react": "github:bvisible/frappe-sidebar-react#f141496441c57a0e6c458cbd65296af73f877b2f",
     "@tanstack/react-query": "^5.100.14",
     "@types/three": "^0.184.1",
     "@xyflow/react": "^12.10.2",
