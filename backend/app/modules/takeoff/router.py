@@ -72,6 +72,7 @@ from app.modules.takeoff.schemas import (
     PlanReadAcceptRequest,
     PlanReadAcceptResponse,
     PlanReadMetaResponse,
+    PlanReadRejectResponse,
     PlanReadRequest,
     RecognizeResponse,
     TakeoffCompareResponse,
@@ -4030,6 +4031,7 @@ async def list_documents(
             "pages": d.pages,
             "size_bytes": d.size_bytes,
             "status": d.status,
+            "project_id": str(d.project_id) if d.project_id else None,
             "uploaded_at": d.created_at.isoformat() if d.created_at else None,
         }
         for d in docs
@@ -4618,6 +4620,27 @@ async def plan_read_accept(
     return PlanReadAcceptResponse(**result)
 
 
+@router.post(
+    "/plan-read/runs/{run_id}/reject",
+    response_model=PlanReadRejectResponse,
+    dependencies=[Depends(RequirePermission("takeoff.update"))],
+)
+async def plan_read_reject(
+    run_id: _uuid.UUID,
+    body: PlanReadAcceptRequest,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    service: TakeoffService = Depends(_get_service),
+) -> PlanReadRejectResponse:
+    """Reject selected proposals so they disappear from future reloads."""
+    run = await service.get_plan_read_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Plan-read run not found")
+    await verify_project_access(run.project_id, str(user_id), session)
+    result = await service.reject_plan_read(run_id, measurement_ids=body.measurement_ids)
+    return PlanReadRejectResponse(**result)
+
+
 # ── Delete ────────────────────────────────────────────────────────────────
 
 
@@ -4672,6 +4695,11 @@ def _measurement_to_response(item: object) -> TakeoffMeasurementResponse:
         count_value=item.count_value,  # type: ignore[attr-defined]
         scale_pixels_per_unit=item.scale_pixels_per_unit,  # type: ignore[attr-defined]
         linked_boq_position_id=item.linked_boq_position_id,  # type: ignore[attr-defined]
+        # #### NEOFFICE PATCH — v7.6 AI plan-read review lifecycle fields.
+        source=getattr(item, "source", "manual"),
+        confidence=getattr(item, "confidence", None),
+        review_status=getattr(item, "review_status", "confirmed"),
+        # #### END NEOFFICE PATCH
         metadata=getattr(item, "metadata_", {}),  # type: ignore[attr-defined]
         created_by=item.created_by,  # type: ignore[attr-defined]
         created_at=item.created_at,  # type: ignore[attr-defined]

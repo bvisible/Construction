@@ -148,6 +148,12 @@ export interface PlanReadAcceptResult {
   measurement_ids: string[];
 }
 
+export interface PlanReadRejectResult {
+  rejected: number;
+  skipped: number;
+  measurement_ids: string[];
+}
+
 export interface MeasurementSummary {
   total_measurements: number;
   by_type: Record<string, number>;
@@ -160,6 +166,7 @@ export interface TakeoffDocumentResponse {
   pages: number;
   size_bytes: number;
   status: string;
+  project_id?: string | null;
   uploaded_at: string | null;
 }
 
@@ -205,6 +212,34 @@ export interface CreateVariationFromCompareResult {
   currency: string;
 }
 
+// //// NEOFFICE PATCH — accept raw or proxy/paginated list payloads.
+// Osiris can expose OCE responses through the Frappe proxy, and some upstream
+// endpoints moved from raw arrays to paginated objects. Keep list consumers
+// defensive so a harmless response envelope cannot crash React with `.map`.
+export function normalizeListResponse<T>(payload: unknown, keys: string[] = []): T[] {
+  if (Array.isArray(payload)) return payload as T[];
+  if (!payload || typeof payload !== 'object') return [];
+
+  const obj = payload as Record<string, unknown>;
+  const orderedKeys = [...keys, 'items', 'data', 'results', 'rows', 'message'];
+  const nestedKeys = ['items', 'data', 'results', 'rows'];
+
+  for (const key of orderedKeys) {
+    const value = obj[key];
+    if (Array.isArray(value)) return value as T[];
+    if (value && typeof value === 'object') {
+      const nestedObj = value as Record<string, unknown>;
+      for (const nestedKey of nestedKeys) {
+        const nested = nestedObj[nestedKey];
+        if (Array.isArray(nested)) return nested as T[];
+      }
+    }
+  }
+
+  return [];
+}
+// //// END NEOFFICE PATCH
+
 /* ── API functions ────────────────────────────────────────────────────── */
 
 export const takeoffApi = {
@@ -215,7 +250,8 @@ export const takeoffApi = {
     if (!(await isModuleLoaded('oe_takeoff'))) return [];
     let url = `/v1/takeoff/measurements/?project_id=${projectId}`;
     if (documentId) url += `&document_id=${encodeURIComponent(documentId)}`;
-    return apiGet<MeasurementResponse[]>(url);
+    const payload = await apiGet<unknown>(url);
+    return normalizeListResponse<MeasurementResponse>(payload, ['measurements']);
   },
 
   /** Create a single measurement. */
@@ -224,7 +260,8 @@ export const takeoffApi = {
 
   /** Bulk create measurements (up to 500). */
   bulkCreate: (measurements: MeasurementCreate[]) =>
-    apiPost<MeasurementResponse[]>('/v1/takeoff/measurements/bulk/', { measurements }),
+    apiPost<unknown>('/v1/takeoff/measurements/bulk/', { measurements })
+      .then((payload) => normalizeListResponse<MeasurementResponse>(payload, ['measurements'])),
 
   /** Update a measurement. */
   update: (id: string, data: Partial<MeasurementCreate>) =>
@@ -272,8 +309,10 @@ export const takeoffApi = {
 
     /** List the unconfirmed (proposed) measurements minted by a run. */
     proposals: (runId: string) =>
-      apiGet<MeasurementResponse[]>(
+      apiGet<unknown>(
         `/v1/takeoff/plan-read/runs/${encodeURIComponent(runId)}/proposals`,
+      ).then((payload) =>
+        normalizeListResponse<MeasurementResponse>(payload, ['proposals', 'measurements']),
       ),
 
     /** Confirm selected / above-threshold proposals into billed measurements.
@@ -284,6 +323,16 @@ export const takeoffApi = {
     ) =>
       apiPost<PlanReadAcceptResult>(
         `/v1/takeoff/plan-read/runs/${encodeURIComponent(runId)}/accept`,
+        body,
+      ),
+
+    /** Reject selected proposals and remove them from future reloads. */
+    reject: (
+      runId: string,
+      body: { measurement_ids?: string[] | null },
+    ) =>
+      apiPost<PlanReadRejectResult>(
+        `/v1/takeoff/plan-read/runs/${encodeURIComponent(runId)}/reject`,
         body,
       ),
   },
@@ -303,7 +352,8 @@ export const takeoffApi = {
     const url = projectId
       ? `/v1/takeoff/documents/?project_id=${encodeURIComponent(projectId)}`
       : '/v1/takeoff/documents/';
-    return apiGet<TakeoffDocumentResponse[]>(url);
+    const payload = await apiGet<unknown>(url);
+    return normalizeListResponse<TakeoffDocumentResponse>(payload, ['documents']);
   },
 
   /** Delete an uploaded takeoff document. */

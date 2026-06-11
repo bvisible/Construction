@@ -37,7 +37,7 @@ import { formatFileSize } from '@/shared/lib/formatters';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
-import { takeoffApi, type TakeoffDocumentResponse } from './api';
+import { normalizeListResponse, takeoffApi, type TakeoffDocumentResponse } from './api';
 import { canonicalizeUnit } from './lib/units';
 import { aiApi } from '@/features/ai/api';
 import { hasLlmKey } from '@/features/ai-estimator/useAiReadiness';
@@ -88,6 +88,7 @@ interface UploadedDocument {
   analysis: AnalysisResult | null;
   analyzing: boolean;
   extractingTables: boolean;
+  project_id?: string | null;
   uploadError?: string;
   uploading?: boolean;
 }
@@ -1171,7 +1172,7 @@ export function TakeoffPage() {
   const filmstripUploadRef = useRef<HTMLInputElement>(null);
 
   /** Currently opened document in the Measurements viewer. */
-  const [viewerDoc, setViewerDoc] = useState<{ url: string; name: string } | null>(null);
+  const [viewerDoc, setViewerDoc] = useState<{ url: string; name: string; projectId?: string | null } | null>(null);
 
   /** Revision compare drawer (Item 17) — diffs two takeoff PDFs. */
   const [showCompare, setShowCompare] = useState(false);
@@ -1243,13 +1244,17 @@ export function TakeoffPage() {
 
   const { data: projects, isLoading: projectsLoading } = useQuery({
     queryKey: ['projects'],
-    queryFn: () => apiGet<Project[]>('/v1/projects/'),
+    queryFn: () =>
+      apiGet<unknown>('/v1/projects/')
+        .then((payload) => normalizeListResponse<Project>(payload, ['projects'])),
     staleTime: 5 * 60_000,
   });
 
   const { data: boqs, isLoading: boqsLoading } = useQuery({
     queryKey: ['boqs', selectedProjectId],
-    queryFn: () => apiGet<BOQ[]>(`/v1/boq/boqs/?project_id=${selectedProjectId}`),
+    queryFn: () =>
+      apiGet<unknown>(`/v1/boq/boqs/?project_id=${selectedProjectId}`)
+        .then((payload) => normalizeListResponse<BOQ>(payload, ['boqs'])),
     enabled: !!selectedProjectId,
   });
 
@@ -1281,6 +1286,7 @@ export function TakeoffPage() {
     setViewerDoc({
       url: `${API_BASE}/v1/takeoff/documents/${match.id}/download/`,
       name: match.filename,
+      projectId: match.project_id,
     });
     setActiveTab('measurements');
     const next = new URLSearchParams(searchParams);
@@ -1302,6 +1308,7 @@ export function TakeoffPage() {
     setViewerDoc({
       url: `${API_BASE}/v1/takeoff/documents/${docId}/download/`,
       name: match.filename,
+      projectId: match.project_id,
     });
     setActiveTab('measurements');
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1335,6 +1342,7 @@ export function TakeoffPage() {
         setViewerDoc({
           url: `${API_BASE}/v1/documents/${encodeURIComponent(docId)}/download/`,
           name: displayName,
+          projectId: selectedProjectId || null,
         });
         setActiveTab('measurements');
       } catch {
@@ -1401,6 +1409,7 @@ export function TakeoffPage() {
       setViewerDoc({
         url: `${API_BASE}/v1/takeoff/documents/${match.id}/download/`,
         name: match.filename,
+        projectId: match.project_id,
       });
       setActiveTab('measurements');
     } else if (serverDocuments.length >= 0) {
@@ -1618,6 +1627,7 @@ export function TakeoffPage() {
                       pages: data.pages || d.pages,
                       size_bytes: data.size_bytes || d.size_bytes,
                       filename: data.filename || d.filename,
+                      project_id: data.project_id,
                       uploading: false,
                     }
                   : d,
@@ -1826,6 +1836,7 @@ export function TakeoffPage() {
         analysis: null,
         analyzing: false,
         extractingTables: false,
+        project_id: d.project_id,
       });
     });
     documents.forEach((d) => byId.set(d.id, d));
@@ -1852,6 +1863,7 @@ export function TakeoffPage() {
       setViewerDoc({
         url: `${API_BASE}/v1/takeoff/documents/${docId}/download/`,
         name: doc.filename,
+        projectId: doc.project_id,
       });
       setActiveTab('measurements');
       // Pin the current doc to the URL so reload restores the viewer.
@@ -2306,6 +2318,7 @@ export function TakeoffPage() {
                 <TakeoffViewerModule
                   initialPdfUrl={viewerDoc?.url}
                   initialPdfName={viewerDoc?.name}
+                  projectId={viewerDoc?.projectId ?? selectedProjectId}
                   initialMeasurementId={initialMeasurementId}
                   recentDocuments={serverDocuments}
                   onOpenRecentDocument={handleOpenDocInViewer}

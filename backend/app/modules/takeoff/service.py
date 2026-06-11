@@ -2527,6 +2527,9 @@ class TakeoffService:
         blocked = 0
         for prop in proposals:
             mid = str(prop.id)
+            if prop.review_status != "proposed":
+                skipped += 1
+                continue
             if wanted is not None and mid not in wanted:
                 skipped += 1
                 continue
@@ -2554,6 +2557,41 @@ class TakeoffService:
             "skipped": skipped,
             "blocked": blocked,
             "measurement_ids": confirmed_ids,
+        }
+
+    async def reject_plan_read(
+        self,
+        run_id: uuid.UUID,
+        *,
+        measurement_ids: list[str] | None,
+    ) -> dict[str, Any]:
+        """Reject selected plan-read proposals by removing their rows.
+
+        Rejected proposals should disappear from the canvas and from future
+        measurement reloads. They are still auditable through the run's aggregate
+        counts/validation report, while confirmed measurements remain ordinary
+        takeoff rows.
+        """
+        proposals = await self.measurement_repo.list_proposals_for_run(run_id)
+        wanted = {str(m) for m in measurement_ids} if measurement_ids else None
+
+        rejected_ids: list[str] = []
+        skipped = 0
+        for prop in proposals:
+            mid = str(prop.id)
+            if prop.review_status != "proposed":
+                skipped += 1
+                continue
+            if wanted is not None and mid not in wanted:
+                skipped += 1
+                continue
+            await self.measurement_repo.delete(prop.id)
+            rejected_ids.append(mid)
+
+        return {
+            "rejected": len(rejected_ids),
+            "skipped": skipped,
+            "measurement_ids": rejected_ids,
         }
 
 

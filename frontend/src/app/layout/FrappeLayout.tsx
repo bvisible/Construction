@@ -28,7 +28,8 @@ export function FrappeLayout({ title, children }: FrappeLayoutProps) {
   }, [title]);
 
   return (
-    <NeoCockpit env="spa">
+    // Neoconstruction surface: pin the Construction module in the menu
+    <NeoCockpit env="spa" defaultApp="neoconstruction">
       <div className="page-content">{children}</div>
     </NeoCockpit>
   );

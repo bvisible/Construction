@@ -15,6 +15,7 @@ import asyncio
 import hmac
 import logging
 import os
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -35,6 +36,7 @@ from app.modules.neoffice.schemas import (
     PlanVisionRequest,
     PlanVisionResponse,
     RoomDetectionRequest,
+    RoomDetectionProposalResponse,
     RoomDetectionResponse,
     RoomPlanImportRequest,
     ScheduleProgressBridgeRequest,
@@ -429,4 +431,178 @@ async def detect_takeoff_rooms(
 
     return RoomDetectionResponse(
         document_id=request.document_id, page=request.page, **result
+    )
+
+
+def _room_detection_confidence(room: DetectedRoom) -> float:
+    """Map the Neoffice QA band to the 0..1 plan-read confidence scale."""
+    by_band = {"high": 0.86, "medium": 0.68, "low": 0.45}
+    score = by_band.get((room.confidence or "low").lower(), 0.45)
+    if room.needs_review and score > 0.69:
+        score = 0.69
+    if room.error_pct is not None and abs(room.error_pct) > 10:
+        score = min(score, 0.55)
+    return round(max(0.0, min(1.0, score)), 2)
+
+
+def _room_detection_pdf_points(
+    polygon: list[list[float]],
+    page_width_pt: float,
+    page_height_pt: float,
+) -> list[dict[str, float]]:
+    """Convert normalised Neoffice room polygons to PDF-point canvas coords."""
+    out: list[dict[str, float]] = []
+    for xy in polygon:
+        if len(xy) < 2:
+            continue
+        x = max(0.0, min(1.0, float(xy[0]))) * page_width_pt
+        y = max(0.0, min(1.0, float(xy[1]))) * page_height_pt
+        out.append({"x": x, "y": y})
+    return out
+
+
+@router.post(
+    "/takeoff/detect-rooms/proposals/",
+    response_model=RoomDetectionProposalResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_room_detection_proposals(
+    request: RoomDetectionRequest,
+    session: SessionDep,
+    settings: SettingsDep,
+    user_id: str = Depends(get_current_user_id),
+) -> RoomDetectionProposalResponse:
+    """Persist Neoffice room detection as v7.6 plan-read review proposals.
+
+    This keeps the Neoffice geometry detector outside the OCE core while using
+    the upstream plan-read lifecycle for review, accept, reload and audit.
+    """
+    from app.modules.takeoff import plan_read as _plan_read
+    from app.modules.takeoff.models import AiTakeoffRun, TakeoffMeasurement
+    from app.modules.takeoff.service import TakeoffService
+
+    takeoff = TakeoffService(session)
+    doc = await takeoff.get_document(request.document_id)
+    if doc is None or not doc.file_path:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Takeoff document not found"
+        )
+    if doc.project_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Room proposals require a project-backed takeoff document",
+        )
+    await _verify_project_access(session, doc.project_id, user_id)
+
+    detected = await detect_takeoff_rooms(request, session, settings, user_id)
+    run = await takeoff.plan_read_repo.create(
+        AiTakeoffRun(
+            project_id=doc.project_id,
+            document_id=request.document_id,
+            page=request.page,
+            mode="rooms",
+            user_id=uuid.UUID(str(user_id)),
+            created_by=str(user_id),
+            status="review",
+            scale_pixels_per_unit=detected.scale_pixels_per_unit,
+            do_cost_match=False,
+            provider="neoffice",
+            model_used=(
+                "neoffice-room-vision-bbox"
+                if any(room.source == "vision" for room in detected.rooms)
+                else "neoffice-room-vector-v2"
+            ),
+            proposal_count=0,
+            accepted_count=0,
+            validation_report={
+                "engine": "neoffice_room_detection",
+                "source": "vector_or_vision",
+                "stats": detected.stats,
+                "scale_ratio": detected.scale_ratio,
+                "scale_pixels_per_unit": detected.scale_pixels_per_unit,
+                "page_width_pt": detected.page_width_pt,
+                "page_height_pt": detected.page_height_pt,
+            },
+            metadata_={"engine": "neoffice_room_detection"},
+        )
+    )
+    run_id = run.id
+
+    proposals: list[TakeoffMeasurement] = []
+    for room in detected.rooms:
+        if len(room.polygon) < 3:
+            continue
+        points = _room_detection_pdf_points(
+            room.polygon,
+            detected.page_width_pt,
+            detected.page_height_pt,
+        )
+        if len(points) < 3:
+            continue
+        point_pairs = [(p["x"], p["y"]) for p in points]
+        self_intersects = _plan_read.polygon_self_intersects(point_pairs)
+        confidence = _room_detection_confidence(room)
+        if self_intersects:
+            confidence = min(confidence, 0.55)
+        needs_review = bool(room.needs_review) or self_intersects
+        metadata: dict[str, Any] = {
+            "ai_takeoff_run_id": str(run_id),
+            "engine": "neoffice_room_detection",
+            "detection_source": room.source,
+            "detection_confidence": room.confidence,
+            "detection_needs_review": needs_review,
+            "detection_review_reason": "self_intersects"
+            if self_intersects
+            else room.review_reason,
+            "detection_declared_area_m2": room.declared_m2,
+            "detection_error_pct": room.error_pct,
+            "page_width_pt": detected.page_width_pt,
+            "page_height_pt": detected.page_height_pt,
+            "room_name": room.name,
+            "self_intersects": self_intersects,
+            "verdict": "error" if self_intersects else ("review" if needs_review else "ok"),
+        }
+        proposals.append(
+            TakeoffMeasurement(
+                project_id=doc.project_id,
+                document_id=request.document_id,
+                page=request.page,
+                type="area",
+                group_name="Pièces",
+                group_color="#F59E0B" if needs_review else "#10B981",
+                annotation=room.name or "Pièce",
+                points=points,
+                measurement_value=room.area_m2,
+                measurement_unit="m2",
+                scale_pixels_per_unit=detected.scale_pixels_per_unit,
+                source="ai_plan_read",
+                confidence=confidence,
+                review_status="proposed",
+                metadata_=metadata,
+                created_by=str(user_id),
+            )
+        )
+
+    if proposals:
+        await takeoff.measurement_repo.create_bulk(proposals)
+    await takeoff.plan_read_repo.update_fields(
+        run_id,
+        proposal_count=len(proposals),
+        validation_report={
+            **(run.validation_report or {}),
+            "proposal_count": len(proposals),
+            "rooms_needs_review": sum(
+                1 for p in proposals if (p.metadata_ or {}).get("detection_needs_review")
+            ),
+        },
+    )
+    await session.commit()
+    return RoomDetectionProposalResponse(
+        run_id=run_id,
+        document_id=request.document_id,
+        page=request.page,
+        scale_ratio=detected.scale_ratio,
+        scale_pixels_per_unit=detected.scale_pixels_per_unit,
+        proposal_count=len(proposals),
+        stats={**detected.stats, "proposal_count": len(proposals)},
     )

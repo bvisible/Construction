@@ -220,3 +220,15 @@ class RoomDetectionResponse(BaseModel):
     scale_pixels_per_unit: float | None = None
     rooms: list[DetectedRoom] = Field(default_factory=list)
     stats: dict[str, int | float | str] = Field(default_factory=dict)
+
+
+class RoomDetectionProposalResponse(BaseModel):
+    """Server-backed proposal run created from Neoffice room detection."""
+
+    run_id: UUID
+    document_id: str
+    page: int
+    scale_ratio: float | None = None
+    scale_pixels_per_unit: float | None = None
+    proposal_count: int
+    stats: dict[str, int | float | str] = Field(default_factory=dict)

@@ -38,6 +38,10 @@ interface Measurement {
   suggested?: boolean;
   /** Recognition confidence 0..1 on AI-sourced measurements. */
   confidence?: number;
+  /** Server review lifecycle for v7.6 plan-read proposals. */
+  source?: string;
+  reviewStatus?: string;
+  planReadRunId?: string;
   // //// NEOFFICE PATCH — QA metadata for our detect-rooms candidates
   // (oe_neoffice vector/vision pathway), round-tripped via metadata so the
   // review badges survive a reload.
@@ -270,6 +274,11 @@ function fromApiFormat(r: MeasurementResponse): Measurement {
     linkedBoqId: (meta.linked_boq_id as string) ?? undefined,
     linkedPositionOrdinal: (meta.linked_position_ordinal as string) ?? undefined,
     linkedPositionLabel: (meta.linked_position_label as string) ?? undefined,
+    suggested: r.review_status === 'proposed',
+    confidence: typeof r.confidence === 'number' ? r.confidence : undefined,
+    source: r.source,
+    reviewStatus: r.review_status,
+    planReadRunId: (meta.ai_takeoff_run_id as string) ?? undefined,
     // //// NEOFFICE PATCH — restore detect-rooms QA metadata
     detectionSource: (meta.detection_source as 'vector' | 'vision') ?? undefined,
     detectionConfidence: (meta.detection_confidence as 'high' | 'medium' | 'low') ?? undefined,
@@ -285,6 +294,8 @@ function fromApiFormat(r: MeasurementResponse): Measurement {
 
 interface UseMeasurementPersistenceOptions {
   fileName: string | null;
+  /** Stored takeoff document UUID. New v7.6 plan-read proposals use this key. */
+  documentId?: string | null;
   measurements: Measurement[];
   setMeasurements: (measurements: Measurement[]) => void;
   scale: ScaleConfig;
@@ -306,6 +317,7 @@ interface UseMeasurementPersistenceResult {
 
 export function useMeasurementPersistence({
   fileName,
+  documentId,
   measurements,
   setMeasurements,
   scale,
@@ -332,10 +344,14 @@ export function useMeasurementPersistence({
   // it to broadcast a refresh to the unified Markups hub.
   const qc = useContext(QueryClientContext);
 
-  // Load persisted data when file name changes — try server first, fallback to localStorage
+  // Load persisted data when the opened document changes — try server first,
+  // fallback to localStorage. v7.6 plan-read proposals are keyed by the
+  // takeoff document UUID, while legacy/manual rows may still be keyed by the
+  // filename, so load both and merge by server id.
   useEffect(() => {
-    if (!fileName || fileName === lastFileRef.current) return;
-    lastFileRef.current = fileName;
+    const loadKey = `${fileName ?? ''}|${documentId ?? ''}|${projectId ?? ''}`;
+    if (!fileName || loadKey === lastFileRef.current) return;
+    lastFileRef.current = loadKey;
 
     let cancelled = false;
 
@@ -343,7 +359,15 @@ export function useMeasurementPersistence({
       // Try server first if project is available
       if (projectId) {
         try {
-          const serverData = await takeoffApi.list(projectId, fileName ?? undefined);
+          const serverDataById = documentId
+            ? await takeoffApi.list(projectId, documentId)
+            : [];
+          const serverDataByName = fileName && fileName !== documentId
+            ? await takeoffApi.list(projectId, fileName)
+            : [];
+          const byId = new Map<string, MeasurementResponse>();
+          [...serverDataById, ...serverDataByName].forEach((row) => byId.set(row.id, row));
+          const serverData = Array.from(byId.values());
           if (!cancelled && serverData.length > 0) {
             hasPersistedRef.current = true;
             setSyncedToServer(true);
@@ -378,7 +402,7 @@ export function useMeasurementPersistence({
 
     loadData();
     return () => { cancelled = true; };
-  }, [fileName, projectId, setMeasurements, setScale]);
+  }, [fileName, documentId, projectId, setMeasurements, setScale]);
 
   // Auto-save to localStorage with debounce (500ms)
   useEffect(() => {

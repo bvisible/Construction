@@ -56,7 +56,7 @@ import { useToastStore } from '../../stores/useToastStore';
 import { useProjectContextStore } from '../../stores/useProjectContextStore';
 import { useAuthStore } from '../../stores/useAuthStore';
 import { boqApi, type CreatePositionData, type Position } from '../../features/boq/api';
-import { takeoffApi } from '../../features/takeoff/api';
+import { takeoffApi, type MeasurementResponse } from '../../features/takeoff/api';
 import { apiGet, apiPost, getErrorMessage } from '../../shared/lib/api';
 import { formatFileSize } from '../../shared/lib/formatters';
 import { useMeasurementPersistence } from './useMeasurementPersistence';
@@ -183,6 +183,10 @@ interface Measurement {
   suggested?: boolean;
   /** Recognition confidence 0..1, present only on AI-sourced measurements. */
   confidence?: number;
+  /** Server review lifecycle for v7.6 plan-read proposals. */
+  source?: string;
+  reviewStatus?: string;
+  planReadRunId?: string;
   // //// NEOFFICE PATCH — QA metadata for our detect-rooms candidates (vector
   // geometry / Gemma vision pathway in oe_neoffice), persisted via metadata.
   /** Auto-detection QA metadata for pre-drawn room candidates. */
@@ -297,47 +301,14 @@ interface PlanVisionResponse {
   tokens_used: number;
 }
 
-/** Vector-geometry room detection (oe_neoffice detect-rooms). */
-const ROOMS_GROUP = 'Pièces';
-const ROOMS_GROUP_COLOR = '#10B981';
-const ROOMS_REVIEW_COLOR = '#F59E0B';
-
-interface DetectedRoom {
-  name?: string | null;
-  /** [[x, y], …] normalised in [0, 1] of the page. */
-  polygon: number[][];
-  area_m2?: number | null;
-  declared_m2?: number | null;
-  error_pct?: number | null;
-  confidence?: 'high' | 'medium' | 'low' | null;
-  needs_review?: boolean;
-  review_reason?: string | null;
-  source?: 'vector' | 'vision' | null;
-}
-
-interface RoomDetectionResponse {
+interface RoomDetectionProposalResponse {
+  run_id: string;
   document_id: string;
   page: number;
-  page_width_pt: number;
-  page_height_pt: number;
   scale_ratio?: number | null;
   scale_pixels_per_unit?: number | null;
-  rooms: DetectedRoom[];
+  proposal_count: number;
   stats: Record<string, number | string>;
-}
-
-function roomDetectionNotes(room: DetectedRoom): string | undefined {
-  const parts: string[] = [];
-  if (room.source) parts.push(`source=${room.source}`);
-  if (room.confidence) parts.push(`confidence=${room.confidence}`);
-  if (typeof room.declared_m2 === 'number') {
-    parts.push(`declared=${room.declared_m2.toFixed(2)} m2`);
-  }
-  if (typeof room.error_pct === 'number') {
-    parts.push(`error=${room.error_pct.toFixed(1)}%`);
-  }
-  if (room.review_reason) parts.push(`review=${room.review_reason}`);
-  return parts.length ? parts.join(' | ') : undefined;
 }
 // //// END NEOFFICE PATCH
 
@@ -355,6 +326,8 @@ interface TakeoffViewerModuleProps {
   recentDocuments?: RecentTakeoffDocument[];
   /** Open one of the recent documents in the viewer (parent owns navigation). */
   onOpenRecentDocument?: (docId: string) => void;
+  /** Project owning the opened takeoff document. */
+  projectId?: string | null;
 }
 
 export default function TakeoffViewerModule({
@@ -363,6 +336,7 @@ export default function TakeoffViewerModule({
   initialMeasurementId,
   recentDocuments,
   onOpenRecentDocument,
+  projectId,
 }: TakeoffViewerModuleProps = {}) {
   const { t } = useTranslation();
 
@@ -532,17 +506,28 @@ export default function TakeoffViewerModule({
   const [fileName, setFileName] = useState<string | null>(null);
   const activeProjectId = useProjectContextStore((s) => s.activeProjectId);
   const activeProjectName = useProjectContextStore((s) => s.activeProjectName);
+  const effectiveProjectId = projectId || activeProjectId || undefined;
+  /** The takeoff document UUID, parsed from the download URL the viewer was
+   *  opened with. Null for a locally-uploaded PDF that has no server record
+   *  yet (the vision endpoint needs a stored document). */
+  const visionDocumentId = useMemo(() => {
+    const match = (initialPdfUrl || '').match(
+      /\/documents\/([0-9a-fA-F-]{16,})\/download/,
+    );
+    return match ? match[1]! : null;
+  }, [initialPdfUrl]);
 
   // PDF / Excel export in-flight flags (drive button spinner state).
   const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [isExportingXlsx, setIsExportingXlsx] = useState(false);
   const { hasPersistedData, saveNow, clearPersisted, syncing, syncedToServer } = useMeasurementPersistence({
     fileName,
+    documentId: visionDocumentId,
     measurements,
     setMeasurements: (ms) => setMeasurements(ms),
     scale,
     setScale: (s) => setScale(s),
-    projectId: activeProjectId,
+    projectId: effectiveProjectId,
   });
 
   /* ── Deep-link: auto-select measurement from /markups ─────────────────
@@ -1338,6 +1323,59 @@ export default function TakeoffViewerModule({
     [t],
   );
 
+  /** Convert a server-side plan-read proposal into a canvas measurement. */
+  const proposalToMeasurement = useCallback(
+    (p: MeasurementResponse, runId?: string): Measurement => {
+      const meta = p.metadata || {};
+      const mType: Measurement['type'] = p.type === 'count' ? 'count' : 'area';
+      const unit =
+        p.type === 'count'
+          ? 'pcs'
+          : p.measurement_unit === 'm2'
+            ? 'm²'
+            : p.measurement_unit === 'm3'
+              ? 'm³'
+              : p.measurement_unit || `${scale.unitLabel}²`;
+      const rawValue =
+        p.type === 'count'
+          ? (p.count_value ?? p.points.length)
+          : (p.measurement_value ?? p.volume ?? 0);
+      const labelText =
+        p.type === 'count'
+          ? String(p.count_value ?? p.points.length)
+          : rawValue != null
+            ? formatMeasurement(Number(rawValue), unit)
+            : t('takeoff_viewer.recognize_uncalibrated', { defaultValue: 'calibrate for value' });
+      return {
+        id: (meta.frontend_id as string) || p.id,
+        serverId: p.id,
+        type: mType,
+        points: p.points.map((pt) => ({ x: pt.x, y: pt.y })),
+        value: Number(rawValue) || 0,
+        unit,
+        label: labelText,
+        annotation: p.annotation || nextAnnotation(mType),
+        page: p.page || currentPage,
+        group: p.group_name || activeGroup,
+        color: p.group_color || undefined,
+        suggested: p.review_status === 'proposed',
+        confidence: p.confidence ?? undefined,
+        source: p.source,
+        reviewStatus: p.review_status,
+        planReadRunId: runId || (meta.ai_takeoff_run_id as string) || undefined,
+        // //// NEOFFICE PATCH — hydrate QA badges on server-backed room proposals.
+        detectionSource: (meta.detection_source as 'vector' | 'vision') ?? undefined,
+        detectionConfidence: (meta.detection_confidence as 'high' | 'medium' | 'low') ?? undefined,
+        detectionNeedsReview: (meta.detection_needs_review as boolean) ?? undefined,
+        detectionReviewReason: (meta.detection_review_reason as string) ?? undefined,
+        detectionDeclaredAreaM2: (meta.detection_declared_area_m2 as number) ?? undefined,
+        detectionErrorPct: (meta.detection_error_pct as number) ?? undefined,
+        // //// END NEOFFICE PATCH
+      };
+    },
+    [activeGroup, currentPage, nextAnnotation, scale.unitLabel, t],
+  );
+
   /** Update the annotation of a measurement with undo support. */
   const updateAnnotation = useCallback(
     (id: string, newAnnotation: string) => {
@@ -2110,16 +2148,6 @@ export default function TakeoffViewerModule({
 
   /* ── AI vision plan analysis (NEOFFICE PATCH) ────────────────────── */
 
-  /** The takeoff document UUID, parsed from the download URL the viewer was
-   *  opened with. Null for a locally-uploaded PDF that has no server record
-   *  yet (the vision endpoint needs a stored document). */
-  const visionDocumentId = useMemo(() => {
-    const match = (initialPdfUrl || '').match(
-      /\/documents\/([0-9a-fA-F-]{16,})\/download/,
-    );
-    return match ? match[1]! : null;
-  }, [initialPdfUrl]);
-
   /** Send the current page to the multimodal model, then pre-calibrate the
    *  scale from what it read on the plan and pre-draw the detected rooms as
    *  area measurements (group "IA Vision") the user can adjust. */
@@ -2213,11 +2241,9 @@ export default function TakeoffViewerModule({
     }
   }, [visionDocumentId, pdfDoc, currentPage, scale, addToast, t]);
 
-  /** Detect room polygons from the PDF VECTOR layer (geometry, not vision) and
-   *  pre-draw them as 'area' measurements (group "Pièces"). Contours follow the
-   *  real walls — far more precise than the vision boxes. */
+  /** Detect room polygons and persist them as v7.6 plan-read proposals. */
   const handleDetectRooms = useCallback(async () => {
-    if (!visionDocumentId || !pdfDoc) {
+    if (!visionDocumentId) {
       addToast({
         type: 'info',
         title: t('takeoff_viewer.rooms_need_doc', {
@@ -2228,14 +2254,10 @@ export default function TakeoffViewerModule({
     }
     setRoomsLoading(true);
     try {
-      const res = await apiPost<RoomDetectionResponse>(
-        '/v1/neoffice/takeoff/detect-rooms/',
+      const res = await apiPost<RoomDetectionProposalResponse>(
+        '/v1/neoffice/takeoff/detect-rooms/proposals/',
         { document_id: visionDocumentId, page: currentPage },
       );
-      const page = await pdfDoc.getPage(currentPage);
-      const vp = page.getViewport({ scale: 1 });
-      const pw = vp.width;
-      const ph = vp.height;
 
       const effScale = res.scale_ratio ? presetScale(res.scale_ratio) : scale;
       if (res.scale_ratio && !effScale.invalid) {
@@ -2244,39 +2266,17 @@ export default function TakeoffViewerModule({
         setLastCalibration(null);
       }
 
-      const ts = Date.now();
-      const newMeasurements: Measurement[] = (res.rooms || [])
-        .filter((r) => Array.isArray(r.polygon) && r.polygon.length >= 3)
-        .map((r, i) => {
-          const pts: Point[] = r.polygon.map((xy) => ({
-            x: (xy[0] ?? 0) * pw,
-            y: (xy[1] ?? 0) * ph,
-          }));
-          const realArea = r.area_m2 ?? toRealArea(polygonAreaPixels(pts), effScale);
-          const needsReview = r.needs_review ?? r.confidence !== 'high';
-          return {
-            id: `r_${ts}_${i}`,
-            type: 'area' as const,
-            points: pts,
-            value: realArea,
-            unit: `${effScale.unitLabel}²`,
-            label: formatMeasurement(realArea, `${effScale.unitLabel}²`),
-            annotation: r.name || 'Pièce',
-            page: currentPage,
-            group: ROOMS_GROUP,
-            color: needsReview ? ROOMS_REVIEW_COLOR : ROOMS_GROUP_COLOR,
-            notes: roomDetectionNotes(r),
-            detectionSource: r.source ?? 'vector',
-            detectionConfidence: r.confidence ?? (needsReview ? 'low' : 'high'),
-            detectionNeedsReview: needsReview,
-            detectionReviewReason: r.review_reason ?? undefined,
-            detectionDeclaredAreaM2: r.declared_m2 ?? undefined,
-            detectionErrorPct: r.error_pct ?? undefined,
-          };
-        });
+      const proposals = await takeoffApi.planRead.proposals(res.run_id);
+      const newMeasurements = proposals.map((p) => proposalToMeasurement(p, res.run_id));
 
       if (newMeasurements.length > 0) {
-        setMeasurements((prev) => [...prev, ...newMeasurements]);
+        setMeasurements((prev) => {
+          const seen = new Set(prev.map((m) => m.serverId || m.id));
+          return [
+            ...prev,
+            ...newMeasurements.filter((m) => !seen.has(m.serverId || m.id)),
+          ];
+        });
       }
 
       const needsReview = Number(res.stats?.rooms_needs_review ?? newMeasurements.filter((m) => m.detectionNeedsReview).length);
@@ -2290,7 +2290,7 @@ export default function TakeoffViewerModule({
         message: t('takeoff_viewer.rooms_done_msg', {
           defaultValue:
             '{{count}} candidat(s), {{high}} fiable(s), {{review}} à vérifier. Labels couverts: {{covered}}/{{labels}}.',
-          count: newMeasurements.length,
+          count: res.proposal_count || newMeasurements.length,
           high: highConfidence,
           review: needsReview,
           covered,
@@ -2308,7 +2308,7 @@ export default function TakeoffViewerModule({
     } finally {
       setRoomsLoading(false);
     }
-  }, [visionDocumentId, pdfDoc, currentPage, scale, addToast, t]);
+  }, [visionDocumentId, currentPage, scale, proposalToMeasurement, addToast, t]);
 
   /* ── Calibration (two-click → unit picker) ───────────────────────── */
 
@@ -2860,7 +2860,7 @@ export default function TakeoffViewerModule({
   const handleReadWithAi = useCallback(async () => {
     if (planReadBusy) return;
     const docId = initialPdfUrl?.match(/\/documents\/([^/?#]+)\/(?:download|recognize)/)?.[1];
-    const projectId = selectedProjectId || activeProjectId || '';
+    const projectId = selectedProjectId || effectiveProjectId || '';
     if (!docId || !projectId) {
       addToast({
         type: 'info',
@@ -2915,34 +2915,11 @@ export default function TakeoffViewerModule({
         });
         return;
       }
-      const suggestions: Measurement[] = proposals.map((p, i) => {
-        const mType: Measurement['type'] = p.type === 'count' ? 'count' : 'area';
-        const unit = p.type === 'count' ? 'pcs' : `${scale.unitLabel}²`;
-        const value =
-          p.type === 'count'
-            ? (p.count_value ?? p.points.length)
-            : (typeof p.measurement_value === 'number' ? p.measurement_value : 0);
-        const labelText =
-          p.type === 'count'
-            ? String(p.count_value ?? p.points.length)
-            : p.measurement_value != null
-              ? formatMeasurement(Number(p.measurement_value), unit)
-              : t('takeoff_viewer.recognize_uncalibrated', { defaultValue: 'calibrate for value' });
-        return {
-          id: `ai_${run.id}_${i}`,
-          type: mType,
-          points: p.points.map((pt) => ({ x: pt.x, y: pt.y })),
-          value: Number(value) || 0,
-          unit,
-          label: labelText,
-          annotation: p.annotation || nextAnnotation(mType),
-          page: currentPage,
-          group: activeGroup,
-          suggested: true,
-          confidence: p.confidence ?? undefined,
-        };
+      const suggestions = proposals.map((p) => proposalToMeasurement(p, run.id));
+      setMeasurements((prev) => {
+        const seen = new Set(prev.map((m) => m.serverId || m.id));
+        return [...prev, ...suggestions.filter((m) => !seen.has(m.serverId || m.id))];
       });
-      setMeasurements((prev) => [...prev, ...suggestions]);
       addToast({
         type: 'success',
         title: t('takeoff_viewer.plan_read.added_title', {
@@ -2966,35 +2943,168 @@ export default function TakeoffViewerModule({
     planReadBusy,
     initialPdfUrl,
     selectedProjectId,
-    activeProjectId,
+    effectiveProjectId,
     currentPage,
     scale,
-    activeGroup,
-    nextAnnotation,
+    proposalToMeasurement,
     addToast,
     t,
   ]);
 
-  /** Accept one suggestion: clear the flag so it persists on the next sync. */
-  const acceptSuggestion = useCallback((id: string) => {
+  /** Accept one suggestion. Server-backed plan-read proposals are confirmed
+   *  through the v7.6 accept endpoint; legacy offline suggestions remain local
+   *  until the normal persistence hook creates them. */
+  const acceptSuggestion = useCallback(async (id: string) => {
+    const target = measurements.find((m) => m.id === id);
+    if (!target) return;
+    if (target.serverId && target.planReadRunId) {
+      try {
+        const result = await takeoffApi.planRead.accept(target.planReadRunId, {
+          measurement_ids: [target.serverId],
+        });
+        if (result.blocked > 0 || result.confirmed === 0) {
+          addToast({
+            type: 'warning',
+            title: t('takeoff_viewer.plan_read.blocked_title', { defaultValue: 'Suggestion needs redraw' }),
+            message: t('takeoff_viewer.plan_read.blocked_msg', {
+              defaultValue: 'This proposal has invalid geometry. Redraw or edit it before using it.',
+            }),
+          });
+          return;
+        }
+        const accepted = new Set(result.measurement_ids);
+        setMeasurements((prev) =>
+          prev.map((m) =>
+            m.serverId && accepted.has(m.serverId)
+              ? { ...m, suggested: false, reviewStatus: 'confirmed' }
+              : m,
+          ),
+        );
+      } catch (err) {
+        addToast({
+          type: 'error',
+          title: t('takeoff_viewer.accept_suggestion_failed', { defaultValue: 'Accept failed' }),
+          message: getErrorMessage(err),
+        });
+      }
+      return;
+    }
     setMeasurements((prev) => prev.map((m) => (m.id === id ? { ...m, suggested: false } : m)));
-  }, []);
+  }, [measurements, addToast, t]);
 
-  /** Reject one suggestion: drop it (it was never persisted). */
-  const rejectSuggestion = useCallback((id: string) => {
+  /** Reject one suggestion and remove server-backed proposals from future reloads. */
+  const rejectSuggestion = useCallback(async (id: string) => {
+    const target = measurements.find((m) => m.id === id);
+    if (!target) return;
+    if (target.serverId && target.planReadRunId) {
+      try {
+        const result = await takeoffApi.planRead.reject(target.planReadRunId, {
+          measurement_ids: [target.serverId],
+        });
+        const rejected = new Set(result.measurement_ids);
+        setMeasurements((prev) =>
+          prev.filter((m) => !(m.serverId && rejected.has(m.serverId))),
+        );
+        setSelectedMeasurementId((cur) => (cur === id ? null : cur));
+      } catch (err) {
+        addToast({
+          type: 'error',
+          title: t('takeoff_viewer.reject_suggestion_failed', { defaultValue: 'Reject failed' }),
+          message: getErrorMessage(err),
+        });
+      }
+      return;
+    }
     setMeasurements((prev) => prev.filter((m) => m.id !== id));
     setSelectedMeasurementId((cur) => (cur === id ? null : cur));
-  }, []);
+  }, [measurements, addToast, t]);
 
   /** Accept every pending suggestion at once. */
-  const acceptAllSuggestions = useCallback(() => {
-    setMeasurements((prev) => prev.map((m) => (m.suggested ? { ...m, suggested: false } : m)));
-  }, []);
+  const acceptAllSuggestions = useCallback(async () => {
+    const pending = measurements.filter((m) => m.suggested);
+    const localIds = new Set(pending.filter((m) => !m.serverId || !m.planReadRunId).map((m) => m.id));
+    const byRun = new Map<string, string[]>();
+    for (const m of pending) {
+      if (!m.serverId || !m.planReadRunId) continue;
+      byRun.set(m.planReadRunId, [...(byRun.get(m.planReadRunId) || []), m.serverId]);
+    }
+
+    const accepted = new Set<string>();
+    let blocked = 0;
+    try {
+      for (const [runId, ids] of byRun) {
+        const result = await takeoffApi.planRead.accept(runId, { measurement_ids: ids });
+        result.measurement_ids.forEach((mid) => accepted.add(mid));
+        blocked += result.blocked;
+      }
+    } catch (err) {
+      addToast({
+        type: 'error',
+        title: t('takeoff_viewer.accept_suggestion_failed', { defaultValue: 'Accept failed' }),
+        message: getErrorMessage(err),
+      });
+      return;
+    }
+
+    setMeasurements((prev) =>
+      prev.map((m) => {
+        const acceptedLocal = localIds.has(m.id);
+        const acceptedServer = Boolean(m.serverId && accepted.has(m.serverId));
+        return acceptedLocal || acceptedServer
+          ? { ...m, suggested: false, reviewStatus: 'confirmed' }
+          : m;
+      }),
+    );
+    if (blocked > 0) {
+      addToast({
+        type: 'warning',
+        title: t('takeoff_viewer.plan_read.some_blocked_title', { defaultValue: 'Some suggestions need redraw' }),
+        message: t('takeoff_viewer.plan_read.some_blocked_msg', {
+          defaultValue: '{{n}} proposal(s) were left pending because their geometry is invalid.',
+          n: blocked,
+        }),
+      });
+    }
+  }, [measurements, addToast, t]);
 
   /** Dismiss every pending suggestion at once. */
-  const dismissAllSuggestions = useCallback(() => {
-    setMeasurements((prev) => prev.filter((m) => !m.suggested));
-  }, []);
+  const dismissAllSuggestions = useCallback(async () => {
+    const pending = measurements.filter((m) => m.suggested);
+    const localIds = new Set(pending.filter((m) => !m.serverId || !m.planReadRunId).map((m) => m.id));
+    const byRun = new Map<string, string[]>();
+    for (const m of pending) {
+      if (!m.serverId || !m.planReadRunId) continue;
+      byRun.set(m.planReadRunId, [...(byRun.get(m.planReadRunId) || []), m.serverId]);
+    }
+
+    const rejected = new Set<string>();
+    try {
+      for (const [runId, ids] of byRun) {
+        const result = await takeoffApi.planRead.reject(runId, { measurement_ids: ids });
+        result.measurement_ids.forEach((mid) => rejected.add(mid));
+      }
+    } catch (err) {
+      addToast({
+        type: 'error',
+        title: t('takeoff_viewer.reject_suggestion_failed', { defaultValue: 'Reject failed' }),
+        message: getErrorMessage(err),
+      });
+      return;
+    }
+
+    setMeasurements((prev) =>
+      prev.filter((m) => {
+        if (!m.suggested) return true;
+        if (localIds.has(m.id)) return false;
+        return !(m.serverId && rejected.has(m.serverId));
+      }),
+    );
+    setSelectedMeasurementId((cur) => {
+      if (!cur) return cur;
+      const selected = pending.find((m) => m.id === cur);
+      return selected ? null : cur;
+    });
+  }, [measurements, addToast, t]);
 
   /* ── Export measurements to BOQ ────────────────────────────────── */
 
@@ -3018,7 +3128,7 @@ export default function TakeoffViewerModule({
     // Seed the picker from the app's active project context so the
     // estimator doesn't have to reselect the project they're already
     // working in. The BOQ list loads in step with it.
-    const seedProject = selectedProjectId || activeProjectId || '';
+    const seedProject = selectedProjectId || effectiveProjectId || '';
     if (seedProject) {
       setSelectedProjectId(seedProject);
       if (exportBoqs.length === 0) {
@@ -3036,7 +3146,7 @@ export default function TakeoffViewerModule({
         message: err instanceof Error ? err.message : '',
       });
     }
-  }, [addToast, t, selectedProjectId, activeProjectId, exportBoqs.length, loadExportBoqs]);
+  }, [addToast, t, selectedProjectId, effectiveProjectId, exportBoqs.length, loadExportBoqs]);
 
   const handleProjectChange = useCallback(async (projectId: string) => {
     setSelectedProjectId(projectId);
@@ -3144,7 +3254,7 @@ export default function TakeoffViewerModule({
     setLinkPickerMode('pick');
 
     // Seed picker selection.  Priority: export-dialog pick > active context.
-    const seedProject = selectedProjectId || activeProjectId || '';
+    const seedProject = selectedProjectId || effectiveProjectId || '';
     const seedBoq = (selectedProjectId ? selectedBoqId : '') || (activeProjectId ? activeBoqIdFromStore ?? '' : '') || '';
     setLinkPickerProjectId(seedProject);
     setLinkPickerBoqId(seedBoq);
@@ -3167,7 +3277,7 @@ export default function TakeoffViewerModule({
     } else {
       setLinkBoqPositions([]);
     }
-  }, [selectedProjectId, selectedBoqId, activeProjectId, activeBoqIdFromStore, loadPickerBoqs, loadPickerPositions]);
+  }, [selectedProjectId, selectedBoqId, activeProjectId, effectiveProjectId, activeBoqIdFromStore, loadPickerBoqs, loadPickerPositions]);
 
   /** Picker: user switched project.  Reset BOQ + positions, load BOQs for new project. */
   const handlePickerProjectChange = useCallback(async (projectId: string) => {

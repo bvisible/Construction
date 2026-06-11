@@ -31,7 +31,21 @@ from typing import Any
 #: to the request (the multimodal-capable transports). A provider outside this
 #: set cannot read a drawing image, so the plan-read run refuses rather than
 #: silently degrading to a text-only call that would fabricate geometry.
-VISION_PROVIDERS: frozenset[str] = frozenset({"anthropic", "openai", "gemini", "openrouter"})
+VISION_PROVIDERS: frozenset[str] = frozenset(
+    {
+        "anthropic",
+        "openai",
+        "gemini",
+        "openrouter",
+        # #### NEOFFICE PATCH — allow OpenAI-compatible self-hosted vision
+        # transports (Olares/Ollama/vLLM). The model check below still blocks
+        # obvious text-only models; unknown local model ids are left to the
+        # provider as the final capability backstop.
+        "ollama",
+        "vllm",
+        # #### END NEOFFICE PATCH
+    }
+)
 
 #: Model-name fragments that mark a known text-only model even on an otherwise
 #: vision-capable provider. Kept deliberately small and conservative: when in

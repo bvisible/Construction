@@ -37,6 +37,21 @@ interface RecentPhoto {
 
 const RECENT_LIMIT = 12;
 
+function normalizeRecentPhotos(payload: unknown): RecentPhoto[] {
+  if (Array.isArray(payload)) return payload as RecentPhoto[];
+  if (!payload || typeof payload !== 'object') return [];
+  const obj = payload as {
+    items?: unknown;
+    data?: unknown;
+    photos?: unknown;
+    results?: unknown;
+  };
+  for (const value of [obj.items, obj.data, obj.photos, obj.results]) {
+    if (Array.isArray(value)) return value as RecentPhoto[];
+  }
+  return [];
+}
+
 export function LatestSitePhotosCard() {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -45,7 +60,9 @@ export function LatestSitePhotosCard() {
   const { data: photos, isLoading } = useQuery({
     queryKey: ['dashboard-recent-photos', RECENT_LIMIT],
     queryFn: () =>
-      apiGet<RecentPhoto[]>(`/v1/documents/photos/recent/?limit=${RECENT_LIMIT}`).catch(() => []),
+      apiGet<unknown>(`/v1/documents/photos/recent/?limit=${RECENT_LIMIT}`)
+        .then(normalizeRecentPhotos)
+        .catch(() => []),
     retry: false,
     staleTime: 60_000,
   });

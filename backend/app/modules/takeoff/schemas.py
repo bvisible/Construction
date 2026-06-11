@@ -50,6 +50,7 @@ class TakeoffDocumentResponse(BaseModel):
     pages: int
     size_bytes: int
     status: str
+    project_id: str | None = None
     content_type: str
     uploaded_at: datetime | None = Field(None, alias="created_at")
 
@@ -259,6 +260,13 @@ class TakeoffMeasurementResponse(BaseModel):
     count_value: int | None = None
     scale_pixels_per_unit: float | None = None
     linked_boq_position_id: str | None = None
+    # #### NEOFFICE PATCH — expose review provenance from v7.6 plan-read rows
+    # so the SPA can distinguish proposed AI candidates from confirmed/manual
+    # measurements after a reload.
+    source: str = "manual"
+    confidence: float | None = None
+    review_status: str = "confirmed"
+    # #### END NEOFFICE PATCH
     metadata: dict[str, Any] = Field(default_factory=dict, validation_alias="metadata_")
     created_by: str = ""
     created_at: datetime
@@ -522,6 +530,14 @@ class PlanReadAcceptResponse(BaseModel):
     confirmed: int = 0
     skipped: int = 0
     blocked: int = 0
+    measurement_ids: list[str] = Field(default_factory=list)
+
+
+class PlanReadRejectResponse(BaseModel):
+    """Outcome of a plan-read reject call."""
+
+    rejected: int = 0
+    skipped: int = 0
     measurement_ids: list[str] = Field(default_factory=list)
 
 
