@@ -20,6 +20,9 @@ import {
   AlertTriangle,
   Clock,
   MapPin,
+  CircleDot,
+  Flame,
+  Timer,
 } from 'lucide-react';
 import {
   Button,
@@ -34,7 +37,9 @@ import {
   WideModalField,
   SkeletonTable,
   IntroRichText,
+  KpiBand,
 } from '@/shared/ui';
+import type { KpiBandItem } from '@/shared/ui';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { RequiresProject } from '@/shared/auth/RequiresProject';
 import { useConfirm } from '@/shared/hooks/useConfirm';
@@ -235,64 +240,175 @@ function PunchSourceBadge({
   );
 }
 
-/* ── Stats Cards ──────────────────────────────────────────────────────── */
+/* ── KPI band ──────────────────────────────────────────────────────────
 
-function StatsCards({ summary }: { summary: PunchSummary | undefined }) {
+   The role-home KPI strip the founder picked as the reference pattern
+   (issue #70). Built on the shared <KpiBand> + StatCard so it reads the
+   same on every page that copies it. Metrics are derived from the data the
+   page already has: the server summary (total / by_status / by_priority /
+   overdue / avg_days_to_close) plus the loaded item list (used to compute
+   what the summary endpoint does not expose - urgent-open count, items
+   closed in the last seven days, and the average age of still-open work).
+   Tiles are clickable where a sensible drill-down exists, filtering the
+   list below to the matching slice. */
+
+const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Parse an ISO timestamp to epoch ms, or null when absent/unparseable. */
+function toMs(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const ms = new Date(value).getTime();
+  return Number.isFinite(ms) ? ms : null;
+}
+
+interface PunchKpiActions {
+  /** Show only the given statuses in the list below. */
+  onFilterStatus: (status: PunchStatus | '') => void;
+  /** Show only the given priority in the list below. */
+  onFilterPriority: (priority: PunchPriority | '') => void;
+}
+
+function PunchKpiBand({
+  summary,
+  items,
+  actions,
+}: {
+  summary: PunchSummary | undefined;
+  items: PunchItem[];
+  actions: PunchKpiActions;
+}) {
   const { t } = useTranslation();
 
-  const total = summary?.total ?? 0;
-  const byStatus = summary?.by_status ?? {};
-  const overdue = summary?.overdue ?? 0;
-  const avgDays = summary?.avg_days_to_close;
+  const metrics = useMemo(() => {
+    const byStatus = summary?.by_status ?? {};
+    const overdue = summary?.overdue ?? 0;
+    const avgClose = summary?.avg_days_to_close;
 
-  const items: { label: string; value: string | number; cls: string }[] = [
+    // "Open" = the live workload still to be worked (open + in progress).
+    const open = (byStatus['open'] ?? 0) + (byStatus['in_progress'] ?? 0);
+    const resolved = byStatus['resolved'] ?? 0;
+    // Urgent-open is not in the summary payload, so derive it from the list:
+    // critical/high items that are not yet resolved/verified/closed.
+    const urgentOpen = items.reduce((n, it) => {
+      const live = it.status === 'open' || it.status === 'in_progress';
+      const urgent = it.priority === 'critical' || it.priority === 'high';
+      return n + (live && urgent ? 1 : 0);
+    }, 0);
+
+    // Closed in the last 7 days: prefer the verified/resolved timestamps,
+    // fall back to updated_at for closed items that carry no resolved stamp.
+    const now = Date.now();
+    const closedThisWeek = items.reduce((n, it) => {
+      if (it.status !== 'closed' && it.status !== 'verified') return n;
+      const when = toMs(it.verified_at) ?? toMs(it.resolved_at) ?? toMs(it.updated_at);
+      return n + (when != null && now - when <= WEEK_MS ? 1 : 0);
+    }, 0);
+
+    // Average age (days) of still-open items, from created_at. Null when
+    // there is nothing open to average so we render a dash, not "0d".
+    let ageSum = 0;
+    let ageCount = 0;
+    for (const it of items) {
+      if (it.status !== 'open' && it.status !== 'in_progress') continue;
+      const created = toMs(it.created_at);
+      if (created == null) continue;
+      ageSum += Math.max(0, now - created);
+      ageCount += 1;
+    }
+    const avgOpenAgeDays = ageCount > 0 ? Math.round(ageSum / ageCount / DAY_MS) : null;
+
+    return {
+      open,
+      resolved,
+      overdue,
+      urgentOpen,
+      closedThisWeek,
+      avgOpenAgeDays,
+      avgClose,
+    };
+  }, [summary, items]);
+
+  const dashOrDays = (n: number | null | undefined) =>
+    n != null ? t('punch.kpi_days', { defaultValue: '{{count}}d', count: n }) : '-';
+
+  const kpiItems: KpiBandItem[] = [
     {
-      label: t('punch.stat_total', { defaultValue: 'Total' }),
-      value: total,
-      cls: 'text-content-primary',
+      key: 'open',
+      label: t('punch.kpi_open', { defaultValue: 'Open' }),
+      value: metrics.open,
+      sub: t('punch.kpi_open_sub', { defaultValue: 'still to action' }),
+      icon: CircleDot,
+      tone: metrics.open > 0 ? 'danger' : 'success',
+      tintValue: metrics.open > 0,
+      onClick: () => actions.onFilterStatus('open'),
+      ariaLabel: t('punch.kpi_open_aria', {
+        defaultValue: 'Filter to open items ({{count}})',
+        count: metrics.open,
+      }),
     },
     {
-      label: t('punch.stat_open', { defaultValue: 'Open' }),
-      value: byStatus['open'] ?? 0,
-      cls: 'text-semantic-error',
+      key: 'overdue',
+      label: t('punch.kpi_overdue', { defaultValue: 'Overdue' }),
+      value: metrics.overdue,
+      sub: t('punch.kpi_overdue_sub', { defaultValue: 'past due date' }),
+      icon: AlertTriangle,
+      tone: metrics.overdue > 0 ? 'danger' : 'default',
+      tintValue: metrics.overdue > 0,
     },
     {
-      label: t('punch.stat_in_progress', { defaultValue: 'In Progress' }),
-      value: byStatus['in_progress'] ?? 0,
-      cls: 'text-amber-700 dark:text-amber-400',
+      key: 'urgent',
+      label: t('punch.kpi_urgent', { defaultValue: 'Critical / High' }),
+      value: metrics.urgentOpen,
+      sub: t('punch.kpi_urgent_sub', { defaultValue: 'urgent and open' }),
+      icon: Flame,
+      tone: metrics.urgentOpen > 0 ? 'warning' : 'default',
+      tintValue: metrics.urgentOpen > 0,
+      onClick: () => actions.onFilterPriority('critical'),
+      ariaLabel: t('punch.kpi_urgent_aria', {
+        defaultValue: 'Filter to critical priority items',
+      }),
     },
     {
-      label: t('punch.stat_resolved', { defaultValue: 'Resolved' }),
-      value: byStatus['resolved'] ?? 0,
-      cls: 'text-oe-blue',
+      key: 'resolved',
+      label: t('punch.kpi_resolved', { defaultValue: 'Resolved' }),
+      value: metrics.resolved,
+      sub: t('punch.kpi_resolved_sub', { defaultValue: 'awaiting verify' }),
+      icon: CheckCircle2,
+      tone: 'blue',
+      tintValue: metrics.resolved > 0,
+      onClick: () => actions.onFilterStatus('resolved'),
+      ariaLabel: t('punch.kpi_resolved_aria', {
+        defaultValue: 'Filter to resolved items ({{count}})',
+        count: metrics.resolved,
+      }),
     },
     {
-      label: t('punch.stat_overdue', { defaultValue: 'Overdue' }),
-      value: overdue,
-      cls: overdue > 0 ? 'text-semantic-error' : 'text-content-primary',
+      key: 'closed_week',
+      label: t('punch.kpi_closed_week', { defaultValue: 'Closed this week' }),
+      value: metrics.closedThisWeek,
+      sub: t('punch.kpi_closed_week_sub', { defaultValue: 'last 7 days' }),
+      icon: ShieldCheck,
+      tone: 'success',
+      tintValue: metrics.closedThisWeek > 0,
     },
     {
-      label: t('punch.stat_avg_close', { defaultValue: 'Avg Days to Close' }),
-      value: avgDays != null ? `${avgDays}d` : '-',
-      cls: 'text-content-primary',
+      key: 'age',
+      label: t('punch.kpi_avg_age', { defaultValue: 'Avg open age' }),
+      value: dashOrDays(metrics.avgOpenAgeDays),
+      sub:
+        metrics.avgClose != null
+          ? t('punch.kpi_avg_close_sub', {
+              defaultValue: '{{count}}d avg to close',
+              count: metrics.avgClose,
+            })
+          : t('punch.kpi_avg_age_sub', { defaultValue: 'open items' }),
+      icon: Timer,
+      tone: 'default',
     },
   ];
 
-  return (
-    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-      {items.map((item) => (
-        <div
-          key={item.label}
-          className="rounded-xl border border-border bg-surface-primary p-3 animate-card-in"
-        >
-          <p className="text-2xs uppercase tracking-wide text-content-tertiary">{item.label}</p>
-          <p className={clsx('mt-1 text-lg font-semibold tabular-nums', item.cls)}>
-            {item.value}
-          </p>
-        </div>
-      ))}
-    </div>
-  );
+  return <KpiBand items={kpiItems} columns={6} />;
 }
 
 /* ── Add Punch Item Modal ─────────────────────────────────────────────── */
@@ -899,6 +1015,18 @@ export function PunchListPage() {
     enabled: !!projectId,
   });
 
+  // Unfiltered project-wide list used only to derive the KPI metrics the
+  // summary endpoint does not expose (urgent-open count, items closed this
+  // week, average age of open items). Keeping it separate from the
+  // filtered `punchItems` query means the role-home KPI band stays stable
+  // and project-wide even while the list below is narrowed by a filter.
+  const { data: kpiItems = [] } = useQuery({
+    queryKey: ['punchlist-kpi', projectId],
+    queryFn: () => fetchPunchItems(projectId),
+    enabled: !!projectId,
+    staleTime: 30_000,
+  });
+
   const { data: teamMembers = [] } = useQuery({
     queryKey: ['team-members', projectId],
     queryFn: () => fetchTeamMembers(projectId),
@@ -1217,8 +1345,21 @@ export function PunchListPage() {
         })}
       </SectionIntro>
 
-      {/* KPI strip */}
-      <StatsCards summary={summary} />
+      {/* KPI strip - the role-home reference band (issue #70). */}
+      <PunchKpiBand
+        summary={summary}
+        items={kpiItems}
+        actions={{
+          onFilterStatus: (status) => {
+            setFilterStatus(status);
+            setShowFilters(true);
+          },
+          onFilterPriority: (priority) => {
+            setFilterPriority(priority);
+            setShowFilters(true);
+          },
+        }}
+      />
 
       {/* Toolbar */}
       <div className="flex flex-col sm:flex-row sm:items-center gap-3">

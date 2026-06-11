@@ -27,6 +27,7 @@ class AISettings(Base):
     anthropic_api_key: Mapped[str | None] = mapped_column(String(500), nullable=True, default=None)
     openai_api_key: Mapped[str | None] = mapped_column(String(500), nullable=True, default=None)
     gemini_api_key: Mapped[str | None] = mapped_column(String(500), nullable=True, default=None)
+    kimi_api_key: Mapped[str | None] = mapped_column(String(500), nullable=True, default=None)
     openrouter_api_key: Mapped[str | None] = mapped_column(String(500), nullable=True, default=None)
     mistral_api_key: Mapped[str | None] = mapped_column(String(500), nullable=True, default=None)
     groq_api_key: Mapped[str | None] = mapped_column(String(500), nullable=True, default=None)

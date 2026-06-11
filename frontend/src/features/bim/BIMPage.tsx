@@ -277,27 +277,24 @@ function ModelCard({ model, isActive, onClick, onDelete }: {
   const isError = model.status === 'error' || model.status === 'needs_converter';
   const isProcessing = model.status === 'processing';
 
-  const statusDot = model.status === 'ready'
-    ? 'bg-emerald-500'
-    : model.status === 'degraded'
-      ? 'bg-amber-500'
-      : isProcessing
-        ? 'bg-amber-400 animate-pulse'
-        : isError
-          ? 'bg-red-400'
-          : 'bg-gray-400';
+  let statusDot = 'bg-gray-400';
+  if (model.status === 'ready') statusDot = 'bg-emerald-500';
+  else if (model.status === 'degraded') statusDot = 'bg-amber-500';
+  else if (isProcessing) statusDot = 'bg-amber-400 animate-pulse';
+  else if (isError) statusDot = 'bg-red-400';
 
-  const statusLabel = model.status === 'ready'
-    ? t('bim.status_ready', { defaultValue: 'Ready' })
-    : model.status === 'degraded'
-      ? t('bim.status_degraded', { defaultValue: 'Imported (no quantities)' })
-      : model.status === 'needs_converter'
-        ? t('bim.status_needs_converter', { defaultValue: 'Needs Converter' })
-        : model.status === 'processing'
-          ? t('bim.status_processing', { defaultValue: 'Processing' })
-          : model.status === 'error'
-            ? t('bim.status_error', { defaultValue: 'Error' })
-            : model.status;
+  let statusLabel: string = model.status;
+  if (model.status === 'ready') {
+    statusLabel = t('bim.status_ready', { defaultValue: 'Ready' });
+  } else if (model.status === 'degraded') {
+    statusLabel = t('bim.status_degraded', { defaultValue: 'Imported (no quantities)' });
+  } else if (model.status === 'needs_converter') {
+    statusLabel = t('bim.status_needs_converter', { defaultValue: 'Needs Converter' });
+  } else if (model.status === 'processing') {
+    statusLabel = t('bim.status_processing', { defaultValue: 'Processing' });
+  } else if (model.status === 'error') {
+    statusLabel = t('bim.status_error', { defaultValue: 'Error' });
+  }
 
   // The card itself acts as a button (click selects the model). We render
   // it as a <div role="button"> so the inner delete button can stay a real
@@ -1745,11 +1742,21 @@ function LandingPage({ projectId, onUploadComplete: _onUploadComplete, breadcrum
             )}
             {(landingModels ?? []).map((m) => {
               const fmt = (m.model_format || m.format || '').toUpperCase();
-              const isReady = m.status === 'ready';
-              const isDegraded = m.status === 'degraded';
-              const isProcessing = m.status === 'processing';
-              const isError = m.status === 'error' || m.status === 'needs_converter';
-              const statusDot = isReady ? 'bg-emerald-500' : isDegraded ? 'bg-amber-500' : isProcessing ? 'bg-amber-400 animate-pulse' : isError ? 'bg-red-400' : 'bg-gray-400';
+              const status = m.status;
+              const isReady = status === 'ready';
+              const isDegraded = status === 'degraded';
+              const isProcessing = status === 'processing';
+              const isError = status === 'error' || status === 'needs_converter';
+              let statusDot = 'bg-gray-400';
+              if (isReady) statusDot = 'bg-emerald-500';
+              else if (isDegraded) statusDot = 'bg-amber-500';
+              else if (isProcessing) statusDot = 'bg-amber-400 animate-pulse';
+              else if (isError) statusDot = 'bg-red-400';
+
+              let statusText: string = m.status;
+              if (isReady) statusText = t('bim.status_ready', { defaultValue: 'Ready' });
+              else if (isDegraded) statusText = t('bim.status_degraded', { defaultValue: 'Imported (no quantities)' });
+              else if (isProcessing) statusText = t('bim.status_processing', { defaultValue: 'Processing' });
 
               return (
                 <button
@@ -1779,7 +1786,7 @@ function LandingPage({ projectId, onUploadComplete: _onUploadComplete, breadcrum
                     <div className="flex items-center gap-2 text-[10px] text-content-quaternary">
                       <span className="flex items-center gap-1">
                         <span className={`w-1.5 h-1.5 rounded-full ${statusDot}`} />
-                        {isReady ? t('bim.status_ready', { defaultValue: 'Ready' }) : isDegraded ? t('bim.status_degraded', { defaultValue: 'Imported (no quantities)' }) : isProcessing ? t('bim.status_processing', { defaultValue: 'Processing' }) : m.status}
+                        {statusText}
                       </span>
                       {(m.element_count ?? 0) > 0 && (
                         <>
@@ -2167,10 +2174,13 @@ export function BIMPage() {
     // an upload) used to surface a misleading "Failed to load model elements"
     // toast — the inline NonReadyOverlay now drives the UI for non-ready
     // states and the elements query waits its turn.
-    // 'degraded' models have geometry + elements in the DB (imported but DDC
-    // converter absent or no quantities extracted) — show them in the viewer
-    // with the existing converter-absent warning banner.
-    enabled: !!activeModelId && (activeModel?.status === 'ready' || activeModel?.status === 'degraded'),
+    // A 'degraded' model still has its geometry and elements persisted (the
+    // import succeeded but the DDC converter was unavailable, or no quantities
+    // came back), so we load it just like a ready one and let the existing
+    // converter-absent banner explain the missing data.
+    enabled:
+      !!activeModelId &&
+      (activeModel?.status === 'ready' || activeModel?.status === 'degraded'),
   });
   const elements: BIMElementData[] = elementsQuery.data?.items ?? [];
   const elementsTotal: number = elementsQuery.data?.total ?? 0;
@@ -2324,11 +2334,11 @@ export function BIMPage() {
   // The ?token= param authenticates the request (Three.js can't set headers).
   // Cache-bust with model updated_at to ensure fresh geometry after re-upload.
   const geometryUrl = useMemo(() => {
-    const modelIsViewable =
-      activeModel?.status === 'ready' || activeModel?.status === 'degraded';
+    const status = activeModel?.status;
+    const canRenderModel = status === 'ready' || status === 'degraded';
     if (
       !activeModelId ||
-      !modelIsViewable ||
+      !canRenderModel ||
       ((activeModel?.element_count ?? 0) === 0 && !elements.some((el) => !!el.mesh_ref))
     ) {
       return null;

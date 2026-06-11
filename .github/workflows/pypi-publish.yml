@@ -54,6 +54,9 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Repo hygiene - no internal-only files in the tree
+        run: python scripts/check_repo_hygiene.py
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -104,6 +107,9 @@ jobs:
           assert has_dist, f'wheel {whl} missing _frontend_dist payload'
           print(f'wheel OK: {whl} — {len(files)} files, _frontend_dist present')
           PY
+
+      - name: Repo hygiene - no internal-only files in the wheel
+        run: python scripts/check_repo_hygiene.py --zip "$(ls dist/*.whl | head -n1)"
 
       - name: Detect publish mode
         id: pubmode

@@ -2276,6 +2276,46 @@ SHOWCASE_DEMO_IDS: tuple[str, ...] = (
     "condo-toronto",  # Canada - residential, CAD
 )
 
+# Partner-pack flagship demo projects (one realistic country/company project
+# per pack) are authored as standalone DemoTemplate files under ``demo_packs/``
+# and merged into ``DEMO_TEMPLATES`` + ``DEMO_CATALOG`` via
+# ``register_pack_templates`` (defined below). The merge is driven by
+# ``demo_packs`` pushing into this module at the bottom of the file, which
+# keeps it order-independent: importing either module first yields the full
+# registry without a circular-import race (the pack files only need
+# ``DemoTemplate`` from here, never ``PACK_TEMPLATES``).
+
+# Fresh-install seed: four demo projects covering the broadest spread of
+# archetypes (residential, industrial, healthcare/intl, education/fit-out)
+# without leaning on a single very large UK example. The London/One Canary
+# Square template stays available in DEMO_TEMPLATES for ad-hoc install via
+# POST /api/demo/install/office-london, but it isn't auto-seeded because
+# operators consistently asked us to drop it from the default workspace.
+DEFAULT_DEMO_IDS: tuple[str, ...] = (
+    "residential-berlin",  # residential - DACH DIN 276, EUR
+    "warehouse-dubai",  # industrial / infrastructure - AED
+    "school-paris",  # small renovation / education fit-out - FR EUR
+    "medical-us",  # international healthcare - US MasterFormat, USD
+)
+
+# Rich generic-install showcase: the eight non-flagship country projects that a
+# normal (no pack) install seeds alongside the flagship reference project so the
+# fresh workspace lands a fully worked-out, globe-spanning portfolio. Ordered to
+# read residential -> industrial -> education -> healthcare -> commercial across
+# DACH, Gulf, FR, US, China, Brazil, India and Canada. Each id resolves to a
+# DemoTemplate (built-in or pack-authored, auto-registered from demo_packs/) so
+# install_demo_project materializes the full module set per project.
+SHOWCASE_DEMO_IDS: tuple[str, ...] = (
+    "residential-berlin",  # Germany - DIN 276, EUR
+    "warehouse-dubai",  # UAE - industrial, AED
+    "school-paris",  # France - education, EUR
+    "medical-us",  # USA - MasterFormat healthcare, USD
+    "office-shanghai",  # China - GB/T 50500, CNY
+    "residential-saopaulo",  # Brazil - SINAPI, BRL
+    "govt-building-delhi",  # India - CPWD, INR
+    "condo-toronto",  # Canada - residential, CAD
+)
+
 # Catalog info for the marketplace / frontend
 DEMO_CATALOG: list[dict] = [
     {

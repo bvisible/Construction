@@ -470,15 +470,16 @@ def _build_settings_response(settings: AISettings) -> AISettingsResponse:
         # Only surface non-empty string overrides.
         model_overrides = {str(k): str(v).strip() for k, v in raw_overrides.items() if isinstance(v, str) and v.strip()}
 
-    # Read custom base URLs for local providers from metadata_
-    raw_ollama_base_url = meta.get("ollama_base_url") if isinstance(meta, dict) else None
-    raw_vllm_base_url = meta.get("vllm_base_url") if isinstance(meta, dict) else None
-    ollama_base_url = (
+    # Pull the saved self-hosted endpoints (Ollama / vLLM) straight off metadata_.
+    _meta_is_dict = isinstance(meta, dict)
+    raw_ollama_base_url = meta.get("ollama_base_url") if _meta_is_dict else None
+    raw_vllm_base_url = meta.get("vllm_base_url") if _meta_is_dict else None
+    ollama_url = (
         str(raw_ollama_base_url).strip()
         if isinstance(raw_ollama_base_url, str) and raw_ollama_base_url.strip()
         else None
     )
-    vllm_base_url = (
+    vllm_url = (
         str(raw_vllm_base_url).strip() if isinstance(raw_vllm_base_url, str) and raw_vllm_base_url.strip() else None
     )
 
@@ -488,6 +489,7 @@ def _build_settings_response(settings: AISettings) -> AISettingsResponse:
         anthropic_api_key_set=_usable(settings.anthropic_api_key),
         openai_api_key_set=_usable(settings.openai_api_key),
         gemini_api_key_set=_usable(settings.gemini_api_key),
+        kimi_api_key_set=_usable(getattr(settings, "kimi_api_key", None)),
         openrouter_api_key_set=_usable(settings.openrouter_api_key),
         mistral_api_key_set=_usable(settings.mistral_api_key),
         groq_api_key_set=_usable(settings.groq_api_key),
@@ -502,9 +504,8 @@ def _build_settings_response(settings: AISettings) -> AISettingsResponse:
         baidu_api_key_set=_usable(getattr(settings, "baidu_api_key", None)),
         yandex_api_key_set=_usable(getattr(settings, "yandex_api_key", None)),
         gigachat_api_key_set=_usable(getattr(settings, "gigachat_api_key", None)),
-        kimi_api_key_set=_usable(getattr(settings, "kimi_api_key", None)),
-        ollama_base_url=ollama_base_url,
-        vllm_base_url=vllm_base_url,
+        ollama_base_url=ollama_url,
+        vllm_base_url=vllm_url,
         # //// NEOFFICE PATCH — surface the NORA-rebranded preferred model.
         preferred_model=preferred_model_override,
         model_overrides=model_overrides,
@@ -760,6 +761,7 @@ class AIService:
             "anthropic_api_key",
             "openai_api_key",
             "gemini_api_key",
+            "kimi_api_key",
             "openrouter_api_key",
             "mistral_api_key",
             "groq_api_key",
@@ -774,7 +776,6 @@ class AIService:
             "baidu_api_key",
             "yandex_api_key",
             "gigachat_api_key",
-            "kimi_api_key",
         ]
 
         from app.core.crypto import encrypt_secret
@@ -804,20 +805,18 @@ class AIService:
             meta["model_overrides"] = overrides
             return meta
 
-        def _merge_base_urls(
-            existing_meta: Any,
-            ollama_url: str | None,
-            vllm_url: str | None,
-        ) -> dict[str, Any]:
-            """Merge custom base URLs for local providers into metadata."""
-            meta: dict[str, Any] = dict(existing_meta) if isinstance(existing_meta, dict) else {}
-            if ollama_url is not None:
-                cleaned = ollama_url.strip()
-                meta["ollama_base_url"] = cleaned if cleaned else None
-            if vllm_url is not None:
-                cleaned = vllm_url.strip()
-                meta["vllm_base_url"] = cleaned if cleaned else None
-            return meta
+        def _merge_base_urls(current: Any, ollama: str | None, vllm: str | None) -> dict[str, Any]:
+            """Fold the self-hosted endpoint URLs (Ollama / vLLM) into metadata."""
+            merged: dict[str, Any] = dict(current) if isinstance(current, dict) else {}
+            for meta_key, supplied in (
+                ("ollama_base_url", ollama),
+                ("vllm_base_url", vllm),
+            ):
+                if supplied is None:
+                    continue
+                trimmed = supplied.strip()
+                merged[meta_key] = trimmed or None
+            return merged
 
         if settings is None:
             # Create with provided values (encrypt API keys at rest)
@@ -829,9 +828,9 @@ class AIService:
             create_kwargs["preferred_model"] = data.preferred_model or "claude-sonnet"
             if data.model_overrides is not None:
                 create_kwargs["metadata_"] = _merge_overrides({}, data.model_overrides)
-            meta = create_kwargs.get("metadata_", {})
-            if isinstance(meta, dict):
-                create_kwargs["metadata_"] = _merge_base_urls(meta, data.ollama_base_url, data.vllm_base_url)
+            current_meta = create_kwargs.get("metadata_", {})
+            if isinstance(current_meta, dict):
+                create_kwargs["metadata_"] = _merge_base_urls(current_meta, data.ollama_base_url, data.vllm_base_url)
             settings = AISettings(**create_kwargs)
             settings = await self.settings_repo.create(settings)
         else:
@@ -844,9 +843,10 @@ class AIService:
                 fields["preferred_model"] = data.preferred_model
             if data.model_overrides is not None:
                 fields["metadata_"] = _merge_overrides(settings.metadata_, data.model_overrides)
-            if data.ollama_base_url is not None or data.vllm_base_url is not None:
-                existing_meta = fields.get("metadata_", settings.metadata_)
-                fields["metadata_"] = _merge_base_urls(existing_meta, data.ollama_base_url, data.vllm_base_url)
+            has_base_url_update = data.ollama_base_url is not None or data.vllm_base_url is not None
+            if has_base_url_update:
+                base_meta = fields.get("metadata_", settings.metadata_)
+                fields["metadata_"] = _merge_base_urls(base_meta, data.ollama_base_url, data.vllm_base_url)
 
             if fields:
                 await self.settings_repo.update_fields(settings.id, **fields)
@@ -863,13 +863,13 @@ class AIService:
             source_module="oe_ai",
         )
 
-        # Sync custom base URLs for local providers into the global
-        # provider config so all subsequent call_ai() calls across the
-        # entire app (boq, takeoff, erp_chat, etc.) use the user's URL.
-        from app.modules.ai.ai_client import update_provider_config
+        # Propagate the saved self-hosted endpoints into the process-wide
+        # provider config. That way every later call_ai() invocation, no
+        # matter which module fires it (boq, takeoff, erp_chat and so on),
+        # picks up the user's custom URL without passing it around.
+        from app.modules.ai import ai_client
 
-        update_provider_config(settings.metadata_)
-
+        ai_client.update_provider_config(settings.metadata_)
         return _build_settings_response(settings)
 
     # ── Quick estimate (text -> AI -> BOQ items) ─────────────────────────

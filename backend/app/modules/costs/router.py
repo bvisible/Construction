@@ -88,7 +88,7 @@ from app.modules.costs.translations import localize_cost_row
 # magic-byte gate has a chance to reject it. A real-world CWICR
 # CSV/Excel of 55K rows is ~8 MB; 25 MB leaves comfortable headroom for
 # annotated columns without exposing the parser to multi-GB blobs.
-_MAX_COST_UPLOAD_BYTES = 25 * 1024 * 1024
+_MAX_COST_UPLOAD_BYTES = 100 * 1024 * 1024
 
 # Magic-byte allow-list for the /import/file/ endpoint. ZIP covers OOXML
 # (xlsx); OLE covers legacy .xls; pure CSV has no magic so we accept the
@@ -400,7 +400,7 @@ async def autocomplete_cost_items(
     service: CostItemService = Depends(_get_service),
     q: str = Query(..., min_length=2, max_length=200, description="Search text (min 2 chars)"),
     region: str | None = Query(default=None, description="Filter by region (e.g. DE_BERLIN)"),
-    limit: int = Query(default=8, ge=1, le=20, description="Max results to return"),
+    limit: int = Query(default=20, ge=1, le=200, description="Max results to return"),
     semantic: bool = Query(default=False, description="Use vector semantic search if available"),
     locale: str | None = Query(
         default=None,
@@ -1270,7 +1270,7 @@ async def embedder_status() -> dict[str, Any]:
 async def qdrant_smoke_search(
     q: str = Query(..., min_length=1, description="Query text - passed verbatim as the CORE query"),
     country: str = Query("DE", description="Region or country code, e.g. DE, DE_BERLIN, USA_USD"),
-    limit: int = Query(10, ge=1, le=50),
+    limit: int = Query(10, ge=1, le=500),
     is_abstract: bool | None = Query(False, description="Drop aggregator headers (None to leave open)"),
     department_code: str | None = Query(None, description="DIN-276-derived trade bucket (optional)"),
     unit_dim: str | None = Query(None, description="volume / area / length / count (optional)"),
@@ -1830,30 +1830,26 @@ async def restore_qdrant_snapshot(
             )
             logger.info("Created Qdrant collection: %s", collection_name)
 
-        # Upload snapshot via multipart - client.recover_snapshot() only
-        # accepts URIs the Qdrant SERVER can fetch (http://, s3://, file://
-        # on the server's own disk). Our snapshot sits on the app container,
-        # so we POST the bytes directly to /collections/{name}/snapshots/upload.
-        from app.modules.costs.qdrant_snapshot_loader import restore_snapshot_file
+        # recover_snapshot() can only pull from a URI the Qdrant SERVER itself
+        # reaches (http://, s3://, or file:// on its own disk). The snapshot
+        # we hold lives on the app container instead, so push the raw bytes
+        # straight to /collections/{name}/snapshots/upload over multipart.
+        from app.modules.costs import qdrant_snapshot_loader
 
-        qdrant_url = _v3_qdrant_url()
-        if not qdrant_url:
-            raise HTTPException(
-                status.HTTP_500_INTERNAL_SERVER_ERROR,
-                "Qdrant URL not configured - set QDRANT_URL or CWICR_QDRANT_URL",
-            )
-        ok = await asyncio.to_thread(
-            restore_snapshot_file,
-            qdrant_url=qdrant_url,
-            collection_name=collection_name,
-            snapshot_path=local_path,
-            timeout_s=1800,
-        )
-        if not ok:
-            raise HTTPException(
-                status.HTTP_500_INTERNAL_SERVER_ERROR,
-                f"Failed to restore Qdrant snapshot for {db_id}. Check Qdrant logs.",
-            )
+        target_url = _v3_qdrant_url()
+        if not target_url:  # nowhere to send the restore request
+            detail = "Qdrant URL not configured - set QDRANT_URL or CWICR_QDRANT_URL"
+            raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail)
+        restore_kwargs = {
+            "qdrant_url": target_url,
+            "collection_name": collection_name,
+            "snapshot_path": local_path,
+            "timeout_s": 1800,
+        }
+        restored = await asyncio.to_thread(qdrant_snapshot_loader.restore_snapshot_file, **restore_kwargs)
+        if not restored:
+            detail = f"Failed to restore Qdrant snapshot for {db_id}. Check Qdrant logs."
+            raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail)
         logger.info("Snapshot restored for collection %s", collection_name)
     except Exception as exc:
         logger.error("Failed to restore snapshot for %s: %s", db_id, exc)
@@ -2234,7 +2230,7 @@ async def install_v3_catalogue(
 async def semantic_search(
     q: str = Query(..., min_length=2, max_length=500, description="Natural language query"),
     region: str | None = Query(default=None, description="Filter by region"),
-    limit: int = Query(default=10, ge=1, le=50),
+    limit: int = Query(default=25, ge=1, le=500),
 ) -> list[dict]:
     """Semantic search using vector similarity.
 
@@ -4599,12 +4595,13 @@ async def get_cost_item_certainty(
 @router.post(
     "/{item_id}/record-usage/",
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(RequirePermission("costs.read"))],
 )
 async def record_cost_item_usage(
     item_id: uuid.UUID,
     body: RecordUsageRequest,
     session: SessionDep,
-    user: OptionalUserPayload,
+    user: CurrentUserPayload,
 ) -> dict[str, object]:
     """‌⁠‍Append one row to the usage ledger.
 
@@ -4615,6 +4612,12 @@ async def record_cost_item_usage(
 
     Returns the new usage row's id + the refreshed certainty band so
     the frontend can update its badge cache in one round-trip.
+
+    Authenticated only. The usage ledger feeds the shared, cross-tenant
+    certainty badge (``CostCertaintyService.compute`` counts every row for
+    an item with no tenant scoping), so an anonymous writer could forge a
+    rate's "proven" status and inflate any project's frequency. We require
+    a usable subject and verify project access for EVERY caller.
     """
     # Verify cost item exists so we can give a precise 404 rather than
     # letting the FK CASCADE constraint do it at commit time.
@@ -4626,24 +4629,26 @@ async def record_cost_item_usage(
         )
 
     recorder = CostUsageRecorder(session)
-    used_by: uuid.UUID | None = None
-    sub = (user or {}).get("sub") if user else None
-    if sub:
-        try:
-            used_by = uuid.UUID(str(sub))
-        except (TypeError, ValueError):
-            # Anonymous / demo-token id may be non-UUID - silently drop.
-            used_by = None
+    sub = (user or {}).get("sub")
+    if not sub:
+        # Authenticated route, but defend against a token without a subject.
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+    try:
+        used_by = uuid.UUID(str(sub))
+    except (TypeError, ValueError) as exc:
+        # A non-UUID subject (e.g. malformed token) cannot be attributed or
+        # access-checked, so it must not be allowed to write the shared ledger.
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+        ) from exc
 
-    # IDOR guard: when the caller is authenticated, verify they can see the
-    # target project before we record a usage row attributed to it. Without
-    # this check, any authenticated user could attribute apply-events to any
-    # project UUID they happen to know. Anonymous callers (no usable sub)
-    # skip the check - the demo / pre-auth analytics path is preserved
-    # (the unauth ledger row has ``used_by = NULL`` so it can't be used to
-    # forge an identity-attributed history).
-    if used_by is not None:
-        await verify_project_access(body.project_id, str(used_by), session)
+    # IDOR guard: verify the caller can see the target project before we
+    # record a usage row attributed to it. Without this check any user could
+    # attribute apply-events to any project UUID they happen to know and bump
+    # the item's shared certainty frequency. verify_project_access raises 404
+    # for both missing and inaccessible projects.
+    await verify_project_access(body.project_id, str(used_by), session)
 
     row = await recorder.record(
         item_id,

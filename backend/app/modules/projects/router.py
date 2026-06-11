@@ -1266,10 +1266,13 @@ async def project_dashboard(
         except Exception:
             logger.debug("Dashboard activity: PunchItem query build failed", exc_info=True)
         try:
+            # Use the work-performed note as the activity title, falling back
+            # to the report type when no note was entered.
+            field_report_title = func.coalesce(FieldReport.work_performed, FieldReport.report_type).label("title")
             activity_queries.append(
                 select(
                     literal_column("'field_report'").label("type"),
-                    func.coalesce(FieldReport.work_performed, FieldReport.report_type).label("title"),
+                    field_report_title,
                     FieldReport.created_at,
                 ).where(FieldReport.project_id == project_id)
             )

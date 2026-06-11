@@ -2,7 +2,7 @@
 
 # OpenConstructionERP
 
-### The #1 open-source workspace for construction project management
+### A leading open-source workspace for construction project management
 
 Professional BOQ, 4D scheduling, 5D cost model, and tendering - all in one open-source platform.
 

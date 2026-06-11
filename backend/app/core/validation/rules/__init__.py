@@ -1733,7 +1733,10 @@ class LumpSumRatio(ValidationRule):
 
     async def validate(self, context: ValidationContext) -> list[RuleResult]:
         locale = _get_locale(context)
-        positions = _get_positions(context)
+        # Count over leaf positions only: section/header rows never carry a
+        # unit, so including them in the denominator dilutes the lump-sum
+        # ratio and under-flags lump-sum-heavy BOQs.
+        positions = _get_leaf_positions(context)
         if not positions:
             return []
 
@@ -2644,7 +2647,10 @@ class DPGFPricingComplete(ValidationRule):
 
     async def validate(self, context: ValidationContext) -> list[RuleResult]:
         locale = _get_locale(context)
-        positions = _get_positions(context)
+        # Use leaf positions only: section/header rows intentionally carry no
+        # unit_rate, so counting them in the denominator understates the
+        # pricing-completeness ratio (matches PositionHasUnitRate).
+        positions = _get_leaf_positions(context)
         if not positions:
             return []
         priced = sum(1 for p in positions if p.get("unit_rate") and (_num(p["unit_rate"], default=0.0) or 0.0) > 0)
@@ -5195,6 +5201,206 @@ class ScheduleMissingDuration(ValidationRule):
         return results
 
 
+# ── AI Takeoff (vision-LLM plan reading, issue #194) ────────────────────────
+#
+# Validation is first-class for the vision path: the model's structured output
+# is checked before it can become a trusted suggestion. These three rules fire
+# over a plan-read run's proposals (the engine is fed
+# ``context.data = {"proposals": [...], "page_width_pt", "page_height_pt"}``).
+# They are a review/quality gate, not a hard block - the API layer also blocks
+# accept on a self-intersection ERROR verdict.
+
+# The whole page must imply a real-world span inside this belt. Mirrors
+# plan_read._MIN_PAGE_SPAN_M / _MAX_PAGE_SPAN_M so the rule and the service
+# agree on what counts as an absurd ratio.
+_AI_TAKEOFF_MIN_PAGE_SPAN_M = 0.5
+_AI_TAKEOFF_MAX_PAGE_SPAN_M = 5000.0
+# Proposals at or below this confidence are flagged for human review.
+_AI_TAKEOFF_LOW_CONFIDENCE = 0.62
+
+
+def _get_plan_read_proposals(context: ValidationContext) -> list[dict[str, Any]]:
+    """Pull the plan-read proposal list from the validation context."""
+    data = context.data
+    if isinstance(data, dict):
+        proposals = data.get("proposals")
+        if isinstance(proposals, list):
+            return proposals
+    if isinstance(data, list):
+        return data
+    return []
+
+
+def _polygon_self_intersects(points: list[tuple[float, float]]) -> bool:
+    """Closed-polygon self-intersection test (parity with the TS source).
+
+    Twin of the frontend ``isSelfIntersecting`` and the service-side
+    ``plan_read.polygon_self_intersects`` so the dashboard finding matches the
+    canvas verdict.
+    """
+    n = len(points)
+    if n < 4:
+        return False
+
+    def _ccw(a: tuple[float, float], b: tuple[float, float], c: tuple[float, float]) -> bool:
+        return (c[1] - a[1]) * (b[0] - a[0]) > (b[1] - a[1]) * (c[0] - a[0])
+
+    def _cross(
+        a: tuple[float, float],
+        b: tuple[float, float],
+        c: tuple[float, float],
+        d: tuple[float, float],
+    ) -> bool:
+        return _ccw(a, c, d) != _ccw(b, c, d) and _ccw(a, b, c) != _ccw(a, b, d)
+
+    edges = [(points[i], points[(i + 1) % n]) for i in range(n)]
+    for i in range(n):
+        for j in range(i + 1, n):
+            if j == i or (i == 0 and j == n - 1) or j == i + 1:
+                continue
+            if _cross(*edges[i], *edges[j]):
+                return True
+    return False
+
+
+def _proposal_points(proposal: dict[str, Any]) -> list[tuple[float, float]]:
+    """Read ``[(x, y), ...]`` from a proposal's points, defensively."""
+    out: list[tuple[float, float]] = []
+    for pt in proposal.get("points") or []:
+        try:
+            if isinstance(pt, dict):
+                out.append((float(pt["x"]), float(pt["y"])))
+            elif isinstance(pt, (list, tuple)) and len(pt) >= 2:
+                out.append((float(pt[0]), float(pt[1])))
+        except (TypeError, ValueError, KeyError):
+            continue
+    return out
+
+
+class TakeoffScaleSanityRule(ValidationRule):
+    rule_id = "ai_takeoff.scale_sanity"
+    name = "AI Plan-Read Scale Sanity"
+    standard = "ai_takeoff"
+    severity = Severity.ERROR
+    category = RuleCategory.CONSISTENCY
+    description = "A detected scale must imply a plausible real-world page span"
+
+    async def validate(self, context: ValidationContext) -> list[RuleResult]:
+        locale = _get_locale(context)
+        data = context.data if isinstance(context.data, dict) else {}
+        ratio = _to_number(data.get("scale_ratio_px_per_unit"))
+        page_w = _to_number(data.get("page_width_pt")) or 0.0
+        page_h = _to_number(data.get("page_height_pt")) or 0.0
+        # Nothing to check when there is no scale (honest "no evidence").
+        if ratio is None or ratio is _NOT_A_NUMBER or ratio <= 0:
+            return []
+        long_edge = max(float(page_w), float(page_h))  # type: ignore[arg-type]
+        if long_edge <= 0:
+            return []
+        span_m = long_edge / float(ratio)  # type: ignore[arg-type]
+        passed = _AI_TAKEOFF_MIN_PAGE_SPAN_M <= span_m <= _AI_TAKEOFF_MAX_PAGE_SPAN_M
+        message = (
+            _ok(locale) if passed else translate("ai_takeoff.scale_sanity.fail", locale=locale, span=round(span_m, 2))
+        )
+        suggestion = None if passed else translate("ai_takeoff.scale_sanity.suggestion", locale=locale)
+        return [
+            RuleResult(
+                rule_id=self.rule_id,
+                rule_name=self.name,
+                severity=self.severity,
+                category=self.category,
+                passed=passed,
+                message=message,
+                suggestion=suggestion,
+            )
+        ]
+
+
+class TakeoffPolygonSelfIntersectionRule(ValidationRule):
+    rule_id = "ai_takeoff.polygon_self_intersection"
+    name = "AI Plan-Read Polygon Self-Intersection"
+    standard = "ai_takeoff"
+    severity = Severity.ERROR
+    category = RuleCategory.STRUCTURE
+    description = "A proposed room polygon must not self-intersect"
+
+    async def validate(self, context: ValidationContext) -> list[RuleResult]:
+        locale = _get_locale(context)
+        results: list[RuleResult] = []
+        for prop in _get_plan_read_proposals(context):
+            if (prop.get("type") or "").lower() != "area":
+                continue
+            points = _proposal_points(prop)
+            bad = _polygon_self_intersects(points)
+            message = (
+                _ok(locale)
+                if not bad
+                else translate(
+                    "ai_takeoff.polygon_self_intersection.fail",
+                    locale=locale,
+                    name=prop.get("annotation") or prop.get("id", "?"),
+                )
+            )
+            suggestion = (
+                None if not bad else translate("ai_takeoff.polygon_self_intersection.suggestion", locale=locale)
+            )
+            results.append(
+                RuleResult(
+                    rule_id=self.rule_id,
+                    rule_name=self.name,
+                    severity=self.severity,
+                    category=self.category,
+                    passed=not bad,
+                    message=message,
+                    element_ref=prop.get("id"),
+                    suggestion=suggestion,
+                )
+            )
+        return results
+
+
+class TakeoffLowConfidenceReviewRule(ValidationRule):
+    rule_id = "ai_takeoff.low_confidence_review"
+    name = "AI Plan-Read Low Confidence Review"
+    standard = "ai_takeoff"
+    severity = Severity.WARNING
+    category = RuleCategory.QUALITY
+    description = "Low-confidence AI proposals are flagged for human review before accept"
+
+    async def validate(self, context: ValidationContext) -> list[RuleResult]:
+        locale = _get_locale(context)
+        results: list[RuleResult] = []
+        for prop in _get_plan_read_proposals(context):
+            conf = _to_number(prop.get("confidence"))
+            if conf is None or conf is _NOT_A_NUMBER:
+                continue
+            passed = float(conf) > _AI_TAKEOFF_LOW_CONFIDENCE  # type: ignore[arg-type]
+            message = (
+                _ok(locale)
+                if passed
+                else translate(
+                    "ai_takeoff.low_confidence_review.fail",
+                    locale=locale,
+                    name=prop.get("annotation") or prop.get("id", "?"),
+                    confidence=round(float(conf), 2),  # type: ignore[arg-type]
+                )
+            )
+            suggestion = None if passed else translate("ai_takeoff.low_confidence_review.suggestion", locale=locale)
+            results.append(
+                RuleResult(
+                    rule_id=self.rule_id,
+                    rule_name=self.name,
+                    severity=self.severity,
+                    category=self.category,
+                    passed=passed,
+                    message=message,
+                    element_ref=prop.get("id"),
+                    suggestion=suggestion,
+                )
+            )
+        return results
+
+
 # ── Registration ────────────────────────────────────────────────────────────
 
 
@@ -5288,6 +5494,10 @@ def register_builtin_rules() -> None:
         (ScheduleNegativeFloat(), None),
         (ScheduleHighFloat(), None),
         (ScheduleMissingDuration(), None),
+        # AI Takeoff (vision-LLM plan reading, issue #194)
+        (TakeoffScaleSanityRule(), None),
+        (TakeoffPolygonSelfIntersectionRule(), None),
+        (TakeoffLowConfidenceReviewRule(), None),
     ]
 
     for rule, sets in rules:

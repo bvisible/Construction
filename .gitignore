@@ -107,6 +107,31 @@ frontend/debug-bim/
 
 # MCP artifacts
 .mcp.json
+
+# Internal-only files: planning, strategy, QA artifacts, audits and runbooks.
+# Kept local, never published. Enforced by scripts/check_repo_hygiene.py at
+# commit, CI and build time. If you keep one of these locally it stays
+# untracked; do not force-add it.
+/R[0-9]*_*REPORT.md
+/ISSUE_*_HANDOVER.md
+/_handover_dossiers/
+/docs/strategy/
+/docs/qa/
+/docs/postgres-migration/
+/docs/roadmap/
+/docs/handover/
+/docs/initiative-ai-estimator/
+/docs/RUNBOOK.md
+/docs/MASTER_PLAN*.md
+/docs/SECURITY_AUDIT*.md
+/docs/I18N_AUDIT*.md
+/docs/ROADMAP_v*.md
+/docs/MONEY_FLOAT*.md
+/docs/validation_report.md
+/qa/
+/scripts/*_report.json
+/scripts/i18n_coverage_report.txt
+**/__audit_report.md
 .playwright-mcp/
 
 # TS incremental build cache

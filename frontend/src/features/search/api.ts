@@ -166,7 +166,7 @@ export async function fetchSimilarItems(
  *  Each route is matched against the actual `App.tsx` route table:
  *
  *    /boq/:boqId?highlight=<position_id>     → BOQEditorPage
- *    /documents?id=<doc_id>                  → DocumentsPage
+ *    /files?file=<doc_id>                    → FileManagerPage
  *    /tasks?id=<task_id>                     → TasksPage
  *    /risks?id=<risk_id>                     → RiskRegisterPage
  *    /bim?element=<element_id>               → BIMPage
@@ -187,7 +187,11 @@ export function hitToHref(hit: UnifiedSearchHit): string {
       return `/boq/${encodeURIComponent(boqId)}?highlight=${encodeURIComponent(hit.id)}`;
     }
     case 'oe_documents':
-      return `/documents?id=${encodeURIComponent(hit.id)}`;
+      // Documents merged into the unified File Manager (#71): the file
+      // browser pre-selects a file via `?file=<id>`. The old `/documents?id`
+      // form dropped its query through the redirect, so point straight at
+      // the live route and param.
+      return `/files?file=${encodeURIComponent(hit.id)}`;
     case 'oe_tasks':
       return `/tasks?id=${encodeURIComponent(hit.id)}`;
     case 'oe_risks':

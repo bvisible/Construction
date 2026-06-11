@@ -144,12 +144,14 @@ describe('getAllModuleRoutes', () => {
 describe('getModuleNavItems', () => {
   it('should return nav items for tools group', () => {
     const items = getModuleNavItems('tools');
-    // Tools group currently holds at least sustainability + risk-analysis.
-    // Other tools (benchmarks, takeoff-viewer, collaboration) live in their
-    // own groups now; gaeb-exchange opts out of sidebar nav (#217).
-    expect(items.length).toBeGreaterThanOrEqual(2);
+    // Tools group holds sustainability. Other tools (benchmarks,
+    // takeoff-viewer, collaboration) live in their own groups now;
+    // gaeb-exchange opts out of sidebar nav (#217). risk-analysis no longer
+    // contributes a nav item: its standalone page was retired in the Monte
+    // Carlo IA merge (#71) so there is one simulation home (Risk Register).
+    expect(items.length).toBeGreaterThanOrEqual(1);
     expect(items.some((i) => i.to === '/sustainability')).toBe(true);
-    expect(items.some((i) => i.to === '/risk-analysis')).toBe(true);
+    expect(items.some((i) => i.to === '/risk-analysis')).toBe(false);
   });
 
   it('regional nav-items are intentionally empty (the page is reached via /boq)', () => {

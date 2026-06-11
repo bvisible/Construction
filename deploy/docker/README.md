@@ -1,11 +1,10 @@
-# Docker deployment
+# Running OpenConstructionERP in Docker
 
-Two ways to run OpenConstructionERP in containers live in this folder. Pick one.
+This directory ships two container layouts. Both work, so pick the one that matches how you plan to run the app and then follow just that section.
 
-## Option 1: single unified image (simplest)
+## Layout 1: one unified image
 
-One container, FastAPI serves the built React frontend, SQLite by default, no
-external database needed.
+This is the fastest way in. A single container runs FastAPI, and FastAPI serves the compiled React frontend itself. The image falls back to SQLite by default, so you need nothing external to get a working instance up.
 
 ```bash
 docker build -t openconstructionerp -f deploy/docker/Dockerfile.unified .
@@ -14,57 +13,33 @@ docker run -d -p 8080:8080 -v oe_data:/data \
   openconstructionerp
 ```
 
-The app is then on http://localhost:8080. Data (SQLite database and the vector
-store) lives in the `/data` volume. To use PostgreSQL instead of SQLite, pass
-`-e DATABASE_URL=postgresql+asyncpg://user:pass@host:5432/dbname`.
+After the container starts, the app responds on http://localhost:8080. Anything that has to survive a restart, the SQLite file and the vector store, gets written under the `/data` volume. To run against PostgreSQL instead of the bundled SQLite, hand it your own connection string: `-e DATABASE_URL=postgresql+asyncpg://user:pass@host:5432/dbname`.
 
-`JWT_SECRET` is deliberately not baked into the image. Always pass your own, or
-every container pulled from a registry would share one signing key.
+`JWT_SECRET` deliberately has no default baked into the image. Without that, every container launched from the same published image would sign tokens with one shared key, so always pass a secret you generated yourself.
 
-## Option 2: split backend + nginx frontend
+## Layout 2: separate backend and nginx frontend
 
-Two images: the API (`Dockerfile.backend`, listening on 8000) and an nginx
-container that serves the static SPA and reverse-proxies the API
-(`Dockerfile.frontend` + `nginx.conf`). Use this when you want nginx to handle
-TLS termination, compression and caching in front of the API.
+Here you build two images. The first is the API (`Dockerfile.backend`), which listens on port 8000. The second is an nginx container (`Dockerfile.frontend` together with `nginx.conf`) that serves the static single-page app and reverse-proxies API traffic back to the backend. Reach for this layout when you want nginx out front to terminate TLS and take care of compression and caching.
 
 ```bash
 docker build -t oce-backend  -f deploy/docker/Dockerfile.backend  .
 docker build -t oce-frontend -f deploy/docker/Dockerfile.frontend .
 ```
 
-The frontend container expects to reach the backend at `http://backend:8000`,
-so run both on a shared Docker network where the API container is named
-`backend` (a small `docker-compose.yml` or a `--network` plus `--name backend`
-does the job). Copy `deploy/docker/.env.example` and set at least `JWT_SECRET`
-and your `DATABASE_URL`.
+The nginx container expects to find the API at `http://backend:8000`. That means the two containers have to sit on a shared Docker network and the API container has to be named `backend`. A small `docker-compose.yml`, or a `--network` flag plus `--name backend`, covers both needs. Copy `deploy/docker/.env.example`, then fill in at least `JWT_SECRET` and your `DATABASE_URL` before you bring the stack up.
 
-## What the reverse proxy has to get right
+## Settings any reverse proxy in front of the app must honor
 
-`nginx.conf` already handles these, and they are worth calling out for anyone
-putting a different proxy (Caddy, Traefik, a cloud load balancer) in front of
-the app:
+`nginx.conf` already handles the three items below. We document them here because anyone substituting a different proxy (Caddy, Traefik, a cloud load balancer) has to reproduce them or the app misbehaves.
 
-- Upload size. Drawings and BIM files are large, so the body limit is raised to
-  `100M`. The nginx default of `1M` rejects most takeoff and CAD uploads with a
-  413 before the request ever reaches FastAPI.
-- `.mjs` module workers. The PDF takeoff viewer loads pdf.js as an ES module
-  worker. nginx-alpine has no MIME mapping for `.mjs` and would serve it as
-  `application/octet-stream`, which the browser refuses to execute, leaving the
-  viewer blank. The config serves `.mjs` as `application/javascript`.
-- WebSocket upgrades. Live notifications and collaborative-lock presence run
-  over WebSockets on `/api/v1/notifications/ws` and
-  `/api/v1/collaboration_locks/presence`. Those paths need the HTTP/1.1 Upgrade
-  handshake and long read timeouts, so they have their own proxy block ahead of
-  the generic `/api/` proxy. The WebSocket clients send the JWT as a `?token=`
-  query parameter, so that block passes the original path and query through
-  unchanged.
+First is upload size. CAD files and drawings are large, so the request body limit is raised to `100M`. nginx ships with a `1M` default, and at that ceiling most takeoff and CAD uploads get rejected with a 413 before FastAPI ever sees them.
 
-If real-time features go quiet or the takeoff viewer is blank behind your own
-proxy, those three settings are the first thing to check.
+Second is `.mjs` module workers. The PDF takeoff viewer loads pdf.js as an ES module worker. nginx-alpine carries no MIME entry for `.mjs`, so by default it returns the file as `application/octet-stream`, the browser refuses to run it, and the viewer comes up blank. The config serves `.mjs` with the `application/javascript` content type instead.
 
-## Health check
+Third is WebSocket upgrades. Live notifications and collaborative-lock presence run over WebSockets at `/api/v1/notifications/ws` and `/api/v1/collaboration_locks/presence`. Those routes need the HTTP/1.1 Upgrade handshake and long read timeouts, so they get their own proxy block placed ahead of the general `/api/` block. The WebSocket clients carry the JWT in a `?token=` query parameter, which is why that block forwards the original path and query string untouched.
 
-Both images expose `GET /api/health`, which the container `HEALTHCHECK` polls.
-A healthy response reports the version, the module count and whether the
-database and the Alembic head match.
+If real-time features stop working or the takeoff viewer comes up blank behind your own proxy, start your troubleshooting with these three settings.
+
+## Health endpoint
+
+Each image exposes `GET /api/health`, and the container `HEALTHCHECK` directive polls that route on a fixed interval. A healthy reply reports the running version, the loaded module count, and a flag for whether the database revision matches the current Alembic head.

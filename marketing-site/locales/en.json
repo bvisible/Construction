@@ -64,6 +64,7 @@
     "dl_btn_macos": "Download for macOS",
     "dl_btn_linux": "Download for Linux",
     "dl_btn_sub": "Free - no Python, no Docker, nothing to set up",
+    "try_demo": "Or try the live demo in your browser, nothing to install",
     "all_platforms": "All platforms",
     "float_cta": "Download",
     "meta_selfhost": "Self-hosted",
@@ -375,7 +376,7 @@
   },
   "compare": {
     "eyebrow": "<span class=\"num\">04</span> · how it stacks up",
-    "lede": "A straight side-by-side. Commercial suites lead on a few things, mostly integrations paid for over a decade. On everything else, OpenConstructionERP already matches or beats them, at zero licence cost.",
+    "lede": "A straight side-by-side. Commercial suites lead on a few things, mostly integrations built up over a decade. Across the rest, OpenConstructionERP covers the same ground, self-hosted and at zero licence cost.",
     "col_capability": "Capability",
     "col_enterprise": "Enterprise estimating suite",
     "col_heavy_civil": "Heavy civil bid tool",
@@ -581,6 +582,7 @@
     "link_terms": "Terms",
     "link_security": "Security",
     "bottom_copyright": "© 2026 DataDrivenConstruction · OpenConstructionERP",
+    "bottom_trademarks": "All product names, logos and brands are the property of their respective owners and are used for identification purposes only. Their use does not imply any affiliation with or endorsement by them.",
     "bottom_back": "← back to editions",
     "aria_github": "GitHub",
     "aria_website": "Website",
@@ -597,7 +599,7 @@
     "lede": "Monthly digest - new modules, CAD parser updates, cost-database releases, behind-the-scenes notes. No spam, unsubscribe any time.",
     "placeholder": "your@email.com",
     "submit": "Subscribe",
-    "note": "~1 email per month · no sales calls · GDPR-compliant",
+    "note": "~1 email per month · no sales calls · unsubscribe any time",
     "follow": "Follow DataDrivenConstruction"
   },
   "popup": {
@@ -606,7 +608,7 @@
     "sub": "One short email a month - new modules, CAD parser releases, behind-the-scenes notes. No spam, unsubscribe any time.",
     "placeholder": "your@email.com",
     "submit": "Subscribe",
-    "note": "~1 email per month · GDPR-compliant",
+    "note": "~1 email per month · unsubscribe any time",
     "close": "Close"
   },
   "custom": {
@@ -711,15 +713,15 @@
     "read_less": "Show less"
   },
   "trust": {
-    "title": "engineers, contractors and consultancies already running it",
-    "sub": "A snapshot of the construction, engineering and infrastructure teams that registered in the first weeks of OpenConstructionERP - across Europe, North America, MENA, APAC and Australasia."
+    "title": "engineers, contractors and consultancies in the DataDrivenConstruction community",
+    "sub": "A snapshot of the construction, engineering and infrastructure teams that have worked with DataDrivenConstruction's open tools, datasets and workshops, across Europe, North America, MENA, APAC and Australasia."
   },
   "ddc": {
     "eyebrow": "<span class=\"num\">07</span> · open research lineage",
     "title": "Built on DataDrivenConstruction.",
     "lede": "OpenConstructionERP grows out of a decade of open construction‑tech research.",
-    "trusted_title": "clients & users of DDC solutions",
-    "trusted_sub": "A snapshot of the construction, engineering and infrastructure companies that have built with DataDrivenConstruction's open tools, datasets and AI workflows over the past decade."
+    "trusted_title": "Engineers, contractors and consultancies in the DataDrivenConstruction community",
+    "trusted_sub": "A snapshot of the construction, engineering and infrastructure teams that have explored the OpenConstructionERP demo and worked with DataDrivenConstruction's open tools, datasets and workshops, across Europe, North America, MENA, APAC and Australasia."
   },
   "modgrid": {
     "eyebrow": "What's in the box",
@@ -1176,7 +1178,7 @@
       "faq_a7": "\n          The <strong>community CWICR</strong> is free with the AGPL repo. The\n          <strong>commercial CWICR</strong> - covering 11 countries, 55,000+ items,\n          monthly updates, audit trail - is sold separately and resold by partners\n          at 45–55% margin.\n        ",
       "faq_a8": "\n          Yes - and many will. Partners earn their margin on the four things free AGPL\n          doesn't deliver: <strong>production go-live, SLA support, localisation\n          packs, and AGPL-free commercial licensing</strong> for clients who need it.\n        ",
       "apply_rail_h2": "Apply in <em>six fields.</em>",
-      "apply_trust1": "Stored in <b>EU servers</b> · GDPR-compliant · never sold or shared",
+      "apply_trust1": "Stored on <b>EU servers</b> · never sold or shared",
       "apply_trust2": "<b>€0 partnership fees</b> · forever, written into the agreement",
       "form_label_website": "Website <span style=\"color:var(--ink-3); font-weight:400;\">(optional)</span>",
       "form_label_brief": "Current AEC clients &amp; what you'd implement first",
@@ -2410,7 +2412,7 @@
       "corr_ep3": "Get details with attachments",
       "corr_ep4": "Get linked correspondence chain",
       "cde_title": "Common Data Environment (CDE)",
-      "cde_intro": "ISO 19650-compliant Common Data Environment for managing project information with controlled status transitions. Documents move through Work in Progress (WIP), Shared, Published, and Archived states with approval gates. Ensures information management follows BIM standards for collaborative delivery.",
+      "cde_intro": "A Common Data Environment aligned with ISO 19650 workflows for managing project information with controlled status transitions. Documents move through Work in Progress (WIP), Shared, Published, and Archived states with approval gates. Ensures information management follows BIM standards for collaborative delivery.",
       "cde_ep1": "List CDE documents (filterable by status, suitability)",
       "cde_ep2": "Upload document to CDE",
       "cde_ep3": "Transition document status",

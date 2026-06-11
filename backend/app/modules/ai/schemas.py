@@ -41,6 +41,7 @@ class AISettingsUpdate(BaseModel):
     anthropic_api_key: str | None = None
     openai_api_key: str | None = None
     gemini_api_key: str | None = None
+    kimi_api_key: str | None = None
     openrouter_api_key: str | None = None
     mistral_api_key: str | None = None
     groq_api_key: str | None = None
@@ -55,10 +56,10 @@ class AISettingsUpdate(BaseModel):
     baidu_api_key: str | None = None
     yandex_api_key: str | None = None
     gigachat_api_key: str | None = None
-    kimi_api_key: str | None = None
-    # Custom base URL for local providers (Ollama, vLLM), e.g. "http://host:11434"
-    ollama_base_url: str | None = None
-    vllm_base_url: str | None = None
+    # Self-hosted endpoints (Ollama / vLLM); accepts a host root such as
+    # "http://host:11434" and the path is appended downstream.
+    ollama_base_url: str | None = None  # Ollama host root
+    vllm_base_url: str | None = None  # vLLM host root
     preferred_model: str | None = Field(default=None, max_length=100)
     # Per-provider model-id override, e.g. {"gemini": "gemini-2.5-flash",
     # "openrouter": "anthropic/claude-sonnet-4"}. Lets users track provider
@@ -83,6 +84,7 @@ class AISettingsResponse(BaseModel):
     anthropic_api_key_set: bool = False
     openai_api_key_set: bool = False
     gemini_api_key_set: bool = False
+    kimi_api_key_set: bool = False
     openrouter_api_key_set: bool = False
     mistral_api_key_set: bool = False
     groq_api_key_set: bool = False
@@ -97,9 +99,9 @@ class AISettingsResponse(BaseModel):
     baidu_api_key_set: bool = False
     yandex_api_key_set: bool = False
     gigachat_api_key_set: bool = False
-    kimi_api_key_set: bool = False
-    ollama_base_url: str | None = None
-    vllm_base_url: str | None = None
+    # Echo back any saved self-hosted endpoints so the UI can prefill them.
+    ollama_base_url: str | None = None  # saved Ollama host root
+    vllm_base_url: str | None = None  # saved vLLM host root
     preferred_model: str
     # Effective per-provider model id the platform will send (override if the
     # user set one, otherwise the built-in default). Drives the editable

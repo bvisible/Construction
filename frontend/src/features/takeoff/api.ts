@@ -56,6 +56,14 @@ export interface MeasurementResponse {
   created_by: string;
   created_at: string;
   updated_at: string;
+  /** Provenance of the measurement (issue #194). 'ai_plan_read' marks a
+   *  vision-LLM proposal; 'manual' is a human-drawn measurement. */
+  source?: string;
+  /** AI confidence 0..1, present only on AI-sourced rows (null otherwise). */
+  confidence?: number | null;
+  /** Review state: 'proposed' (unconfirmed AI suggestion), 'confirmed', or
+   *  'rejected'. Manual measurements default to 'confirmed'. */
+  review_status?: string;
 }
 
 /** One unconfirmed measurement proposed by offline vector recognition (#194). */
@@ -74,6 +82,70 @@ export interface RecognizeResult {
   page: number;
   source: string;
   notes: string | null;
+}
+
+/* ── Vision-LLM plan reading (issue #194) ──────────────────────────────────
+ * An ADDITIONAL, higher-quality suggestion source alongside the offline
+ * Recognize tool. Bring-your-own-key, cost-capped, and human-confirmed: a run
+ * only produces ``proposed`` measurements; the user accepts/rejects each, and
+ * the server recomputes the billed number. Nothing is auto-applied. */
+
+export type PlanReadMode = 'scale' | 'rooms' | 'symbols' | 'full';
+
+export interface PlanReadMeta {
+  confidence_high_threshold: number;
+  confidence_medium_threshold: number;
+  vision_providers: string[];
+  max_polygon_vertices: number;
+  // Money on the wire is a Decimal-rendered string (v3 §10); coerce with
+  // Number() at any display site.
+  max_cost_usd: number | string;
+  rolling_spend_usd: number | string;
+  modes: PlanReadMode[];
+  /** False when no vision-capable AI key is configured. The "Read plan with
+   *  AI" action is hidden / disabled in that case; the offline Recognize tool
+   *  is unaffected (graceful degradation). */
+  vision_available: boolean;
+  provider: string | null;
+  model_used: string | null;
+  /** A human-readable reason when vision_available is false. */
+  reason: string | null;
+}
+
+export interface AiTakeoffRun {
+  id: string;
+  status: string;
+  project_id: string;
+  document_id: string | null;
+  page: number;
+  mode: string;
+  provider: string | null;
+  model_used: string | null;
+  total_tokens: number;
+  // Decimal-rendered string on the wire (v3 §10); Number() to display.
+  cost_usd_estimate: number | string;
+  duration_ms: number;
+  proposal_count: number;
+  accepted_count: number;
+  validation_report: Record<string, unknown> | null;
+  failure_reason: string | null;
+  created_at: string | null;
+}
+
+export interface PlanReadStartRequest {
+  project_id: string;
+  document_id: string;
+  page: number;
+  scale_pixels_per_unit?: number | null;
+  mode?: PlanReadMode;
+  do_cost_match?: boolean;
+}
+
+export interface PlanReadAcceptResult {
+  confirmed: number;
+  skipped: number;
+  blocked: number;
+  measurement_ids: string[];
 }
 
 export interface MeasurementSummary {
@@ -177,6 +249,43 @@ export const takeoffApi = {
       `/v1/takeoff/documents/${encodeURIComponent(docId)}/recognize/?page=${page}&scale_pixels_per_unit=${sp}`,
       {},
     );
+  },
+
+  /* ── Vision-LLM plan reading (issue #194) ─────────────────────────────── */
+  planRead: {
+    /** Thresholds, vision availability, caps, and rolling spend. Returns a
+     *  graceful "vision_available: false" payload (never throws) when the
+     *  module is disabled so the viewer can hide the action without errors. */
+    meta: async (): Promise<PlanReadMeta | null> => {
+      if (!(await isModuleLoaded('oe_takeoff'))) return null;
+      return apiGet<PlanReadMeta>('/v1/takeoff/plan-read/meta');
+    },
+
+    /** Start a vision plan-read run for one page. 400 when no vision key is
+     *  configured, the model is text-only, or the cost cap would be exceeded. */
+    start: (body: PlanReadStartRequest) =>
+      apiPost<AiTakeoffRun>('/v1/takeoff/plan-read/', body),
+
+    /** Poll a run's FSM state. */
+    getRun: (runId: string) =>
+      apiGet<AiTakeoffRun>(`/v1/takeoff/plan-read/runs/${encodeURIComponent(runId)}`),
+
+    /** List the unconfirmed (proposed) measurements minted by a run. */
+    proposals: (runId: string) =>
+      apiGet<MeasurementResponse[]>(
+        `/v1/takeoff/plan-read/runs/${encodeURIComponent(runId)}/proposals`,
+      ),
+
+    /** Confirm selected / above-threshold proposals into billed measurements.
+     *  A self-intersecting proposal is blocked (redraw first). */
+    accept: (
+      runId: string,
+      body: { measurement_ids?: string[] | null; min_confidence?: number | null },
+    ) =>
+      apiPost<PlanReadAcceptResult>(
+        `/v1/takeoff/plan-read/runs/${encodeURIComponent(runId)}/accept`,
+        body,
+      ),
   },
 
   /** Get measurement summary stats for a project. */

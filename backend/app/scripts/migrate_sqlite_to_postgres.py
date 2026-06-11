@@ -41,6 +41,7 @@ import sys
 from collections.abc import Iterator
 
 from sqlalchemy import JSON as _JSON
+from sqlalchemy import column as _column
 from sqlalchemy import create_engine, func, inspect, select, text
 from sqlalchemy.engine import Engine
 
@@ -132,10 +133,28 @@ def _make_source_engine(url: str) -> Engine:
     return create_engine(url, json_deserializer=_tolerant_json_deserializer)
 
 
-def _iter_batches(src: Engine, table, batch_size: int) -> Iterator[list[dict]]:
-    """Yield rows of ``table`` from the source in memory-bounded batches."""
+def _iter_batches(src: Engine, table, batch_size: int, columns=None) -> Iterator[list[dict]]:
+    """Yield rows of ``table`` from the source in memory-bounded batches.
+
+    ``columns`` restricts the SELECT to a subset of the table's columns. This is
+    how a cross-version copy stays alive: the new release may have added columns
+    that the older source table does not have, so selecting the full metadata
+    column set would raise "no such column". Selecting only the columns the
+    source actually has lets the target fill the new ones from their defaults.
+
+    The read is done with UNTYPED column expressions so SQLAlchemy does not run
+    the metadata's typed result processors on the source value. SQLite is loosely
+    typed: a ``Numeric``/``Float`` column can hold a stored *string* (e.g. a rate
+    persisted as ``"10.0"``), and the strict ``Decimal``/``float`` result
+    processor raises ``TypeError: must be real number, not str`` on such a row,
+    aborting the whole copy. Reading raw text and letting the target's bind
+    processor coerce on insert mirrors the tolerant-JSON handling and survives
+    every legacy scalar.
+    """
+    cols = columns if columns is not None else list(table.columns)
+    selectable = select(*[_column(c.name) for c in cols]).select_from(table)
     with src.connect() as sconn:
-        result = sconn.execution_options(stream_results=True, yield_per=batch_size).execute(select(table))
+        result = sconn.execution_options(stream_results=True, yield_per=batch_size).execute(selectable)
         while True:
             chunk = result.fetchmany(batch_size)
             if not chunk:
@@ -145,8 +164,10 @@ def _iter_batches(src: Engine, table, batch_size: int) -> Iterator[list[dict]]:
 
 def _coerce_row(row: dict, table) -> dict:
     """Patch the residual case where a JSON column still arrives as a ``str`` so
-    the JSONB bind processor does not double-encode it. Typed result processors
-    already handle bool/Decimal/datetime/JSON-object cases.
+    the JSONB bind processor does not double-encode it. The source is read with
+    untyped expressions, so JSON columns come back as raw text; this parses them
+    once. The target bind processors coerce the remaining scalar types
+    (bool/Decimal/datetime) on insert.
     """
     for col in table.columns:
         name = col.name
@@ -155,6 +176,18 @@ def _coerce_row(row: dict, table) -> dict:
         if isinstance(col.type, _JSON) and isinstance(row[name], str):
             row[name] = _tolerant_json_deserializer(row[name])
     return row
+
+
+def _source_columns(src: Engine, table):
+    """Return the table columns that actually exist in the source database.
+
+    The new release's metadata can carry columns an older source table lacks
+    (a migration added them after the source was last upgraded). Copying only
+    the intersection keeps the SELECT valid; the missing columns are populated
+    on the target by their server_default / Python default during insert.
+    """
+    src_col_names = {c["name"] for c in inspect(src).get_columns(table.name)}
+    return [c for c in table.columns if c.name in src_col_names]
 
 
 def _copy_table(src: Engine, dst: Engine, table, batch_size: int) -> tuple[int, list[dict]]:
@@ -167,7 +200,8 @@ def _copy_table(src: Engine, dst: Engine, table, batch_size: int) -> tuple[int, 
     """
     copied = 0
     deferred: list[dict] = []
-    for batch in _iter_batches(src, table, batch_size):
+    columns = _source_columns(src, table)
+    for batch in _iter_batches(src, table, batch_size, columns):
         batch = [_coerce_row(r, table) for r in batch]
         try:
             with dst.begin() as dconn:
@@ -219,7 +253,20 @@ def _copy_all(src: Engine, dst: Engine, base, batch_size: int) -> int:
     total_copied = 0
     deferred_by_table: dict[str, tuple[object, list[dict]]] = {}
 
+    # The app metadata is the schema of the NEW release; the source SQLite is an
+    # OLDER database. Any table a newer module added does not exist in the source
+    # yet, so selecting from it raises "no such table" and would abort the whole
+    # copy. Read the source's real table set once and skip the absent ones; the
+    # target already has them (empty) from create_all, which is the correct state.
+    with src.connect() as sconn:
+        source_tables = set(inspect(sconn).get_table_names())
+    missing = [t.name for t in base.metadata.sorted_tables if t.name not in source_tables]
+    if missing:
+        print(f"skipping {len(missing)} tables absent from source (new in this release): {', '.join(missing)}")
+
     for table in base.metadata.sorted_tables:
+        if table.name not in source_tables:
+            continue
         copied, deferred = _copy_table(src, dst, table, batch_size)
         total_copied += copied
         if copied or deferred:

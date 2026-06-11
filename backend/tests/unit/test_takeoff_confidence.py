@@ -211,23 +211,28 @@ async def test_extract_tables_no_description_lowers_confidence() -> None:
 
 
 @pytest.mark.asyncio
-async def test_manual_measurement_has_null_confidence_not_zero() -> None:
-    """Manual measurements created by a user must have confidence=None.
+async def test_manual_measurement_confidence_defaults_to_null() -> None:
+    """A manual measurement must default to confidence=None, never 0.0.
 
-    A confidence of 0.0 means "AI is very unsure". A manual correction
-    has no AI involvement, so confidence should be None (absent).
-    The TakeoffMeasurement model does NOT store confidence — which is
-    correct: measurements are geometry-based (human-drawn), not AI-scored.
-    The confidence field lives only on ExtractedElement (AI/table output).
-    This test pins that the ORM model doesn't accidentally default to 0.0.
+    Since the vision plan reader (issue #194) the TakeoffMeasurement model
+    carries an optional ``confidence`` column so an AI-sourced proposal can
+    record its real score. A confidence of 0.0 means "AI is very unsure";
+    a manual, human-drawn measurement has no AI involvement, so its
+    confidence must be None (absent), never a fake 0.0. The column is
+    nullable with no server_default, so a manual insert leaves it NULL.
     """
     from app.modules.takeoff.models import TakeoffMeasurement
 
-    # Verify the ORM model has NO confidence column at all.
-    columns = {c.key for c in TakeoffMeasurement.__table__.columns}
-    assert "confidence" not in columns, (
-        "TakeoffMeasurement must NOT have a confidence column — manual measurements don't have an AI score."
+    col = TakeoffMeasurement.__table__.columns.get("confidence")
+    assert col is not None, "TakeoffMeasurement must carry an optional AI confidence column"
+    assert col.nullable is True, "confidence must be nullable so manual rows stay NULL, not 0.0"
+    assert col.default is None and col.server_default is None, (
+        "confidence must default to NULL (absent), never a fabricated 0.0 score"
     )
+    # The provenance columns exist with honest manual defaults.
+    source_col = TakeoffMeasurement.__table__.columns.get("source")
+    review_col = TakeoffMeasurement.__table__.columns.get("review_status")
+    assert source_col is not None and review_col is not None
 
 
 def test_extracted_element_confidence_cannot_be_none() -> None:

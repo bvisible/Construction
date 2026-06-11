@@ -13,8 +13,12 @@ from typing import Any
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.takeoff.models import TakeoffDocument, TakeoffMeasurement
-from app.modules.takeoff.repository import MeasurementRepository, TakeoffRepository
+from app.modules.takeoff.models import AiTakeoffRun, TakeoffDocument, TakeoffMeasurement
+from app.modules.takeoff.repository import (
+    AiTakeoffRunRepository,
+    MeasurementRepository,
+    TakeoffRepository,
+)
 from app.modules.takeoff.schemas import (
     PointSchema,
     TakeoffMeasurementCreate,
@@ -22,6 +26,23 @@ from app.modules.takeoff.schemas import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# ── Vision-LLM plan-read cost cap (issue #194) ──────────────────────────────
+
+
+def _takeoff_ai_max_cost_usd() -> float:
+    """Read the per-user rolling plan-read cost cap from env (default 2.00 USD).
+
+    Mirrors the proven ``EVAL_AI_MAX_COST_USD`` cap reader: an invalid value
+    logs a warning and falls back to the default rather than crashing the run.
+    """
+    raw = os.environ.get("TAKEOFF_AI_MAX_COST_USD", "2.00")
+    try:
+        return float(raw)
+    except ValueError:
+        logger.warning("Invalid TAKEOFF_AI_MAX_COST_USD=%r - defaulting to 2.00", raw)
+        return 2.00
 
 
 # ── PDF stability gates (Indian-user ticket, v3.0.x) ────────────────────────
@@ -868,6 +889,7 @@ class TakeoffService:
         self.session = session
         self.repo = TakeoffRepository(session)
         self.measurement_repo = MeasurementRepository(session)
+        self.plan_read_repo = AiTakeoffRunRepository(session)
 
     async def upload_document(
         self,
@@ -2014,3 +2036,530 @@ class TakeoffService:
             "estimated_cost_impact": str(estimated_cost_impact),
             "currency": currency,
         }
+
+    # ── Vision-LLM plan reading (issue #194) ───────────────────────────────
+    #
+    # An ADDITIONAL, higher-quality suggestion source alongside the offline
+    # OpenCV "Recognize" tool, never a replacement. Bring-your-own-key, hard
+    # cost-capped, and human-confirmed: every model output is a proposal with a
+    # real confidence; only an explicit accept writes a billed measurement, and
+    # the server recomputes the number from points x scale (B8).
+
+    async def _resolve_plan_read_provider(
+        self,
+        user_id: str,
+    ) -> tuple[str, str, str | None, str]:
+        """Resolve the confirming user's vision provider / key / model.
+
+        Returns ``(provider, api_key, model_override, effective_model)``. The
+        BYO-key plumbing (``resolve_provider_key_model``) is reused unchanged.
+
+        Raises:
+            HTTPException(400): No AI key configured, or the resolved
+                provider/model is not vision-capable. Never a silent fallback
+                to a text-only call (that would fabricate geometry).
+        """
+        from app.modules.ai.ai_client import default_model_for, resolve_provider_key_model
+        from app.modules.ai.repository import AISettingsRepository
+        from app.modules.takeoff.plan_read import VISION_PROVIDERS, is_vision_capable
+
+        settings = await AISettingsRepository(self.session).get_by_user_id(uuid.UUID(user_id))
+        try:
+            provider, api_key, model_override = resolve_provider_key_model(settings)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No AI provider configured. Please add an API key in Settings > AI.",
+            ) from exc
+
+        effective_model = model_override or default_model_for(provider)
+        if not is_vision_capable(provider, effective_model):
+            providers = ", ".join(sorted(VISION_PROVIDERS))
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "Your AI provider/model does not support image analysis. Pick a "
+                    f"vision-capable provider ({providers}) in Settings > AI - for "
+                    "example Anthropic Claude, OpenAI GPT-4.1, or Gemini."
+                ),
+            )
+        return provider, api_key, model_override, effective_model
+
+    async def plan_read_meta(self, user_id: str) -> dict[str, Any]:
+        """Thresholds, vision availability, caps, and rolling spend for the UI.
+
+        Never raises on a missing key - it reports ``vision_available=False``
+        with a reason so the takeoff viewer can degrade gracefully (hide /
+        disable the "Read plan with AI" action) while the offline Recognize
+        button keeps working.
+        """
+        from app.modules.takeoff.plan_read import VISION_PROVIDERS
+        from app.modules.takeoff.schemas import (
+            MAX_PLAN_POLYGON_VERTICES,
+            TAKEOFF_CONFIDENCE_HIGH_THRESHOLD,
+            TAKEOFF_CONFIDENCE_MEDIUM_THRESHOLD,
+        )
+
+        vision_available = False
+        provider: str | None = None
+        effective_model: str | None = None
+        reason: str | None = None
+        try:
+            provider, _key, _override, effective_model = await self._resolve_plan_read_provider(user_id)
+            vision_available = True
+        except HTTPException as exc:
+            reason = str(exc.detail)
+
+        rolling = await self.plan_read_repo.rolling_spend_usd(uuid.UUID(user_id))
+        return {
+            "confidence_high_threshold": TAKEOFF_CONFIDENCE_HIGH_THRESHOLD,
+            "confidence_medium_threshold": TAKEOFF_CONFIDENCE_MEDIUM_THRESHOLD,
+            "vision_providers": sorted(VISION_PROVIDERS),
+            "max_polygon_vertices": MAX_PLAN_POLYGON_VERTICES,
+            "max_cost_usd": _takeoff_ai_max_cost_usd(),
+            "rolling_spend_usd": round(rolling, 4),
+            "modes": ["scale", "rooms", "symbols", "full"],
+            "vision_available": vision_available,
+            "provider": provider,
+            "model_used": effective_model,
+            "reason": reason,
+        }
+
+    async def plan_read_start(
+        self,
+        *,
+        project_id: uuid.UUID,
+        document_id: str,
+        page: int,
+        mode: str,
+        scale_pixels_per_unit: float | None,
+        do_cost_match: bool,
+        user_id: str,
+    ) -> AiTakeoffRun:
+        """Validate, cost-gate, create, and schedule a plan-read run.
+
+        Resolves the user's vision key (400 on no key / non-vision model),
+        validates the page is in range, applies the pre-flight cost cap (refuse
+        BEFORE calling the provider when the rolling spend plus this call's
+        estimate would exceed ``TAKEOFF_AI_MAX_COST_USD``), creates the run row,
+        and schedules the in-process reading coroutine. Returns the queued run.
+        """
+        from app.core.ai.pricing import estimate_cost_usd
+
+        provider, _api_key, _override, effective_model = await self._resolve_plan_read_provider(user_id)
+
+        doc = await self.repo.get_by_id(uuid.UUID(document_id))
+        if doc is None:
+            raise HTTPException(status_code=404, detail="Takeoff document not found")
+        validate_page_for_document(doc, page)
+
+        # Pre-flight cost gate. A conservative token estimate (image tokens plus
+        # the capped output) priced at the resolved model; refuse before any
+        # spend when the rolling window plus this estimate would exceed the cap.
+        cap = _takeoff_ai_max_cost_usd()
+        rolling = await self.plan_read_repo.rolling_spend_usd(uuid.UUID(user_id))
+        preflight_tokens = _PLAN_READ_PREFLIGHT_TOKENS
+        this_call = float(estimate_cost_usd(effective_model, preflight_tokens))
+        if rolling + this_call > cap:
+            run = await self.plan_read_repo.create(
+                AiTakeoffRun(
+                    project_id=project_id,
+                    document_id=document_id,
+                    page=page,
+                    mode=mode,
+                    user_id=uuid.UUID(user_id),
+                    created_by=user_id,
+                    status="failed",
+                    provider=provider,
+                    model_used=effective_model,
+                    scale_pixels_per_unit=scale_pixels_per_unit,
+                    do_cost_match=do_cost_match,
+                    failure_reason="cost_cap",
+                    validation_report={
+                        "cost_cap_usd": cap,
+                        "rolling_spend_usd": round(rolling, 4),
+                        "estimated_call_usd": round(this_call, 4),
+                    },
+                )
+            )
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"This run would exceed your AI spend cap of ${cap:.2f}. You have "
+                    f"already spent ${rolling:.2f} on plan reading recently. Raise "
+                    "TAKEOFF_AI_MAX_COST_USD or wait for the window to roll over. "
+                    f"(run {run.id})"
+                ),
+            )
+
+        run = await self.plan_read_repo.create(
+            AiTakeoffRun(
+                project_id=project_id,
+                document_id=document_id,
+                page=page,
+                mode=mode,
+                user_id=uuid.UUID(user_id),
+                created_by=user_id,
+                status="queued",
+                provider=provider,
+                model_used=effective_model,
+                scale_pixels_per_unit=scale_pixels_per_unit,
+                do_cost_match=do_cost_match,
+            )
+        )
+        await self.session.commit()
+        self._schedule_plan_read(run.id, user_id=user_id)
+        return run
+
+    def _schedule_plan_read(self, run_id: uuid.UUID, *, user_id: str) -> None:
+        """Detach the reading coroutine on its own DB session.
+
+        Mirrors the event-bus / job-runner pattern: the background task owns a
+        fresh ``AsyncSession`` so it never touches the request session after the
+        response is sent. Tests call ``_run_plan_read`` directly with a stub,
+        so this thin scheduler is the only un-unit-tested seam.
+        """
+        import asyncio
+
+        async def _runner() -> None:
+            from app.database import async_session_factory
+
+            async with async_session_factory() as bg_session:
+                svc = TakeoffService(bg_session)
+                try:
+                    await svc._run_plan_read(run_id, user_id=user_id)
+                    await bg_session.commit()
+                except Exception:
+                    logger.exception("plan_read background run %s failed", run_id)
+                    await bg_session.rollback()
+
+        try:
+            asyncio.create_task(_runner())  # noqa: RUF006 - detached background job
+        except RuntimeError:
+            logger.warning("plan_read run %s: no running loop to schedule on", run_id)
+
+    async def _run_plan_read(self, run_id: uuid.UUID, *, user_id: str) -> None:
+        """Execute one plan-read run: rasterize, read, validate, persist.
+
+        FSM: ``queued -> rasterizing -> reading -> validating -> review`` (or
+        ``failed``). The vision call is the only network step; everything else
+        is deterministic. Proposals are persisted as ``review_status='proposed'``
+        rows so the viewer's existing list / render / accept paths handle them.
+        Zero rooms reaches ``review`` with ``proposal_count=0`` (honest empty),
+        never ``failed``.
+        """
+        import time as _time
+
+        from app.core.ai.pricing import estimate_cost_usd
+        from app.modules.ai.ai_client import call_ai, extract_json
+        from app.modules.ai.prompts import (
+            PLAN_READ_ROOMS_INSTRUCTION,
+            PLAN_READ_SCALE_INSTRUCTION,
+            PLAN_READ_SYMBOLS_INSTRUCTION,
+            PLAN_READ_VISION_PROMPT,
+            PLAN_READ_VISION_SYSTEM_PROMPT,
+            fence_user_content,
+        )
+        from app.modules.takeoff import plan_read as _pr
+
+        run = await self.plan_read_repo.get_by_id(run_id)
+        if run is None:
+            logger.warning("plan_read run %s vanished before execution", run_id)
+            return
+
+        provider, api_key, model_override, effective_model = await self._resolve_plan_read_provider(user_id)
+        start = _time.monotonic()
+        await self.plan_read_repo.update_fields(run_id, status="rasterizing")
+
+        # ── rasterize ──────────────────────────────────────────────────────
+        try:
+            doc = await self.repo.get_by_id(uuid.UUID(run.document_id))
+            if doc is None:
+                await self._fail_plan_read(run_id, "document_missing", start)
+                return
+            file_path = Path(doc.file_path) if doc.file_path else _TAKEOFF_DOCUMENTS_DIR / f"{run.document_id}.pdf"
+            if not file_path.exists():
+                await self._fail_plan_read(run_id, "pdf_not_on_disk", start)
+                return
+            content = file_path.read_bytes()
+            png, media_type, dpi, page_w_pt, page_h_pt = _pr.rasterize_page(content, run.page)
+        except ImportError:
+            await self._fail_plan_read(run_id, "pymupdf_missing", start)
+            return
+        except Exception:
+            logger.exception("plan_read run %s rasterize failed", run_id)
+            await self._fail_plan_read(run_id, "rasterize_failed", start)
+            return
+
+        # ── read (the single network call) ─────────────────────────────────
+        await self.plan_read_repo.update_fields(run_id, status="reading")
+        # Scale is always read (every mode benefits from a scale handshake); the
+        # heavier room / symbol blocks are added only when the mode asks for
+        # them, so the cheapest mode is the cheapest call.
+        instructions: list[str] = [PLAN_READ_SCALE_INSTRUCTION]
+        if run.mode in ("rooms", "full"):
+            instructions.append(PLAN_READ_ROOMS_INSTRUCTION)
+        if run.mode in ("symbols", "full"):
+            instructions.append(PLAN_READ_SYMBOLS_INSTRUCTION)
+        # A free-form discipline hint would be fenced via fence_user_content
+        # before reaching the model (the image itself cannot be fenced). v1
+        # carries no hint, so the fenced block is empty.
+        discipline_hint = fence_user_content("", max_len=500)
+        prompt = PLAN_READ_VISION_PROMPT.format(
+            mode_instructions="\n\n".join(instructions),
+            discipline_hint=discipline_hint,
+        )
+        import base64
+
+        try:
+            raw_response, tokens = await call_ai(
+                provider=provider,
+                api_key=api_key,
+                system=PLAN_READ_VISION_SYSTEM_PROMPT,
+                prompt=prompt,
+                image_base64=base64.b64encode(png).decode("utf-8"),
+                image_media_type=media_type,
+                max_tokens=_PLAN_READ_MAX_TOKENS,
+                model=model_override,
+            )
+        except ValueError as exc:
+            low = str(exc).lower()
+            reason = "rate_limited" if "rate limit" in low else "provider_error"
+            logger.warning("plan_read run %s provider error: %s", run_id, exc)
+            await self._fail_plan_read(run_id, reason, start, provider=provider, model=effective_model)
+            return
+        except Exception:
+            logger.exception("plan_read run %s unexpected provider failure", run_id)
+            await self._fail_plan_read(run_id, "provider_unavailable", start, provider=provider, model=effective_model)
+            return
+
+        # ── validate ───────────────────────────────────────────────────────
+        await self.plan_read_repo.update_fields(run_id, status="validating")
+        parsed = extract_json(raw_response)
+        result, dropped = _pr.parse_plan_read_response(
+            parsed,
+            page=run.page,
+            page_width_pt=page_w_pt,
+            page_height_pt=page_h_pt,
+        )
+
+        scale_ratio = run.scale_pixels_per_unit
+        if result.scale is not None and scale_ratio is None:
+            scale_ratio = _pr.scale_ratio_from_plan_scale(result.scale, page_w_pt, page_h_pt)
+
+        proposals = self._build_plan_read_proposals(
+            run=run,
+            result=result,
+            page_w_pt=page_w_pt,
+            page_h_pt=page_h_pt,
+            scale_ratio=scale_ratio,
+            user_id=user_id,
+        )
+        if proposals:
+            await self.measurement_repo.create_bulk(proposals)
+
+        duration_ms = int((_time.monotonic() - start) * 1000)
+        cost = float(estimate_cost_usd(effective_model, int(tokens or 0)))
+        validation_report = {
+            "dropped_items": dropped,
+            "rooms_proposed": len(result.rooms),
+            "symbols_proposed": len(result.symbols),
+            "scale_detected": result.scale is not None,
+            "scale_ratio_px_per_unit": scale_ratio,
+            "image_dpi": dpi,
+        }
+        await self.plan_read_repo.update_fields(
+            run_id,
+            status="review",
+            provider=provider,
+            model_used=effective_model,
+            total_tokens=int(tokens or 0),
+            cost_usd_estimate=cost,
+            duration_ms=duration_ms,
+            proposal_count=len(proposals),
+            validation_report=validation_report,
+        )
+
+    def _build_plan_read_proposals(
+        self,
+        *,
+        run: AiTakeoffRun,
+        result: Any,
+        page_w_pt: float,
+        page_h_pt: float,
+        scale_ratio: float | None,
+        user_id: str,
+    ) -> list[TakeoffMeasurement]:
+        """Turn a validated ``PlanReadResult`` into ``proposed`` measurements.
+
+        Rooms become ``area`` proposals whose value is the SERVER's shoelace
+        recompute (never the model's claimed area). A self-intersecting room is
+        flagged and capped to the low band. Symbol classes become ``count``
+        proposals whose points are the centroids. Every proposal carries
+        ``source='ai_plan_read'``, ``review_status='proposed'``, the model
+        confidence, and the run id in ``metadata_`` so accept and the review
+        list can find it. Nothing here is billed until a human accepts it.
+        """
+        from app.modules.takeoff import plan_read as _pr
+        from app.modules.takeoff.schemas import (
+            TAKEOFF_CONFIDENCE_MEDIUM_THRESHOLD,
+        )
+
+        out: list[TakeoffMeasurement] = []
+        run_meta_base = {"ai_takeoff_run_id": str(run.id), "page_width_pt": page_w_pt, "page_height_pt": page_h_pt}
+
+        for room in result.rooms:
+            pdf_points = _pr.norm_polygon_to_pdf_points(room.polygon, page_w_pt, page_h_pt)
+            self_intersects = _pr.polygon_self_intersects(pdf_points)
+            confidence = (
+                round(min(room.confidence, TAKEOFF_CONFIDENCE_MEDIUM_THRESHOLD - 0.01), 2)
+                if self_intersects
+                else round(room.confidence, 2)
+            )
+            area_pt2 = _pr.shoelace_area(pdf_points)
+            value: float | None = None
+            if scale_ratio and scale_ratio > 0:
+                value = area_pt2 / (scale_ratio * scale_ratio)
+            meta = {
+                **run_meta_base,
+                "room_name": room.name,
+                "self_intersects": self_intersects,
+                "verdict": "error" if self_intersects else "ok",
+            }
+            out.append(
+                TakeoffMeasurement(
+                    project_id=run.project_id,
+                    document_id=run.document_id,
+                    page=run.page,
+                    type="area",
+                    group_name="AI plan read",
+                    group_color="#8B5CF6",
+                    annotation=room.name or None,
+                    points=[{"x": p[0], "y": p[1]} for p in pdf_points],
+                    measurement_value=value,
+                    measurement_unit="m2",
+                    scale_pixels_per_unit=scale_ratio,
+                    source="ai_plan_read",
+                    confidence=confidence,
+                    review_status="proposed",
+                    metadata_=meta,
+                    created_by=user_id,
+                )
+            )
+
+        for symbol in result.symbols:
+            centers = _pr.norm_polygon_to_pdf_points(symbol.centers, page_w_pt, page_h_pt)
+            out.append(
+                TakeoffMeasurement(
+                    project_id=run.project_id,
+                    document_id=run.document_id,
+                    page=run.page,
+                    type="count",
+                    group_name="AI plan read",
+                    group_color="#8B5CF6",
+                    annotation=symbol.element_class or None,
+                    points=[{"x": p[0], "y": p[1]} for p in centers],
+                    measurement_value=float(len(centers)),
+                    count_value=len(centers),
+                    measurement_unit="pcs",
+                    source="ai_plan_read",
+                    confidence=round(symbol.confidence, 2),
+                    review_status="proposed",
+                    metadata_={**run_meta_base, "element_class": symbol.element_class, "verdict": "ok"},
+                    created_by=user_id,
+                )
+            )
+        return out
+
+    async def _fail_plan_read(
+        self,
+        run_id: uuid.UUID,
+        reason: str,
+        start: float,
+        *,
+        provider: str | None = None,
+        model: str | None = None,
+    ) -> None:
+        """Mark a run ``failed`` with a reason and the elapsed duration."""
+        import time as _time
+
+        fields: dict[str, Any] = {
+            "status": "failed",
+            "failure_reason": reason,
+            "duration_ms": int((_time.monotonic() - start) * 1000),
+        }
+        if provider is not None:
+            fields["provider"] = provider
+        if model is not None:
+            fields["model_used"] = model
+        await self.plan_read_repo.update_fields(run_id, **fields)
+
+    async def get_plan_read_run(self, run_id: uuid.UUID) -> AiTakeoffRun | None:
+        """Fetch a plan-read run by id (for polling)."""
+        return await self.plan_read_repo.get_by_id(run_id)
+
+    async def list_plan_read_proposals(self, run_id: uuid.UUID) -> list[TakeoffMeasurement]:
+        """List the ``proposed`` measurements minted by a run."""
+        return await self.measurement_repo.list_proposals_for_run(run_id)
+
+    async def accept_plan_read(
+        self,
+        run_id: uuid.UUID,
+        *,
+        measurement_ids: list[str] | None,
+        min_confidence: float | None,
+    ) -> dict[str, Any]:
+        """Confirm selected / above-threshold proposals into billed measurements.
+
+        Selection is by explicit ``measurement_ids`` or a ``min_confidence``
+        threshold (or all proposals when neither is given). A proposal carrying
+        a self-intersection ERROR verdict is BLOCKED (the user must redraw it
+        first), counted in ``blocked``. Low confidence is a warning, not a
+        block - it is accepted when explicitly selected or above the threshold.
+        On confirm the row flips to ``review_status='confirmed'``; the geometry
+        and value are left intact (the server already owns the shoelace number).
+        """
+        proposals = await self.measurement_repo.list_proposals_for_run(run_id)
+        wanted = {str(m) for m in measurement_ids} if measurement_ids else None
+
+        confirmed_ids: list[str] = []
+        skipped = 0
+        blocked = 0
+        for prop in proposals:
+            mid = str(prop.id)
+            if wanted is not None and mid not in wanted:
+                skipped += 1
+                continue
+            conf = prop.confidence if prop.confidence is not None else 0.0
+            if min_confidence is not None and conf < min_confidence:
+                skipped += 1
+                continue
+            verdict = (prop.metadata_ or {}).get("verdict") if isinstance(prop.metadata_, dict) else None
+            if verdict == "error":
+                blocked += 1
+                continue
+            await self.measurement_repo.update_fields(prop.id, review_status="confirmed")
+            confirmed_ids.append(mid)
+
+        if confirmed_ids:
+            run = await self.plan_read_repo.get_by_id(run_id)
+            if run is not None:
+                await self.plan_read_repo.update_fields(
+                    run_id,
+                    accepted_count=int(run.accepted_count or 0) + len(confirmed_ids),
+                    status="applied",
+                )
+        return {
+            "confirmed": len(confirmed_ids),
+            "skipped": skipped,
+            "blocked": blocked,
+            "measurement_ids": confirmed_ids,
+        }
+
+
+# Conservative pre-flight token estimate for one 2000px page vision call
+# (image tokens + the capped output). Used only by the pre-flight cost gate;
+# the real token count from the provider replaces it after the call.
+_PLAN_READ_PREFLIGHT_TOKENS = 4000
+# Output is geometry and short labels, not prose - a small cap keeps cost down.
+_PLAN_READ_MAX_TOKENS = 2048

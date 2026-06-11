@@ -996,6 +996,12 @@ export default function App() {
         <Route path="/projects/:projectId/files" element={<P title="Project Files"><FileManagerPage /></P>} />
 
         <Route path="/risks" element={<P title="Risk Register"><RiskRegisterPage /></P>} />
+        {/* Monte Carlo IA merge (#71): the standalone Risk Analysis tool
+            duplicated simulation that already lives in the Risk Register's
+            Monte Carlo tab (register-driven) and the 5D Cost Model
+            (BOQ-cost-driven). Collapse the third entry point into the Risk
+            Register tab so there is one way in; old deep links still resolve. */}
+        <Route path="/risk-analysis" element={<Navigate to="/risks?tab=montecarlo" replace />} />
 
         {/* Requirements merged into BIM Rules page */}
         <Route path="/requirements" element={<Navigate to="/bim/rules" replace />} />

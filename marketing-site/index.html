@@ -1096,31 +1096,46 @@
       padding: 8px 14px;
       margin-right: 8px;
       border-radius: 999px;
-      background: transparent;
-      color: var(--ink-1);
-      border: 1px solid var(--line-2);
+      background: rgba(2, 132, 199, 0.08);
+      color: var(--accent);
+      border: 1px solid rgba(2, 132, 199, 0.28);
       font-size: 13px;
-      font-weight: 500;
+      font-weight: 600;
       letter-spacing: -0.005em;
       white-space: nowrap;
       transition: transform 0.2s ease, background 0.25s ease, border-color 0.25s ease, color 0.25s ease;
     }
     .demo-pill:hover {
       transform: translateY(-1px);
-      background: var(--surface-2);
-      border-color: var(--line-1);
-      color: var(--ink-0);
+      background: rgba(2, 132, 199, 0.14);
+      border-color: rgba(2, 132, 199, 0.45);
+      color: var(--accent);
     }
     .demo-pill svg {
       color: var(--accent);
       flex-shrink: 0;
     }
-    [data-theme="dark"] .demo-pill { color: var(--ink-1); border-color: rgba(148, 163, 184, 0.22); }
-    [data-theme="dark"] .demo-pill:hover { background: rgba(148, 163, 184, 0.08); color: var(--ink-0); }
+    [data-theme="dark"] .demo-pill { background: rgba(56, 189, 248, 0.1); color: var(--accent); border-color: rgba(56, 189, 248, 0.32); }
+    [data-theme="dark"] .demo-pill:hover { background: rgba(56, 189, 248, 0.16); border-color: rgba(56, 189, 248, 0.5); }
     @media (max-width: 720px) {
       .demo-pill span { display: none; }
       .demo-pill { padding: 8px 10px; margin-right: 4px; }
     }
+
+    .hero-demo-link {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 8px;
+      margin-top: 14px;
+      color: var(--accent);
+      font-size: 14px;
+      font-weight: 600;
+      text-decoration: none;
+      transition: opacity 0.2s ease;
+    }
+    .hero-demo-link svg { flex-shrink: 0; }
+    .hero-demo-link:hover { opacity: 0.78; text-decoration: underline; }
 
     /* ================================================================ */
     /* HERO - two-column grid with floating right panel                  */
@@ -2199,7 +2214,7 @@
 
     .headline {
       font-family: 'Inter Tight', 'Inter', sans-serif;
-      font-weight: 580;
+      font-weight: 500;
       color: var(--ink-0);
       font-size: clamp(34px, 4.4vw, 64px);
       line-height: 1.05;
@@ -11448,8 +11463,8 @@
         "operatingSystem": "Linux, macOS, Windows, Docker, Kubernetes",
         "url": "https://openconstructionerp.com/",
         "description": "Open-source construction ERP with AI-powered BOQ, multi-CAD ingest (DWG, RVT, IFC), 55,000+ cost items, real-time collaboration and 20-language i18n. Self-host under AGPL-3.0.",
-        "softwareVersion": "7.3.0",
-        "releaseNotes": "Reliable desktop install with self-healing upgrade, AI estimator showing real cost matches, and BIM element grouping and search working across 26 languages.",
+        "softwareVersion": "7.5.0",
+        "releaseNotes": "Scanned-drawing recognition, on-drawing measurement editing and portfolio cost benchmarks.",
         "license": "https://www.gnu.org/licenses/agpl-3.0.html",
         "author": { "@id": "https://datadrivenconstruction.io/#organization" },
         "publisher": { "@id": "https://datadrivenconstruction.io/#organization" },
@@ -11909,6 +11924,11 @@
 
       <div class="nav-right">
 
+        <a class="demo-pill" href="/demo" aria-label="Try the live demo">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
+          <span data-i18n="nav.demo">Demo</span>
+        </a>
+
         <a class="github-pill" href="https://github.com/datadrivenconstruction/openconstructionerp" target="_blank" rel="noopener" aria-label="Star us on GitHub">
           <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" aria-hidden="true"><path d="M12 0.5C5.65 0.5 0.5 5.65 0.5 12a11.5 11.5 0 0 0 7.86 10.92c.58.1.79-.25.79-.56v-2c-3.2.7-3.87-1.36-3.87-1.36-.52-1.32-1.28-1.68-1.28-1.68-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.18 1.76 1.18 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.7 0-1.26.45-2.29 1.18-3.1-.12-.29-.51-1.47.11-3.05 0 0 .97-.31 3.18 1.18A11 11 0 0 1 12 6.8a11 11 0 0 1 2.9.39c2.2-1.5 3.17-1.18 3.17-1.18.63 1.58.24 2.76.12 3.05.74.81 1.18 1.84 1.18 3.1 0 4.43-2.7 5.4-5.27 5.69.42.36.78 1.07.78 2.15v3.19c0 .31.21.67.8.56A11.5 11.5 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5Z"/></svg>
           <span data-i18n="nav.github">GitHub</span>
@@ -11943,6 +11963,7 @@
 
   <!-- Mobile menu overlay - shown when body has .nav-open -->
   <div class="mobile-menu" id="mobile-menu" role="dialog" aria-label="Mobile navigation" aria-modal="true">
+    <a href="/demo"><span data-i18n="nav.demo">Demo</span><svg class="arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></a>
     <a href="#tour"><span data-i18n="nav.tour">Tour</span><svg class="arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></a>
     <a href="#compare"><span data-i18n="nav.compare">Compare</span><svg class="arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></a>
     <a href="#pricing"><span data-i18n="nav.pricing">Pricing</span><svg class="arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></a>
@@ -11984,7 +12005,7 @@
 
       <div class="eyebrow" id="fx-eyebrow">
         <span class="dot" aria-hidden="true"></span>
-        <span><b id="latest-version">v7.3.0</b> &middot; <span id="latest-version-meta" data-i18n="hero.version_meta">open source on GitHub</span></span>
+        <span><b id="latest-version">v7.5.0</b> &middot; <span id="latest-version-meta" data-i18n="hero.version_meta">open source on GitHub</span></span>
       </div>
 
       <h1 class="headline" id="headline" data-i18n-html="hero.headline">
@@ -12267,15 +12288,19 @@
               <span class="hero-dl-sub" data-i18n="hero.dl_btn_sub">Free - no Python, no Docker, nothing to set up</span>
             </span>
           </a>
+          <a class="hero-demo-link" href="/demo">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
+            <span data-i18n="hero.try_demo">Or try the live demo in your browser, nothing to install</span>
+          </a>
         </div>
         <div class="hero-secondary-row">
           <span class="hero-platform-icons" aria-label="Other platform downloads">
             <a class="hero-platform-icon" href="/download#card-macos" aria-label="Download for macOS">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16.4 12.6c0-2.1 1.7-3.1 1.8-3.2-1-1.4-2.5-1.6-3-1.6-1.3-.1-2.5.7-3.1.7-.6 0-1.6-.7-2.7-.7-1.4 0-2.6.8-3.3 2-1.4 2.4-.4 6 1 8 .7 1 1.4 2 2.5 2 1 0 1.4-.6 2.6-.6 1.2 0 1.5.6 2.6.6 1.1 0 1.8-1 2.4-2 .8-1.1 1.1-2.2 1.1-2.3 0-.1-2.1-.8-2.1-3.1zM14.5 6.3c.6-.7 1-1.6.9-2.6-.8 0-1.8.5-2.4 1.2-.5.6-1 1.6-.9 2.5.9.1 1.8-.4 2.4-1.1z"/></svg>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><defs><linearGradient id="osapple-h1" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#bcbcc2"/><stop offset="1" stop-color="#56565b"/></linearGradient></defs><path fill="url(#osapple-h1)" d="M16.4 12.6c0-2.1 1.7-3.1 1.8-3.2-1-1.4-2.5-1.6-3-1.6-1.3-.1-2.5.7-3.1.7-.6 0-1.6-.7-2.7-.7-1.4 0-2.6.8-3.3 2-1.4 2.4-.4 6 1 8 .7 1 1.4 2 2.5 2 1 0 1.4-.6 2.6-.6 1.2 0 1.5.6 2.6.6 1.1 0 1.8-1 2.4-2 .8-1.1 1.1-2.2 1.1-2.3 0-.1-2.1-.8-2.1-3.1zM14.5 6.3c.6-.7 1-1.6.9-2.6-.8 0-1.8.5-2.4 1.2-.5.6-1 1.6-.9 2.5.9.1 1.8-.4 2.4-1.1z"/></svg>
               <span>macOS</span>
             </a>
             <a class="hero-platform-icon" href="/download#card-linux" aria-label="Linux install options">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path fill-rule="evenodd" clip-rule="evenodd" d="M12 2.3c-2.05 0-3.55 1.6-3.55 3.95 0 .95.3 1.55.3 2.3 0 .85-.55 1.4-1.3 2.4-.9 1.2-1.95 2.7-1.95 4.75 0 1.45.5 2.55 1.3 3.35l-1.2 2.05c-.22.38.05.85.49.85H7.1c.18.5.62.85 1.2.95 1.05.18 2.2-.05 2.85-.6.27-.22.5-.32.85-.32s.58.1.85.32c.65.55 1.8.78 2.85.6.58-.1 1.02-.45 1.2-.95h1.01c.44 0 .71-.47.49-.85l-1.2-2.05c.8-.8 1.3-1.9 1.3-3.35 0-2.05-1.05-3.55-1.95-4.75-.75-1-1.3-1.55-1.3-2.4 0-.75.3-1.35.3-2.3C15.55 3.9 14.05 2.3 12 2.3Zm-1.65 3.5c.48 0 .82.45.82 1s-.34 1-.82 1-.83-.45-.83-1 .35-1 .83-1Zm3.3 0c.48 0 .83.45.83 1s-.35 1-.83 1-.82-.45-.82-1 .34-1 .82-1Zm-1.65 2.45c.6 0 1.55.3 1.95.85.12.17-.02.38-.25.45l-1.4.45c-.2.06-.4.06-.6 0l-1.4-.45c-.23-.07-.37-.28-.25-.45.4-.55 1.35-.85 1.95-.85Z"/></svg>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#1b1b1b" d="M12 2.3c-2.5 0-4 1.9-4 4.3 0 1 .3 1.6.3 2.3 0 .9-.6 1.5-1.4 2.6-1 1.3-2 2.9-2 4.9 0 1.1.35 2 .9 2.6l-.7 1.3c-.2.35.05.8.45.8h.95c.15.5.55.85 1.1.95 1 .18 2-.05 2.6-.55.25-.2.45-.3.8-.3s.55.1.8.3c.6.5 1.6.73 2.6.55.55-.1.95-.45 1.1-.95h.95c.4 0 .65-.45.45-.8l-.7-1.3c.55-.6.9-1.5.9-2.6 0-2-1-3.6-2-4.9-.8-1.1-1.4-1.7-1.4-2.6 0-.7.3-1.3.3-2.3 0-2.4-1.5-4.3-4-4.3z"/><ellipse cx="9.7" cy="19.3" rx="2.05" ry="1" fill="#f6a800" transform="rotate(-20 9.7 19.3)"/><ellipse cx="14.3" cy="19.3" rx="2.05" ry="1" fill="#f6a800" transform="rotate(20 14.3 19.3)"/><path fill="#fff" d="M12 8.6c-2 0-3.3 1.8-3.3 4.1 0 1.7.45 3.3 1.3 4.4.55.7 1.25 1.05 2 1.05s1.45-.35 2-1.05c.85-1.1 1.3-2.7 1.3-4.4 0-2.3-1.3-4.1-3.3-4.1z"/><ellipse cx="10.45" cy="10.6" rx=".95" ry="1.3" fill="#1b1b1b"/><ellipse cx="13.55" cy="10.6" rx=".95" ry="1.3" fill="#1b1b1b"/><circle cx="10.72" cy="10.2" r=".28" fill="#fff"/><circle cx="13.82" cy="10.2" r=".28" fill="#fff"/><path fill="#f6a800" d="M12 11.5l1.45 1-1.45 1.15-1.45-1.15z"/><path fill="#d98e00" d="M12 12.65l1.45-.15-1.45 1.15-1.45-1.15z"/></svg>
               <span>Linux</span>
             </a>
           </span>
@@ -13034,7 +13059,7 @@
     var heroLabel = document.getElementById("hero-dl-label");
     var heroGlyph = document.getElementById("hero-dl-glyph");
     var OS_GLYPH = {
-      windows: "M3 5.4 10.4 4.3v6.6H3zM10.4 11.6v6.6L3 17.1V11.6zM11.5 4.1 21 2.7v8.2h-9.5zM21 11.9v8.2l-9.5-1.4v-6.8z",
+      windows: "M2.6 2.6h8.4v8.4h-8.4zM13 2.6h8.4v8.4h-8.4zM2.6 13h8.4v8.4h-8.4zM13 13h8.4v8.4h-8.4z",
       macos:   "M16.4 12.6c0-2.1 1.7-3.1 1.8-3.2-1-1.4-2.5-1.6-3-1.6-1.3-.1-2.5.7-3.1.7-.6 0-1.6-.7-2.7-.7-1.4 0-2.6.8-3.3 2-1.4 2.4-.4 6 1 8 .7 1 1.4 2 2.5 2 1 0 1.4-.6 2.6-.6 1.2 0 1.5.6 2.6.6 1.1 0 1.8-1 2.4-2 .8-1.1 1.1-2.2 1.1-2.3 0-.1-2.1-.8-2.1-3.1zM14.5 6.3c.6-.7 1-1.6.9-2.6-.8 0-1.8.5-2.4 1.2-.5.6-1 1.6-.9 2.5.9.1 1.8-.4 2.4-1.1z",
       linux:   "M12 2.3c-2.05 0-3.55 1.6-3.55 3.95 0 .95.3 1.55.3 2.3 0 .85-.55 1.4-1.3 2.4-.9 1.2-1.95 2.7-1.95 4.75 0 1.45.5 2.55 1.3 3.35l-1.2 2.05c-.22.38.05.85.49.85H7.1c.18.5.62.85 1.2.95 1.05.18 2.2-.05 2.85-.6.27-.22.5-.32.85-.32s.58.1.85.32c.65.55 1.8.78 2.85.6.58-.1 1.02-.45 1.2-.95h1.01c.44 0 .71-.47.49-.85l-1.2-2.05c.8-.8 1.3-1.9 1.3-3.35 0-2.05-1.05-3.55-1.95-4.75-.75-1-1.3-1.55-1.3-2.4 0-.75.3-1.35.3-2.3C15.55 3.9 14.05 2.3 12 2.3Zm-1.65 3.5c.48 0 .82.45.82 1s-.34 1-.82 1-.83-.45-.83-1 .35-1 .83-1Zm3.3 0c.48 0 .83.45.83 1s-.35 1-.83 1-.82-.45-.82-1 .34-1 .82-1Zm-1.65 2.45c.6 0 1.55.3 1.95.85.12.17-.02.38-.25.45l-1.4.45c-.2.06-.4.06-.6 0l-1.4-.45c-.23-.07-.37-.28-.25-.45.4-.55 1.35-.85 1.95-.85Z"
     };
@@ -14012,8 +14037,8 @@
   <!-- ============================================================ -->
   <section class="ddc-trusted reveal" aria-label="Trusted by early adopters" id="trusted">
     <div class="ddc-trusted-head">
-      <div class="ddc-trusted-title" data-i18n="trust.title">engineers, contractors and consultancies already running it</div>
-      <div class="ddc-trusted-sub" data-i18n="trust.sub">A snapshot of the construction, engineering and infrastructure teams that registered in the first weeks of OpenConstructionERP - across Europe, North America, MENA, APAC and Australasia.</div>
+      <div class="ddc-trusted-title" data-i18n="trust.title">engineers, contractors and consultancies in the DataDrivenConstruction community</div>
+      <div class="ddc-trusted-sub" data-i18n="trust.sub">A snapshot of the construction, engineering and infrastructure teams that have worked with DataDrivenConstruction's open tools, datasets and workshops, across Europe, North America, MENA, APAC and Australasia.</div>
     </div>
     <div class="ddc-marquee-rows">
 
@@ -14727,9 +14752,14 @@
       </div>
       <ul class="release-ticker-list">
                 <li id="latest-release-row">
-          <span class="ver" id="latest-release-tag">v7.3.0</span>
-          <span class="note" id="latest-release-note">Schedule-quality validation pack with seven checks, in-app guidance across the platform (confidence badges, plain-language errors, glossary), and BIM grouping and search fixed in 26 languages.</span>
-          <span class="date" id="latest-release-date">2026-06-08</span>
+          <span class="ver" id="latest-release-tag">v7.5.0</span>
+          <span class="note" id="latest-release-note">Scanned-drawing recognition, on-drawing measurement editing and portfolio cost benchmarks.</span>
+          <span class="date" id="latest-release-date">2026-06-10</span>
+        </li>
+        <li>
+          <span class="ver">v7.3.0</span>
+          <span class="note">Schedule-quality validation pack with seven checks, in-app guidance across the platform (confidence badges, plain-language errors, glossary), and BIM grouping and search fixed in 26 languages.</span>
+          <span class="date">2026-06-08</span>
         </li>
         <li>
           <span class="ver">v7.2.0</span>
@@ -14754,11 +14784,6 @@
         <li>
           <span class="ver">v6.10.0</span>
           <span class="note">Field time and attendance with a payroll lifecycle, a cross-module project-controls dashboard, compliance enforced at contract gates, and AIA G702 and G703 payment applications.</span>
-          <span class="date">2026-06-05</span>
-        </li>
-        <li>
-          <span class="ver">v6.9.0</span>
-          <span class="note">Management of Change register screen, cost matching fixed for projects outside the US, per-user scoped backup restore, and several access and purchase-order hardening fixes.</span>
           <span class="date">2026-06-05</span>
         </li>
       </ul>
@@ -15609,8 +15634,8 @@ manifest = <span class="tok-fn">ModuleManifest</span>(
          in a styled text fallback so the card never looks broken.            -->
     <div class="ddc-trusted reveal">
       <div class="ddc-trusted-head">
-        <div class="ddc-trusted-title" data-i18n="ddc.trusted_title">clients &amp; users of DDC solutions</div>
-        <div class="ddc-trusted-sub" data-i18n="ddc.trusted_sub">A snapshot of the construction, engineering and infrastructure companies that have built with DataDrivenConstruction's open tools, datasets and AI workflows over the past decade.</div>
+        <div class="ddc-trusted-title" data-i18n="ddc.trusted_title">Engineers, contractors and consultancies in the DataDrivenConstruction community</div>
+        <div class="ddc-trusted-sub" data-i18n="ddc.trusted_sub">A snapshot of the construction, engineering and infrastructure teams that have explored the OpenConstructionERP demo and worked with DataDrivenConstruction's open tools, datasets and workshops, across Europe, North America, MENA, APAC and Australasia.</div>
       </div>
       <div class="ddc-marquee-rows">
         <div class="ddc-marquee">
@@ -16478,7 +16503,7 @@ manifest = <span class="tok-fn">ModuleManifest</span>(
           <svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
         </button>
       </form>
-      <div class="newsletter-note" data-i18n="newsletter.note">~1 email per month · no sales calls · GDPR-compliant</div>
+      <div class="newsletter-note" data-i18n="newsletter.note">~1 email per month · no sales calls · unsubscribe any time</div>
 
       <div class="newsletter-divider" aria-hidden="true"></div>
 
@@ -17365,11 +17390,11 @@ manifest = <span class="tok-fn">ModuleManifest</span>(
         </a>
         <span class="hero-platform-icons" aria-label="Other platform downloads">
           <a class="hero-platform-icon" href="/download#card-macos" aria-label="Download for macOS (Apple)">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16.4 12.6c0-2.1 1.7-3.1 1.8-3.2-1-1.4-2.5-1.6-3-1.6-1.3-.1-2.5.7-3.1.7-.6 0-1.6-.7-2.7-.7-1.4 0-2.6.8-3.3 2-1.4 2.4-.4 6 1 8 .7 1 1.4 2 2.5 2 1 0 1.4-.6 2.6-.6 1.2 0 1.5.6 2.6.6 1.1 0 1.8-1 2.4-2 .8-1.1 1.1-2.2 1.1-2.3 0-.1-2.1-.8-2.1-3.1zM14.5 6.3c.6-.7 1-1.6.9-2.6-.8 0-1.8.5-2.4 1.2-.5.6-1 1.6-.9 2.5.9.1 1.8-.4 2.4-1.1z"/></svg>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><defs><linearGradient id="osapple-h2" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#bcbcc2"/><stop offset="1" stop-color="#56565b"/></linearGradient></defs><path fill="url(#osapple-h2)" d="M16.4 12.6c0-2.1 1.7-3.1 1.8-3.2-1-1.4-2.5-1.6-3-1.6-1.3-.1-2.5.7-3.1.7-.6 0-1.6-.7-2.7-.7-1.4 0-2.6.8-3.3 2-1.4 2.4-.4 6 1 8 .7 1 1.4 2 2.5 2 1 0 1.4-.6 2.6-.6 1.2 0 1.5.6 2.6.6 1.1 0 1.8-1 2.4-2 .8-1.1 1.1-2.2 1.1-2.3 0-.1-2.1-.8-2.1-3.1zM14.5 6.3c.6-.7 1-1.6.9-2.6-.8 0-1.8.5-2.4 1.2-.5.6-1 1.6-.9 2.5.9.1 1.8-.4 2.4-1.1z"/></svg>
             <span>Apple</span>
           </a>
           <a class="hero-platform-icon" href="/download#card-linux" aria-label="Linux install options">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path fill-rule="evenodd" clip-rule="evenodd" d="M12 2.3c-2.05 0-3.55 1.6-3.55 3.95 0 .95.3 1.55.3 2.3 0 .85-.55 1.4-1.3 2.4-.9 1.2-1.95 2.7-1.95 4.75 0 1.45.5 2.55 1.3 3.35l-1.2 2.05c-.22.38.05.85.49.85H7.1c.18.5.62.85 1.2.95 1.05.18 2.2-.05 2.85-.6.27-.22.5-.32.85-.32s.58.1.85.32c.65.55 1.8.78 2.85.6.58-.1 1.02-.45 1.2-.95h1.01c.44 0 .71-.47.49-.85l-1.2-2.05c.8-.8 1.3-1.9 1.3-3.35 0-2.05-1.05-3.55-1.95-4.75-.75-1-1.3-1.55-1.3-2.4 0-.75.3-1.35.3-2.3C15.55 3.9 14.05 2.3 12 2.3Zm-1.65 3.5c.48 0 .82.45.82 1s-.34 1-.82 1-.83-.45-.83-1 .35-1 .83-1Zm3.3 0c.48 0 .83.45.83 1s-.35 1-.83 1-.82-.45-.82-1 .34-1 .82-1Zm-1.65 2.45c.6 0 1.55.3 1.95.85.12.17-.02.38-.25.45l-1.4.45c-.2.06-.4.06-.6 0l-1.4-.45c-.23-.07-.37-.28-.25-.45.4-.55 1.35-.85 1.95-.85Z"/></svg>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#1b1b1b" d="M12 2.3c-2.5 0-4 1.9-4 4.3 0 1 .3 1.6.3 2.3 0 .9-.6 1.5-1.4 2.6-1 1.3-2 2.9-2 4.9 0 1.1.35 2 .9 2.6l-.7 1.3c-.2.35.05.8.45.8h.95c.15.5.55.85 1.1.95 1 .18 2-.05 2.6-.55.25-.2.45-.3.8-.3s.55.1.8.3c.6.5 1.6.73 2.6.55.55-.1.95-.45 1.1-.95h.95c.4 0 .65-.45.45-.8l-.7-1.3c.55-.6.9-1.5.9-2.6 0-2-1-3.6-2-4.9-.8-1.1-1.4-1.7-1.4-2.6 0-.7.3-1.3.3-2.3 0-2.4-1.5-4.3-4-4.3z"/><ellipse cx="9.7" cy="19.3" rx="2.05" ry="1" fill="#f6a800" transform="rotate(-20 9.7 19.3)"/><ellipse cx="14.3" cy="19.3" rx="2.05" ry="1" fill="#f6a800" transform="rotate(20 14.3 19.3)"/><path fill="#fff" d="M12 8.6c-2 0-3.3 1.8-3.3 4.1 0 1.7.45 3.3 1.3 4.4.55.7 1.25 1.05 2 1.05s1.45-.35 2-1.05c.85-1.1 1.3-2.7 1.3-4.4 0-2.3-1.3-4.1-3.3-4.1z"/><ellipse cx="10.45" cy="10.6" rx=".95" ry="1.3" fill="#1b1b1b"/><ellipse cx="13.55" cy="10.6" rx=".95" ry="1.3" fill="#1b1b1b"/><circle cx="10.72" cy="10.2" r=".28" fill="#fff"/><circle cx="13.82" cy="10.2" r=".28" fill="#fff"/><path fill="#f6a800" d="M12 11.5l1.45 1-1.45 1.15-1.45-1.15z"/><path fill="#d98e00" d="M12 12.65l1.45-.15-1.45 1.15-1.45-1.15z"/></svg>
             <span>Linux</span>
           </a>
         </span>
@@ -17862,7 +17887,7 @@ manifest = <span class="tok-fn">ModuleManifest</span>(
         <p class="pa-eyebrow">Practice atlas · the deeper view</p>
         <h2>Where to look <em>after</em> the homepage.</h2>
         <p class="pa-lede">
-          Four reference pages built on what OCERP actually ships in v7.3.0 -
+          Four reference pages built on what OCERP actually ships in v7.5.0 -
           <b>code‑level audited, no marketing fiction.</b> Take the assessment to find your starting point,
           then go deeper into practices, industries and standards.
         </p>
@@ -17952,7 +17977,7 @@ manifest = <span class="tok-fn">ModuleManifest</span>(
             <div class="pa-side-body">
               <div class="pa-side-eyebrow">▸ P‑01 .. P‑05</div>
               <h4 class="pa-side-title"><em>Practice</em> areas</h4>
-              <p class="pa-side-desc">5 disciplines with <b>platform vs partner</b> column per practice. What ships in v7.3.0, what's still partner work.</p>
+              <p class="pa-side-desc">5 disciplines with <b>platform vs partner</b> column per practice. What ships in v7.5.0, what's still partner work.</p>
               <div class="pa-side-tags">
                 <span class="pa-side-tag is-accent">110+ modules</span>
                 <span class="pa-side-tag">BIM · Cost · Takeoff</span>
@@ -18000,7 +18025,7 @@ manifest = <span class="tok-fn">ModuleManifest</span>(
             <div class="pa-side-body">
               <div class="pa-side-eyebrow">▸ Code‑audit</div>
               <h4 class="pa-side-title"><em>Standards</em> reference</h4>
-              <p class="pa-side-desc">Every standard with a registered reader, writer or validator in v7.3.0. <b>46 rules · 5 packs</b>. Roadmap items called out separately.</p>
+              <p class="pa-side-desc">Every standard with a registered reader, writer or validator in v7.5.0. <b>46 rules · 5 packs</b>. Roadmap items called out separately.</p>
               <div class="pa-side-tags">
                 <span class="pa-side-tag is-accent">IFC · GAEB · BCF</span>
                 <span class="pa-side-tag">DIN · NRM · CSI</span>
@@ -18092,6 +18117,7 @@ manifest = <span class="tok-fn">ModuleManifest</span>(
     </div>
     <div class="footer-bottom">
       <span data-i18n="footer.bottom_copyright">&copy; 2026 DataDrivenConstruction &middot; OpenConstructionERP</span>
+      <span class="footer-trademarks" style="display:block;margin-top:8px;opacity:0.55;font-size:11px;line-height:1.5;max-width:780px" data-i18n="footer.bottom_trademarks">All product names, logos and brands are the property of their respective owners and are used for identification purposes only. Their use does not imply any affiliation with or endorsement by them.</span>
     </div>
   </footer>
 
@@ -21126,7 +21152,7 @@ manifest = <span class="tok-fn">ModuleManifest</span>(
           <svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
         </button>
       </form>
-      <div class="ddc-popup-note" data-i18n="popup.note">~1 email per month · GDPR-compliant</div>
+      <div class="ddc-popup-note" data-i18n="popup.note">~1 email per month · unsubscribe any time</div>
     </div>
   </div>
 

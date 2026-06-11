@@ -170,17 +170,18 @@ interface NavGroup {
 // Source-of-truth audit: every `to` here is cross-checked against
 // `App.tsx` <Route path="…"/> entries — no broken links. Two routes the
 // old flat menu had dropped (`/benchmarks` Cost Benchmarks, and
-// `/collaboration`) are re-surfaced here, along with the two
-// module-registry surfaces that never had a sidebar home because their
-// manifest declared a `tools` group that did not exist (`/sustainability`,
-// `/risk-analysis`). All four are now static rows with module-key gating.
+// `/collaboration`) are re-surfaced here, along with the module-registry
+// surface that never had a sidebar home because its manifest declared a
+// `tools` group that did not exist (`/sustainability`), now a static row
+// with module-key gating. (`/risk-analysis` was a third such surface but
+// was retired in the Monte Carlo IA merge #71 and now redirects to /risks.)
 //
 // Group ids are deliberately unique and do NOT reuse the old `ai` / `tools`
 // ids that module manifests inject into via `getModuleNavItems(group.id)`.
-// Those manifest items (pipelines, sustainability, risk-analysis) are now
-// listed statically instead, so there is no dynamic duplication. The one
-// dynamic group kept verbatim is `regional` (Regional Exchange) — it still
-// pulls its rows from the module registry and keeps its conditional render.
+// Those manifest items (pipelines, sustainability) are now listed statically
+// instead, so there is no dynamic duplication. The one dynamic group kept
+// verbatim is `regional` (Regional Exchange) — it still pulls its rows from
+// the module registry and keeps its conditional render.
 //
 // Group labels use `t('sidebar.group.<slug>', { defaultValue: '<EN>' })`.
 // The locale keys are added by a later pass; until then the English
@@ -304,8 +305,10 @@ const navGroups: NavGroup[] = [
     ],
   },
   // ── 8. COST CONTROL & RISK ─────────────────────────────────────────
-  // 5D cost model, portfolio capacity/leveling, risk register and the
-  // Monte-Carlo risk-analysis tool (re-surfaced from the module registry).
+  // 5D cost model, portfolio capacity/leveling and the risk register. The
+  // register hosts the Monte Carlo simulation in its own tab, so the old
+  // standalone "Risk Analysis" row was retired (IA merge #71) to keep a
+  // single Monte-Carlo entry point; `/risk-analysis` now redirects there.
   {
     id: 'grp_cost_control',
     labelKey: 'sidebar.group.cost_control',
@@ -317,7 +320,6 @@ const navGroups: NavGroup[] = [
       { labelKey: 'nav.capacity_planning', to: '/portfolio/capacity', icon: CalendarRange, advancedOnly: true },
       { labelKey: 'nav.resource_leveling', to: '/portfolio/leveling', icon: Scale, advancedOnly: true },
       { labelKey: 'nav.risk_register', to: '/risks', icon: ShieldAlert, advancedOnly: true },
-      { labelKey: 'nav.risk_analysis', to: '/risk-analysis', icon: Radar, moduleKey: 'risk-analysis', advancedOnly: true },
     ],
   },
   // ── 9. COMMERCIAL ──────────────────────────────────────────────────
@@ -753,8 +755,9 @@ const ROUTE_MODULE_KEY: Record<string, string> = {
   '/ai-agents': 'ai',
   '/advisor': 'ai',
   '/chat': 'erp_chat',
-  // (/pipelines, /benchmarks, /sustainability, /risk-analysis are gated by
-  //  their inline `moduleKey` instead — no Company-Profile mapping.)
+  // (/pipelines, /benchmarks, /sustainability are gated by their inline
+  //  `moduleKey` instead — no Company-Profile mapping. /risk-analysis was
+  //  retired in the Monte Carlo IA merge and now redirects to /risks.)
   // Commercial
   '/crm': 'crm',
   '/contracts': 'contracts',

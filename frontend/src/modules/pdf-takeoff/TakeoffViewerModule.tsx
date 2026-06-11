@@ -2819,6 +2819,162 @@ export default function TakeoffViewerModule({
     }
   }, [recognizeBusy, initialPdfUrl, currentPage, scale, activeGroup, nextAnnotation, addToast, t]);
 
+  /* ── Read plan with AI: vision-LLM plan reading (issue #194) ────────────
+   * The opt-in, bring-your-own-key, cost-capped complement to the offline
+   * Recognize tool. It can read room names, dimension strings and a scale that
+   * OpenCV structurally cannot. Every result is a SUGGESTION with a confidence;
+   * nothing is applied until the user accepts it (same provisional-overlay
+   * flow as offline Recognize), and the server recomputes the billed number. */
+
+  const [planReadBusy, setPlanReadBusy] = useState(false);
+  /** Null until /plan-read/meta resolves; false hides the action when no
+   *  vision-capable AI key is configured (graceful degradation). */
+  const [planReadVision, setPlanReadVision] = useState<{ available: boolean; reason: string | null } | null>(
+    null,
+  );
+
+  // Probe vision availability once on mount so the action can hide / disable
+  // cleanly when no key is configured. Never throws to the user.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const meta = await takeoffApi.planRead.meta();
+        if (!cancelled && meta) {
+          setPlanReadVision({ available: meta.vision_available, reason: meta.reason });
+        } else if (!cancelled) {
+          setPlanReadVision({ available: false, reason: null });
+        }
+      } catch {
+        if (!cancelled) setPlanReadVision({ available: false, reason: null });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  /** Read the current page with a vision model: start a run, poll it to
+   *  completion, then drop its proposals as provisional suggestions the user
+   *  reviews and accepts (human-confirmed). Never auto-applies. */
+  const handleReadWithAi = useCallback(async () => {
+    if (planReadBusy) return;
+    const docId = initialPdfUrl?.match(/\/documents\/([^/?#]+)\/(?:download|recognize)/)?.[1];
+    const projectId = selectedProjectId || activeProjectId || '';
+    if (!docId || !projectId) {
+      addToast({
+        type: 'info',
+        title: t('takeoff_viewer.plan_read.needs_upload_title', {
+          defaultValue: 'AI plan reading needs an uploaded drawing',
+        }),
+        message: t('takeoff_viewer.plan_read.needs_upload_msg', {
+          defaultValue:
+            'Upload this PDF to a project first, then open it from the documents list to read it with AI.',
+        }),
+      });
+      return;
+    }
+    setPlanReadBusy(true);
+    try {
+      const run = await takeoffApi.planRead.start({
+        project_id: projectId,
+        document_id: docId,
+        page: currentPage,
+        mode: 'rooms',
+        scale_pixels_per_unit: scale.pixelsPerUnit > 0 ? scale.pixelsPerUnit : null,
+      });
+      // Poll the FSM to a terminal state (review / applied / failed). The run
+      // is in-process and fast for one page; cap the wait so the UI never hangs.
+      let current = run;
+      const deadline = Date.now() + 130_000;
+      while (!['review', 'applied', 'failed', 'cancelled'].includes(current.status)) {
+        if (Date.now() > deadline) break;
+        await new Promise((r) => setTimeout(r, 1500));
+        current = await takeoffApi.planRead.getRun(run.id);
+      }
+      if (current.status === 'failed') {
+        addToast({
+          type: 'error',
+          title: t('takeoff_viewer.plan_read.failed', { defaultValue: 'AI plan reading failed' }),
+          message: current.failure_reason
+            ? t(`takeoff_viewer.plan_read.reason_${current.failure_reason}`, {
+                defaultValue: current.failure_reason,
+              })
+            : '',
+        });
+        return;
+      }
+      const proposals = await takeoffApi.planRead.proposals(run.id);
+      if (proposals.length === 0) {
+        addToast({
+          type: 'info',
+          title: t('takeoff_viewer.plan_read.none_title', { defaultValue: 'No rooms detected' }),
+          message: t('takeoff_viewer.plan_read.none_msg', {
+            defaultValue: 'The model did not find anything clear enough to suggest on this page.',
+          }),
+        });
+        return;
+      }
+      const suggestions: Measurement[] = proposals.map((p, i) => {
+        const mType: Measurement['type'] = p.type === 'count' ? 'count' : 'area';
+        const unit = p.type === 'count' ? 'pcs' : `${scale.unitLabel}²`;
+        const value =
+          p.type === 'count'
+            ? (p.count_value ?? p.points.length)
+            : (typeof p.measurement_value === 'number' ? p.measurement_value : 0);
+        const labelText =
+          p.type === 'count'
+            ? String(p.count_value ?? p.points.length)
+            : p.measurement_value != null
+              ? formatMeasurement(Number(p.measurement_value), unit)
+              : t('takeoff_viewer.recognize_uncalibrated', { defaultValue: 'calibrate for value' });
+        return {
+          id: `ai_${run.id}_${i}`,
+          type: mType,
+          points: p.points.map((pt) => ({ x: pt.x, y: pt.y })),
+          value: Number(value) || 0,
+          unit,
+          label: labelText,
+          annotation: p.annotation || nextAnnotation(mType),
+          page: currentPage,
+          group: activeGroup,
+          suggested: true,
+          confidence: p.confidence ?? undefined,
+        };
+      });
+      setMeasurements((prev) => [...prev, ...suggestions]);
+      addToast({
+        type: 'success',
+        title: t('takeoff_viewer.plan_read.added_title', {
+          defaultValue: '{{n}} AI suggestions added',
+          n: suggestions.length,
+        }),
+        message: t('takeoff_viewer.plan_read.added_msg', {
+          defaultValue: 'Review them on the drawing, then accept or reject each (AI proposes, you confirm).',
+        }),
+      });
+    } catch (err) {
+      addToast({
+        type: 'error',
+        title: t('takeoff_viewer.plan_read.failed', { defaultValue: 'AI plan reading failed' }),
+        message: err instanceof Error ? err.message : '',
+      });
+    } finally {
+      setPlanReadBusy(false);
+    }
+  }, [
+    planReadBusy,
+    initialPdfUrl,
+    selectedProjectId,
+    activeProjectId,
+    currentPage,
+    scale,
+    activeGroup,
+    nextAnnotation,
+    addToast,
+    t,
+  ]);
+
   /** Accept one suggestion: clear the flag so it persists on the next sync. */
   const acceptSuggestion = useCallback((id: string) => {
     setMeasurements((prev) => prev.map((m) => (m.id === id ? { ...m, suggested: false } : m)));
@@ -3984,6 +4140,30 @@ export default function TakeoffViewerModule({
                 {recognizeBusy ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
                 <span className="hidden sm:inline">{t('takeoff_viewer.recognize', { defaultValue: 'Recognize' })}</span>
               </button>
+
+              {/* Read plan with AI — vision-LLM plan reading (issue #194). The
+                  opt-in, BYO-key, cost-capped complement to offline Recognize:
+                  it reads room names and a scale a vision model can see but
+                  OpenCV cannot. Hidden when no vision key is configured so the
+                  feature degrades gracefully (the offline Recognize button is
+                  unaffected). AI proposes, the user confirms. */}
+              {planReadVision?.available && (
+                <button
+                  onClick={handleReadWithAi}
+                  disabled={planReadBusy}
+                  className="flex items-center gap-1 px-2 py-1.5 rounded text-xs font-medium transition-colors bg-gradient-to-r from-fuchsia-500 to-purple-600 text-white hover:from-fuchsia-600 hover:to-purple-700 disabled:opacity-50 disabled:pointer-events-none shadow-sm"
+                  title={t('takeoff_viewer.plan_read.hint', {
+                    defaultValue: 'Read this page with a vision AI: room names and scale (AI proposes, you confirm)',
+                  })}
+                  aria-label={t('takeoff_viewer.plan_read.action', { defaultValue: 'Read plan with AI' })}
+                  data-testid="plan-read-ai-button"
+                >
+                  {planReadBusy ? <Loader2 size={14} className="animate-spin" /> : <Scan size={14} />}
+                  <span className="hidden sm:inline">
+                    {t('takeoff_viewer.plan_read.action', { defaultValue: 'Read plan with AI' })}
+                  </span>
+                </button>
+              )}
 
               {/* Save PDF — burn the current measurements + markups into a
                   downloadable PDF (with a summary page). Always-visible

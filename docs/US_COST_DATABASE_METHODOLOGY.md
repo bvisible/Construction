@@ -1,10 +1,10 @@
-# US Resource-Based Cost Database — Methodology & Integration Guide
+# US Resource-Based Cost Database: Methodology and Integration Guide
 
-**Audience:** OCERP developers and data integrators  
-**Last updated:** 2026-05-15  
-**Related:** `docs/US_COST_DATABASE_PILOT.md` (pilot batch)  
-**Related:** `docs/validation_report.md` (pilot validation results)  
-**Quick reference:** For API-focused import guides (CSV/Excel/JSON bulk upload), see [`docs/cost-database-import.md`](cost-database-import.md)
+**Written for:** OCERP developers and the people wiring data into the platform  
+**Revised:** 2026-05-15  
+**See also:** `docs/US_COST_DATABASE_PILOT.md` for the pilot batch  
+**See also:** `docs/validation_report.md` for the pilot validation results  
+**Looking for the API import path?** The CSV, Excel, and JSON bulk-upload guides live in [`docs/cost-database-import.md`](cost-database-import.md)
 
 ---
 
@@ -20,89 +20,89 @@
 8. [Source-to-Schema Mapping Reference](#8-source-to-schema-mapping-reference)
 9. [Classification Systems](#9-classification-systems)
 10. [Step-by-Step: Building a New Regional Database](#10-step-by-step-building-a-new-regional-database)
-11. [Validation & Quality Assurance](#11-validation--quality-assurance)
+11. [Validation and Quality Assurance](#11-validation-and-quality-assurance)
 12. [Importing Data into OCERP](#12-importing-data-into-ocerp)
 
 ---
 
 ## 1. Overview
 
-OCERP's cost database stores **resource-based cost items** — each item represents a unit of construction work (e.g., "Bulk excavation, common earth, machine") with a total rate **decomposed into labor, material, and equipment components**. This decomposition enables:
+The OCERP cost database keeps its entries as **resource-based cost items**. Every item stands for one unit of construction work, for example "Bulk excavation, common earth, machine", and its total rate is **broken down into labor, material, and equipment parts**. Splitting the rate this way gives us several things at once:
 
-- **Transparent costing** — estimators see *why* a rate is what it is, not just a number
-- **Regional adaptation** — swap labor wages or material prices for a different market without rebuilding from scratch
-- **Cross-validation** — compare calculated rates against bid prices to catch errors
-- **Sensitivity analysis** — model cost impacts of wage changes, material price swings, or equipment selection
+- **Transparent costing:** estimators can see *why* a rate ended up where it did instead of just reading a final number.
+- **Regional adaptation:** swap in different labor wages or material prices for another market and you do not have to rebuild the item from the ground up.
+- **Cross-validation:** line up the calculated rate against actual bid prices and any errors stand out.
+- **Sensitivity analysis:** model what happens to cost when wages move, material prices swing, or a different machine is chosen.
 
-This guide documents:
+This document walks through:
 
-- How we built the USA_TENNESSEE pilot from real government and market data
-- The OCERP cost database architecture and schema
-- How to evaluate what cost items are needed for a given project type
-- How to find, extract, and map data from every major US cost source
-- How to build a new regional database from scratch
+- How we assembled the USA_TENNESSEE pilot out of real government and market data.
+- The architecture and schema behind the OCERP cost database.
+- A way to decide which cost items a given project type actually requires.
+- Where to find, pull, and map data from each of the major US cost sources.
+- A repeatable procedure for standing up a brand new regional database.
 
 ---
 
 ## 2. How We Built the Pilot: Process Walkthrough
 
-The pilot batch of 12 sitework cost items (Nashville, TN) was built through this process:
+We produced the pilot batch of 12 sitework cost items for Nashville, TN, by following the steps below.
 
 ### Phase 1: Identify Required Items (Scope Definition)
 
-Starting from the TCG Brentwood Sitework project scope, we identified 12 items across four categories:
+We took the TCG Brentwood Sitework project scope as our starting point and pulled out 12 items spread across four categories:
 
 | Category | Items | MasterFormat Division |
 |----------|-------|----------------------|
-| Demolition | 4 (house, garage, concrete, asphalt) | 02 — Existing Conditions |
-| Excavation & Grading | 4 (bulk, trench, grading, fill) | 31 — Earthwork |
-| Stormwater | 2 (French drain, infiltration pit) | 33 — Utilities |
-| Utilities | 2 (water, sewer service lines) | 33 — Utilities |
+| Demolition | 4 (house, garage, concrete, asphalt) | 02, Existing Conditions |
+| Excavation and Grading | 4 (bulk, trench, grading, fill) | 31, Earthwork |
+| Stormwater | 2 (French drain, infiltration pit) | 33, Utilities |
+| Utilities | 2 (water, sewer service lines) | 33, Utilities |
 
-Each item was assigned a human-readable code (e.g., `DEM-HSE-01`, `EXC-BLK-01`) and a unit of measurement based on industry convention for that work type.
+Every item received a readable code (such as `DEM-HSE-01` or `EXC-BLK-01`) plus a unit of measure that matches how the trade conventionally measures that kind of work.
 
 ### Phase 2: Source Research
 
-Three government free sources provided the foundational data:
+Three free government sources supplied the underlying numbers:
 
 | Source | What It Provided | How We Used It |
 |--------|-----------------|----------------|
-| **USACE EP 1110-1-8** (Region 3 Southeast, 2022 ed.) | Equipment hourly rates (ownership + operating) | Machine cost components in every cost item |
+| **USACE EP 1110-1-8** (Region 3 Southeast, 2022 ed.) | Equipment hourly rates (ownership plus operating) | Machine cost components across every cost item |
 | **BLS OEWS** (May 2024, Nashville MSA #34980) | Mean hourly wages by occupation (SOC codes) | Labor cost components |
-| **TDOT Average Bid Prices** (2024) | Real bid prices for validation | Cross-check: our calculated rates vs. market reality |
+| **TDOT Average Bid Prices** (2024) | Real bid prices for validation | Sanity check of our calculated rates against the market |
 
-Material rates were compiled from local Nashville market estimates (Home Depot, Lowe's, regional suppliers).
+Material rates were put together from local Nashville market estimates (Home Depot, Lowe's, and regional suppliers).
 
 ### Phase 3: Component Decomposition
 
-For each cost item, we determined:
+For each cost item we worked out:
 
-1. **What crew and equipment are needed** — e.g., house demolition needs 1 excavator operator + 2 laborers + hydraulic excavator with grapple
-2. **Productivity rates** — how many hours of each resource per unit of work (e.g., 0.06 equipment-hrs/SF for house demolition)
-3. **Material quantities** — e.g., 0.003 dumpster rentals per SF, 0.015 tons of debris per SF
+1. **The crew and equipment involved.** House demolition, for instance, needs 1 excavator operator plus 2 laborers plus a hydraulic excavator fitted with a grapple.
+2. **Productivity rates,** meaning how many hours of each resource go into one unit of work (about 0.06 equipment-hrs/SF for house demolition).
+3. **Material quantities,** such as 0.003 dumpster rentals per SF and 0.015 tons of debris per SF.
 
-Then computed each component cost as `quantity × unit_rate` and the total rate as `sum(component_costs)`.
+We then calculated each component cost as `quantity x unit_rate` and set the total rate equal to `sum(component_costs)`.
 
-**Example — DEM-HSE-01 (House Demolition):**
+**Example, DEM-HSE-01 (House Demolition):**
 
 ```
 rate = sum(components.cost) = $10.33/SF
 
 Component breakdown:
-  Labor:     0.12 hrs/SF × $22.45/hr  = $2.69  (Construction Laborers, BLS 47-2061)
-  Equipment: 0.06 hrs/SF × $73.58/hr  = $4.41  (Excavator 30T, USACE EXC-30T)
-  Material:  0.003 EA/SF × $650/EA    = $1.95  (Dumpster 30-yd)
-  Material:  0.015 ton/SF × $85/ton   = $1.28  (Debris disposal)
+  Labor:     0.12 hrs/SF x $22.45/hr  = $2.69  (Construction Laborers, BLS 47-2061)
+  Equipment: 0.06 hrs/SF x $73.58/hr  = $4.41  (Excavator 30T, USACE EXC-30T)
+  Material:  0.003 EA/SF x $650/EA    = $1.95  (Dumpster 30-yd)
+  Material:  0.015 ton/SF x $85/ton   = $1.28  (Debris disposal)
 ```
 
 ### Phase 4: Validation
 
-Validated two ways:
+We validated in two ways:
 
-1. **Component math**: `abs(rate - sum(components.cost)) < 0.01` for all 12 items
-2. **TDOT cross-comparison**: Our rates vs. TDOT bid prices. Where scope is comparable (French drain: +6.4% variance), our rates are within ±10%. Where scope differs (residential service vs. highway sewer: -86%), the variance is expected and documented.
+1. **Component math:** `abs(rate - sum(components.cost)) < 0.01` holds for all 12 items.
+2. **TDOT cross-comparison:** our rates set against TDOT bid prices. Where the scope lines up (French drain at +6.4% variance), our rates land within plus or minus 10%. Where the scope genuinely differs (a residential service line against a highway sewer at -86%), the gap is expected and we document it.
 
-Result files:
+The pilot left behind these files:
 
 ```
 data/
@@ -138,14 +138,14 @@ backend/app/modules/costs/
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
-| Rate storage | `String(50)` | SQLite float precision safety; parsed to float on read. PostgreSQL is the production DB, SQLite is the zero-config dev fallback |
-| Currency fallback | 3-tier chain | Explicit → region map → `"EUR"` default. Handles legacy CWICR rows with empty currency |
-| Component type | Free-form JSON list | Supports `labor`, `material`, `equipment`, `subcontractor`, `operator`, `electricity`, `other` |
-| Classification | Free-form dict | Supports DIN 276, MasterFormat, UniFormat, NRM, and any other standard simultaneously |
-| Uniqueness | `(code, region)` | Same code allowed in different regions. No upsert on bulk import — duplicates silently skipped |
+| Rate storage | `String(50)` | Protects SQLite float precision; parsed to float on read. PostgreSQL is the production DB and SQLite is the zero-config dev fallback |
+| Currency fallback | 3-tier chain | Explicit, then region map, then `"EUR"` default. Covers legacy CWICR rows that left currency empty |
+| Component type | Free-form JSON list | Allows `labor`, `material`, `equipment`, `subcontractor`, `operator`, `electricity`, `other` |
+| Classification | Free-form dict | Holds DIN 276, MasterFormat, UniFormat, NRM, and any other standard at the same time |
+| Uniqueness | `(code, region)` | The same code is fine in different regions. Bulk import does not upsert; duplicates are quietly skipped |
 | Region format | `COUNTRYCODE_CITY` | Uppercase, underscore-delimited: `USA_TENNESSEE`, `DE_BERLIN`, `GB_LONDON` |
 | Search pagination | Keyset cursor | O(1) page fetches; total count cached for 60 min |
-| Lite mode | `?lite=true` | Strips 31KB `components` array for list views; `components_count` preserves "has breakdown" hint |
+| Lite mode | `?lite=true` | Drops the 31KB `components` array for list views; `components_count` still flags "has breakdown" |
 
 ### 3.3 API Endpoints Summary
 
@@ -167,7 +167,7 @@ backend/app/modules/costs/
 
 ### 3.4 Catalog Module (`backend/app/modules/catalog/`)
 
-After cost items are imported, their component resources can be extracted into the **Resource Catalog** for reuse in assemblies and the BOQ editor.
+Once cost items are loaded, the resources inside their component arrays can be pulled out into the **Resource Catalog**, where they become reusable in assemblies and the BOQ editor.
 
 ```
 backend/app/modules/catalog/
@@ -180,15 +180,15 @@ backend/app/modules/catalog/
 └── manifest.py         # Module registration (depends on oe_costs)
 ```
 
-**Key concept:** The Resource Catalog stores **leaf resources** — individual materials, equipment items, labor rates, and operators — extracted from the `components` arrays of cost items. These resources can then be referenced by assemblies and applied directly to BOQ positions.
+**The core idea:** the Resource Catalog holds **leaf resources**, the individual materials, equipment items, labor rates, and operators that get extracted out of the `components` arrays of cost items. Assemblies can then reference those resources and they can be applied straight onto BOQ positions.
 
-**Extraction workflow:**
-1. Import cost items with `components[]` arrays into `oe_costs_item`
-2. Run `CatalogResourceService.import_region_from_costs(region)` or `POST /catalog/extract/`
-3. Components are aggregated by `(code, type)`, averages computed, and inserted into `oe_catalog_resource`
-4. Extracted resources appear in the catalog UI under their region tab (e.g. `USA_TENNESSEE`)
+**The extraction flow runs like this:**
+1. Import cost items, each with its `components[]` array, into `oe_costs_item`.
+2. Run `CatalogResourceService.import_region_from_costs(region)` or call `POST /catalog/extract/`.
+3. Components are grouped by `(code, type)`, averages are computed, and the results are written into `oe_catalog_resource`.
+4. The extracted resources show up in the catalog UI under their region tab (for example `USA_TENNESSEE`).
 
-> **Note:** The "My Catalog" tab on `/catalog` only shows `region='CUSTOM'` resources. Extracted regional resources appear as a separate region tab.
+> **Note:** The "My Catalog" tab on `/catalog` only lists `region='CUSTOM'` resources. Extracted regional resources land on their own region tab instead.
 
 ---
 
@@ -199,12 +199,12 @@ backend/app/modules/catalog/
 | Column | Type | Nullable | Default | Notes |
 |--------|------|----------|---------|-------|
 | `id` | UUID | PK | auto | |
-| `code` | `String(100)` | NO | — | Unique per region. E.g. `"DEM-HSE-01"` or `"03.330.10"` |
-| `description` | `Text` | NO | — | Primary human-readable description |
+| `code` | `String(100)` | NO | - | Unique per region. E.g. `"DEM-HSE-01"` or `"03.330.10"` |
+| `description` | `Text` | NO | - | Primary human-readable description |
 | `descriptions` | `JSON` | NO | `{}` | Localized: `{"en": "House demolition", "de": "Haushaltabbruch"}` |
-| `unit` | `String(20)` | NO | — | Measurement unit: `SF`, `CY`, `LF`, `EA`, `hr`, `m`, `m2`, `m3`, `kg`, `pcs` |
-| `rate` | `String(50)` | NO | — | Unit rate stored as string for SQLite compatibility |
-| `currency` | `String(10)` | NO | `""` | ISO 4217 code. Resolved from region if empty |
+| `unit` | `String(20)` | NO | - | Measurement unit: `SF`, `CY`, `LF`, `EA`, `hr`, `m`, `m2`, `m3`, `kg`, `pcs` |
+| `rate` | `String(50)` | NO | - | Unit rate stored as a string for SQLite compatibility |
+| `currency` | `String(10)` | NO | `""` | ISO 4217 code. Resolved from region if left empty |
 | `source` | `String(50)` | NO | `"cwicr"` | Data provenance: `cwicr`, `rsmeans`, `manual`, `file_import`, `custom` |
 | `classification` | `JSON` | NO | `{}` | Multi-standard: `{"masterformat": "03 30 00", "din276": "330"}` |
 | `components` | `JSON` | NO | `[]` | Resource breakdown: `[{type, name, quantity, unit_rate, cost, unit}]` |
@@ -213,11 +213,11 @@ backend/app/modules/catalog/
 | `is_active` | `Boolean` | NO | `True` | Soft-delete |
 | `metadata_` | `JSON` | NO | `{}` | Column name `metadata`; arbitrary key-value store |
 
-**Unique constraint:** `uq_costs_code_region` on `(code, region)`
+**Unique constraint:** `uq_costs_code_region` covers `(code, region)`
 
 ### 4.2 Component Schema
 
-Each entry in the `components` array follows this structure:
+Every entry in the `components` array has this shape:
 
 ```json
 {
@@ -225,23 +225,23 @@ Each entry in the `components` array follows this structure:
   "name": "Construction Laborers (SOC 47-2061)",  // Descriptive name
   "quantity": 0.12,             // Quantity per parent unit
   "unit_rate": 22.45,           // Rate per component unit
-  "cost": 2.69,                 // quantity × unit_rate (MUST sum to parent rate)
+  "cost": 2.69,                 // quantity x unit_rate (MUST sum to parent rate)
   "unit": "hr",                 // Component unit (hr, SF, CY, EA, ton, etc.)
-  "code": "LAB-2061"            // Required for catalog extraction; optional otherwise. Auto-generated by import script if missing
+  "code": "LAB-2061"            // Required for catalog extraction; optional otherwise. Auto-generated by the import script if missing
 }
 ```
 
-**Validation rule:**
+**The rule to enforce:**
 
 ```python
 assert abs(rate - sum(c["cost"] for c in components)) < 0.01
 ```
 
-The parent `rate` must equal the sum of all component `cost` values within $0.01. This is enforced by the import script and should be validated before any bulk import.
+The parent `rate` has to match the sum of all component `cost` values to within $0.01. The import script enforces this, and you should run the check before any bulk import.
 
 ### 4.3 Classification Dict
 
-The `classification` field stores one or more classification standard codes:
+The `classification` field carries one or more classification standard codes:
 
 ```json
 {
@@ -253,11 +253,11 @@ The `classification` field stores one or more classification standard codes:
 }
 ```
 
-OCERP uses `collection → department → section → subsection` for the CWICR 4-level tree, and arbitrary keys like `masterformat`, `din276`, `nrm` for standard classification codes.
+For the 4-level CWICR tree, OCERP uses `collection`, then `department`, then `section`, then `subsection`. Standard classification codes go under their own keys such as `masterformat`, `din276`, or `nrm`.
 
 ### 4.4 Metadata Dict
 
-The `metadata_` field stores arbitrary extension data:
+The `metadata_` field is a free-form bag for extension data:
 
 ```json
 {
@@ -279,29 +279,29 @@ The `metadata_` field stores arbitrary extension data:
 
 ### 5.1 What Is Resource-Based Costing?
 
-Resource-based costing decomposes a unit rate into its constituent resources:
+Resource-based costing takes a unit rate apart into the resources that make it up:
 
 ```
 total_rate = Σ(labor_costs) + Σ(equipment_costs) + Σ(material_costs)
-           = Σ(quantity_i × unit_rate_i) for each component i
+           = Σ(quantity_i x unit_rate_i) for each component i
 ```
 
-This differs from **unit-price estimating** (a single rate per unit of work with no breakdown) and **parametric estimating** (rate derived from building characteristics like $/SF).
+This is a different approach from **unit-price estimating**, which carries one rate per unit of work with no breakdown, and from **parametric estimating**, where the rate comes from building characteristics like $/SF.
 
 ### 5.2 Why Resource-Based?
 
 | Advantage | Explanation |
 |-----------|-------------|
 | **Transparency** | Estimators see *why* a rate is $10.33/SF, not just the bottom line |
-| **Regional adaptation** | Swap Nashville labor wages for Denver wages → rates update automatically |
-| **Time adjustment** | Update equipment rates from USACE 2022 to 2026 → costs adjust |
-| **Cross-validation** | Compare calculated rates against TDOT/RSMeans bid prices |
-| **Sensitivity analysis** | Model impact of wage changes, material price volatility, equipment selection |
-| **Audit trail** | Every component references its source (BLS SOC code, USACE equipment code, market rate) |
+| **Regional adaptation** | Swap Nashville labor wages for Denver wages and the rates update on their own |
+| **Time adjustment** | Move equipment rates from the USACE 2022 edition to 2026 and costs follow |
+| **Cross-validation** | Compare calculated rates against TDOT or RSMeans bid prices |
+| **Sensitivity analysis** | Model the impact of wage changes, material price volatility, or equipment choice |
+| **Audit trail** | Each component points back to its source (a BLS SOC code, a USACE equipment code, a market rate) |
 
 ### 5.3 Productivity Rates
 
-The critical input is the **productivity rate** — how many hours of each resource are needed per unit of work. Sources for productivity rates:
+The make-or-break input is the **productivity rate**, the number of hours of each resource needed per unit of work. Common sources for productivity rates:
 
 | Source | Type | Best For |
 |--------|------|----------|
@@ -315,23 +315,23 @@ The critical input is the **productivity rate** — how many hours of each resou
 
 ### 5.4 Component Decomposition Template
 
-For each cost item, follow this template:
+Run each cost item through this template:
 
 ```
 1. Define the scope of work (what's included/excluded)
 2. Identify the crew composition:
-   - Which trades? → BLS SOC codes → labor hourly rate
-   - How many workers per crew? → labor hours per unit
+   - Which trades? -> BLS SOC codes -> labor hourly rate
+   - How many workers per crew? -> labor hours per unit
 3. Identify the equipment:
-   - Which machines? → USACE/FEMA equipment code → equipment hourly rate
-   - How many hours per unit? → equipment hours per unit
+   - Which machines? -> USACE/FEMA equipment code -> equipment hourly rate
+   - How many hours per unit? -> equipment hours per unit
 4. Identify the materials:
-   - What materials? → material code → material unit price
-   - What quantity per unit? → material quantity per parent unit
+   - What materials? -> material code -> material unit price
+   - What quantity per unit? -> material quantity per parent unit
 5. Add incidentals:
    - Dumpster rentals, water, marking paint, silt fence, etc.
 6. Compute:
-   component_cost = quantity × unit_rate
+   component_cost = quantity x unit_rate
    total_rate = round(sum(component_costs), 2)
 7. Validate:
    abs(total_rate - sum(component_costs)) < 0.01
@@ -340,28 +340,28 @@ For each cost item, follow this template:
 
 ### 5.5 Example: French Drain (SW-FRN-01)
 
-**Scope:** Trench excavation, geotextile wrap, #57 stone fill, 4" perforated PVC pipe, backfill, and compaction. Per linear foot.
+**Scope:** Trench excavation, geotextile wrap, #57 stone fill, 4" perforated PVC pipe, backfill, and compaction. Priced per linear foot.
 
-**Crew & Equipment:**
-- Operating Engineer (excavator operator, SOC 47-2073): 0.08 hr/LF × $25.58/hr
-- Pipelayer (pipe installation, SOC 47-2151): 0.10 hr/LF × $22.77/hr
-- Construction Laborer (backfill/compaction, SOC 47-2061): 0.10 hr/LF × $22.45/hr
-- Excavator 20-ton: 0.08 hr/LF × $60.94/hr
-- Vibratory Roller 5.2-ton: 0.04 hr/LF × $30.73/hr
+**Crew and equipment:**
+- Operating Engineer (excavator operator, SOC 47-2073): 0.08 hr/LF x $25.58/hr
+- Pipelayer (pipe installation, SOC 47-2151): 0.10 hr/LF x $22.77/hr
+- Construction Laborer (backfill/compaction, SOC 47-2061): 0.10 hr/LF x $22.45/hr
+- Excavator 20-ton: 0.08 hr/LF x $60.94/hr
+- Vibratory Roller 5.2-ton: 0.04 hr/LF x $30.73/hr
 
-**Materials:**
-- 4" PVC perforated pipe: 1.05 LF/LF × $3.50/LF (5% waste allowance)
-- #57 stone: 0.08 CY/LF × $45.00/CY
-- Geotextile fabric: 6.0 SF/LF × $0.85/SF
-- Sand bedding: 0.03 CY/LF × $35.00/CY
-- PVC fittings: 1.00 LF/LF × $1.88/LF
+**Materials going in:**
+- 4" PVC perforated pipe: 1.05 LF/LF x $3.50/LF (5% waste allowance)
+- #57 stone: 0.08 CY/LF x $45.00/CY
+- Geotextile fabric: 6.0 SF/LF x $0.85/SF
+- Sand bedding: 0.03 CY/LF x $35.00/CY
+- PVC fittings: 1.00 LF/LF x $1.88/LF
 
-**Result:**
+**Rolled-up result:**
 ```
 rate = $28.00/LF = 2.05 + 2.28 + 2.25 + 4.88 + 1.23 + 3.68 + 3.60 + 5.10 + 1.05 + 1.88
 ```
 
-**Validation:** TDOT 2024 average bid price for Filter Cloth Underdrain (Item 710-04) = $26.31/LF. Variance: +6.4%.
+**Validation:** The TDOT 2024 average bid price for Filter Cloth Underdrain (Item 710-04) is $26.31/LF. That puts our variance at +6.4%.
 
 ---
 
@@ -369,18 +369,18 @@ rate = $28.00/LF = 2.05 + 2.28 + 2.25 + 4.88 + 1.23 + 3.68 + 3.60 + 5.10 + 1.05 
 
 ### 6.1 Scope-Driven Approach
 
-**Start from the project scope of work, not from available data sources.**
+**Begin from the project scope of work, not from whatever data sources happen to be on hand.**
 
-1. **Identify the project type:** Sitework? Building? Highway? Utility? Each type maps to specific CSI MasterFormat divisions.
+1. **Identify the project type.** Sitework, building, highway, utility? Each maps onto a particular set of CSI MasterFormat divisions.
 
-2. **List work items from the scope:**
-   - For sitework: demolition, earthwork, stormwater, utilities
-   - For building: foundations, structure, envelope, MEP, finishes
-   - For highway: earthwork, paving, drainage, traffic, landscaping
+2. **List the work items from the scope.**
+   - Sitework: demolition, earthwork, stormwater, utilities.
+   - Building: foundations, structure, envelope, MEP, finishes.
+   - Highway: earthwork, paving, drainage, traffic, landscaping.
 
-3. **Map each work item to a cost item code** using the project's specification or the estimator's work breakdown structure.
+3. **Map each work item to a cost item code,** drawing on the project specification or the estimator's work breakdown structure.
 
-4. **Validate coverage:** For each MasterFormat division in the project, ensure the cost database has items covering 80%+ of the estimated value.
+4. **Validate coverage.** For every MasterFormat division in the project, confirm the cost database covers 80% or more of the estimated value.
 
 ### 6.2 MasterFormat Division Coverage for Sitework
 
@@ -394,83 +394,83 @@ rate = $28.00/LF = 2.05 + 2.28 + 2.25 + 4.88 + 1.23 + 3.68 + 3.60 + 5.10 + 1.05 
 
 ### 6.3 Project-Type Templates
 
-When starting a new regional database, begin with a project-type template:
+When you spin up a new regional database, start from a project-type template:
 
-**Sitework (Residential Subdivision — 20 items):**
+**Sitework (Residential Subdivision, 20 items):**
 ```
-02 41 00 — Demolition (4): house, garage, concrete, asphalt removal
-31 23 00 — Excavation (4): bulk, trench, grading, fill
-33 46 00 — Stormwater (2): French drain, infiltration pit
-33 11 00 — Water utility (1): water service line
-33 30 00 — Sewer utility (1): sewer service line
-31 25 00 — Erosion control (4): silt fence, construction entrance, stabilization, mulch
-32 12 00 — Paving (2): asphalt base, asphalt surface
-32 31 00 — Fencing (2): chain-link fence, temporary construction fence
+02 41 00 - Demolition (4): house, garage, concrete, asphalt removal
+31 23 00 - Excavation (4): bulk, trench, grading, fill
+33 46 00 - Stormwater (2): French drain, infiltration pit
+33 11 00 - Water utility (1): water service line
+33 30 00 - Sewer utility (1): sewer service line
+31 25 00 - Erosion control (4): silt fence, construction entrance, stabilization, mulch
+32 12 00 - Paving (2): asphalt base, asphalt surface
+32 31 00 - Fencing (2): chain-link fence, temporary construction fence
 ```
 
-**Heavy Highway (30+ items):**
-- Division 31 items for cut/fill/haul
-- TDOT/CALTRANS standard bid items for paving, drainage, striping
-- MORE items from utility relocation
+**Heavy Highway (30 or more items):**
+- Division 31 items for cut, fill, and haul.
+- TDOT or CALTRANS standard bid items for paving, drainage, and striping.
+- Additional items for utility relocation.
 
 ### 6.4 Coverage Analysis Method
 
-After building a cost database for a region, verify coverage:
+Once a region's cost database is built, check coverage across four angles:
 
-1. **By division**: Does the database have items for every relevant MasterFormat division?
-2. **By value**: Do the top 20 items by estimated project value have cost entries?
-3. **By bid item**: Can 80%+ of the project's bid items be mapped to cost entries?
-4. **By source**: Are all components (labor, material, equipment) sourced from current data?
+1. **By division.** Does the database hold items for every MasterFormat division that applies?
+2. **By value.** Do the top 20 items by estimated project value all have cost entries?
+3. **By bid item.** Can 80% or more of the project's bid items be mapped onto cost entries?
+4. **By source.** Are all components (labor, material, equipment) drawn from current data?
 
 ### 6.5 Prioritization When Starting a New Region
 
-When building a new regional database from scratch:
+When building a region from scratch:
 
-1. **Start with labor, equipment, and material rate tables** — these are the building blocks
-2. **Build the highest-value items first** — excavation, concrete, and pipe work represent 60-70% of sitework value
-3. **Validate each batch against local bid prices** — TDOT, CALTRANS, etc.
-4. **Add detail progressively** — first batch may have simplified components; later batches add variants, alternates, and more detail
+1. **Lay down the labor, equipment, and material rate tables first.** These are the building blocks for everything else.
+2. **Build the highest-value items first.** Excavation, concrete, and pipe work tend to make up 60 to 70% of sitework value.
+3. **Validate each batch against local bid prices** (TDOT, CALTRANS, and so on).
+4. **Add detail in waves.** A first batch can carry simplified components; later batches fill in variants, alternates, and finer detail.
 
 ---
 
 ## 7. External Cost Data Sources
 
-Sources are organized into three tiers: **Government Free** (authoritative, no cost), **Commercial Subscription** (comprehensive, paid), and **Industry Free/Low-Cost** (partial, accessible).
+We group the sources into three tiers: **Government Free** (authoritative, no cost), **Commercial Subscription** (comprehensive, paid), and **Industry Free/Low-Cost** (partial, accessible).
 
 ### 7.1 Government Free Sources
 
-#### 7.1.1 USACE EP 1110-1-8 — Equipment Ownership & Operating Rates
+#### 7.1.1 USACE EP 1110-1-8: Equipment Ownership and Operating Rates
 
 | Attribute | Value |
 |-----------|-------|
-| **What** | Hourly equipment rates (ownership + operating) by machine type, size, condition |
+| **What** | Hourly equipment rates (ownership plus operating) by machine type, size, condition |
 | **Regions** | 12 US regions (Northeast through Pacific) |
 | **Update** | Sporadic (current edition 2022) |
 | **Access** | Free PDF download |
 | **URL** | https://www.usace.army.mil/Missions/Cost-Engineering/EP1110-1-8/ |
 
-**Our use:** Equipment cost components in every cost item. The 2022 Region 3 (Southeast) data was parsed and stored in `data/usace_equipment_rates.json`.
+**Our use:** Equipment cost components in every cost item. We parsed the 2022 Region 3 (Southeast) data and stored it in `data/usace_equipment_rates.json`.
 
-**Limitations:** Data is from 2011 with 2022 rate adjustments. Does not include operator labor (separate BLS wage). Rates are machine-only.
+**Limitations:** The data dates from 2011 with 2022 rate adjustments. It does not carry operator labor, which comes from a separate BLS wage. The rates are machine-only.
 
-**Better alternative:** FEMA Schedule of Equipment Rates (annual updates, ~530 items, national scope):
+**Better alternative:** the FEMA Schedule of Equipment Rates (annual updates, around 530 items, national scope):
 - URL: https://www.fema.gov/sites/default/files/documents/fema_pa_schedule-equipment-rates_2025.pdf
 - Also on data.gov as dataset FEMA-0359
 
-#### 7.1.2 BLS OEWS — Occupational Employment & Wage Statistics
+#### 7.1.2 BLS OEWS: Occupational Employment and Wage Statistics
 
 | Attribute | Value |
 |-----------|-------|
 | **What** | Mean/median hourly and annual wages by SOC occupation code, by metro area |
 | **Regions** | National, state, 400+ metro areas |
-| **Update** | Annual (May data, released ~18 months after) |
-| **Access** | Free API (v2.2) and downloadable CSV/XLSX |
+| **Update** | Annual (May data, released about 18 months later) |
+| **Access** | Free API (v2.2) plus downloadable CSV/XLSX |
 | **URL** | https://www.bls.gov/oes/tables.htm |
 | **API** | https://www.bls.gov/bls/api_features.htm |
 
-**Our use:** Labor cost components. Nashville MSA (34980) May 2024 data stored in `data/bls_labor_wages.json`.
+**Our use:** Labor cost components. Nashville MSA (34980) May 2024 data is stored in `data/bls_labor_wages.json`.
 
-**Key construction SOC codes:**
+**The construction SOC codes that matter most:**
 
 | SOC Code | Occupation | Typical Use |
 |----------|-----------|-------------|
@@ -484,35 +484,35 @@ Sources are organized into three tiers: **Government Free** (authoritative, no c
 | 37-3013 | Tree Trimmers | Clearing, site prep |
 | 47-2211 | Ironworkers | Structural steel, rebar |
 
-**Limitations:** Mean wages, not prevailing (Davis-Bacon) wages. For federally-funded projects, use Davis-Bacon determinations instead.
+**Limitations:** These are mean wages, not prevailing (Davis-Bacon) wages. On federally funded projects, use Davis-Bacon determinations instead.
 
 #### 7.1.3 Davis-Bacon Wage Determinations
 
 | Attribute | Value |
 |-----------|-------|
 | **What** | Legally binding prevailing wage rates by county, by construction type |
-| **Regions** | County-level for all US states/territories |
-| **Update** | Annual general determinations + modifications |
+| **Regions** | County-level for all US states and territories |
+| **Update** | Annual general determinations plus modifications |
 | **Access** | Free on SAM.gov |
 | **URL** | https://sam.gov (Wage Determinations tab) |
 
-**When to use:** Davis-Bacon rates are **mandatory** for federally-funded construction projects over $2,000. They're typically 25-40% higher than BLS mean wages because they reflect union/collective bargaining rates.
+**When to use:** Davis-Bacon rates are **mandatory** on federally funded construction over $2,000. They usually run 25 to 40% higher than BLS mean wages because they reflect union and collective bargaining rates.
 
-**How to extract:** No bulk API. Determinations are individual HTML pages on SAM.gov. A scraper must enumerate WD numbers by state + construction type (Building, Heavy, Highway, Residential).
+**How to extract:** There is no bulk API. Determinations are individual HTML pages on SAM.gov. A scraper has to enumerate WD numbers by state plus construction type (Building, Heavy, Highway, Residential).
 
 #### 7.1.4 State DOT Bid Prices
 
 | Attribute | Value |
 |-----------|-------|
 | **What** | Average unit bid prices from awarded contracts |
-| **Regions** | State-wide (some states provide district-level) |
+| **Regions** | State-wide (some states publish district-level too) |
 | **Update** | Annual or quarterly |
 | **Access** | Free from state DOT websites |
 | **Best states** | TN, CA, FL, WI, TX, NY (via DOTestimate) |
 
-**Our use:** Cross-validation of our calculated rates against real market prices. TDOT 2024 data stored in `data/tdot_bid_prices.json`.
+**Our use:** Cross-validation of our calculated rates against real market prices. The TDOT 2024 data lives in `data/tdot_bid_prices.json`.
 
-**State DOT URLs:**
+**Where each state DOT publishes:**
 
 | State | URL | Format |
 |-------|-----|--------|
@@ -523,7 +523,7 @@ Sources are organized into three tiers: **Government Free** (authoritative, no c
 | Texas | https://www.txdot.gov/.../average-low-bid-prices.html | Excel |
 | New York | Via DOTestimate.com | Web platform |
 
-**Key insight:** DOT bid prices are the **gold standard for sitework/civil unit costs** because they reflect actual market conditions. However, they are composite rates (labor + material + equipment + overhead + profit bundled together), not resource-decomposed. Use them for **validation**, not as component sources.
+**Key insight:** DOT bid prices are the **gold standard for sitework and civil unit costs** because they track actual market conditions. They are, however, composite rates that bundle labor plus material plus equipment plus overhead plus profit into one figure, not resource-decomposed. Use them for **validation**, not as component sources.
 
 ### 7.2 Commercial Subscription Sources
 
@@ -532,27 +532,27 @@ Sources are organized into three tiers: **Government Free** (authoritative, no c
 | Attribute | Value |
 |-----------|-------|
 | **What** | 92,000+ unit cost line items with labor/material/equipment breakdowns, crew compositions, daily outputs, and city cost indexes |
-| **Regions** | National average + 970+ city adjustment factors |
+| **Regions** | National average plus 970+ city adjustment factors |
 | **Update** | Quarterly (Jan, Apr, Jul, Oct) |
-| **Cost** | $2,195/yr (single dataset) to $35,752/yr (complete) |
+| **Cost** | $2,195/yr (single dataset) up to $35,752/yr (complete) |
 | **Format** | Online, CD (CostWorks), print, API (enterprise) |
 | **URL** | https://www.rsmeans.com |
 
-**Why RSMeans matters:** It's the industry standard for US construction cost data. Its structure maps almost perfectly to OCERP's `components` field (labor + material + equipment breakdown, crew compositions). The MasterFormat line numbering maps directly to `classification.masterformat`.
+**Why RSMeans matters:** it is the industry standard for US construction cost data. Its structure lines up almost perfectly with OCERP's `components` field (labor plus material plus equipment breakdown, crew compositions). The MasterFormat line numbering maps straight onto `classification.masterformat`.
 
-**Mapping:**
+**How the fields line up:**
 
 ```
-RSMeans line number  → code (e.g., "RSM-033053.40-3950")
-RSMeans description   → description
-RSMeans unit          → unit
-RSMeans bare cost     → rate
-RSMeans city index    → metadata.city_cost_index
-RSMeans crew details  → components (labor, material, equipment)
-RSMeans CSI division  → classification.masterformat
+RSMeans line number  -> code (e.g., "RSM-033053.40-3950")
+RSMeans description   -> description
+RSMeans unit          -> unit
+RSMeans bare cost     -> rate
+RSMeans city index    -> metadata.city_cost_index
+RSMeans crew details  -> components (labor, material, equipment)
+RSMeans CSI division  -> classification.masterformat
 ```
 
-**Limitation:** RSMeans data is copyrighted and *cannot be freely redistributed*. For OCERP, RSMeans could be offered as a premium data connector that users subscribe to separately, or used as a reference/benchmarking source during development.
+**Limitation:** RSMeans data is copyrighted and *cannot be redistributed freely*. For OCERP it could ship as a premium data connector that users subscribe to separately, or serve as a reference and benchmarking source during development.
 
 #### 7.2.2 Craftsman National Construction Estimator (NCE)
 
@@ -565,19 +565,19 @@ RSMeans CSI division  → classification.masterformat
 | **Format** | PDF, print, National Estimator Cloud, API (licensing available) |
 | **URL** | https://craftsman-book.com/national-construction-estimator |
 
-**Why NCE matters:** Most affordable comprehensive construction cost book. API access available for integration. Good for residential/light commercial. Directly maps to OCERP components.
+**Why NCE matters:** it is the most affordable comprehensive construction cost book, and API access is available for integration. Good fit for residential and light commercial work, and it maps directly onto OCERP components.
 
 #### 7.2.3 ENR Construction Cost Index
 
 | Attribute | Value |
 |-----------|-------|
-| **What** | Cost escalation indexes (CCI, BCI) + 66 material prices in 20 cities |
-| **Regions** | 20 US cities + national average |
+| **What** | Cost escalation indexes (CCI, BCI) plus 66 material prices in 20 cities |
+| **Regions** | 20 US cities plus national average |
 | **Update** | Monthly |
-| **Cost** | $99.99/yr (digital); Cost Data Dashboard: ~$2,000/yr |
+| **Cost** | $99.99/yr (digital); Cost Data Dashboard around $2,000/yr |
 | **URL** | https://www.enr.com/economics |
 
-**Why ENR matters:** Not a unit cost database, but essential for **time-adjusting historical costs** to current dollars. The CCI and BCI are the most widely cited construction inflation indexes. The 66-city material price data (concrete, steel, lumber) can populate individual `CostItem` entries with `source: "enr_materials"`.
+**Why ENR matters:** it is not a unit cost database, but it is essential for **time-adjusting historical costs** into current dollars. The CCI and BCI are the most widely cited construction inflation indexes. The 66-city material price data (concrete, steel, lumber) can populate individual `CostItem` entries with `source: "enr_materials"`.
 
 #### 7.2.4 Richardson Engineering (via Eos Group)
 
@@ -585,10 +585,10 @@ RSMeans CSI division  → classification.masterformat
 |-----------|-------|
 | **What** | 190,000+ line items across 520 phases. Heavy civil/industrial focus. Manhours, materials, equipment, subcontractor pricing |
 | **Regions** | 130+ North American labor markets; 30+ international |
-| **Cost** | ~$3,000–$5,000/yr |
+| **Cost** | around $3,000 to $5,000/yr |
 | **URL** | https://eosgroup.com/richardson-engineering-database/ |
 
-**Why Richardson matters:** Best source for heavy civil and industrial/process plant estimating. 130+ labor market rates are more granular than BLS OEWS. The 520 phase structure aligns with sitework scope.
+**Why Richardson matters:** it is the best source for heavy civil and industrial process-plant estimating. Its 130+ labor market rates are more granular than BLS OEWS, and the 520-phase structure lines up with sitework scope.
 
 ### 7.3 Industry Free / Low-Cost Sources
 
@@ -599,21 +599,21 @@ RSMeans CSI division  → classification.masterformat
 | **What** | $/SF construction costs by occupancy group and construction type |
 | **Regions** | National with regional modifiers |
 | **Update** | Semi-annual |
-| **Cost** | Free with ICC membership (~$200/yr) |
+| **Cost** | Free with ICC membership (around $200/yr) |
 | **URL** | https://www.iccsafe.org/.../building-valuation-data/ |
 
-**Use case:** Conceptual/square-foot estimating only. Not suitable for detailed estimating but useful for order-of-magnitude validation.
+**Use case:** Conceptual and square-foot estimating only. Not suited to detailed estimating, but handy for order-of-magnitude validation.
 
-#### 7.3.2 Marshall & Swift / Cotality
+#### 7.3.2 Marshall and Swift / Cotality
 
 | Attribute | Value |
 |-----------|-------|
-| **What** | Square-foot and unit-in-place replacement costs for insurance/tax assessment |
+| **What** | Square-foot and unit-in-place replacement costs for insurance and tax assessment |
 | **Regions** | US and Canada with local multipliers |
-| **Cost** | $100–$1,000+/yr depending on product |
+| **Cost** | $100 to $1,000+/yr depending on the product |
 | **URL** | https://www.cotality.com/products/marshall-swift |
 
-**Use case:** Building valuation, not sitework. Segregated cost breakdowns could populate OCERP `components` for building-level items.
+**Use case:** Building valuation rather than sitework. The segregated cost breakdowns could populate OCERP `components` for building-level items.
 
 ---
 
@@ -621,25 +621,25 @@ RSMeans CSI division  → classification.masterformat
 
 ### 8.1 Universal Mapping Template
 
-Every external source maps to the same OCERP `CostItemCreate` schema. Here's the universal mapping:
+Every external source resolves to the same OCERP `CostItemCreate` schema. Here is the universal mapping:
 
 ```
-source item identifier     → code
-source item description    → description
-source unit                 → unit
-source rate/price           → rate
-source geographic region    → region (transformed to COUNTRYCODE_CITY)
-source currency             → currency (ISO 4217)
-source classification       → classification (transformed to standard keys)
-source labor/equip/material → components (resource-based decomposition)
-source metadata             → metadata (provenance, effective dates, source URLs)
-source tags                 → tags
-source identifier           → source field ("usace", "bls_oews", "rsmeans", etc.)
+source item identifier     -> code
+source item description    -> description
+source unit                 -> unit
+source rate/price           -> rate
+source geographic region    -> region (transformed to COUNTRYCODE_CITY)
+source currency             -> currency (ISO 4217)
+source classification       -> classification (transformed to standard keys)
+source labor/equip/material -> components (resource-based decomposition)
+source metadata             -> metadata (provenance, effective dates, source URLs)
+source tags                 -> tags
+source identifier           -> source field ("usace", "bls_oews", "rsmeans", etc.)
 ```
 
 ### 8.2 Per-Source Mapping Details
 
-#### USACE / FEMA Equipment Rates → CostItem
+#### USACE / FEMA Equipment Rates -> CostItem
 
 ```json
 {
@@ -667,14 +667,14 @@ source identifier           → source field ("usace", "bls_oews", "rsmeans", et
 }
 ```
 
-**Note:** The USACE rate is machine-only ($73.58/hr). Operator labor ($25.58/hr from BLS) is added as a separate component to get the fully-burdened rate of $99.16/hr.
+**Note:** the USACE rate is machine-only at $73.58/hr. Operator labor ($25.58/hr from BLS) is layered in as a separate component, which brings the fully burdened rate to $99.16/hr.
 
-#### BLS OEWS Labor Rates → CostItem
+#### BLS OEWS Labor Rates -> CostItem
 
 ```json
 {
   "code": "BLS-47-2061",
-  "description": "Construction Laborers — Nashville-Davidson-Murfreesboro-Franklin, TN MSA",
+  "description": "Construction Laborers, Nashville-Davidson-Murfreesboro-Franklin, TN MSA",
   "unit": "hr",
   "rate": 22.45,
   "currency": "USD",
@@ -694,9 +694,9 @@ source identifier           → source field ("usace", "bls_oews", "rsmeans", et
 }
 ```
 
-#### TDOT Bid Prices → CostItem (Validation Only)
+#### TDOT Bid Prices -> CostItem (Validation Only)
 
-Bid prices are **composite rates** (labor + material + equipment + overhead + profit). They should NOT be decomposed into components unless you have the component breakdown from another source. Instead, store them as **reference items** with `source: "tdot_bid"` and use for cross-validation:
+Bid prices are **composite rates** (labor plus material plus equipment plus overhead plus profit). Do not break them into components unless you have the breakdown from another source. Store them instead as **reference items** with `source: "tdot_bid"` and lean on them for cross-validation:
 
 ```json
 {
@@ -719,7 +719,7 @@ Bid prices are **composite rates** (labor + material + equipment + overhead + pr
 }
 ```
 
-#### RSMeans → CostItem (Conceptual Mapping)
+#### RSMeans -> CostItem (Conceptual Mapping)
 
 ```json
 {
@@ -743,13 +743,13 @@ Bid prices are **composite rates** (labor + material + equipment + overhead + pr
 
 ### 8.3 Common Source Tags
 
-Use these `source` field values consistently:
+Apply these `source` field values consistently:
 
 | Source Tag | Description |
 |-----------|-------------|
 | `usace_ep1110` | USACE EP 1110-1-8 equipment rates |
 | `fema_equipment` | FEMA Schedule of Equipment Rates |
-| `bls_oews` | BLS Occupational Employment & Wage Statistics |
+| `bls_oews` | BLS Occupational Employment and Wage Statistics |
 | `davis_bacon` | Davis-Bacon prevailing wage determinations |
 | `tdot_bid` | Tennessee DOT average bid prices |
 | `caltrans_bid` | California DOT contract cost data |
@@ -758,12 +758,12 @@ Use these `source` field values consistently:
 | `rsmeans` | RSMeans / Gordian construction cost data |
 | `craftsman_nce` | Craftsman National Construction Estimator |
 | `enr_index` | ENR Construction Cost Index / material prices |
-| `marshall_swift` | Marshall & Swift / Cotality valuation data |
+| `marshall_swift` | Marshall and Swift / Cotality valuation data |
 | `richardson` | Richardson Engineering (Eos Group) |
 | `icc_bvd` | ICC Building Valuation Data |
 | `cwicr` | DDC CWICR database (legacy) |
 | `manual` | Manually compiled from multiple sources |
-| `file_import` | Imported from user-uploaded spreadsheet |
+| `file_import` | Imported from a user-uploaded spreadsheet |
 | `custom` | User-created custom items |
 
 ---
@@ -772,9 +772,9 @@ Use these `source` field values consistently:
 
 ### 9.1 MasterFormat (CSI)
 
-The primary classification standard for US construction cost data. 50 divisions (00-49), each with hierarchical section numbers.
+This is the primary classification standard for US construction cost data: 50 divisions (00 to 49), each carrying hierarchical section numbers.
 
-**Key sitework divisions for OCERP:**
+**The sitework divisions OCERP leans on:**
 
 | Division | Name | Typical Items |
 |----------|------|---------------|
@@ -785,7 +785,7 @@ The primary classification standard for US construction cost data. 50 divisions 
 | 33 | Utilities | Water, sewer, storm drain, gas, electric, communications |
 | 34 | Transportation | Roadways, bridges, rail, signage, markings |
 
-**Mapping to `classification`:**
+**In the `classification` dict this reads as:**
 
 ```json
 {"masterformat": "31 23 13"}
@@ -793,9 +793,9 @@ The primary classification standard for US construction cost data. 50 divisions 
 
 ### 9.2 UniFormat (CSI)
 
-Assembly-level classification for early-stage estimating. Letter-based elements with numeric subdivisions.
+An assembly-level classification aimed at early-stage estimating, built from letter-based elements with numeric subdivisions.
 
-**Key sitework elements:**
+**The sitework elements you will use:**
 
 | Element | Name |
 |---------|------|
@@ -804,7 +804,7 @@ Assembly-level classification for early-stage estimating. Letter-based elements 
 | G30 | Site Civil/Mechanical Utilities |
 | G40 | Site Electrical Utilities |
 
-**Mapping to `classification`:**
+**In the `classification` dict this reads as:**
 
 ```json
 {"uniformat": "G30"}
@@ -812,7 +812,7 @@ Assembly-level classification for early-stage estimating. Letter-based elements 
 
 ### 9.3 Using Both Together
 
-OCERP's `classification` dict can hold multiple standards simultaneously:
+OCERP's `classification` dict can hold several standards at once:
 
 ```json
 {
@@ -824,7 +824,7 @@ OCERP's `classification` dict can hold multiple standards simultaneously:
 }
 ```
 
-The CWICR import uses `collection`, `department`, `section`, `subsection` for its 4-level tree. US items can use `masterformat` and `uniformat` alongside CWICR keys.
+The CWICR import relies on `collection`, `department`, `section`, and `subsection` for its 4-level tree. US items can carry `masterformat` and `uniformat` right alongside the CWICR keys.
 
 ---
 
@@ -832,24 +832,24 @@ The CWICR import uses `collection`, `department`, `section`, `subsection` for it
 
 ### 10.1 Define Scope
 
-1. Choose the region (e.g., `USA_COLORADO`, `USA_SEATTLE`, `CA_TORONTO`)
-2. Determine the project type (sitework, building, highway, utility)
-3. List the MasterFormat divisions to cover
-4. Estimate the number of items (start with 12-30 for a pilot)
+1. Pick the region (for example `USA_COLORADO`, `USA_SEATTLE`, `CA_TORONTO`).
+2. Decide the project type (sitework, building, highway, utility).
+3. List the MasterFormat divisions to cover.
+4. Estimate the item count (12 to 30 makes a reasonable pilot).
 
 ### 10.2 Gather Source Data
 
 | Data Need | Primary Source | Alternative | Format |
 |-----------|---------------|-------------|--------|
-| Equipment rates | FEMA Schedule (free, current) | USACE EP 1110-1-8 | PDF → JSON |
-| Labor wages | BLS OEWS (free API) | Davis-Bacon (county-level) | CSV/XLSX → JSON |
-| Material prices | Local supplier quotes | Home Depot/Lowe's web | Manual → JSON |
-| Bid prices (validation) | State DOT website | DOTestimate.com | Excel/PDF → JSON |
-| Productivity rates | RSMeans (paid) | Craftsman NCE (paid) | API/book → JSON |
+| Equipment rates | FEMA Schedule (free, current) | USACE EP 1110-1-8 | PDF -> JSON |
+| Labor wages | BLS OEWS (free API) | Davis-Bacon (county-level) | CSV/XLSX -> JSON |
+| Material prices | Local supplier quotes | Home Depot/Lowe's web | Manual -> JSON |
+| Bid prices (validation) | State DOT website | DOTestimate.com | Excel/PDF -> JSON |
+| Productivity rates | RSMeans (paid) | Craftsman NCE (paid) | API/book -> JSON |
 
 ### 10.3 Create Reference Data Files
 
-Following the pilot structure, create in `data/`:
+Mirror the pilot structure and create these under `data/`:
 
 ```python
 data/
@@ -864,30 +864,30 @@ data/
 
 For each cost item:
 
-1. **Identify the crew composition** (trades, count, hours)
-2. **Identify the equipment** (types, hours)
-3. **Identify the materials** (quantities, units)
-4. **Look up unit rates** from your reference data
-5. **Calculate each component cost** = quantity × unit_rate
-6. **Sum component costs** = total rate
-7. **Validate** rate rounds to 2 decimal places
-8. **Cross-check** against bid prices (±30% tolerance for first pass)
+1. **Identify the crew composition** (trades, count, hours).
+2. **Identify the equipment** (types, hours).
+3. **Identify the materials** (quantities, units).
+4. **Look up unit rates** from your reference data.
+5. **Calculate each component cost** as quantity x unit_rate.
+6. **Sum the component costs** to get the total rate.
+7. **Validate** that the rate rounds to 2 decimal places.
+8. **Cross-check** against bid prices (plus or minus 30% tolerance on a first pass).
 
 ### 10.5 Validation Checklist
 
-Before importing:
+Work through this list before you import:
 
-- [ ] Every item has `rate == sum(components.cost)` within $0.01
-- [ ] Every item has `region` set (e.g., `USA_TENNESSEE`)
-- [ ] Every item has `currency` set (e.g., `USD`) or will be resolved from region
-- [ ] Every item has `source` set (e.g., `manual`)
-- [ ] Component `type` is one of: `labor`, `material`, `equipment`, `subcontractor`, `other`
-- [ ] Component `quantity` and `unit_rate` are positive numbers
-- [ ] Component `cost` = round(`quantity` × `unit_rate`, 2)
-- [ ] No duplicate `(code, region)` pairs
-- [ ] Classification codes match the intended standard (MasterFormat, etc.)
-- [ ] Tags are lowercase and relevant
-- [ ] Rates are in the correct unit (SF, CY, LF, EA — not SY, CF, etc.)
+- [ ] Each item satisfies `rate == sum(components.cost)` to within $0.01
+- [ ] Each item carries a `region` (for example `USA_TENNESSEE`)
+- [ ] Each item carries a `currency` (for example `USD`), or it will resolve from the region
+- [ ] Each item carries a `source` (for example `manual`)
+- [ ] Each component `type` is one of `labor`, `material`, `equipment`, `subcontractor`, `other`
+- [ ] Every component `quantity` and `unit_rate` is a positive number
+- [ ] Every component `cost` equals round(`quantity` x `unit_rate`, 2)
+- [ ] There are no duplicate `(code, region)` pairs
+- [ ] Classification codes line up with the standard you intend (MasterFormat, and so on)
+- [ ] Tags are lowercase and on-topic
+- [ ] Rates sit in the right unit (SF, CY, LF, EA, not SY, CF, and the like)
 
 ### 10.6 Add Region to Currency Map
 
@@ -909,7 +909,7 @@ python scripts/import_tennessee_costs.py \
   --data-dir /tmp/tn_import/tn_import_package/data
 ```
 
-Or use the bulk API directly:
+Or call the bulk API directly:
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/costs/bulk/ \
@@ -920,42 +920,42 @@ curl -X POST http://localhost:8000/api/v1/costs/bulk/ \
 
 ---
 
-## 11. Validation & Quality Assurance
+## 11. Validation and Quality Assurance
 
 ### 11.1 Component Math Validation
 
-**Rule:** `abs(rate - sum(component_costs)) < 0.01`
+**The check:** `abs(rate - sum(component_costs)) < 0.01`
 
 ```python
 for item in cost_items:
     total = item["rate"]
     calculated = sum(c["cost"] for c in item["components"])
-    assert abs(total - calculated) < 0.01, f"{item['code']}: {total} ≠ {calculated}"
+    assert abs(total - calculated) < 0.01, f"{item['code']}: {total} != {calculated}"
 ```
 
 ### 11.2 Bid Price Cross-Validation
 
-Compare calculated rates against local DOT bid prices:
+Set the calculated rates against local DOT bid prices:
 
 ```python
 variance_pct = (our_rate - tdot_rate) / tdot_rate * 100
 ```
 
-**Interpretation:**
+**How to read the variance:**
 
 | Variance | Assessment |
 |----------|------------|
-| ±5% | Excellent match |
-| ±10% | Good match |
-| ±15-20% | Acceptable for first pass |
-| ±20-30% | Needs investigation (scope differences likely) |
-| > ±30% | Investigate; may be scope, productivity, or source data issues |
+| plus or minus 5% | Excellent match |
+| plus or minus 10% | Good match |
+| plus or minus 15 to 20% | Acceptable for a first pass |
+| plus or minus 20 to 30% | Needs investigation (scope differences likely) |
+| over plus or minus 30% | Investigate; could be scope, productivity, or source data |
 
-**Common reasons for variance:**
-- Our rates are **direct cost only**; DOT prices include 15-25% overhead/profit
-- DOT items often include more scope (traffic control, erosion control, mobilization)
-- Scale differences: residential sitework vs. highway heavy civil
-- Davis-Bacon (prevailing) wages vs. BLS (mean) wages
+**What usually drives the variance:**
+- Our rates are **direct cost only**; DOT prices fold in 15 to 25% overhead and profit.
+- DOT items often pull in more scope (traffic control, erosion control, mobilization).
+- Scale differences, such as residential sitework against highway heavy civil.
+- Davis-Bacon (prevailing) wages against BLS (mean) wages.
 
 ### 11.3 Reasonableness Checks
 
@@ -965,16 +965,16 @@ variance_pct = (our_rate - tdot_rate) / tdot_rate * 100
 | Equipment hours per unit | Compare to USACE productivity guides |
 | Material quantities per unit | Verify against construction takeoff standards |
 | Total rate per SF/CY/LF | Compare to similar items in other regions (CWICR for EUR, RSMeans for USD) |
-| Component cost percentages | Labor typically 30-50%, material 30-50%, equipment 10-30% for sitework |
+| Component cost percentages | For sitework, labor is usually 30 to 50%, material 30 to 50%, equipment 10 to 30% |
 
 ### 11.4 Continuity Checks
 
-When adding items to an existing region:
+As you add items to a region that already has data:
 
-- [ ] No `(code, region)` duplicates
-- [ ] Units are consistent within a category (all demolition items in SF or all in CY — not mixed)
-- [ ] Rate ordering is logical (house demolition > garage demolition per SF)
-- [ ] New items don't clash with CWICR/imported items (search by code and description)
+- [ ] There are no `(code, region)` duplicates
+- [ ] Units stay consistent within a category (all demolition items in SF, or all in CY, never mixed)
+- [ ] Rate ordering is logical (house demolition costs more per SF than garage demolition)
+- [ ] New items do not clash with CWICR or imported items (search by code and description)
 
 ---
 
@@ -982,7 +982,7 @@ When adding items to an existing region:
 
 ### 12.1 Bulk JSON Import
 
-The primary method for importing curated cost items:
+This is the main route for importing curated cost items:
 
 ```bash
 TOKEN=$(curl -s -X POST http://localhost:8000/api/v1/users/auth/login/ \
@@ -995,11 +995,11 @@ curl -X POST http://localhost:8000/api/v1/costs/bulk/ \
   -d @data/us_tn_sitework_costs.json
 ```
 
-**Behavior:** Creates all items. Skips any where `(code, region)` already exists (no upsert). Returns the list of created items.
+**Behavior:** it creates all items and skips any where `(code, region)` already exists (no upsert). It returns the list of created items.
 
 ### 12.2 File Import (Excel/CSV)
 
-For quick imports from spreadsheets:
+For quick imports straight from spreadsheets:
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/costs/import/file/ \
@@ -1007,20 +1007,20 @@ curl -X POST http://localhost:8000/api/v1/costs/import/file/ \
   -F "file=@data/cost_items.xlsx"
 ```
 
-**Auto-detected columns:** `code`, `description`, `unit`, `rate`/`price`, `currency`, `classification`/`din 276`/`masterformat`
+**Columns the parser recognises automatically:** `code`, `description`, `unit`, `rate`/`price`, `currency`, `classification`/`din 276`/`masterformat`
 
-**Limitations:** File import does not support `components` arrays. Use bulk JSON import for resource-based items.
+**Limitations:** file import does not handle `components` arrays. For resource-based items, go through the bulk JSON import.
 
 ### 12.3 Python Import Script
 
-The recommended script is `scripts/import_tennessee_costs.py` which:
+The recommended script is `scripts/import_tennessee_costs.py`, which:
 
-1. Authenticates with regular user login (`POST /users/auth/login/`)
-2. Loads all JSON data files from a directory
-3. Auto-generates component `code` fields if missing (required for catalog extraction)
-4. Validates `rate == sum(components.cost)` for each item
-5. Calls `POST /costs/bulk/`
-6. Verifies items by searching the API
+1. Authenticates through the regular user login (`POST /users/auth/login/`).
+2. Loads every JSON data file from a directory.
+3. Auto-generates component `code` fields where they are missing (required for catalog extraction).
+4. Validates `rate == sum(components.cost)` for each item.
+5. Calls `POST /costs/bulk/`.
+6. Verifies the items by searching the API.
 
 > **Note:** `scripts/import_cost_database.py` is the legacy script that uses demo auth on port 8082. It is deprecated for production use.
 
@@ -1037,44 +1037,44 @@ curl -X POST http://localhost:8000/api/v1/costs/load-cwicr/DE_BERLIN \
   -H "Authorization: Bearer $TOKEN"
 ```
 
-This downloads parquet data from GitHub, deduplicates, extracts components, and bulk-inserts. Source is set to `"cwicr"`.
+This downloads parquet data from GitHub, deduplicates it, extracts components, and bulk-inserts. The source is set to `"cwicr"`.
 
 ### 12.5 Clearing a Region
 
-To remove all items for a region before re-importing:
+To wipe all items for a region before re-importing:
 
 ```bash
 curl -X DELETE http://localhost:8000/api/v1/costs/actions/clear-region/USA_TENNESSEE \
   -H "Authorization: Bearer $TOKEN"
 ```
 
-**This is irreversible.** Use with caution.
+**This cannot be undone.** Use it with care.
 
 ### 12.6 Catalog Resource Extraction
 
-After importing cost items with `components[]` arrays, extract their individual resources into the catalog so they can be reused in assemblies and the BOQ editor.
+After importing cost items with `components[]` arrays, pull their individual resources into the catalog so they can be reused in assemblies and the BOQ editor.
 
-**Why extraction matters:**
-- Components without `code` fields are **silently skipped** during extraction
-- Extracted resources become searchable in the catalog UI
-- They can be selected directly when building assemblies or adding resources to BOQ positions
-- Each resource shows avg/min/max rates and usage count across all cost items in the region
+**Why bother extracting:**
+- Components without a `code` field are **silently skipped** during extraction.
+- Extracted resources become searchable in the catalog UI.
+- They can be picked directly when building assemblies or adding resources to BOQ positions.
+- Each resource reports avg/min/max rates and a usage count across all cost items in the region.
 
-**Using the standalone script:**
+**With the standalone script:**
 
 ```bash
 cd backend
 python -m app.scripts.extract_tennessee_catalog
 ```
 
-**Using the API** (requires `catalog.extract` permission — Manager or Admin role):
+**Using the API** (requires the `catalog.extract` permission, i.e. a Manager or Admin role):
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/catalog/extract/ \
   -H "Authorization: Bearer $TOKEN"
 ```
 
-**Verify extraction:**
+**Confirm the extraction worked:**
 
 ```bash
 # List regions with catalog resources
@@ -1086,9 +1086,9 @@ curl -s "http://localhost:8000/api/v1/catalog/?region=USA_TENNESSEE&limit=5" \
   -H "Authorization: Bearer $TOKEN" | jq '.total'
 ```
 
-**Component `code` requirement:**
+**The component `code` requirement:**
 
-The extraction service groups components by their `code` field. If a component lacks a `code`, it is skipped:
+The extraction service groups components by their `code` field. A component with no `code` gets skipped:
 
 ```python
 code = comp.get("code", "")
@@ -1096,7 +1096,7 @@ if not code:
     continue  # silently skipped
 ```
 
-The import script (`scripts/import_tennessee_costs.py`) auto-generates codes in the format `TN-{TYPE}-{slug}` if missing.
+The import script (`scripts/import_tennessee_costs.py`) auto-generates codes in the form `TN-{TYPE}-{slug}` when they are missing.
 
 ---
 
@@ -1113,18 +1113,18 @@ The import script (`scripts/import_tennessee_costs.py`) auto-generates codes in 
 | Craftsman NCE | Commercial | 6K+ unit costs | National | Annual | Book/API | $59-$118/yr | Affordable estimating |
 | ENR CCI/BCI | Commercial | Cost indexes, 66 materials | 20 cities | Monthly | Web | $100-$2K/yr | Escalation/trending |
 | Dodge/CMD | Commercial | Project leads | US/Canada | Continuous | Web | $5K-$25K/yr | Market intelligence |
-| Marshall & Swift | Commercial | $/SF replacement | US/Canada | Quarterly | Online | $100-$1K+/yr | Building valuation |
+| Marshall and Swift | Commercial | $/SF replacement | US/Canada | Quarterly | Online | $100-$1K+/yr | Building valuation |
 | Richardson (Eos) | Commercial | 190K+ items | 130+ markets | Quarterly | Online | $3K-$5K/yr | Heavy civil/industrial |
 
-\* ICC BVD requires membership (~$200/yr)
+\* ICC BVD requires membership (around $200/yr)
 
 ## Appendix B: Region Naming Convention
 
-OCERP supports multiple region key formats. The CWICR legacy catalogues use two conventions:
+OCERP accepts several region key formats. The legacy CWICR catalogues follow two conventions.
 
 ### Currency-based regions (broad markets)
 
-Used by CWICR for national/regional price databases:
+CWICR uses these for national and regional price databases:
 
 ```
 USA_USD           # United States (broad market, USD currency)
@@ -1134,7 +1134,7 @@ DE___DDC_CWICR    # Germany (CWICR internal identifier)
 
 ### Location-based regions (specific metros/states)
 
-Used for custom or city-specific data:
+These cover custom or city-specific data:
 
 ```
 USA_TENNESSEE     # Tennessee (state-level)
@@ -1149,37 +1149,37 @@ PT_SAOPAULO       # São Paulo, Brazil
 
 ### Custom region guidelines
 
-When creating new custom regions:
+When you create new custom regions:
 
-1. **Prefer `COUNTRYCODE_STATE`** for state-wide data: `USA_TENNESSEE`, `USA_COLORADO`
-2. **Prefer `COUNTRYCODE_CITY`** for metro-specific data: `USA_SEATTLE`, `USA_CHICAGO`
-3. **Avoid currency codes** in custom regions unless you're creating a broad national market
-4. **Keep uppercase** and use underscores: `USA_TENNESSEE`, not `usa_tennessee` or `USA-Tennessee`
-5. **Be consistent** within a region set — don't mix `USA_NASHVILLE` and `USA_TENNESSEE` for the same data
+1. **Prefer `COUNTRYCODE_STATE`** for state-wide data: `USA_TENNESSEE`, `USA_COLORADO`.
+2. **Prefer `COUNTRYCODE_CITY`** for metro-specific data: `USA_SEATTLE`, `USA_CHICAGO`.
+3. **Avoid currency codes** in custom regions unless you are deliberately building a broad national market.
+4. **Keep it uppercase** and use underscores: `USA_TENNESSEE`, not `usa_tennessee` or `USA-Tennessee`.
+5. **Stay consistent** within a region set. Do not mix `USA_NASHVILLE` and `USA_TENNESSEE` for the same data.
 
 ## Appendix C: Recommended Data Strategy for US Sitework
 
 ### Immediate (Free, Already Implemented)
 
-1. **FEMA Equipment Rates** → equipment cost items (replaces USACE, more current)
-2. **BLS OEWS** → labor wage items (API-accessible, annual updates)
-3. **State DOT bid prices** → validation items (start with TDOT, add others as needed)
-4. **Local material quotes** → manual market estimates
+1. **FEMA Equipment Rates** for equipment cost items (replaces USACE, more current).
+2. **BLS OEWS** for labor wage items (API-accessible, annual updates).
+3. **State DOT bid prices** for validation items (start with TDOT, add others as needed).
+4. **Local material quotes** for manual market estimates.
 
 ### Near-Term (Free, Moderate Effort)
 
-5. **Davis-Bacon wage determinations** → prevailing wage items (requires SAM.gov scraper)
-6. **Additional state DOT data** → CA (Caltrans), FL (FDOT), TX (TxDOT), WI
+5. **Davis-Bacon wage determinations** for prevailing wage items (requires a SAM.gov scraper).
+6. **Additional state DOT data** for CA (Caltrans), FL (FDOT), TX (TxDOT), WI.
 
 ### Medium-Term (Paid, High Value)
 
-7. **Craftsman NCE API** → general building costs (~$60-300/yr for data access)
-8. **ENR subscription** → cost indexes and material prices for escalation
+7. **Craftsman NCE API** for general building costs (around $60 to $300/yr for data access).
+8. **ENR subscription** for cost indexes and material prices for escalation.
 
 ### Long-Term (Paid, Enterprise)
 
-9. **RSMeans online** → comprehensive 92K+ item database ($2K+/yr)
-10. **Richardson Engineering** → heavy civil deep data ($3K+/yr)
+9. **RSMeans online** for the comprehensive 92K+ item database ($2K+/yr).
+10. **Richardson Engineering** for deep heavy-civil data ($3K+/yr).
 
 ## Appendix D: File Structure Reference
 
@@ -1190,8 +1190,8 @@ OCERP/
 │   ├── bls_labor_wages.json          # Labor wages (Sec 7.1.2)
 │   ├── material_rates.json            # Material prices (Sec 7.1.4 context)
 │   ├── tdot_bid_prices.json           # Validation prices (Sec 7.1.4)
-│   ├── us_tn_sitework_costs.json          # Final CostItem array — sitework (Sec 4)
-│   └── us_tn_concrete_utilities_costs.json # Final CostItem array — concrete & utilities
+│   ├── us_tn_sitework_costs.json          # Final CostItem array, sitework (Sec 4)
+│   └── us_tn_concrete_utilities_costs.json # Final CostItem array, concrete & utilities
 ├── scripts/
 │   ├── import_tennessee_costs.py          # Recommended import script (Sec 12.3)
 │   └── import_cost_database.py            # Legacy demo-auth script (deprecated)

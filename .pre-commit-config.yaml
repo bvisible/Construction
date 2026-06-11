@@ -60,3 +60,13 @@ repos:
         entry: python scripts/check_no_brand_tokens.py
         language: system
         pass_filenames: true
+
+      # Keep internal-only planning, strategy, QA, audit and runbook files out
+      # of the repo. They are local only; this fails the commit if one is
+      # staged. CI and the publish pipelines run the same script (against the
+      # built wheel too) so a leak is caught at commit, CI and build time.
+      - id: repo-hygiene-check
+        name: Block internal-only files from the repo
+        entry: python scripts/check_repo_hygiene.py
+        language: system
+        pass_filenames: false

@@ -128,7 +128,6 @@ const ROUTE_ICON_MAP: Record<string, LucideIcon> = {
   '/portfolio/capacity': CalendarRange,
   '/portfolio/leveling': Scale,
   '/risks': ShieldAlert,
-  '/risk-analysis': Radar,
   // ── 8. Commercial ─────────────────────────────────────────────────
   '/crm': Briefcase,
   '/contracts': FileSignature,

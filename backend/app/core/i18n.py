@@ -45,7 +45,7 @@ SUPPORTED_LOCALES = [
     "zh",  # Chinese Simplified (简体中文)
     "ja",  # Japanese (日本語)
     "ko",  # Korean (한국어)
-    "mn",  # Mongolian (Монгол)
+    "mn",  # Mongolian, endonym Монгол
     "hi",  # Hindi (हिन्दी)
     "sv",  # Swedish (Svenska)
     "no",  # Norwegian (Norsk)
@@ -69,7 +69,7 @@ LOCALE_NAMES = {
     "zh": "简体中文",
     "ja": "日本語",
     "ko": "한국어",
-    "mn": "Монгол",
+    "mn": "Монгол",  # Mongolian endonym
     "hi": "हिन्दी",
     "sv": "Svenska",
     "no": "Norsk",

@@ -39,10 +39,12 @@ export function RegisterPage() {
   }, []);
 
   const passwordsMatch = password === confirmPassword;
-  const passwordLongEnough = password.length >= 8;
-  const passwordHasLetter = /[a-zA-Zа-яА-Я]/.test(password);
-  const passwordHasDigit = /\d/.test(password);
-  const passwordStrong = passwordLongEnough && passwordHasLetter && passwordHasDigit;
+  // A usable password needs a minimum length and at least one letter (Latin or
+  // Cyrillic) plus one numeric character.
+  const meetsMinLength = password.length >= 8;
+  const containsLetter = /[a-zA-Zа-яА-Я]/.test(password);
+  const containsDigit = /\d/.test(password);
+  const passwordStrong = meetsMinLength && containsLetter && containsDigit;
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -52,8 +54,13 @@ export function RegisterPage() {
       setError(t('auth.passwords_no_match', { defaultValue: 'Passwords do not match' }));
       return;
     }
-    if (!passwordStrong) {
-      setError(t('auth.password_requirements', { defaultValue: 'Password must be at least 8 characters with at least one letter and one digit' }));
+    if (passwordStrong === false) {
+      setError(
+        t('auth.password_requirements', {
+          defaultValue:
+            'Password must be at least 8 characters with at least one letter and one digit',
+        }),
+      );
       return;
     }
 
@@ -74,12 +81,16 @@ export function RegisterPage() {
       });
 
       if (!regRes.ok) {
-        const data = await regRes.json().catch(() => null);
-        const detail = data?.detail;
-        const errorMsg = Array.isArray(detail)
-          ? detail.map((e: { msg?: string }) => e.msg).join('; ')
-          : detail || t('auth.registration_failed', 'Registration failed');
-        setError(errorMsg);
+        // FastAPI returns either a plain string detail or a list of
+        // validation-error objects; flatten the list into one message,
+        // otherwise fall back to the generic failure text.
+        const body = await regRes.json().catch(() => null);
+        const detail = body?.detail;
+        const fallback = t('auth.registration_failed', 'Registration failed');
+        const message = Array.isArray(detail)
+          ? detail.map((item: { msg?: string }) => item.msg).join('; ')
+          : detail || fallback;
+        setError(message);
         return;
       }
 
@@ -412,7 +423,7 @@ export function RegisterPage() {
                     </a>
                     {' '}{t('auth.and', 'and')}{' '}
                     <a
-                      href="/terms.html"
+                      href="/terms-of-service.html"
                       target="_blank"
                       rel="noopener noreferrer"
                       className="text-oe-blue hover:underline font-medium"
@@ -431,7 +442,17 @@ export function RegisterPage() {
                   variant="primary"
                   size="lg"
                   loading={loading}
-                  disabled={!fullName || !email || !password || !confirmPassword || !passwordsMatch || !passwordStrong || !privacyAccepted}
+                  disabled={
+                    !(
+                      fullName &&
+                      email &&
+                      password &&
+                      confirmPassword &&
+                      passwordsMatch &&
+                      passwordStrong &&
+                      privacyAccepted
+                    )
+                  }
                   className="w-full btn-shimmer"
                 >
                   {t('auth.create_account', 'Create account')}

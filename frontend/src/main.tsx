@@ -70,6 +70,8 @@ const __routerBasename = FRAPPE_INTEGRATION ? '/neoconstruction' : undefined;
 
 (window as unknown as { CESIUM_BASE_URL: string }).CESIUM_BASE_URL = '/cesium/';
 
+(window as unknown as { CESIUM_BASE_URL: string }).CESIUM_BASE_URL = '/cesium/';
+
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {

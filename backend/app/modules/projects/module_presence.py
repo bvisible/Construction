@@ -38,16 +38,15 @@ import time
 import uuid
 from typing import NamedTuple
 
+from sqlalchemy import exc as _sa_exc
 from sqlalchemy import text
-from sqlalchemy.exc import OperationalError, ProgrammingError
-
-try:
-    from sqlalchemy.exc import InFailedSQLTransactionError
-except ImportError:
-    # Older SQLAlchemy (<2.0): InFailedSQLTransactionError was added in 2.0.
-    # Fall back to the base class so the except clause still compiles.
-    from sqlalchemy.exc import DBAPIError as InFailedSQLTransactionError
+from sqlalchemy.exc import DBAPIError, OperationalError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
+
+# InFailedSQLTransactionError was only added in SQLAlchemy 2.0. On older
+# releases fall back to the broader DBAPIError under the same name, so the
+# except clause further down still resolves and compiles either way.
+InFailedSQLTransactionError = getattr(_sa_exc, "InFailedSQLTransactionError", DBAPIError)
 
 logger = logging.getLogger(__name__)
 
@@ -231,14 +230,12 @@ async def _run_one_probe(
             probe.module_key,
         )
         return probe.module_key, False
-    except InFailedSQLTransactionError:
-        # A prior probe aborted the transaction. Clear it and carry on.
+    except InFailedSQLTransactionError:  # aborted txn from an earlier probe
+        # The transaction is already poisoned; roll it back so the remaining
+        # probes can keep running.
         await _safe_rollback(session)
-        logger.debug(
-            "module_presence: probe %s skipped (transaction was aborted)",
-            probe.module_key,
-        )
-        return probe.module_key, False
+        logger.debug("module_presence: probe %s skipped (transaction was aborted)", probe.module_key)
+        return (probe.module_key, False)
     except Exception:  # noqa: BLE001
         # Anything else (e.g. dialect-specific cast failure) - still
         # return False so the endpoint stays a 200. Log loudly so we

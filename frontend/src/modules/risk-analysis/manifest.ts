@@ -1,8 +1,5 @@
-import { lazy } from 'react';
 import { Dices } from 'lucide-react';
 import type { ModuleManifest } from '../_types';
-
-const RiskAnalysisModule = lazy(() => import('./RiskAnalysisModule'));
 
 export const manifest: ModuleManifest = {
   id: 'risk-analysis',
@@ -13,26 +10,19 @@ export const manifest: ModuleManifest = {
   category: 'tools',
   defaultEnabled: false,
   depends: ['boq'],
-  routes: [
-    {
-      path: '/risk-analysis',
-      title: 'Risk Analysis',
-      component: RiskAnalysisModule,
-    },
-  ],
-  navItems: [
-    {
-      labelKey: 'nav.risk_analysis',
-      to: '/risk-analysis',
-      icon: Dices,
-      group: 'tools',
-      advancedOnly: true,
-    },
-  ],
+  // IA merge (#71): the standalone Risk Analysis page is retired so there is
+  // a single Monte Carlo home. Cost-risk simulation from the BOQ lives in the
+  // 5D Cost Model and register-driven simulation lives in the Risk Register
+  // Monte Carlo tab, so this module no longer registers its own route or
+  // sidebar entry. The static `/risk-analysis` redirect in App.tsx sends any
+  // old deep link to `/risks?tab=montecarlo`. The page component is kept on
+  // disk (RiskAnalysisModule.tsx) for reference and a possible later home.
+  routes: [],
+  navItems: [],
   searchEntries: [
     {
-      label: 'Risk Analysis / Monte Carlo',
-      path: '/risk-analysis',
+      label: 'Monte Carlo simulation',
+      path: '/risks?tab=montecarlo',
       keywords: ['monte carlo', 'risk', 'probability', 'contingency', 'simulation', 'p80', 'percentile', 'uncertainty'],
     },
   ],

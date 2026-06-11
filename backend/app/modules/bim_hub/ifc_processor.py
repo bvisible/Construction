@@ -1678,7 +1678,7 @@ def _convert_dae_to_glb(dae_path: Path, output_dir: Path) -> Path | None:
     # RVT through DDC) it routinely OOMs or thrashes for 5+ minutes.
     # Skip the conversion and let the frontend ColladaLoader stream the
     # DAE directly - slower over the wire, but it actually works.
-    MAX_DAE_FOR_GLB_BYTES = 250 * 1024 * 1024  # 250 MB
+    MAX_DAE_FOR_GLB_BYTES = 1000 * 1024 * 1024  # 1000 MB
     try:
         dae_size = dae_path.stat().st_size
     except OSError:
@@ -3735,17 +3735,19 @@ def _patch_collada_node_names(dae_path: Path) -> int:
 
     if patched > 0:
         ET.indent(tree, space="  ")
-        # Register COLLADA namespace as the default (empty prefix) so
-        # tree.write() emits <COLLADA xmlns="..."> instead of
-        # <ns0:COLLADA xmlns:ns0="...">.  Python ET emits the ns0: form when
-        # the namespace is not in the global prefix registry, which causes the
-        # frontend's literal "<COLLADA" text-scan to reject the file with
-        # "Not a COLLADA document".
-        # NOTE: default_namespace= cannot be used here - Python ET rejects it
-        # whenever any element or attribute carries a non-qualified name
-        # (e.g. the `version` attribute on <COLLADA>): ValueError "cannot use
-        # non-qualified names with default_namespace option".
-        ET.register_namespace("", _COLLADA_NS)
+        # Bind the COLLADA namespace to the empty prefix in ET's global prefix
+        # table. With that binding in place, the subsequent tree.write() produces
+        # the default-namespace serialisation <COLLADA xmlns="..."> rather than
+        # the prefixed <ns0:COLLADA xmlns:ns0="..."> form. ET falls back to the
+        # ns0: spelling for any namespace it does not already know about, and the
+        # frontend's plain "<COLLADA" substring detection then treats the output
+        # as "Not a COLLADA document".
+        # We deliberately avoid the write(default_namespace=...) route: ET raises
+        # ValueError("cannot use non-qualified names with default_namespace
+        # option") as soon as a node or attribute has an un-namespaced name, and
+        # the <COLLADA> element's `version` attribute is exactly such a case.
+        default_prefix = ""
+        ET.register_namespace(default_prefix, _COLLADA_NS)
         tree.write(str(dae_path), xml_declaration=True, encoding="utf-8")
         logger.info(
             "Patched %d COLLADA node name attributes to match id in %s",

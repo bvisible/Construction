@@ -113,7 +113,7 @@ def upgrade() -> None:
                 "focus_mode_enabled",
                 sa.Boolean(),
                 nullable=False,
-                server_default=sa.text("true"),
+                server_default="1",
             ),
             sa.Column(
                 "setup_completion",
@@ -173,7 +173,7 @@ def upgrade() -> None:
                 "enabled",
                 sa.Boolean(),
                 nullable=False,
-                server_default=sa.text("false"),
+                server_default="0",
             ),
             sa.Column(
                 "tier",

@@ -10,7 +10,18 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import JSON, DateTime, Float, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import (
+    JSON,
+    CheckConstraint,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    Text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import GUID, Base
@@ -148,10 +159,86 @@ class TakeoffMeasurement(Base):
     # in production to be re-calibrated for no precision gain.
     scale_pixels_per_unit: Mapped[float | None] = mapped_column(Float, nullable=True)
     linked_boq_position_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # ── Vision-LLM plan reading (issue #194) ───────────────────────────────
+    # Provenance and review state. All three are additive with a server_default
+    # so every existing row reads unchanged. A plan-read proposal lands as
+    # ``source='ai_plan_read'`` / ``review_status='proposed'`` with the model
+    # confidence; manual draws stay ``manual`` / ``confirmed`` (back-compat).
+    # ``confidence`` is NULL for non-AI rows (NULL = honestly not AI-derived,
+    # never a fake 0.0). The run id is stamped into ``metadata_`` so no FK
+    # column is needed and cascade stays clean.
+    source: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="manual", server_default="manual"
+    )  # manual | ai_plan_read | ai_takeoff | cad_import | gaeb_import
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    review_status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="confirmed", server_default="confirmed"
+    )  # proposed | confirmed | rejected
     metadata_: Mapped[dict] = mapped_column(  # type: ignore[assignment]
         "metadata", JSON, nullable=False, default=dict, server_default="{}"
     )
     created_by: Mapped[str] = mapped_column(String(255), nullable=False, default="")
 
+    __table_args__ = (
+        CheckConstraint(
+            "confidence IS NULL OR (confidence >= 0.0 AND confidence <= 1.0)",
+            name="ck_takeoff_measurement_confidence_range",
+        ),
+    )
+
     def __repr__(self) -> str:
         return f"<TakeoffMeasurement {self.type} group={self.group_name} page={self.page}>"
+
+
+class AiTakeoffRun(Base):
+    """One vision-LLM plan-read run - the pollable job bookkeeping row.
+
+    Mirrors the proven ``AiEstimatorRun`` / ``AIEstimateJob`` shape. The run is
+    a long-lived, pollable job; ``status`` is the FSM
+    ``queued -> rasterizing -> reading -> validating -> review ->
+    applied | failed | cancelled``. The vision call is bring-your-own-key per
+    the confirming user, and a hard cost cap (``TAKEOFF_AI_MAX_COST_USD``) is
+    enforced pre-flight and rolled up per user from the windowed sum of these
+    rows' ``cost_usd_estimate`` so one tenant cannot exhaust another's budget.
+    """
+
+    __tablename__ = "oe_ai_takeoff_run"
+    __table_args__ = (
+        Index("ix_ai_takeoff_run_project", "project_id"),
+        Index("ix_ai_takeoff_run_project_status", "project_id", "status"),
+        Index("ix_ai_takeoff_run_user", "user_id"),
+        Index("ix_ai_takeoff_run_user_created", "user_id", "created_at"),
+    )
+
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(),
+        ForeignKey("oe_projects_project.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    document_id: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    page: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    # scale | rooms | symbols | full
+    mode: Mapped[str] = mapped_column(String(16), nullable=False, default="rooms", server_default="rooms")
+    user_id: Mapped[uuid.UUID] = mapped_column(GUID(), nullable=False, index=True)
+    created_by: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    # FSM: queued | rasterizing | reading | validating | review | applied |
+    # failed | cancelled
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="queued", server_default="queued")
+    scale_pixels_per_unit: Mapped[float | None] = mapped_column(Float, nullable=True)
+    do_cost_match: Mapped[bool] = mapped_column(default=False, server_default="0")
+    provider: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    model_used: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    total_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    cost_usd_estimate: Mapped[float] = mapped_column(Float, nullable=False, default=0.0, server_default="0")
+    duration_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    proposal_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    accepted_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    validation_report: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # type: ignore[assignment]
+    failure_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    metadata_: Mapped[dict] = mapped_column(  # type: ignore[assignment]
+        "metadata", JSON, nullable=False, default=dict, server_default="{}"
+    )
+
+    def __repr__(self) -> str:
+        return f"<AiTakeoffRun {self.status} mode={self.mode} page={self.page}>"

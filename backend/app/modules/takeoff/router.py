@@ -50,7 +50,7 @@ from sqlalchemy import delete, select
 
 from app.core.csv_safety import neutralise_formula
 from app.core.i18n import get_locale
-from app.core.rate_limiter import upload_limiter
+from app.core.rate_limiter import ai_limiter, upload_limiter
 from app.core.validation.messages import translate
 from app.dependencies import CurrentUserId, RequirePermission, SessionDep, verify_project_access
 from app.modules.takeoff.manifest_verifier import (
@@ -65,9 +65,14 @@ from app.modules.takeoff.manifest_verifier import (
 )
 from app.modules.takeoff.models import CadExtractionSession
 from app.modules.takeoff.schemas import (
+    AiTakeoffRunResponse,
     CreateVariationFromCompareRequest,
     CreateVariationFromCompareResponse,
     LinkToBoqRequest,
+    PlanReadAcceptRequest,
+    PlanReadAcceptResponse,
+    PlanReadMetaResponse,
+    PlanReadRequest,
     RecognizeResponse,
     TakeoffCompareResponse,
     TakeoffMeasurementBulkCreate,
@@ -1644,7 +1649,7 @@ async def uninstall_converter(
 
 # ── CAD quantity extraction (no AI) ──────────────────────────────────────
 
-MAX_CAD_SIZE = 100 * 1024 * 1024  # 100 MB
+MAX_CAD_SIZE = 500 * 1024 * 1024  # 500 MB
 
 _SUPPORTED_CAD_EXTS = {"rvt", "ifc", "dwg", "dgn", "rfa", "dxf"}
 
@@ -3815,7 +3820,7 @@ async def save_session_to_project(
     }
 
 
-MAX_PDF_SIZE = 50 * 1024 * 1024  # 50 MB
+MAX_PDF_SIZE = 200 * 1024 * 1024  # 200 MB
 
 
 def _get_service(session: SessionDep) -> TakeoffService:
@@ -4449,6 +4454,168 @@ async def recognize_document(
 
     result = await service.recognize_candidates(doc_id, page, scale_pixels_per_unit or None)
     return RecognizeResponse(**result)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Vision-LLM plan reading (issue #194)
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# The opt-in, bring-your-own-key, cost-capped complement to the offline
+# Recognize tool. Every endpoint runs verify_project_access first (IDOR gate,
+# admin bypass) then RequirePermission, matching every other takeoff route.
+# Nothing is auto-applied: a run only ever produces ``proposed`` measurements;
+# a human accepts them through ``/accept``, and the server recomputes the
+# billed number (B8).
+
+
+def _run_to_response(run: object) -> AiTakeoffRunResponse:
+    """Build an AiTakeoffRunResponse from an AiTakeoffRun ORM object."""
+    return AiTakeoffRunResponse(
+        id=run.id,  # type: ignore[attr-defined]
+        status=run.status,  # type: ignore[attr-defined]
+        project_id=run.project_id,  # type: ignore[attr-defined]
+        document_id=run.document_id,  # type: ignore[attr-defined]
+        page=run.page,  # type: ignore[attr-defined]
+        mode=run.mode,  # type: ignore[attr-defined]
+        provider=run.provider,  # type: ignore[attr-defined]
+        model_used=run.model_used,  # type: ignore[attr-defined]
+        total_tokens=run.total_tokens,  # type: ignore[attr-defined]
+        cost_usd_estimate=run.cost_usd_estimate,  # type: ignore[attr-defined]
+        duration_ms=run.duration_ms,  # type: ignore[attr-defined]
+        proposal_count=run.proposal_count,  # type: ignore[attr-defined]
+        accepted_count=run.accepted_count,  # type: ignore[attr-defined]
+        validation_report=run.validation_report,  # type: ignore[attr-defined]
+        failure_reason=run.failure_reason,  # type: ignore[attr-defined]
+        created_at=getattr(run, "created_at", None),
+    )
+
+
+@router.get(
+    "/plan-read/meta",
+    response_model=PlanReadMetaResponse,
+    dependencies=[Depends(RequirePermission("takeoff.read"))],
+)
+async def plan_read_meta(
+    user_id: CurrentUserId,
+    service: TakeoffService = Depends(_get_service),
+) -> PlanReadMetaResponse:
+    """Thresholds, vision availability, caps, and rolling spend for the UI.
+
+    The UI never hardcodes thresholds or limits. ``vision_available=false``
+    (with a reason) lets the takeoff viewer hide / disable the "Read plan with
+    AI" action when no vision-capable key is configured - the offline Recognize
+    button is unaffected. Never errors on a missing key.
+    """
+    meta = await service.plan_read_meta(str(user_id))
+    return PlanReadMetaResponse(**meta)
+
+
+@router.post(
+    "/plan-read/",
+    response_model=AiTakeoffRunResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(RequirePermission("takeoff.create"))],
+)
+async def plan_read_start(
+    body: PlanReadRequest,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    service: TakeoffService = Depends(_get_service),
+) -> AiTakeoffRunResponse:
+    """Start a vision-LLM plan-read run for one page.
+
+    Gated by ``verify_project_access`` (IDOR) and AI-rate-limited. Returns 400
+    when no AI key is configured, the resolved provider/model is not
+    vision-capable, or the pre-flight cost estimate would exceed
+    ``TAKEOFF_AI_MAX_COST_USD``. On success creates a queued run and schedules
+    the in-process reading coroutine.
+    """
+    await verify_project_access(body.project_id, str(user_id), session)
+    allowed, _retry = ai_limiter.is_allowed(str(user_id))
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many AI requests. Please wait a moment and try again.",
+        )
+    run = await service.plan_read_start(
+        project_id=body.project_id,
+        document_id=body.document_id,
+        page=body.page,
+        mode=body.mode,
+        scale_pixels_per_unit=body.scale_pixels_per_unit,
+        do_cost_match=body.do_cost_match,
+        user_id=str(user_id),
+    )
+    return _run_to_response(run)
+
+
+@router.get(
+    "/plan-read/runs/{run_id}",
+    response_model=AiTakeoffRunResponse,
+    dependencies=[Depends(RequirePermission("takeoff.read"))],
+)
+async def plan_read_get_run(
+    run_id: _uuid.UUID,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    service: TakeoffService = Depends(_get_service),
+) -> AiTakeoffRunResponse:
+    """Poll a plan-read run's FSM state."""
+    run = await service.get_plan_read_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Plan-read run not found")
+    await verify_project_access(run.project_id, str(user_id), session)
+    return _run_to_response(run)
+
+
+@router.get(
+    "/plan-read/runs/{run_id}/proposals",
+    response_model=list[TakeoffMeasurementResponse],
+    dependencies=[Depends(RequirePermission("takeoff.read"))],
+)
+async def plan_read_proposals(
+    run_id: _uuid.UUID,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    service: TakeoffService = Depends(_get_service),
+) -> list[TakeoffMeasurementResponse]:
+    """List the unconfirmed (``proposed``) measurements minted by a run."""
+    run = await service.get_plan_read_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Plan-read run not found")
+    await verify_project_access(run.project_id, str(user_id), session)
+    proposals = await service.list_plan_read_proposals(run_id)
+    return [_measurement_to_response(m) for m in proposals]
+
+
+@router.post(
+    "/plan-read/runs/{run_id}/accept",
+    response_model=PlanReadAcceptResponse,
+    dependencies=[Depends(RequirePermission("takeoff.update"))],
+)
+async def plan_read_accept(
+    run_id: _uuid.UUID,
+    body: PlanReadAcceptRequest,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    service: TakeoffService = Depends(_get_service),
+) -> PlanReadAcceptResponse:
+    """Confirm selected / above-threshold proposals into billed measurements.
+
+    A self-intersecting proposal is blocked (redraw first); low confidence is a
+    warning, not a block. The geometry and the server-recomputed value are left
+    intact on confirm (the server already owns the number).
+    """
+    run = await service.get_plan_read_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Plan-read run not found")
+    await verify_project_access(run.project_id, str(user_id), session)
+    result = await service.accept_plan_read(
+        run_id,
+        measurement_ids=body.measurement_ids,
+        min_confidence=body.min_confidence,
+    )
+    return PlanReadAcceptResponse(**result)
 
 
 # ── Delete ────────────────────────────────────────────────────────────────

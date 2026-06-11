@@ -555,6 +555,21 @@ export function RiskRegisterPage() {
     }
   }, [searchParams, selectedRiskId, setSearchParams]);
 
+  // Deep-link to a tab: the retired standalone Monte Carlo tool now
+  // redirects here as ?tab=montecarlo so the user lands straight on the
+  // simulation. Apply it once, then drop the param so it does not pin the
+  // tab on later in-page navigation.
+  useEffect(() => {
+    const tabParam = searchParams.get('tab');
+    if (!tabParam) return;
+    if ((RISK_TAB_IDS as readonly string[]).includes(tabParam)) {
+      setActiveTab(tabParam as RiskTab);
+    }
+    const next = new URLSearchParams(searchParams);
+    next.delete('tab');
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams]);
+
   const { data: projects = [] } = useQuery({ queryKey: ['projects'], queryFn: () => apiGet<Project[]>('/v1/projects/'), staleTime: 5 * 60_000 });
   const projectId = activeProjectId || projects[0]?.id || '';
   const project = useMemo(() => projects.find((p) => p.id === projectId), [projects, projectId]);

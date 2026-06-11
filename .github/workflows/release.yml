@@ -31,6 +31,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Repo hygiene - no internal-only files
+        run: python3 scripts/check_repo_hygiene.py
+
       - name: Extract version from tag
         id: version
         run: |

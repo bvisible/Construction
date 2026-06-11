@@ -20,10 +20,9 @@ export type AIProvider =
   | 'zhipu'
   | 'baidu'
   | 'yandex'
-  | 'gigachat'
-  | 'ollama'
-  | 'kimi'
-  | 'vllm';
+  // Final batch: a hosted Chinese provider plus three self-hosted /
+  // OpenAI-compatible endpoints (two local runtimes and a hosted one).
+  | 'gigachat' | 'ollama' | 'kimi' | 'vllm';
 
 export type AIConnectionStatus = 'connected' | 'not_configured' | 'error';
 
@@ -46,10 +45,9 @@ export interface AISettings {
   zhipu_api_key_set: boolean;
   baidu_api_key_set: boolean;
   yandex_api_key_set: boolean;
-  gigachat_api_key_set: boolean;
-  kimi_api_key_set: boolean;
-  ollama_base_url: string | null;
-  vllm_base_url: string | null;
+  gigachat_api_key_set: boolean; kimi_api_key_set: boolean;
+  // Self-hosted runtimes carry an endpoint instead of a key flag; null when unset.
+  ollama_base_url: string | null; vllm_base_url: string | null;
   preferred_model: string;
   /** Per-provider model-id override the user has saved (provider -> model id). */
   model_overrides: Record<string, string>;
@@ -85,10 +83,9 @@ export interface AISettingsUpdate {
   zhipu_api_key?: string | null;
   baidu_api_key?: string | null;
   yandex_api_key?: string | null;
-  gigachat_api_key?: string | null;
-  kimi_api_key?: string | null;
-  ollama_base_url?: string | null;
-  vllm_base_url?: string | null;
+  gigachat_api_key?: string | null; kimi_api_key?: string | null;
+  // Optional endpoint overrides for the self-hosted runtimes.
+  ollama_base_url?: string | null; vllm_base_url?: string | null;
 }
 
 export interface AITestResult {

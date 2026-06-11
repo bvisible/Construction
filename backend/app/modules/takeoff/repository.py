@@ -1,11 +1,12 @@
 """‌⁠‍Takeoff data access layer."""
 
 import uuid
+from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.takeoff.models import TakeoffDocument, TakeoffMeasurement
+from app.modules.takeoff.models import AiTakeoffRun, TakeoffDocument, TakeoffMeasurement
 
 
 class TakeoffRepository:
@@ -118,3 +119,61 @@ class MeasurementRepository:
         stmt = select(TakeoffMeasurement).where(TakeoffMeasurement.project_id == project_id)
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
+
+    async def list_proposals_for_run(self, run_id: uuid.UUID) -> list[TakeoffMeasurement]:
+        """Return all proposal rows minted by one plan-read run.
+
+        Proposals are ordinary :class:`TakeoffMeasurement` rows stamped with the
+        run id in ``metadata_['ai_takeoff_run_id']`` and ``review_status`` of
+        ``'proposed'``. Ordered newest-first so the review panel renders a
+        stable list.
+        """
+        stmt = (
+            select(TakeoffMeasurement)
+            .where(TakeoffMeasurement.metadata_["ai_takeoff_run_id"].as_string() == str(run_id))
+            .order_by(TakeoffMeasurement.created_at.desc())
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+
+class AiTakeoffRunRepository:
+    """Data access for the vision-LLM plan-read run (issue #194)."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def get_by_id(self, run_id: uuid.UUID) -> AiTakeoffRun | None:
+        """Fetch a run by id (fresh SELECT, bypasses the identity map)."""
+        stmt = select(AiTakeoffRun).where(AiTakeoffRun.id == run_id)
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def create(self, run: AiTakeoffRun) -> AiTakeoffRun:
+        """Insert a new plan-read run."""
+        self.session.add(run)
+        await self.session.flush()
+        return run
+
+    async def update_fields(self, run_id: uuid.UUID, **fields: object) -> None:
+        """Update specific fields on a run and expire cached instances."""
+        stmt = update(AiTakeoffRun).where(AiTakeoffRun.id == run_id).values(**fields)
+        await self.session.execute(stmt)
+        await self.session.flush()
+        self.session.expire_all()
+
+    async def rolling_spend_usd(self, user_id: uuid.UUID, *, window_hours: int = 24) -> float:
+        """Sum a user's plan-read spend over a recent window.
+
+        Used by the pre-flight cost gate so the cap is per-user and windowed,
+        not a single global ceiling - one tenant cannot exhaust another's
+        budget. ``window_hours <= 0`` sums all of the user's runs.
+        """
+        stmt = select(func.coalesce(func.sum(AiTakeoffRun.cost_usd_estimate), 0.0)).where(
+            AiTakeoffRun.user_id == user_id
+        )
+        if window_hours > 0:
+            cutoff = datetime.now(UTC) - timedelta(hours=window_hours)
+            stmt = stmt.where(AiTakeoffRun.created_at >= cutoff)
+        result = await self.session.execute(stmt)
+        return float(result.scalar_one() or 0.0)

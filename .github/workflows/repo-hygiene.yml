@@ -1,0 +1,27 @@
+# Repo hygiene gate.
+#
+# Fails any push or pull request that tracks internal-only files (planning,
+# strategy, QA artifacts, audits, runbooks). Those are kept local only and must
+# never reach the public repository or a release artifact. The same script also
+# runs in the publish pipelines against the built wheel, and as a pre-commit
+# hook, so a leak is caught at commit time, in CI, and at build time.
+name: Repo hygiene
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  hygiene:
+    name: No internal-only files
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check the tree for internal-only files
+        run: python scripts/check_repo_hygiene.py

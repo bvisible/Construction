@@ -852,8 +852,8 @@ def vector_search(
         search_filter = None
         if region:
             search_filter = Filter(must=[FieldCondition(key="region", match=MatchValue(value=region))])
-        results = client.search(COST_TABLE, query_vector=query_vector, query_filter=search_filter, limit=limit)
-        return [{"id": h.id, "score": round(h.score, 4), **h.payload} for h in results]
+        response = client.query_points(COST_TABLE, query=query_vector, query_filter=search_filter, limit=limit)
+        return [{"id": h.id, "score": round(h.score, 4), **h.payload} for h in response.points]
 
     return _lancedb_search(query_vector, region, limit)
 
@@ -948,12 +948,13 @@ def vector_search_collection(
             must_clauses.append(FieldCondition(key="tenant_id", match=MatchValue(value=tenant_id)))
         search_filter = Filter(must=must_clauses) if must_clauses else None
         try:
-            results = client.search(
+            response = client.query_points(
                 collection_name,
-                query_vector=query_vector,
+                query=query_vector,
                 query_filter=search_filter,
                 limit=limit,
             )
+            results = response.points
         except Exception as exc:
             logger.debug("Qdrant search %s failed: %s", collection_name, exc)
             return []

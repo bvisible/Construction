@@ -18,6 +18,7 @@ import { useToastStore } from '@/stores/useToastStore';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useUploadQueueStore } from '@/stores/useUploadQueueStore';
 import { fileManagerKeys } from '../hooks';
+import { uploadResumable, RESUMABLE_THRESHOLD_BYTES } from '../resumableUpload';
 import type { FileKind } from '../types';
 
 interface UploadDialogProps {
@@ -104,6 +105,53 @@ export function UploadDialog({
         // Fire-and-forget — same pattern as DocumentsPage so progress
         // shows up in the global FloatingQueuePanel.
         (async () => {
+          const markDone = () => {
+            updateQueueTask(taskId, {
+              status: 'completed',
+              progress: 100,
+              message: t('files.uploaded', { defaultValue: 'Uploaded' }),
+              completedAt: Date.now(),
+            });
+            queryClient.invalidateQueries({ queryKey: [fileManagerKeys.tree, projectId] });
+            queryClient.invalidateQueries({ queryKey: [fileManagerKeys.list, projectId] });
+          };
+          const markError = (detail: string) => {
+            updateQueueTask(taskId, {
+              status: 'error',
+              error: detail,
+              completedAt: Date.now(),
+            });
+          };
+
+          // Large files take the resumable, chunked path: real progress and
+          // automatic per-chunk retry so a flaky connection no longer
+          // restarts the whole transfer from zero. Small files keep the
+          // simpler single-shot multipart upload below.
+          if (file.size >= RESUMABLE_THRESHOLD_BYTES) {
+            try {
+              updateQueueTask(taskId, {
+                message: t('files.uploading_chunked', {
+                  defaultValue: 'Uploading large file…',
+                }),
+              });
+              await uploadResumable(file, {
+                projectId,
+                category: cat,
+                onProgress: (percent) => updateQueueTask(taskId, { progress: percent }),
+              });
+              markDone();
+            } catch (err) {
+              markError(
+                err instanceof Error
+                  ? err.message
+                  : t('files.upload_resume_failed', {
+                      defaultValue: 'Upload interrupted. Try again to resume.',
+                    }),
+              );
+            }
+            return;
+          }
+
           try {
             const formData = new FormData();
             formData.append('file', file);
@@ -136,27 +184,12 @@ export function UploadDialog({
               } catch {
                 /* ignore — keep filename */
               }
-              updateQueueTask(taskId, {
-                status: 'error',
-                error: detail,
-                completedAt: Date.now(),
-              });
+              markError(detail);
             } else {
-              updateQueueTask(taskId, {
-                status: 'completed',
-                progress: 100,
-                message: t('files.uploaded', { defaultValue: 'Uploaded' }),
-                completedAt: Date.now(),
-              });
-              queryClient.invalidateQueries({ queryKey: [fileManagerKeys.tree, projectId] });
-              queryClient.invalidateQueries({ queryKey: [fileManagerKeys.list, projectId] });
+              markDone();
             }
           } catch (err) {
-            updateQueueTask(taskId, {
-              status: 'error',
-              error: err instanceof Error ? err.message : 'Upload failed',
-              completedAt: Date.now(),
-            });
+            markError(err instanceof Error ? err.message : 'Upload failed');
           }
         })();
       }

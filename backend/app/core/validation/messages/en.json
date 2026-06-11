@@ -2,6 +2,20 @@
   "common": {
     "ok": "OK"
   },
+  "ai_takeoff": {
+    "scale_sanity": {
+      "fail": "The AI-detected scale implies an implausible page span of {span} m",
+      "suggestion": "Recalibrate the scale by hand before trusting AI areas"
+    },
+    "polygon_self_intersection": {
+      "fail": "Proposed room '{name}' has a self-intersecting outline",
+      "suggestion": "Redraw this room as a simple (non-crossing) polygon before accepting"
+    },
+    "low_confidence_review": {
+      "fail": "Proposed item '{name}' has low confidence ({confidence})",
+      "suggestion": "Review this AI proposal carefully and verify it against the drawing before accepting"
+    }
+  },
   "boq_quality": {
     "position_has_quantity": {
       "fail": "Position {ordinal} must not have zero or missing quantity",

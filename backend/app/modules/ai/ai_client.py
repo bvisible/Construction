@@ -19,23 +19,6 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-
-# ── Neoconstruction override: read Frappe site_config for Olares ─────────────
-def _read_frappe_site_config(key, default=None):
-    """Read a key from Frappe site_config.json. Path overridable via env."""
-    import os
-    import json as _json
-    path = os.environ.get(
-        "FRAPPE_SITE_CONFIG",
-        "/home/neoffice/frappe-bench/sites/prod.local/site_config.json",
-    )
-    try:
-        with open(path) as _f:
-            return _json.load(_f).get(key, default)
-    except Exception:
-        return default
-
-
 # ── Model defaults ───────────────────────────────────────────────────────────
 
 # UI model-choice aliases → current Anthropic API model ids. The Settings > AI
@@ -77,6 +60,8 @@ def resolve_anthropic_model(model: str | None) -> str:
 # Users can override per-provider via Settings > AI without an app release.
 OPENAI_MODEL = "gpt-4.1"
 GEMINI_MODEL = "gemini-2.5-flash"
+# Moonshot's rolling alias that always points at the current Kimi release.
+KIMI_MODEL = "kimi-latest"
 # OpenRouter uses date-less, vendor-prefixed slugs. The dated Anthropic id
 # ("...-20250514") is NOT a valid OpenRouter model - passing it makes even a
 # perfectly valid OpenRouter key fail with HTTP 400 "not a valid model ID".
@@ -84,7 +69,6 @@ OPENROUTER_MODEL = "anthropic/claude-sonnet-4"
 MISTRAL_MODEL = "mistral-large-latest"
 GROQ_MODEL = "llama-3.3-70b-versatile"
 DEEPSEEK_MODEL = "deepseek-chat"
-KIMI_MODEL = "kimi-latest"
 
 # Per-provider default model id. This is the single source of truth for the
 # model name sent to each provider's API. Users can override any of these via
@@ -95,6 +79,7 @@ DEFAULT_MODELS: dict[str, str] = {
     "anthropic": ANTHROPIC_MODEL,
     "openai": OPENAI_MODEL,
     "gemini": GEMINI_MODEL,
+    "kimi": KIMI_MODEL,
     "openrouter": OPENROUTER_MODEL,
     "mistral": MISTRAL_MODEL,
     "groq": GROQ_MODEL,
@@ -111,7 +96,6 @@ DEFAULT_MODELS: dict[str, str] = {
     "gigachat": "GigaChat-Pro",
     "ollama": os.environ.get("OE_OLLAMA_MODEL", "llama3.1"),
     "vllm": os.environ.get("OE_VLLM_MODEL", "meta-llama/Llama-3.1-8B-Instruct"),
-    "kimi": KIMI_MODEL,
 }
 
 
@@ -162,7 +146,7 @@ def fallback_models_for(provider: str, attempted: str) -> list[str]:
 
 
 # Timeout for AI API calls (2 minutes - large BOQ generation can be slow)
-AI_TIMEOUT = 120.0
+AI_TIMEOUT = 240.0
 
 
 # ── Anthropic Claude ─────────────────────────────────────────────────────────
@@ -492,6 +476,11 @@ _OPENAI_COMPAT_CONFIG = {
         "url": "https://gigachat.devices.sberbank.ru/api/v1/chat/completions",
         "model": "GigaChat-Pro",
     },
+    # Moonshot AI (Kimi) - hosted, OpenAI-compatible chat completions.
+    "kimi": {
+        "url": "https://api.moonshot.cn/v1/chat/completions",
+        "model": KIMI_MODEL,
+    },
     # Local LLM runtimes - OpenAI-compatible REST API, no key required.
     # Override base URL via OE_OLLAMA_URL / OE_VLLM_URL env vars to point at
     # a non-default host (default Ollama :11434, default VLLM :8001 to avoid
@@ -508,37 +497,23 @@ _OPENAI_COMPAT_CONFIG = {
         "model": os.environ.get("OE_VLLM_MODEL", "meta-llama/Llama-3.1-8B-Instruct"),
         "api_key_optional": True,
     },
-    "kimi": {
-        "url": "https://api.moonshot.cn/v1/chat/completions",
-        "model": KIMI_MODEL,
-    },
 }
 
-# ── Neoconstruction: register Olares as OpenAI-compatible provider ─────────
-_olares_base = (_read_frappe_site_config("oce_olares_base_url") or "").rstrip("/")
-if _olares_base:
-    _OPENAI_COMPAT_CONFIG["olares"] = {
-        "url": _olares_base + "/chat/completions",
-        "model": _read_frappe_site_config("oce_olares_model", "Qwen3.6-35B-A3B-UD-Q3_K_XL.gguf"),
-    }
 
-
-def update_provider_config(metadata: dict | None = None) -> None:
-    """Update Ollama/vLLM base URLs from user settings metadata.
-
-    Called after settings are saved so subsequent AI calls across the
-    entire app use the user's custom URL without threading a parameter
-    through every call site.
-    """
-    meta = metadata or {}
-    for provider in ("ollama", "vllm"):
-        url_key = f"{provider}_base_url"
-        url = meta.get(url_key) if isinstance(meta, dict) else None
-        if isinstance(url, str) and url.strip():
-            base = url.strip().rstrip("/")
-            if not base.endswith("/v1/chat/completions"):
-                base += "/v1/chat/completions"
-            _OPENAI_COMPAT_CONFIG[provider]["url"] = base
+def update_provider_config(saved_meta: dict | None = None) -> None:
+    """Refresh the Ollama/vLLM endpoints from the saved settings metadata.
+    Invoked once after settings are persisted so every subsequent AI call in
+    the app reuses the user's endpoint without that URL having to be threaded
+    through each individual call site (no per-call URL threading required)."""
+    meta = saved_meta or {}
+    for provider in ("ollama", "vllm"):  # only self-hosted runtimes are tunable
+        candidate = meta.get(f"{provider}_base_url") if isinstance(meta, dict) else None
+        if not (isinstance(candidate, str) and candidate.strip()):
+            continue
+        endpoint = candidate.strip().rstrip("/")
+        if not endpoint.endswith("/v1/chat/completions"):
+            endpoint += "/v1/chat/completions"
+        _OPENAI_COMPAT_CONFIG[provider]["url"] = endpoint
 
 
 async def call_openai_compatible(
@@ -550,7 +525,7 @@ async def call_openai_compatible(
     image_media_type: str = "image/jpeg",
     max_tokens: int = 4096,
     model: str | None = None,
-    base_url: str | None = None,
+    base_url: str | None = None,  # self-hosted endpoint override
 ) -> tuple[str, int]:
     """Call any OpenAI-compatible API (OpenRouter, Mistral, Groq, DeepSeek).
 
@@ -559,8 +534,8 @@ async def call_openai_compatible(
     Args:
         model: Optional model id override. When falsy, the provider's
             built-in default model is used.
-        base_url: Optional custom base URL (for Ollama/vLLM). When set,
-            overrides the built-in config URL.
+        base_url: Optional endpoint override for self-hosted backends
+            (Ollama/vLLM); takes precedence over the configured URL.
     """
     config = _OPENAI_COMPAT_CONFIG.get(provider)
     if not config:
@@ -594,11 +569,11 @@ async def call_openai_compatible(
         ],
     }
 
-    url = base_url or config["url"]
-
+    # Prefer the caller-supplied endpoint, otherwise fall back to the config.
+    endpoint = base_url or config["url"]
     async with httpx.AsyncClient() as client:
         response = await client.post(
-            url,
+            endpoint,
             headers=headers,
             json=payload,
             timeout=AI_TIMEOUT,
@@ -623,7 +598,7 @@ async def call_ai(
     image_media_type: str = "image/jpeg",
     max_tokens: int = 4096,
     model: str | None = None,
-    base_url: str | None = None,
+    base_url: str | None = None,  # self-hosted endpoint override
 ) -> tuple[str, int]:
     """Route an AI call to the correct provider.
 
@@ -637,8 +612,8 @@ async def call_ai(
         max_tokens: Max response tokens.
         model: Optional model id override. When falsy, the provider's
             built-in default model is used.
-        base_url: Optional custom base URL (for Ollama/vLLM). When set,
-            overrides the built-in config URL.
+        base_url: Optional endpoint override for self-hosted backends
+            (Ollama/vLLM); takes precedence over the configured URL.
 
     Returns:
         Tuple of (response_text, tokens_used).
@@ -668,8 +643,8 @@ async def call_ai(
                     image_base64,
                     image_media_type,
                     max_tokens=max_tokens,
+                    base_url=base_url,  # forward any self-hosted endpoint
                     model=model_id,
-                    base_url=base_url,
                 )
 
             return _call
@@ -927,22 +902,6 @@ def _key_from_env_and_config(provider: str | None) -> tuple[str, str] | None:
 
 
 def resolve_provider_and_key(
-    settings,
-    preferred_model=None,
-):
-    """Neoconstruction override: always use Olares (NORA local) when configured.
-
-    Reads oce_olares_api_key + oce_olares_base_url + oce_olares_model from
-    Frappe site_config.json. Falls through to original BYOK logic only when
-    Olares is not configured (e.g. dev environments).
-    """
-    olares_key = _read_frappe_site_config("oce_olares_api_key")
-    if olares_key:
-        return "olares", olares_key
-    return _resolve_provider_and_key_original(settings, preferred_model)
-
-
-def _resolve_provider_and_key_original(
     settings: Any,
     preferred_model: str | None = None,
 ) -> tuple[str, str]:
@@ -986,9 +945,9 @@ def _resolve_provider_and_key_original(
         (["baidu", "ernie"], "baidu", "baidu_api_key"),
         (["yandex"], "yandex", "yandex_api_key"),
         (["gigachat"], "gigachat", "gigachat_api_key"),
-        (["ollama"], "ollama", None),
-        (["vllm"], "vllm", None),
-        (["kimi", "moonshot"], "kimi", "kimi_api_key"),
+        (["ollama"], "ollama", None),  # self-hosted: no stored key
+        (["vllm"], "vllm", None),  # self-hosted: no stored key
+        (["kimi", "moonshot"], "kimi", "kimi_api_key"),  # Moonshot AI
     ]
 
     # The provider the chosen model maps to (e.g. "anthropic" for any
@@ -998,8 +957,8 @@ def _resolve_provider_and_key_original(
     for keywords, provider_name, key_attr in _MODEL_PROVIDER_MAP:
         if any(kw in model for kw in keywords):
             matched_provider = provider_name
-            if key_attr is None:
-                return provider_name, ""
+            if key_attr is None:  # keyless self-hosted provider
+                return provider_name, ""  # no credential to resolve
             raw = getattr(settings, key_attr, None) if settings else None
             if raw:
                 decrypted = decrypt_secret(raw)
@@ -1028,16 +987,16 @@ def _resolve_provider_and_key_original(
         ("baidu", "baidu_api_key"),
         ("yandex", "yandex_api_key"),
         ("gigachat", "gigachat_api_key"),
-        ("ollama", None),
-        ("vllm", None),
-        ("kimi", "kimi_api_key"),
+        ("ollama", None),  # keyless, skipped below
+        ("vllm", None),  # keyless, skipped below
+        ("kimi", "kimi_api_key"),  # Moonshot AI
     ]
 
     undecryptable = False
     if settings:
         for provider_name, key_attr in _FALLBACK_ORDER:
-            if key_attr is None:
-                continue
+            if key_attr is None:  # keyless provider, nothing to resolve
+                continue  # move on to the next candidate
             key_val = getattr(settings, key_attr, None)
             if key_val:
                 decrypted = decrypt_secret(key_val)
@@ -1067,8 +1026,8 @@ def _resolve_provider_and_key_original(
         "No AI API key configured. Please add your API key in Settings > AI, or "
         "set an environment variable such as ANTHROPIC_API_KEY / OPENAI_API_KEY "
         "(or add it to ~/.openestimate/config.json). "
-        "Supported: Anthropic, OpenAI, Gemini, OpenRouter, Mistral, Groq, DeepSeek, "
-        "Together, Fireworks, Perplexity, Cohere, AI21, xAI, Ollama, Kimi, vLLM."
+        "Supported: Anthropic, OpenAI, Gemini, OpenRouter, Mistral, Groq, "
+        "DeepSeek, Together, Fireworks, Perplexity, Cohere, AI21, xAI, Ollama, Kimi, vLLM."
     )
     raise ValueError(msg)
 

@@ -39,6 +39,26 @@ jobs:
     defaults:
       run:
         working-directory: backend
+
+    # The app is PostgreSQL-only at runtime, so importing app.database fails
+    # fast unless DATABASE_URL is a real PostgreSQL URL. Provide a throwaway
+    # PostgreSQL 16 service (mirrors ci.yml) so the harness and runner can
+    # import the app and the match service can reach the DB.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: oe
+          POSTGRES_PASSWORD: oe
+          POSTGRES_DB: openconstructionerp_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U oe -d openconstructionerp_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -59,11 +79,16 @@ jobs:
         run: pip install -e ".[dev,vector]" pyyaml
 
       - name: Run harness meta-tests
+        env:
+          DATABASE_URL: postgresql+asyncpg://oe:oe@localhost:5432/openconstructionerp_test
+          DATABASE_SYNC_URL: postgresql+psycopg2://oe:oe@localhost:5432/openconstructionerp_test
         run: python -m pytest tests/eval/test_eval_harness.py -v
 
       - name: Run eval (no-LLM mode) and compare to baseline
         env:
           EVAL_AI_MAX_COST_USD: "0.00"
+          DATABASE_URL: postgresql+asyncpg://oe:oe@localhost:5432/openconstructionerp_test
+          DATABASE_SYNC_URL: postgresql+psycopg2://oe:oe@localhost:5432/openconstructionerp_test
         run: |
           python -m tests.eval.runner \
             --golden tests/eval/golden_set.yaml \
@@ -88,6 +113,24 @@ jobs:
     defaults:
       run:
         working-directory: backend
+
+    # PostgreSQL-only at runtime; provide the same throwaway service as the
+    # quick job so importing app.database and reaching the match DB works.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: oe
+          POSTGRES_PASSWORD: oe
+          POSTGRES_DB: openconstructionerp_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U oe -d openconstructionerp_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -112,6 +155,8 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           EVAL_AI_MAX_COST_USD: "2.00"
+          DATABASE_URL: postgresql+asyncpg://oe:oe@localhost:5432/openconstructionerp_test
+          DATABASE_SYNC_URL: postgresql+psycopg2://oe:oe@localhost:5432/openconstructionerp_test
         run: |
           python -m tests.eval.runner \
             --golden tests/eval/golden_set.yaml \

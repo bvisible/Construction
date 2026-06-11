@@ -56,10 +56,10 @@ from app.modules.ai.service import AIService
 
 router = APIRouter(tags=["ai"])
 
-# Maximum upload size for photos: 10 MB
-MAX_PHOTO_SIZE = 10 * 1024 * 1024
-# Maximum upload size for documents: 50 MB
-MAX_FILE_SIZE = 50 * 1024 * 1024
+# Maximum upload size for photos: 50 MB
+MAX_PHOTO_SIZE = 50 * 1024 * 1024
+# Maximum upload size for documents: 200 MB
+MAX_FILE_SIZE = 200 * 1024 * 1024
 
 ALLOWED_IMAGE_TYPES = {
     "image/jpeg",
@@ -135,9 +135,24 @@ _AI_PROVIDERS: list[dict[str, Any]] = [
     {"id": "baidu", "display_name": "Baidu (ERNIE Bot)", "supports_streaming": True, "model_choices": []},
     {"id": "yandex", "display_name": "Yandex GPT", "supports_streaming": True, "model_choices": []},
     {"id": "gigachat", "display_name": "Sber GigaChat", "supports_streaming": True, "model_choices": []},
-    {"id": "ollama", "display_name": "Ollama (Local)", "supports_streaming": True, "model_choices": []},
-    {"id": "kimi", "display_name": "Kimi (Moonshot AI)", "supports_streaming": True, "model_choices": []},
-    {"id": "vllm", "display_name": "vLLM (Local)", "supports_streaming": True, "model_choices": []},
+    {
+        "id": "ollama",
+        "display_name": "Ollama (Local)",
+        "supports_streaming": True,
+        "model_choices": [],
+    },
+    {
+        "id": "kimi",
+        "display_name": "Kimi (Moonshot AI)",
+        "supports_streaming": True,
+        "model_choices": [],
+    },
+    {
+        "id": "vllm",
+        "display_name": "vLLM (Local)",
+        "supports_streaming": True,
+        "model_choices": [],
+    },
 ]
 
 
@@ -289,18 +304,18 @@ async def test_ai_connection(
     model_override = _model_override_for(settings, provider)
     effective_model = model_override or default_model_for(provider)
 
-    # Resolve custom base URL for local providers (Ollama, vLLM)
-    meta = settings.metadata_ or {}
-    base_url = None
-    if provider in ("ollama", "vllm"):
-        url_key = f"{provider}_base_url"
-        raw_url = meta.get(url_key) if isinstance(meta, dict) else None
-        if isinstance(raw_url, str) and raw_url.strip():
-            base = raw_url.strip().rstrip("/")
-            if not base.endswith("/v1/chat/completions"):
-                base += "/v1/chat/completions"
-            base_url = base
-
+    # Self-hosted backends (Ollama, vLLM) may carry a user-supplied endpoint
+    # in the saved metadata; everything else uses the built-in URL.
+    resolved_url: str | None = None
+    saved_meta = settings.metadata_ or {}
+    if provider in ("ollama", "vllm") and isinstance(saved_meta, dict):
+        raw_url = saved_meta.get(f"{provider}_base_url")
+        has_custom_url = isinstance(raw_url, str) and bool(raw_url.strip())
+        if has_custom_url:
+            normalized = raw_url.strip().rstrip("/")
+            if not normalized.endswith("/v1/chat/completions"):
+                normalized += "/v1/chat/completions"
+            resolved_url = normalized
     # Make a minimal test call
     try:
         t0 = time.monotonic()
@@ -310,8 +325,8 @@ async def test_ai_connection(
             system="You are a test assistant.",
             prompt="Reply with exactly: OK",
             max_tokens=10,
+            base_url=resolved_url,
             model=model_override,
-            base_url=base_url,
         )
         latency_ms = int((time.monotonic() - t0) * 1000)
         return {

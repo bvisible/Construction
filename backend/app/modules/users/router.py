@@ -8,6 +8,7 @@ Endpoints:
     POST /auth/reset-password   - Reset password with token
     GET  /me                    - Current user profile
     PATCH /me                   - Update own profile
+    DELETE /me                  - Erase own account (GDPR Art. 17)
     POST /me/change-password    - Change own password
     GET  /me/api-keys           - List own API keys
     POST /me/api-keys           - Create API key
@@ -46,6 +47,8 @@ from app.modules.users.schemas import (
     APIKeyCreatedResponse,
     APIKeyResponse,
     ChangePasswordRequest,
+    DeleteAccountRequest,
+    DeleteAccountResponse,
     FirstRunResponse,
     ForgotPasswordRequest,
     ForgotPasswordResponse,
@@ -492,6 +495,37 @@ async def change_password(
     return await service.change_password(uuid.UUID(user_id), data)
 
 
+@router.delete("/me/", response_model=DeleteAccountResponse)
+@router.delete("/me", response_model=DeleteAccountResponse, include_in_schema=False)
+async def delete_me(
+    data: DeleteAccountRequest,
+    user_id: CurrentUserId,
+    service: UserService = Depends(_get_service),
+) -> DeleteAccountResponse:
+    """Erase the current user's own account (GDPR Art. 17, right to erasure).
+
+    Self-service only: it always targets the authenticated caller (``user_id``
+    comes from the token, the body has no id), so a caller can never erase
+    another user through this route.
+
+    The request body must confirm intent so an account is never erased by
+    accident or by a replayed token alone: a password account re-supplies its
+    ``current_password``; a passwordless / SSO account types ``DELETE`` into
+    ``confirm``. A bad confirmation returns 400.
+
+    Erasure anonymises the row in place rather than hard-deleting it, so the
+    user's projects and audit/activity history keep resolving while every
+    personal field is nulled, the password hash is invalidated, all API keys
+    are revoked and the account can no longer log in. The last active admin of
+    a workspace cannot erase itself (409) so the workspace is never orphaned.
+
+    Declared before the ``/{user_id}`` admin routes so ``DELETE /users/me``
+    resolves here and not as a UUID-path 422 on the literal ``"me"``.
+    """
+    await service.erase_account(uuid.UUID(user_id), data)
+    return DeleteAccountResponse()
+
+
 # ── Regional Preferences ──────────────────────────────────────────────────
 
 
@@ -891,9 +925,24 @@ async def save_onboarding(
     user = await service.get_user(uuid.UUID(user_id))
     metadata: dict[str, Any] = dict(user.metadata_ or {})
 
+    # "Full Enterprise" means the whole platform. Pin it to the backend's own
+    # authoritative functional-module list rather than trusting whatever set the
+    # client computed: if the client catalogue is even slightly behind the
+    # server's module registry, the missing keys would be sent as "not chosen"
+    # and ``modules_for`` would write an explicit False for them, silently
+    # hiding live sidebar routes (BIM, Finance, CRM and the rest). Making the
+    # server authoritative here closes that drift for good.
+    from app.core.onboarding_presets import get_preset, modules_for
+
+    effective_modules = data.enabled_modules
+    if data.company_type == "full_enterprise":
+        full_enterprise = get_preset("full_enterprise")
+        if full_enterprise is not None:
+            effective_modules = list(full_enterprise.enabled_modules)
+
     metadata["onboarding"] = {
         "company_type": data.company_type,
-        "enabled_modules": data.enabled_modules,
+        "enabled_modules": effective_modules,
         "interface_mode": data.interface_mode,
         "completed": data.completed,
     }
@@ -901,16 +950,14 @@ async def save_onboarding(
     # Also persist module preferences so the sidebar reflects the selection.
     # ``modules_for`` writes an explicit True/False for every known module and
     # forces core modules on, so a profile can never hide Projects/Settings/etc.
-    from app.core.onboarding_presets import modules_for
-
-    metadata["module_preferences"] = modules_for(data.enabled_modules)
+    metadata["module_preferences"] = modules_for(effective_modules)
 
     await service.update_profile(uuid.UUID(user_id), metadata_=metadata)
 
     return OnboardingResponse(
         completed=data.completed,
         company_type=data.company_type,
-        enabled_modules=data.enabled_modules,
+        enabled_modules=effective_modules,
         interface_mode=data.interface_mode,
     )
 

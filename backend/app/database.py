@@ -4,6 +4,7 @@ PostgreSQL only. The app runs embedded PostgreSQL 16 by default (no Docker);
 set DATABASE_URL to point at an external PostgreSQL to override.
 """
 
+import contextlib
 import json
 import logging
 import os
@@ -50,13 +51,16 @@ def _log_slow_query(
     executemany: bool,
 ) -> None:
     """Log statements that exceed ``settings.slow_query_ms`` at WARNING level."""
-    try:
-        start = conn.info.pop("query_start_time", None)
-    except Exception:  # noqa: BLE001 - connection may be closed by concurrent coroutine
+    # A concurrent coroutine may have already torn the connection down and
+    # dropped ``conn.info``; treat any failure here as "no timing available"
+    # by leaving ``started_at`` at None and falling through to the early-out.
+    started_at = None
+    with contextlib.suppress(Exception):  # connection may be closed concurrently
+        started_at = conn.info.pop("query_start_time", None)
+    # No start timestamp recorded (failed lookup, or the listener missed it).
+    if started_at is None:
         return
-    if start is None:
-        return
-    elapsed_ms = (time.perf_counter() - start) * 1000.0
+    elapsed_ms = (time.perf_counter() - started_at) * 1000.0
     try:
         threshold = get_settings().slow_query_ms
     except Exception:  # noqa: BLE001 - never break a query on settings hiccup
