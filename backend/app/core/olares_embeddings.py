@@ -1,19 +1,21 @@
-# //// NEOFFICE PATCH — Remote embeddings via Olares (Neoffice's self-hosted AI box).
-# Rationale: OCE instances run on small boxes (4 GB RAM). Loading the embedding
-# models locally (sentence-transformers/e5-small -> PyTorch ~1 GB for the general
-# semantic search, BGE-M3 via FlagEmbedding ~1-2 GB for CWICR hybrid matching)
-# saturates them. Olares already hosts these models on dedicated AI hardware, so
-# we delegate ALL embedding to Olares over HTTP and keep zero ML weight on the
-# instance. Two endpoints:
-#   * DENSE (general semantic search, ~30 modules): OpenAI-compatible
-#     /v1/embeddings, model qwen3-embedding:8b (4096-d). Endpoint already live.
-#   * HYBRID (CWICR cost matching): a dedicated BGE-M3 service returning dense
-#     (1024-d) + sparse (lexical weights) in one call -> /embed.
-#
-# Everything is gated by Frappe site_config; when Olares is not configured the
-# callers fall back to their previous local behaviour (dev machines).
-# //// END NEOFFICE PATCH
-"""Remote embedding clients (Olares) — dense (OpenAI-compatible) and BGE-M3 hybrid.
+"""NEOFFICE FILE — Owned 100% by Neoservice. Not from upstream OpenConstructionERP.
+
+Remote embedding clients (Olares) — dense (OpenAI-compatible) and BGE-M3 hybrid.
+
+Rationale: OCE instances run on small boxes (4 GB RAM). Loading the embedding
+models locally (sentence-transformers/e5-small -> PyTorch ~1 GB for the general
+semantic search, BGE-M3 via FlagEmbedding ~1-2 GB for CWICR hybrid matching)
+saturates them. Olares already hosts these models on dedicated AI hardware, so
+we delegate ALL embedding to Olares over HTTP and keep zero ML weight on the
+instance. Two endpoints:
+
+* DENSE (general semantic search, ~30 modules): OpenAI-compatible
+  ``/v1/embeddings``, model ``qwen3-embedding:8b`` (4096-d). Endpoint already live.
+* HYBRID (CWICR cost matching): a dedicated BGE-M3 service returning dense
+  (1024-d) + sparse (lexical weights) in one call -> ``/embed`` (bge.noraai.ch).
+
+Everything is gated by Frappe site_config; when Olares is not configured the
+callers fall back to their previous local behaviour (dev machines).
 
 Used by:
     * ``app.core.vector.get_embedder``        -> dense general semantic search
