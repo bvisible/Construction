@@ -14,6 +14,15 @@
   // for "draw the on-brand SVG placeholder".
   var ARTICLES = [
     {
+      slug: 'v7-10-0',
+      href: '/news/v7-10-0.html',
+      title: 'v7.10.0 - Tables in the assistant chat, a fully translated project setup and a lighter install.',
+      date: '2026-06-13',
+      tag: 'Release',
+      tagClass: 'release',
+      thumb: null
+    },
+    {
       slug: 'v7-9-0',
       href: '/news/v7-9-0.html',
       title: 'v7.9.0 - Your own cost catalogues and earned value on the 5D model.',
