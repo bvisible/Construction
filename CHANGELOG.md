@@ -5,6 +5,72 @@ All notable changes to OpenConstructionERP are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [7.10.0] - 2026-06-13
+
+### Changed
+
+- Regional cost catalogues are no longer shipped inside the package. They download on demand from the public CWICR data repository the first time you import one and are then cached locally, so the install is about 15 MB lighter and a catalogue you have imported once keeps working with no internet connection. All thirty regions are still available to import exactly as before, and the resource cost database import is unchanged.
+
+### Fixed
+
+- ERP Chat showed Markdown tables as raw pipe text. Assistant answers that contain a table, for example a list of projects with budgets, now render as a real table with per-column alignment, in both the floating chat and the full-page chat. Reported in [#224](https://github.com/datadrivenconstruction/OpenConstructionERP/issues/224).
+- The quick create and guided project setup windows showed English labels and hints when the interface language was set to something else. Every string in both windows is now translated across all 27 languages.
+
+## [7.9.0] - 2026-06-13
+
+### Added
+
+- Your own cost catalogues. You can now keep company price books inside the cost database: create a catalogue with its own required currency, fill it by hand or by importing an Excel or CSV price list, and apply its rates when estimating. The importer understands Russian column headings such as "Цена за ед." and European number formats like 8 450,00, warns when a file mixes currencies, and rows without a currency inherit the catalogue's. Catalogues appear as chips above the cost list for one-click filtering, and each one exports back to Excel with its real name kept intact in the filename, including non-Latin names.
+- Offline regional cost data. Thirty regional reference catalogues, from St. Petersburg to Tokyo, now ship inside the install itself, so loading one takes seconds and works with no internet connection at all.
+- Recording site progress on the 5D cost model. Budget lines that come from estimate positions now carry an earned value column, and you can record percent complete right in the line: the recorded percent becomes earned value at the position's budgeted rate, the column totals across the project, and the figure feeds the EVM analysis. Creating a budget from the estimate also seeds these lines automatically.
+- Estimated activity durations in the 4D schedule. Generating a schedule from an estimate no longer produces zero-day activities when no labour data is available: durations fall back to built-in production rates per unit of work, and every estimated duration is marked with an "Est." badge so you know which bars to refine.
+- Demo data you can actually remove. The projects page tells administrators how many of the visible projects are seeded demo content and offers to remove them in one click, without ever touching your own projects, and they stay gone after a restart.
+- Faster project creation. Quick create now needs only a project name, everything else is optional, and the new project becomes the active one everywhere immediately, so the next page you open is already working on it.
+
+### Fixed
+
+- A European rate with three decimal places, like 0,500, no longer imports a thousand times too large. A single comma in a number is always read as the decimal separator; only multi-group figures like 1,234,567 are treated as thousands.
+- Creating a budget from the estimate twice no longer doubles the finance budget, and the endpoint now checks that you are a member of the project. The material, labour and equipment share columns fill in and sum correctly across the estimate, including right after editing a resource.
+- An approved change order in a different currency than its contract is recorded but no longer silently added into the contract total at face value, and two change orders approved at the same moment can no longer overwrite each other's contract update.
+- Budget lines generated from positions priced in a foreign currency keep that currency label instead of being mislabelled as the project currency.
+- Importing a second price list without a code column into the same catalogue no longer collides with the first one and silently imports nothing.
+- The cost page no longer snaps back to a region filter on its own after you pick a catalogue, choose all regions, or delete an item, and downloaded export files no longer carry a stray underscore at the end of the name.
+- The header project switcher keeps up with project changes: creating, deleting, duplicating, archiving or restoring a project updates the list immediately, and a freshly created project can no longer lose its active status to a stale list.
+- Self-hosted AI models connect properly: an Ollama or vLLM endpoint is routed to the right provider even though the model name contains "llama", and no authorization header is sent when there is no key to send.
+- Spreadsheet imports are hardened against zip bombs, and upgraded desktop installs receive the new database index they need so catalogue filtering stays fast on large cost databases.
+
+## [7.8.0] - 2026-06-12
+
+### Added
+
+- Optional Material, Labor and Equipment columns in the bill of quantities. A button in the grid settings turns on three percentage columns that show, per position, how the unit rate splits across material, labour and equipment, so you can see the cost driver of every line at a glance and sort or filter on it. The columns are off by default and your choice is remembered. The same split also reads correctly straight after you edit a resource quantity or rate, recomputing from the live figures instead of an old cached value.
+- Worked retail-market example projects for three German cities. Each one is a full discount-store estimate built from real trades with named crews, materials and equipment at regional rates, from earthworks and shell through drywall, screed, tiling and painting to refrigeration, ventilation, electrical, photovoltaics and external works, so the resources reflect how the work is actually priced rather than placeholder lines.
+
+### Fixed
+
+- Consolidated general ledger statements are now limited to administrators. A trial balance, income statement, balance sheet or cash flow requested without a project used to span every project on the instance for any finance reader; it now requires an administrator, and everyone else passes a project to see that project's books.
+- Imported IDS validation rules are kept separate per project. A rule set imported into one project can no longer collide with, or be applied to, another project's data.
+- The bill of quantities Excel export reconciles again. The sheet now writes the direct cost and each markup line above the grand total, so the total column adds up to the grand total instead of the markups quietly disappearing from the file.
+- The AI estimate no longer lets a broken number reach your money. A non-numeric quantity or rate is rejected before it becomes a position, and a catalogue rate only replaces the estimated rate when the match is confident enough.
+- Model validation is honest about an empty check. Validating a model where nothing matched the rules now reports as not checked rather than a green hundred percent pass.
+- The 3D viewer no longer turns black after opening several models in a row, the cost-database import recovers cleanly if you leave the page mid-load, and the validation dashboard shows information-level findings in their own style instead of as warnings.
+- Validation messages and suggestions now appear in your language, and the run result tells you which requested rule sets actually ran. Comment threads are checked against project access. A markup type that had no real effect is no longer accepted, and the demo sign-in shortcut is refused on a production install.
+
+## [7.7.0] - 2026-06-11
+
+### Added
+
+- A multi-line description view for the bill of quantities. A position description can now carry a full specification text with paragraphs and line breaks, the way a German LV Langtext reads, and a toolbar button cycles the row height between compact, comfortable and tall so you can read the long text in place. Editing a description opens a large text box.
+- Import a country standard straight from the New BOQ window. When you create a bill of quantities you can pick a file and have it imported on the spot, with the common national exchange formats recognised automatically: GAEB for the German-speaking countries, FIEBDC-3 (BC3) for Spain and Latin America, and Excel or CSV anywhere, while PDF and CAD are routed to the AI import.
+- A worked retail-market example project. A new discount-store build estimate covers the popular trades, from earthworks, shell and roof through drywall partitions, screed, tiling, painting, internal doors and suspended ceilings to sanitary, ventilation, CO2 refrigeration, electrical, photovoltaics and external works, with a DIN 276 budget and a 303-position detailed bill that closes to the cent on every procurement unit.
+- The Packs umbrella. Partner packs, country standard packs and industry template packs now sit under one Packs tab with a type badge on each card. The old partner-pack entry points, environment variable and state file keep working unchanged, so any pack already applied loads exactly as before.
+
+### Fixed
+
+- GAEB import no longer zeros out money. A GAEB X84 file used to import with a grand total of 0.00; the direct cost is now read cent-exact, and an export followed by a re-import preserves the total. Export also emits schema-valid GAEB DA XML 3.3, and the GAEB rule set no longer flags the official test file with dozens of false errors.
+- Point cloud upload no longer fails at the final step. Finishing a large scan upload could return a 500 from the finalise call; it now completes and records the scan.
+- Validation reports honestly on rule sets it does not run. An advertised but not-yet-implemented rule set now reports as unsupported with no score instead of silently passing, so a project can never look checked against a standard the engine does not actually enforce.
+
 ## [7.6.0] - 2026-06-11
 
 ### Added

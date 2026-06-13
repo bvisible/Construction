@@ -44,7 +44,34 @@ from app.core.partner_pack.manifest import PartnerPackManifest
 
 logger = logging.getLogger(__name__)
 
-ENTRY_POINT_GROUP = "openconstructionerp.partner_packs"
+# Canonical entry-point group under the Packs umbrella, plus the legacy group
+# external packs already register under. Both are read (union) so packs shipped
+# against either name keep loading; ``OLD`` first means a pack that for some
+# reason registers under both is resolved once, with the new group winning.
+ENTRY_POINT_GROUP = "openconstructionerp.packs"
+ENTRY_POINT_GROUP_LEGACY = "openconstructionerp.partner_packs"
+ENTRY_POINT_GROUPS = (ENTRY_POINT_GROUP_LEGACY, ENTRY_POINT_GROUP)
+
+
+def _iter_entry_points() -> list[EntryPoint]:
+    """Return entry-points from both the new and legacy pack groups (union).
+
+    Reads ``openconstructionerp.partner_packs`` (legacy) and
+    ``openconstructionerp.packs`` (canonical). When the same entry-point name
+    appears in both groups the later group (canonical) wins, but external packs
+    registered only under the legacy group still load.
+    """
+    by_name: dict[str, EntryPoint] = {}
+    for group in ENTRY_POINT_GROUPS:
+        try:
+            eps = entry_points(group=group)
+        except TypeError:
+            # Python 3.9 fallback (the codebase requires 3.12 but be defensive).
+            eps = entry_points().get(group, [])  # type: ignore[assignment]
+        for ep in eps:
+            by_name[ep.name] = ep
+    return list(by_name.values())
+
 
 # Repo root is five levels up from this file:
 #   backend/app/core/partner_pack/discovery.py -> repo root
@@ -88,15 +115,9 @@ def _load_one(ep: EntryPoint) -> PartnerPackManifest | None:
 
 
 def _discover_entrypoint_packs() -> list[PartnerPackManifest]:
-    """Return all packs registered via the pip entry-point group."""
-    try:
-        eps = entry_points(group=ENTRY_POINT_GROUP)
-    except TypeError:
-        # Python 3.9 fallback (the codebase requires 3.12 but be defensive).
-        eps = entry_points().get(ENTRY_POINT_GROUP, [])  # type: ignore[assignment]
-
+    """Return all packs registered via the pip entry-point groups (union)."""
     manifests: list[PartnerPackManifest] = []
-    for ep in eps:
+    for ep in _iter_entry_points():
         manifest = _load_one(ep)
         if manifest:
             manifests.append(manifest)
@@ -432,7 +453,6 @@ def get_pack_by_slug(slug: str) -> PartnerPackManifest | None:
     return None
 
 
-@lru_cache(maxsize=1)
 def get_active_pack() -> PartnerPackManifest | None:
     """Pick the active pack.
 
@@ -442,20 +462,38 @@ def get_active_pack() -> PartnerPackManifest | None:
     never co-brands the app.
 
     Precedence:
-      1. in-app applied pack (``partner_pack_state.json``)
+      1. in-app applied pack (``partner_pack_state.json`` in the ACTIVE
+         data dir - see ``state._resolve_state_dir``)
       2. env ``OE_PARTNER_PACK=<slug>``
       3. None
 
-    Cached for the process lifetime; ``reset_cache()`` is called by the apply
+    Cached per resolved state dir, so two instances resolving different data
+    dirs never share an answer; ``reset_cache()`` is called by the apply
     service after an apply / un-apply so the change takes effect immediately.
     """
-    # 1. In-app applied pack. Imported lazily to avoid any import-order issues.
+    # Resolve the state dir HERE (live, uncached) and key the cache on it.
+    # Imported lazily to avoid any import-order issues.
     try:
-        from app.core.partner_pack.state import get_applied_slug
+        from app.core.partner_pack.state import _resolve_state_dir
 
-        applied = get_applied_slug()
-    except Exception:  # noqa: BLE001 - state file is best-effort
-        applied = None
+        state_dir = str(_resolve_state_dir())
+    except Exception:  # noqa: BLE001 - state resolution is best-effort
+        state_dir = ""
+    return _get_active_pack_cached(state_dir)
+
+
+@lru_cache(maxsize=8)
+def _get_active_pack_cached(state_dir: str) -> PartnerPackManifest | None:
+    """Resolve the active pack for one specific state dir (cached per path)."""
+    # 1. In-app applied pack, read from the keyed state dir only.
+    applied = None
+    if state_dir:
+        try:
+            from app.core.partner_pack.state import get_applied_slug
+
+            applied = get_applied_slug(Path(state_dir))
+        except Exception:  # noqa: BLE001 - state file is best-effort
+            applied = None
     if applied:
         m = get_pack_by_slug(applied)
         if m:
@@ -466,15 +504,17 @@ def get_active_pack() -> PartnerPackManifest | None:
             applied,
         )
 
-    # 2. env var.
-    requested = os.environ.get("OE_PARTNER_PACK", "").strip()
+    # 2. env var. OE_PACK is the canonical name under the Packs umbrella;
+    #    OE_PARTNER_PACK is kept as a backward-compatible alias. OE_PACK wins
+    #    if both are set so existing installs keep working unchanged.
+    requested = os.environ.get("OE_PACK", "").strip() or os.environ.get("OE_PARTNER_PACK", "").strip()
     if requested:
         m = get_pack_by_slug(requested)
         if m:
-            logger.info("Active partner pack (env-selected): %s", m.slug)
+            logger.info("Active pack (env-selected): %s", m.slug)
             return m
         logger.warning(
-            "OE_PARTNER_PACK=%s requested but no such pack is installed.",
+            "OE_PACK/OE_PARTNER_PACK=%s requested but no such pack is installed.",
             requested,
         )
     return None
@@ -495,11 +535,7 @@ def get_active_pack_module_name() -> str | None:
     active = get_active_pack()
     if not active:
         return None
-    try:
-        eps = entry_points(group=ENTRY_POINT_GROUP)
-    except TypeError:
-        eps = entry_points().get(ENTRY_POINT_GROUP, [])  # type: ignore[assignment]
-    for ep in eps:
+    for ep in _iter_entry_points():
         if ep.name == active.slug:
             # ep.value is "module:attr" - return the module part
             return ep.value.split(":", 1)[0]
@@ -508,11 +544,7 @@ def get_active_pack_module_name() -> str | None:
 
 def _entrypoint_module_for_slug(slug: str) -> str | None:
     """Return the Python module name for a pip-installed pack by slug, or None."""
-    try:
-        eps = entry_points(group=ENTRY_POINT_GROUP)
-    except TypeError:
-        eps = entry_points().get(ENTRY_POINT_GROUP, [])  # type: ignore[assignment]
-    for ep in eps:
+    for ep in _iter_entry_points():
         if ep.name == slug:
             return ep.value.split(":", 1)[0]
     return None
@@ -635,6 +667,6 @@ def read_pack_file(slug: str, relpath: str) -> bytes | None:
 
 
 def reset_cache() -> None:
-    """Reset the discovery caches. Used by tests."""
+    """Reset the discovery caches. Used by tests and the apply service."""
     discover_packs.cache_clear()
-    get_active_pack.cache_clear()
+    _get_active_pack_cached.cache_clear()

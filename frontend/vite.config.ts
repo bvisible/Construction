@@ -75,6 +75,23 @@ function cesiumAssets(): Plugin {
 // (sidebar, About page, error reports, update checker) stays in sync.
 const pkg = JSON.parse(readFileSync(path.resolve(__dirname, 'package.json'), 'utf-8'));
 
+// The static JSON-LD block in index.html advertises ``softwareVersion`` to
+// search engines. Rewrite it from package.json at serve/build time so the
+// SEO metadata can never drift from the released version again (the literal
+// sat at 0.2.4 while the app shipped 7.6.0). The literal in the source file
+// stays as a fallback for tools that read the raw file.
+function jsonLdSoftwareVersion(): Plugin {
+  return {
+    name: 'jsonld-software-version',
+    transformIndexHtml(html) {
+      return html.replace(
+        /"softwareVersion":\s*"[^"]*"/,
+        `"softwareVersion": "${pkg.version}"`,
+      );
+    },
+  };
+}
+
 // //// NEOFFICE PATCH — Frappe build mode
 // WHY: When building for the Frappe `neoconstruction` app, the bundle is
 // served under /assets/neoconstruction/neoconstruction/ (not from /). Set
@@ -103,6 +120,7 @@ export default defineConfig({
       open: false,
     }),
     cesiumAssets(),
+    jsonLdSoftwareVersion(),
     // ── Mobile PWA — Slice 1 ────────────────────────────────────────────
     // Installable PWA with offline-app-shell + i18n bundle caching.
     //

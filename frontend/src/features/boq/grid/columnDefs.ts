@@ -42,6 +42,15 @@ export interface BOQColumnContext {
    * `null` / undefined ⇒ stick with the project base currency.
    */
   displayCurrency?: { code: string; rate: number } | null;
+  /**
+   * Resource cost-driver split (Material / Labor / Equipment %) columns.
+   * Off by default - the user turns them on from the BOQ toolbar's Grid
+   * Settings menu. When false the three columns are hidden (kept in the
+   * defs so AG Grid can show/hide them without rebuilding the grid). The
+   * percentages come from each position's
+   * ``metadata.resource_breakdown[type].pct`` rollup.
+   */
+  showResourceSplit?: boolean;
 }
 
 // Note: `currencyFormatter` was previously applied to the unit_rate column
@@ -64,6 +73,98 @@ function totalFormatter(params: ValueFormatterParams): string {
   }
   const currencyCode = ctx?.currencyCode ?? 'EUR';
   return fmtWithCurrency(params.value, locale, currencyCode);
+}
+
+/**
+ * Fractional share (0..1) of one resource type (material / labor /
+ * equipment) of a position's cost. Computes the share straight from the LIVE
+ * ``metadata.resources`` array first - that array is recomputed on every
+ * inline resource edit and variant re-pick, so the split stays correct after
+ * the user changes a quantity or rate. When the resources array is absent OR
+ * its totals sum to zero (e.g. zero-rate resources), it falls back to the
+ * pre-rolled ``metadata.resource_breakdown`` (assembly / AI positions and the
+ * server-side rollup carry it). Returns null when the position has no usable
+ * resource data, leaving the cell blank.
+ */
+export function resourceSplitFraction(
+  meta: Record<string, unknown>,
+  resType: string,
+): number | null {
+  const resources = meta.resources;
+  if (Array.isArray(resources) && resources.length > 0) {
+    let subtotal = 0;
+    let typeTotal = 0;
+    for (const r of resources) {
+      if (!r || typeof r !== 'object') continue;
+      const rr = r as { type?: string; total?: number; quantity?: number; unit_rate?: number };
+      const ttl =
+        typeof rr.total === 'number'
+          ? rr.total
+          : (Number(rr.quantity) || 0) * (Number(rr.unit_rate) || 0);
+      if (!Number.isFinite(ttl)) continue;
+      subtotal += ttl;
+      if ((rr.type || 'other') === resType) typeTotal += ttl;
+    }
+    if (subtotal > 0) return typeTotal / subtotal;
+    // subtotal <= 0: defense in depth - fall through to the pre-rolled
+    // breakdown instead of blanking the cell (the live array carried no
+    // usable money, but the server-side rollup may still know the split).
+  }
+  const bd = meta.resource_breakdown as Record<string, { pct?: number }> | undefined;
+  const direct = bd?.[resType]?.pct;
+  if (typeof direct === 'number' && Number.isFinite(direct)) return direct / 100;
+  return null;
+}
+
+/**
+ * Percentage share (rounded integer) of one resource type. Thin wrapper over
+ * {@link resourceSplitFraction} - the split columns render this, while the
+ * footer money rollup uses the exact fraction to avoid rounding drift.
+ */
+export function resourceSplitPct(meta: Record<string, unknown>, resType: string): number | null {
+  const frac = resourceSplitFraction(meta, resType);
+  return frac == null ? null : Math.round(frac * 100);
+}
+
+/**
+ * Estimate-wide money totals per resource type. For each leaf position that
+ * carries a split, the money attributable to a type is
+ * ``share(type) x unit_rate x quantity``, rebased into the project base
+ * currency via ``convertToBase`` when the position is priced in a foreign
+ * ``metadata.currency`` (mirrors the Total column / directCost path for
+ * Issue #111 - without the rebase the M/L/E footer mixed currencies while
+ * the adjacent DIRECT COST was already in base). Sections and positions
+ * without any resource data are skipped. Returns null when NO position
+ * carried a split, so the footer cells stay blank instead of showing a
+ * misleading 0.
+ */
+export function resourceSplitMoneyTotals(
+  positions: Array<Pick<Position, 'quantity' | 'unit_rate' | 'unit'> & {
+    metadata?: Record<string, unknown> | null;
+    metadata_?: Record<string, unknown> | null;
+  }>,
+  resTypes: readonly string[] = ['material', 'labor', 'equipment'],
+  baseCurrency?: string | null,
+  fxRates?: Array<{ currency: string; rate: number }> | null,
+): Record<string, number> | null {
+  const totals: Record<string, number> = {};
+  let any = false;
+  for (const p of positions) {
+    // Sections act as group headers (empty unit) and aggregate children -
+    // counting them would double the money.
+    if (!p.unit || p.unit.trim() === '' || p.unit.trim().toLowerCase() === 'section') continue;
+    const meta = (p.metadata || p.metadata_ || {}) as Record<string, unknown>;
+    const raw = (Number(p.unit_rate) || 0) * (Number(p.quantity) || 0);
+    const sourceCurrency = (meta.currency as string | undefined) || baseCurrency;
+    const money = convertToBase(raw, sourceCurrency, baseCurrency, fxRates);
+    for (const rt of resTypes) {
+      const frac = resourceSplitFraction(meta, rt);
+      if (frac == null) continue;
+      any = true;
+      totals[rt] = (totals[rt] || 0) + frac * money;
+    }
+  }
+  return any ? totals : null;
 }
 
 export function getColumnDefs(context: BOQColumnContext): ColDef[] {
@@ -172,7 +273,18 @@ export function getColumnDefs(context: BOQColumnContext): ColDef[] {
       minWidth: 180,
       flex: 3,
       editable: true,
-      cellEditor: 'agTextCellEditor',
+      // Multi-line Langtext editor: a popup textarea so a position description
+      // can hold a full LV-style specification with newlines, not just one
+      // line. The value is the same `description` field (stored as TEXT,
+      // newlines preserved); the grid's density toggle controls how much of it
+      // shows at rest.
+      cellEditor: 'agLargeTextCellEditor',
+      cellEditorPopup: true,
+      cellEditorParams: {
+        maxLength: 5000,
+        rows: 14,
+        cols: 64,
+      },
       cellRenderer: 'descriptionCellRenderer',
       // !pl-1 overrides AG Grid's default ~17px cell-horizontal-padding
       // so the position description sits flush-left within the column
@@ -414,6 +526,52 @@ export function getColumnDefs(context: BOQColumnContext): ColDef[] {
       headerClass: 'ag-right-aligned-header',
       type: 'numericColumn',
     },
+    // ── Resource cost-driver split (Material / Labor / Equipment %) ──────
+    // Hidden until the user enables "Resource split" in the Grid Settings
+    // menu. Each reads the per-type ``pct`` from the position's
+    // ``metadata.resource_breakdown`` rollup (the same figures the inline
+    // "55% MAT · 35% LAB · 10% EQU" pill shows), but as sortable columns so
+    // the estimator can scan and order positions by their cost driver.
+    ...(
+      [
+        ['material', t('boq.split_material', { defaultValue: 'Material %' }), t('boq.split_material_tip', { defaultValue: 'Material share of the unit rate' })],
+        ['labor', t('boq.split_labor', { defaultValue: 'Labor %' }), t('boq.split_labor_tip', { defaultValue: 'Labor share of the unit rate' })],
+        ['equipment', t('boq.split_equipment', { defaultValue: 'Equipment %' }), t('boq.split_equipment_tip', { defaultValue: 'Equipment share of the unit rate' })],
+      ] as const
+    ).map(([resType, header, tip]) => ({
+      headerName: header,
+      headerTooltip: tip,
+      colId: `resource_split_${resType}`,
+      width: 92,
+      hide: !context.showResourceSplit,
+      editable: false,
+      sortable: true,
+      filter: 'agNumberColumnFilter',
+      valueGetter: (params: ValueGetterParams) => {
+        const d = params.data;
+        if (!d) return null;
+        // Footer (DIRECT COST row): estimate-wide money attributable to this
+        // resource type, pre-aggregated by BOQEditorPage's footer builder.
+        if (d._isFooter) {
+          const money = d._resourceSplitMoney as Record<string, number> | undefined;
+          const v = money?.[resType];
+          return typeof v === 'number' && Number.isFinite(v) ? v : null;
+        }
+        if (d._isSection) return null;
+        const meta = (d.metadata || d.metadata_ || {}) as Record<string, unknown>;
+        return resourceSplitPct(meta, resType);
+      },
+      valueFormatter: (params: ValueFormatterParams) => {
+        if (params.value == null) return '';
+        // Footer cells carry money (estimate-wide per-type total) and reuse
+        // the grid's currency formatter; position cells stay percentages.
+        if (params.data?._isFooter) return totalFormatter(params);
+        return `${params.value}%`;
+      },
+      cellClass: 'text-right tabular-nums text-xs !pr-2 !pl-2 text-content-secondary',
+      headerClass: 'ag-right-aligned-header',
+      type: 'numericColumn',
+    })),
     {
       headerName: '',
       field: '_actions',

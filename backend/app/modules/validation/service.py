@@ -88,13 +88,19 @@ class ValidationModuleService:
         if not positions_data:
             logger.warning("Validation: BOQ %s has no positions", boq_id)
 
-        # 2. Run validation engine
+        # 2. Run validation engine. Pass the request locale so rule messages
+        #    and suggestions resolve in the user's language (the de/ru bundles
+        #    are otherwise unreachable - rules default to "en" when no locale
+        #    is in metadata).
+        from app.core.i18n import get_locale
+
         engine_report: EngineReport = await validation_engine.validate(
             data={"positions": positions_data},
             rule_sets=rule_sets,
             target_type="boq",
             target_id=str(boq_id),
             project_id=str(project_id),
+            metadata={"locale": get_locale()},
         )
 
         # 3. Build results list for storage
@@ -132,6 +138,8 @@ class ValidationModuleService:
             metadata_={
                 "duration_ms": engine_report.duration_ms,
                 "rule_sets": rule_sets,
+                "supported_rule_sets": engine_report.supported_rule_sets,
+                "unsupported_rule_sets": engine_report.unsupported_rule_sets,
             },
         )
         await self.repo.create(db_report)
@@ -202,6 +210,8 @@ class ValidationModuleService:
             "error_count": len(engine_report.errors),
             "info_count": len(engine_report.infos),
             "rule_sets": rule_sets,
+            "supported_rule_sets": engine_report.supported_rule_sets,
+            "unsupported_rule_sets": engine_report.unsupported_rule_sets,
             "duration_ms": engine_report.duration_ms,
             "results": [
                 {
@@ -237,6 +247,13 @@ class ValidationModuleService:
                     "name": name,
                     "description": RULE_SET_DESCRIPTIONS.get(name, f"{name} validation rules"),
                     "rule_count": count,
+                    # Only rule sets that resolve to at least one registered
+                    # rule reach this list, so ``implemented`` is always true
+                    # here. The flag is explicit so callers never have to infer
+                    # "ran for real" from a non-zero count, and so a future
+                    # rule set that is described but unimplemented can be marked
+                    # honestly rather than advertised as working.
+                    "implemented": count > 0,
                     "rules": rule_registry.list_rules(rule_set=name),
                 }
             )

@@ -541,6 +541,14 @@ export interface ResourceGridContext {
 }
 
 export type FullGridContext = ActionsContext & ResourceGridContext & SectionGroupContext & {
+  /** Description-density preference: how tall a position description renders
+   *  at rest (compact = one truncated line, comfortable/tall = multi-line
+   *  Langtext with newlines honoured). Driven by the BOQ toolbar toggle. */
+  descDensity?: 'compact' | 'comfortable' | 'tall';
+  /** When the dedicated Material/Labor/Equipment % columns are shown, the
+   *  description cell hides its inline cost-driver split pill to avoid
+   *  showing the same figures twice. */
+  showResourceSplit?: boolean;
   onApplyAnomalySuggestion?: (positionId: string, suggestedRate: number) => void;
   /** First ready BIM model ID for the current project (used for mini 3D previews). */
   bimModelId?: string | null;
@@ -886,6 +894,16 @@ export function DescriptionCellRenderer(params: ICellRendererParams) {
   // duplicated text is just noise on legacy applies.
   const displayValue = stripVariantSuffix(value as string | null | undefined);
 
+  // Description density: compact keeps the historical single truncated line;
+  // comfortable / tall let the full multi-line Langtext show, honouring the
+  // newlines stored in the description and scrolling within the (taller) row
+  // when the text overflows.
+  const descMultiline = (ctx?.descDensity ?? 'compact') !== 'compact';
+  const descTextCls = descMultiline
+    ? 'whitespace-pre-wrap break-words leading-snug min-w-0 w-full overflow-y-auto max-h-full'
+    : 'truncate min-w-0';
+  const descAlignCls = descMultiline ? 'items-start py-0.5' : 'items-center';
+
   const meta = (data.metadata ?? {}) as Record<string, unknown>;
   const variant = (meta as { variant?: { label?: string; price?: number; index?: number } }).variant;
   const variantDefault = (meta as { variant_default?: 'mean' | 'median' }).variant_default;
@@ -976,19 +994,49 @@ export function DescriptionCellRenderer(params: ICellRendererParams) {
   // the estimator sees the cost-driver split without having to expand
   // the resources sub-rows. Skipped silently when the field is absent
   // (manual or non-assembly positions).
-  const breakdownRaw = (meta as { resource_breakdown?: Record<string, { pct?: number }> }).resource_breakdown;
-  const breakdownEntries: Array<{ rt: string; pct: number }> =
-    breakdownRaw && typeof breakdownRaw === 'object'
-      ? Object.entries(breakdownRaw)
-          .map(([rt, v]) => ({
-            rt,
-            pct: typeof v?.pct === 'number' ? Math.round(v.pct) : 0,
-          }))
-          .filter((e) => e.pct > 0)
-          .sort((a, b) => b.pct - a.pct)
-      : [];
+  // Compute the cost-driver split from the LIVE ``resources`` array first so
+  // the pill stays correct after an inline resource edit, mirroring the grid
+  // split-columns. Fall back to the pre-rolled ``resource_breakdown`` when a
+  // position carries the rollup but no resources list, OR when the live
+  // array yields a zero subtotal (defense in depth - zero-rate resources
+  // must not blank a pill the server-side rollup can still supply). Skipped
+  // silently when neither source is usable (manual / non-assembly positions).
+  const liveResources = (meta as { resources?: unknown }).resources;
+  let breakdownEntries: Array<{ rt: string; pct: number }> = [];
+  if (Array.isArray(liveResources) && liveResources.length > 0) {
+    const totals: Record<string, number> = {};
+    let subtotal = 0;
+    for (const r of liveResources) {
+      if (!r || typeof r !== 'object') continue;
+      const rr = r as { type?: string; total?: number; quantity?: number; unit_rate?: number };
+      const ttl =
+        typeof rr.total === 'number'
+          ? rr.total
+          : (Number(rr.quantity) || 0) * (Number(rr.unit_rate) || 0);
+      if (!Number.isFinite(ttl)) continue;
+      const rt = rr.type || 'other';
+      totals[rt] = (totals[rt] || 0) + ttl;
+      subtotal += ttl;
+    }
+    if (subtotal > 0) {
+      breakdownEntries = Object.entries(totals)
+        .map(([rt, ttl]) => ({ rt, pct: Math.round((ttl / subtotal) * 100) }))
+        .filter((e) => e.pct > 0)
+        .sort((a, b) => b.pct - a.pct);
+    }
+  }
+  if (breakdownEntries.length === 0) {
+    const breakdownRaw = (meta as { resource_breakdown?: Record<string, { pct?: number }> })
+      .resource_breakdown;
+    if (breakdownRaw && typeof breakdownRaw === 'object') {
+      breakdownEntries = Object.entries(breakdownRaw)
+        .map(([rt, v]) => ({ rt, pct: typeof v?.pct === 'number' ? Math.round(v.pct) : 0 }))
+        .filter((e) => e.pct > 0)
+        .sort((a, b) => b.pct - a.pct);
+    }
+  }
   const breakdownPill =
-    breakdownEntries.length > 0 ? (
+    breakdownEntries.length > 0 && !ctx?.showResourceSplit ? (
       <span
         className="shrink-0 inline-flex items-center gap-0.5 rounded text-[10px] font-medium px-1 py-0.5 bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 cursor-help"
         title={t('boq.resource_breakdown_tip', {
@@ -1005,12 +1053,18 @@ export function DescriptionCellRenderer(params: ICellRendererParams) {
 
   if (!hasVariant && !hasDefault) {
     if (!variantIconButton && !scopeHint && !breakdownPill) {
-      return <span className="truncate">{displayValue}</span>;
+      return descMultiline ? (
+        <span className="block w-full whitespace-pre-wrap break-words leading-snug overflow-y-auto max-h-full">
+          {displayValue}
+        </span>
+      ) : (
+        <span className="truncate">{displayValue}</span>
+      );
     }
     return (
-      <span className="inline-flex items-center gap-1.5 min-w-0 max-w-full">
+      <span className={`inline-flex ${descAlignCls} gap-1.5 min-w-0 max-w-full`}>
         {variantIconButton}
-        <span className="truncate min-w-0">{displayValue}</span>
+        <span className={descTextCls}>{displayValue}</span>
         {scopeHint}
         {breakdownPill}
       </span>
@@ -1033,9 +1087,9 @@ export function DescriptionCellRenderer(params: ICellRendererParams) {
     // VARIANT row inside the expanded resource panel \u2014 the blue
     // "Variant: <label>" pill that used to render here was redundant.
     return (
-      <span className="inline-flex items-center gap-1.5 min-w-0 max-w-full">
+      <span className={`inline-flex ${descAlignCls} gap-1.5 min-w-0 max-w-full`}>
         {variantIconButton}
-        <span className="truncate min-w-0">{displayValue}</span>
+        <span className={descTextCls}>{displayValue}</span>
         {scopeHint}
         {breakdownPill}
       </span>

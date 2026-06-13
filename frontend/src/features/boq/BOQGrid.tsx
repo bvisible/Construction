@@ -93,6 +93,7 @@ import {
 import { RESOURCE_TYPES, getResourceTypeLabel } from './boqResourceTypes';
 import { CURRENCY_GROUPS } from '@/features/projects/CreateProjectPage';
 import { useToastStore } from '@/stores/useToastStore';
+import { useBoqDescDensityStore, BOQ_DESC_ROW_HEIGHT } from '@/stores/useBoqDescDensityStore';
 import { getIntlLocale } from '@/shared/lib/formatters';
 import { VariantPicker } from '@/features/costs/VariantPicker';
 import type { CostVariant, VariantStats } from '@/features/costs/api';
@@ -176,6 +177,12 @@ interface FooterRow {
   unit: string;
   quantity: number;
   unit_rate: number;
+  /**
+   * Estimate-wide money per resource type (material / labor / equipment),
+   * present only on the DIRECT COST row. The M/L/E split columns render
+   * these as currency in their footer cell (columnDefs valueGetter).
+   */
+  _resourceSplitMoney?: Record<string, number>;
 }
 
 interface SectionRow {
@@ -431,6 +438,11 @@ export interface BOQGridProps {
   /** Custom column definitions from BOQ metadata */
   customColumns?: import('./grid/columnDefs').CustomColumnDef[];
   /**
+   * Show the Material/Labor/Equipment % cost-driver split columns. Toggled
+   * from the BOQ toolbar's Grid Settings menu; off by default.
+   */
+  showResourceSplit?: boolean;
+  /**
    * BOQ-scoped named variables ($GFA, $LABOR_RATE, …). Used by `calculated`
    * custom columns; safe to omit when no calculated columns are defined.
    */
@@ -508,6 +520,7 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
   onApplyAnomalySuggestion,
   onSaveAsAssembly,
   customColumns,
+  showResourceSplit,
   boqVariables,
   bimModelId,
   onHighlightBIMElements,
@@ -525,6 +538,21 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
   const gridApiRef = useRef<GridApi | null>(null);
   const gridWrapperRef = useRef<HTMLDivElement>(null);
   const addToast = useToastStore((s) => s.addToast);
+
+  // Description density (compact / comfortable / tall) drives how many lines a
+  // position's description renders at rest, so a one-line Kurztext can become a
+  // full multi-line Langtext view. A ref keeps getRowHeight's identity stable
+  // while still reading the live value; an effect re-measures the rows and
+  // repaints the description column whenever the toolbar toggle changes it.
+  const descDensity = useBoqDescDensityStore((s) => s.density);
+  const descDensityRef = useRef(descDensity);
+  descDensityRef.current = descDensity;
+  useEffect(() => {
+    const api = gridApiRef.current;
+    if (!api) return;
+    api.resetRowHeights();
+    api.refreshCells({ columns: ['description'], force: true });
+  }, [descDensity]);
 
   // Track all setTimeout(..., 0) handles scheduled to refresh AG Grid cells
   // after a state change (toggle resources, open variant picker, position
@@ -1013,6 +1041,10 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
       // through the configured rate. Null when the user is on base.
       displayCurrency: displayCurrency ?? null,
       onOpenFxRateSettings,
+      // When the dedicated Material/Labor/Equipment % columns are on, the
+      // description cell suppresses its inline split pill so the figure is
+      // not shown twice.
+      showResourceSplit: showResourceSplit ?? false,
       locale,
       fmt,
       t,
@@ -1064,20 +1096,21 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
       // values without a network round-trip.
       positions,
       customColumns,
+      descDensity,
     }) as FullGridContext,
-    [currencySymbol, currencyCode, fxRates, onUpsertProjectFxRate, displayCurrency, onOpenFxRateSettings, locale, fmt, t, collapsedSections, onToggleSection, onAddPosition, onAddSubSection,
+    [descDensity, currencySymbol, currencyCode, fxRates, onUpsertProjectFxRate, displayCurrency, onOpenFxRateSettings, locale, fmt, t, collapsedSections, onToggleSection, onAddPosition, onAddSubSection,
      expandedPositions, toggleResources, onRemoveResource, onUpdateResource, onUpdateResourceFields,
      onSaveResourceToCatalog, onSaveVariantHeaderToCatalog, onOpenCostDbForPosition, onOpenCatalogForPosition, onRepickResourceVariant,
      openVariantPickerSignal, openVariantPickerFor, clearOpenVariantPicker, openPositionVariantPicker, onUpdateVariantHeader,
      onDeletePosition, onSaveToDatabase, onAddComment,
      onDuplicatePosition, showContextMenu, anomalyMap, onApplyAnomalySuggestion, bimModelId,
      onUpdatePosition, onHighlightBIMElements, onDeleteSection, onReorderSections, onFormulaApplied,
-     positions, customColumns],
+     positions, customColumns, showResourceSplit],
   );
 
   /* ── Column defs (standard + custom) ─────────────────────────────── */
   const columnDefs = useMemo(() => {
-    const defs = getColumnDefs({ currencySymbol, currencyCode, locale, fmt, t: tRef.current, displayCurrency: displayCurrency ?? null });
+    const defs = getColumnDefs({ currencySymbol, currencyCode, locale, fmt, t: tRef.current, displayCurrency: displayCurrency ?? null, showResourceSplit });
     // Override ordinal column with custom renderer
     const ordinalCol = defs.find((c) => c.field === 'ordinal');
     if (ordinalCol) {
@@ -1114,7 +1147,7 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
       }
     }
     return defs;
-  }, [currencySymbol, currencyCode, locale, fmt, i18n.language, customColumns, positions, boqVariables, displayCurrency]);
+  }, [currencySymbol, currencyCode, locale, fmt, i18n.language, customColumns, positions, boqVariables, displayCurrency, showResourceSplit]);
 
   /* ── Calculated-column refresh on positions change ──────────────────
    * AG Grid re-runs `valueGetter` on every refresh; for cross-position
@@ -1652,7 +1685,10 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
     if (params.data?._isResource) return 28;
     if (params.data?._isAddResource) return 30;
     if (params.data?._isVariantHeader) return 36;
-    return 32;
+    if (params.data?._isFooter) return 32;
+    // Position rows grow with the description-density preference so a long
+    // Langtext is readable inline; compact keeps the historical 32px row.
+    return BOQ_DESC_ROW_HEIGHT[descDensityRef.current] ?? 32;
   }, []);
 
   /* ── Cancel accidental ordinal edits from chevron clicks ─────── */

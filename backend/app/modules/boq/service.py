@@ -18,6 +18,7 @@ Stateless service layer. Handles:
 """
 
 import logging
+import math
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
@@ -1080,6 +1081,54 @@ def _is_section(position: Position) -> bool:
     qty = _str_to_float(position.quantity)
     rate = _str_to_float(position.unit_rate)
     return unit in ("", "section") and qty == 0.0 and rate == 0.0
+
+
+def _stamp_resource_breakdown(metadata: dict[str, Any]) -> None:
+    """Stamp ``metadata['resource_breakdown']`` from ``metadata['resources']``.
+
+    Canonical server-side M/L/E rollup: ``{type: {"total": float, "pct": float}}``
+    mirroring the shape written by the assembly apply path
+    (``assemblies/service.py``) and the demo seeder's
+    ``_resource_breakdown_rollup``. Each resource contributes its ``total``
+    when present, else ``quantity * unit_rate`` (the per-unit norm convention).
+    When resources are absent/empty or the rolled subtotal is not positive,
+    any previously stamped ``resource_breakdown`` is removed so a stale split
+    never survives a resources wipe (audit m5).
+    ``float`` values in JSONB metadata follow the existing convention there.
+    """
+    resources = metadata.get("resources")
+    if not isinstance(resources, list) or not resources:
+        metadata.pop("resource_breakdown", None)
+        return
+    totals: dict[str, Decimal] = {}
+    for res in resources:
+        if not isinstance(res, dict):
+            continue
+        rtype = str(res.get("type") or "other")
+        if res.get("total") is not None:
+            try:
+                ttl = Decimal(str(res.get("total")))
+            except (ArithmeticError, ValueError):
+                ttl = Decimal("0")
+        else:
+            try:
+                ttl = Decimal(str(res.get("quantity") or 0)) * Decimal(str(res.get("unit_rate") or 0))
+            except (ArithmeticError, ValueError):
+                ttl = Decimal("0")
+        if not ttl.is_finite():
+            ttl = Decimal("0")
+        totals[rtype] = totals.get(rtype, Decimal("0")) + ttl
+    subtotal = sum(totals.values(), Decimal("0"))
+    if subtotal <= 0:
+        metadata.pop("resource_breakdown", None)
+        return
+    metadata["resource_breakdown"] = {
+        rtype: {
+            "total": float(ttl),
+            "pct": float((ttl / subtotal) * Decimal("100")),
+        }
+        for rtype, ttl in totals.items()
+    }
 
 
 def _resource_total_in_base(
@@ -2587,6 +2636,9 @@ class BOQService:
             merged_metadata,
             position_currency=currency_hint if isinstance(currency_hint, str) else None,
         )
+        # Canonical M/L/E rollup: keep ``resource_breakdown`` in sync with the
+        # resources list so the BOQ grid split columns / pill never go stale.
+        _stamp_resource_breakdown(merged_metadata)
 
         total = _compute_total(data.quantity, data.unit_rate)
         max_order = await self.position_repo.get_max_sort_order(data.boq_id)
@@ -3427,6 +3479,10 @@ class BOQService:
                 fields["metadata_"],
                 position_currency=currency if isinstance(currency, str) else None,
             )
+            # Canonical M/L/E rollup: re-stamp ``resource_breakdown`` whenever
+            # a metadata patch carries resources, so the grid split columns
+            # and the pill read fresh per-type totals/percentages.
+            _stamp_resource_breakdown(fields["metadata_"])
 
         # BUG-B-014: re-evaluate the boq_quality duplicate-content signal
         # whenever the patch touches description / unit / quantity /
@@ -6031,7 +6087,19 @@ class BOQService:
                         continue
                     res_type = str(res.get("type", "other")).lower()
                     res_name = str(res.get("name", "Unknown"))
-                    res_total = float(res.get("total", 0))
+                    # Derive the per-unit subtotal from quantity * unit_rate when
+                    # both are present, so the breakdown self-heals after an
+                    # inline resource edit that updated qty/rate but left a stale
+                    # ``total`` behind. Fall back to the stored ``total`` only
+                    # when the factors are missing.
+                    res_qty = res.get("quantity")
+                    res_rate = res.get("unit_rate")
+                    if res_qty is not None and res_rate is not None:
+                        res_total = (_str_to_float(res_qty)) * (_str_to_float(res_rate))
+                    else:
+                        res_total = float(res.get("total", 0) or 0)
+                    if not math.isfinite(res_total):
+                        res_total = 0.0
 
                     cat = self._normalize_resource_category(res_type)
 

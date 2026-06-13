@@ -9,6 +9,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile
 from fastapi.responses import StreamingResponse
+from fastapi.routing import APIRoute
 from pydantic import BaseModel, Field
 
 from app.core.partner_pack._safe_extract import has_zip_magic
@@ -32,7 +33,7 @@ from app.core.partner_pack.full_install import (
     full_install,
     full_install_stream,
 )
-from app.dependencies import RequirePermission
+from app.dependencies import RequireRole
 
 _IMAGE_MEDIA_TYPES = {
     "svg": "image/svg+xml",
@@ -105,7 +106,7 @@ def apply_preview(slug: str) -> dict[str, Any]:
 @router.post(
     "/apply",
     summary="Apply a pack to this installation (admin)",
-    dependencies=[Depends(RequirePermission("admin"))],
+    dependencies=[Depends(RequireRole("admin"))],
 )
 async def apply(body: ApplyRequest, request: Request) -> dict[str, Any]:
     """Apply the pack: enable its modules, co-brand, record defaults."""
@@ -123,7 +124,7 @@ async def apply(body: ApplyRequest, request: Request) -> dict[str, Any]:
 @router.post(
     "/full-install",
     summary="One-click install an entire localized workspace for a pack (admin)",
-    dependencies=[Depends(RequirePermission("admin"))],
+    dependencies=[Depends(RequireRole("admin"))],
     response_model=FullInstallResponse,
 )
 async def full_install_pack(body: FullInstallRequest, request: Request) -> FullInstallResponse:
@@ -144,7 +145,7 @@ async def full_install_pack(body: FullInstallRequest, request: Request) -> FullI
 @router.post(
     "/full-install-stream",
     summary="One-click install a pack's workspace with live SSE progress (admin)",
-    dependencies=[Depends(RequirePermission("admin"))],
+    dependencies=[Depends(RequireRole("admin"))],
 )
 async def full_install_pack_stream(body: FullInstallRequest, request: Request) -> StreamingResponse:
     """Stream a pack activation step-by-step as Server-Sent Events.
@@ -181,7 +182,7 @@ async def full_install_pack_stream(body: FullInstallRequest, request: Request) -
 @router.post(
     "/unapply",
     summary="Remove the applied pack (admin)",
-    dependencies=[Depends(RequirePermission("admin"))],
+    dependencies=[Depends(RequireRole("admin"))],
 )
 async def unapply_pack(request: Request) -> dict[str, Any]:
     """Drop co-branding and restore any modules the apply disabled."""
@@ -191,7 +192,7 @@ async def unapply_pack(request: Request) -> dict[str, Any]:
 @router.post(
     "/rescan",
     summary="Re-scan installed packs without a restart (admin)",
-    dependencies=[Depends(RequirePermission("admin"))],
+    dependencies=[Depends(RequireRole("admin"))],
 )
 def rescan() -> dict[str, Any]:
     """Bust the discovery cache so on-disk packs are re-read.
@@ -214,7 +215,7 @@ _MAX_PACK_UPLOAD_BYTES = 100 * 1024 * 1024
 @router.post(
     "/install",
     summary="Upload and install a partner-pack .zip into the data dir (admin)",
-    dependencies=[Depends(RequirePermission("admin"))],
+    dependencies=[Depends(RequireRole("admin"))],
 )
 async def install_pack(file: UploadFile = File(...)) -> dict[str, Any]:
     """Install a declarative partner pack from an uploaded ``.zip``.
@@ -406,3 +407,37 @@ def inspect_pack(slug: str) -> dict[str, Any]:
     if not m:
         raise HTTPException(status_code=404, detail=f"Pack '{slug}' not installed")
     return m.to_public_dict()
+
+
+def _build_alias_router(source: APIRouter, prefix: str, tags: list[str]) -> APIRouter:
+    """Mirror ``source``'s routes onto a new prefix, reusing the same handlers.
+
+    Under the Packs umbrella the canonical surface is ``/api/v1/packs/*``. The
+    legacy ``/api/v1/partner-pack/*`` routes must keep working unchanged for
+    external integrations, so rather than rename anything we mount a second
+    router whose routes point at the exact same endpoint callables. Both URLs
+    therefore always return identical data and can never drift.
+    """
+    alias = APIRouter(prefix=prefix, tags=tags)
+    for route in source.routes:
+        if not isinstance(route, APIRoute):
+            continue
+        # Strip the source prefix so the path is re-prefixed cleanly.
+        sub_path = route.path[len(source.prefix) :] if route.path.startswith(source.prefix) else route.path
+        alias.add_api_route(
+            sub_path,
+            route.endpoint,
+            methods=sorted(route.methods or set()),
+            name=route.name,
+            summary=route.summary,
+            description=route.description,
+            response_model=route.response_model,
+            dependencies=list(route.dependencies),
+            include_in_schema=route.include_in_schema,
+        )
+    return alias
+
+
+# Canonical Packs-umbrella alias. Shares every handler with ``router`` so the
+# old /partner-pack routes and the new /packs routes return the same data.
+alias_router = _build_alias_router(router, prefix="/api/v1/packs", tags=["packs"])

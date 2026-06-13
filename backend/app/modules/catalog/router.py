@@ -37,6 +37,7 @@ Endpoints:
 import asyncio
 import logging
 import uuid
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -150,8 +151,79 @@ REGION_MAP: dict[str, str] = {
 
 _GITHUB_BASE = "https://raw.githubusercontent.com/datadrivenconstruction/OpenConstructionEstimate-DDC-CWICR/main"
 
+# Local cache for downloaded catalog CSVs. Shares the parent directory with the
+# CWICR parquet cache in app.modules.costs.router so one folder holds all
+# downloaded reference data, and a region imported once stays available offline.
+_CATALOG_CACHE_DIR = Path.home() / ".openestimator" / "cache" / "catalog"
 
-# ── Import from GitHub ───────────────────────────────────────────────────
+
+def _read_region_catalog_csv(region: str, folder: str) -> tuple[bytes, str]:
+    """Resolve the catalog CSV bytes for one region.
+
+    The regional CWICR catalogs are not shipped inside the package; they are
+    downloaded on demand from the public CWICR data repository and cached
+    locally, so a region imported once stays available without network.
+
+    Lookup order:
+      1. Local cache dir (a previous successful download).
+      2. GitHub download (cached on success for the next offline run).
+
+    Runs in a worker thread (blocking I/O). Returns ``(raw_bytes, source)``
+    where ``source`` is ``cache`` / ``github``. Raises ``RuntimeError`` with
+    an actionable message when both fail.
+    """
+    csv_name = f"DDC_CWICR_{region}_Catalog.csv"
+
+    # 1. Local cache from a previous download. The 1 KB floor skips a stuck
+    #    0-byte file left by an interrupted write.
+    cached = _CATALOG_CACHE_DIR / csv_name
+    try:
+        if cached.is_file() and cached.stat().st_size > 1000:
+            return cached.read_bytes(), "cache"
+    except OSError:
+        logger.warning("Unreadable cached catalog CSV at %s, ignoring", cached)
+
+    # 2. GitHub download (cached on success for the next offline run).
+    # Belt-and-braces: `folder` and `region` come from the static REGION_MAP
+    # only (already validated by the caller), but URL-quote them anyway and
+    # verify the final URL still has the trusted host. This makes the trust
+    # boundary explicit and silences CodeQL's `py/partial-ssrf` finding.
+    from urllib.parse import quote, urlparse
+
+    url = f"{_GITHUB_BASE}/{quote(folder, safe='')}/{quote(csv_name, safe='')}"
+    if urlparse(url).netloc != "raw.githubusercontent.com":
+        raise RuntimeError("Catalog source host is not allowed.")
+    logger.info("Downloading catalog CSV: %s", url)
+
+    import urllib.request
+
+    req = urllib.request.Request(
+        url,
+        headers={"User-Agent": ("OpenConstructionERP (+https://datadrivenconstruction.io; DDC-CWICR-OE-2026)")},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:  # noqa: S310 - host pinned above
+            raw_bytes = resp.read()
+    except Exception as exc:
+        logger.error("Failed to download catalog CSV from %s: %s", url, exc)
+        raise RuntimeError(
+            f"Could not load the '{region}' resource catalog: it is not in the local "
+            f"cache and the GitHub download failed "
+            f"({exc.__class__.__name__}: {exc}). URL: {url}. Check that this server "
+            f"can reach raw.githubusercontent.com, or place the CSV at {cached} "
+            f"and retry."
+        ) from exc
+
+    # Cache for the next (possibly offline) run. Best-effort only.
+    try:
+        _CATALOG_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        cached.write_bytes(raw_bytes)
+    except OSError:
+        logger.warning("Could not cache catalog CSV at %s", cached)
+    return raw_bytes, "github"
+
+
+# ── Import from bundled data / cache / GitHub ────────────────────────────
 
 
 @router.post("/import/{region}")
@@ -161,7 +233,11 @@ async def import_catalog_from_github(
     _user_id: CurrentUserId,
     _perm: None = Depends(RequirePermission("catalog.create")),
 ) -> dict[str, Any]:
-    """‌⁠‍Download resource catalog CSV from GitHub and import into DB.
+    """Import the resource catalog CSV for a region into the DB.
+
+    Resolves the CSV from the local cache first, then downloads it from the
+    public CWICR data repository and caches it, so a region imported once
+    stays available without network access.
 
     Accepts any of the 30 region ids in ``REGION_MAP`` (one metro per CWICR
     locale: AR_DUBAI, AU_SYDNEY, BG_SOFIA, CS_PRAGUE, DE_BERLIN, ENG_TORONTO,
@@ -173,7 +249,6 @@ async def import_catalog_from_github(
     """
     import csv
     import io
-    import urllib.request
 
     folder = REGION_MAP.get(region)
     if folder is None:
@@ -182,39 +257,16 @@ async def import_catalog_from_github(
             detail=f"Unknown region '{region}'. Valid regions: {', '.join(sorted(REGION_MAP))}",
         )
 
-    # Belt-and-braces: `folder` and `region` come from the static REGION_MAP
-    # only (already validated above), but URL-quote them anyway and verify the
-    # final URL still has the trusted host. This makes the trust boundary
-    # explicit and silences CodeQL's `py/partial-ssrf` finding.
-    from urllib.parse import quote, urlparse
-
-    url = f"{_GITHUB_BASE}/{quote(folder, safe='')}/DDC_CWICR_{quote(region, safe='')}_Catalog.csv"
-    if urlparse(url).netloc != "raw.githubusercontent.com":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Catalog source host is not allowed.",
-        )
-    logger.info("Downloading catalog CSV: %s", url)
-
+    # Offload blocking file/network I/O to a worker thread so the event loop
+    # stays responsive during the 60-second download window.
     try:
-        req = urllib.request.Request(
-            url,
-            headers={"User-Agent": ("OpenConstructionERP (+https://datadrivenconstruction.io; DDC-CWICR-OE-2026)")},
-        )
-
-        # Offload blocking urllib to a worker thread so the event loop
-        # stays responsive during the 60-second download window.
-        def _fetch() -> bytes:
-            with urllib.request.urlopen(req, timeout=60) as resp:  # noqa: S310 - host pinned above
-                return resp.read()
-
-        raw_bytes = await asyncio.to_thread(_fetch)
-    except Exception as exc:
-        logger.error("Failed to download catalog CSV from %s: %s", url, exc)
+        raw_bytes, csv_source = await asyncio.to_thread(_read_region_catalog_csv, region, folder)
+    except RuntimeError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Failed to download catalog from GitHub: {exc}",
+            detail=str(exc),
         ) from exc
+    logger.info("Catalog CSV for %s resolved from %s (%d bytes)", region, csv_source, len(raw_bytes))
 
     text = raw_bytes.decode("utf-8-sig")
     reader = csv.DictReader(io.StringIO(text))
@@ -307,7 +359,7 @@ async def import_catalog_from_github(
         skipped,
     )
 
-    return {"imported": imported, "skipped": skipped, "region": region}
+    return {"imported": imported, "skipped": skipped, "region": region, "source": csv_source}
 
 
 # ── List loaded regions ──────────────────────────────────────────────────

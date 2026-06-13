@@ -27,6 +27,7 @@ import {
   type CostAutocompleteItem,
   DEFAULT_MAX_NESTING_DEPTH,
 } from './api';
+import { resourceSplitMoneyTotals } from './grid/columnDefs';
 import { ApiError } from '@/shared/lib/api';
 import { projectsApi, type Project, type ProjectFxRate } from '@/features/projects/api';
 import { fetchBIMModels } from '@/features/bim/api';
@@ -789,14 +790,21 @@ export function BOQEditorPage() {
   }, [unlockMutation]);
 
   const createBudgetMutation = useMutation({
-    mutationFn: () => apiPost<{ created: number }>(`/v1/boq/boqs/${boqId}/create-budget/`, {}),
+    mutationFn: () =>
+      apiPost<{ created: number; budget_lines_created?: number }>(
+        `/v1/boq/boqs/${boqId}/create-budget/`,
+        {},
+      ),
     onSuccess: (data) => {
       addToast({
         type: 'success',
         title: t('boq.budget_created', { defaultValue: 'Budget created' }),
-        message: t('boq.budget_created_desc', {
-          defaultValue: '{{count}} budget lines created from estimate',
+        // Report both layers: finance budget categories AND the 5D cost-spine
+        // budget lines (one per position) the backend now creates alongside.
+        message: t('boq.budget_created_desc_full', {
+          defaultValue: 'Budget created: {{count}} categories, {{lines}} cost lines',
           count: data.created ?? 0,
+          lines: data.budget_lines_created ?? 0,
         }),
       });
     },
@@ -1788,6 +1796,30 @@ export function BOQEditorPage() {
       else localStorage.removeItem(displayCurrencyKey);
     } catch { /* localStorage unavailable / quota — silently ignore */ }
   }, [displayCurrencyKey]);
+  /* ── Resource cost-driver split columns (Material/Labor/Equipment %) ──
+   *  A view preference, remembered globally in localStorage so the user
+   *  keeps their chosen layout across BOQs. Off by default - the three
+   *  percentage columns only appear once the user enables them from the
+   *  toolbar's Grid Settings menu. */
+  const RESOURCE_SPLIT_KEY = 'oe_boq_show_resource_split';
+  const [showResourceSplit, setShowResourceSplit] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(RESOURCE_SPLIT_KEY) === '1';
+    } catch {
+      return false;
+    }
+  });
+  const toggleResourceSplit = useCallback(() => {
+    setShowResourceSplit((prev) => {
+      const next = !prev;
+      try {
+        if (next) localStorage.setItem(RESOURCE_SPLIT_KEY, '1');
+        else localStorage.removeItem(RESOURCE_SPLIT_KEY);
+      } catch { /* localStorage unavailable / quota — silently ignore */ }
+      return next;
+    });
+  }, []);
+
   const displayCurrencyMeta = useMemo(() => {
     if (!displayCurrency) return null;
     const fx = fxRates.find((f) => f.currency === displayCurrency);
@@ -3659,11 +3691,24 @@ export function BOQEditorPage() {
   const hasPositions = boq ? boq.positions.length > 0 : false;
 
   const boqFooterRows = useMemo(() => {
-    type FooterRow = { _isFooter: true; _footerType: string; id: string; description: string; total: number; ordinal: string; unit: string; quantity: number; unit_rate: number };
+    type FooterRow = { _isFooter: true; _footerType: string; id: string; description: string; total: number; ordinal: string; unit: string; quantity: number; unit_rate: number; _resourceSplitMoney?: Record<string, number> };
     const rows: FooterRow[] = [];
     if (!hasPositions) return rows;
     const base = { _isFooter: true as const, ordinal: '', unit: '', quantity: 0, unit_rate: 0 };
-    rows.push({ ...base, _footerType: 'direct_cost', id: '_direct_cost', description: t('boq.direct_cost', { defaultValue: 'DIRECT COST' }), total: directCost });
+    // Estimate-wide money per resource type (Material / Labor / Equipment):
+    // for every leaf position with a split, money(type) = share(type) x
+    // unit_rate x quantity, rebased into the project base currency (same
+    // convertToBase path as directCost) so mixed-currency positions sum
+    // correctly. Rendered on the DIRECT COST footer row of the M/L/E split
+    // columns so the estimator sees absolute cost-driver totals, not just
+    // per-position percentages.
+    const splitMoney = resourceSplitMoneyTotals(
+      boq?.positions ?? [],
+      undefined,
+      currencyCode,
+      fxRates,
+    );
+    rows.push({ ...base, _footerType: 'direct_cost', id: '_direct_cost', description: t('boq.direct_cost', { defaultValue: 'DIRECT COST' }), total: directCost, ...(splitMoney ? { _resourceSplitMoney: splitMoney } : {}) });
     for (const m of markupTotals) {
       rows.push({ ...base, _footerType: `markup_${m.id}`, id: `_markup_${m.id}`, description: `${m.name} ${fmt.format(m.percentage)}%`, total: m.amount });
     }
@@ -3673,7 +3718,7 @@ export function BOQEditorPage() {
       rows.push({ ...base, _footerType: 'gross_total', id: '_gross_total', description: t('boq.gross_total', { defaultValue: 'GROSS TOTAL' }), total: grossTotal });
     }
     return rows;
-  }, [hasPositions, directCost, markupTotals, netTotal, vatRate, vatAmount, grossTotal, t, fmt]);
+  }, [hasPositions, boq?.positions, directCost, markupTotals, netTotal, vatRate, vatAmount, grossTotal, t, fmt, currencyCode, fxRates]);
 
   /** Handle cost suggestion selected from AG Grid autocomplete editor */
   const handleGridSelectSuggestion = useCallback(
@@ -4078,6 +4123,8 @@ export function BOQEditorPage() {
           onAcceptAllAnomalies={anomalyMap.size > 0 ? handleAcceptAllAnomalies : undefined}
           onManageColumns={() => setCustomColumnsOpen(true)}
           customColumnCount={boqCustomColumns.length}
+          showResourceSplit={showResourceSplit}
+          onToggleResourceSplit={toggleResourceSplit}
           onManageVariables={() => setVariablesOpen(true)}
           onRenumber={handleRenumber}
           isRenumbering={renumberMutation.isPending}
@@ -4181,6 +4228,7 @@ export function BOQEditorPage() {
           onApplyAnomalySuggestion={handleApplyAnomalySuggestion}
           onSaveAsAssembly={handleSaveAsAssembly}
           customColumns={boqCustomColumns}
+          showResourceSplit={showResourceSplit}
           boqVariables={boqVariables}
           bimModelId={bimModelId}
           onHighlightBIMElements={(elementIds) => {
