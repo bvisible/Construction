@@ -480,6 +480,7 @@ async def create_room_detection_proposals(
     from app.modules.takeoff import plan_read as _plan_read
     from app.modules.takeoff.models import AiTakeoffRun, TakeoffMeasurement
     from app.modules.takeoff.service import TakeoffService
+    from sqlalchemy import delete
 
     takeoff = TakeoffService(session)
     doc = await takeoff.get_document(request.document_id)
@@ -495,6 +496,19 @@ async def create_room_detection_proposals(
     await _verify_project_access(session, doc.project_id, user_id)
 
     detected = await detect_takeoff_rooms(request, session, settings, user_id)
+
+    # Supersede previous still-unreviewed room proposals for this page. A
+    # confirmed measurement is user data and must never be replaced here.
+    await session.execute(
+        delete(TakeoffMeasurement).where(
+            TakeoffMeasurement.project_id == doc.project_id,
+            TakeoffMeasurement.document_id == request.document_id,
+            TakeoffMeasurement.page == request.page,
+            TakeoffMeasurement.source == "ai_plan_read",
+            TakeoffMeasurement.review_status == "proposed",
+        )
+    )
+
     run = await takeoff.plan_read_repo.create(
         AiTakeoffRun(
             project_id=doc.project_id,
@@ -510,7 +524,11 @@ async def create_room_detection_proposals(
             model_used=(
                 "neoffice-room-vision-bbox"
                 if any(room.source == "vision" for room in detected.rooms)
-                else "neoffice-room-vector-v2"
+                else (
+                    "neoffice-room-label-surface-v1"
+                    if any(room.source == "label_surface" for room in detected.rooms)
+                    else "neoffice-room-vector-v2"
+                )
             ),
             proposal_count=0,
             accepted_count=0,
@@ -518,6 +536,7 @@ async def create_room_detection_proposals(
                 "engine": "neoffice_room_detection",
                 "source": "vector_or_vision",
                 "stats": detected.stats,
+                "sources": sorted({room.source for room in detected.rooms}),
                 "scale_ratio": detected.scale_ratio,
                 "scale_pixels_per_unit": detected.scale_pixels_per_unit,
                 "page_width_pt": detected.page_width_pt,
@@ -556,6 +575,10 @@ async def create_room_detection_proposals(
             else room.review_reason,
             "detection_declared_area_m2": room.declared_m2,
             "detection_error_pct": room.error_pct,
+            "detection_geometry_area_m2": getattr(room, "geometry_m2", None),
+            "detection_quantity_source": (
+                "printed_surface" if room.source == "label_surface" else "polygon"
+            ),
             "page_width_pt": detected.page_width_pt,
             "page_height_pt": detected.page_height_pt,
             "room_name": room.name,

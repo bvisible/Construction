@@ -197,6 +197,13 @@ class DetectedRoom(BaseModel):
     area_m2: float | None = None
     declared_m2: float | None = None
     error_pct: float | None = None
+    geometry_m2: float | None = Field(
+        default=None,
+        description=(
+            "Geometric polygon area when the billed area is taken from a "
+            "printed room surface label instead of polygon shoelace area."
+        ),
+    )
     confidence: str | None = Field(
         default=None,
         description='"high", "medium" or "low" QA confidence for the area candidate',
@@ -206,7 +213,7 @@ class DetectedRoom(BaseModel):
         description="True when the candidate should be checked before use as quantity truth",
     )
     review_reason: str | None = None
-    source: str = Field(default="vector", description='"vector" or "vision"')
+    source: str = Field(default="vector", description='"vector", "vision" or "label_surface"')
 
 
 class RoomDetectionResponse(BaseModel):

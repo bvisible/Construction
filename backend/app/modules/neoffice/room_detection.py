@@ -242,6 +242,212 @@ def _wall_regions(page, walls, conv) -> list[Polygon]:
     return polys
 
 
+def _nearest_free_pixel(
+    free: np.ndarray,
+    x: int,
+    y: int,
+    max_radius: int,
+) -> tuple[int, int] | None:
+    h, w = free.shape
+    if 0 <= x < w and 0 <= y < h and free[y, x]:
+        return x, y
+    radius = 1
+    while radius <= max_radius:
+        x0, x1 = max(0, x - radius), min(w - 1, x + radius)
+        y0, y1 = max(0, y - radius), min(h - 1, y + radius)
+        yy, xx = np.where(free[y0 : y1 + 1, x0 : x1 + 1] > 0)
+        if len(xx):
+            xx = xx + x0
+            yy = yy + y0
+            d = (xx - x) ** 2 + (yy - y) ** 2
+            idx = int(np.argmin(d))
+            return int(xx[idx]), int(yy[idx])
+        radius *= 2
+    return None
+
+
+def _label_surface_regions(
+    page,
+    walls,
+    conv: float,
+    labels: list[tuple[str, float, float, float | None]],
+    *,
+    reserved_label_idxs: set[int] | None = None,
+    reserved_polys: list[Polygon] | None = None,
+) -> list[dict[str, Any]]:
+    """Fallback regions grown from room labels and printed surfaces.
+
+    Some ArchiCAD PDFs flatten fixtures and open-plan spaces so the wall-only
+    free-space components fragment badly. The printed room label remains a much
+    stronger supervision signal: grow one non-overlapping region around each
+    label, trim it to the printed surface target, and keep the billed quantity
+    sourced from that printed surface. The geometry is deliberately marked for
+    review; this fallback exists to make the demo useful without pretending the
+    contour is exact.
+    """
+    reserved_label_idxs = reserved_label_idxs or set()
+    reserved_polys = reserved_polys or []
+    candidates = [
+        (i, name, cx, cy, declared)
+        for i, (name, cx, cy, declared) in enumerate(labels)
+        if i not in reserved_label_idxs and declared is not None and declared > 0
+    ]
+    if not candidates or not walls:
+        return []
+
+    pw, ph = page.rect.width, page.rect.height
+    s = RENDER_DPI / 72.0
+    width_px, height_px = int(round(pw * s)), int(round(ph * s))
+    wall_img = np.zeros((height_px, width_px), np.uint8)
+    for (a, b) in walls:
+        cv2.line(
+            wall_img,
+            (int(a[0] * s), int(a[1] * s)),
+            (int(b[0] * s), int(b[1] * s)),
+            255,
+            2,
+        )
+
+    k = max(3, int(round(WALL_CLOSE_PT * s)))
+    closed = cv2.morphologyEx(
+        wall_img,
+        cv2.MORPH_CLOSE,
+        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)),
+    )
+    pad_wall = max(3, int(round(2.0 * s)))
+    blocked = cv2.dilate(
+        closed,
+        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (pad_wall, pad_wall)),
+    )
+    free = (blocked == 0).astype(np.uint8)
+
+    # Restrict growth to the drawing footprint so balcony/common labels cannot
+    # leak into the title block or the infinite page background.
+    ys, xs = np.where(wall_img > 0)
+    if len(xs):
+        pad = int(round(35.0 * s))
+        x0, x1 = max(0, int(xs.min()) - pad), min(width_px - 1, int(xs.max()) + pad)
+        y0, y1 = max(0, int(ys.min()) - pad), min(height_px - 1, int(ys.max()) + pad)
+        roi = np.zeros_like(free)
+        roi[y0 : y1 + 1, x0 : x1 + 1] = 1
+        free &= roi
+
+    if reserved_polys:
+        reserved = np.zeros_like(free)
+        for poly in reserved_polys:
+            pts = np.array(
+                [[int(x * s), int(y * s)] for x, y in poly.exterior.coords],
+                dtype=np.int32,
+            )
+            if len(pts) >= 3:
+                cv2.fillPoly(reserved, [pts], 1)
+        free[reserved > 0] = 0
+
+    seed_infos: list[tuple[int, str, float, int, int]] = []
+    max_radius = int(round(30.0 * s))
+    for label_idx, name, cx, cy, declared in candidates:
+        seed = _nearest_free_pixel(
+            free,
+            int(round(cx * s)),
+            int(round(cy * s)),
+            max_radius,
+        )
+        if seed is not None:
+            seed_infos.append((label_idx, name, float(declared), seed[0], seed[1]))
+    if not seed_infos:
+        return []
+
+    n_components, components = cv2.connectedComponents(free, connectivity=4)
+    out: list[dict[str, Any]] = []
+    min_px = int(round((1.0 / conv) * (s * s))) if conv else 0
+    for component_id in range(1, n_components):
+        seeds = [
+            seed for seed in seed_infos
+            if components[seed[4], seed[3]] == component_id
+        ]
+        if not seeds:
+            continue
+        yy, xx = np.where(components == component_id)
+        if len(xx) == 0:
+            continue
+
+        best_distance = np.full(len(xx), np.inf)
+        best_seed = np.zeros(len(xx), dtype=np.int32)
+        distances_by_seed: list[np.ndarray] = []
+        for seed_pos, (_label_idx, _name, _declared, sx, sy) in enumerate(seeds):
+            distance = (xx - sx) ** 2 + (yy - sy) ** 2
+            distances_by_seed.append(distance)
+            update = distance < best_distance
+            best_distance[update] = distance[update]
+            best_seed[update] = seed_pos
+
+        for seed_pos, (label_idx, name, declared, _sx, _sy) in enumerate(seeds):
+            assigned = best_seed == seed_pos
+            if not np.any(assigned):
+                continue
+            xs_assigned = xx[assigned]
+            ys_assigned = yy[assigned]
+            d_assigned = distances_by_seed[seed_pos][assigned]
+            target_px = int(round((declared / conv) * (s * s))) if conv else len(xs_assigned)
+            if 0 < target_px < len(xs_assigned):
+                keep_idx = np.argpartition(d_assigned, target_px - 1)[:target_px]
+                xs_keep = xs_assigned[keep_idx]
+                ys_keep = ys_assigned[keep_idx]
+            else:
+                xs_keep = xs_assigned
+                ys_keep = ys_assigned
+
+            mask = np.zeros_like(free)
+            mask[ys_keep, xs_keep] = 255
+            assign_mask = np.zeros_like(free)
+            assign_mask[ys_assigned, xs_assigned] = 255
+            close_px = max(3, int(round(3.0 * s)))
+            mask = cv2.morphologyEx(
+                mask,
+                cv2.MORPH_CLOSE,
+                cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (close_px, close_px)),
+            )
+            mask = cv2.bitwise_and(mask, assign_mask)
+            if int(mask.sum() / 255) < min_px:
+                continue
+            contours, _ = cv2.findContours(
+                mask,
+                cv2.RETR_EXTERNAL,
+                cv2.CHAIN_APPROX_SIMPLE,
+            )
+            if not contours:
+                continue
+            contour = max(contours, key=cv2.contourArea)
+            contour = cv2.approxPolyDP(
+                contour,
+                0.006 * cv2.arcLength(contour, True),
+                True,
+            )
+            pts = [
+                (float(p[0][0]) / s, float(p[0][1]) / s)
+                for p in contour
+            ]
+            if len(pts) < 3:
+                continue
+            poly = Polygon(pts)
+            if not poly.is_valid:
+                poly = poly.buffer(0)
+            polys = _iter_polys(poly)
+            if not polys:
+                continue
+            poly = max(polys, key=lambda p: p.area)
+            out.append(
+                {
+                    "label_idx": label_idx,
+                    "name": name,
+                    "declared_m2": declared,
+                    "geometry_m2": round(poly.area * conv, 2),
+                    "poly": poly,
+                }
+            )
+    return out
+
+
 _SURFACE_RE = re.compile(r"Surface[:\s]*(\d+[.,]\d+|\d+)\s*m", re.I)
 
 
@@ -470,10 +676,13 @@ def detect_rooms(
                 "area_m2": area_m2,
                 "declared_m2": round(declared_m2, 2) if declared_m2 is not None else None,
                 "error_pct": error_pct,
+                "geometry_m2": None,
                 "confidence": confidence,
                 "needs_review": needs_review,
                 "review_reason": review_reason,
                 "source": "vector",
+                "_label_idx": label_idx,
+                "_poly": poly,
             })
 
         for poly in regions:
@@ -488,18 +697,89 @@ def detect_rooms(
                 emit(pg, owner)
 
         qa = _label_summary(labels, rooms_out, pw, ph)
+        declared_count = sum(1 for _name, _cx, _cy, declared_m2 in labels if declared_m2 is not None)
+        needs_surface_fallback = (
+            declared_count >= 4
+            and (
+                int(qa.get("within_10pct", 0)) < max(2, int(declared_count * 0.25))
+                or int(qa.get("anchors_covered", 0)) < max(2, int(len(labels) * 0.70))
+            )
+        )
+
+        fallback_rooms: list[dict[str, Any]] = []
+        kept_vector_rooms: list[dict[str, Any]] = []
+        if needs_surface_fallback:
+            # Keep genuinely decent wall-following geometry; replace the
+            # obviously fragmented/missed labels with printed-surface regions.
+            for room in rooms_out:
+                label_idx = room.get("_label_idx")
+                error = room.get("error_pct")
+                if label_idx is not None and error is not None and float(error) <= 10.0:
+                    kept_vector_rooms.append(room)
+                elif label_idx is not None and room.get("declared_m2") is None and room.get("name"):
+                    kept_vector_rooms.append(room)
+
+            reserved_idxs = {
+                int(room["_label_idx"])
+                for room in kept_vector_rooms
+                if room.get("_label_idx") is not None
+            }
+            reserved_polys = [
+                room["_poly"]
+                for room in kept_vector_rooms
+                if isinstance(room.get("_poly"), Polygon)
+            ]
+            seeded = _label_surface_regions(
+                page,
+                walls,
+                conv,
+                labels,
+                reserved_label_idxs=reserved_idxs,
+                reserved_polys=reserved_polys,
+            )
+            for item in seeded:
+                poly = item["poly"]
+                declared_m2 = float(item["declared_m2"])
+                fallback_rooms.append({
+                    "name": item["name"],
+                    "polygon": [[round(x / pw, 5), round(y / ph, 5)] for x, y in poly.exterior.coords],
+                    # The billed quantity follows the printed surface label.
+                    # The approximate polygon area is retained separately for QA.
+                    "area_m2": round(declared_m2, 2),
+                    "declared_m2": round(declared_m2, 2),
+                    "error_pct": 0.0,
+                    "geometry_m2": item["geometry_m2"],
+                    "confidence": "medium",
+                    "needs_review": True,
+                    "review_reason": "printed_surface_geometry_approx",
+                    "source": "label_surface",
+                    "_label_idx": item["label_idx"],
+                    "_poly": poly,
+                })
+
+            if fallback_rooms:
+                rooms_out = kept_vector_rooms + fallback_rooms
+                qa = _label_summary(labels, rooms_out, pw, ph)
+
+        public_rooms = [
+            {key: value for key, value in room.items() if not key.startswith("_")}
+            for room in rooms_out
+        ]
 
         return {
             "page_width_pt": round(pw, 2),
             "page_height_pt": round(ph, 2),
             "scale_ratio": implied_ratio,
             "scale_pixels_per_unit": round(1.0 / mpp, 4) if mpp else None,  # pt per metre
-            "rooms": rooms_out,
+            "rooms": public_rooms,
             "stats": {
                 "wall_segments": len(walls),
                 "regions": len(regions),
-                "rooms": len(rooms_out),
+                "rooms": len(public_rooms),
                 "scale_source": scale_src,
+                "surface_fallback": 1 if fallback_rooms else 0,
+                "vector_rooms_kept": len(kept_vector_rooms) if fallback_rooms else len(rooms_out),
+                "printed_surface_rooms": len(fallback_rooms),
                 **qa,
             },
         }

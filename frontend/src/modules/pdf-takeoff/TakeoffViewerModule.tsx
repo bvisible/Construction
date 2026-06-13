@@ -271,36 +271,6 @@ export interface RecentTakeoffDocument {
   uploaded_at: string | null;
 }
 
-// //// NEOFFICE PATCH — AI vision plan analysis (rooms + scale) types
-/** Measurement group the vision pre-draw lands in (shown in the legend). */
-const VISION_GROUP = 'IA Vision';
-const VISION_GROUP_COLOR = '#8B5CF6';
-
-interface VisionRoom {
-  name: string;
-  zone?: string | null;
-  usage?: string | null;
-  /** [x0, y0, x1, y1] normalised in [0,1] relative to the page (origin top-left). */
-  bbox?: number[] | null;
-  approx_area_m2?: number | null;
-}
-
-interface PlanVisionResponse {
-  document_id: string;
-  page: number;
-  plan_type?: string | null;
-  scale_label?: string | null;
-  scale_ratio?: number | null;
-  scale_pixels_per_unit?: number | null;
-  page_width_pt: number;
-  page_height_pt: number;
-  image_width: number;
-  image_height: number;
-  rooms: VisionRoom[];
-  elements: unknown[];
-  tokens_used: number;
-}
-
 interface RoomDetectionProposalResponse {
   run_id: string;
   document_id: string;
@@ -375,8 +345,6 @@ export default function TakeoffViewerModule({
    *  — drives the "Calibrated · 1:N @ Lm" status badge. */
   const [isCalibrated, setIsCalibrated] = useState(false);
 
-  // //// NEOFFICE PATCH — AI vision analysis in-flight flag
-  const [visionLoading, setVisionLoading] = useState(false);
   // //// NEOFFICE PATCH — vector room detection in-flight flag
   const [roomsLoading, setRoomsLoading] = useState(false);
 
@@ -2146,101 +2114,6 @@ export default function TakeoffViewerModule({
     setScalePoints([]);
   }, [scaleRefPixels, scaleRefReal, addToast, t]);
 
-  /* ── AI vision plan analysis (NEOFFICE PATCH) ────────────────────── */
-
-  /** Send the current page to the multimodal model, then pre-calibrate the
-   *  scale from what it read on the plan and pre-draw the detected rooms as
-   *  area measurements (group "IA Vision") the user can adjust. */
-  const handleVisionAnalyze = useCallback(async () => {
-    if (!visionDocumentId || !pdfDoc) {
-      addToast({
-        type: 'info',
-        title: t('takeoff_viewer.vision_need_doc', {
-          defaultValue: 'Veuillez d’abord ouvrir un document enregistré.',
-        }),
-      });
-      return;
-    }
-    setVisionLoading(true);
-    try {
-      const res = await apiPost<PlanVisionResponse>(
-        '/v1/neoffice/takeoff/analyze-vision/',
-        { document_id: visionDocumentId, page: currentPage },
-      );
-
-      // Use the pdfjs page dimensions (PDF points) as the reference frame —
-      // the exact same one the manual draw path uses, so the pre-drawn rooms
-      // land on the drawing regardless of render resolution.
-      const page = await pdfDoc.getPage(currentPage);
-      const vp = page.getViewport({ scale: 1 });
-      const pw = vp.width;
-      const ph = vp.height;
-
-      // Pre-calibrate from the scale read off the title block.
-      const effScale = res.scale_ratio ? presetScale(res.scale_ratio) : scale;
-      if (res.scale_ratio && !effScale.invalid) {
-        setScale(effScale);
-        setIsCalibrated(true);
-        setLastCalibration(null);
-      }
-
-      const ts = Date.now();
-      const newMeasurements: Measurement[] = (res.rooms || [])
-        .filter((r) => Array.isArray(r.bbox) && r.bbox.length === 4)
-        .map((r, i) => {
-          const [x0, y0, x1, y1] = r.bbox as [number, number, number, number];
-          const pts: Point[] = [
-            { x: x0 * pw, y: y0 * ph },
-            { x: x1 * pw, y: y0 * ph },
-            { x: x1 * pw, y: y1 * ph },
-            { x: x0 * pw, y: y1 * ph },
-          ];
-          const realArea = toRealArea(polygonAreaPixels(pts), effScale);
-          const name =
-            [r.zone, r.name].filter(Boolean).join(' · ') || r.name || 'Pièce';
-          return {
-            id: `m_${ts}_${i}`,
-            type: 'area' as const,
-            points: pts,
-            value: realArea,
-            unit: `${effScale.unitLabel}²`,
-            label: formatMeasurement(realArea, `${effScale.unitLabel}²`),
-            annotation: name,
-            page: currentPage,
-            group: VISION_GROUP,
-            color: VISION_GROUP_COLOR,
-          };
-        });
-
-      if (newMeasurements.length > 0) {
-        setMeasurements((prev) => [...prev, ...newMeasurements]);
-      }
-
-      addToast({
-        type: 'success',
-        title: t('takeoff_viewer.vision_done_title', {
-          defaultValue: 'Analyse IA terminée',
-        }),
-        message: t('takeoff_viewer.vision_done_msg', {
-          defaultValue:
-            '{{count}} pièce(s) détectée(s){{scale}}. Ajustez si nécessaire.',
-          count: newMeasurements.length,
-          scale: res.scale_label ? ` · échelle ${res.scale_label}` : '',
-        }),
-      });
-    } catch (err) {
-      addToast({
-        type: 'error',
-        title: t('takeoff_viewer.vision_failed', {
-          defaultValue: 'L’analyse IA a échoué.',
-        }),
-        message: getErrorMessage(err),
-      });
-    } finally {
-      setVisionLoading(false);
-    }
-  }, [visionDocumentId, pdfDoc, currentPage, scale, addToast, t]);
-
   /** Detect room polygons and persist them as v7.6 plan-read proposals. */
   const handleDetectRooms = useCallback(async () => {
     if (!visionDocumentId) {
@@ -2271,9 +2144,16 @@ export default function TakeoffViewerModule({
 
       if (newMeasurements.length > 0) {
         setMeasurements((prev) => {
-          const seen = new Set(prev.map((m) => m.serverId || m.id));
+          const retained = prev.filter((m) => {
+            const isCurrentPage = m.page === currentPage;
+            const isUnreviewedAiProposal =
+              (m.source === 'ai_plan_read' || Boolean(m.planReadRunId)) &&
+              (m.reviewStatus === 'proposed' || m.suggested);
+            return !(isCurrentPage && isUnreviewedAiProposal);
+          });
+          const seen = new Set(retained.map((m) => m.serverId || m.id));
           return [
-            ...prev,
+            ...retained,
             ...newMeasurements.filter((m) => !seen.has(m.serverId || m.id)),
           ];
         });
@@ -4348,27 +4228,6 @@ export default function TakeoffViewerModule({
               >
                 <Ruler size={14} />
                 <span className="hidden sm:inline">{t('takeoff_viewer.calibrate', { defaultValue: 'Calibrate' })}</span>
-              </button>
-
-              {/* //// NEOFFICE PATCH — AI vision: detect rooms + scale, pre-draw */}
-              <button
-                onClick={handleVisionAnalyze}
-                disabled={visionLoading || !visionDocumentId}
-                className={`flex items-center gap-1 px-2 py-1.5 rounded text-xs transition-colors disabled:opacity-40 ${
-                  visionLoading ? 'bg-pink-500 text-white' : 'hover:bg-surface-secondary text-content-secondary'
-                }`}
-                title={t('takeoff_viewer.vision_analyze', {
-                  defaultValue: 'Analyse IA (vision) — détecte les pièces et l’échelle du plan',
-                })}
-                aria-label={t('takeoff_viewer.vision_analyze', { defaultValue: 'Analyse IA vision' })}
-                data-testid="vision-analyze-button"
-              >
-                {visionLoading ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
-                <span className="hidden sm:inline">
-                  {visionLoading
-                    ? t('takeoff_viewer.vision_analyzing', { defaultValue: 'Analyse…' })
-                    : t('takeoff_viewer.vision_analyze_short', { defaultValue: 'Analyse IA' })}
-                </span>
               </button>
 
               {/* //// NEOFFICE PATCH — vector room detection (precise wall-following contours) */}

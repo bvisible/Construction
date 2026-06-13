@@ -1471,6 +1471,7 @@ export function TakeoffPage() {
         filename: string;
         pages: number;
         size_bytes: number;
+        project_id?: string | null;
       };
     },
     // NOTE: onSuccess/onError handled per-call in handleFilesSelected
