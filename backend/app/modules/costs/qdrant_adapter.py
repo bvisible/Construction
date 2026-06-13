@@ -560,6 +560,20 @@ def _get_encoder() -> Any:
     """
 
     global _encoder
+    # //// NEOFFICE PATCH — serve CWICR hybrid embeddings (dense + sparse) from the
+    # Olares BGE-M3 service instead of loading FlagEmbedding/torch locally. When
+    # enabled this overrides any prior local/False encoder state. Same model
+    # (BGE-M3, 1024-d) so existing CWICR v3 collections stay compatible.
+    from app.core.olares_embeddings import olares_bge_enabled
+
+    if olares_bge_enabled():
+        from app.core.olares_embeddings import OlaresBGEM3Encoder
+
+        if not isinstance(_encoder, OlaresBGEM3Encoder):
+            _encoder = OlaresBGEM3Encoder()
+            logger.info("CWICR encoder: using Olares remote BGE-M3 (dense+sparse)")
+        return _encoder
+    # //// END NEOFFICE PATCH
     # ``False`` = HARD unavailable (the [semantic] extra isn't installed)
     # - there is no point retrying within this process. A *load* failure
     # (broken HF cache entry, OOM during a concurrent first-call race,

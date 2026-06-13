@@ -85,6 +85,13 @@ def _resolve_active_model() -> tuple[str, int]:
     test fixtures can override them via the env var ``EMBEDDING_MODEL_NAME``
     without restarting the process.
     """
+    # //// NEOFFICE PATCH — when Olares serves the dense embedder, ITS model/dim
+    # (qwen3-embedding:8b, 4096) drive collection creation + model-drift checks.
+    from app.core.olares_embeddings import dense_model_and_dim, olares_dense_enabled
+
+    if olares_dense_enabled():
+        return dense_model_and_dim()
+    # //// END NEOFFICE PATCH
     try:
         from app.config import get_settings
 
@@ -120,6 +127,21 @@ def get_embedder():
     global _embedder_instance, _embedder_tried, _active_model_name
     if _embedder_instance is not None:
         return _embedder_instance
+
+    # //// NEOFFICE PATCH — serve the general dense embedder from Olares (no local
+    # PyTorch/sentence-transformers). Cached as the singleton like any embedder.
+    from app.core.olares_embeddings import OlaresDenseEmbedder, olares_dense_enabled
+
+    if olares_dense_enabled():
+        try:
+            _embedder_instance = OlaresDenseEmbedder()
+            _active_model_name = _embedder_instance.model
+            logger.info("Embedder: using Olares remote dense model %s", _active_model_name)
+            return _embedder_instance
+        except Exception as exc:  # never fatal — fall through to the local model
+            logger.warning("Olares dense embedder unavailable, falling back local: %s", exc)
+    # //// END NEOFFICE PATCH
+
     # Short-circuit: a prior call exhausted both candidate models.
     # Without this guard every caller pays the multi-second retry cost.
     if _embedder_tried:
