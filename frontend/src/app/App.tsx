@@ -31,6 +31,7 @@ import { TemplatesPage } from '@/features/boq/TemplatesPage';
 import { syncCustomUnitsFromServer } from '@/features/boq/boqHelpers';
 import { NlRuleBuilderPanel } from '@/features/compliance';
 import { useModuleRouteElements } from '@/modules/ModuleRoutes';
+<<<<<<< Updated upstream
 // //// NEOFFICE PATCH — Swiss Pack feature import
 import { SwissPackPage } from '@/features/swiss-pack';
 // //// END NEOFFICE PATCH
@@ -39,6 +40,11 @@ import { SwissPackPage } from '@/features/swiss-pack';
 // are defined as lazy() chunks further down (upstream moved them).
 // import { SettingsPage } from '@/features/settings';
 // //// END NEOFFICE PATCH
+=======
+// Neoconstruction: SettingsPage import removed — /settings route redirects
+// to /ai-estimate (cf. patch 04-redirect-settings-to-ai-estimate). The page
+// itself is still reachable via direct import if needed.
+>>>>>>> Stashed changes
 import { DatabaseSetupPage } from '@/features/setup';
 import { Logo, ShortcutsDialog, CommandPalette, ToastContainer, BackgroundInstallBanner, ErrorBoundary, NotFoundPage, ProductTour, OfflineBanner, PWAInstallPrompt } from '@/shared/ui';
 import { AdminOnly } from '@/shared/auth/AdminOnly';
