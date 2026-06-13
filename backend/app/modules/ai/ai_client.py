@@ -75,6 +75,23 @@ DEEPSEEK_MODEL = "deepseek-chat"
 # Settings > AI (stored in AISettings.metadata_["model_overrides"][provider])
 # so that when a provider renames or retires a model the user can point the
 # integration at a current model id WITHOUT waiting for an app release.
+# //// NEOFFICE PATCH — read Frappe site_config (Olares/Nora credentials live
+# there, not in AISettings). Path overridable via FRAPPE_SITE_CONFIG env.
+def _read_frappe_site_config(key, default=None):
+    import os
+    import json as _json
+    path = os.environ.get(
+        "FRAPPE_SITE_CONFIG",
+        "/home/neoffice/frappe-bench/sites/prod.local/site_config.json",
+    )
+    try:
+        with open(path) as _f:
+            return _json.load(_f).get(key, default)
+    except Exception:
+        return default
+# //// END NEOFFICE PATCH
+
+
 DEFAULT_MODELS: dict[str, str] = {
     "anthropic": ANTHROPIC_MODEL,
     "openai": OPENAI_MODEL,
@@ -94,6 +111,9 @@ DEFAULT_MODELS: dict[str, str] = {
     "baidu": "ernie-4.0-8k",
     "yandex": "yandexgpt/latest",
     "gigachat": "GigaChat-Pro",
+    # //// NEOFFICE PATCH — Nora (Olares) house model alias
+    "nora": "nora",
+    # //// END NEOFFICE PATCH
     "ollama": os.environ.get("OE_OLLAMA_MODEL", "llama3.1"),
     "vllm": os.environ.get("OE_VLLM_MODEL", "meta-llama/Llama-3.1-8B-Instruct"),
 }
@@ -500,6 +520,23 @@ _OPENAI_COMPAT_CONFIG = {
     },
 }
 
+
+
+# //// NEOFFICE PATCH — register Nora (Neoffice's self-hosted Olares LLM gateway)
+# as a first-class OpenAI-compatible provider. Endpoint from Frappe site_config
+# (oce_olares_base_url); the bearer key is injected by resolve_provider_and_key
+# from oce_olares_api_key. Model alias "nora" is what Olares routes (the
+# site_config oce_olares_model is a stale Qwen id, intentionally ignored). This
+# is what makes the native vision plan-read / ERP Chat / AI estimator all run on
+# Nora, so a separate plan_vision path is no longer the only way to reach it.
+_nora_base = (_read_frappe_site_config("oce_olares_base_url") or "").rstrip("/")
+if _nora_base:
+    _OPENAI_COMPAT_CONFIG["nora"] = {
+        "url": _nora_base + "/chat/completions",
+        "model": "nora",
+        "api_key_optional": True,
+    }
+# //// END NEOFFICE PATCH
 
 def update_provider_config(saved_meta: dict | None = None) -> None:
     """Refresh the Ollama/vLLM endpoints from the saved settings metadata.
@@ -928,6 +965,14 @@ def resolve_provider_and_key(
     Raises:
         ValueError: If no API key is configured.
     """
+    # //// NEOFFICE PATCH — Nora (Olares) is Neoffice's on-prem house LLM. When its
+    # key is configured in Frappe site_config, route EVERY AI call to it (vision
+    # plan-read, ERP Chat, estimator) regardless of the upstream model preference,
+    # instead of an external provider. No-op in dev where Olares is absent.
+    _nora_key = _read_frappe_site_config("oce_olares_api_key")
+    if _nora_key and "nora" in _OPENAI_COMPAT_CONFIG:
+        return "nora", _nora_key
+    # //// END NEOFFICE PATCH
     from app.core.crypto import decrypt_secret
 
     model = preferred_model or (settings.preferred_model if settings else "claude-sonnet")

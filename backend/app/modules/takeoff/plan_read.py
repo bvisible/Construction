@@ -43,6 +43,7 @@ VISION_PROVIDERS: frozenset[str] = frozenset(
         # provider as the final capability backstop.
         "ollama",
         "vllm",
+        "nora",  # Neoffice's dedicated Olares provider slug (ai_client)
         # #### END NEOFFICE PATCH
     }
 )
