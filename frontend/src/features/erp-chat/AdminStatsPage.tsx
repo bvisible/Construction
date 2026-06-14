@@ -172,7 +172,7 @@ export default function AdminStatsPage() {
                 border: 'none',
                 background:
                   windowDays === w
-                    ? 'var(--chat-accent, #3b82f6)'
+                    ? 'var(--chat-accent, #d68a59)'
                     : 'transparent',
                 color:
                   windowDays === w
@@ -302,7 +302,7 @@ export default function AdminStatsPage() {
                     : 0;
                 const tint =
                   d.thumbs_up + d.thumbs_down === 0
-                    ? 'var(--chat-accent, #3b82f6)'
+                    ? 'var(--chat-accent, #d68a59)'
                     : ratio >= 0.6
                       ? '#10b981'
                       : ratio <= 0.3

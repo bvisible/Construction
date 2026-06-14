@@ -145,11 +145,11 @@ export function GlobalProgress() {
         style={{
           height: '100%',
           width: '0%',
-          backgroundColor: 'var(--color-oe-blue, #2563eb)',
+          backgroundColor: 'var(--color-oe-blue, #c2723f)',
           transition: progress === 100 ? 'width 200ms ease-out, opacity 200ms ease-out' : 'width 100ms linear',
           opacity: progress === 100 ? 0 : 1,
           borderRadius: '0 2px 2px 0',
-          boxShadow: '0 0 8px var(--color-oe-blue, #2563eb)',
+          boxShadow: '0 0 8px var(--color-oe-blue, #c2723f)',
         }}
       />
     </div>

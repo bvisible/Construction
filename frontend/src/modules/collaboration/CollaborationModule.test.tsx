@@ -242,7 +242,7 @@ describe('ConnectionStatus', () => {
 
 describe('CollaborationBar with ConnectionStatus', () => {
   const mockUsers: CollabUser[] = [
-    { userId: '1', userName: 'Alice', color: '#3b82f6', cursor: null, isLocal: true },
+    { userId: '1', userName: 'Alice', color: '#d68a59', cursor: null, isLocal: true },
     { userId: '2', userName: 'Bob', color: '#10b981', cursor: null, isLocal: false },
   ];
 

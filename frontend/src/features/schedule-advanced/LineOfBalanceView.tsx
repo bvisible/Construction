@@ -14,7 +14,7 @@ import { AlertTriangle } from 'lucide-react';
 import type { LineOfBalance, LineOfBalanceBar } from './api';
 
 const PALETTE = [
-  '#2563eb', // blue
+  '#c2723f', // blue
   '#64748b', // slate
   '#d97706', // amber
   '#059669', // emerald

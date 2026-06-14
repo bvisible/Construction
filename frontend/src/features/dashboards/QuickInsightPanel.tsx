@@ -45,7 +45,7 @@ import { PresetPicker } from './PresetPicker';
 
 const CHART_HEIGHT = 200;
 const PIE_PALETTE = [
-  '#3b82f6', // blue
+  '#d68a59', // blue
   '#10b981', // emerald
   '#f59e0b', // amber
   '#ef4444', // red
@@ -300,7 +300,7 @@ function ChartBody({ chart }: { chart: QuickInsightChart }) {
             <XAxis dataKey={chart.x_field} fontSize={10} tickLine={false} />
             <YAxis fontSize={10} tickLine={false} />
             <Tooltip />
-            <Bar dataKey={chart.y_field} fill="#3b82f6" />
+            <Bar dataKey={chart.y_field} fill="#d68a59" />
           </BarChart>
         </ResponsiveContainer>
       );
@@ -324,7 +324,7 @@ function ChartBody({ chart }: { chart: QuickInsightChart }) {
             <XAxis dataKey={chart.x_field} fontSize={10} tickLine={false} />
             <YAxis fontSize={10} tickLine={false} />
             <Tooltip />
-            <Line type="monotone" dataKey={chart.y_field} stroke="#3b82f6" dot={false} />
+            <Line type="monotone" dataKey={chart.y_field} stroke="#d68a59" dot={false} />
           </LineChart>
         </ResponsiveContainer>
       );

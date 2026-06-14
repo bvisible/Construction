@@ -203,10 +203,10 @@ export function renderMarkdown(text: string): string {
       const isInternal = href.startsWith('/') || href.startsWith('#');
       const isMailto = /^mailto:/i.test(href);
       if (!isExternal && !isInternal && !isMailto) {
-        return `<span style="color:var(--chat-accent,#3b82f6)">${label}</span>`;
+        return `<span style="color:var(--chat-accent,#d68a59)">${label}</span>`;
       }
       const attrs = isExternal ? ' target="_blank" rel="noopener noreferrer"' : '';
-      return `<a href="${href}"${attrs} style="color:var(--chat-accent,#3b82f6);text-decoration:underline;font-weight:500">${label}</a>`;
+      return `<a href="${href}"${attrs} style="color:var(--chat-accent,#d68a59);text-decoration:underline;font-weight:500">${label}</a>`;
     },
   );
 
@@ -313,7 +313,7 @@ function FeedbackBar({ messageId }: { messageId: string }) {
   };
   const activeStyle: React.CSSProperties = {
     ...baseStyle,
-    color: 'var(--chat-accent, #3b82f6)',
+    color: 'var(--chat-accent, #d68a59)',
     background: 'var(--chat-surface-3, rgba(0,0,0,.06))',
   };
 

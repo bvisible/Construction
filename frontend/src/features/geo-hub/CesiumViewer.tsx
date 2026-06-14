@@ -1354,7 +1354,7 @@ export function CesiumViewer({
               point: {
                 pixelSize: 18,
                 color:
-                  cesium.Color.fromCssColorString?.('rgba(37,99,235,0.85)') ??
+                  cesium.Color.fromCssColorString?.('rgba(194, 114, 63,0.85)') ??
                   cesium.Color.DODGERBLUE,
                 outlineColor: cesium.Color.WHITE,
                 outlineWidth: 3,

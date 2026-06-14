@@ -13,7 +13,7 @@ import {
 
 /** Colors for the donut chart segments and bar breakdown. */
 const CATEGORY_COLORS: Record<string, string> = {
-  material: '#3b82f6', // blue-500
+  material: '#d68a59', // blue-500
   labor: '#f59e0b', // amber-500
   equipment: '#8b5cf6', // violet-500
   subcontractor: '#ec4899', // pink-500

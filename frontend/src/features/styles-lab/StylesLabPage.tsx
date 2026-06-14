@@ -252,7 +252,7 @@ function ButtonsSection() {
         </Specimen>
 
         <Specimen no={3} name="Gradient Mesh" family="Premium" note="Анимированный градиент. Для главного CTA, AI-кнопок, Pro-плана.">
-          <button className="inline-flex h-10 items-center gap-2 px-5 rounded-[10px] text-sm font-semibold text-white shadow-md hover:shadow-lg transition-all duration-normal ease-oe bg-[linear-gradient(120deg,#0071e3_0%,#7c3aed_45%,#06b6d4_100%)] bg-[length:200%_auto] hover:bg-[position:right_center] active:scale-[0.97]">
+          <button className="inline-flex h-10 items-center gap-2 px-5 rounded-[10px] text-sm font-semibold text-white shadow-md hover:shadow-lg transition-all duration-normal ease-oe bg-[linear-gradient(120deg,#d68a59_0%,#7c3aed_45%,#06b6d4_100%)] bg-[length:200%_auto] hover:bg-[position:right_center] active:scale-[0.97]">
             <Wand2 className="h-4 w-4" /> Generate with AI
           </button>
         </Specimen>
@@ -275,7 +275,7 @@ function ButtonsSection() {
 
         <Specimen no={6} name="Animated Conic Border" family="Premium" note="Конический градиент вращается по периметру. Признак pro/premium.">
           <span className="relative inline-flex p-[1.5px] rounded-[10px] overflow-hidden">
-            <span aria-hidden className="absolute inset-[-100%] animate-[spin_4s_linear_infinite] bg-[conic-gradient(from_0deg,#0071e3,#a855f7,#06b6d4,#0071e3)]" />
+            <span aria-hidden className="absolute inset-[-100%] animate-[spin_4s_linear_infinite] bg-[conic-gradient(from_0deg,#d68a59,#a855f7,#06b6d4,#d68a59)]" />
             <button className="relative inline-flex h-10 items-center gap-2 px-5 rounded-[8.5px] text-sm font-medium bg-surface-primary text-content-primary">
               <Sparkles className="h-4 w-4 text-fuchsia-500" /> Upgrade
             </button>
@@ -289,7 +289,7 @@ function ButtonsSection() {
         </Specimen>
 
         <Specimen no={8} name="3D Press" family="Tactile" note="Тёмный bottom-edge даёт физическое нажатие. Stripe style.">
-          <button className="inline-flex h-10 items-center gap-2 px-5 rounded-[10px] text-sm font-semibold text-white bg-oe-blue active:translate-y-[2px] transition-transform duration-fast shadow-[inset_0_-2px_0_0_rgba(0,0,0,0.25),0_2px_0_0_#005bb5] active:shadow-[inset_0_-1px_0_0_rgba(0,0,0,0.25),0_0px_0_0_#005bb5]">
+          <button className="inline-flex h-10 items-center gap-2 px-5 rounded-[10px] text-sm font-semibold text-white bg-oe-blue active:translate-y-[2px] transition-transform duration-fast shadow-[inset_0_-2px_0_0_rgba(0,0,0,0.25),0_2px_0_0_#a15a2e] active:shadow-[inset_0_-1px_0_0_rgba(0,0,0,0.25),0_0px_0_0_#a15a2e]">
             <Download className="h-4 w-4" /> Export GAEB
           </button>
         </Specimen>
@@ -361,7 +361,7 @@ function IconsSection() {
         </Specimen>
 
         <Specimen no={3} name="Gradient Chip" family="Premium" note="Цветной градиент + белая иконка. Для AI и premium-фичей.">
-          <div className="grid h-12 w-12 place-items-center rounded-[10px] text-white shadow-md bg-[linear-gradient(135deg,#0071e3_0%,#7c3aed_100%)]">
+          <div className="grid h-12 w-12 place-items-center rounded-[10px] text-white shadow-md bg-[linear-gradient(135deg,#d68a59_0%,#7c3aed_100%)]">
             <Sparkles className="h-6 w-6" strokeWidth={1.75} />
           </div>
         </Specimen>
@@ -470,7 +470,7 @@ function TagsSection() {
         </Specimen>
 
         <Specimen no={5} name="Gradient Pill" family="Premium" note="Анимированный градиент. Для «AI-suggested», «Pro», «New».">
-          <span className="inline-flex h-6 items-center gap-1 rounded-full px-2.5 text-xs font-semibold text-white bg-[linear-gradient(120deg,#0071e3,#a855f7,#06b6d4)] bg-[length:200%_auto] animate-gradient-text">
+          <span className="inline-flex h-6 items-center gap-1 rounded-full px-2.5 text-xs font-semibold text-white bg-[linear-gradient(120deg,#d68a59,#a855f7,#06b6d4)] bg-[length:200%_auto] animate-gradient-text">
             <Sparkles className="h-3 w-3" /> AI suggested
           </span>
         </Specimen>
@@ -556,7 +556,7 @@ function TagsSection() {
           <span className="inline-flex h-6 items-center rounded-[5px] px-1.5 font-mono text-2xs text-content-primary bg-surface-tertiary border border-border-light">v2.9.36</span>
           <span className="inline-flex h-6 items-center rounded-[6px] px-2 text-2xs font-semibold uppercase tracking-wider bg-violet-100 text-violet-700 dark:bg-violet-500/20 dark:text-violet-300">Concrete</span>
           <span className="inline-flex h-6 items-center gap-1 rounded-full px-2 text-xs font-semibold bg-semantic-success-bg text-semantic-success"><TrendingUp className="h-3 w-3"/> +12.4%</span>
-          <span className="inline-flex h-6 items-center gap-1 rounded-full px-2.5 text-xs font-semibold text-white bg-[linear-gradient(120deg,#0071e3,#a855f7,#06b6d4)] bg-[length:200%_auto] animate-gradient-text">
+          <span className="inline-flex h-6 items-center gap-1 rounded-full px-2.5 text-xs font-semibold text-white bg-[linear-gradient(120deg,#d68a59,#a855f7,#06b6d4)] bg-[length:200%_auto] animate-gradient-text">
             <Sparkles className="h-3 w-3"/> AI suggested
           </span>
           <span className="inline-flex h-6 items-center gap-1.5 rounded-full px-2.5 text-xs font-medium text-content-secondary border border-border">Draft</span>
@@ -667,7 +667,7 @@ function BackgroundsSection() {
           bgStyle={{
             backgroundColor: 'var(--oe-bg-secondary)',
             backgroundImage:
-              'radial-gradient(80% 55% at 50% -10%, rgba(0,113,227,0.20) 0%, rgba(0,113,227,0.06) 35%, rgba(0,113,227,0) 65%),' +
+              'radial-gradient(80% 55% at 50% -10%, rgba(214, 138, 89,0.20) 0%, rgba(214, 138, 89,0.06) 35%, rgba(214, 138, 89,0) 65%),' +
               'radial-gradient(circle, rgba(60,60,67,0.16) 0.9px, transparent 0.9px)',
             backgroundSize: 'auto, 24px 24px',
             backgroundRepeat: 'no-repeat, repeat',
@@ -689,7 +689,7 @@ function BackgroundsSection() {
           note="Мягкое цветное пятно сверху, расходящееся вниз. Apple-style hero / splash. Не для контентных страниц."
           bgStyle={{
             background:
-              'radial-gradient(80% 60% at 50% 0%, rgba(0,113,227,0.18) 0%, rgba(0,113,227,0) 60%),' +
+              'radial-gradient(80% 60% at 50% 0%, rgba(214, 138, 89,0.18) 0%, rgba(214, 138, 89,0) 60%),' +
               'var(--oe-bg-secondary)',
           }}
         />
@@ -709,7 +709,7 @@ function BackgroundsSection() {
           bgClass="text-white"
           bgStyle={{
             background:
-              'linear-gradient(120deg, #0071e3 0%, #7c3aed 30%, #06b6d4 60%, #0071e3 100%)',
+              'linear-gradient(120deg, #d68a59 0%, #7c3aed 30%, #06b6d4 60%, #d68a59 100%)',
             backgroundSize: '300% 300%',
             animation: 'gradientShift 14s ease infinite',
           }}
@@ -751,7 +751,7 @@ function BackgroundsSection() {
           note="Низ страницы плавно окрашивается в брендовый оттенок. Маркирует контекст без шума."
           bgStyle={{
             background:
-              'linear-gradient(180deg, var(--oe-bg-secondary) 0%, var(--oe-bg-secondary) 50%, rgba(0,113,227,0.08) 100%)',
+              'linear-gradient(180deg, var(--oe-bg-secondary) 0%, var(--oe-bg-secondary) 50%, rgba(214, 138, 89,0.08) 100%)',
           }}
         />
 

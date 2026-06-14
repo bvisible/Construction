@@ -720,7 +720,7 @@ if (typeof window !== 'undefined' && typeof console !== 'undefined') {
     // eslint-disable-next-line no-console
     console.info(
       `%c${DDC_ORIGIN}%c · Artem Boiko · datadrivenconstruction.io`,
-      'color:#0071E3;font-weight:700',
+      'color:#d68a59;font-weight:700',
       'color:#64748b',
     );
   } catch { /* noop */ }

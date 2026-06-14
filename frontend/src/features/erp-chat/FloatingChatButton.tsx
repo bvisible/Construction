@@ -73,7 +73,7 @@ export function FloatingChatButton() {
         // Fallback for tokens that may not exist in every theme — keep the
         // button visible even if --oe-blue-dark hasn't been defined yet.
         background:
-          'linear-gradient(135deg, var(--oe-blue, #2563eb) 0%, var(--oe-blue-dark, #1d4ed8) 100%)',
+          'linear-gradient(135deg, var(--oe-blue, #c2723f) 0%, var(--oe-blue-dark, #a15a2e) 100%)',
       }}
     >
       <MessageCircle size={24} strokeWidth={2} aria-hidden />

@@ -401,7 +401,7 @@ export function MeasurementLedger({
                 </tr>
               )}
               {rowsByGroup.map(([group, groupRows]) => {
-                const color = groupColorMap[group] ?? '#3B82F6';
+                const color = groupColorMap[group] ?? '#d68a59';
                 const sub = subtotalByGroup.get(group);
                 return (
                   <GroupRows

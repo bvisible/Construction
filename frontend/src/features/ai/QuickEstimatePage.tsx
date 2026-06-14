@@ -3346,7 +3346,7 @@ export function QuickEstimatePage() {
                         'Paste your BOQ data here (from Excel, Word, or any table)...\n\nExample:\nPos\tDescription\tUnit\tQty\tRate\n01.01\tExcavation\tm3\t250\t18.50\n01.02\tConcrete C30/37\tm3\t120\t145.00\n01.03\tReinforcement BSt 500\tkg\t12000\t1.85',
                     })}
                     rows={8}
-                    className="w-full rounded-xl border border-border bg-surface-primary px-4 py-3 text-sm text-content-primary placeholder:text-content-tertiary focus:outline-none focus:ring-2 focus:ring-oe-blue/30 focus:border-oe-blue focus:shadow-[0_0_0_4px_rgba(0,113,227,0.08)] transition-all duration-normal ease-oe hover:border-content-tertiary resize-none leading-relaxed font-mono"
+                    className="w-full rounded-xl border border-border bg-surface-primary px-4 py-3 text-sm text-content-primary placeholder:text-content-tertiary focus:outline-none focus:ring-2 focus:ring-oe-blue/30 focus:border-oe-blue focus:shadow-[0_0_0_4px_rgba(214, 138, 89,0.08)] transition-all duration-normal ease-oe hover:border-content-tertiary resize-none leading-relaxed font-mono"
                     disabled={isPending}
                   />
                   <div className="absolute bottom-3 right-3 text-xs text-content-tertiary">

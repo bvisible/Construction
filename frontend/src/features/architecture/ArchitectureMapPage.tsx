@@ -128,7 +128,7 @@ interface ArchitectureManifest {
 type ViewLevel = 'modules' | 'models' | 'api' | 'full';
 
 const CATEGORY_COLORS: Record<string, string> = {
-  core: '#3b82f6',
+  core: '#d68a59',
   estimation: '#f59e0b',
   planning: '#10b981',
   intelligence: '#8b5cf6',
@@ -142,7 +142,7 @@ const CATEGORY_COLORS: Record<string, string> = {
 
 const METHOD_COLORS: Record<string, string> = {
   GET: '#16a34a',
-  POST: '#3b82f6',
+  POST: '#d68a59',
   PUT: '#f59e0b',
   PATCH: '#f59e0b',
   DELETE: '#ef4444',
@@ -253,10 +253,10 @@ function ModelNodeComponent({ data }: { data: ModelNodeData }) {
               <span
                 className="w-1.5 h-1.5 rounded-full shrink-0"
                 style={{
-                  background: isPk ? '#eab308' : isFk ? '#3b82f6' : '#475569',
+                  background: isPk ? '#eab308' : isFk ? '#d68a59' : '#475569',
                 }}
               />
-              <span className="font-mono truncate" style={{ color: isPk ? '#eab308' : isFk ? '#60a5fa' : NODE_TEXT_DIM }}>
+              <span className="font-mono truncate" style={{ color: isPk ? '#eab308' : isFk ? '#dda479' : NODE_TEXT_DIM }}>
                 {col.name}
               </span>
               <span className="ml-auto text-[9px] shrink-0" style={{ color: '#475569' }}>
@@ -328,7 +328,7 @@ const nodeTypes: NodeTypes = {
 
 const EDGE_STYLE_DEPENDENCY = { stroke: '#64748b', strokeWidth: 2 };
 const EDGE_STYLE_FK = { stroke: '#f59e0b', strokeWidth: 2 };
-const EDGE_STYLE_API = { stroke: '#3b82f6', strokeWidth: 2, strokeDasharray: '8 4' };
+const EDGE_STYLE_API = { stroke: '#d68a59', strokeWidth: 2, strokeDasharray: '8 4' };
 const EDGE_STYLE_OWNS = { stroke: '#94a3b8', strokeWidth: 1.5 };
 
 // ---------------------------------------------------------------------------
@@ -537,7 +537,7 @@ function buildAPIView(manifest: ArchitectureManifest): { nodes: Node[]; edges: E
         type: 'default',
         animated: true,
         style: { ...EDGE_STYLE_API },
-        markerEnd: { type: MarkerType.ArrowClosed, color: '#3b82f6', width: 12, height: 12 },
+        markerEnd: { type: MarkerType.ArrowClosed, color: '#d68a59', width: 12, height: 12 },
       });
     }
 
@@ -557,7 +557,7 @@ function buildAPIView(manifest: ArchitectureManifest): { nodes: Node[]; edges: E
         type: 'default',
         animated: true,
         style: { ...EDGE_STYLE_API },
-        markerEnd: { type: MarkerType.ArrowClosed, color: '#3b82f6', width: 12, height: 12 },
+        markerEnd: { type: MarkerType.ArrowClosed, color: '#d68a59', width: 12, height: 12 },
       });
     }
   }
@@ -862,12 +862,12 @@ function DetailPanel({ manifest, selectedNodeId, onClose }: DetailPanelProps) {
                     <span
                       className="w-2 h-2 rounded-full shrink-0"
                       style={{
-                        background: isPk ? '#eab308' : isFk ? '#3b82f6' : '#475569',
+                        background: isPk ? '#eab308' : isFk ? '#d68a59' : '#475569',
                       }}
                     />
                     <span
                       className="font-mono"
-                      style={{ color: isPk ? '#eab308' : isFk ? '#60a5fa' : NODE_TEXT_DIM }}
+                      style={{ color: isPk ? '#eab308' : isFk ? '#dda479' : NODE_TEXT_DIM }}
                     >
                       {col.name}
                     </span>
@@ -901,7 +901,7 @@ function DetailPanel({ manifest, selectedNodeId, onClose }: DetailPanelProps) {
                     {rel.name}
                   </span>
                   <span style={{ color: NODE_TEXT_DIM }}>{'->'}</span>
-                  <span className="font-mono" style={{ color: '#60a5fa' }}>
+                  <span className="font-mono" style={{ color: '#dda479' }}>
                     {rel.target}
                   </span>
                 </div>
@@ -955,7 +955,7 @@ function DetailPanel({ manifest, selectedNodeId, onClose }: DetailPanelProps) {
               <h4 className="text-xs font-semibold mb-1" style={{ color: NODE_TEXT }}>
                 {t('architecture.request_schema', { defaultValue: 'Request Schema' })}
               </h4>
-              <span className="text-xs font-mono" style={{ color: '#3b82f6' }}>
+              <span className="text-xs font-mono" style={{ color: '#d68a59' }}>
                 {route.request_schema}
               </span>
             </div>
@@ -1038,7 +1038,7 @@ function Legend() {
           <span>{t('architecture.edge_fk', { defaultValue: 'Foreign Key' })}</span>
         </div>
         <div className="flex items-center gap-1.5">
-          <span className="w-4 border-t-2 border-dashed" style={{ borderColor: '#3b82f6' }} />
+          <span className="w-4 border-t-2 border-dashed" style={{ borderColor: '#d68a59' }} />
           <span>{t('architecture.edge_api', { defaultValue: 'API Call' })}</span>
         </div>
       </div>
@@ -1051,7 +1051,7 @@ function Legend() {
           <span>{t('architecture.pk', { defaultValue: 'Primary Key' })}</span>
         </div>
         <div className="flex items-center gap-1.5">
-          <span className="w-2 h-2 rounded-full" style={{ background: '#3b82f6' }} />
+          <span className="w-2 h-2 rounded-full" style={{ background: '#d68a59' }} />
           <span>{t('architecture.fk', { defaultValue: 'Foreign Key' })}</span>
         </div>
       </div>
@@ -1304,7 +1304,7 @@ export function ArchitectureMapPage() {
     return (
       <div className="flex items-center justify-center" style={{ background: CANVAS_BG, height: 'calc(100vh - 56px)' }}>
         <div className="flex flex-col items-center gap-3">
-          <div className="w-8 h-8 border-2 border-t-transparent rounded-full animate-spin" style={{ borderColor: '#3b82f6', borderTopColor: 'transparent' }} />
+          <div className="w-8 h-8 border-2 border-t-transparent rounded-full animate-spin" style={{ borderColor: '#d68a59', borderTopColor: 'transparent' }} />
           <span className="text-sm" style={{ color: NODE_TEXT_DIM }}>
             {t('architecture.loading', { defaultValue: 'Loading architecture data (54 modules)...' })}
           </span>
@@ -1332,9 +1332,9 @@ export function ArchitectureMapPage() {
               onClick={() => setViewLevel(v.key)}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all"
               style={{
-                background: viewLevel === v.key ? '#3b82f620' : 'transparent',
-                color: viewLevel === v.key ? '#60a5fa' : NODE_TEXT_DIM,
-                border: viewLevel === v.key ? '1px solid #3b82f640' : '1px solid transparent',
+                background: viewLevel === v.key ? '#d68a5920' : 'transparent',
+                color: viewLevel === v.key ? '#dda479' : NODE_TEXT_DIM,
+                border: viewLevel === v.key ? '1px solid #d68a5940' : '1px solid transparent',
               }}
             >
               {v.icon}

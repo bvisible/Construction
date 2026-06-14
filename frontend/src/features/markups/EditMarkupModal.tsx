@@ -28,7 +28,7 @@ const PRESET_COLORS = [
   { name: 'Orange', value: '#F97316' },
   { name: 'Yellow', value: '#EAB308' },
   { name: 'Green', value: '#22C55E' },
-  { name: 'Blue', value: '#3B82F6' },
+  { name: 'Blue', value: '#d68a59' },
   { name: 'Purple', value: '#A855F7' },
 ];
 

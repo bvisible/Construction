@@ -187,7 +187,7 @@ export function getCategoryTokens(category: string): CategoryTokenEntry {
 /** Hex color used for the minimap dot of a category (xyflow MiniMap nodeColor). */
 export const CATEGORY_MINIMAP_COLOR: Record<NodeCategory, string> = {
   trigger: '#16a34a',
-  source: '#2563eb',
+  source: '#c2723f',
   transform: '#9333ea',
   gate: '#d97706',
   ai: '#7c3aed',
@@ -230,7 +230,7 @@ export interface PortTypeEntry {
  */
 export const PORT_TYPES: Record<PortDataType, PortTypeEntry> = {
   table: {
-    color: '#2563eb',
+    color: '#c2723f',
     shape: 'circle',
     dash: undefined,
     labelKey: 'pipeline.port.table',

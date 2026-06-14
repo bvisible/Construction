@@ -28,7 +28,7 @@ const STAGE_LABELS: Record<string, string> = {
 };
 
 const STAGE_COLOR: Record<string, string> = {
-  lead_to_reservation: '#3b82f6',
+  lead_to_reservation: '#d68a59',
   reservation_to_sale: '#8b5cf6',
   sale_to_handover: '#10b981',
   lead_to_handover: '#f59e0b',

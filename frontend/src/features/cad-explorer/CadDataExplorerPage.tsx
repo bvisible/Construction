@@ -850,12 +850,12 @@ function PivotHeatmap({ groups, groupBy, aggCols, aggFn, maxByAgg, thresholdRule
     );
   }
   const heatBg = (value: number, max: number): string => {
-    if (!Number.isFinite(max) || max <= 0) return 'rgba(59,130,246,0)';
+    if (!Number.isFinite(max) || max <= 0) return 'rgba(214, 138, 89,0)';
     const ratio = Math.max(0, Math.min(1, Math.abs(value) / max));
     // Blue gradient — low saturation at low values, darker at high.
     // Kept CSS-in-style so dark mode picks up the same hue.
     const alpha = 0.08 + ratio * 0.52;
-    return `rgba(59,130,246,${alpha.toFixed(3)})`;
+    return `rgba(214, 138, 89,${alpha.toFixed(3)})`;
   };
   return (
     <div className="overflow-x-auto" data-testid="pivot-heatmap">
@@ -1877,7 +1877,7 @@ function PivotTab({ sessionId, describe, thresholdRules, setThresholdRules }: Pi
 
 /** Category palette — deliberately hardcoded for consistent data viz. */
 const BAR_COLORS = [
-  '#3B82F6', '#22C55E', '#F97316', '#A855F7', '#EF4444',
+  '#d68a59', '#22C55E', '#F97316', '#A855F7', '#EF4444',
   '#06B6D4', '#EC4899', '#84CC16', '#F59E0B', '#6366F1',
 ];
 
@@ -2375,9 +2375,9 @@ function LazyRechart({ slices, kind, formatAxis, onSliceClick, onSliceDoubleClic
             <Line
               type="monotone"
               dataKey="value"
-              stroke="#3B82F6"
+              stroke="#d68a59"
               strokeWidth={2}
-              dot={{ r: 4, stroke: '#3B82F6', strokeWidth: 2, fill: 'white' }}
+              dot={{ r: 4, stroke: '#d68a59', strokeWidth: 2, fill: 'white' }}
               activeDot={{ r: 6, onClick: activeDotClickHandler }}
               isAnimationActive={false}
             />
@@ -2400,7 +2400,7 @@ function LazyRechart({ slices, kind, formatAxis, onSliceClick, onSliceDoubleClic
             <Tooltip cursor={{ strokeDasharray: '3 3' }} formatter={tooltipFormatter} />
             <Scatter
               data={data}
-              fill="#3B82F6"
+              fill="#d68a59"
               isAnimationActive={false}
               onClick={scatterClickHandler}
             >

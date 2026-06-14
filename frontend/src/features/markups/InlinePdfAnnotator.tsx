@@ -112,12 +112,12 @@ const TOOLS: { id: AnnotationTool; icon: React.ElementType; label: string }[] = 
 const DEFAULT_STAMPS: StampDef[] = [
   { name: 'approved', label: 'APPROVED', color: '#16a34a', bgColor: '#dcfce7' },
   { name: 'rejected', label: 'REJECTED', color: '#dc2626', bgColor: '#fee2e2' },
-  { name: 'for_review', label: 'FOR REVIEW', color: '#2563eb', bgColor: '#dbeafe' },
+  { name: 'for_review', label: 'FOR REVIEW', color: '#c2723f', bgColor: '#dbeafe' },
   { name: 'revised', label: 'REVISED', color: '#9333ea', bgColor: '#f3e8ff' },
   { name: 'final', label: 'FINAL', color: '#d97706', bgColor: '#fef3c7' },
 ];
 
-const PRESET_COLORS = ['#EF4444', '#3B82F6', '#22C55E', '#F97316', '#A855F7', '#6B7280'];
+const PRESET_COLORS = ['#EF4444', '#d68a59', '#22C55E', '#F97316', '#A855F7', '#6B7280'];
 
 const ZOOM_LEVELS = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
 
@@ -259,7 +259,7 @@ export function InlinePdfAnnotator({
             // legacy ``canvas`` so they at least appear on-screen.
             coordSpace: savedSpace === 'pdf' ? 'pdf' : 'canvas',
             text: m.text || m.label || undefined,
-            color: m.color || '#3B82F6',
+            color: m.color || '#d68a59',
             page: m.page || 1,
             stampName: (m.geometry?.stamp_name as string) || (m.type === 'stamp' ? (m.label || undefined) : undefined),
           };
@@ -1075,8 +1075,8 @@ export function InlinePdfAnnotator({
                     width: highlightRect.width * scaleX,
                     height: highlightRect.height * scaleY,
                     boxShadow:
-                      '0 0 0 3px rgba(59,130,246,0.9), 0 0 24px 8px rgba(59,130,246,0.5)',
-                    background: 'rgba(59,130,246,0.08)',
+                      '0 0 0 3px rgba(214, 138, 89,0.9), 0 0 24px 8px rgba(214, 138, 89,0.5)',
+                    background: 'rgba(214, 138, 89,0.08)',
                     transition: 'all 250ms ease-out',
                   }}
                   data-testid="markup-highlight-ring"

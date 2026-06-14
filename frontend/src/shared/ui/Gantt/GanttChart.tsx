@@ -413,12 +413,12 @@ export function GanttChart({
       const effectiveX = x + dragOffset + resizeLeftShift;
       const effectiveWidth = Math.max(width + resizeWidthDelta, MIN_BAR_WIDTH);
 
-      const fillColor = a.color || (isCritical ? '#ef4444' : '#3b82f6');
+      const fillColor = a.color || (isCritical ? '#ef4444' : '#d68a59');
       const bgColor = a.color
         ? `${a.color}33`
         : isCritical
           ? '#ef444433'
-          : '#3b82f633';
+          : '#d68a5933';
       const progressWidth = (a.progress / 100) * width;
 
       if (a.isMilestone) {
@@ -429,7 +429,7 @@ export function GanttChart({
             <polygon
               points={`${cx},${cy - MILESTONE_SIZE} ${cx + MILESTONE_SIZE},${cy} ${cx},${cy + MILESTONE_SIZE} ${cx - MILESTONE_SIZE},${cy}`}
               fill={isCritical ? '#ef4444' : fillColor}
-              stroke={isCritical ? '#b91c1c' : '#1e40af'}
+              stroke={isCritical ? '#b91c1c' : '#a15a2e'}
               strokeWidth={1.5}
               className={onActivityClick ? 'cursor-pointer' : ''}
               onClick={() => onActivityClick?.(a.id)}
@@ -706,7 +706,7 @@ export function GanttChart({
                     <svg width="10" height="10" viewBox="0 0 10 10" className="shrink-0">
                       <polygon
                         points="5,0 10,5 5,10 0,5"
-                        fill={isCritical ? '#ef4444' : '#3b82f6'}
+                        fill={isCritical ? '#ef4444' : '#d68a59'}
                       />
                     </svg>
                   )}

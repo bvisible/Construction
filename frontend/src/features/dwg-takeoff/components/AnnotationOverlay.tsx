@@ -110,7 +110,7 @@ export function renderAnnotations(
 ): void {
   for (const ann of annotations) {
     const isSelected = ann.id === selectedId;
-    const color = isSelected ? '#3b82f6' : ann.color;
+    const color = isSelected ? '#d68a59' : ann.color;
     const width = strokeWidth(ann, isSelected);
 
     switch (ann.type) {
@@ -307,7 +307,7 @@ function renderTextPin(
   }
 
   if (isSelected) {
-    ctx.strokeStyle = '#3b82f6';
+    ctx.strokeStyle = '#d68a59';
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.arc(pos.x, pos.y, markerRadius + 5, 0, Math.PI * 2);
@@ -379,7 +379,7 @@ function renderRectangle(
   // Drag handles when selected
   if (isSelected) {
     for (const p of [p1, p2]) {
-      ctx.fillStyle = '#3b82f6';
+      ctx.fillStyle = '#d68a59';
       ctx.fillRect(p.x - 4, p.y - 4, 8, 8);
     }
   }

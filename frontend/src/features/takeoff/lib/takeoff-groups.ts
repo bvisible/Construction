@@ -37,7 +37,7 @@ export interface GroupSummary {
 export function computeGroupSummaries(
   measurements: Measurement[],
   groupColorMap: Readonly<Record<string, string>>,
-  fallbackColor: string = '#3B82F6',
+  fallbackColor: string = '#d68a59',
 ): GroupSummary[] {
   const byGroup = new Map<
     string,

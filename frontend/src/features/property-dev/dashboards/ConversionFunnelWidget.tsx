@@ -25,7 +25,7 @@ interface ConversionFunnelWidgetProps {
 }
 
 const STEP_COLOR: Record<string, string> = {
-  leads: '#3b82f6',
+  leads: '#d68a59',
   qualified: '#8b5cf6',
   reservation: '#f59e0b',
   sale: '#10b981',

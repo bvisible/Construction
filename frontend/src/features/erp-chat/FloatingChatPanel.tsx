@@ -367,10 +367,10 @@ function renderMarkdown(text: string): string {
     const isInternal = href.startsWith('/') || href.startsWith('#');
     const isMailto = /^mailto:/i.test(href);
     if (!isExternal && !isInternal && !isMailto) {
-      return `<span style="color:var(--chat-accent,#3b82f6)">${label}</span>`;
+      return `<span style="color:var(--chat-accent,#d68a59)">${label}</span>`;
     }
     const attrs = isExternal ? ' target="_blank" rel="noopener noreferrer"' : '';
-    return `<a href="${href}"${attrs} style="color:var(--chat-accent,#3b82f6);text-decoration:underline;font-weight:500">${label}</a>`;
+    return `<a href="${href}"${attrs} style="color:var(--chat-accent,#d68a59);text-decoration:underline;font-weight:500">${label}</a>`;
   });
   html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
   html = html.replace(/(?<!\w)\*([^*\n]+?)\*(?!\w)/g, '<em>$1</em>');

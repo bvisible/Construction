@@ -207,7 +207,7 @@ const PerformanceIndicator = memo(function PerformanceIndicator({
 
 /** EVM S-curve chart colors — semantic names for planned/earned/actual series */
 const CHART_COLORS = {
-  planned: 'var(--chart-planned, #2563eb)',
+  planned: 'var(--chart-planned, #c2723f)',
   earned: 'var(--chart-earned, #16a34a)',
   actual: 'var(--chart-actual, #dc2626)',
 } as const;

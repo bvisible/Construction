@@ -221,7 +221,7 @@ const COUNTRY_FLAGS: Record<string, string> = {
 };
 
 const DEMO_TYPE_COLORS: Record<string, string> = {
-  Residential: '#2563eb',
+  Residential: '#c2723f',
   Commercial: '#7c3aed',
   Healthcare: '#dc2626',
   Industrial: '#ca8a04',

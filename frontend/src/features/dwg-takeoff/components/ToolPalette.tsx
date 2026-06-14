@@ -61,7 +61,7 @@ const TOOLS: ToolDef[] = [
   { id: 'calibrate', icon: Crosshair, labelKey: 'dwg_takeoff.tool_calibrate', labelFallback: 'Calibrate', shortcut: 'K' },
 ];
 
-const PRESET_COLORS = ['#ef4444', '#f59e0b', '#22c55e', '#3b82f6', '#8b5cf6', '#ec4899'];
+const PRESET_COLORS = ['#ef4444', '#f59e0b', '#22c55e', '#d68a59', '#8b5cf6', '#ec4899'];
 
 interface Props {
   activeTool: DwgTool;

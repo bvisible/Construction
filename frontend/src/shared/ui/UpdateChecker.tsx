@@ -340,7 +340,7 @@ export function UpdateNotification({ forceShow = false, hideDismiss = false }: U
 
   return (
     <>
-      {/* Site-brand palette: oe-blue (#0071e3) with sky/cyan accents.
+      {/* Site-brand palette: oe-blue (#d68a59) with sky/cyan accents.
           Entire card is a button — clicking anywhere opens the full-screen
           modal with highlights + install commands. The sidebar stays narrow,
           the details breathe. */}

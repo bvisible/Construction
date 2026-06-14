@@ -6,7 +6,7 @@
  * without a rate render gray with reduced opacity so the user can see them
  * but they don't compete with the cost signal.
  *
- *   low  rate → #0071e3 (Apple system blue)
+ *   low  rate → #d68a59 (Apple system blue)
  *   mid  rate → #f59e0b (amber-500)
  *   high rate → #ef4444 (red-500)
  *
@@ -24,7 +24,7 @@ export interface RateGradientStop {
 
 /** Default 3-stop gradient.  Exposed for the legend strip. */
 export const DEFAULT_5D_GRADIENT: readonly RateGradientStop[] = [
-  { t: 0.0, hex: '#0071e3' },
+  { t: 0.0, hex: '#d68a59' },
   { t: 0.5, hex: '#f59e0b' },
   { t: 1.0, hex: '#ef4444' },
 ];

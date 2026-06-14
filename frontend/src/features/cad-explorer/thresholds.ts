@@ -155,7 +155,7 @@ export function applyRuleToBar(
   const zone = resolveThresholdColor(value, rule);
   if (!zone || !rule) {
     return {
-      bar: '#3b82f6',
+      bar: '#d68a59',
       text: 'inherit',
       bg: 'transparent',
     };

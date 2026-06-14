@@ -365,7 +365,7 @@ function ColorSwatch({
     DEFAULT_LOW_COLOR,
     DEFAULT_MID_COLOR,
     DEFAULT_HIGH_COLOR,
-    '#3b82f6', // blue
+    '#d68a59', // blue
     '#8b5cf6', // violet
     '#6b7280', // neutral
   ];

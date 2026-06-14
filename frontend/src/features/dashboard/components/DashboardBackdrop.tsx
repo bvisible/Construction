@@ -155,7 +155,7 @@ export function DashboardBackdrop({
       {isDefaultTint && (
         <style>{`
           [data-theme="dark"] .dash-backdrop > div:nth-child(2) {
-            background: radial-gradient(80% 55% at 50% -10%, rgba(59,130,246,0.18) 0%, rgba(59,130,246,0.05) 35%, rgba(59,130,246,0) 65%);
+            background: radial-gradient(80% 55% at 50% -10%, rgba(214, 138, 89,0.18) 0%, rgba(214, 138, 89,0.05) 35%, rgba(214, 138, 89,0) 65%);
           }
           [data-theme="dark"] .dash-backdrop > div:nth-child(4) {
             background-image: radial-gradient(circle, rgba(180,184,196,0.10) 0.9px, transparent 0.9px);

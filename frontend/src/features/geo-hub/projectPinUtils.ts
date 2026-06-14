@@ -81,7 +81,7 @@ export function colorForProjectStatus(
     s === 'closed' ||
     s === 'archived'
   ) {
-    return '#3b82f6'; // blue-500
+    return '#d68a59'; // blue-500
   }
   if (s === 'on_hold' || s === 'paused' || s === 'cancelled') {
     return '#9ca3af'; // gray-400

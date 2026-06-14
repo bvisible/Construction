@@ -37,7 +37,7 @@ interface TooltipState {
 /* ── Canvas colours (aligned with OE palette) ───────────────────────── */
 const CELL_PRESENT = '#1f2937'; // slate-800 — "black"
 const CELL_MISSING = '#e5e7eb'; // gray-200 — "light-gray"
-const ROW_LINE = '#2563eb'; // oe-blue
+const ROW_LINE = '#c2723f'; // oe-blue
 
 function pickFilterColumn(columnNames: string[], candidates: string[]): string | null {
   const lower = columnNames.reduce<Record<string, string>>((acc, c) => {

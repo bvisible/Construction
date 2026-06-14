@@ -45,7 +45,7 @@ const Input = forwardRef<HTMLInputElement, InputProps>(
                 'text-sm text-content-primary placeholder:text-content-tertiary',
                 'transition-all duration-normal ease-oe',
                 'focus:outline-none focus:ring-2 focus:ring-oe-blue/30 focus:border-oe-blue',
-                'focus:shadow-[0_0_0_4px_rgba(0,113,227,0.08)]',
+                'focus:shadow-[0_0_0_4px_rgba(214, 138, 89,0.08)]',
                 icon && 'pl-10',
                 suffix && 'pr-10',
                 hasError
@@ -102,7 +102,7 @@ const Input = forwardRef<HTMLInputElement, InputProps>(
               'text-sm text-content-primary',
               'transition-all duration-normal ease-oe',
               'focus:outline-none focus:ring-2 focus:ring-oe-blue/30 focus:border-oe-blue',
-              'focus:shadow-[0_0_0_4px_rgba(0,113,227,0.08)]',
+              'focus:shadow-[0_0_0_4px_rgba(214, 138, 89,0.08)]',
               icon && 'pl-10',
               suffix && 'pr-10',
               hasError

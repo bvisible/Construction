@@ -37,7 +37,7 @@ interface PresenceState {
 }
 
 const DEMO_USERS: Omit<PresenceUser, 'boqId' | 'lastSeen'>[] = [
-  { id: 'demo-1', name: 'Sarah K.', email: 'sarah@example.com', color: '#3b82f6' },
+  { id: 'demo-1', name: 'Sarah K.', email: 'sarah@example.com', color: '#d68a59' },
   { id: 'demo-2', name: 'Max M.', email: 'max@example.com', color: '#10b981' },
   { id: 'demo-3', name: 'Lena B.', email: 'lena@example.com', color: '#f59e0b' },
 ];

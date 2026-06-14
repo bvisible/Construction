@@ -42,7 +42,7 @@ const TEXT_PIN_COLORS = [
   '#ef4444',
   '#f59e0b',
   '#22c55e',
-  '#3b82f6',
+  '#d68a59',
   '#8b5cf6',
   '#ec4899',
 ];
@@ -589,7 +589,7 @@ export function DxfViewer({
           // band so it sits under the primary preview line.
           if (shiftHeldRef.current && canOrtho && !snapHit) {
             ctx.save();
-            ctx.strokeStyle = '#60a5fa';
+            ctx.strokeStyle = '#dda479';
             ctx.globalAlpha = 0.35;
             ctx.lineWidth = 1;
             ctx.setLineDash([2, 4]);
@@ -1288,10 +1288,10 @@ function renderPolylineMeasurements(
       ctx.lineTo(sp.x, sp.y);
     }
     ctx.closePath();
-    ctx.fillStyle = 'rgba(59, 130, 246, 0.12)';
+    ctx.fillStyle = 'rgba(214, 138, 89, 0.12)';
     ctx.fill();
     // Subtle dashed border for the fill region
-    ctx.strokeStyle = 'rgba(59, 130, 246, 0.25)';
+    ctx.strokeStyle = 'rgba(214, 138, 89, 0.25)';
     ctx.lineWidth = 1;
     ctx.setLineDash([6, 3]);
     ctx.stroke();
@@ -1308,11 +1308,11 @@ function renderPolylineMeasurements(
   }
   if (closed) ctx.closePath();
   // Outer glow
-  ctx.strokeStyle = 'rgba(59, 130, 246, 0.3)';
+  ctx.strokeStyle = 'rgba(214, 138, 89, 0.3)';
   ctx.lineWidth = 6;
   ctx.stroke();
   // Inner bright stroke
-  ctx.strokeStyle = '#60a5fa';
+  ctx.strokeStyle = '#dda479';
   ctx.lineWidth = 2;
   ctx.stroke();
 
@@ -1424,7 +1424,7 @@ function renderPolylineMeasurements(
     ctx.shadowOffsetY = 2;
 
     ctx.textAlign = 'center';
-    ctx.fillStyle = 'rgba(59, 130, 246, 0.92)';
+    ctx.fillStyle = 'rgba(214, 138, 89, 0.92)';
     roundRect(ctx, centroidScreen.x - atw / 2, centroidScreen.y - ath / 2, atw, ath, 6);
     ctx.fill();
 

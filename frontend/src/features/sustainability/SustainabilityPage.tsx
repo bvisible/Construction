@@ -49,7 +49,7 @@ interface BOQ {
 function ratingColor(rating: string): string {
   switch (rating) {
     case 'A': return '#16a34a';
-    case 'B': return '#2563eb';
+    case 'B': return '#c2723f';
     case 'C': return '#ca8a04';
     case 'D': return '#dc2626';
     default: return '#6b7280';
@@ -67,7 +67,7 @@ function complianceStyle(level: string, t: (key: string, opts?: Record<string, u
 }
 
 const DONUT_COLORS = [
-  '#2563eb', '#dc2626', '#16a34a', '#ca8a04', '#7c3aed',
+  '#c2723f', '#dc2626', '#16a34a', '#ca8a04', '#7c3aed',
   '#0891b2', '#ea580c', '#6366f1', '#be185d', '#065f46', '#9333ea',
 ];
 
@@ -652,7 +652,7 @@ export function SustainabilityPage() {
             <div className="flex items-center gap-4">
               {[
                 { label: 'A: <80', color: '#16a34a', key: 'a' },
-                { label: 'B: 80-150', color: '#2563eb', key: 'b' },
+                { label: 'B: 80-150', color: '#c2723f', key: 'b' },
                 { label: 'C: 150-250', color: '#ca8a04', key: 'c' },
                 { label: 'D: >250', color: '#dc2626', key: 'd' },
               ].map((r) => (

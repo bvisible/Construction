@@ -405,7 +405,7 @@ const SEQ_BLUE_LOW = '#e0f2fe';
 const SEQ_BLUE_HIGH = '#0c4a6e';
 const DIVERGING_LOW = '#b91c1c';   // red (low)
 const DIVERGING_MID = '#ffffff';   // white (mid)
-const DIVERGING_HIGH = '#1d4ed8';  // blue (high)
+const DIVERGING_HIGH = '#a15a2e';  // blue (high)
 
 /** Parse a CSS-hex string into a THREE.Color (no #-less or rgb() support). */
 function hexToColor(hex: string): THREE.Color {

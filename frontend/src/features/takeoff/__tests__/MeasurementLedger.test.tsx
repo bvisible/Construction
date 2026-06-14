@@ -35,7 +35,7 @@ const FIXTURE: Measurement[] = [
   m({ id: 'e', type: 'count', value: 3, unit: 'pcs', group: 'Walls', annotation: 'Doors' }),
 ];
 
-const COLORS = { Walls: '#EF4444', Floors: '#3B82F6' };
+const COLORS = { Walls: '#EF4444', Floors: '#d68a59' };
 
 describe('MeasurementLedger', () => {
   it('renders the empty state when there are no measurements', () => {

@@ -62,7 +62,7 @@ beforeAll(() => {
 /* ── Fixtures ────────────────────────────────────────────────────── */
 
 const GROUP_COLORS: Readonly<Record<string, string>> = {
-  General: '#3B82F6',
+  General: '#d68a59',
   Structural: '#EF4444',
   Electrical: '#F59E0B',
 };
@@ -166,7 +166,7 @@ describe('summariseByGroupType', () => {
     expect(generalDistance!.count).toBe(2);
     expect(generalDistance!.total).toBeCloseTo(7.75, 5);
     expect(generalDistance!.unit).toBe('m');
-    expect(generalDistance!.color).toBe('#3B82F6');
+    expect(generalDistance!.color).toBe('#d68a59');
 
     const structuralArea = rows.find((r) => r.group === 'Structural' && r.type === 'area');
     expect(structuralArea).toBeDefined();

@@ -86,7 +86,7 @@ function makePdfMeasurement(
     page: 1,
     type: 'distance',
     group_name: 'Walls',
-    group_color: '#3b82f6',
+    group_color: '#d68a59',
     annotation: 'Wall A',
     points: [
       { x: 0, y: 0 },

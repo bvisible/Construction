@@ -596,7 +596,7 @@ function ProgressBar({ current, total }: { current: number; total: number }) {
                     done
                       ? 'bg-oe-blue text-white shadow-sm'
                       : here
-                        ? 'bg-white dark:bg-surface-elevated text-oe-blue ring-2 ring-oe-blue shadow-[0_0_0_4px_rgba(37,99,235,0.18)] scale-110'
+                        ? 'bg-white dark:bg-surface-elevated text-oe-blue ring-2 ring-oe-blue shadow-[0_0_0_4px_rgba(194, 114, 63,0.18)] scale-110'
                         : 'bg-surface-secondary text-content-tertiary',
                   )}
                 >
@@ -675,7 +675,7 @@ function StepWelcome({
           className="absolute inset-0 -m-6 rounded-full blur-2xl opacity-60"
           style={{
             background:
-              'radial-gradient(circle, rgba(37, 99, 235, 0.35), transparent 70%)',
+              'radial-gradient(circle, rgba(194, 114, 63, 0.35), transparent 70%)',
           }}
           aria-hidden
         />
@@ -1726,7 +1726,7 @@ function PackLogo({ pack }: { pack: InstalledPartnerPack }) {
   // Brand gradient from the pack's own colours; falls back to the app blue
   // when a pack omits them. Two-stop gradient gives the flat badge depth.
   const initials = packInitials(pack);
-  const from = pack.branding?.primary_color || '#2563eb';
+  const from = pack.branding?.primary_color || '#c2723f';
   const to = pack.branding?.accent_color || from;
   return (
     <span
@@ -3625,7 +3625,7 @@ export function OnboardingWizard() {
           className="absolute -top-40 -start-40 h-[520px] w-[520px] rounded-full blur-3xl opacity-[0.35] dark:opacity-[0.22]"
           style={{
             background:
-              'radial-gradient(circle at center, rgba(37, 99, 235, 0.55), transparent 70%)',
+              'radial-gradient(circle at center, rgba(194, 114, 63, 0.55), transparent 70%)',
           }}
         />
         <div

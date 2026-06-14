@@ -39,7 +39,7 @@ const CATEGORY_OPTIONS: { value: TagCategory; labelKey: string; defaultLabel: st
 ];
 
 const DEFAULT_TAG_COLORS = [
-  '#3b82f6',
+  '#d68a59',
   '#ef4444',
   '#10b981',
   '#f59e0b',

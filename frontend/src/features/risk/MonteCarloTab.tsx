@@ -306,7 +306,7 @@ export function MonteCarloTab({ projectId, currency }: MonteCarloTabProps) {
               />
               <YAxis tick={{ fontSize: 10 }} />
               <Tooltip />
-              <Bar dataKey="count" fill="#3b82f6" radius={[4, 4, 0, 0]} />
+              <Bar dataKey="count" fill="#d68a59" radius={[4, 4, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
         </Card>

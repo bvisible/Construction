@@ -20,7 +20,7 @@ const SLOT_TYPE_STYLE: Record<SlotDataType, { stroke: string; label: string }> =
   selector: { stroke: '#6b7280', label: 'Selector' }, // gray-500
   predicate: { stroke: '#16a34a', label: 'Predicate' }, // green-600
   attribute: { stroke: '#9333ea', label: 'Attribute' }, // purple-600
-  constraint: { stroke: '#2563eb', label: 'Constraint' }, // blue-600
+  constraint: { stroke: '#c2723f', label: 'Constraint' }, // blue-600
   variable: { stroke: '#ca8a04', label: 'Variable' }, // yellow-600
   number: { stroke: '#0891b2', label: 'Number' }, // cyan-600
   string: { stroke: '#db2777', label: 'String' }, // pink-600

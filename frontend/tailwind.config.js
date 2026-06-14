@@ -31,6 +31,25 @@ export default {
           // 4.5:1 in both themes. See index.css `--oe-blue-text`.
           'blue-text': 'var(--oe-blue-text)',
         },
+        // Neoffice Design System: override Tailwind's default `blue` palette with
+        // a clay ramp so the ~124 files still using raw `blue-N` utility classes
+        // (text-blue-700, bg-blue-50, bg-blue-950, …) render warm clay instead of
+        // blue, in light AND dark, without touching each file. The `oe-blue`
+        // token utilities above stay the runtime-themable path; this catches the
+        // hardcoded-class path.
+        blue: {
+          50: '#faefe6',
+          100: '#f3decc',
+          200: '#e9c5a4',
+          300: '#dda479',
+          400: '#d68a59',
+          500: '#c2723f',
+          600: '#a15a2e',
+          700: '#7e4523',
+          800: '#633619',
+          900: '#4a2812',
+          950: '#2e190b',
+        },
         surface: {
           primary: ({ opacityValue }) =>
             opacityValue === undefined

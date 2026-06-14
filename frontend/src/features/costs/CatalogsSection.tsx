@@ -377,7 +377,7 @@ function DeleteCatalogDialog({
               name="catalog-delete-mode"
               checked={mode === 'keep_items'}
               onChange={() => setMode('keep_items')}
-              className="mt-0.5 accent-[var(--oe-blue,#2563eb)]"
+              className="mt-0.5 accent-[var(--oe-blue,#c2723f)]"
             />
             <span>
               <span className="block text-sm font-medium text-content-primary">
@@ -399,7 +399,7 @@ function DeleteCatalogDialog({
               name="catalog-delete-mode"
               checked={mode === 'delete_items'}
               onChange={() => setMode('delete_items')}
-              className="mt-0.5 accent-[var(--oe-blue,#2563eb)]"
+              className="mt-0.5 accent-[var(--oe-blue,#c2723f)]"
             />
             <span>
               <span className="block text-sm font-medium text-content-primary">

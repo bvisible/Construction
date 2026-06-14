@@ -13,8 +13,8 @@ interface BadgeProps {
 }
 
 // WCAG AA contrast fix 2026-05-27 (Task #216):
-//   blue.text was `text-oe-blue` (#0071e3 on #f0f7ff → 4.35:1, fails AA).
-//   Swap to `text-oe-blue-text` (#005bb5 on #f0f7ff → 8.05:1, passes AA).
+//   blue.text was `text-oe-blue` (#d68a59 on #f0f7ff → 4.35:1, fails AA).
+//   Swap to `text-oe-blue-text` (#a15a2e on #f0f7ff → 8.05:1, passes AA).
 //   The pill backgrounds (Apple-Blue tints) stay unchanged.
 const variantStyles: Record<BadgeVariant, string> = {
   neutral: 'bg-surface-secondary text-content-secondary',

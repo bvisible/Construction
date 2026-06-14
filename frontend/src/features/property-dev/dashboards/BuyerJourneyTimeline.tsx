@@ -19,7 +19,7 @@ interface BuyerJourneyTimelineProps {
 
 const STATE_COLOR: Record<BuyerJourneyEvent['state'], string> = {
   completed: '#10b981',
-  in_progress: '#3b82f6',
+  in_progress: '#d68a59',
   upcoming: '#94a3b8',
 };
 

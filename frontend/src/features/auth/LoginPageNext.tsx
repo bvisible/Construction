@@ -42,7 +42,7 @@ interface ModuleTile {
 }
 
 const TONE_STYLES: Record<ModuleTile['tone'], { bg: string; fg: string; ring: string }> = {
-  blue:    { bg: 'bg-[#007AFF]/12',  fg: 'text-[#007AFF]',  ring: 'ring-[#007AFF]/15' },
+  blue:    { bg: 'bg-[#d68a59]/12',  fg: 'text-[#d68a59]',  ring: 'ring-[#d68a59]/15' },
   violet:  { bg: 'bg-violet-500/12', fg: 'text-violet-600', ring: 'ring-violet-500/15' },
   emerald: { bg: 'bg-emerald-500/12',fg: 'text-emerald-600',ring: 'ring-emerald-500/15' },
   amber:   { bg: 'bg-amber-500/12',  fg: 'text-amber-600',  ring: 'ring-amber-500/15' },

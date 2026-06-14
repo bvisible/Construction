@@ -186,7 +186,7 @@ export function SalesVelocity({ developmentId }: SalesVelocityProps) {
               })}
               value={b.units}
               max={maxUnits}
-              color="#3b82f6"
+              color="#d68a59"
             />
             <BarRow
               label={t('propdev.dashboards.velocity.bar_revenue', {

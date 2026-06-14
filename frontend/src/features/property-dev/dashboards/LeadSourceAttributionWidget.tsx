@@ -34,7 +34,7 @@ interface LeadSourceAttributionWidgetProps {
 }
 
 const SOURCE_PALETTE = [
-  '#3b82f6', // blue — web_form
+  '#d68a59', // blue — web_form
   '#10b981', // green — walk_in
   '#f59e0b', // amber — broker
   '#8b5cf6', // violet — referral

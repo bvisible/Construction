@@ -180,7 +180,7 @@ function toApiFormat(
     page: m.page,
     type: m.type,
     group_name: m.group || 'General',
-    group_color: m.color || '#3B82F6',
+    group_color: m.color || '#d68a59',
     annotation: m.annotation || m.label || null,
     points: m.points,
     measurement_value: m.value || null,

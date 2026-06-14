@@ -24,7 +24,7 @@ export interface CollabUser {
 
 /** Predefined user colors for collaboration */
 export const COLLAB_COLORS = [
-  '#3b82f6', // blue
+  '#d68a59', // blue
   '#10b981', // emerald
   '#f59e0b', // amber
   '#ef4444', // red

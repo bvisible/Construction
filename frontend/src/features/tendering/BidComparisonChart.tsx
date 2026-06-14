@@ -71,10 +71,10 @@ function getBarColor(
   highestTotal: number,
   bidCount: number,
 ): string {
-  if (bidCount <= 1) return 'var(--color-oe-blue, #3b82f6)';
+  if (bidCount <= 1) return 'var(--color-oe-blue, #d68a59)';
   if (total === lowestTotal) return 'var(--oe-success, #15803d)';
   if (total === highestTotal) return 'var(--oe-error, #dc2626)';
-  return 'var(--color-oe-blue, #3b82f6)';
+  return 'var(--color-oe-blue, #d68a59)';
 }
 
 function niceNum(range: number, round: boolean): number {
@@ -439,7 +439,7 @@ export function BidComparisonChart({
                 >
                   {t('tendering.highest', 'Highest')}
                 </text>
-                <rect x={130} y={0} width={10} height={10} rx={2} fill="var(--color-oe-blue, #3b82f6)" />
+                <rect x={130} y={0} width={10} height={10} rx={2} fill="var(--color-oe-blue, #d68a59)" />
                 <text
                   x={144}
                   y={9}

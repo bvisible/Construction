@@ -227,7 +227,7 @@ interface AnnotationColor {
 
 const ANNOTATION_COLORS: AnnotationColor[] = [
   { name: 'Red', value: '#EF4444' },
-  { name: 'Blue', value: '#3B82F6' },
+  { name: 'Blue', value: '#d68a59' },
   { name: 'Green', value: '#22C55E' },
   { name: 'Orange', value: '#F59E0B' },
   { name: 'Purple', value: '#8B5CF6' },
@@ -237,7 +237,7 @@ const ANNOTATION_COLORS: AnnotationColor[] = [
 /** Default colors for each annotation tool */
 const DEFAULT_ANNOTATION_COLORS: Record<AnnotationToolType, string> = {
   cloud: '#EF4444',
-  arrow: '#3B82F6',
+  arrow: '#d68a59',
   text: '#000000',
   rectangle: '#22C55E',
   highlight: '#FACC15',
@@ -251,7 +251,7 @@ interface MeasurementGroup {
 }
 
 const MEASUREMENT_GROUPS: MeasurementGroup[] = [
-  { name: 'General', color: '#3B82F6' },
+  { name: 'General', color: '#d68a59' },
   { name: 'Structural', color: '#EF4444' },
   { name: 'Electrical', color: '#F59E0B' },
   { name: 'Plumbing', color: '#8B5CF6' },
@@ -815,7 +815,7 @@ export default function TakeoffViewerModule({
 
     // Draw completed measurements on current page (respecting group visibility)
     for (const m of measurements.filter((m) => m.page === currentPage && !hiddenGroups.has(m.group) && !(isAnnotationType(m.type) && hiddenGroups.has('__annotations__')))) {
-      const color = GROUP_COLOR_MAP[m.group] || '#3B82F6';
+      const color = GROUP_COLOR_MAP[m.group] || '#d68a59';
       ctx.strokeStyle = color;
       ctx.fillStyle = color;
       // AI suggestions (#194) render translucent + dashed until the user
@@ -1141,7 +1141,7 @@ export default function TakeoffViewerModule({
         ctx.globalAlpha = 1;
       }
       // Measured rectangle previews in measure-blue; annotations keep their color.
-      ctx.strokeStyle = activeTool === 'rectarea' ? '#2563EB' : annotationColor;
+      ctx.strokeStyle = activeTool === 'rectarea' ? '#c2723f' : annotationColor;
       ctx.setLineDash([4 * dpr, 4 * dpr]);
       ctx.strokeRect(rx, ry, rw, rh);
       ctx.setLineDash([]);
@@ -1180,7 +1180,7 @@ export default function TakeoffViewerModule({
       if (selected) {
         const preview = dragPreview?.measurementId === selected.id ? dragPreview : null;
         const pts = preview ? preview.points : selected.points;
-        const accent = '#2563EB';
+        const accent = '#c2723f';
         ctx.save();
         ctx.globalAlpha = 1;
         ctx.setLineDash([]);
@@ -4769,7 +4769,7 @@ export default function TakeoffViewerModule({
                           const items = pageMeasurements.filter((m) => (m.group || 'General') === name);
                           rows.push({
                             name,
-                            color: GROUP_COLOR_MAP[name] || '#3B82F6',
+                            color: GROUP_COLOR_MAP[name] || '#d68a59',
                             count: items.length,
                             total: items.reduce((s, it) => s + it.value, 0),
                             unit: items.find((it) => it.unit)?.unit ?? '',
@@ -4851,7 +4851,7 @@ export default function TakeoffViewerModule({
               <div className="flex items-center gap-2">
                 <span
                   className="h-3 w-3 rounded-full shrink-0 ring-2 ring-white dark:ring-gray-900"
-                  style={{ backgroundColor: GROUP_COLOR_MAP[activeGroup] || '#3B82F6' }}
+                  style={{ backgroundColor: GROUP_COLOR_MAP[activeGroup] || '#d68a59' }}
                 />
                 <select
                   value={activeGroup}
@@ -5297,7 +5297,7 @@ export default function TakeoffViewerModule({
                 {Object.entries(groupedPageMeasurements).map(([groupName, groupMs]) => {
                   const measurementOnly = groupMs.filter((m) => !isAnnotationType(m.type));
                   if (measurementOnly.length === 0) return null;
-                  const groupColor = GROUP_COLOR_MAP[groupName] || '#3B82F6';
+                  const groupColor = GROUP_COLOR_MAP[groupName] || '#d68a59';
                   const isHidden = hiddenGroups.has(groupName);
                   const isCollapsed = collapsedGroups.has(groupName);
                   return (

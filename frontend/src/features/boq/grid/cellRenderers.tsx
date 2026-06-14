@@ -674,7 +674,7 @@ export function ExpandCellRenderer(params: ICellRendererParams) {
 
   // Solid theme tokens ONLY. `--oe-blue` is a hex-valued CSS variable, so
   // Tailwind opacity modifiers over it (`bg-oe-blue/10`, `ring-oe-blue/30`)
-  // emit `rgb(#0071e3 / 0.1)` — invalid CSS the browser drops, leaving the
+  // emit `rgb(#d68a59 / 0.1)` — invalid CSS the browser drops, leaving the
   // chip transparent + ring-less (it read as "missing"). Every class here
   // is a real solid token. Modern soft-affordance: a low-contrast tinted
   // chip at rest (calm, not loud), full blue only on hover/expanded so

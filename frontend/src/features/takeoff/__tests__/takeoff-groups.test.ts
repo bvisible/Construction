@@ -7,7 +7,7 @@ import {
 import type { Measurement } from '../lib/takeoff-types';
 
 const GROUP_COLORS: Record<string, string> = {
-  General: '#3B82F6',
+  General: '#d68a59',
   Structural: '#EF4444',
   Electrical: '#F59E0B',
 };

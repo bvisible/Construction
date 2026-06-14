@@ -127,7 +127,7 @@ export interface GroupTypeTotal {
 export function summariseByGroupType(
   measurements: Measurement[],
   groupColorMap: Readonly<Record<string, string>>,
-  fallbackColor: string = '#3B82F6',
+  fallbackColor: string = '#d68a59',
 ): GroupTypeTotal[] {
   const byKey = new Map<
     string,
@@ -229,7 +229,7 @@ export function renderMeasurementsOnCanvas(
   );
 
   for (const m of visible) {
-    const color = groupColorMap[m.group] || '#3B82F6';
+    const color = groupColorMap[m.group] || '#d68a59';
     ctx.strokeStyle = color;
     ctx.fillStyle = color;
 
@@ -709,7 +709,7 @@ export async function buildTakeoffWorkbook(
 
   for (const groupName of sortedGroups) {
     const groupMs = byGroup.get(groupName)!;
-    const color = (ctx.groupColorMap[groupName] ?? '#3B82F6').replace('#', 'FF');
+    const color = (ctx.groupColorMap[groupName] ?? '#d68a59').replace('#', 'FF');
 
     // Group header row.
     const headerRowVals = ws.addRow({

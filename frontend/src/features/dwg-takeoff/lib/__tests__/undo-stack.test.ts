@@ -160,7 +160,7 @@ describe('snapshotFrom', () => {
         { x: 10, y: 10 },
       ],
       text: 'wall length',
-      color: '#3b82f6',
+      color: '#d68a59',
       measurement_value: 7.07,
       measurement_unit: 'm',
       linked_boq_position_id: null,
@@ -175,7 +175,7 @@ describe('snapshotFrom', () => {
     expect(snap.id).toBe('ann-1');
     expect(snap.annotation_type).toBe('distance');
     expect(snap.points).toHaveLength(2);
-    expect(snap.color).toBe('#3b82f6');
+    expect(snap.color).toBe('#d68a59');
     expect(snap.measurement_value).toBe(7.07);
     expect(snap.metadata).toEqual({ font_size: 14 });
   });

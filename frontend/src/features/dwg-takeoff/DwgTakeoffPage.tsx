@@ -2765,7 +2765,7 @@ export function DwgTakeoffPage() {
                 className="absolute inset-0 pointer-events-none z-0"
                 style={{
                   background:
-                    'radial-gradient(ellipse 60% 50% at 50% 40%, rgba(59,130,246,0.06) 0%, transparent 70%)',
+                    'radial-gradient(ellipse 60% 50% at 50% 40%, rgba(214, 138, 89,0.06) 0%, transparent 70%)',
                 }}
               />
               {/* Crosshair at center (AutoCAD UCS marker) */}
@@ -2809,12 +2809,12 @@ export function DwgTakeoffPage() {
                         className={clsx(
                           'group/drop flex flex-col items-center justify-center gap-7 rounded-xl p-20 text-center cursor-pointer transition-all flex-1 border-2 border-dashed focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-[#22252b]',
                           isDragActive
-                            ? 'border-blue-400 bg-blue-500/15 shadow-[0_0_40px_rgba(59,130,246,0.2)] scale-[1.01]'
-                            : 'border-[#444c5a] bg-[#1a1d23]/60 hover:border-blue-500/50 hover:bg-blue-500/5 hover:shadow-[0_0_30px_rgba(59,130,246,0.1)]',
+                            ? 'border-blue-400 bg-blue-500/15 shadow-[0_0_40px_rgba(214, 138, 89,0.2)] scale-[1.01]'
+                            : 'border-[#444c5a] bg-[#1a1d23]/60 hover:border-blue-500/50 hover:bg-blue-500/5 hover:shadow-[0_0_30px_rgba(214, 138, 89,0.1)]',
                         )}
                         onClick={() => setShowUpload(true)}
                       >
-                        <div className="w-20 h-20 rounded-2xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center group-hover/drop:scale-110 group-hover/drop:shadow-[0_0_20px_rgba(59,130,246,0.2)] transition-all">
+                        <div className="w-20 h-20 rounded-2xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center group-hover/drop:scale-110 group-hover/drop:shadow-[0_0_20px_rgba(214, 138, 89,0.2)] transition-all">
                           <Upload size={36} className="text-blue-400" />
                         </div>
                         <div>
@@ -2861,7 +2861,7 @@ export function DwgTakeoffPage() {
                         { icon: Layers, title: t('dwg_takeoff.feat_layers', { defaultValue: 'Layer Control' }), desc: t('dwg_takeoff.feat_layers_desc', { defaultValue: 'Toggle layers on/off, filter by entity type' }) },
                         { icon: FileUp, title: t('dwg_takeoff.feat_measure', { defaultValue: 'Measurements' }), desc: t('dwg_takeoff.feat_measure_desc', { defaultValue: 'Area, length, perimeter · link to BOQ' }) },
                       ].map((f, i) => (
-                        <div key={i} className="flex items-start gap-3 rounded-xl p-4 bg-[#22252b]/80 backdrop-blur-sm border border-[#333842] hover:border-blue-500/30 hover:shadow-[0_0_15px_rgba(59,130,246,0.06)] transition-all">
+                        <div key={i} className="flex items-start gap-3 rounded-xl p-4 bg-[#22252b]/80 backdrop-blur-sm border border-[#333842] hover:border-blue-500/30 hover:shadow-[0_0_15px_rgba(214, 138, 89,0.06)] transition-all">
                           <div className="w-8 h-8 rounded-lg bg-orange-500/10 border border-orange-500/20 flex items-center justify-center shrink-0"><f.icon size={15} className="text-orange-400" /></div>
                           <div className="min-w-0">
                             <h3 className="text-xs font-semibold text-gray-200 leading-tight">{f.title}</h3>

@@ -152,7 +152,7 @@ const MEASUREMENT_TYPES: MarkupType[] = ['distance', 'area', 'count'];
 
 const PRESET_COLORS = [
   { name: 'Red', value: '#EF4444' },
-  { name: 'Blue', value: '#3B82F6' },
+  { name: 'Blue', value: '#d68a59' },
   { name: 'Green', value: '#22C55E' },
   { name: 'Orange', value: '#F97316' },
   { name: 'Purple', value: '#A855F7' },
@@ -1190,7 +1190,7 @@ export function MarkupsPage() {
   const [annotateInitialPage, setAnnotateInitialPage] = useState<number | undefined>(undefined);
   const [showCustomStampForm, setShowCustomStampForm] = useState(false);
   const [customStampName, setCustomStampName] = useState('');
-  const [customStampColor, setCustomStampColor] = useState('#3B82F6');
+  const [customStampColor, setCustomStampColor] = useState('#d68a59');
   // Unified vs hub-only tab. "unified" is the default because the user's
   // primary complaint was that the three modules were disconnected —
   // opening this page and seeing only hub markups reinforced that.

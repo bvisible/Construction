@@ -49,7 +49,7 @@ describe('colorAtStop - gradient interpolation', () => {
   });
 
   it('produces a blue-ish colour at the low end', () => {
-    // #0071e3 is heavy in blue — low t should reflect that.
+    // #d68a59 is heavy in blue — low t should reflect that.
     const hex = colorAtStop(0.05);
     const b = parseInt(hex.slice(5, 7), 16);
     const r = parseInt(hex.slice(1, 3), 16);

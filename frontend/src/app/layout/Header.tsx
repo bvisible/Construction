@@ -1470,7 +1470,7 @@ function ProjectSwitcher() {
             }
           }}
           className={clsx(
-            // WCAG AA fix 2026-05-27: text-oe-blue-text (#0071e3) on bg-oe-blue-subtle
+            // WCAG AA fix 2026-05-27: text-oe-blue-text (#d68a59) on bg-oe-blue-subtle
             // failed 4.35:1; text-oe-blue-text passes at 8.05:1.
             'flex items-center gap-2 pl-1.5 pr-2 h-9 text-[13px] min-w-0',
             activeProjectId ? 'text-oe-blue-text' : 'text-oe-blue-text/85 hover:text-oe-blue-text',
