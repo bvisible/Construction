@@ -26,10 +26,10 @@
 
 :root {
   /* Brand */
-  --neo-accent: #6366f1;          /* soft indigo, matches mobile colors.accent */
-  --neo-accent-hover: #4f46e5;
-  --neo-accent-active: #4338ca;
-  --neo-accent-soft: rgba(99, 102, 241, 0.12);
+  --neo-accent: #d68a59;          /* soft indigo, matches mobile colors.accent */
+  --neo-accent-hover: #c2723f;
+  --neo-accent-active: #a15a2e;
+  --neo-accent-soft: rgba(214, 138, 89, 0.12);
 
   /* Surfaces — warm off-white sand, not pure white */
   --neo-bg: #fbfaf6;
@@ -73,10 +73,10 @@
 
 .dark {
   /* Brand — slightly brighter so it stays vivid on dark surfaces */
-  --neo-accent: #818cf8;          /* indigo-400, matches mobile dark.accent */
-  --neo-accent-hover: #a5b4fc;
-  --neo-accent-active: #6366f1;
-  --neo-accent-soft: rgba(129, 140, 248, 0.18);
+  --neo-accent: #dda479;          /* indigo-400, matches mobile dark.accent */
+  --neo-accent-hover: #e9c5a4;
+  --neo-accent-active: #c2723f;
+  --neo-accent-soft: rgba(214, 138, 89, 0.18);
 
   /* Surfaces — warm dark, not the cold blue-grey OCE shipped (#0f1117).
    * #1a1a1f is the Neoffice "warm graphite" used on mobile dark. */
