@@ -191,10 +191,44 @@ export function FullViewPage() {
 }
 
 /**
+ * Uniform-height card wrapper for the Insights grid. Mirrors the hub's
+ * ``DashboardTile`` (``min-h`` + ``flex flex-col``) so the grid keeps a
+ * stable shape no matter which state a widget is in.
+ *
+ * Each widget manages its own loading / empty / error state internally
+ * (skeleton, ``DashboardEmpty``); the wrapper centres that state inside
+ * the card's reserved height so a single widget failing or coming back
+ * empty no longer collapses to a thin strip and leaves a ragged column
+ * next to its taller neighbour.
+ */
+function InsightCard({
+  children,
+  fullWidth = false,
+}: {
+  children: React.ReactNode;
+  fullWidth?: boolean;
+}) {
+  return (
+    <div
+      className={`flex min-h-[280px] flex-col justify-center rounded-lg border border-divider bg-surface-primary p-3 ${
+        fullWidth ? 'md:col-span-2' : ''
+      }`}
+    >
+      {children}
+    </div>
+  );
+}
+
+/**
  * Insights tab — the 5 v3124 sales-analytics widgets in a 2-col grid
  * (1-col on mobile). Each widget is independently cached (React Query
  * staleTime 60s) so swapping tabs or window-filter changes only
  * re-fetches the widgets the user actually scrolls to.
+ *
+ * Each widget owns its failure independently: it renders its own
+ * skeleton while loading and a ``DashboardEmpty`` on error or empty,
+ * and the ``InsightCard`` wrapper keeps every card the same height so
+ * one widget's failure can't reflow or unbalance the rest of the grid.
  *
  * The Insights grid intentionally drops the development_id scope —
  * these analytics are tenant-wide (cohort retention, lead-source CPA,
@@ -205,21 +239,21 @@ export function FullViewPage() {
 function InsightsGrid({ developmentId }: { developmentId: string }) {
   return (
     <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-      <div className="rounded-lg border border-divider bg-surface-primary p-3">
+      <InsightCard>
         <CohortRetentionWidget />
-      </div>
-      <div className="rounded-lg border border-divider bg-surface-primary p-3">
+      </InsightCard>
+      <InsightCard>
         <TimeToCloseWidget />
-      </div>
-      <div className="rounded-lg border border-divider bg-surface-primary p-3 md:col-span-2">
+      </InsightCard>
+      <InsightCard fullWidth>
         <LeadSourceAttributionWidget />
-      </div>
-      <div className="rounded-lg border border-divider bg-surface-primary p-3">
+      </InsightCard>
+      <InsightCard>
         <ConversionFunnelWidget devId={developmentId} />
-      </div>
-      <div className="rounded-lg border border-divider bg-surface-primary p-3">
+      </InsightCard>
+      <InsightCard>
         <BrokerPerformanceWidget />
-      </div>
+      </InsightCard>
     </div>
   );
 }

@@ -14,7 +14,6 @@ Module lifecycle:
 import contextlib
 import importlib
 import logging
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -188,12 +187,14 @@ class ModuleLoader:
         # Load router if exists
         try:
             router_module_name = f"{package_path}.router"
-            # Clear stale import cache entry (handles hot-reload after new files added)
-            if router_module_name in sys.modules:
-                importlib.reload(sys.modules[router_module_name])
-                router_mod = sys.modules[router_module_name]
-            else:
-                router_mod = importlib.import_module(router_module_name)
+            # Plain import: reuse the already-imported router module if present,
+            # import it fresh otherwise. Each module is loaded exactly once at
+            # startup, so this is all production ever needs. We deliberately do
+            # NOT importlib.reload() or pop-and-reimport the router here: a
+            # module's router is built once at import time, and including it onto
+            # a fresh app does not consume it, so the cached object is always the
+            # fully populated one.
+            router_mod = importlib.import_module(router_module_name)
             router = getattr(router_mod, "router", None)
             if router:
                 # URL convention: kebab-case (hyphens), not snake_case.
@@ -371,6 +372,18 @@ class ModuleLoader:
             "version": manifest.version,
         }
 
+    @staticmethod
+    def _route_under_prefix(route_path: str, prefix: str) -> bool:
+        """True when ``route_path`` belongs to the module mounted at ``prefix``.
+
+        Boundary-aware: a route is owned by the module only when it equals the
+        prefix or sits directly beneath it (``prefix`` + ``/``). A bare
+        ``startswith`` would let a short module segment (``/api/v1/schedule``)
+        over-match a longer sibling (``/api/v1/schedule-advanced/...``) and strip
+        its routes, so match on the path boundary instead.
+        """
+        return route_path == prefix or route_path.startswith(prefix + "/")
+
     def _has_live_routes(self, module_name: str, app: FastAPI) -> bool:
         """True if the live ASGI route table carries this module's prefix.
 
@@ -381,7 +394,8 @@ class ModuleLoader:
         kebab_name = dir_name.replace("_", "-")
         prefixes = (f"/api/v1/{kebab_name}", f"/api/v1/{dir_name}")
         return any(
-            hasattr(r, "path") and any(getattr(r, "path", "").startswith(p) for p in prefixes) for r in app.routes
+            hasattr(r, "path") and any(self._route_under_prefix(getattr(r, "path", ""), p) for p in prefixes)
+            for r in app.routes
         )
 
     async def disable_module(self, module_name: str, app: FastAPI) -> dict[str, Any]:
@@ -425,7 +439,9 @@ class ModuleLoader:
             app.routes[:] = [
                 r
                 for r in app.routes
-                if not (hasattr(r, "path") and any(getattr(r, "path", "").startswith(p) for p in prefixes))
+                if not (
+                    hasattr(r, "path") and any(self._route_under_prefix(getattr(r, "path", ""), p) for p in prefixes)
+                )
             ]
             logger.info(
                 "Removed routes for %s (prefixes %s)",

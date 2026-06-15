@@ -441,7 +441,7 @@ async def activate_permit(
     item_id: uuid.UUID,
     user_id: CurrentUserId,
     session: SessionDep,
-    _perm: None = Depends(RequirePermission("hse_advanced.update")),
+    _perm: None = Depends(RequirePermission("hse_advanced.activate_permit")),
     service: HSEAdvancedService = Depends(_get_service),
 ) -> PermitResponse:
     existing = await service.get_permit(item_id)

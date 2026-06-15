@@ -19,11 +19,14 @@ import {
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { ModuleGuideButton } from '@/shared/ui';
+
 import {
   selectCanRedo,
   selectCanUndo,
   usePipelineStore,
 } from '../usePipelineStore';
+import { pipelinesGuide } from '../pipelinesGuide';
 
 export interface PipelineToolbarProps {
   onFitView?: () => void;
@@ -37,6 +40,8 @@ export interface PipelineToolbarProps {
   running?: boolean;
   /** Count of authoring-time issues; shows a warning chip when > 0. */
   issueCount?: number;
+  /** True when there are unsaved edits; shows an "Unsaved changes" badge. */
+  dirty?: boolean;
   testId?: string;
 }
 
@@ -86,6 +91,7 @@ export function PipelineToolbar({
   busy = false,
   running = false,
   issueCount = 0,
+  dirty = false,
   testId,
 }: PipelineToolbarProps) {
   const { t } = useTranslation();
@@ -136,6 +142,7 @@ export function PipelineToolbar({
         icon={<Sparkles size={14} aria-hidden="true" />}
         onClick={onExplain}
       />
+      <ModuleGuideButton content={pipelinesGuide} />
 
       {issueCount > 0 && (
         <span
@@ -150,6 +157,22 @@ export function PipelineToolbar({
       )}
 
       <span className="ms-auto h-6 w-px bg-border" aria-hidden="true" />
+
+      {dirty && (
+        <span
+          data-testid="pipeline-dirty-badge"
+          className="inline-flex items-center gap-1.5 rounded-md border border-semantic-warning/40 bg-semantic-warning-bg px-2 py-1 text-xs font-medium text-semantic-warning"
+          title={t('pipeline.toolbar.unsaved_hint', {
+            defaultValue: 'You have unsaved changes. Press Save to keep them.',
+          })}
+        >
+          <span
+            className="h-1.5 w-1.5 rounded-full bg-semantic-warning"
+            aria-hidden="true"
+          />
+          {t('pipeline.toolbar.unsaved', { defaultValue: 'Unsaved changes' })}
+        </span>
+      )}
 
       <TBtn
         label={t('pipeline.toolbar.save', { defaultValue: 'Save' })}

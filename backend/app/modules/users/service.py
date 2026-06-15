@@ -133,15 +133,22 @@ def create_refresh_token(user: User, settings: Settings) -> str:
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
+# Password-reset token lifetime. Single source of truth: the token's actual
+# expiry AND the "expires in N minutes" line in the reset email both read this,
+# so they can never drift (the email used to advertise jwt_expire_minutes - 60 -
+# while the token really expired in 15, so users got "link expired" early).
+RESET_TOKEN_LIFETIME_MINUTES = 15
+
+
 def create_reset_token(user: User, settings: Settings) -> str:
-    """Create a JWT password-reset token (15 min expiry)."""
+    """Create a JWT password-reset token (see RESET_TOKEN_LIFETIME_MINUTES)."""
     now = datetime.now(UTC)
     payload = {
         "iss": "openconstructionerp",
         "sub": str(user.id),
         "email": user.email,
         "iat": now,
-        "exp": now + timedelta(minutes=15),
+        "exp": now + timedelta(minutes=RESET_TOKEN_LIFETIME_MINUTES),
         "type": "reset",
     }
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
@@ -744,7 +751,7 @@ class UserService:
             to=user.email,
             reset_url=reset_url,
             recipient_name=recipient_name,
-            token_lifetime_minutes=self.settings.jwt_expire_minutes,
+            token_lifetime_minutes=RESET_TOKEN_LIFETIME_MINUTES,
         )
         # Never raise - the response must stay enumeration-proof even
         # when SMTP is down. The service already logs failure reasons.

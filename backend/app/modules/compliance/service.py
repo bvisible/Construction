@@ -147,6 +147,12 @@ class ComplianceDSLService:
         )
         try:
             await self.repo.add(row)
+            # Commit before touching the in-memory registry. repo.add only
+            # flushes; the request-level commit would otherwise land AFTER the
+            # registration below, so a rolled-back save would leave the engine
+            # running a rule that was never persisted (active until the next
+            # restart). Committing here makes registration strictly post-commit.
+            await self.repo.session.commit()
         except IntegrityError as exc:
             logger.info(
                 "Race on compliance DSL rule_id %s (treated as duplicate)",
@@ -157,13 +163,13 @@ class ComplianceDSLService:
                 details={"rule_id": definition.rule_id},
             ) from exc
 
-        # Register with the engine so subsequent validation runs pick
-        # the rule up. Failures are logged but don't abort the save -
-        # the row is still on disk and the next startup will re-attempt
-        # registration via :func:`register_active_rules`.
+        # Register with the engine so subsequent validation runs pick the rule
+        # up. The row is committed above, so a registration failure here is
+        # logged and safely re-attempted at the next startup via
+        # :func:`register_active_rules` - it never leaves an unpersisted rule live.
         if row.is_active:
             try:
-                _register_compiled(definition)
+                _register_compiled(definition, args.tenant_id)
             except Exception:  # pragma: no cover - defensive
                 logger.exception(
                     "Failed to register compiled rule %s",
@@ -221,38 +227,108 @@ class ComplianceDSLService:
                 "Only the rule owner can delete this rule.",
             )
         # Deregister before deleting so concurrent validation calls
-        # don't pick up a half-removed rule.
-        _deregister_compiled(row.rule_id)
+        # don't pick up a half-removed rule. Key on the row's own tenant so
+        # we evict the tenant-scoped registry entry, not a bare/global one.
+        _deregister_compiled(row.tenant_id, row.rule_id)
         await self.repo.delete(row)
 
 
 # ── Registry helpers ───────────────────────────────────────────────────────
+#
+# SECURITY (cross-tenant isolation): the validation ``rule_registry`` is a
+# single process-global singleton with no tenant dimension - one ``_rules``
+# dict (rule_id -> rule) and one ``_rule_sets`` dict (set_name -> [rule_ids])
+# shared by every tenant. User-authored compliance DSL rules are persisted
+# per tenant (``oe_compliance_dsl_rule.tenant_id``) but, if registered with
+# their bare ids/sets, they would become globally resolvable: tenant B running
+# ``/validation/run`` with tenant A's set name would execute tenant A's rule
+# against tenant B's data, and a tenant could register ``rule_id``/``standard``
+# matching a built-in (e.g. ``din276.cost_group_required`` / ``din276``) and
+# overwrite that built-in's body - or inject into the built-in ``din276`` /
+# ``boq_quality`` set - for everyone.
+#
+# Fix: namespace every compliance DSL rule by its tenant before it touches the
+# registry. The ``t:{tenant_id}:`` prefix is applied UNCONDITIONALLY to both
+# the rule id and every set name, so a tenant's rules always land in their own
+# ``t:{id}:*`` id/set space regardless of what strings they put in
+# ``standard`` / ``rule_sets`` (those fields are not colon-restricted by the
+# parser, only ``rule_id`` is). Built-ins register with un-prefixed ids and
+# ``sets=None`` (so their global names ``boq_quality`` / ``din276`` / ``gaeb``
+# / ... resolve only to built-ins), so they are never reachable or overwritten
+# by a tenant rule. This mirrors the IDS importer
+# (:mod:`app.modules.validation.router`), which namespaces both the set
+# (``{rule_set}:{project_id}``) and the rule id (``{project_id}:{rule_id}``).
 
 
-def _register_compiled(definition: RuleDefinition) -> ValidationRule:
-    """Compile + register a definition, replacing any prior copy."""
+def _ns(tenant_id: str | None) -> str:
+    """Per-tenant registry namespace prefix (system rules share one bucket)."""
+    return f"t:{tenant_id}" if tenant_id else "t:__system__"
+
+
+def _scoped_rule_id(tenant_id: str | None, rule_id: str) -> str:
+    """Tenant-scoped registry key for a compiled rule id."""
+    return f"{_ns(tenant_id)}:{rule_id}"
+
+
+def _scoped_sets(
+    tenant_id: str | None,
+    rule_sets: list[str] | None,
+    standard: str,
+) -> list[str]:
+    """Tenant-scoped rule-set names this rule registers into.
+
+    Mirrors the registry's own default (set = ``[standard]`` when the
+    definition lists no explicit sets) and then prefixes every name with the
+    tenant namespace so it can never collide with a built-in / another
+    tenant's set.
+    """
+    base = list(rule_sets) if rule_sets else [standard]
+    ns = _ns(tenant_id)
+    return [f"{ns}:{s}" for s in base]
+
+
+def _register_compiled(
+    definition: RuleDefinition,
+    tenant_id: str | None,
+) -> ValidationRule:
+    """Compile + register a definition under the tenant's namespace.
+
+    Mutating ``rule.rule_id`` on the instance is safe: :func:`compile_rule`
+    returns a fresh ``ValidationRule`` subclass instance per call and the
+    engine reads ``rule.rule_id`` off the instance at register and run time
+    (the instance attribute shadows the class attribute). This is exactly
+    what the IDS importer does.
+    """
     rule = compile_rule(definition)
-    rule_sets = list(definition.rule_sets) if definition.rule_sets else None
-    rule_registry.register(rule, rule_sets)
+    rule.rule_id = _scoped_rule_id(tenant_id, rule.rule_id)
+    rule_registry.register(
+        rule,
+        _scoped_sets(
+            tenant_id,
+            list(definition.rule_sets) or None,
+            definition.standard,
+        ),
+    )
     return rule
 
 
-def _deregister_compiled(rule_id: str) -> None:
-    """Best-effort removal from the global registry.
+def _deregister_compiled(tenant_id: str | None, rule_id: str) -> None:
+    """Best-effort removal of a tenant's rule from the global registry.
 
-    The registry doesn't expose a public ``remove`` so we touch the
-    private dicts directly. This is safe because the registry is a
-    plain in-memory cache; a future refactor can lift this into a
-    public method without changing the call sites.
+    Keyed on the tenant-scoped id so one tenant's delete can never evict
+    a built-in or another tenant's identically-named rule. The registry
+    doesn't expose a public ``remove`` so we touch the private dicts
+    directly; this is safe because the registry is a plain in-memory cache.
     """
+    scoped = _scoped_rule_id(tenant_id, rule_id)
     rules = getattr(rule_registry, "_rules", None)
     if isinstance(rules, dict):
-        rules.pop(rule_id, None)
+        rules.pop(scoped, None)
     sets = getattr(rule_registry, "_rule_sets", None)
     if isinstance(sets, dict):
         for name, ids in list(sets.items()):
-            if rule_id in ids:
-                sets[name] = [r for r in ids if r != rule_id]
+            if scoped in ids:
+                sets[name] = [r for r in ids if r != scoped]
 
 
 async def register_active_rules(repo: ComplianceDSLRepository) -> int:
@@ -266,7 +342,7 @@ async def register_active_rules(repo: ComplianceDSLRepository) -> int:
     for row in rows:
         try:
             definition = parse_definition(row.definition_yaml)
-            _register_compiled(definition)
+            _register_compiled(definition, row.tenant_id)
             registered += 1
         except DSLError as exc:
             logger.warning(

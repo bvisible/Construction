@@ -856,7 +856,10 @@ class ChangeOrderService:
 
         fields = data.model_dump(exclude_unset=True)
         if "metadata" in fields:
-            fields["metadata_"] = fields.pop("metadata")
+            _incoming = fields.pop("metadata")
+            fields["metadata_"] = (
+                {**(getattr(order, "metadata_", None) or {}), **_incoming} if isinstance(_incoming, dict) else _incoming
+            )
         # T3: coerce UUID lists to plain str lists so the JSON column
         # stores stable hex strings on both Postgres and SQLite (which
         # serializes JSON via stdlib ``json.dumps`` that refuses UUID).
@@ -1612,7 +1615,10 @@ class ChangeOrderService:
 
         fields = data.model_dump(exclude_unset=True)
         if "metadata" in fields:
-            fields["metadata_"] = fields.pop("metadata")
+            _incoming = fields.pop("metadata")
+            fields["metadata_"] = (
+                {**(getattr(item, "metadata_", None) or {}), **_incoming} if isinstance(_incoming, dict) else _incoming
+            )
 
         # Recalculate cost_delta if quantities or rates changed. Decimal
         # throughout - mixing the stored string column with an incoming

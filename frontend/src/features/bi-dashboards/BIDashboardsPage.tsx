@@ -34,6 +34,7 @@ import {
   WideModal,
   WideModalSection,
   WideModalField,
+  ModuleGuideButton,
 } from '@/shared/ui';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { DismissibleInfo } from '@/shared/ui/DismissibleInfo';
@@ -79,6 +80,7 @@ import {
   type WidgetRenderResult,
   type WidgetType,
 } from './api';
+import { biDashboardsGuide } from './biDashboardsGuide';
 import { useDashboardFilters } from '@/stores/useDashboardFilters';
 
 type Tab = 'dashboards' | 'kpis' | 'reports' | 'schedules' | 'alerts';
@@ -259,6 +261,14 @@ export function BIDashboardsPage() {
     queryFn: listReports,
     enabled: tab === 'reports' || tab === 'schedules',
   });
+  // Schedules are fetched here (not inside SchedulesList) so the query only
+  // fires when the Schedules tab is active and so the page-level loading /
+  // error / retry chrome reflects the real schedules request.
+  const schedulesQ = useQuery({
+    queryKey: ['bi', 'schedules'],
+    queryFn: listSchedules,
+    enabled: tab === 'schedules',
+  });
   const alertsQ = useQuery({
     queryKey: ['bi', 'alerts'],
     queryFn: listAlerts,
@@ -270,14 +280,36 @@ export function BIDashboardsPage() {
       ? dashboardsQ
       : tab === 'kpis'
         ? kpisQ
-        : tab === 'reports' || tab === 'schedules'
+        : tab === 'reports'
           ? reportsQ
-          : alertsQ;
-  const isLoading = activeQuery.isLoading;
+          : tab === 'schedules'
+            ? schedulesQ
+            : alertsQ;
+  // On the Schedules tab the rows are joined to human report names from
+  // reportsQ, so the page must wait for BOTH schedules and reports before it
+  // drops the skeleton - otherwise rows flash the generic "Report" fallback
+  // (and the wrong empty-state copy) until reportsQ lands.
+  const isLoading =
+    tab === 'schedules'
+      ? schedulesQ.isLoading || reportsQ.isLoading
+      : activeQuery.isLoading;
   // A failed list query must NOT fall through to the "nothing here yet"
   // empty state — that hides real backend/permission failures behind a
   // success-looking screen. Surface it with a retry instead.
-  const loadError = activeQuery.isError ? activeQuery.error : null;
+  const loadError =
+    tab === 'schedules'
+      ? (schedulesQ.error ?? reportsQ.error ?? null)
+      : activeQuery.isError
+        ? activeQuery.error
+        : null;
+  const retryActive = () => {
+    if (tab === 'schedules') {
+      void schedulesQ.refetch();
+      void reportsQ.refetch();
+    } else {
+      void activeQuery.refetch();
+    }
+  };
 
   return (
     <div className="space-y-5">
@@ -296,20 +328,29 @@ export function BIDashboardsPage() {
             'KPIs, scheduled reports, executive dashboards and alert rules, all in one place.',
         })}
         actions={
-          (tab === 'dashboards' || tab === 'reports' || tab === 'alerts') ? (
-            <Button
-              variant="primary"
-              size="sm"
-              icon={<Plus size={14} />}
-              onClick={() => setCreateOpen(true)}
-            >
-              {tab === 'dashboards'
-                ? t('bi.new_dashboard', { defaultValue: 'New Dashboard' })
-                : tab === 'reports'
-                  ? t('bi.new_report', { defaultValue: 'New Report' })
-                  : t('bi.new_alert', { defaultValue: 'New Alert' })}
-            </Button>
-          ) : undefined
+          <>
+            {/* How it works guide - explains the tabs, the starter pack and
+                the KPI / report / schedule / alert workflow. Leads the action
+                cluster so it stays visible on every tab. */}
+            <ModuleGuideButton
+              content={biDashboardsGuide}
+              onCta={() => installStarterM.mutate()}
+            />
+            {(tab === 'dashboards' || tab === 'reports' || tab === 'alerts') && (
+              <Button
+                variant="primary"
+                size="sm"
+                icon={<Plus size={14} />}
+                onClick={() => setCreateOpen(true)}
+              >
+                {tab === 'dashboards'
+                  ? t('bi.new_dashboard', { defaultValue: 'New Dashboard' })
+                  : tab === 'reports'
+                    ? t('bi.new_report', { defaultValue: 'New Report' })
+                    : t('bi.new_alert', { defaultValue: 'New Alert' })}
+              </Button>
+            )}
+          </>
         }
       />
 
@@ -385,7 +426,7 @@ export function BIDashboardsPage() {
             description={getErrorMessage(loadError)}
             action={{
               label: t('common.retry', { defaultValue: 'Retry' }),
-              onClick: () => activeQuery.refetch(),
+              onClick: retryActive,
             }}
           />
         </Card>
@@ -402,7 +443,10 @@ export function BIDashboardsPage() {
       ) : tab === 'reports' ? (
         <ReportList rows={reportsQ.data ?? []} onCreate={() => setCreateOpen(true)} />
       ) : tab === 'schedules' ? (
-        <SchedulesList reports={reportsQ.data ?? []} />
+        <SchedulesList
+          reports={reportsQ.data ?? []}
+          schedules={schedulesQ.data ?? []}
+        />
       ) : (
         <AlertsList rows={alertsQ.data ?? []} onCreate={() => setCreateOpen(true)} />
       )}
@@ -725,6 +769,13 @@ function KpiLibraryCard({ kpi }: { kpi: KpiDefinition }) {
  * the BI drill endpoint returns plain field maps (no per-row deep links), so
  * rows are rendered as a compact field list.
  */
+// Drill-down rows are capped server-side for performance; the backend returns
+// at most this many records (and ``record_count`` is the length of that capped
+// list, not a true grand total). When we receive exactly this many rows the
+// result is likely truncated, so the drawer surfaces that explicitly instead of
+// implying the user is seeing every source row.
+const DRILL_DOWN_LIMIT = 100;
+
 function KpiSourceRecordsDrawer({
   kpi,
   open,
@@ -737,20 +788,28 @@ function KpiSourceRecordsDrawer({
   const { t } = useTranslation();
   const drillQ = useQuery({
     queryKey: ['bi', 'kpi-drill', kpi.code],
-    queryFn: () => drillDownKpi(kpi.code, { limit: 100 }),
+    queryFn: () => drillDownKpi(kpi.code, { limit: DRILL_DOWN_LIMIT }),
     enabled: open,
   });
   const records = drillQ.data?.records ?? [];
+  const truncated = records.length >= DRILL_DOWN_LIMIT;
 
   return (
     <SideDrawer
       open={open}
       onClose={onClose}
       title={kpi.name}
-      subtitle={t('bi.source_records_subtitle', {
-        defaultValue: '{{n}} source records',
-        n: drillQ.data?.record_count ?? 0,
-      })}
+      subtitle={
+        truncated
+          ? t('bi.source_records_subtitle_capped', {
+              defaultValue: 'Showing the first {{n}} source records',
+              n: records.length,
+            })
+          : t('bi.source_records_subtitle', {
+              defaultValue: '{{n}} source records',
+              n: records.length,
+            })
+      }
     >
       {drillQ.isLoading ? (
         <div className="flex items-center gap-2 p-4 text-sm text-content-tertiary">
@@ -772,6 +831,15 @@ function KpiSourceRecordsDrawer({
         </div>
       ) : (
         <div className="flex flex-col gap-2 p-3">
+          {truncated && (
+            <p className="rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-2xs text-amber-700 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-300">
+              {t('bi.source_records_truncated', {
+                defaultValue:
+                  'Only the first {{n}} records are shown for performance. Narrow the scope or export the KPI to see the full set.',
+                n: DRILL_DOWN_LIMIT,
+              })}
+            </p>
+          )}
           {records.map((rec, idx) => (
             <div
               key={(rec['id'] as string) ?? idx}
@@ -1006,20 +1074,21 @@ const FREQUENCY_LABELS: Record<ReportFrequency, string> = {
   quarterly: 'Quarterly',
 };
 
-function SchedulesList({ reports }: { reports: ReportDefinition[] }) {
+function SchedulesList({
+  reports,
+  schedules,
+}: {
+  reports: ReportDefinition[];
+  // Schedules are fetched by the parent (lazily, only on the Schedules tab)
+  // and passed down so page-level loading / error chrome stays in sync. The
+  // backend GET /report-schedules resolves them from the reports the caller
+  // can see, so frequency / next-run / recipients are real, not fabricated.
+  schedules: ReportSchedule[];
+}) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const addToast = useToastStore((s) => s.addToast);
   const [newOpen, setNewOpen] = useState(false);
-
-  // Real schedules — the backend GET /report-schedules resolves them from
-  // the reports the caller can see, so frequency / next-run / recipients
-  // are no longer fabricated.
-  const schedulesQ = useQuery({
-    queryKey: ['bi', 'schedules'],
-    queryFn: listSchedules,
-  });
-  const schedules = schedulesQ.data ?? [];
 
   const reportName = (id: string) =>
     reports.find((r) => r.id === id)?.name ??
@@ -1059,23 +1128,10 @@ function SchedulesList({ reports }: { reports: ReportDefinition[] }) {
       defaultValue: FREQUENCY_LABELS[f as ReportFrequency] ?? f,
     });
 
-  if (schedulesQ.isError) {
-    return (
-      <Card padding="md">
-        <EmptyState
-          icon={<AlertOctagon size={22} />}
-          title={t('bi.load_error', { defaultValue: 'Could not load BI data' })}
-          description={getErrorMessage(schedulesQ.error)}
-          action={{
-            label: t('common.retry', { defaultValue: 'Retry' }),
-            onClick: () => schedulesQ.refetch(),
-          }}
-        />
-      </Card>
-    );
-  }
-
-  if (!schedulesQ.isLoading && schedules.length === 0) {
+  // Loading and error states are handled by the parent page (the page-level
+  // skeleton / retry chrome is driven by the lifted schedules query), so this
+  // component only renders the loaded data.
+  if (schedules.length === 0) {
     return (
       <>
         <Card padding="md">
@@ -1130,12 +1186,7 @@ function SchedulesList({ reports }: { reports: ReportDefinition[] }) {
         </Button>
       </div>
       <Card padding="none" className="mt-3">
-        {schedulesQ.isLoading ? (
-          <div className="p-4">
-            <SkeletonTable rows={4} columns={5} />
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
+        <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-surface-secondary text-content-tertiary text-xs uppercase tracking-wide">
                 <tr>
@@ -1204,8 +1255,7 @@ function SchedulesList({ reports }: { reports: ReportDefinition[] }) {
                 ))}
               </tbody>
             </table>
-          </div>
-        )}
+        </div>
         <div className="border-t border-border-light px-4 py-2.5 text-xs text-content-tertiary">
           {t('bi.schedules_hint', {
             defaultValue:
@@ -1668,8 +1718,35 @@ function DashboardRenderPanel({
           {renderQ.isError && (
             <p className="text-sm text-rose-600">{getErrorMessage(renderQ.error)}</p>
           )}
+          {/* When the dashboard renders but evaluating the (filtered) widgets
+              fails, surface it as a distinct alert below the still-visible
+              cross-filter chips so the user understands the active filters are
+              what failed and remain applied (clear them to recover). */}
           {evaluateQ.isError && !renderQ.isError && (
-            <p className="text-sm text-rose-600">{getErrorMessage(evaluateQ.error)}</p>
+            <div className="flex items-start gap-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 dark:border-rose-900/40 dark:bg-rose-900/20">
+              <AlertOctagon size={16} className="mt-0.5 shrink-0 text-rose-600" />
+              <div className="text-sm text-rose-700 dark:text-rose-300">
+                <p className="font-medium">
+                  {Object.keys(filtersForQuery).length > 0
+                    ? t('bi.evaluate_error_filtered', {
+                        defaultValue: 'Could not apply the active filters',
+                      })
+                    : t('bi.evaluate_error', {
+                        defaultValue: 'Could not evaluate widgets',
+                      })}
+                </p>
+                <p className="text-xs">{getErrorMessage(evaluateQ.error)}</p>
+                {Object.keys(filtersForQuery).length > 0 && (
+                  <button
+                    type="button"
+                    onClick={clearFilters}
+                    className="mt-1 text-xs font-medium underline underline-offset-2 hover:no-underline"
+                  >
+                    {t('bi.clear_filters', { defaultValue: 'Clear filters' })}
+                  </button>
+                )}
+              </div>
+            </div>
           )}
           {data && data.widgets.length === 0 && (
             <EmptyState
@@ -2153,9 +2230,13 @@ function WidgetCard({
                 </tr>
               </thead>
               <tbody>
-                {rows.slice(0, 10).map((row, i) => (
+                {rows.slice(0, 10).map((row, i) => {
+                  const rowId = row['id'] ?? row['code'] ?? row['key'];
+                  const rowKey =
+                    rowId !== undefined && rowId !== null ? String(rowId) : `${i}:${JSON.stringify(row)}`;
+                  return (
                   <tr
-                    key={i}
+                    key={rowKey}
                     onClick={rowClickable ? () => onCellClick?.(row) : undefined}
                     className={clsx(
                       'border-t border-border-light',
@@ -2166,7 +2247,8 @@ function WidgetCard({
                       <td key={c} className="px-2 py-1">{String(row[c] ?? '')}</td>
                     ))}
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>

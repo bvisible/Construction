@@ -3,6 +3,7 @@
 Stateless service layer.
 """
 
+import hashlib
 import logging
 import uuid
 from datetime import UTC, datetime
@@ -62,6 +63,37 @@ def _safe_decimal(value: object, default: Decimal = Decimal("0")) -> Decimal:
 def _utcnow_iso() -> str:
     """Return current UTC time as ISO-8601 string."""
     return datetime.now(UTC).isoformat()
+
+
+def _derive_ledger_idempotency_key(
+    *,
+    project_id: object,
+    transaction_ref: str,
+    source_type: str | None,
+    source_id: str | None,
+) -> str:
+    """Build a deterministic ledger idempotency key.
+
+    Used when the caller does not pass an explicit ``idempotency_key`` so a
+    benign retry of the SAME posting reuses the SAME key (and therefore hits
+    the existing-entry short-circuit / DB backstop) instead of double-posting.
+    Two distinct postings that happen to share a ``transaction_ref`` stay
+    distinct because the source pair is folded in. Hashed to a fixed length
+    so it always fits the ``String(64)`` column regardless of ref length.
+    """
+    raw = "|".join(
+        (
+            str(project_id or ""),
+            transaction_ref or "",
+            source_type or "",
+            source_id or "",
+        )
+    )
+    # Trim to the column width: "auto:" (5) + a full sha256 hex (64) is 69
+    # chars, which overflows the String(64) ``idempotency_key`` column. 59 hex
+    # chars (236 bits) keep collisions negligible, and the truncation is
+    # deterministic so the same posting still derives the same key.
+    return ("auto:" + hashlib.sha256(raw.encode("utf-8")).hexdigest())[:64]
 
 
 def _project_fx_map(project: object | None) -> dict[str, str]:
@@ -311,14 +343,21 @@ class FinanceService:
         self,
         *,
         project_id: uuid.UUID | None = None,
+        project_ids: set[uuid.UUID] | None = None,
         direction: str | None = None,
         invoice_status: str | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> tuple[list[Invoice], int]:
-        """List invoices with filters."""
+        """List invoices with filters.
+
+        ``project_ids`` is the accessible-projects scope applied by the router
+        when no explicit ``project_id`` is given, so a non-admin never sees
+        every tenant's invoices.
+        """
         return await self.invoices.list(
             project_id=project_id,
+            project_ids=project_ids,
             direction=direction,
             status=invoice_status,
             limit=limit,
@@ -669,7 +708,12 @@ class FinanceService:
                 # so still matches base-currency invoice amounts as before.
                 budget_currency = (getattr(budget, "currency_code", "") or "").strip().upper()
                 key = (budget.wbs_id, budget.category, budget_currency)
-                budget.actual = bucketed.get(key, Decimal("0"))
+                # Preserve the goods-receipt-sourced portion of actual (recorded
+                # in metadata by the procurement gr.confirmed handler). Without
+                # this, paying any invoice overwrites actual with only the
+                # invoice-sourced total and silently wipes procurement actuals.
+                gr_actual = _safe_decimal((getattr(budget, "metadata_", None) or {}).get("actual_from_receipts", "0"))
+                budget.actual = bucketed.get(key, Decimal("0")) + gr_actual
 
             logger.info(
                 "Updated budget actuals for project %s: total_actual=%s across %d budget row(s), %d bucket(s)",
@@ -1186,6 +1230,20 @@ class FinanceService:
 
         invoice = await self.get_invoice(invoice_id)  # 404 check
 
+        # FX never-blend: the withholding math below runs entirely in the
+        # invoice currency (gross derives from the invoice total). Stamping the
+        # payment with a different currency would silently relabel an
+        # invoice-currency amount as another currency, so reject the mismatch
+        # rather than mis-post it. Settle in the invoice currency.
+        if data.currency_code and invoice.currency_code and data.currency_code != invoice.currency_code:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"Payment currency {data.currency_code} does not match invoice "
+                    f"currency {invoice.currency_code}; settle in the invoice currency."
+                ),
+            )
+
         inv_total = _safe_decimal(invoice.amount_total)
         inv_retention = _safe_decimal(invoice.retention_amount)
 
@@ -1414,10 +1472,20 @@ class FinanceService:
         self,
         *,
         project_id: uuid.UUID | None = None,
+        project_ids: set[uuid.UUID] | None = None,
         category: str | None = None,
     ) -> tuple[list[ProjectBudget], int]:
-        """List budgets with filters."""
-        return await self.budgets.list(project_id=project_id, category=category)
+        """List budgets with filters.
+
+        ``project_ids`` is the accessible-projects scope applied by the router
+        when no explicit ``project_id`` is given, so a non-admin never sees
+        every tenant's budgets.
+        """
+        return await self.budgets.list(
+            project_id=project_id,
+            project_ids=project_ids,
+            category=category,
+        )
 
     async def update_budget(
         self,
@@ -1589,9 +1657,15 @@ class FinanceService:
         self,
         *,
         project_id: uuid.UUID | None = None,
+        project_ids: set[uuid.UUID] | None = None,
     ) -> tuple[list[EVMSnapshot], int]:
-        """List EVM snapshots for a project."""
-        return await self.evm.list(project_id=project_id)
+        """List EVM snapshots for a project.
+
+        ``project_ids`` is the accessible-projects scope applied by the router
+        when no explicit ``project_id`` is given, so a non-admin never sees
+        every tenant's snapshots.
+        """
+        return await self.evm.list(project_id=project_id, project_ids=project_ids)
 
     # ── Dashboard ───────────────────────────────────────────────────────────
 
@@ -1599,19 +1673,26 @@ class FinanceService:
         self,
         *,
         project_id: uuid.UUID | None = None,
+        project_ids: set[uuid.UUID] | None = None,
     ) -> dict:
         """Compute aggregated finance KPIs for a project or globally.
 
         Uses SQL-level aggregation for invoices, budgets, and payments
         instead of loading all rows into Python - significantly faster
         for projects with many financial records.
+
+        ``project_ids`` is the accessible-projects scope applied by the router
+        when no explicit ``project_id`` is given, so a non-admin's portfolio
+        dashboard aggregates only their own projects rather than every tenant's.
         """
         from app.modules.finance.schemas import FinanceDashboardResponse
 
         # ── Per-currency aggregates ────────────────────────────────────
-        inv_agg = await self.invoices.aggregate_for_dashboard(project_id=project_id)
-        budget_agg = await self.budgets.aggregate_for_dashboard(project_id=project_id)
-        payments_by_currency = await self.payments_repo.aggregate_by_currency(project_id=project_id)
+        inv_agg = await self.invoices.aggregate_for_dashboard(project_id=project_id, project_ids=project_ids)
+        budget_agg = await self.budgets.aggregate_for_dashboard(project_id=project_id, project_ids=project_ids)
+        payments_by_currency = await self.payments_repo.aggregate_by_currency(
+            project_id=project_id, project_ids=project_ids
+        )
         overdue_count = inv_agg["overdue_count"]
         status_counts = inv_agg["status_counts"]
 
@@ -1727,7 +1808,36 @@ class FinanceService:
             - credit row: credit_amount > 0, debit_amount == 0
         * Rows are NEVER mutated after insert - corrections use
           :meth:`reverse_ledger_transaction`.
+
+        Idempotency: a key is taken from ``data.idempotency_key`` or derived
+        from ``transaction_ref`` + source. If a transaction already exists for
+        that key its rows are returned unchanged (no second write), so a
+        retried post never double-posts the ledger.
         """
+        from sqlalchemy import select
+
+        idem_key = data.idempotency_key or _derive_ledger_idempotency_key(
+            project_id=data.project_id,
+            transaction_ref=data.transaction_ref,
+            source_type=data.source_type,
+            source_id=data.source_id,
+        )
+
+        # Existence-check first: a benign retry returns the existing pair.
+        existing_stmt = (
+            select(LedgerEntry).where(LedgerEntry.idempotency_key == idem_key).order_by(LedgerEntry.debit_amount.desc())
+        )
+        existing = list((await self.session.execute(existing_stmt)).scalars().all())
+        if existing:
+            debit_existing = next((r for r in existing if _safe_decimal(r.debit_amount) > 0), existing[0])
+            credit_existing = next((r for r in existing if _safe_decimal(r.credit_amount) > 0), existing[-1])
+            logger.info(
+                "Ledger transaction idempotent hit: ref=%s key=%s - returning existing pair.",
+                data.transaction_ref,
+                idem_key,
+            )
+            return debit_existing, credit_existing
+
         debit_val = _safe_decimal(data.debit_amount)
         credit_val = _safe_decimal(data.credit_amount)
         if debit_val <= Decimal("0"):
@@ -1748,38 +1858,50 @@ class FinanceService:
         posted_at = data.posted_at or _utcnow_iso()
         project_id = data.project_id
 
-        async with self.session.begin_nested():
-            debit_row = LedgerEntry(
-                project_id=project_id,
-                transaction_ref=data.transaction_ref,
-                account_code=data.debit_account,
-                description=data.description,
-                debit_amount=debit_val,
-                credit_amount=Decimal("0"),
-                currency_code=data.currency_code or "",
-                posted_at=posted_at,
-                source_type=data.source_type,
-                source_id=data.source_id,
-                is_reversal=False,
-                created_by=data.created_by,
-            )
-            credit_row = LedgerEntry(
-                project_id=project_id,
-                transaction_ref=data.transaction_ref,
-                account_code=data.credit_account,
-                description=data.description,
-                debit_amount=Decimal("0"),
-                credit_amount=credit_val,
-                currency_code=data.currency_code or "",
-                posted_at=posted_at,
-                source_type=data.source_type,
-                source_id=data.source_id,
-                is_reversal=False,
-                created_by=data.created_by,
-            )
-            self.session.add(debit_row)
-            self.session.add(credit_row)
-            await self.session.flush()
+        try:
+            async with self.session.begin_nested():
+                debit_row = LedgerEntry(
+                    project_id=project_id,
+                    transaction_ref=data.transaction_ref,
+                    account_code=data.debit_account,
+                    description=data.description,
+                    debit_amount=debit_val,
+                    credit_amount=Decimal("0"),
+                    currency_code=data.currency_code or "",
+                    posted_at=posted_at,
+                    source_type=data.source_type,
+                    source_id=data.source_id,
+                    is_reversal=False,
+                    created_by=data.created_by,
+                    idempotency_key=idem_key,
+                )
+                credit_row = LedgerEntry(
+                    project_id=project_id,
+                    transaction_ref=data.transaction_ref,
+                    account_code=data.credit_account,
+                    description=data.description,
+                    debit_amount=Decimal("0"),
+                    credit_amount=credit_val,
+                    currency_code=data.currency_code or "",
+                    posted_at=posted_at,
+                    source_type=data.source_type,
+                    source_id=data.source_id,
+                    is_reversal=False,
+                    created_by=data.created_by,
+                    idempotency_key=idem_key,
+                )
+                self.session.add(debit_row)
+                self.session.add(credit_row)
+                await self.session.flush()
+        except IntegrityError:
+            # Concurrent writer won the race on the partial unique index -
+            # the rows now exist under our key; return them instead of failing.
+            existing = list((await self.session.execute(existing_stmt)).scalars().all())
+            if existing:
+                debit_existing = next((r for r in existing if _safe_decimal(r.debit_amount) > 0), existing[0])
+                credit_existing = next((r for r in existing if _safe_decimal(r.credit_amount) > 0), existing[-1])
+                return debit_existing, credit_existing
+            raise
 
         logger.info(
             "Ledger transaction created: ref=%s dr=%s cr=%s",
@@ -1805,8 +1927,39 @@ class FinanceService:
 
         The reversal transaction_ref uses the ``:rev`` suffix convention:
         e.g. ``TXN-001:rev``.
+
+        Idempotency: a transaction is reversible exactly once. If a reversal
+        pair already exists for this ref the existing pair is returned (never a
+        second corrective write), so calling reverse twice cannot over-correct
+        the account. A partial unique index on the reversal idempotency key is
+        the DB-level backstop against a concurrent double-reverse.
         """
         from sqlalchemy import select
+
+        # :rev suffix is the canonical naming convention for corrective entries
+        reversal_ref = f"{transaction_ref}:rev"
+        # Deterministic key shared by both reversal legs - one reversal per ref.
+        # Trimmed to the String(64) column width ("rev:" + full hex = 68 chars).
+        reversal_idem_key = ("rev:" + hashlib.sha256(reversal_ref.encode("utf-8")).hexdigest())[:64]
+
+        # ── Idempotency: bail out if this transaction is already reversed ─────
+        rev_existing_stmt = (
+            select(LedgerEntry)
+            .where(
+                LedgerEntry.transaction_ref == reversal_ref,
+                LedgerEntry.is_reversal == True,  # noqa: E712
+            )
+            .order_by(LedgerEntry.debit_amount.desc())
+        )
+        already = list((await self.session.execute(rev_existing_stmt)).scalars().all())
+        if already:
+            rev_debit_existing = next((r for r in already if _safe_decimal(r.debit_amount) > 0), already[0])
+            rev_credit_existing = next((r for r in already if _safe_decimal(r.credit_amount) > 0), already[-1])
+            logger.info(
+                "Ledger reversal idempotent hit: %s already reversed - returning existing pair.",
+                transaction_ref,
+            )
+            return rev_debit_existing, rev_credit_existing
 
         stmt = select(LedgerEntry).where(
             LedgerEntry.transaction_ref == transaction_ref,
@@ -1820,52 +1973,54 @@ class FinanceService:
             )
 
         posted_at = _utcnow_iso()
-        # :rev suffix is the canonical naming convention for corrective entries
-        reversal_ref = f"{transaction_ref}:rev"
         rev_description = description or f"Reversal of {transaction_ref}"
 
-        # Identify the debit and credit legs by which amount is non-zero
-        orig_debit = next((r for r in rows if _safe_decimal(r.debit_amount) > 0), rows[0])
-        orig_credit = next((r for r in rows if _safe_decimal(r.credit_amount) > 0), rows[-1])
+        try:
+            async with self.session.begin_nested():
+                # Reverse EVERY leg of the original transaction, not just one
+                # debit + one credit. A journal entry may carry 3+ legs (e.g. one
+                # debit split across two credit accounts); mirroring only a single
+                # debit/credit pair would leave the remaining legs un-backed and
+                # the GL permanently unbalanced. Each reversal row keeps the leg's
+                # OWN account and swaps its debit<->credit amounts, which backs the
+                # account out individually and keeps the reversal batch balanced.
+                # account_code stays part of the idempotency key, so the distinct-
+                # account legs coexist exactly as in the original post.
+                reversal_rows: list[LedgerEntry] = []
+                for r in rows:
+                    rev = LedgerEntry(
+                        project_id=project_id or r.project_id,
+                        transaction_ref=reversal_ref,
+                        account_code=r.account_code,
+                        description=rev_description,
+                        debit_amount=r.credit_amount,  # swap debit <-> credit
+                        credit_amount=r.debit_amount,
+                        currency_code=r.currency_code,
+                        posted_at=posted_at,
+                        source_type=r.source_type,
+                        source_id=r.source_id,
+                        is_reversal=True,
+                        reversal_of_id=r.id,
+                        created_by=created_by,
+                        idempotency_key=reversal_idem_key,
+                    )
+                    self.session.add(rev)
+                    reversal_rows.append(rev)
+                await self.session.flush()
+                # Representative pair for the (debit_row, credit_row) return contract.
+                rev_debit = next((r for r in reversal_rows if _safe_decimal(r.debit_amount) > 0), reversal_rows[0])
+                rev_credit = next((r for r in reversal_rows if _safe_decimal(r.credit_amount) > 0), reversal_rows[-1])
+        except IntegrityError:
+            # Concurrent double-reverse lost the race on the partial unique
+            # index - return the pair the winner wrote, never a second one.
+            already = list((await self.session.execute(rev_existing_stmt)).scalars().all())
+            if already:
+                rev_debit_existing = next((r for r in already if _safe_decimal(r.debit_amount) > 0), already[0])
+                rev_credit_existing = next((r for r in already if _safe_decimal(r.credit_amount) > 0), already[-1])
+                return rev_debit_existing, rev_credit_existing
+            raise
 
-        async with self.session.begin_nested():
-            # Reversal debit row uses the credit account (accounts are swapped)
-            rev_debit = LedgerEntry(
-                project_id=project_id or orig_debit.project_id,
-                transaction_ref=reversal_ref,
-                account_code=orig_credit.account_code,  # ← swapped
-                description=rev_description,
-                debit_amount=orig_debit.debit_amount,  # same magnitude
-                credit_amount=Decimal("0"),
-                currency_code=orig_debit.currency_code,
-                posted_at=posted_at,
-                source_type=orig_debit.source_type,
-                source_id=orig_debit.source_id,
-                is_reversal=True,
-                reversal_of_id=orig_debit.id,
-                created_by=created_by,
-            )
-            # Reversal credit row uses the debit account (accounts are swapped)
-            rev_credit = LedgerEntry(
-                project_id=project_id or orig_credit.project_id,
-                transaction_ref=reversal_ref,
-                account_code=orig_debit.account_code,  # ← swapped
-                description=rev_description,
-                debit_amount=Decimal("0"),
-                credit_amount=orig_credit.credit_amount,  # same magnitude
-                currency_code=orig_credit.currency_code,
-                posted_at=posted_at,
-                source_type=orig_credit.source_type,
-                source_id=orig_credit.source_id,
-                is_reversal=True,
-                reversal_of_id=orig_credit.id,
-                created_by=created_by,
-            )
-            self.session.add(rev_debit)
-            self.session.add(rev_credit)
-            await self.session.flush()
-
-        logger.info("Ledger reversal created: %s → %s", transaction_ref, reversal_ref)
+        logger.info("Ledger reversal created: %s -> %s", transaction_ref, reversal_ref)
         return rev_debit, rev_credit
 
     # ── GAAP: chart of accounts ───────────────────────────────────────────────
@@ -2068,8 +2223,40 @@ class FinanceService:
         Each line becomes one :class:`LedgerEntry` row sharing the entry's
         ``transaction_ref``. All rows are written inside one SAVEPOINT so a
         failure rolls the whole entry back.
+
+        Idempotency: every line of the entry carries the same key (from
+        ``data.idempotency_key`` or derived from ``transaction_ref`` + source).
+        If an entry already exists under that key its rows are returned
+        unchanged, so a replayed post never double-posts the general ledger.
         """
+        from sqlalchemy import select
+
         currency = data.currency_code or ""
+
+        idem_key = data.idempotency_key or _derive_ledger_idempotency_key(
+            project_id=data.project_id,
+            transaction_ref=data.transaction_ref,
+            source_type=data.source_type,
+            source_id=data.source_id,
+        )
+
+        # Existence-check first: a replay returns the already-posted rows and
+        # their totals without writing anything new.
+        existing_stmt = (
+            select(LedgerEntry).where(LedgerEntry.idempotency_key == idem_key).order_by(LedgerEntry.posted_at.asc())
+        )
+        existing_rows = list((await self.session.execute(existing_stmt)).scalars().all())
+        if existing_rows:
+            dr = sum((_safe_decimal(r.debit_amount) for r in existing_rows), Decimal("0"))
+            cr = sum((_safe_decimal(r.credit_amount) for r in existing_rows), Decimal("0"))
+            logger.info(
+                "Journal entry idempotent hit: ref=%s key=%s - returning %d existing rows.",
+                data.transaction_ref,
+                idem_key,
+                len(existing_rows),
+            )
+            return existing_rows, gaap.q2(dr), gaap.q2(cr)
+
         chart = await self._chart_lookup(data.project_id)
 
         total_debits = Decimal("0")
@@ -2128,24 +2315,35 @@ class FinanceService:
 
         posted_at = data.posted_at or _utcnow_iso()
         rows: list[LedgerEntry] = []
-        async with self.session.begin_nested():
-            for account_code, debit, credit, line_desc in prepared:
-                row = LedgerEntry(
-                    project_id=data.project_id,
-                    transaction_ref=data.transaction_ref,
-                    account_code=account_code,
-                    description=line_desc or data.description,
-                    debit_amount=debit,
-                    credit_amount=credit,
-                    currency_code=currency,
-                    posted_at=posted_at,
-                    source_type=data.source_type,
-                    source_id=data.source_id,
-                    is_reversal=False,
-                )
-                self.session.add(row)
-                rows.append(row)
-            await self.session.flush()
+        try:
+            async with self.session.begin_nested():
+                for account_code, debit, credit, line_desc in prepared:
+                    row = LedgerEntry(
+                        project_id=data.project_id,
+                        transaction_ref=data.transaction_ref,
+                        account_code=account_code,
+                        description=line_desc or data.description,
+                        debit_amount=debit,
+                        credit_amount=credit,
+                        currency_code=currency,
+                        posted_at=posted_at,
+                        source_type=data.source_type,
+                        source_id=data.source_id,
+                        is_reversal=False,
+                        idempotency_key=idem_key,
+                    )
+                    self.session.add(row)
+                    rows.append(row)
+                await self.session.flush()
+        except IntegrityError:
+            # Concurrent writer won the race on the partial unique index -
+            # return the rows it wrote under our key instead of failing.
+            existing_rows = list((await self.session.execute(existing_stmt)).scalars().all())
+            if existing_rows:
+                dr = sum((_safe_decimal(r.debit_amount) for r in existing_rows), Decimal("0"))
+                cr = sum((_safe_decimal(r.credit_amount) for r in existing_rows), Decimal("0"))
+                return existing_rows, gaap.q2(dr), gaap.q2(cr)
+            raise
 
         logger.info(
             "Journal entry posted: ref=%s lines=%d dr=%s cr=%s",

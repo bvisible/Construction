@@ -42,6 +42,7 @@ import {
   ConfirmDialog,
   TabBar,
   tabIds,
+  ModuleGuideButton,
 } from '@/shared/ui';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { RequiresProject } from '@/shared/auth/RequiresProject';
@@ -61,6 +62,7 @@ import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { useActiveProjectId } from '@/shared/hooks/useActiveProjectId';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { ConnectorsTab } from './ConnectorsTab';
+import { financeGuide } from './financeGuide';
 
 /* ── Types ─────────────────────────────────────────────────────────────── */
 
@@ -342,7 +344,15 @@ interface FinanceDashboardData {
   missing_fx_rates?: string[];
 }
 
-function FinanceSummaryCards({ projectId }: { projectId: string }) {
+function FinanceSummaryCards({
+  projectId,
+  onGoToBudgets,
+  onGoToInvoices,
+}: {
+  projectId: string;
+  onGoToBudgets?: () => void;
+  onGoToInvoices?: () => void;
+}) {
   const { t } = useTranslation();
 
   const { data: dashboard } = useQuery({
@@ -374,14 +384,54 @@ function FinanceSummaryCards({ projectId }: { projectId: string }) {
   const mixedCurrencies = !!dashboard?.mixed_currencies;
   const missingFx = dashboard?.missing_fx_rates ?? [];
 
-  if (
-    !dashboard ||
-    (totalBudget === 0 &&
-      totalRevised === 0 &&
-      totalInvoiced === 0 &&
-      totalReceivable === 0)
-  ) {
+  // Still loading — render nothing rather than flashing an empty-state hint
+  // before the real totals arrive.
+  if (!dashboard) {
     return null;
+  }
+
+  // Loaded, but the project has no financial figures yet. Instead of leaving a
+  // blank gap above the tabs, guide the user toward the first actions.
+  if (
+    totalBudget === 0 &&
+    totalRevised === 0 &&
+    totalInvoiced === 0 &&
+    totalReceivable === 0
+  ) {
+    return (
+      <Card padding="none" className="overflow-hidden">
+        <EmptyState
+          icon={<Wallet size={28} strokeWidth={1.5} />}
+          title={t('finance.summary_empty_title', {
+            defaultValue: 'No financial data yet',
+          })}
+          description={t('finance.summary_empty_desc', {
+            defaultValue:
+              'Add budget lines or create an invoice to start tracking project costs here.',
+          })}
+          action={
+            onGoToBudgets || onGoToInvoices ? (
+              <div className="flex flex-wrap items-center justify-center gap-2">
+                {onGoToBudgets && (
+                  <Button variant="primary" onClick={onGoToBudgets}>
+                    {t('finance.summary_empty_add_budget', {
+                      defaultValue: 'Add budget lines',
+                    })}
+                  </Button>
+                )}
+                {onGoToInvoices && (
+                  <Button variant="secondary" onClick={onGoToInvoices}>
+                    {t('finance.summary_empty_add_invoice', {
+                      defaultValue: 'Create an invoice',
+                    })}
+                  </Button>
+                )}
+              </div>
+            ) : undefined
+          }
+        />
+      </Card>
+    );
   }
 
   const cards = [
@@ -617,7 +667,12 @@ export function FinancePage() {
           defaultValue:
             'Budgets, invoices, payments, and earned value management',
         })}
-        actions={projectId ? <FinanceModuleLinks projectId={projectId} /> : undefined}
+        actions={
+          <>
+            {projectId && <FinanceModuleLinks projectId={projectId} />}
+            <ModuleGuideButton content={financeGuide} />
+          </>
+        }
       />
 
       {/* Canonical module intro — pain-named, copy from MODULE_INTRO_COPY.
@@ -652,7 +707,13 @@ export function FinancePage() {
           there is no duplicate amber banner here (audit: finance-top). */}
 
       {/* Summary Cards */}
-      {projectId && <FinanceSummaryCards projectId={projectId} />}
+      {projectId && (
+        <FinanceSummaryCards
+          projectId={projectId}
+          onGoToBudgets={() => setActiveTab('budgets')}
+          onGoToInvoices={() => setActiveTab('invoices')}
+        />
+      )}
 
       {/* Tab Bar */}
       <TabBar<FinanceTab>
@@ -705,6 +766,18 @@ function BudgetsTab({ projectId }: { projectId: string }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const addToast = useToastStore((s) => s.addToast);
+
+  // Resolve the active project's currency from the dashboard query (already
+  // loaded by the summary cards, so this is a cache hit). Keyed on projectId,
+  // so switching projects via the global selector immediately re-resolves the
+  // currency rather than leaving the budget form pinned to the previous
+  // project's code until edit mode is re-entered.
+  const { data: budgetDashboard } = useQuery({
+    queryKey: ['finance', 'dashboard', projectId],
+    queryFn: () =>
+      apiGet<FinanceDashboardData>(`/v1/finance/dashboard/?project_id=${projectId}`),
+  });
+  const projectCurrency = budgetDashboard?.currency || '';
   const [search, setSearch] = useState('');
   const [showImport, setShowImport] = useState(false);
   const [importFile, setImportFile] = useState<File | null>(null);
@@ -836,11 +909,16 @@ function BudgetsTab({ projectId }: { projectId: string }) {
         `/api/v1/finance/budgets/export/?project_id=${encodeURIComponent(projectId)}`,
         'budgets_export.xlsx',
       ),
-    onSuccess: () =>
+    onSuccess: () => {
+      // Keep the summary cards (which read the dashboard query) in step with
+      // the exported snapshot so an export-then-reimport round-trip never
+      // shows stale totals against a freshly downloaded file.
+      queryClient.invalidateQueries({ queryKey: ['finance', 'dashboard', projectId] });
       addToast({
         type: 'success',
         title: t('finance.export_success', { defaultValue: 'Budget data exported successfully' }),
-      }),
+      });
+    },
     onError: (e: Error) =>
       addToast({
         type: 'error',
@@ -857,6 +935,10 @@ function BudgetsTab({ projectId }: { projectId: string }) {
       const res = await importBudgetsFile(importFile, projectId);
       setImportResult(res);
       queryClient.invalidateQueries({ queryKey: ['finance-budgets', projectId] });
+      // The summary cards read the dashboard query, so an import that adds or
+      // updates budget lines must refresh it too - otherwise the top totals
+      // stay stale until a manual page reload.
+      queryClient.invalidateQueries({ queryKey: ['finance', 'dashboard', projectId] });
     } catch (err: unknown) {
       setImportError(err instanceof Error ? err.message : 'Import failed');
     } finally {
@@ -986,7 +1068,12 @@ function BudgetsTab({ projectId }: { projectId: string }) {
         >
           <div className="relative">
             <span className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3 text-xs text-content-tertiary font-medium">
-              {budgets?.[0]?.currency_code ||
+              {/* Prefer the active project's resolved currency (keyed on
+                  projectId) so switching projects updates the prefix
+                  immediately; fall back to an existing budget row's code,
+                  then to a neutral label. */}
+              {projectCurrency ||
+                budgets?.[0]?.currency_code ||
                 budgets?.[0]?.currency ||
                 t('finance.project_currency', { defaultValue: 'project currency' })}
             </span>
@@ -1580,6 +1667,13 @@ function InvoicesTab({ projectId }: { projectId: string }) {
     description: '',
   });
   const [invoiceErrors, setInvoiceErrors] = useState<Record<string, string>>({});
+  // Tracks whether the user has hand-entered the Total (overriding the
+  // subtotal+tax auto-sum). Once set, subtotal/tax edits no longer clobber
+  // the manual total - they only suggest a recomputed value the user can
+  // restore via the "recalculate" affordance. Reset whenever a fresh form is
+  // opened (new invoice / edit / direction reset) so each invoice starts in
+  // auto-compute mode.
+  const [amountEditedManually, setAmountEditedManually] = useState(false);
   const invoiceDateRef = useRef<HTMLInputElement>(null);
   // When set, the invoice modal is in edit mode for this existing invoice.
   const [editingInvoice, setEditingInvoice] = useState<Invoice | null>(null);
@@ -1621,6 +1715,17 @@ function InvoicesTab({ projectId }: { projectId: string }) {
       currency: inv.currency_code || inv.currency || projectCurrency || '',
       description: inv.notes ?? inv.description ?? '',
     });
+    // If the stored total differs from subtotal+tax, the invoice was saved
+    // with a deliberate manual total - preserve that intent so editing the
+    // subtotal/tax doesn't silently overwrite it.
+    const subN = parseFloat(subtotal || '0');
+    const taxN = parseFloat(tax || '0');
+    const totalN = parseFloat(total || '0');
+    setAmountEditedManually(
+      Number.isFinite(totalN) &&
+        total.trim() !== '' &&
+        Math.abs(totalN - (subN + taxN)) > 0.005,
+    );
     setInvoiceErrors({});
     setEditingInvoice(inv);
   };
@@ -1689,6 +1794,7 @@ function InvoicesTab({ projectId }: { projectId: string }) {
       queryClient.invalidateQueries({ queryKey: ['finance', 'dashboard', projectId] });
       setShowCreate(false);
       setInvoiceForm({ direction: 'payable', counterparty: '', contact_id: '', invoice_date: todayStr, due_date: '', subtotal: '', tax: '', amount: '', currency: projectCurrency, description: '' });
+      setAmountEditedManually(false);
       addToast({ type: 'success', title: t('finance.invoice_created', { defaultValue: 'Invoice created successfully' }) });
     },
     onError: (e: Error) =>
@@ -1888,6 +1994,7 @@ function InvoicesTab({ projectId }: { projectId: string }) {
             onClick={() => {
               setInvoiceForm({ direction: subTab, counterparty: '', contact_id: '', invoice_date: todayStr, due_date: '', subtotal: '', tax: '', amount: '', currency: projectCurrency, description: '' });
               setInvoiceErrors({});
+              setAmountEditedManually(false);
               setShowCreate(true);
             }}
           >
@@ -1961,6 +2068,7 @@ function InvoicesTab({ projectId }: { projectId: string }) {
                       onClick: () => {
                         setInvoiceForm({ direction: subTab, counterparty: '', contact_id: '', invoice_date: todayStr, due_date: '', subtotal: '', tax: '', amount: '', currency: projectCurrency, description: '' });
                         setInvoiceErrors({});
+                        setAmountEditedManually(false);
                         setShowCreate(true);
                       },
                     }
@@ -2126,9 +2234,12 @@ function InvoicesTab({ projectId }: { projectId: string }) {
                               onClick={async () => {
                                 const ok = await confirm({
                                   title: t('finance.confirm_pay_title', { defaultValue: 'Mark as paid?' }),
-                                  message: t('finance.confirm_pay_msg', { defaultValue: 'This invoice will be recorded as paid.' }),
+                                  message: t('finance.confirm_pay_msg_immutable', {
+                                    defaultValue:
+                                      'This records the payment as an immutable ledger entry and closes the invoice. It cannot be undone.',
+                                  }),
                                   confirmLabel: t('finance.mark_paid', { defaultValue: 'Mark Paid' }),
-                                  variant: 'warning',
+                                  variant: 'danger',
                                 });
                                 if (ok) markPaidMutation.mutate(inv.id);
                               }}
@@ -2416,7 +2527,13 @@ function InvoicesTab({ projectId }: { projectId: string }) {
                     const sub = e.target.value;
                     const tax = invoiceForm.tax || '0';
                     const total = (parseFloat(sub || '0') + parseFloat(tax)).toFixed(2);
-                    setInvoiceForm((f) => ({ ...f, subtotal: sub, amount: total }));
+                    // Only auto-fill the total while the user hasn't taken it
+                    // over manually; otherwise preserve their entered total.
+                    setInvoiceForm((f) => ({
+                      ...f,
+                      subtotal: sub,
+                      ...(amountEditedManually ? {} : { amount: total }),
+                    }));
                     if (invoiceErrors.subtotal) setInvoiceErrors((prev) => { const next = { ...prev }; delete next.subtotal; return next; });
                   }}
                   className={clsx(inputCls, 'pl-12', invoiceErrors.subtotal && 'border-semantic-error focus:ring-red-300 focus:border-semantic-error')}
@@ -2437,25 +2554,78 @@ function InvoicesTab({ projectId }: { projectId: string }) {
                     const tax = e.target.value;
                     const sub = invoiceForm.subtotal || '0';
                     const total = (parseFloat(sub) + parseFloat(tax || '0')).toFixed(2);
-                    setInvoiceForm((f) => ({ ...f, tax, amount: total }));
+                    // Preserve a manually entered total; otherwise keep it in
+                    // sync with subtotal+tax.
+                    setInvoiceForm((f) => ({
+                      ...f,
+                      tax,
+                      ...(amountEditedManually ? {} : { amount: total }),
+                    }));
                   }}
                   className={clsx(inputCls, 'pl-12')}
                   placeholder="0.00"
                 />
               </div>
             </WideModalField>
-            <div className="sm:col-span-2 lg:col-span-3 rounded-lg bg-surface-secondary/60 px-4 py-3 flex items-center justify-between">
-              <span className="text-sm font-semibold text-content-primary">
-                {t('finance.total', { defaultValue: 'Total' })}
-              </span>
-              <span className="text-base font-bold tabular-nums text-content-primary">
-                {invoiceForm.currency} {(() => {
-                  const sub = parseFloat(invoiceForm.subtotal || '0');
-                  const tax = parseFloat(invoiceForm.tax || '0');
-                  const total = (Number.isFinite(sub) ? sub : 0) + (Number.isFinite(tax) ? tax : 0);
-                  return total.toFixed(2);
-                })()}
-              </span>
+            <div className="sm:col-span-2 lg:col-span-3 rounded-lg bg-surface-secondary/60 px-4 py-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-semibold text-content-primary">
+                    {t('finance.total', { defaultValue: 'Total' })}
+                  </span>
+                  {amountEditedManually && (
+                    <Badge variant="warning" size="sm">
+                      {t('finance.total_manual', { defaultValue: 'Manual override' })}
+                    </Badge>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="pointer-events-none text-xs text-content-tertiary font-medium">
+                    {invoiceForm.currency}
+                  </span>
+                  {/* Editable so a user can round to a nice figure or paste a
+                      pre-calculated total; once touched it stops being
+                      overwritten by subtotal/tax edits (item: manual total). */}
+                  <input
+                    type="number"
+                    step="0.01"
+                    aria-label={t('finance.total', { defaultValue: 'Total' })}
+                    value={(() => {
+                      if (amountEditedManually) return invoiceForm.amount;
+                      const sub = parseFloat(invoiceForm.subtotal || '0');
+                      const tax = parseFloat(invoiceForm.tax || '0');
+                      const total = (Number.isFinite(sub) ? sub : 0) + (Number.isFinite(tax) ? tax : 0);
+                      return total.toFixed(2);
+                    })()}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setAmountEditedManually(true);
+                      setInvoiceForm((f) => ({ ...f, amount: v }));
+                    }}
+                    className="h-9 w-36 rounded-lg border border-border bg-surface-primary px-3 text-right text-base font-bold tabular-nums text-content-primary focus:outline-none focus:ring-2 focus:ring-oe-blue/30 focus:border-oe-blue"
+                    placeholder="0.00"
+                  />
+                </div>
+              </div>
+              {amountEditedManually && (
+                <div className="mt-2 flex items-center justify-end">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const sub = parseFloat(invoiceForm.subtotal || '0');
+                      const tax = parseFloat(invoiceForm.tax || '0');
+                      const total = ((Number.isFinite(sub) ? sub : 0) + (Number.isFinite(tax) ? tax : 0)).toFixed(2);
+                      setAmountEditedManually(false);
+                      setInvoiceForm((f) => ({ ...f, amount: total }));
+                    }}
+                    className="text-xs font-medium text-oe-blue hover:underline"
+                  >
+                    {t('finance.total_recalculate', {
+                      defaultValue: 'Recalculate from subtotal + tax',
+                    })}
+                  </button>
+                </div>
+              )}
             </div>
           </WideModalSection>
 

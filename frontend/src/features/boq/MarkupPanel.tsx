@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { boqApi, type Markup, type CreateMarkupData, type UpdateMarkupData } from './api';
@@ -51,6 +51,13 @@ interface MarkupPanelProps {
   currencyCode: string;
   locale: string;
   fmt: Intl.NumberFormat;
+  /**
+   * Bumped by the host (the toolbar "Markups / OH&P" jump) to force this
+   * panel open. The panel is collapsible and defaults open; bumping the
+   * signal re-expands it after a manual collapse so the jump always lands
+   * on visible content.
+   */
+  openSignal?: number;
 }
 
 interface EditState {
@@ -59,7 +66,7 @@ interface EditState {
   value: string;
 }
 
-export function MarkupPanel({ boqId, markups, directCost, currencySymbol, currencyCode, locale, fmt }: MarkupPanelProps) {
+export function MarkupPanel({ boqId, markups, directCost, currencySymbol, currencyCode, locale, fmt, openSignal }: MarkupPanelProps) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const addToast = useToastStore((s) => s.addToast);
@@ -67,6 +74,13 @@ export function MarkupPanel({ boqId, markups, directCost, currencySymbol, curren
   const [isOpen, setIsOpen] = useState(true);
   const [editState, setEditState] = useState<EditState | null>(null);
   const [showRegionMenu, setShowRegionMenu] = useState(false);
+
+  // Re-expand when the host bumps openSignal (toolbar "Markups / OH&P" jump).
+  // Ignore the initial 0 so a user who manually collapsed the panel is not
+  // re-opened on mount.
+  useEffect(() => {
+    if (openSignal && openSignal > 0) setIsOpen(true);
+  }, [openSignal]);
 
   const invalidate = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: ['boq-markups', boqId] });
@@ -117,6 +131,36 @@ export function MarkupPanel({ boqId, markups, directCost, currencySymbol, curren
     },
   });
 
+  // Cascading calculation, used both for the per-row Amount column and for the
+  // toggle flash so the flash matches what a row actually contributes (fixed
+  // amounts and cumulative bases included). Memoised so the toggle handler can
+  // read a row's real contribution without recomputing. Defensive against
+  // malformed server payloads - Apply-Regional-Template used to crash the panel
+  // when a markup came back without a numeric percentage.
+  const { calcMap, netTotal, calculated } = useMemo(() => {
+    let running = directCost;
+    const calculated = (Array.isArray(markups) ? markups : [])
+      .filter((m) => m && m.is_active !== false)
+      .map((m) => {
+        let amount = 0;
+        const pct = typeof m.percentage === 'number' && Number.isFinite(m.percentage) ? m.percentage : 0;
+        if (m.markup_type === 'fixed') {
+          amount = typeof m.fixed_amount === 'number' && Number.isFinite(m.fixed_amount) ? m.fixed_amount : 0;
+        } else if (m.apply_to === 'cumulative' || m.apply_to === 'subtotal') {
+          // The backend treats 'subtotal' identically to 'cumulative' (base =
+          // direct cost + the markups before it); GAEB import persists tax
+          // markups as 'subtotal', so basing it on directCost here would
+          // under-state the Amount column and the net total against the server.
+          amount = running * (pct / 100);
+        } else {
+          amount = directCost * (pct / 100);
+        }
+        running += amount;
+        return { id: m.id, amount };
+      });
+    return { calcMap: new Map(calculated.map((c) => [c.id, c.amount])), netTotal: running, calculated };
+  }, [markups, directCost]);
+
   const handleAddMarkup = useCallback(() => {
     addMutation.mutate({
       name: t('boq.new_markup', { defaultValue: 'New Markup' }),
@@ -128,9 +172,22 @@ export function MarkupPanel({ boqId, markups, directCost, currencySymbol, curren
 
   const handleToggleActive = useCallback(
     (markup: Markup) => {
-      // Calculate impact for visual feedback
-      const pct = markup.percentage ?? 0;
-      const impact = directCost * (pct / 100);
+      // Impact for the brief visual flash. Prefer the exact cascade amount the
+      // panel already computed for this row (this respects fixed_amount markups
+      // and cumulative bases); fall back to a flat estimate only when the row is
+      // currently inactive and therefore absent from the cascade map.
+      let impact = calcMap.get(markup.id);
+      if (impact === undefined) {
+        if (markup.markup_type === 'fixed') {
+          impact =
+            typeof markup.fixed_amount === 'number' && Number.isFinite(markup.fixed_amount)
+              ? markup.fixed_amount
+              : 0;
+        } else {
+          const pct = markup.percentage ?? 0;
+          impact = directCost * (pct / 100);
+        }
+      }
       const sign = markup.is_active ? '-' : '+';
       updateMutation.mutate(
         { markupId: markup.id, data: { is_active: !markup.is_active } },
@@ -150,7 +207,7 @@ export function MarkupPanel({ boqId, markups, directCost, currencySymbol, curren
         },
       );
     },
-    [updateMutation, directCost, fmt, currencySymbol],
+    [updateMutation, directCost, calcMap, fmt, currencySymbol],
   );
 
   const handleStartEdit = useCallback((markupId: string, field: 'name' | 'percentage' | 'category', value: string) => {
@@ -165,14 +222,27 @@ export function MarkupPanel({ boqId, markups, directCost, currencySymbol, curren
       updateMutation.mutate({ markupId, data: { name: value } });
     } else if (field === 'percentage') {
       const num = parseFloat(value);
-      if (!isNaN(num) && num >= 0 && num <= 100) {
-        updateMutation.mutate({ markupId, data: { percentage: num } });
+      if (isNaN(num) || num < 0 || num > 100) {
+        // Keep the editor open and explain, rather than silently reverting the
+        // typed value with no feedback (a number input's min/max does not block
+        // out-of-range typing).
+        addToast({
+          type: 'error',
+          title: t('boq.markup_pct_invalid_title', {
+            defaultValue: 'Enter a percentage from 0 to 100',
+          }),
+          message: t('boq.markup_pct_invalid_msg', {
+            defaultValue: 'The markup percentage must be a number between 0 and 100.',
+          }),
+        });
+        return; // leave editState intact so the field stays editable
       }
+      updateMutation.mutate({ markupId, data: { percentage: num } });
     } else if (field === 'category') {
       updateMutation.mutate({ markupId, data: { category: value } });
     }
     setEditState(null);
-  }, [editState, updateMutation]);
+  }, [editState, updateMutation, addToast, t]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -182,36 +252,13 @@ export function MarkupPanel({ boqId, markups, directCost, currencySymbol, curren
     [handleCommitEdit],
   );
 
-  // Cascading calculation for preview. Defensive against malformed server
-  // payloads — Apply-Regional-Template used to crash the panel when a markup
-  // came back without a numeric percentage (Bug 3).
-  let running = directCost;
-  const calculated = (Array.isArray(markups) ? markups : [])
-    .filter((m) => m && m.is_active !== false)
-    .map((m) => {
-      let amount = 0;
-      const pct = typeof m.percentage === 'number' && Number.isFinite(m.percentage) ? m.percentage : 0;
-      if (m.markup_type === 'fixed') {
-        amount = typeof m.fixed_amount === 'number' && Number.isFinite(m.fixed_amount) ? m.fixed_amount : 0;
-      } else if (m.apply_to === 'cumulative') {
-        amount = running * (pct / 100);
-      } else {
-        amount = directCost * (pct / 100);
-      }
-      running += amount;
-      return { id: m.id, amount };
-    });
-
-  const calcMap = new Map(calculated.map((c) => [c.id, c.amount]));
-  const netTotal = running;
-
   const categoryLabel = (cat: string) => {
     const key = `boq.markup_${cat}`;
     return t(key, { defaultValue: cat.charAt(0).toUpperCase() + cat.slice(1) });
   };
 
   return (
-    <div className="mt-4 rounded-xl border border-border-light bg-surface-elevated shadow-xs">
+    <div id="boq-markups-panel" className="mt-4 rounded-xl border border-border-light bg-surface-elevated shadow-xs scroll-mt-28">
       {/* Header */}
       <button
         onClick={() => setIsOpen(!isOpen)}

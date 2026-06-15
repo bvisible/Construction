@@ -41,8 +41,9 @@ import {
   FileArchive,
   type LucideIcon,
 } from 'lucide-react';
-import { Card, Badge, Button, Input, InfoHint, Breadcrumb, ConfirmDialog, DismissibleInfo, IntroRichText } from '@/shared/ui';
+import { Card, Badge, Button, Input, InfoHint, Breadcrumb, ConfirmDialog, DismissibleInfo, IntroRichText, ModuleGuideButton } from '@/shared/ui';
 import { PageHeader } from '@/shared/ui/PageHeader';
+import { modulesGuide } from './modulesGuide';
 import { PartnerPackApplyDialog } from './PartnerPackApplyDialog';
 import { PartnerPackDeactivateDialog } from './PartnerPackDeactivateDialog';
 import {
@@ -323,16 +324,22 @@ export function ModulesPage() {
           defaultValue: 'Manage your company profile, data packages, and system modules.',
         })}
         actions={
-          <Link
-            to="/modules/developer-guide"
-            className="inline-flex items-center gap-2 h-9 px-3 rounded-lg border border-oe-blue/30 bg-oe-blue/5 text-xs font-medium text-oe-blue hover:bg-oe-blue/10 hover:border-oe-blue/50 transition-colors shrink-0"
-            title={t('modules.dev_guide_hint', {
-              defaultValue: 'Learn how to build your own module',
-            })}
-          >
-            <Info size={14} />
-            {t('modules.dev_guide', { defaultValue: 'Build a module - developer guide' })}
-          </Link>
+          <>
+            {/* How it works guide - explains the four tabs and the
+                profiles / packs / data-packages / system-modules flow.
+                Sits at the head of the action cluster as the leading help pill. */}
+            <ModuleGuideButton content={modulesGuide} />
+            <Link
+              to="/modules/developer-guide"
+              className="inline-flex items-center gap-2 h-9 px-3 rounded-lg border border-oe-blue/30 bg-oe-blue/5 text-xs font-medium text-oe-blue hover:bg-oe-blue/10 hover:border-oe-blue/50 transition-colors shrink-0"
+              title={t('modules.dev_guide_hint', {
+                defaultValue: 'Learn how to build your own module',
+              })}
+            >
+              <Info size={14} />
+              {t('modules.dev_guide', { defaultValue: 'Build a module - developer guide' })}
+            </Link>
+          </>
         }
       />
 
@@ -773,6 +780,7 @@ function PartnerPacksTab() {
               index={i}
               isActive={activeSlug === pack.slug}
               activeSource={activeSlug === pack.slug ? activeSource : null}
+              envPinned={activeSource === 'env'}
             />
           ))}
         </div>
@@ -1021,6 +1029,10 @@ interface PartnerPackCardProps {
    *  deactivated from the UI) or pinned via the OE_PARTNER_PACK env var
    *  (managed by the operator, not unappliable here). */
   activeSource?: 'in-app' | 'env' | null;
+  /** True when ANY pack is currently pinned via the OE_PARTNER_PACK env var.
+   *  Activating a different pack from the UI then silently fails, so we warn
+   *  instead of opening the apply dialog. */
+  envPinned?: boolean;
 }
 
 function asStringArray(value: unknown): string[] {
@@ -1069,10 +1081,30 @@ function PartnerPackLogo({ pack }: { pack: PartnerPackManifestAPI }) {
   );
 }
 
-function PartnerPackCard({ pack, index, isActive, activeSource }: PartnerPackCardProps) {
+function PartnerPackCard({ pack, index, isActive, activeSource, envPinned }: PartnerPackCardProps) {
   const { t } = useTranslation();
+  const addToast = useToastStore((s) => s.addToast);
   const [applyOpen, setApplyOpen] = useState(false);
   const [deactivateOpen, setDeactivateOpen] = useState(false);
+
+  // Activating from the UI cannot override an env-pinned pack — the backend
+  // keeps the OE_PARTNER_PACK selection. Warn and skip opening the dialog.
+  function handleActivateClick() {
+    if (envPinned) {
+      addToast({
+        type: 'warning',
+        title: t('modules.pack_active_via_env', {
+          defaultValue: 'Active via environment (OE_PACK)',
+        }),
+        message: t('modules.env_pinned_warning', {
+          defaultValue:
+            'A partner pack is pinned via the OE_PARTNER_PACK environment variable. Ask your administrator to change it.',
+        }),
+      });
+      return;
+    }
+    setApplyOpen(true);
+  }
 
   const countryName =
     typeof pack.metadata.country_name_en === 'string'
@@ -1261,7 +1293,7 @@ function PartnerPackCard({ pack, index, isActive, activeSource }: PartnerPackCar
               variant="primary"
               size="sm"
               icon={<Power size={14} />}
-              onClick={() => setApplyOpen(true)}
+              onClick={handleActivateClick}
             >
               {t('modules.pack_activate', { defaultValue: 'Activate pack' })}
             </Button>
@@ -1980,6 +2012,7 @@ function SystemModulesTab() {
   const userRole = useAuthStore((s) => s.userRole);
   const isAdmin = userRole === 'admin';
   const [togglingModule, setTogglingModule] = useState<string | null>(null);
+  const { confirm, ...confirmProps } = useConfirm();
 
   const { data: systemModules, refetch, isLoading, isError: systemError } = useQuery({
     queryKey: ['system-modules'],
@@ -2014,6 +2047,25 @@ function SystemModulesTab() {
         }),
       });
       return;
+    }
+    // Disabling removes a backend plugin and can break dependent routes /
+    // require an app restart, so confirm first. Enabling is safe and stays
+    // immediate (mirrors the company-profile module-toggle guard pattern).
+    if (mod.enabled) {
+      const confirmed = await confirm({
+        title: t('modules.confirm_disable_system_title', {
+          defaultValue: 'Disable {{name}}?',
+          name: mod.display_name,
+        }),
+        message: t('modules.confirm_disable_system', {
+          defaultValue:
+            'Disable {{name}}? This removes the module from the backend and may require an app restart.',
+          name: mod.display_name,
+        }),
+        confirmLabel: t('common.disable', { defaultValue: 'Disable' }),
+        variant: 'warning',
+      });
+      if (!confirmed) return;
     }
     setTogglingModule(mod.name);
     const action = mod.enabled ? 'disable' : 'enable';
@@ -2222,6 +2274,8 @@ function SystemModulesTab() {
           </Card>
         ))}
       </div>
+
+      <ConfirmDialog {...confirmProps} />
     </div>
   );
 }
@@ -2274,8 +2328,23 @@ function ModuleToggleCard({
         <Icon size={15} />
       </div>
       <div className="min-w-0 flex-1">
-        <span className="text-xs font-medium text-content-primary truncate block">{name}</span>
-        <span className="text-2xs text-content-tertiary line-clamp-1">
+        <span
+          className={clsx(
+            'text-xs font-medium truncate block',
+            // When disabled the card carries opacity-60, which can push the
+            // primary text below WCAG AA. Drop to the tertiary token (still a
+            // muted look) rather than dimming an already-lower-contrast color.
+            enabled ? 'text-content-primary' : 'text-content-tertiary',
+          )}
+        >
+          {name}
+        </span>
+        <span
+          className={clsx(
+            'text-2xs line-clamp-1',
+            enabled ? 'text-content-tertiary' : 'text-content-secondary',
+          )}
+        >
           {description}
           {version ? ` · v${version}` : ''}
         </span>

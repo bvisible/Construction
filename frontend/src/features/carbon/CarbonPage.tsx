@@ -31,8 +31,10 @@ import {
   ConfirmDialog,
   DismissibleInfo,
   IntroRichText,
+  ModuleGuideButton,
 } from '@/shared/ui';
 import { PageHeader } from '@/shared/ui/PageHeader';
+import { carbonGuide } from './carbonGuide';
 import { useConfirm } from '@/shared/hooks/useConfirm';
 import { DateDisplay } from '@/shared/ui/DateDisplay';
 import { useToastStore } from '@/stores/useToastStore';
@@ -178,6 +180,10 @@ export function CarbonPage() {
         })}
         actions={
           <>
+            {/* How it works guide - explains inventories, embodied carbon from
+                the BOQ, scopes 1/2/3, EPDs, targets and GHG reports. Leads the
+                action cluster as the help pill. */}
+            <ModuleGuideButton content={carbonGuide} />
             {tab === 'inventory' && (
               <Button
                 variant="primary"
@@ -1686,10 +1692,17 @@ function ScopeBar({
   scope2: number;
   scope3: number;
 }) {
+  const { t } = useTranslation();
   const total = scope1 + scope2 + scope3;
   if (total <= 0) {
     return (
-      <div className="h-4 w-full rounded-full bg-surface-secondary" aria-label="empty" />
+      <div
+        className="h-4 w-full rounded-full bg-surface-secondary"
+        role="img"
+        aria-label={t('carbon.scope_bar_empty', {
+          defaultValue: 'No scope 1, 2 or 3 emissions recorded yet',
+        })}
+      />
     );
   }
   const p1 = (scope1 / total) * 100;

@@ -255,7 +255,7 @@ class CloseoutService:
             if key in fields and fields[key] is not None:
                 setattr(slot, key, fields[key])
         if fields.get("metadata") is not None:
-            slot.metadata_ = dict(fields["metadata"])
+            slot.metadata_ = {**(slot.metadata_ or {}), **fields["metadata"]}
         self.session.add(slot)
         await self.session.flush()
         package = await self.get_package_or_404(slot.package_id)

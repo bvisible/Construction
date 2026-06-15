@@ -247,7 +247,12 @@ class FieldReportService:
 
         fields = data.model_dump(exclude_unset=True)
         if "metadata" in fields:
-            fields["metadata_"] = fields.pop("metadata")
+            _incoming = fields.pop("metadata")
+            fields["metadata_"] = (
+                {**(getattr(report, "metadata_", None) or {}), **_incoming}
+                if isinstance(_incoming, dict)
+                else _incoming
+            )
 
         # Convert workforce entries from Pydantic models to dicts
         if "workforce" in fields and fields["workforce"] is not None:
@@ -788,7 +793,12 @@ class FieldReportTemplateService:
 
         fields = data.model_dump(exclude_unset=True)
         if "metadata" in fields:
-            fields["metadata_"] = fields.pop("metadata")
+            _incoming = fields.pop("metadata")
+            fields["metadata_"] = (
+                {**(getattr(template, "metadata_", None) or {}), **_incoming}
+                if isinstance(_incoming, dict)
+                else _incoming
+            )
         if "fields" in fields and fields["fields"] is not None:
             fields["fields"] = [f.model_dump() if hasattr(f, "model_dump") else f for f in fields["fields"]]
         if not fields:

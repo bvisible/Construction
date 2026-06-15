@@ -2751,7 +2751,12 @@ async def post_import_bundle(
                     select(Project).where(Project.id == result.project_id),
                 )
             ).scalar_one_or_none()
-            if proj is not None and not getattr(proj, "owner_id", None):
+            # A new_project import belongs to whoever imported it, so claim
+            # ownership unconditionally. A bundle exported from another instance
+            # can carry a foreign owner_id that does not exist here, which left
+            # the imported project owned by a stranger and invisible in the
+            # importer's dashboard.
+            if proj is not None and user_id is not None:
                 proj.owner_id = user_id
                 await session.commit()
         except Exception:  # noqa: BLE001

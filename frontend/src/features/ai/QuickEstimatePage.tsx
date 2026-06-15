@@ -43,8 +43,9 @@ import {
   Wand2,
 } from 'lucide-react';
 import clsx from 'clsx';
-import { Card, CardContent, Button, Badge, AIDisclaimerBanner, DismissibleInfo, IntroRichText, Breadcrumb } from '@/shared/ui';
+import { Card, CardContent, Button, Badge, AIDisclaimerBanner, DismissibleInfo, IntroRichText, Breadcrumb, ModuleGuideButton } from '@/shared/ui';
 import { PageHeader } from '@/shared/ui/PageHeader';
+import { aiGuide } from './aiGuide';
 import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { aiApi, type QuickEstimateRequest, type EstimateJobResponse, type EstimateItem, type CadExtractResponse, type EnrichResult, type EnrichedItem, type CostMatch, type CadColumnsResponse, type CadGroupResponse, type CadDynamicGroup, type CadGroupElementsResponse } from './api';
@@ -496,7 +497,10 @@ interface ProjectSummary {
 
 function SaveToBOQDialog({ open, onClose, onSave, saving, enrichedMatches = 0, enrichRegion = '' }: SaveDialogProps) {
   const { t } = useTranslation();
-  const [selectedProject, setSelectedProject] = useState('');
+  // Seed from the global project switcher so the dialog opens on the project
+  // the user is actually looking at, not an empty selector.
+  const activeProjectId = useProjectContextStore((s) => s.activeProjectId);
+  const [selectedProject, setSelectedProject] = useState(activeProjectId ?? '');
   const [boqName, setBOQName] = useState('AI Quick Estimate');
   // Default the toggle ON when the user already ran enrichment and got
   // same-currency matches - that is the whole point of having matched. They
@@ -516,6 +520,12 @@ function SaveToBOQDialog({ open, onClose, onSave, saving, enrichedMatches = 0, e
   useEffect(() => {
     if (open) setApplyEnriched(enrichedMatches > 0);
   }, [open, enrichedMatches]);
+
+  // Re-seed the project from the global switcher each time the dialog opens,
+  // so reopening after switching projects reflects the current one.
+  useEffect(() => {
+    if (open && activeProjectId) setSelectedProject(activeProjectId);
+  }, [open, activeProjectId]);
 
   const { data: projects } = useQuery({
     queryKey: ['projects-list-simple'],
@@ -2548,18 +2558,23 @@ export function QuickEstimatePage() {
             : t('ai.estimate_subtitle', { defaultValue: 'Create an estimate from any source' })
         }
         actions={
-          !isCadRoute && isConfigured && aiSettings?.preferred_model ? (
-            <span
-              data-testid="ai-quick-estimate-model-pill"
-              className="inline-flex items-center gap-1.5 rounded-full border border-border-light bg-surface-elevated px-3 py-1 text-xs font-medium text-content-secondary"
-            >
-              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
-              <Zap size={11} className="text-violet-500" />
-              {t('ai.model_pill', {
-                defaultValue: 'model: {{model}}',
-                model: aiSettings.preferred_model,
-              })}
-            </span>
+          !isCadRoute ? (
+            <div className="flex items-center gap-2">
+              {isConfigured && aiSettings?.preferred_model && (
+                <span
+                  data-testid="ai-quick-estimate-model-pill"
+                  className="inline-flex items-center gap-1.5 rounded-full border border-border-light bg-surface-elevated px-3 py-1 text-xs font-medium text-content-secondary"
+                >
+                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                  <Zap size={11} className="text-violet-500" />
+                  {t('ai.model_pill', {
+                    defaultValue: 'model: {{model}}',
+                    model: aiSettings.preferred_model,
+                  })}
+                </span>
+              )}
+              <ModuleGuideButton content={aiGuide} />
+            </div>
           ) : undefined
         }
       />

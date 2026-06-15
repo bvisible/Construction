@@ -155,6 +155,27 @@ jobs:
         if: runner.os != 'Windows'
         run: chmod +x desktop/src-tauri/binaries/*
 
+      # Ad-hoc code sign the sidecar on macOS BEFORE Tauri bundles it. The
+      # sidecar is an unsigned PyInstaller binary; an unsigned nested Mach-O
+      # breaks the .app bundle's code-signature seal, and on Apple Silicon a
+      # broken seal on a quarantined download makes Gatekeeper report the app
+      # as "damaged" (the severe path, which right-click Open cannot bypass)
+      # rather than the milder "unidentified developer". Giving the sidecar a
+      # valid ad-hoc cdhash here lets Tauri's own ad-hoc bundle signing
+      # (bundle.macOS.signingIdentity "-") seal a valid bundle. This is not
+      # notarization: users still clear quarantine once (see the release
+      # notes and docs/desktop/INSTALL.md), but the app stops being reported
+      # as damaged.
+      - name: Ad-hoc sign sidecar (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          for f in desktop/src-tauri/binaries/*; do
+            echo "Ad-hoc signing $f"
+            codesign --force --sign - --timestamp=none "$f"
+            codesign --verify --verbose=2 "$f"
+          done
+
       # Bundle the small (~30 MB) DDC IFC converter into the Windows installer
       # so a fresh install converts .ifc files offline with no first-use
       # download. We fetch the public converter repo as a zipball for the pinned
@@ -249,10 +270,20 @@ jobs:
             | Platform | File | Notes |
             | --- | --- | --- |
             | Windows | `.exe` installer, 64-bit | WebView2 is fetched automatically if it is missing |
-            | macOS | `.dmg`, Apple Silicon | Drag the app to Applications. macOS 10.15 or later |
+            | macOS | `.dmg`, Apple Silicon | Drag the app to Applications, then see "Opening on macOS" below |
             | Linux | `.deb` or `.AppImage`, 64-bit | `.deb` for Debian and Ubuntu, `.AppImage` runs anywhere |
 
             The files are attached below under Assets. You can also always get the newest build at https://openconstructionerp.com/download which detects your operating system for you.
+
+            ### Opening on macOS
+
+            This build is ad-hoc signed but not yet notarized by Apple. On the first launch macOS may say the app is "damaged" or block it. The app is fine: macOS quarantines anything downloaded from the web. After you drag the app into Applications, open Terminal and run this once:
+
+            ```
+            xattr -dr com.apple.quarantine /Applications/OpenConstructionERP.app
+            ```
+
+            Then open the app normally. On macOS Sequoia you may also need to approve it once under System Settings, Privacy and Security. You only do this once.
 
             ### Prefer the command line?
 
@@ -276,6 +307,32 @@ jobs:
             Docs: https://openconstructionerp.com/docs  .  Report an issue: https://github.com/datadrivenconstruction/OpenConstructionERP/issues
           releaseDraft: true
           prerelease: false
+
+      # Read-only diagnostic: confirm the macOS .app carries a valid ad-hoc
+      # code signature. With the sidecar pre-signed and signingIdentity "-",
+      # the bundle seal must verify, otherwise Gatekeeper would report the
+      # download as "damaged". The result is printed into the build log so a
+      # broken seal is caught at release time. spctl will reject the app as
+      # unnotarized, which is expected (we ship ad-hoc, not notarized); the
+      # codesign --verify result is the seal-integrity signal. Non-fatal so a
+      # tooling quirk never blocks a release, but it surfaces regressions.
+      - name: Verify macOS bundle signature (diagnostic)
+        if: runner.os == 'macOS'
+        run: |
+          set -uo pipefail
+          APP=$(find desktop/src-tauri/target -path '*/bundle/macos/*.app' -type d -maxdepth 8 2>/dev/null | head -1)
+          echo "App bundle: ${APP:-<none found>}"
+          if [ -z "${APP:-}" ]; then echo "No .app bundle found, skipping"; exit 0; fi
+          echo "=== codesign -dvvv ==="
+          codesign -dvvv "$APP" 2>&1 || true
+          echo "=== codesign --verify --strict ==="
+          if codesign --verify --strict --verbose=2 "$APP" 2>&1; then
+            echo "OK: bundle code-signature seal is valid (ad-hoc)"
+          else
+            echo "WARN: bundle seal verification reported issues - the dmg may still be flagged damaged"
+          fi
+          echo "=== spctl assess (expected: rejected, unnotarized) ==="
+          spctl -a -t exec -vvv "$APP" 2>&1 || true
 
   # Authenticode code signing for the Windows installers.
   #

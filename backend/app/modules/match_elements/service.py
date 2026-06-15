@@ -9,7 +9,8 @@ the AsyncSession explicitly so tests can pass a transactional session.
 Implemented:
     create_session, get_session, update_session
     rebuild_groups, list_groups, get_group_detail
-    run_match (vector / resources / llm, with auto-confirm above threshold)
+    run_match (vector / resources / llm, pre-selects high-confidence
+        top candidates for one-click confirm - never auto-commits)
     confirm, bulk_confirm
     split_group, merge_groups, skip_group
     apply_to_boq (writes BOQ positions + scaled resource sub-rows)
@@ -1694,16 +1695,20 @@ class MatchElementsService:
         )
         applied_rows = (await db.execute(applied_stmt)).all()
         cost_ids = list({r[1] for r in applied_rows if r[1] is not None})
-        cost_lookup: dict[uuid.UUID, tuple[float, str]] = {}
+        cost_lookup: dict[uuid.UUID, tuple[float, str, str]] = {}
         if cost_ids:
-            ci_stmt = select(CostItem.id, CostItem.rate, CostItem.currency).where(CostItem.id.in_(cost_ids))
-            for cid, rate, ccy in (await db.execute(ci_stmt)).all():
+            ci_stmt = select(CostItem.id, CostItem.rate, CostItem.currency, CostItem.unit).where(
+                CostItem.id.in_(cost_ids)
+            )
+            for cid, rate, ccy, cat_unit in (await db.execute(ci_stmt)).all():
                 # Don't paper over a missing currency - leave it empty
                 # so the rollup downstream can either pick the dominant
                 # currency from siblings or surface the gap explicitly.
                 # Hard-defaulting to EUR mis-stamps non-EUR rates (e.g.
                 # a BRL rate row with NULL currency would become EUR).
-                cost_lookup[cid] = (_to_decimal(rate, 0.0), (ccy or "").upper())
+                # Carry the catalogue unit too so the per-row total below can
+                # mirror apply_to_boq (multiplier strip + dimensional gate).
+                cost_lookup[cid] = (_to_decimal(rate, 0.0), (ccy or "").upper(), cat_unit or "")
 
         # Universality: stamp the session_summary.currency with the
         # project's currency, NOT the first matched candidate's currency.
@@ -1751,13 +1756,38 @@ class MatchElementsService:
                 return Decimal("0"), False
             return amount * factor_dec, True
 
+        # Same dimensional helpers apply_to_boq uses, so the resume-picker total
+        # mirrors what applying actually books (multiplier strip + dim gate).
+        from app.core.match_service.boosts.unit import (
+            _DIMENSION_GROUP,
+            _normalise_unit,
+        )
+
         totals: dict[uuid.UUID, tuple[Decimal, str | None]] = dict.fromkeys(sids, (Decimal("0"), None))
         for sid, cid, qty_raw, unit in applied_rows:
             if cid is None or cid not in cost_lookup:
                 continue
-            rate, ccy = cost_lookup[cid]
+            rate, ccy, cat_unit = cost_lookup[cid]
+            # Mirror apply_to_boq so the resume-picker total matches what
+            # applying actually books. Two corrections the raw rate*qty missed:
+            #   1. Divide out any quantity multiplier the catalogue encodes in
+            #      its unit string ("100 м3" -> per-m3 rate), else a CWICR row
+            #      overstates the total by that factor (commonly 100x/1000x).
+            #   2. Zero the rate when the catalogue dimension and the group's
+            #      unit dimension disagree (an m2 rate on a length qty is
+            #      meaningless and apply_to_boq drops it to 0).
+            env_unit = unit or ""
+            cat_mult, cat_base_unit = _split_unit_multiplier(cat_unit or env_unit)
+            mult_dec = Decimal(str(cat_mult))
+            unit_rate = (Decimal(str(rate)) / mult_dec) if mult_dec > 0 else Decimal(str(rate))
+            env_dim = _DIMENSION_GROUP.get(_normalise_unit_cross_locale(env_unit) or _normalise_unit(env_unit), "")
+            cand_dim = _DIMENSION_GROUP.get(
+                _normalise_unit_cross_locale(cat_base_unit) or _normalise_unit(cat_base_unit), ""
+            )
+            if env_dim and cand_dim and env_dim != cand_dim:
+                unit_rate = Decimal("0")
             qty = _quantity_for_unit(qty_raw or {}, unit or "pcs")
-            row_total, ok = _convert(Decimal(str(rate)) * Decimal(str(qty)), ccy)
+            row_total, ok = _convert(unit_rate * Decimal(str(qty)), ccy)
             if not ok:
                 # Drop rows we can't FX-convert into the project
                 # currency. The session is still shown - just with a
@@ -2125,7 +2155,7 @@ class MatchElementsService:
         * ``init``      - session loaded, project context fetched
         * ``elements``  - source adapter iterating BIM/Excel/text rows
         * ``ranking``   - per-group vector search + boost + rerank
-        * ``save``      - flushing results / auto-confirms to DB
+        * ``save``      - flushing ranked suggestions to DB
         * ``done``      - finished cleanly
         * ``error``     - exception bubbled out of the runner
 
@@ -2490,20 +2520,26 @@ class MatchElementsService:
             methods[spec.method] = [c.model_dump() for c in candidates]
             grow.methods = methods
 
-            # Auto-confirm if top candidate >= threshold AND group not
-            # already confirmed.
-            if candidates and grow.status in ("unmatched", "suggested") and candidates[0].score >= threshold:
+            # Human-in-the-loop (CLAUDE.md #7): the matcher proposes,
+            # the user confirms. A high-confidence top candidate is
+            # pre-selected and flagged so the user can bulk-confirm the
+            # whole batch in one click (POST /bulk-confirm with this
+            # threshold), but the group stays "suggested" until a person
+            # acts. We never set status="confirmed" or write a rate onto
+            # a BOQ position here - apply_to_boq only reads CONFIRMED
+            # groups, so nothing reaches the BOQ without an explicit
+            # confirm. ``threshold`` only decides what gets pre-selected.
+            if candidates and grow.status in ("unmatched", "suggested"):
                 top = candidates[0]
-                # MatchCandidate now carries a real CostItem.id end-to-end,
-                # so apply_to_boq can read the rate without a second lookup.
-                grow.chosen_candidate_id = uuid.UUID(top.id) if top.id else None
-                grow.chosen_method = "auto"
                 grow.confidence = f"{top.score:.4f}"
-                grow.status = "confirmed"
-                grow.confirmed_at = datetime.now(UTC)
-            elif candidates and grow.status == "unmatched":
                 grow.status = "suggested"
-                grow.confidence = f"{candidates[0].score:.4f}"
+                if top.score >= threshold:
+                    # Pre-select the top candidate so one-click bulk
+                    # confirm has a CostItem to read the rate from. This
+                    # is a suggestion, not a commitment: confirmed_by /
+                    # confirmed_at stay empty until the user confirms.
+                    grow.chosen_candidate_id = uuid.UUID(top.id) if top.id else None
+                    grow.chosen_method = "auto"
 
             ifc_class = _ifc_class_from_group_key(grow.group_key)
             meta = ifc_labels.lookup(ifc_class) if ifc_class else ifc_labels.lookup(None)
@@ -2722,17 +2758,33 @@ class MatchElementsService:
         spec: schemas.BulkConfirmRequest,
         confirmed_by: uuid.UUID | None,
     ) -> int:
-        stmt = select(MatchGroup).where(
+        # Decide which groups to confirm with a lightweight scan (id +
+        # confidence only). Below-threshold groups are skipped in the loop
+        # below; capping the heavy fetch with a static element_count ordering
+        # let high-element-count below-threshold groups permanently occupy the
+        # batch and starve confirmable groups ranked past the cap. confidence is
+        # a String column, so the numeric threshold is applied here in Python.
+        # Then we load only the chosen rows (bounded by the batch limit) for the
+        # confirm writes, preserving the per-call cap that protects the request
+        # thread on a 10k-group session (the frontend repeats to progress).
+        pick_stmt = select(MatchGroup.id, MatchGroup.confidence).where(
             MatchGroup.session_id == session_id,
             MatchGroup.status == "suggested",
         )
         if spec.group_keys:
-            stmt = stmt.where(MatchGroup.group_key.in_(spec.group_keys))
-        # Cap the per-call confirm batch so a 10k-group session doesn't
-        # block the request thread. The frontend can repeat the call to
-        # progress through the full set; status counters update live.
-        stmt = stmt.order_by(MatchGroup.element_count.desc()).limit(_BULK_BATCH_LIMIT)
-        rows = (await db.execute(stmt)).scalars().all()
+            pick_stmt = pick_stmt.where(MatchGroup.group_key.in_(spec.group_keys))
+        pick_stmt = pick_stmt.order_by(MatchGroup.element_count.desc())
+
+        chosen_ids: list[uuid.UUID] = []
+        for gid, gconf in (await db.execute(pick_stmt)).all():
+            if _to_decimal(gconf, 0.0) >= spec.threshold:
+                chosen_ids.append(gid)
+                if len(chosen_ids) >= _BULK_BATCH_LIMIT:
+                    break
+        if not chosen_ids:
+            await db.flush()
+            return 0
+        rows = (await db.execute(select(MatchGroup).where(MatchGroup.id.in_(chosen_ids)))).scalars().all()
 
         n = 0
         for r in rows:

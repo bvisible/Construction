@@ -91,6 +91,8 @@ import {
   isBookingTerminal,
   isChargeLocked,
   listAccommodationBookings,
+  listRoomBookings,
+  findBookingConflicts,
   updateBooking,
   getBooking,
   type AccommodationDetail,
@@ -734,6 +736,29 @@ function AssignOccupantModal({
   );
   const [checkOut, setCheckOut] = useState('');
 
+  // Existing bookings on this room — used to detect date conflicts on the
+  // client before submitting, so the operator sees which stays collide
+  // (and on what dates) without a 409 round-trip. Mirrors the backend
+  // guard in service.assert_no_booking_overlap.
+  const roomBookingsQuery = useQuery({
+    queryKey: ['accommodation', 'room-bookings', room.id],
+    queryFn: () => listRoomBookings(room.id, { limit: 200 }),
+  });
+  const existingBookings = roomBookingsQuery.data?.items ?? [];
+
+  // ISO date strings sort lexicographically, so a string compare is a
+  // valid chronological compare here.
+  const checkOutBeforeCheckIn =
+    !!checkOut && !!checkIn && checkOut <= checkIn;
+
+  const conflicts = useMemo(
+    () =>
+      checkIn && !checkOutBeforeCheckIn
+        ? findBookingConflicts(existingBookings, checkIn, checkOut || null)
+        : [],
+    [existingBookings, checkIn, checkOut, checkOutBeforeCheckIn],
+  );
+
   const mutation = useMutation({
     mutationFn: async () => {
       return createBooking(room.id, {
@@ -781,7 +806,12 @@ function AssignOccupantModal({
             size="sm"
             onClick={() => mutation.mutate()}
             loading={mutation.isPending}
-            disabled={disabled || (!contactId && !occupantName.trim())}
+            disabled={
+              disabled ||
+              (!contactId && !occupantName.trim()) ||
+              checkOutBeforeCheckIn ||
+              conflicts.length > 0
+            }
             data-testid="accommodation-assign-submit"
           >
             {t('accommodation.assign.confirm', {
@@ -850,14 +880,71 @@ function AssignOccupantModal({
           label={t('accommodation.assign.check_out', {
             defaultValue: 'Check-out (optional)',
           })}
+          error={
+            checkOutBeforeCheckIn
+              ? t('accommodation.assign.checkout_before_checkin', {
+                  defaultValue: 'Check-out must be after check-in.',
+                })
+              : undefined
+          }
         >
           <input
             type="date"
             value={checkOut}
+            min={checkIn || undefined}
             onChange={(e) => setCheckOut(e.target.value)}
             className={inputCls}
           />
         </WideModalField>
+
+        {/* Client-side overlap detection — lists the live bookings whose
+            dates collide with this stay so the operator can adjust the
+            range before submitting (the backend would otherwise 409). */}
+        {conflicts.length > 0 && (
+          <div
+            role="alert"
+            data-testid="accommodation-assign-conflicts"
+            className="sm:col-span-2 rounded-xl border border-rose-300 bg-rose-50 p-3 text-xs text-rose-900"
+          >
+            <div className="flex items-center gap-1.5 font-semibold">
+              <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" />
+              {t('accommodation.assign.conflict_title', {
+                defaultValue: 'These dates overlap an existing booking',
+              })}
+            </div>
+            <ul className="mt-1.5 space-y-1">
+              {conflicts.map((c) => (
+                <li
+                  key={c.id}
+                  className="flex flex-wrap items-center gap-1.5 tabular-nums"
+                >
+                  <span
+                    className={clsx(
+                      'inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-semibold',
+                      BOOKING_STATUS_BADGE[c.status],
+                    )}
+                  >
+                    {t(`accommodation.booking.status.${c.status}`, {
+                      defaultValue: c.status,
+                    })}
+                  </span>
+                  <span>
+                    {c.check_in} {'→'} {c.check_out ?? '∞'}
+                  </span>
+                  {c.occupant_name && (
+                    <span className="text-rose-700">- {c.occupant_name}</span>
+                  )}
+                </li>
+              ))}
+            </ul>
+            <p className="mt-1.5 text-rose-700">
+              {t('accommodation.assign.conflict_hint', {
+                defaultValue:
+                  'Adjust the check-in or check-out so the stay no longer overlaps, then create the booking.',
+              })}
+            </p>
+          </div>
+        )}
       </WideModalSection>
     </WideModal>
   );

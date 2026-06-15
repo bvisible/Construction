@@ -35,6 +35,12 @@ interface ChangelogEntry {
 // RULE: each changelog description must be 1 to 2 sentences. Keep the version,
 // date, title and meaning intact; trim the prose, not the facts.
 const CHANGELOG: ChangelogEntry[] = [
+  { version: '8.3.1', date: '2026-06-15', tag: 'FIX', summary: 'Sample projects are now clearly labelled and easy to remove so a fresh install can start from an empty workspace, a new project takes its currency from your regional preference, and the AI estimate builder, the match-to-cost wizard and the assembly template dialog now follow the project chosen in the top bar. Regional cost-database downloads explain a blocked connection and offer a retry, and the new wording is translated across all 26 other languages.' },
+  { version: '8.3.0', date: '2026-06-15', tag: 'NEW', summary: 'A new South Africa construction pack, the first in our African coverage, pre-configured with SANS 1200 and ASAQS measurement, CIDB contractor grading, the PPPFA 80/20 and 90/10 procurement scoring, the nine provinces and the rand with 15 percent VAT, and Johannesburg cost data on demand. This release also translates the most recent feature screens across all 26 other languages.' },
+  { version: '8.2.2', date: '2026-06-15', tag: 'FIX', summary: 'The macOS desktop app no longer opens with a "damaged" warning. The build is now ad-hoc signed across the app and its bundled local server so the code signature is valid, and the install guide explains the one-time command to clear the download quarantine.' },
+  { version: '8.2.1', date: '2026-06-15', tag: 'SECURITY', summary: 'A hardening release. Editing one part of a record no longer clears the other details saved on it, fixed across more than two dozen modules where a partial edit used to overwrite the whole stored details field. Paying an invoice now updates budget actuals correctly when some of the spend was already received, cost breakdowns convert mixed currencies before totalling, and reversing a ledger entry writes back every leg. Access checks were tightened so an account only reads and changes records in projects it can reach, and high-value variations, awarded bids and permit activation now require the matching permission.' },
+  { version: '8.2.0', date: '2026-06-14', tag: 'NEW', summary: 'A new project journey map in the top bar names the phase you are in and opens the whole project lifecycle, from winning the work to handover, with every major module placed on its phase as a link, translated in every language. This release also warns when a project exchange rate looks entered upside down, validates BIM models imported from spreadsheets or bulk files, and flags scanned PDF pages in takeoff that need OCR.' },
+  { version: '8.1.0', date: '2026-06-14', tag: 'SECURITY', summary: 'A broad access-control pass makes sure every account only sees and changes data in the projects it can reach, across finance, business intelligence, jobs, approval workflows, the cost catalogue, lead webhooks, property development and the chat assistant; a request that omits a project filter is now scoped to your own projects. A new top-bar news button opens the latest release news, the takeoff CSV export subtracts openings the way Excel does, and DIN 276 cost groups validate across the full code hierarchy.' },
   { version: '8.0.0', date: '2026-06-13', tag: 'MILESTONE', summary: 'Every major module now has a built-in guide: a help button opens a short panel that explains what the module does, the main steps and a few tips, in your language. This release also fixes DWG takeoff drawings on a fresh install, clears links to deleted bill of quantities positions, hardens cross-tenant access on the BOQ and AI estimator endpoints, and finishes the interface translation in every language.' },
   { version: '7.10.0', date: '2026-06-13', tag: 'NEW',       summary: 'ERP Chat now renders Markdown tables as real tables, and the quick create and project setup windows are fully translated in all 27 languages. Regional cost catalogues download on demand instead of shipping inside the install, so it is about 15 MB lighter while all thirty regions stay available.' },
   { version: '7.9.0', date: '2026-06-13', tag: 'NEW',       summary: 'You can now keep your own company price books in the cost database, import them from Excel or CSV, filter by catalogue and export back to Excel, with thirty regional catalogues working offline. The 5D cost model gains an earned value column, estimate-based schedules get realistic durations, and an audit pass fixes European decimal rates, budget duplication, blended foreign-currency change orders and the project switcher.' },
@@ -245,15 +251,23 @@ function compareVersionsDesc(a: ChangelogEntry, b: ChangelogEntry): number {
   return 0;
 }
 
-// Older releases (> 6 months ago relative to "today") fade slightly so the
-// recent ones pop. We use a stable date constant, not Date.now(), so the
-// muted band doesn't silently drift between builds.
-const TODAY = new Date('2026-05-21T00:00:00Z');
+/**
+ * Top N changelog entries, newest version first. Single source of truth for
+ * the /about header's "Recent releases" list so it never drifts from the
+ * changelog below. Reuses the semver-aware {@link compareVersionsDesc}.
+ */
+export function getRecentReleases(count = 3): ChangelogEntry[] {
+  return [...CHANGELOG].sort(compareVersionsDesc).slice(0, Math.max(0, count));
+}
+
+// Older releases (> 6 months ago relative to the real current date) fade
+// slightly so the recent ones pop. Computed at render time against the
+// actual "now" so the newest releases never get muted.
 const FRESH_WINDOW_DAYS = 30 * 6;
 function isStale(date: string): boolean {
   const d = new Date(`${date}T00:00:00Z`);
   if (Number.isNaN(d.getTime())) return false;
-  const ageDays = (TODAY.getTime() - d.getTime()) / 86_400_000;
+  const ageDays = (new Date().getTime() - d.getTime()) / 86_400_000;
   return ageDays > FRESH_WINDOW_DAYS;
 }
 

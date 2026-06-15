@@ -42,7 +42,22 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string, opts?: Record<string, unknown>) => {
       if (typeof opts === 'object' && opts !== null && 'defaultValue' in opts) {
-        return opts.defaultValue as string;
+        // Mirror the two i18next behaviours real components rely on:
+        // (1) pick the ``_other`` plural default whenever ``count`` is
+        // present and not 1 (English plural rule), and (2) interpolate
+        // ``{{var}}`` placeholders from the options. Without this the mock
+        // returned templates like "{{count}} record" verbatim.
+        let template = opts.defaultValue as string;
+        if (
+          'count' in opts &&
+          opts.count !== 1 &&
+          typeof opts.defaultValue_other === 'string'
+        ) {
+          template = opts.defaultValue_other as string;
+        }
+        return template.replace(/\{\{(\w+)\}\}/g, (_match, name) =>
+          name in opts ? String(opts[name]) : `{{${name}}}`,
+        );
       }
       return key;
     },

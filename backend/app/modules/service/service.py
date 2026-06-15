@@ -428,7 +428,12 @@ class ServiceService:
         contract = await self.get_contract(contract_id)
         fields: dict[str, Any] = data.model_dump(exclude_unset=True)
         if "metadata" in fields:
-            fields["metadata_"] = fields.pop("metadata")
+            _incoming = fields.pop("metadata")
+            fields["metadata_"] = (
+                {**(getattr(contract, "metadata_", None) or {}), **_incoming}
+                if isinstance(_incoming, dict)
+                else _incoming
+            )
 
         if "status" in fields:
             assert_transition(contract.status, fields["status"], machine="contract")
@@ -502,7 +507,10 @@ class ServiceService:
         asset = await self.get_asset(asset_id)
         fields: dict[str, Any] = data.model_dump(exclude_unset=True)
         if "metadata" in fields:
-            fields["metadata_"] = fields.pop("metadata")
+            _incoming = fields.pop("metadata")
+            fields["metadata_"] = (
+                {**(getattr(asset, "metadata_", None) or {}), **_incoming} if isinstance(_incoming, dict) else _incoming
+            )
         if not fields:
             return asset
         await self.asset_repo.update_fields(asset_id, **fields)
@@ -654,7 +662,12 @@ class ServiceService:
         ticket = await self.get_ticket(ticket_id)
         fields: dict[str, Any] = data.model_dump(exclude_unset=True)
         if "metadata" in fields:
-            fields["metadata_"] = fields.pop("metadata")
+            _incoming = fields.pop("metadata")
+            fields["metadata_"] = (
+                {**(getattr(ticket, "metadata_", None) or {}), **_incoming}
+                if isinstance(_incoming, dict)
+                else _incoming
+            )
 
         # Dispatch-permission gate. Catches both the "field present but
         # unchanged" case (refused) and the "field set to None to clear"
@@ -1130,7 +1143,10 @@ class ServiceService:
         wo = await self.get_work_order(wo_id)
         fields: dict[str, Any] = data.model_dump(exclude_unset=True)
         if "metadata" in fields:
-            fields["metadata_"] = fields.pop("metadata")
+            _incoming = fields.pop("metadata")
+            fields["metadata_"] = (
+                {**(getattr(wo, "metadata_", None) or {}), **_incoming} if isinstance(_incoming, dict) else _incoming
+            )
         if "status" in fields:
             assert_transition(wo.status, fields["status"], machine="work_order")
         if not fields:
@@ -1333,7 +1349,10 @@ class ServiceService:
         sla = await self.get_sla(sla_id)
         fields: dict[str, Any] = data.model_dump(exclude_unset=True)
         if "metadata" in fields:
-            fields["metadata_"] = fields.pop("metadata")
+            _incoming = fields.pop("metadata")
+            fields["metadata_"] = (
+                {**(getattr(sla, "metadata_", None) or {}), **_incoming} if isinstance(_incoming, dict) else _incoming
+            )
         if not fields:
             return sla
         await self.sla_repo.update_fields(sla_id, **fields)
@@ -1375,7 +1394,10 @@ class ServiceService:
         sched = await self.get_schedule(schedule_id)
         fields: dict[str, Any] = data.model_dump(exclude_unset=True)
         if "metadata" in fields:
-            fields["metadata_"] = fields.pop("metadata")
+            _incoming = fields.pop("metadata")
+            fields["metadata_"] = (
+                {**(getattr(sched, "metadata_", None) or {}), **_incoming} if isinstance(_incoming, dict) else _incoming
+            )
         if not fields:
             return sched
         await self.schedule_repo.update_fields(schedule_id, **fields)

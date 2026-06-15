@@ -37,6 +37,7 @@ import {
   Breadcrumb,
   SkeletonTable,
   ConfirmDialog,
+  ModuleGuideButton,
   WideModal,
   WideModalSection,
   WideModalField,
@@ -49,6 +50,7 @@ import { PrequalModal } from './PrequalModal';
 import { ScorecardTile } from './ScorecardTile';
 import { LienWaiverPanel } from './LienWaiverPanel';
 import { AwardEligibilityBanner } from './AwardEligibilityBanner';
+import { subcontractorsGuide } from './subcontractorsGuide';
 import { useToastStore } from '@/stores/useToastStore';
 import { getErrorMessage } from '@/shared/lib/api';
 import {
@@ -267,18 +269,22 @@ export function SubcontractorsPage() {
       />
 
       <PageHeader
+        srTitle={t('nav.subcontractors', { defaultValue: 'Subcontractors' })}
         subtitle={t('subcontractors.subtitle', {
           defaultValue:
             'Manage subcontractor prequalifications, scopes, payments and ratings.',
         })}
         actions={
-          <Button
-            variant="primary"
-            icon={<Plus size={14} />}
-            onClick={() => setCreateOpen(true)}
-          >
-            {t('subcontractors.new', { defaultValue: 'New Subcontractor' })}
-          </Button>
+          <>
+            <ModuleGuideButton content={subcontractorsGuide} />
+            <Button
+              variant="primary"
+              icon={<Plus size={14} />}
+              onClick={() => setCreateOpen(true)}
+            >
+              {t('subcontractors.new', { defaultValue: 'New Subcontractor' })}
+            </Button>
+          </>
         }
       />
 

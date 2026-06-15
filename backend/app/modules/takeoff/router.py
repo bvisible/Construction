@@ -82,7 +82,7 @@ from app.modules.takeoff.schemas import (
     TakeoffMeasurementSummary,
     TakeoffMeasurementUpdate,
 )
-from app.modules.takeoff.service import TakeoffService
+from app.modules.takeoff.service import TakeoffService, no_text_layer_info
 
 logger = logging.getLogger(__name__)
 
@@ -3933,11 +3933,18 @@ async def upload_document(
         except Exception:
             logger.exception("Failed to cross-link takeoff document to Documents hub")
 
+    no_text_count, no_text_pages = no_text_layer_info(doc)
     return {
         "id": str(doc.id),
         "filename": doc.filename,
         "pages": doc.pages,
         "size_bytes": doc.size_bytes,
+        "status": doc.status,
+        # Per-page text-layer audit (8.2.0). Tells the client how many pages
+        # came back with no text layer (likely scanned drawings needing OCR)
+        # so a partly-scanned upload is not silently treated as empty.
+        "pages_without_text": no_text_count,
+        "pages_without_text_list": no_text_pages,
     }
 
 
@@ -4024,18 +4031,27 @@ async def list_documents(
             ) from exc
         await verify_project_access(pid, str(user_id), session)
     docs = await service.list_documents(user_id, project_id=project_id)
-    return [
-        {
-            "id": str(d.id),
-            "filename": d.filename,
-            "pages": d.pages,
-            "size_bytes": d.size_bytes,
-            "status": d.status,
-            "project_id": str(d.project_id) if d.project_id else None,
-            "uploaded_at": d.created_at.isoformat() if d.created_at else None,
-        }
-        for d in docs
-    ]
+    rows: list[dict[str, Any]] = []
+    for d in docs:
+        no_text_count, no_text_pages = no_text_layer_info(d)
+        rows.append(
+            {
+                "id": str(d.id),
+                "filename": d.filename,
+                "pages": d.pages,
+                "size_bytes": d.size_bytes,
+                "status": d.status,
+                # //// NEOFFICE PATCH — expose project_id so the SPA can filter
+                # the document list by project after a reload.
+                "project_id": str(d.project_id) if d.project_id else None,
+                # //// END NEOFFICE PATCH
+                "uploaded_at": d.created_at.isoformat() if d.created_at else None,
+                # 8.2.0: how many pages have no text layer (likely scanned).
+                "pages_without_text": no_text_count,
+                "pages_without_text_list": no_text_pages,
+            }
+        )
+    return rows
 
 
 # ── Get single document ──────────────────────────────────────────────────
@@ -4064,6 +4080,7 @@ async def get_document(
 
     await _verify_takeoff_doc_access(doc, str(user_id) if user_id else "", session)
 
+    no_text_count, no_text_pages = no_text_layer_info(doc)
     return {
         "id": str(doc.id),
         "filename": doc.filename,
@@ -4074,6 +4091,11 @@ async def get_document(
         "page_data": doc.page_data,
         "analysis": doc.analysis,
         "uploaded_at": doc.created_at.isoformat() if doc.created_at else None,
+        # Per-page text-layer audit (8.2.0): count + 1-based page numbers with
+        # no text layer (scanned drawings) so the viewer can flag OCR-candidate
+        # pages even when only some pages of a mixed PDF are scanned.
+        "pages_without_text": no_text_count,
+        "pages_without_text_list": no_text_pages,
     }
 
 

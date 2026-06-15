@@ -13,18 +13,42 @@ export interface UseYDocResult {
   providerKind: 'webrtc' | 'websocket' | null;
 }
 
-/**
- * Default WebSocket URL for the y-websocket fallback.
- * Can be overridden via localStorage for testing/production.
- */
+// Real-time collaboration is OFF by default and never talks to a public
+// relay. BOQ document edits can carry confidential project pricing, so we
+// refuse to broadcast them through third-party servers (the y-webrtc /
+// y-websocket demo infrastructure at signaling.yjs.dev / demos.yjs.dev).
+// An operator who wants live multi-user editing points these at their OWN
+// self-hosted relay via build-time env vars (VITE_COLLAB_*) or a per-browser
+// localStorage override. With nothing configured the Y.Doc still works fully
+// for a single user; it just stays local and no document data leaves the tab.
 const WS_URL_KEY = 'oe_collab_ws_url';
-const DEFAULT_WS_URL = 'wss://demos.yjs.dev/ws';
+const SIGNALING_KEY = 'oe_collab_signaling';
 
 function getWsUrl(): string {
+  const fromEnv = (import.meta.env.VITE_COLLAB_WS_URL as string | undefined)?.trim();
+  if (fromEnv) return fromEnv;
   try {
-    return localStorage.getItem(WS_URL_KEY) || DEFAULT_WS_URL;
+    return (localStorage.getItem(WS_URL_KEY) ?? '').trim();
   } catch {
-    return DEFAULT_WS_URL;
+    return '';
+  }
+}
+
+/** Self-hosted WebRTC signaling servers, or [] to keep collaboration local.
+ *  Returning [] (rather than omitting the option) is what stops y-webrtc from
+ *  falling back to its built-in public signaling servers. */
+function getSignaling(): string[] {
+  const parse = (raw: string | undefined | null): string[] =>
+    (raw ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+  const fromEnv = parse(import.meta.env.VITE_COLLAB_SIGNALING as string | undefined);
+  if (fromEnv.length > 0) return fromEnv;
+  try {
+    return parse(localStorage.getItem(SIGNALING_KEY));
+  } catch {
+    return [];
   }
 }
 
@@ -47,9 +71,11 @@ export function useYDoc(boqId: string | undefined): UseYDocResult {
     let fallbackTimer: ReturnType<typeof setTimeout> | undefined;
     let wsProvider: WebsocketProvider | null = null;
 
-    // Start with WebRTC
+    // Start with WebRTC. Pass the operator's signaling servers, or [] to keep
+    // the session local (an empty list disables peer discovery entirely, so no
+    // document data is ever relayed through a public server).
     const rtcProvider = new WebrtcProvider(roomName, doc, {
-      signaling: ['wss://signaling.yjs.dev', 'wss://y-webrtc-signaling-eu.herokuapp.com'],
+      signaling: getSignaling(),
     });
 
     const onRtcSynced = () => {
@@ -71,11 +97,15 @@ export function useYDoc(boqId: string | undefined): UseYDocResult {
     providerRef.current = rtcProvider;
     setProviderKind('webrtc');
 
-    // Fallback: if WebRTC doesn't connect within 8s, add WebSocket provider
+    // Fallback: if WebRTC doesn't connect within 8s, add a WebSocket provider,
+    // but ONLY when the operator has configured their own relay URL. With no
+    // URL set we stay local instead of dialing a public demo server.
     fallbackTimer = setTimeout(() => {
       if (connected) return; // Already connected via WebRTC
+      const wsUrl = getWsUrl();
+      if (!wsUrl) return; // No self-hosted relay configured: stay local.
       try {
-        wsProvider = new WebsocketProvider(getWsUrl(), roomName, doc);
+        wsProvider = new WebsocketProvider(wsUrl, roomName, doc);
         wsProvider.on('status', (event: { status: string }) => {
           if (event.status === 'connected') {
             setConnected(true);

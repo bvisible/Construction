@@ -637,7 +637,10 @@ class ProcurementService:
 
         fields = data.model_dump(exclude_unset=True, exclude={"items"})
         if "metadata" in fields:
-            fields["metadata_"] = fields.pop("metadata")
+            _incoming = fields.pop("metadata")
+            fields["metadata_"] = (
+                {**(getattr(po, "metadata_", None) or {}), **_incoming} if isinstance(_incoming, dict) else _incoming
+            )
 
         # Re-apply the vendor prequalification gate (TOP-30 #20) only when the
         # PATCH actually changes the vendor - re-gate the NEW vendor, hard-block

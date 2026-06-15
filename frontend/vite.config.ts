@@ -458,6 +458,13 @@ export default defineConfig({
     setupFiles: ['./src/test/setup.ts'],
     include: ['src/**/*.test.{ts,tsx}', 'tests/**/*.test.{ts,tsx}'],
     css: false,
+    // The default 5s per-test timeout is too tight for the few tests that
+    // build a real xlsx/PDF artifact (the first one pays a one-time lazy
+    // import of exceljs / pdf-lib). Under full-suite CI load the CPU is
+    // saturated by ~290 parallel test files and that first build can exceed
+    // 5s, flaking the run even though every test passes in isolation. 15s
+    // gives headroom without hiding a genuine hang.
+    testTimeout: 15000,
     // Public-asset imports (`import url from '/brand/x.webp'`) are resolved by
     // Vite against ``publicDir`` at runtime, but under vitest the public dir is
     // not served — ``vite:import-analysis`` fails with "Failed to resolve

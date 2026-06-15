@@ -1,4 +1,5 @@
 import clsx from 'clsx';
+import { useTranslation } from 'react-i18next';
 
 import type { ControlsKPI } from './api';
 import { formatControlsValue, kpiCurrency, statusClasses } from './format';
@@ -16,6 +17,7 @@ export function ControlsTile({
   kpi: ControlsKPI;
   onDrill: (kpi: ControlsKPI) => void;
 }) {
+  const { t } = useTranslation();
   const colours = statusClasses(kpi.status);
   const currency = kpiCurrency(kpi.breakdown);
   const hasData = kpi.source_record_count > 0;
@@ -51,8 +53,12 @@ export function ControlsTile({
       </span>
       <span className="mt-0.5 text-2xs text-content-tertiary">
         {hasData
-          ? `${kpi.source_record_count} ${kpi.source_record_count === 1 ? 'record' : 'records'}`
-          : 'no data'}
+          ? t('controls.source_records', {
+              defaultValue: '{{count}} record',
+              defaultValue_other: '{{count}} records',
+              count: kpi.source_record_count,
+            })
+          : t('controls.no_data', { defaultValue: 'no data' })}
       </span>
       {kpi.unit === 'currency' && (
         <MultiCurrencyBadge breakdown={kpi.breakdown} unit={kpi.unit} />

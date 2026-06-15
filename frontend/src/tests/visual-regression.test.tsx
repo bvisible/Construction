@@ -39,6 +39,16 @@ vi.mock('@/app/i18n', () => ({
   },
 }));
 
+/* ── Mock the app version so the snapshot stays stable across releases ─ */
+
+vi.mock('@/shared/lib/version', async () => {
+  const actual =
+    await vi.importActual<typeof import('@/shared/lib/version')>(
+      '@/shared/lib/version',
+    );
+  return { ...actual, APP_VERSION: '0.0.0-test' };
+});
+
 /* ── Mock @tanstack/react-query to avoid real network calls ──────────── */
 
 vi.mock('@tanstack/react-query', () => ({

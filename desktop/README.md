@@ -69,7 +69,7 @@ For signing to run, set these five repository secrets in GitHub Actions:
 
 AZURE_KV_URL is the Key Vault URL, for example https://myvault.vault.azure.net. AZURE_KV_CERT_NAME is the certificate name inside the vault. AZURE_KV_CLIENT_ID is the service principal application (client) id. AZURE_KV_CLIENT_SECRET is the Key Vault client secret for that service principal, and it must be a freshly rotated secret. AZURE_KV_TENANT_ID is the Entra (Azure AD) tenant id.
 
-If these secrets are not set, on forks, on pull requests, or before you add them, the signing step skips cleanly and the build still succeeds with unsigned installers. The macOS and Linux installers are not signed by this step.
+If these secrets are not set, on forks, on pull requests, or before you add them, the signing step skips cleanly and the build still succeeds with unsigned installers. The Linux installers are not signed. The macOS build is ad-hoc signed by the release workflow rather than fully unsigned, so it carries a valid bundle signature, but it is not yet notarized by Apple, which is why users clear the quarantine flag once with the xattr workaround documented in `docs/desktop/INSTALL.md`. The full Apple notarization path is ready to activate and is written up in `docs/desktop/MACOS_NOTARIZATION.md`, including the exact secrets, config, and workflow diff to turn it on once a Developer ID certificate is available.
 
 ## Layout
 

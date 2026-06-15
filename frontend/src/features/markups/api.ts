@@ -94,6 +94,10 @@ export interface MarkupFilters {
   unassigned?: boolean;
   document_id?: string;
   page?: number;
+  /** Pagination, platform-standard offset/limit. The backend defaults to
+   *  offset 0 / limit 50 (max 200) when omitted. */
+  offset?: number;
+  limit?: number;
 }
 
 export interface CreateMarkupPayload {
@@ -113,10 +117,13 @@ export interface CreateMarkupPayload {
 }
 
 export interface UpdateMarkupPayload {
-  text?: string;
+  /** Pass null to clear the column to NULL (it is nullable server-side);
+   *  pass undefined / omit to leave it unchanged (PATCH semantics). */
+  text?: string | null;
   color?: string;
   status?: MarkupStatus;
-  label?: string;
+  /** Pass null to clear the column to NULL; omit to leave unchanged. */
+  label?: string | null;
   measurement_value?: number;
   measurement_unit?: string;
   /** M3 — re-assign or clear the follow-up owner. Pass null to clear. */
@@ -141,6 +148,9 @@ export async function fetchMarkups(
   // Explicit nullish check so page 0 (a valid 0-indexed page) is honoured
   // rather than dropped by a falsy check, which would over-fetch all pages.
   if (filters?.page != null) params.set('page', String(filters.page));
+  // Pagination: nullish checks so offset 0 is honoured rather than dropped.
+  if (filters?.offset != null) params.set('offset', String(filters.offset));
+  if (filters?.limit != null) params.set('limit', String(filters.limit));
   return apiGet<Markup[]>(`/v1/markups/?${params.toString()}`);
 }
 

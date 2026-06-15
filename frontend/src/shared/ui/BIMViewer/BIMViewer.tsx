@@ -695,6 +695,13 @@ export function BIMViewer({
   /** True while the WebGL context is lost and recovering (pdf11). Drives a
    *  non-fatal banner so a transient GPU reset no longer reads as a crash. */
   const [contextLost, setContextLost] = useState(false);
+  /** True when the WebGLRenderer could not be created at all (no GPU context,
+   *  driver blocklist, headless/remote-desktop without a software rasteriser).
+   *  three.js throws from inside the WebGLRenderer constructor in that case;
+   *  the mount effect catches it and flips this flag so we render a graceful
+   *  in-viewer fallback instead of letting the throw escape to the page-level
+   *  ErrorBoundary. Zero effect when WebGL is available. */
+  const [webglError, setWebglError] = useState(false);
   const categoryOpacity = useBIMViewerStore((s) => s.categoryOpacity);
   const hiddenCategories = useBIMViewerStore((s) => s.hiddenCategories);
   const resetHiddenCategories = useBIMViewerStore((s) => s.resetHiddenCategories);
@@ -996,7 +1003,25 @@ export function BIMViewer({
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    const scene = new SceneManager(canvas);
+    // Creating the WebGLRenderer can throw from deep inside three.js when the
+    // browser cannot give us a GL context (WebGL disabled, GPU driver
+    // blocklisted, remote desktop, headless without a software rasteriser).
+    // The symptom varies ("Error creating WebGL context" or a null
+    // shader-precision read). Without this guard the throw escapes the effect
+    // and React escalates it to the page-level ErrorBoundary, replacing the
+    // whole page with the generic crash screen. Catch it, flag a fallback, and
+    // bail out BEFORE building any of the dependent managers (each of which
+    // would otherwise dereference the missing scene). We return early without
+    // registering the cleanup below, which is fine because no half-built scene
+    // was ever placed in the refs.
+    let scene: SceneManager;
+    try {
+      scene = new SceneManager(canvas);
+    } catch (err) {
+      console.warn('[BIMViewer] WebGL unavailable, 3D view disabled:', err);
+      setWebglError(true);
+      return;
+    }
     sceneRef.current = scene;
     // W6.6 Stream B — surface the scene manager to React state so the
     // Site Compass (BIMViewCube) and any sibling consumers can mount after
@@ -1526,7 +1551,15 @@ export function BIMViewer({
     // Clear manually hidden elements so the new filter starts from a
     // clean slate.  Without this, IDs hidden via the context-menu
     // "Hide element" action leak across filter changes.
-    setHiddenIds(new Set());
+    //
+    // Only reset when there is actually something to clear: passing a fresh
+    // `new Set()` every time changes the state reference and re-runs the
+    // Layers-tab category sync effect (which depends on `hiddenIds`), which
+    // would re-assert category visibility right after this effect isolated a
+    // group - the "filter briefly works then reverts" symptom. ElementManager
+    // now also guards against that at the source, but avoiding the needless
+    // re-render keeps the two visibility systems from racing each other.
+    setHiddenIds((prev) => (prev.size > 0 ? new Set() : prev));
     const hasIsolation = !!(isolatedIds && isolatedIds.length > 0);
     const hasFilter = !!filterPredicate;
     const hasClashFocus = !!focusPoint;
@@ -2812,6 +2845,35 @@ export function BIMViewer({
           defaultValue: '3D BIM model viewer - use mouse or touch to orbit, zoom, and pan',
         })}
       />
+
+      {/* WebGL-unavailable fallback. The WebGLRenderer constructor threw, so
+          there is no 3D scene to show. Rather than letting that throw crash
+          the whole page to the ErrorBoundary, we keep the (empty) canvas
+          mounted and overlay a calm, theme-tokened panel explaining the
+          environment is missing WebGL. Covers the viewer area; everything
+          below it (compass, badges, banners) is gated on a live scene and so
+          stays hidden in this state. */}
+      {webglError && (
+        <div
+          data-testid="bim-webgl-unavailable"
+          className="absolute inset-0 z-30 flex items-center justify-center bg-surface-secondary p-6"
+          role="status"
+          aria-live="polite"
+        >
+          <div className="flex max-w-sm flex-col items-center gap-3 text-center">
+            <Boxes size={48} className="text-content-tertiary" aria-hidden="true" />
+            <h3 className="text-sm font-semibold text-content-primary">
+              {t('bim.webgl_unavailable_title', { defaultValue: '3D view unavailable' })}
+            </h3>
+            <p className="text-xs leading-relaxed text-content-tertiary">
+              {t('bim.webgl_unavailable_body', {
+                defaultValue:
+                  'This 3D model viewer needs WebGL, which is not available in this browser or environment. Enable hardware acceleration or try a different browser to view the model.',
+              })}
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* W6.6 Stream B — Site Compass. Mounts only after the SceneManager
           is alive so the cube never tries to read from a null ref. The

@@ -553,7 +553,15 @@ def _pick_takeoff_value(measurement: Any) -> float | None:
     Returns ``None`` when the relevant column is empty or unparseable so
     the caller treats the push as a no-op and never zeroes the existing
     BOQ quantity.
+
+    A deduction (opening / void) carries a positive gross area but only
+    has meaning as a subtraction inside its group's net-area rollup. It is
+    never a standalone BOQ quantity, so we refuse to push it - otherwise a
+    void could silently overwrite a position with the area of the hole.
     """
+    if bool(getattr(measurement, "is_deduction", False)):
+        return None
+
     mtype = (getattr(measurement, "type", None) or "").strip().lower()
 
     if mtype == "volume":
@@ -674,6 +682,7 @@ def _extract_pdf_pages(content: bytes, *, filename: str | None = None) -> list[d
         import pdfplumber
 
         with pdfplumber.open(io.BytesIO(content)) as pdf:
+            empty_pages = 0
             for i, page in enumerate(pdf.pages, start=1):
                 page_text = ""
                 page_tables: list[list[list[str]]] = []
@@ -690,12 +699,32 @@ def _extract_pdf_pages(content: bytes, *, filename: str | None = None) -> list[d
                     if text:
                         page_text = text
 
+                has_text = bool(page_text.strip())
+                if not has_text:
+                    empty_pages += 1
                 pages.append(
                     {
                         "page": i,
                         "text": page_text.strip(),
                         "tables": page_tables,
+                        # Per-page text-layer flag. A page with no text layer
+                        # (scanned/raster drawing) is the OCR candidate; we keep
+                        # the signal per page so a mixed PDF (some text pages,
+                        # some scanned) is not collapsed to a single all-or-
+                        # nothing verdict downstream.
+                        "has_text": has_text,
                     }
+                )
+            if empty_pages:
+                # See the pymupdf branch: an empty page is most likely a
+                # scanned/raster drawing, not a parse failure. Surface the
+                # count so it isn't silently treated as "no content".
+                logger.info(
+                    "takeoff.pdf_extract pdfplumber: %d of %d page(s) had no "
+                    "text (likely scanned - OCR needed to recover content) (%s)",
+                    empty_pages,
+                    len(pages),
+                    input_fp,
                 )
     except Exception:
         # First-pass parser failed - log it with the full stack and fall
@@ -711,10 +740,26 @@ def _extract_pdf_pages(content: bytes, *, filename: str | None = None) -> list[d
             import pymupdf
 
             doc = pymupdf.open(stream=content, filetype="pdf")
+            empty_pages = 0
             for i, page in enumerate(doc, start=1):
                 text = page.get_text()
-                pages.append({"page": i, "text": text.strip(), "tables": []})
+                has_text = bool(text.strip())
+                if not has_text:
+                    empty_pages += 1
+                pages.append({"page": i, "text": text.strip(), "tables": [], "has_text": has_text})
             doc.close()
+            if empty_pages:
+                # A page with no text layer (e.g. a scanned/raster drawing)
+                # extracts as an empty string, which looks the same as a parse
+                # failure downstream. Surface it so the gap isn't silent - the
+                # caller can route these pages through OCR (the [cv] extra).
+                logger.info(
+                    "takeoff.pdf_extract pymupdf: %d of %d page(s) had no text "
+                    "layer (likely scanned - OCR needed to recover content) (%s)",
+                    empty_pages,
+                    len(pages),
+                    input_fp,
+                )
         except Exception:
             logger.exception(
                 "takeoff.pdf_extract both pdfplumber and pymupdf failed (%s) - document will have no extracted pages",
@@ -722,6 +767,41 @@ def _extract_pdf_pages(content: bytes, *, filename: str | None = None) -> list[d
             )
 
     return pages
+
+
+def no_text_layer_info(doc: Any) -> tuple[int, list[int]]:
+    """Read the per-page text-layer audit for a takeoff document.
+
+    Returns ``(count, page_numbers)`` where ``page_numbers`` is the list of
+    1-based pages that came back with no text layer (likely scanned drawings
+    that need OCR). Both default to ``0`` / ``[]`` so a document uploaded
+    before this audit existed - or one stored without the metadata - reads as
+    "no missing text layer" instead of erroring. The count is recomputed from
+    ``page_data`` (the source of truth) when present so a re-extracted document
+    stays accurate even if the stored count drifts.
+    """
+    page_data = getattr(doc, "page_data", None) or []
+    if page_data:
+        missing = [
+            int(p.get("page", idx + 1))
+            for idx, p in enumerate(page_data)
+            if isinstance(p, dict)
+            and not (p.get("has_text") if "has_text" in p else bool(str(p.get("text", "")).strip()))
+        ]
+        if missing:
+            return len(missing), missing
+    # Fall back to the stored metadata snapshot (e.g. page_data trimmed off a
+    # list response, or all pages had text so the loop above found nothing).
+    meta = getattr(doc, "metadata_", None) or {}
+    if isinstance(meta, dict):
+        stored_list = meta.get("pages_without_text_list")
+        if isinstance(stored_list, list) and stored_list:
+            nums = [int(n) for n in stored_list if isinstance(n, int | float)]
+            return len(nums), nums
+        stored_count = meta.get("pages_without_text")
+        if isinstance(stored_count, int | float) and stored_count > 0:
+            return int(stored_count), []
+    return 0, []
 
 
 def validate_page_for_document(doc: Any, page: int) -> None:
@@ -959,14 +1039,28 @@ class TakeoffService:
         page_data = _extract_pdf_pages(content, filename=filename)
         full_text = "\n\n".join(p["text"] for p in page_data if p["text"])
 
-        # Scanned-PDF path: every page returns empty text. We persist
-        # the doc with ``needs_ocr`` so the user still sees it in the
-        # list and can either install [cv] (PaddleOCR) or share the
-        # source CAD with us. The OCR install hint is logged for the
-        # operator - not raised - because the upload should still
-        # succeed in this case.
+        # Per-page text-layer audit. A page is an OCR candidate when it has no
+        # text layer (scanned/raster drawing). We read the per-page ``has_text``
+        # flag set by ``_extract_pdf_pages`` and fall back to the page text when
+        # the flag is absent (older rows / a stubbed extractor), so a mixed PDF
+        # (some text pages, some scanned) keeps the page-level signal instead of
+        # being collapsed to a single all-or-nothing verdict.
+        pages_without_text: list[int] = [
+            int(p.get("page", idx + 1))
+            for idx, p in enumerate(page_data)
+            if not (p.get("has_text") if "has_text" in p else bool(str(p.get("text", "")).strip()))
+        ]
+        no_text_count = len(pages_without_text)
+
+        # Fully-scanned path: EVERY page returns empty text. We persist the doc
+        # with ``needs_ocr`` so the user still sees it in the list and can either
+        # install [cv] (PaddleOCR) or share the source CAD with us.
         is_scanned = bool(page_data) and not full_text.strip()
-        if is_scanned:
+        # Mixed path: at least one (but not every) content page lacks a text
+        # layer. The document still parses, but those pages would otherwise be
+        # silently treated as empty - so we surface the count to the user.
+        is_partial_no_text = no_text_count > 0 and not is_scanned
+        if is_scanned or is_partial_no_text:
             try:
                 import paddleocr  # noqa: F401
 
@@ -975,11 +1069,13 @@ class TakeoffService:
                 paddle_available = False
             if not paddle_available:
                 logger.info(
-                    "takeoff.upload_document: scanned PDF with no text layer; "
+                    "takeoff.upload_document: %d of %d page(s) have no text layer; "
                     "install [cv] extra (paddleocr) to enable OCR fallback "
-                    "(filename=%r, pages=%d)",
-                    filename,
+                    "(filename=%r, scanned=%s)",
+                    no_text_count,
                     page_count,
+                    filename,
+                    is_scanned,
                 )
 
         if page_count == 0 and not page_data:
@@ -1010,6 +1106,16 @@ class TakeoffService:
         # presenting an empty extracted-text panel.
         doc_status = "needs_ocr" if is_scanned else "uploaded"
 
+        # Persist the per-page text-layer audit so the count survives the
+        # round-trip and a mixed (partly-scanned) document is not silently
+        # treated as empty. ``status`` stays ``needs_ocr`` only for the
+        # fully-scanned case, but the count + page list is stored either way
+        # so the API and UI can flag the OCR-candidate pages.
+        doc_metadata: dict[str, Any] = {
+            "pages_without_text": no_text_count,
+            "pages_without_text_list": pages_without_text,
+        }
+
         doc = TakeoffDocument(
             id=doc_id,
             filename=filename,
@@ -1022,6 +1128,7 @@ class TakeoffService:
             extracted_text=full_text,
             page_data=page_data,
             file_path=str(file_path),
+            metadata_=doc_metadata,
         )
 
         return await self.repo.create(doc)
@@ -1229,6 +1336,10 @@ class TakeoffService:
             count_value=data.count_value,
             scale_pixels_per_unit=data.scale_pixels_per_unit,
             linked_boq_position_id=data.linked_boq_position_id,
+            # A deduction only makes sense for an area; never tag a distance /
+            # count / annotation as a void so the rollup can't subtract a
+            # length from an area.
+            is_deduction=bool(data.is_deduction) and data.type == "area",
             metadata_=data.metadata,
             created_by=created_by,
         )
@@ -1442,6 +1553,15 @@ class TakeoffService:
         if "points" in fields and fields["points"] is not None:
             fields["points"] = [p.model_dump() for p in data.points]  # type: ignore[union-attr]
 
+        # A deduction (opening / void) only makes sense for an area. If the
+        # patch tries to flag a non-area measurement as a deduction, drop the
+        # flag so the rollup can't subtract a length / count from an area.
+        # The effective type is the patched type when present, else current.
+        if "is_deduction" in fields and fields["is_deduction"]:
+            effective_type_for_deduction = fields.get("type") if "type" in fields else item.type
+            if effective_type_for_deduction != "area":
+                fields["is_deduction"] = False
+
         # Recompute measurement_value if any geometry-relevant field
         # is touched. We need the *effective post-update* state, so
         # we merge patch over current.
@@ -1582,6 +1702,7 @@ class TakeoffService:
                 count_value=data.count_value,
                 scale_pixels_per_unit=data.scale_pixels_per_unit,
                 linked_boq_position_id=data.linked_boq_position_id,
+                is_deduction=bool(data.is_deduction) and data.type == "area",
                 metadata_=data.metadata,
                 created_by=created_by,
             )
@@ -1643,6 +1764,7 @@ class TakeoffService:
                     "count_value": m.count_value,
                     "scale_pixels_per_unit": m.scale_pixels_per_unit,
                     "linked_boq_position_id": m.linked_boq_position_id or "",
+                    "is_deduction": bool(m.is_deduction),
                     "created_by": m.created_by,
                     "created_at": m.created_at.isoformat() if m.created_at else "",
                 }

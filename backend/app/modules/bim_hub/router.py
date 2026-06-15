@@ -896,6 +896,7 @@ def _rows_to_elements(
 
 @router.post("/upload/", status_code=201)
 async def upload_bim_data(
+    background_tasks: BackgroundTasks,
     project_id: str = Query(..., description="Project UUID"),
     name: str = Query(default="Imported Model", max_length=255),
     discipline: str = Query(default="architecture", max_length=50),
@@ -1068,6 +1069,13 @@ async def upload_bim_data(
         disciplines_found,
     )
 
+    # Validation is part of the canonical import pipeline (Import -> VALIDATE
+    # -> Store). The CAD converter path already runs it; the CSV/Excel drop
+    # must too. Schedule the advisory pass in the background so a slow rule run
+    # never delays the upload response.
+    if created_elements:
+        background_tasks.add_task(_run_import_validation, model_id)
+
     return {
         "model_id": str(model_id),
         "element_count": len(created_elements),
@@ -1173,6 +1181,47 @@ def _surface_parquet_failure(
     # "ParquetWriteError: disk full" without exposing the whole stack.
     short_error = f"{exc_type}: {exc_msg}"[:500]
     return "failed", short_error
+
+
+async def _run_import_validation(model_uuid: uuid.UUID) -> None:
+    """Run the mandatory validation pass over a freshly-imported BIM model.
+
+    Part of the canonical import pipeline (Import -> Convert -> VALIDATE ->
+    Store). Invoked from :func:`_process_cad_in_background` once the converted
+    elements are committed. Delegates to :class:`BIMValidationService`, which
+    runs the universal BIM rule set (required properties, completeness,
+    classification) and persists a ``ValidationReport`` row
+    (``target_type='bim_model'``) - the exact same path the on-demand
+    "Validate" button uses, so the BIM detail view picks the report up with no
+    extra wiring.
+
+    Best-effort by contract: any failure here is logged and swallowed. A good
+    geometry import must never be downgraded because the (advisory) validation
+    pass hit a problem - validation findings live in their own report, separate
+    from the model's processing status.
+    """
+    from app.database import async_session_factory
+
+    try:
+        from app.modules.validation.bim_validation_service import BIMValidationService
+
+        async with async_session_factory() as val_session:
+            service = BIMValidationService(val_session)
+            report = await service.validate_bim_model(model_uuid)
+            await val_session.commit()
+            logger.info(
+                "Import validation complete for model %s: report=%s status=%s score=%s",
+                model_uuid,
+                report.id,
+                report.status,
+                report.score,
+            )
+    except Exception as exc:  # noqa: BLE001 - validation is advisory, never fatal
+        logger.warning(
+            "Import validation failed for model %s (non-fatal): %s",
+            model_uuid,
+            exc,
+        )
 
 
 async def _process_cad_in_background(
@@ -1645,13 +1694,85 @@ async def _process_cad_in_background(
                         "stderr_tail": stderr_tail,
                     }
                 else:
+                    # Default disposition is a hard ``error`` - but a file that
+                    # READ CLEANLY and simply has no physical products is NOT a
+                    # processing failure (issue #197).  That case is downgraded
+                    # to the graceful ``empty_model`` status below.  Genuine
+                    # failures (unreadable STEP, converter/column mismatch,
+                    # timeout) keep ``error``.
                     model.status = "error"
-                    model.error_message = (
-                        "No elements could be extracted from this IFC file. "
-                        "Open the file in a viewer like BIMcollab Zoom to "
-                        "confirm it isn't empty, then click Retry."
-                    )
-                    meta["error_code"] = "zero_elements"
+                    # Pick a specific, actionable message based on WHY the
+                    # conversion produced no elements.  ``empty_reason`` is set
+                    # by process_ifc_file:
+                    #   spatial_only / no_products - the file parsed fine but
+                    #       carried only spatial containers (project, site,
+                    #       building, storey) and no physical products.
+                    #   unclassified_only / all_filtered - rows came back that
+                    #       we could not classify (column / converter mismatch).
+                    #   no_entities - the STEP payload had no readable entities.
+                    #   None - we never got readable rows at all.
+                    empty_reason = result.get("empty_reason")
+                    raw_row_count = int(result.get("raw_row_count") or 0)
+                    # A converter timeout (common on very large models) is the
+                    # real story when no readable rows came back at all.  When
+                    # the parse DID yield a classification reason we trust that
+                    # instead, because it describes the file we actually read.
+                    if cause == "timeout" and not empty_reason:
+                        model.error_message = (
+                            "Converting this IFC timed out before any elements "
+                            "were produced. This usually happens with very "
+                            "large models. Try again on a machine with more "
+                            "memory, split the federated model into smaller "
+                            "files, or click Retry."
+                        )
+                        meta["error_code"] = "convert_timeout"
+                    elif empty_reason in ("spatial_only", "no_products"):
+                        # The IFC parsed successfully; it just carries no
+                        # building products (only project/site/building/storey).
+                        # This is a legitimate, fully-explained outcome - NOT a
+                        # failure - so it gets the dedicated ``empty_model``
+                        # status the frontend renders as a neutral, informational
+                        # state with a Re-upload action, instead of a red error.
+                        model.status = "empty_model"
+                        model.error_message = (
+                            "This IFC was read successfully but contains no "
+                            "physical building elements. It only carries the "
+                            "spatial structure (project, site, building, "
+                            "storeys). Re-export it from your authoring tool "
+                            "with the model objects included (walls, slabs, "
+                            "columns, MEP, and so on), then upload again."
+                        )
+                        meta["error_code"] = "no_products"
+                    elif empty_reason in ("unclassified_only", "all_filtered"):
+                        model.error_message = (
+                            "The converter returned rows for this IFC but none "
+                            "could be matched to a building element type. This "
+                            "usually means the file was exported in an "
+                            "unexpected layout. Try re-exporting it as IFC 2x3 "
+                            "or IFC 4 with base quantities enabled, then click "
+                            "Retry."
+                        )
+                        meta["error_code"] = "unclassified_rows"
+                    elif empty_reason == "no_entities":
+                        model.error_message = (
+                            "No model data could be read from this IFC file. "
+                            "The file may be empty, truncated, or saved in an "
+                            "unsupported layout. Re-export it from your "
+                            "authoring tool and upload again."
+                        )
+                        meta["error_code"] = "no_entities"
+                    else:
+                        model.error_message = (
+                            "No elements could be extracted from this IFC file. "
+                            "Open it in your BIM authoring tool or an IFC viewer "
+                            "to confirm it contains model objects, then "
+                            "re-export and click Retry."
+                        )
+                        meta["error_code"] = "zero_elements"
+                    if empty_reason:
+                        meta["empty_reason"] = empty_reason
+                    if raw_row_count:
+                        meta["raw_row_count"] = raw_row_count
                     if stderr_tail or conv_version:
                         meta["diagnostics"] = {
                             "converter_info": conv_info,
@@ -1661,11 +1782,26 @@ async def _process_cad_in_background(
                         }
                 model.metadata_ = meta
                 logger.warning(
-                    "Background CAD processed but no elements found for model %s",
+                    "Background CAD processed but no elements found for model %s (status=%s, reason=%s)",
                     model_id,
+                    model.status,
+                    meta.get("error_code"),
                 )
 
             await session.commit()
+
+        # ── Mandatory validation pass (Import → Convert → VALIDATE → Store) ──
+        # The canonical CAD data is now persisted as BIMElement rows. Run the
+        # platform's validation engine over it and store a ValidationReport so
+        # the import honours the first-class validation step instead of
+        # skipping it. This reuses the existing BIMValidationService (universal
+        # BIM rules: required properties, completeness, classification) and the
+        # same ValidationReport table the on-demand "Validate" button writes -
+        # the BIM detail view already loads the latest report for the model, so
+        # no new surface is needed. Best-effort: a validation failure must never
+        # turn a good import into a hard error, so it is fully guarded.
+        if element_count > 0:
+            await _run_import_validation(model_uuid)
 
     except Exception as exc:
         logger.exception("Background CAD processing failed for model %s: %s", model_id, exc)
@@ -3461,6 +3597,7 @@ async def list_elements(
 async def bulk_import_elements(
     model_id: uuid.UUID,
     data: BIMElementBulkImport,
+    background_tasks: BackgroundTasks,
     user_id: CurrentUserId,
     _perm: None = Depends(RequirePermission("bim.create")),
     service: BIMHubService = Depends(_get_service),
@@ -3468,6 +3605,10 @@ async def bulk_import_elements(
     """Bulk import elements for a model (replaces existing)."""
     await _verify_model_access(service, model_id, user_id)
     elements = await service.bulk_import_elements(model_id, data.elements)
+    # Run the advisory validation pass (canonical import pipeline) after the
+    # bulk replace, mirroring the CAD converter path. Best-effort, never blocks.
+    if elements:
+        background_tasks.add_task(_run_import_validation, model_id)
     return BIMElementListResponse(
         items=[BIMElementResponse.model_validate(e) for e in elements],
         total=len(elements),

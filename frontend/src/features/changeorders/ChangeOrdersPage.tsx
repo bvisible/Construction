@@ -24,7 +24,7 @@ import {
   HelpCircle,
   GitBranch,
 } from 'lucide-react';
-import { Button, Card, Badge, EmptyState, Breadcrumb, InfoHint, DismissibleInfo, IntroRichText, ConfirmDialog, RecoveryCard, SkeletonTable, SkeletonCard } from '@/shared/ui';
+import { Button, Card, Badge, EmptyState, Breadcrumb, InfoHint, DismissibleInfo, IntroRichText, ConfirmDialog, RecoveryCard, SkeletonTable, SkeletonCard, ModuleGuideButton } from '@/shared/ui';
 import { useNavigate } from 'react-router-dom';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { RequiresProject } from '@/shared/auth/RequiresProject';
@@ -43,6 +43,7 @@ import { listContracts } from '@/features/contracts/api';
 import { ApprovalTimeline } from './ApprovalTimeline';
 import { ImpactSimulator, type SavedScenario } from './ImpactSimulator';
 import { AIDraftModal } from './AIDraftModal';
+import { changeordersGuide } from './changeordersGuide';
 import {
   advanceApproval,
   getApprovals,
@@ -1461,10 +1462,13 @@ function DetailView({
         <div className="flex items-start justify-between">
           <div>
             <div className="flex items-center gap-3">
-              <h2 className="text-xl font-semibold text-content-primary">{order.code}</h2>
+              {/* Single semantic <h1> for the detail sub-view (the list view
+                  gets its <h1> from PageHeader's srTitle); style class keeps
+                  the prior visual size so nothing shifts. */}
+              <h1 className="text-xl font-semibold text-content-primary">{order.code}</h1>
               <Badge variant={STATUS_COLORS[order.status] || 'neutral'}>{translateStatus(order.status, t)}</Badge>
             </div>
-            <h3 className="mt-1 text-lg text-content-secondary">{order.title}</h3>
+            <h2 className="mt-1 text-lg text-content-secondary">{order.title}</h2>
             {order.description && (
               <p className="mt-2 text-sm text-content-tertiary max-w-2xl">{order.description}</p>
             )}
@@ -2064,11 +2068,14 @@ export function ChangeOrdersPage() {
 
       {/* Header — project selection lives in the global top bar; the page
           reads the shared project context and falls back to the first
-          project, so no in-page project picker is rendered here. */}
+          project, so no in-page project picker is rendered here. srTitle
+          gives the page its single semantic <h1> (sr-only) for a11y. */}
       <PageHeader
+        srTitle={t('nav.change_orders', { defaultValue: 'Change Orders' })}
         subtitle={t('changeorders.subtitle', { defaultValue: 'Track scope changes with cost and schedule impact' })}
         actions={
           <>
+            <ModuleGuideButton content={changeordersGuide} />
             <Button variant="secondary" icon={<Download size={14} />} onClick={handleExportCSV} disabled={!filteredOrders || filteredOrders.length === 0}>
               {t('changeorders.export_csv', { defaultValue: 'Export CSV' })}
             </Button>

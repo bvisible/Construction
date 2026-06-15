@@ -467,3 +467,55 @@ export function allowedChargeTransitions(
 export function isChargeLocked(status: ChargeStatus): boolean {
   return status === 'paid' || status === 'waived';
 }
+
+/* ── Booking overlap (client-side mirror of the backend guard) ───────── */
+
+/**
+ * Bookings that still hold the room. Mirrors
+ * ``service._LIVE_BOOKING_STATUSES`` - ``cancelled`` and ``checked_out``
+ * free the slot and never conflict.
+ */
+const LIVE_BOOKING_STATUSES: readonly BookingStatus[] = [
+  'reserved',
+  'checked_in',
+];
+
+/**
+ * Half-open interval overlap test ``[check_in, check_out)``, mirroring
+ * ``service.assert_no_booking_overlap``. Back-to-back stays
+ * (``existing.check_out === candidate.check_in``) are allowed; a
+ * ``null`` check_out is open-ended. Dates are ISO ``YYYY-MM-DD`` strings,
+ * which sort lexicographically, so plain string comparison is correct.
+ */
+export function bookingsOverlap(
+  aIn: string,
+  aOut: string | null,
+  bIn: string,
+  bOut: string | null,
+): boolean {
+  // Existing ends strictly after the candidate start (or is open-ended).
+  const existingEndsAfterCandidateStart = aOut === null || aOut > bIn;
+  // Candidate ends strictly after the existing start (or is open-ended).
+  const candidateEndsAfterExistingStart = bOut === null || aIn < bOut;
+  return existingEndsAfterCandidateStart && candidateEndsAfterExistingStart;
+}
+
+/**
+ * Find the live bookings on a room that would collide with a candidate
+ * stay ``[checkIn, checkOut)``. Pure, so callers can render conflicts
+ * client-side before issuing the create and avoid a 409 round-trip.
+ * ``excludeBookingId`` skips the row being edited (mirrors the backend
+ * PATCH escape hatch).
+ */
+export function findBookingConflicts(
+  existing: Booking[],
+  checkIn: string,
+  checkOut: string | null,
+  excludeBookingId?: string,
+): Booking[] {
+  return existing.filter((b) => {
+    if (b.id === excludeBookingId) return false;
+    if (!LIVE_BOOKING_STATUSES.includes(b.status)) return false;
+    return bookingsOverlap(b.check_in, b.check_out, checkIn, checkOut);
+  });
+}

@@ -32,7 +32,7 @@ import {
   TriangleRight,
   ExternalLink,
 } from 'lucide-react';
-import { Button, Card, Badge, EmptyState, Breadcrumb, ConfirmDialog, RecoveryCard, SkeletonTable } from '@/shared/ui';
+import { Button, Card, Badge, EmptyState, Breadcrumb, ConfirmDialog, RecoveryCard, SkeletonTable, ModuleGuideButton } from '@/shared/ui';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { DismissibleInfo, IntroRichText } from '@/shared/ui/DismissibleInfo';
 import { useTabKeyboardNav } from '@/shared/hooks/useTabKeyboardNav';
@@ -60,6 +60,7 @@ import type {
 import { InlinePdfAnnotator } from './InlinePdfAnnotator';
 import { UnifiedMarkupsList } from './UnifiedMarkupsList';
 import { EditMarkupModal } from './EditMarkupModal';
+import { markupsGuide } from './markupsGuide';
 import { ApprovalInstanceCard } from '@/features/approval-routes';
 
 /* ── Constants ─────────────────────────────────────────────────────────── */
@@ -89,6 +90,11 @@ const ALL_MARKUP_TYPES: MarkupType[] = [
 ];
 
 const MARKUP_STATUSES: MarkupStatus[] = ['active', 'resolved', 'archived'];
+
+// Pagination: matches the backend's default page size (offset/limit, max
+// 200). The list grows by this increment each time the user clicks
+// "Load more" so projects with thousands of markups don't all load at once.
+const MARKUPS_PAGE_SIZE = 50;
 
 const TYPE_ICONS: Record<MarkupType, React.ElementType> = {
   cloud: Cloud,
@@ -1175,6 +1181,10 @@ export function MarkupsPage() {
   // M3 — assignee filter: "" = no filter, "__unassigned__" = NULL,
   // anything else = user id.
   const [filterAssignee, setFilterAssignee] = useState('');
+  // Pagination: how many markups to request. Grows by MARKUPS_PAGE_SIZE
+  // each "Load more". Reset back to one page whenever the active filters
+  // change so a narrower filter doesn't keep an over-large limit.
+  const [limit, setLimit] = useState(MARKUPS_PAGE_SIZE);
   const [showFilters, setShowFilters] = useState(false);
   const [expandedRowId, setExpandedRowId] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
@@ -1283,10 +1293,17 @@ export function MarkupsPage() {
   const isUnassignedFilter = filterAssignee === ASSIGNEE_UNASSIGNED;
   const assigneeIdFilter =
     filterAssignee && !isUnassignedFilter ? filterAssignee : undefined;
-  const { data: markups = [], isLoading, isError, error, refetch } = useQuery({
-    queryKey: noFilters
+  // Only share the deduped hub key on the *first* page with no filters: in
+  // that exact case the request is byte-for-byte identical to the sibling
+  // ``useUnifiedMarkups`` hub query (no filters, backend default limit), so
+  // React Query collapses the two GETs into one. As soon as the user loads
+  // more (limit grows) or applies a filter, we switch to a dedicated key so
+  // the larger / filtered request can't clobber the shared hub cache.
+  const isFirstHubPage = noFilters && limit === MARKUPS_PAGE_SIZE;
+  const { data: markups = [], isLoading, isError, error, refetch, isFetching } = useQuery({
+    queryKey: isFirstHubPage
       ? ['unified-markups', projectId, 'hub']
-      : ['markups', projectId, filterType, filterStatus, filterDocumentId, filterAssignee],
+      : ['markups', projectId, filterType, filterStatus, filterDocumentId, filterAssignee, limit],
     queryFn: () =>
       fetchMarkups(projectId, {
         type: filterType || undefined,
@@ -1294,10 +1311,32 @@ export function MarkupsPage() {
         document_id: filterDocumentId || undefined,
         assignee_id: assigneeIdFilter,
         unassigned: isUnassignedFilter,
+        // Omit the limit param on the shared first-page hub query so the
+        // request matches the unified hook exactly (it relies on the
+        // backend default). Otherwise request the accumulated page window.
+        ...(isFirstHubPage ? {} : { limit }),
       }),
     enabled: !!projectId,
     staleTime: noFilters ? 30_000 : 0,
+    // Keep the current rows on-screen while a "Load more" (larger limit)
+    // request resolves, instead of flashing the skeleton and losing scroll.
+    placeholderData: (prev) => prev,
   });
+
+  // A full page came back, so the server may have more rows beyond what we
+  // asked for. ``MARKUPS_PAGE_SIZE`` is the backend default, so an exact
+  // multiple is the signal that another page might exist.
+  const hasMore = markups.length >= limit;
+  const loadMore = useCallback(() => {
+    setLimit((prev) => prev + MARKUPS_PAGE_SIZE);
+  }, []);
+
+  // Reset the page window whenever the server-side filters change so a
+  // narrower filter doesn't carry an over-large limit (and the deduped
+  // first-page hub key can re-engage).
+  useEffect(() => {
+    setLimit(MARKUPS_PAGE_SIZE);
+  }, [filterType, filterStatus, filterDocumentId, filterAssignee]);
 
   const { data: summary } = useQuery({
     queryKey: ['markups-summary', projectId],
@@ -1574,6 +1613,8 @@ export function MarkupsPage() {
         })}
         actions={
           <>
+            <ModuleGuideButton content={markupsGuide} />
+
             {/* Document selector — a within-project entity picker, stays. */}
             {projectId && (
               <select
@@ -2020,6 +2061,26 @@ export function MarkupsPage() {
                     userMap={userMap}
                   />
                 ))}
+              </div>
+            )}
+
+            {/* ── Load more ──────────────────────────────────────────────── */}
+            {!isLoading && !isError && hasMore && filteredMarkups.length > 0 && (
+              <div className="mt-3 flex flex-col items-center gap-1">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={loadMore}
+                  loading={isFetching}
+                >
+                  {t('markups.load_more', { defaultValue: 'Load more' })}
+                </Button>
+                <span className="text-2xs text-content-tertiary">
+                  {t('markups.showing_count', {
+                    defaultValue: 'Showing {{count}} markups',
+                    count: markups.length,
+                  })}
+                </span>
               </div>
             )}
           </div>

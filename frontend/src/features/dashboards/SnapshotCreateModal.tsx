@@ -59,15 +59,33 @@ export function SnapshotCreateModal({
     mutationFn: () => createSnapshot({ projectId, label: label.trim(), files }),
     onSuccess: (snap) => {
       queryClient.invalidateQueries({ queryKey: ['dashboards-snapshots', projectId] });
+      // Derivative panels (integrity overview, auto-charts) are keyed per
+      // snapshot, so a fresh snapshot has no cached entry yet — but any
+      // panel a teammate left open on another snapshot should re-validate
+      // now that the project's snapshot set changed. Invalidating the
+      // prefixes only refetches active observers, so closed panels stay
+      // cheap and the list does not double-flicker.
+      queryClient.invalidateQueries({ queryKey: ['dashboards-integrity-report'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboards-quick-insights'] });
       onCreated(snap);
     },
     onError: (err: Error & { snapshotError?: SnapshotError }) => {
+      const isDuplicateLabel = err.snapshotError?.message_key === 'snapshot.label.duplicate';
       toast({
         type: 'error',
-        title: t('dashboards.snapshot_create_failed', {
-          defaultValue: 'Snapshot upload failed',
-        }),
-        message: err.snapshotError?.message ?? err.message,
+        title: isDuplicateLabel
+          ? t('dashboards.snapshot_label_taken_title', {
+              defaultValue: 'Label already in use',
+            })
+          : t('dashboards.snapshot_create_failed', {
+              defaultValue: 'Snapshot upload failed',
+            }),
+        message: isDuplicateLabel
+          ? t('dashboards.snapshot_label_taken_detail', {
+              defaultValue:
+                'A snapshot with this label already exists in this project. Pick a different label.',
+            })
+          : (err.snapshotError?.message ?? err.message),
       });
     },
   });

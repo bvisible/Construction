@@ -32,6 +32,7 @@ import {
   WideModal,
   WideModalSection,
   WideModalField,
+  ModuleGuideButton,
 } from '@/shared/ui';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { useConfirm } from '@/shared/hooks/useConfirm';
@@ -57,6 +58,7 @@ import {
   type CDEContainer,
   type CDERevision,
 } from '@/features/cde/api';
+import { transmittalsGuide } from './transmittalsGuide';
 
 /* ── Constants ─────────────────────────────────────────────────────────── */
 
@@ -318,13 +320,17 @@ function CreateTransmittalModal({
         <WideModalField
           label={t('transmittals.field_recipients', { defaultValue: 'Recipients' })}
           htmlFor="tr-recipients"
+          hint={t('transmittals.recipients_hint', {
+            defaultValue:
+              'Names or companies of the people receiving these documents, comma-separated. Recorded on the transmittal for the distribution log.',
+          })}
         >
           <input
             id="tr-recipients"
             value={form.recipients}
             onChange={(e) => set('recipients', e.target.value)}
             placeholder={t('transmittals.recipients_placeholder', {
-              defaultValue: 'Names, comma-separated',
+              defaultValue: 'e.g. Jane Doe (ACME Steel), site@subcontractor.com',
             })}
             className={inputCls}
           />
@@ -461,6 +467,13 @@ const TransmittalRow = React.memo(function TransmittalRow({
   const purposeCls = PURPOSE_COLORS[transmittal.purpose] ?? PURPOSE_COLORS.for_information;
 
   const acknowledgedCount = transmittal.recipients.filter((r) => r.acknowledged).length;
+  // Free-text recipient names captured at create time (no structured
+  // org/user row exists for them) — shown when there are no resolved
+  // recipients so the typed input is never silently lost.
+  const recipientsText =
+    typeof transmittal.metadata?.recipients_text === 'string'
+      ? transmittal.metadata.recipients_text.trim()
+      : '';
   const isOverdue =
     transmittal.response_due &&
     transmittal.status === 'issued' &&
@@ -606,6 +619,19 @@ const TransmittalRow = React.memo(function TransmittalRow({
             </div>
           )}
 
+          {/* Free-text recipients (no structured org/user rows) */}
+          {transmittal.recipients.length === 0 && recipientsText && (
+            <div>
+              <p className="text-xs text-content-tertiary mb-2 font-medium uppercase tracking-wide">
+                {t('transmittals.label_recipients_plain', { defaultValue: 'Recipients' })}
+              </p>
+              <div className="flex items-center gap-2 rounded-lg bg-surface-secondary p-2 text-sm">
+                <Users size={14} className="text-content-tertiary shrink-0" />
+                <span className="text-content-primary">{recipientsText}</span>
+              </div>
+            </div>
+          )}
+
           {/* Items list */}
           {transmittal.items.length > 0 && (
             <div>
@@ -625,8 +651,16 @@ const TransmittalRow = React.memo(function TransmittalRow({
                       {idx + 1}
                     </span>
                     <FileText size={13} className="text-content-tertiary shrink-0" />
-                    <span className="text-content-primary truncate">
-                      {item.document_title}
+                    <span
+                      className={clsx(
+                        'truncate',
+                        item.document_title
+                          ? 'text-content-primary'
+                          : 'text-content-tertiary italic',
+                      )}
+                    >
+                      {item.document_title ||
+                        t('transmittals.item_untitled', { defaultValue: 'Untitled document' })}
                     </span>
                     {item.document_ref && (
                       <Badge variant="neutral" size="sm" className="font-mono shrink-0">
@@ -924,10 +958,13 @@ export function TransmittalsPage() {
     return { total, draft, issued, acknowledged, closed };
   }, [transmittals]);
 
-  // Invalidation
+  // Invalidation — scope to the current project so we only refetch the cache
+  // entry actually in view (queryKey is ['transmittals', projectId, status]).
+  // React Query treats the partial key as a prefix, so every status variant of
+  // this project is invalidated regardless of the active status filter.
   const invalidateAll = useCallback(() => {
-    qc.invalidateQueries({ queryKey: ['transmittals'] });
-  }, [qc]);
+    qc.invalidateQueries({ queryKey: ['transmittals', projectId] });
+  }, [qc, projectId]);
 
   // Mutations
   const createMut = useMutation({
@@ -970,7 +1007,7 @@ export function TransmittalsPage() {
     mutationFn: ({ id, data }: { id: string; data: UpdateTransmittalPayload }) =>
       updateTransmittal(id, data),
     onSuccess: async () => {
-      await qc.invalidateQueries({ queryKey: ['transmittals'] });
+      await qc.invalidateQueries({ queryKey: ['transmittals', projectId] });
       setEditTarget(null);
       addToast({
         type: 'success',
@@ -989,7 +1026,7 @@ export function TransmittalsPage() {
     mutationKey: ['transmittals', 'delete'],
     mutationFn: (id: string) => deleteTransmittal(id),
     onSuccess: async () => {
-      await qc.invalidateQueries({ queryKey: ['transmittals'] });
+      await qc.invalidateQueries({ queryKey: ['transmittals', projectId] });
       addToast({
         type: 'success',
         title: t('transmittals.deleted', { defaultValue: 'Transmittal deleted' }),
@@ -1015,6 +1052,11 @@ export function TransmittalsPage() {
         item_number: idx + 1,
         description: `${r.container_code} · ${r.revision_code}`,
       }));
+      // The free-text "Recipients" field has no dedicated backend column (the
+      // recipients table keys on org/user UUIDs), so the typed names were being
+      // silently dropped on submit. Persist them in the transmittal's free-form
+      // `metadata` dict instead, where the backend echoes them back verbatim.
+      const recipientsText = formData.recipients.trim();
       createMut.mutate({
         project_id: projectId,
         subject: formData.subject,
@@ -1022,6 +1064,7 @@ export function TransmittalsPage() {
         cover_note: formData.cover_note || undefined,
         response_due_date: formData.response_due || undefined,
         items: items.length > 0 ? items : undefined,
+        metadata: recipientsText ? { recipients_text: recipientsText } : undefined,
       });
     },
     [createMut, projectId, addToast, t],
@@ -1083,17 +1126,26 @@ export function TransmittalsPage() {
           defaultValue: 'Formally distribute documents and track recipient acknowledgement',
         })}
         actions={
-          <Button
-            variant="primary"
-            size="sm"
-            onClick={() => setShowCreateModal(true)}
-            disabled={!projectId}
-            title={!projectId ? t('common.select_project_first', { defaultValue: 'Please select a project first' }) : undefined}
-            className="shrink-0 whitespace-nowrap"
-            icon={<Plus size={14} />}
-          >
-            {t('transmittals.new_transmittal', { defaultValue: 'New Transmittal' })}
-          </Button>
+          <>
+            {/* How it works guide - explains transmittals, purpose codes and
+                the draft -> issue -> acknowledge flow. Leads the action
+                cluster as the help pill. */}
+            <ModuleGuideButton
+              content={transmittalsGuide}
+              onCta={() => setShowCreateModal(true)}
+            />
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => setShowCreateModal(true)}
+              disabled={!projectId}
+              title={!projectId ? t('common.select_project_first', { defaultValue: 'Please select a project first' }) : undefined}
+              className="shrink-0 whitespace-nowrap"
+              icon={<Plus size={14} />}
+            >
+              {t('transmittals.new_transmittal', { defaultValue: 'New Transmittal' })}
+            </Button>
+          </>
         }
       />
 

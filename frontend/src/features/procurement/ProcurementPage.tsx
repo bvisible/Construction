@@ -27,6 +27,7 @@ import {
   SkeletonTable,
   DismissibleInfo,
   IntroRichText,
+  ModuleGuideButton,
 } from '@/shared/ui';
 import { RequiresProject } from '@/shared/auth/RequiresProject';
 import { PageHeader } from '@/shared/ui/PageHeader';
@@ -38,6 +39,7 @@ import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { getPOMatchStatus, type POLineMatchTag } from './api';
+import { procurementGuide } from './procurementGuide';
 import { SupplierScorecardModal } from './SupplierScorecardModal';
 import { VendorPrequalBadge } from './VendorPrequalBadge';
 import { RetainagePanel, RetainageBadge } from './RetainagePanel';
@@ -208,11 +210,14 @@ export function ProcurementPage() {
       />
 
       {/* Header — the module name + icon live in the global top bar; the
-          page renders only its subtitle. Project selection is global too. */}
+          page renders only its subtitle. Project selection is global too.
+          srTitle gives the page its single semantic <h1> (sr-only) for a11y. */}
       <PageHeader
+        srTitle={t('procurement.title', { defaultValue: 'Procurement' })}
         subtitle={t('procurement.subtitle', {
           defaultValue: 'Purchase orders and goods receipts',
         })}
+        actions={<ModuleGuideButton content={procurementGuide} />}
       />
 
       {/* Canonical info block — where procurement sits in the money flow,

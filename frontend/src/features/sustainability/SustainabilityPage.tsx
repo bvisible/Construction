@@ -13,8 +13,9 @@ import {
   ChevronDown,
   ChevronUp,
 } from 'lucide-react';
-import { Breadcrumb, Card, CardHeader, CardContent, Button, EmptyState, Skeleton, DismissibleInfo, IntroRichText } from '@/shared/ui';
+import { Breadcrumb, Card, CardHeader, CardContent, Button, EmptyState, Skeleton, DismissibleInfo, IntroRichText, ModuleGuideButton } from '@/shared/ui';
 import { PageHeader } from '@/shared/ui/PageHeader';
+import { sustainabilityGuide } from './sustainabilityGuide';
 import { apiGet } from '@/shared/lib/api';
 import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
@@ -74,6 +75,7 @@ const DONUT_COLORS = [
 /* ── Donut Chart ───────────────────────────────────────────────────── */
 
 function DonutChart({ data }: { data: { label: string; value: number; pct: number }[] }) {
+  const { t } = useTranslation();
   const size = 180;
   const cx = size / 2, cy = size / 2;
   const outerR = 80, innerR = 52;
@@ -111,7 +113,7 @@ function DonutChart({ data }: { data: { label: string; value: number; pct: numbe
       <circle cx={cx} cy={cy} r={innerR - 1} fill="var(--color-surface-primary, white)" />
       <text x={cx} y={cy - 4} textAnchor="middle" fontSize={11} className="fill-content-tertiary" fontFamily="system-ui">CO2e</text>
       <text x={cx} y={cy + 12} textAnchor="middle" fontSize={14} fontWeight="bold" className="fill-content-primary" fontFamily="system-ui">{segments.length}</text>
-      <text x={cx} y={cy + 24} textAnchor="middle" fontSize={9} className="fill-content-tertiary" fontFamily="system-ui">categories</text>
+      <text x={cx} y={cy + 24} textAnchor="middle" fontSize={9} className="fill-content-tertiary" fontFamily="system-ui">{t('sustainability.donut_categories', { defaultValue: 'categories' })}</text>
     </svg>
   );
 }
@@ -371,6 +373,7 @@ export function SustainabilityPage() {
       <PageHeader
         srTitle={t('nav.sustainability', { defaultValue: 'Sustainability' })}
         subtitle={t('sustainability.subtitle', 'Embodied carbon analysis based on EPD data (EN 15804, A1-A3)')}
+        actions={<ModuleGuideButton content={sustainabilityGuide} />}
       />
 
       <DismissibleInfo

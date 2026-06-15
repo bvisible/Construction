@@ -504,7 +504,12 @@ class BidManagementService:
                 ),
             )
         if "metadata" in fields:
-            fields["metadata_"] = fields.pop("metadata")
+            _incoming = fields.pop("metadata")
+            fields["metadata_"] = (
+                {**(getattr(package, "metadata_", None) or {}), **_incoming}
+                if isinstance(_incoming, dict)
+                else _incoming
+            )
         if "total_budget_estimate" in fields and fields["total_budget_estimate"] is not None:
             fields["total_budget_estimate"] = str(fields["total_budget_estimate"])
         if not fields:

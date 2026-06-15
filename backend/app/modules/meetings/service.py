@@ -266,7 +266,12 @@ class MeetingService:
 
         fields: dict[str, Any] = data.model_dump(exclude_unset=True)
         if "metadata" in fields:
-            fields["metadata_"] = fields.pop("metadata")
+            _incoming = fields.pop("metadata")
+            fields["metadata_"] = (
+                {**(getattr(meeting, "metadata_", None) or {}), **_incoming}
+                if isinstance(_incoming, dict)
+                else _incoming
+            )
 
         # Validate status transition if status is being changed
         new_status = fields.get("status")

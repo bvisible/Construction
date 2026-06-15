@@ -258,7 +258,10 @@ class RiskService:
 
         fields = data.model_dump(exclude_unset=True)
         if "metadata" in fields:
-            fields["metadata_"] = fields.pop("metadata")
+            _incoming = fields.pop("metadata")
+            fields["metadata_"] = (
+                {**(getattr(item, "metadata_", None) or {}), **_incoming} if isinstance(_incoming, dict) else _incoming
+            )
 
         if not fields:
             return item

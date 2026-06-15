@@ -5,6 +5,92 @@ All notable changes to OpenConstructionERP are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [8.3.1] - 2026-06-15
+
+### Changed
+
+- The seeded sample projects are now clearly labelled as samples and easy to remove, so a fresh install can be taken to an empty workspace from the projects list or from settings. A new project also takes its currency from your regional preference instead of being left blank. The new and reworded text is translated across all 26 other languages.
+
+### Fixed
+
+- The AI estimate builder, the match-to-cost wizard and the assembly template apply dialog now follow the project chosen in the top bar, so switching project updates them like the rest of the app.
+- Regional cost-database downloads now show a clear message when the data host cannot be reached and offer a retry, and the setup wizard reports when the rates loaded but the resource breakdown did not.
+- Several register lists, including submittals, transmittals, meetings, correspondence, risk and safety, load more rows so their headline counts and search cover the full set rather than the first page.
+
+## [8.3.0] - 2026-06-15
+
+### Added
+
+- A South Africa construction pack, the first in our African coverage. It is pre-configured for South African work with SANS 1200 civil and ASAQS building measurement, CIDB contractor grading 1 to 9, the PPPFA 80/20 and 90/10 preferential procurement scoring, the National Treasury infrastructure delivery and procurement stages, the nine provinces with editable location factors, and the rand with 15 percent VAT. The Johannesburg regional cost data is available and downloads on demand.
+
+### Changed
+
+- The most recently added feature screens are now translated across all 26 other languages, so they read in your own language instead of falling back to English.
+
+### Fixed
+
+- The app starts faster on a fresh install. Search index initialisation now runs in the background instead of holding up the first screen.
+- The BOQ templates page follows the project chosen in the top bar, so switching project updates it like the rest of the app.
+
+## [8.2.2] - 2026-06-15
+
+### Fixed
+
+- The macOS desktop app no longer opens with a "damaged" warning on first launch. The download is now ad-hoc signed across the app and its bundled local server, so the bundle code signature is valid and macOS stops reporting it as broken on Apple Silicon. The first launch still needs the download quarantine cleared once, which the release notes and the install guide explain with a single command.
+
+## [8.2.1] - 2026-06-15
+
+### Fixed
+
+- Editing one part of a record no longer clears the other details saved on it. Across many modules a partial edit used to replace the whole stored details field, so anything the form did not send back was lost. Change orders, contracts, the cost model, procurement, bid packages, meetings, correspondence, risk, punch lists, carbon, closeout, schedules, tasks, resources, documents, transmittals, markups, workflows, the BIM hub, integrations, saved views, field service, property development, the common data environment, compliance documents, field reports, requirements, change management and RFQs now merge an edit into what is already stored.
+- Paying a supplier invoice now updates the budget actuals correctly when part of the spend was already booked from a goods receipt, instead of dropping the received amount.
+- Cost breakdowns convert every line into the project base currency before adding them up, so a project that mixes currencies shows a correct total.
+- Reversing a ledger entry writes back every leg of the original posting, not just the first two.
+- A report built from a record title can no longer carry hidden control characters into the download file name, and number-like codes that start with a zero keep that zero in the Excel export.
+- The password reset email now states the same fifteen minute validity as the link it carries.
+
+### Security
+
+- Several read and edit endpoints now confirm the account can reach the project a record belongs to before returning or changing it, closing cross-project access gaps in validation, finance, the cost catalogue and the compliance document store.
+- High-value variation orders, awarded bids and permit activation now require their own permission, so a lower role can no longer push a change past the threshold the rest of the workflow already guards.
+
+## [8.2.0] - 2026-06-14
+
+### Added
+
+- A project journey map in the top bar. A small control names the lifecycle phase the screen you are on belongs to, so you always know where you are, and opening it lays out the whole project from first lead to handover: three arcs and eleven numbered phases, with every major module placed on its phase as a link, plus an always-on band for the cross-cutting AI, collaboration and pipeline tools. It is translated in every language.
+
+### Fixed
+
+- The currency dialog now warns when a project exchange rate looks entered upside down, or sits far from a typical market rate, and shows the rate the right way round, so a slip no longer quietly skews rolled-up totals. Reported in [#111](https://github.com/datadrivenconstruction/OpenConstructionERP/issues/111).
+- BIM models imported from a spreadsheet or a bulk element file now run the same validation pass as the CAD import path, so every imported model gets a validation report instead of only the ones brought in through a converter.
+- A comment that carries a viewpoint now checks the viewpoint's entity type against the same allowlist the standalone viewpoint path uses, so an unsupported value can no longer slip in through a comment and leave an orphaned reference.
+- Quantity takeoff now reports how many PDF pages came back with no text layer, usually scanned drawings, instead of silently treating them as empty, so it is clear which pages need OCR.
+- DWG drawing previews render again on newer ezdxf builds (1.1 and later), which changed how the preview SVG is produced.
+- The DIN 276 completeness and hierarchy checks now also fold dotted CAD codes such as 330.10 to their three-digit cost group, so a model classified with deeper codes is scored against the right group instead of being undercounted or wrongly flagged as out of hierarchy.
+- Importing a GAEB tender now keeps the surcharge exactly as the file states it. The resulting amount is stored verbatim as a fixed markup instead of being re-derived from the percentage against the whole bill, so an imported bill reconciles to its declared total instead of drifting high.
+- Custom validation rules are now scoped to the workspace that wrote them, so one tenant's rules can no longer run against another tenant's data or shadow a built-in rule.
+- The 3D model viewer now shows a clear message when the browser cannot provide WebGL, for example on a remote desktop or with hardware acceleration turned off, instead of replacing the whole page with an error screen.
+- Real-time BOQ co-editing no longer falls back to public demo relay servers. It stays local to your browser unless an operator points it at their own self-hosted relay, so document content is never sent through third-party infrastructure.
+
+## [8.1.0] - 2026-06-14
+
+### Added
+
+- A "What's new" button in the top bar. It opens a short panel that links to the latest release news on openconstructionerp.com and notes, with a link to the cookie policy, that the site uses anonymised analytics. Anyone who would rather stay in the app gets a link to the in-app changelog.
+- An honest rule-pack coverage report. A new read-only endpoint shows, for every installed validation rule pack, how many of the rules it declares are actually implemented and run, so a pack can no longer look like it checks more than it does.
+
+### Fixed
+
+- DIN 276 cost groups are now validated across the full code hierarchy (main group, group and sub-group), and the dotted element codes the CAD classifier produces, for example 330.10, are accepted, instead of only the first digit being checked.
+- The takeoff CSV export now subtracts openings and voids the same way the Excel export and the on-screen totals already do, so the same takeoff no longer reports a larger area to CSV than to Excel.
+- The quickstart Docker Compose file now parses once the required POSTGRES_PASSWORD and JWT_SECRET are provided, so its fail-fast checks run as intended. Reported in [#227](https://github.com/datadrivenconstruction/OpenConstructionERP/pull/227).
+- A fresh-database setup error. Running `openconstructionerp init-db` (or `seed`) on a brand-new database could stop with a foreign-key error, because the command built its list of tables from a hand-maintained list that had drifted out of date and missed the file-versions tables. It now discovers every module's tables automatically, the same way the server already does on first start, so a fresh schema is always created in full. The normal `openconstructionerp` start was not affected.
+
+### Security
+
+- Hardened multi-user access control across a range of list, aggregate and detail endpoints so an account only ever sees or changes data in the projects it can reach. A request that leaves out a project filter is now scoped to the caller's own projects instead of returning everything, and administrators keep the full portfolio view. This covers finance budgets, earned value, the finance dashboard and the chart of accounts, business-intelligence dashboards, background jobs, approval workflows, the cost catalogue, lead-capture webhooks, property-development records and the chat assistant.
+
 ## [8.0.0] - 2026-06-13
 
 ### Added

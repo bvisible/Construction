@@ -20,7 +20,13 @@ When it finishes you will find OpenConstructionERP in the Start Menu and as a sh
 
 Download the `.dmg`, open it, and drag OpenConstructionERP into your Applications folder. You need macOS 10.15 or later.
 
-The first time you open it, macOS may not let it start straight away because the build is not signed by Apple. If that happens, right-click the app in Applications, choose Open, and confirm. You can also allow it from the Apple menu under System Settings, in Privacy and Security, where macOS shows a button to open the app anyway. You only need to do this once.
+This build is ad-hoc signed but not yet notarized by Apple, so the first time you open it macOS may say it "is damaged and can't be opened" or otherwise block it. The app is not damaged. macOS quarantines anything downloaded from the web, and an app that Apple has not notarized trips that check. To clear it, open Terminal and run this once, then open the app normally:
+
+```
+xattr -dr com.apple.quarantine /Applications/OpenConstructionERP.app
+```
+
+On older macOS you can instead right-click the app and choose Open. On macOS Sequoia you may also need to approve it once under System Settings, in Privacy and Security, where macOS shows a button to open the app anyway. You only need to do this once.
 
 ### Linux
 

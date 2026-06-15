@@ -262,7 +262,10 @@ class ComplianceDocService:
 
         fields: dict[str, Any] = data.model_dump(exclude_unset=True)
         if "metadata" in fields:
-            fields["metadata_"] = fields.pop("metadata")
+            _incoming = fields.pop("metadata")
+            fields["metadata_"] = (
+                {**(getattr(doc, "metadata_", None) or {}), **_incoming} if isinstance(_incoming, dict) else _incoming
+            )
 
         # Same-project guard if attachment is being changed.
         if "attachment_document_id" in fields:

@@ -99,11 +99,31 @@ export function AiEstimatorPage() {
     [projectsQ.data, projectId],
   );
 
+  // This view has no on-page project picker, so it must follow the project
+  // chosen in the top bar (a ?project= deep-link still wins). Without the
+  // activeProjectId sync the builder stayed frozen on the mount-time project
+  // after a switch, listing the old project's estimates and creating runs
+  // against it. Falls back to the first project only when nothing is active.
   useEffect(() => {
-    if (!projectId && projectsQ.data && projectsQ.data.length > 0) {
+    const target = urlProject || activeProjectId;
+    if (target && target !== projectId) {
+      setProjectId(target);
+    } else if (!projectId && projectsQ.data && projectsQ.data.length > 0) {
       setProjectId(projectsQ.data[0]!.id);
     }
-  }, [projectId, projectsQ.data]);
+  }, [urlProject, activeProjectId, projectId, projectsQ.data]);
+
+  // When the project genuinely changes, drop the source selections picked
+  // for the previous project so a new estimate is never built from another
+  // project's BIM model or documents.
+  const prevProjectRef = useRef<string | null>(projectId);
+  useEffect(() => {
+    if (prevProjectRef.current !== null && prevProjectRef.current !== projectId) {
+      setSelectedModelId(null);
+      setSelectedDocIds([]);
+    }
+    prevProjectRef.current = projectId;
+  }, [projectId]);
 
   // ── Source pickers ─────────────────────────────────────────────────
   const modelsQ = useQuery({

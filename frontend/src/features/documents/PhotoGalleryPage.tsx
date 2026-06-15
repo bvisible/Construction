@@ -122,59 +122,6 @@ function formatDateFull(dateStr: string | null): string {
   }
 }
 
-/** Attempt to extract EXIF data from image file client-side. */
-function extractExifData(file: File): Promise<{
-  taken_at?: string;
-  gps_lat?: number;
-  gps_lon?: number;
-}> {
-  return new Promise((resolve) => {
-    // Basic EXIF extraction from JPEG files
-    if (!file.type.includes('jpeg') && !file.type.includes('jpg')) {
-      resolve({});
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      try {
-        const view = new DataView(e.target?.result as ArrayBuffer);
-        // Check for JPEG SOI marker
-        if (view.getUint16(0) !== 0xFFD8) { resolve({}); return; }
-
-        let offset = 2;
-        const len = view.byteLength;
-        while (offset < len) {
-          if (view.getUint16(offset) === 0xFFE1) {
-            // APP1 marker (EXIF)
-            const exifStr = String.fromCharCode(
-              view.getUint8(offset + 4),
-              view.getUint8(offset + 5),
-              view.getUint8(offset + 6),
-              view.getUint8(offset + 7),
-            );
-            if (exifStr === 'Exif') {
-              // EXIF found but full parsing is complex;
-              // use the file's lastModified as fallback date
-              resolve({
-                taken_at: new Date(file.lastModified).toISOString(),
-              });
-              return;
-            }
-            break;
-          }
-          offset += 2 + view.getUint16(offset + 2);
-        }
-        resolve({ taken_at: new Date(file.lastModified).toISOString() });
-      } catch {
-        resolve({});
-      }
-    };
-    reader.onerror = () => resolve({});
-    // Only read first 128KB for EXIF header
-    reader.readAsArrayBuffer(file.slice(0, 131072));
-  });
-}
-
 /* ── Lightbox ─────────────────────────────────────────────────────────── */
 
 function Lightbox({
@@ -876,15 +823,16 @@ function UploadZone({
       setProgress({ current: i + 1, total: validFiles.length });
 
       try {
-        // Extract EXIF data
-        const exif = await extractExifData(file);
-
+        // EXIF (capture date + GPS) is parsed server-side on upload — see
+        // ``isDateFromExif`` / ``isGpsFromExif`` which read the server's
+        // ``taken_at_source`` / ``gps_source`` metadata. We deliberately do
+        // NOT pre-fill these from the client: a robust JPEG/HEIC EXIF parse
+        // needs a dedicated library, and the earlier ``file.lastModified``
+        // fallback was misleading (it's the file's modification time, not
+        // the capture time) and could shadow the backend's correct value.
         await uploadPhoto(projectId, file, {
           category,
           tags: tags.length > 0 ? tags : undefined,
-          taken_at: exif.taken_at,
-          gps_lat: exif.gps_lat,
-          gps_lon: exif.gps_lon,
         });
         successCount++;
       } catch {
@@ -1165,13 +1113,18 @@ export function PhotoGalleryPage() {
   // Deep-link: `?photo={id}` (set by /files → "Open in Site Photos")
   // opens the lightbox on that photo as soon as the gallery loads. We
   // strip the param afterwards so refreshing/back-button doesn't keep
-  // re-opening it. One-shot effect keyed on photoList loading.
+  // re-opening it. We search ``lightboxPhotos`` (the same list the
+  // lightbox pages through) so the deep-link resolves correctly whether
+  // the page starts in grid or timeline view; only when the photo is
+  // found do we drop the param, so a still-loading list gets another
+  // shot once the data arrives.
   const [searchParams, setSearchParams] = useSearchParams();
   const deepLinkPhotoId = searchParams.get('photo');
   useEffect(() => {
-    if (!deepLinkPhotoId || photoList.length === 0) return;
-    const idx = photoList.findIndex((p) => p.id === deepLinkPhotoId);
-    if (idx >= 0) setLightboxIndex(idx);
+    if (!deepLinkPhotoId || lightboxPhotos.length === 0) return;
+    const idx = lightboxPhotos.findIndex((p) => p.id === deepLinkPhotoId);
+    if (idx < 0) return;
+    setLightboxIndex(idx);
     setSearchParams(
       (prev) => {
         const next = new URLSearchParams(prev);
@@ -1180,7 +1133,7 @@ export function PhotoGalleryPage() {
       },
       { replace: true },
     );
-  }, [deepLinkPhotoId, photoList, setSearchParams]);
+  }, [deepLinkPhotoId, lightboxPhotos, setSearchParams]);
 
   /* ── Mutations ──────────────────────────────────────────────────────── */
 
@@ -1332,15 +1285,21 @@ export function PhotoGalleryPage() {
     if (!confirmed) return;
     setBatchDeleting(true);
     let ok = 0;
-    let fail = 0;
+    const failedIds: string[] = [];
     for (const id of selectedIds) {
       try {
         await deletePhoto(id);
         ok++;
-      } catch {
-        fail++;
+      } catch (err) {
+        // Record which photo failed and why so the failure isn't silent —
+        // the toast still shows the count, and the console carries the
+        // per-photo reason for support / retry diagnosis.
+        failedIds.push(id);
+        const reason = err instanceof Error ? err.message : String(err);
+        console.error(`Failed to delete photo ${id}:`, reason);
       }
     }
+    const fail = failedIds.length;
     setBatchDeleting(false);
     if (ok > 0) {
       addToast({
@@ -1352,11 +1311,20 @@ export function PhotoGalleryPage() {
       addToast({
         type: 'error',
         title: t('photos.batch_delete_failed', { defaultValue: '{{count}} photo(s) failed to delete', count: fail }),
+        message: t('photos.batch_delete_failed_detail', {
+          defaultValue: 'Some photos could not be deleted. They remain selected so you can retry.',
+        }),
       });
     }
     queryClient.invalidateQueries({ queryKey: ['photos'] });
     queryClient.invalidateQueries({ queryKey: ['photos-timeline'] });
-    exitSelectMode();
+    if (fail > 0) {
+      // Keep select mode open with only the failed photos selected so the
+      // user can immediately retry the ones that didn't delete.
+      setSelectedIds(new Set(failedIds));
+    } else {
+      exitSelectMode();
+    }
   }, [selectedIds, confirm, addToast, t, queryClient, exitSelectMode]);
 
   // Stats

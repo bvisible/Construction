@@ -58,6 +58,7 @@ import {
   SideDrawer,
   ConfirmDialog,
   ModuleHelpButton,
+  ModuleGuideButton,
 } from '@/shared/ui';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import {
@@ -79,6 +80,7 @@ import { BuyerAccessLinkPanel } from '@/features/buyer-portal/BuyerAccessLinkPan
 import { DocumentPreviewModal } from './DocumentPreviewModal';
 import { SnagsBlock } from './SnagsBlock';
 import { HandoverDocumentsSection } from './HandoverDocumentsSection';
+import { propertyDevGuide } from './propertyDevGuide';
 import type { PropDevDocType } from './api';
 import {
   listDevelopments,
@@ -539,7 +541,8 @@ export function PropertyDevPage() {
           >
             {t('propdev.dashboards_short', { defaultValue: 'Dashboards' })}
           </Button>
-          {/* Per-module Tour CTA — launches the PropDev guided tour. */}
+          {/* "How it works" explainer + per-module Tour CTA. */}
+          <ModuleGuideButton content={propertyDevGuide} />
           <ModuleHelpButton tourId="propdev" />
           </>
         }
@@ -831,7 +834,12 @@ export function PropertyDevPage() {
           onCreate={() => setCreateOpen(true)}
         />
       ) : tab === 'plots' ? (
+        // Key on the selected development so PlotsTab's internal status
+        // filter resets when the operator switches developments - otherwise
+        // a stale chip selection (e.g. "reserved") would visually persist
+        // while the underlying plot data reloads with a different scope.
         <PlotsTab
+          key={selectedDevId}
           plots={allPlots}
           houseTypes={houseTypesQ.data ?? []}
           onSelect={(id) => setActivePlotId(id)}
@@ -1441,7 +1449,7 @@ function LeadsTab({
             {LEAD_SOURCES.map((src) => (
               <option key={src} value={src}>
                 {t(`propdev.lead_source_${src}`, {
-                  defaultValue: src.replace('_', ' '),
+                  defaultValue: src.replace(/_/g, ' '),
                 })}
               </option>
             ))}
@@ -1534,7 +1542,7 @@ function LeadsTab({
                       </td>
                       <td className="px-4 py-2 text-xs text-content-secondary">
                         {t(`propdev.lead_source_${l.source}`, {
-                          defaultValue: l.source.replace('_', ' '),
+                          defaultValue: l.source.replace(/_/g, ' '),
                         })}
                       </td>
                       <td className="px-4 py-2 text-xs font-mono tabular-nums">
@@ -1829,7 +1837,7 @@ function LeadDetailDrawer({
               {LEAD_SOURCES.map((src) => (
                 <option key={src} value={src}>
                   {t(`propdev.lead_source_${src}`, {
-                    defaultValue: src.replace('_', ' '),
+                    defaultValue: src.replace(/_/g, ' '),
                   })}
                 </option>
               ))}
@@ -2449,7 +2457,9 @@ function ReservationsTab({
         >
           <option value="">{t('propdev.all_statuses', { defaultValue: 'All statuses' })}</option>
           {RESERVATION_STATUS_OPTIONS.map((s) => (
-            <option key={s} value={s}>{s}</option>
+            <option key={s} value={s}>
+              {t(`propdev.reservation.status.${s}`, { defaultValue: s.replace(/_/g, ' ') })}
+            </option>
           ))}
         </select>
         <span className="text-xs text-content-tertiary">
@@ -3007,7 +3017,9 @@ function SpaTab({
         >
           <option value="">{t('propdev.all_statuses', { defaultValue: 'All statuses' })}</option>
           {SPA_STATUS_OPTIONS.map((s) => (
-            <option key={s} value={s}>{s}</option>
+            <option key={s} value={s}>
+              {t(`propdev.spa.status.${s}`, { defaultValue: s.replace(/_/g, ' ') })}
+            </option>
           ))}
         </select>
         <span className="text-xs text-content-tertiary">
@@ -3907,7 +3919,9 @@ function PaymentScheduleTab({
         >
           <option value="">{t('propdev.all_statuses', { defaultValue: 'All statuses' })}</option>
           {SCHEDULE_STATUS_OPTIONS.map((s) => (
-            <option key={s} value={s}>{s}</option>
+            <option key={s} value={s}>
+              {t(`propdev.payment_schedule.status.${s}`, { defaultValue: s.replace(/_/g, ' ') })}
+            </option>
           ))}
         </select>
         <span className="text-xs text-content-tertiary">
@@ -4245,6 +4259,10 @@ function HandoverPlotRow({ plot, buyer }: { plot: Plot; buyer: Buyer | undefined
         title: t('propdev.handover_deleted', { defaultValue: 'Handover removed' }),
       });
       qc.invalidateQueries({ queryKey: ['propdev', 'handovers', plot.id] });
+      // Prefix-match invalidate the broad handovers list so every per-plot
+      // HandoverPlotRow rendered in the main HandoversTab refreshes too,
+      // not just this plot's scoped query.
+      qc.invalidateQueries({ queryKey: ['propdev', 'handovers'] });
       qc.invalidateQueries({ queryKey: ['propdev', 'plots'] });
     },
     onError: (err) => addToast({ type: 'error', title: getErrorMessage(err) }),
@@ -5369,7 +5387,7 @@ function PlotDetailDrawer({
                           className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs hover:bg-surface-secondary focus:bg-surface-secondary focus:outline-none"
                           disabled={statusMu.isPending}
                         >
-                          <Badge variant={PLOT_STATUS_VARIANT[next]} dot>{next.replace('_', ' ')}</Badge>
+                          <Badge variant={PLOT_STATUS_VARIANT[next]} dot>{next.replace(/_/g, ' ')}</Badge>
                         </button>
                       ))}
                     </div>
@@ -5662,7 +5680,11 @@ function EditPlotModal({
         <WideModalField label={t('propdev.plot.view_type', { defaultValue: 'View type' })}>
           <select value={form.view_type} onChange={(e) => setForm((s) => ({ ...s, view_type: e.target.value }))} className={inputCls}>
             <option value="">— {t('common.none', { defaultValue: 'None' })} —</option>
-            {PLOT_VIEW_TYPES.map((v) => (<option key={v} value={v}>{v}</option>))}
+            {PLOT_VIEW_TYPES.map((v) => (
+              <option key={v} value={v}>
+                {t(`propdev.plot.view.${v}`, { defaultValue: v })}
+              </option>
+            ))}
           </select>
         </WideModalField>
         <WideModalField label={t('propdev.plot.sun_exposure_hours', { defaultValue: 'Sun exposure (h)' })}>
@@ -6829,7 +6851,7 @@ function CreateModal({
               {LEAD_SOURCES.map((src) => (
                 <option key={src} value={src}>
                   {t(`propdev.lead_source_${src}`, {
-                    defaultValue: src.replace('_', ' '),
+                    defaultValue: src.replace(/_/g, ' '),
                   })}
                 </option>
               ))}
@@ -7087,7 +7109,7 @@ function DevelopmentFormBody({
             {DEV_TYPES.map((dt) => (
               <option key={dt} value={dt}>
                 {t(`propdev.development.type.${dt}`, {
-                  defaultValue: dt.replace('_', ' '),
+                  defaultValue: dt.replace(/_/g, ' '),
                 })}
               </option>
             ))}
@@ -7661,7 +7683,7 @@ function PlotFormBody({
           >
             {PLOT_STATUSES.map((s) => (
               <option key={s} value={s}>
-                {t(`propdev.plot.status.${s}`, { defaultValue: s.replace('_', ' ') })}
+                {t(`propdev.plot.status.${s}`, { defaultValue: s.replace(/_/g, ' ') })}
               </option>
             ))}
           </select>

@@ -27,11 +27,44 @@ export interface TransmittalRecipient {
   response: string | null;
 }
 
+// The backend RecipientResponse returns org/user UUIDs and an
+// `acknowledged_at` timestamp, but no resolved `name`/`company` and no
+// `acknowledged` boolean. Normalise the wire shape into the UI shape so the
+// detail view never renders `undefined` for a recipient name or undercounts
+// acknowledgements. `name`/`company` may be hydrated server-side later (via
+// joined org/user records) — we read them when present and fall back to a
+// readable identifier otherwise.
+interface RecipientWire {
+  id: string;
+  name?: string | null;
+  company?: string | null;
+  acknowledged?: boolean | null;
+  acknowledged_at?: string | null;
+  recipient_org_id?: string | null;
+  recipient_user_id?: string | null;
+  action_required?: string | null;
+  response?: string | null;
+}
+
 export interface TransmittalItem {
   id: string;
   document_title: string;
   document_ref: string | null;
   revision: string | null;
+  revision_id?: string | null;
+  document_id?: string | null;
+}
+
+// The backend ItemResponse carries `description`/`notes`/`item_number` rather
+// than the UI's `document_title`/`document_ref`/`revision`. Map the fields so
+// the detail view shows the description instead of `undefined`, while still
+// honouring an already-shaped `document_title` if a future endpoint sends one.
+interface ItemWire {
+  id: string;
+  document_title?: string | null;
+  description?: string | null;
+  document_ref?: string | null;
+  revision?: string | null;
   revision_id?: string | null;
   document_id?: string | null;
 }
@@ -49,6 +82,10 @@ export interface Transmittal {
   locked: boolean;
   recipients: TransmittalRecipient[];
   items: TransmittalItem[];
+  // Free-form server-side dict; the create form stashes the typed recipient
+  // names here under `recipients_text` (the recipients table only keys on
+  // org/user UUIDs).
+  metadata: Record<string, unknown>;
   created_by: string | null;
   created_at: string;
   updated_at: string;
@@ -88,26 +125,77 @@ export interface CreateTransmittalPayload {
 // the UI shapes expect `purpose` / `response_due` / `locked`. Normalise
 // here so consumers never see untranslated i18n keys like
 // `transmittals.purpose_undefined`.
-type TransmittalWire = Omit<Transmittal, 'purpose' | 'response_due' | 'locked'> & {
+type TransmittalWire = Omit<
+  Transmittal,
+  'purpose' | 'response_due' | 'locked' | 'recipients' | 'items' | 'metadata'
+> & {
   purpose?: TransmittalPurpose;
   purpose_code?: TransmittalPurpose;
   response_due?: string | null;
   response_due_date?: string | null;
   locked?: boolean;
   is_locked?: boolean;
+  recipients?: RecipientWire[];
+  items?: ItemWire[];
+  metadata?: Record<string, unknown> | null;
 };
+
+function normaliseItem(i: ItemWire): TransmittalItem {
+  // Backend sends `description`; UI reads `document_title`. Prefer an explicit
+  // title, fall back to the description, and never surface `undefined`.
+  const document_title = i.document_title?.trim() || i.description?.trim() || '';
+  return {
+    id: i.id,
+    document_title,
+    document_ref: i.document_ref ?? null,
+    revision: i.revision ?? null,
+    revision_id: i.revision_id ?? null,
+    document_id: i.document_id ?? null,
+  };
+}
+
+// Short, stable label for a recipient when the backend has not (yet) hydrated
+// a human-readable name. We never want the UI to print `undefined`.
+function recipientFallbackLabel(r: RecipientWire): string {
+  const id = r.recipient_user_id ?? r.recipient_org_id;
+  if (id) return `#${id.slice(0, 8)}`;
+  return r.action_required ?? 'Recipient';
+}
+
+function normaliseRecipient(r: RecipientWire): TransmittalRecipient {
+  const name = r.name?.trim() || recipientFallbackLabel(r);
+  // Derive the acknowledged flag from `acknowledged_at` when the backend does
+  // not send an explicit boolean, so the "{ack}/{total} acknowledged" header
+  // and the per-row check icon reflect reality instead of always reading 0.
+  const acknowledged = r.acknowledged ?? r.acknowledged_at != null;
+  return {
+    id: r.id,
+    name,
+    company: r.company ?? null,
+    acknowledged,
+    acknowledged_at: r.acknowledged_at ?? null,
+    response: r.response ?? null,
+  };
+}
 
 function normaliseTransmittal(t: TransmittalWire): Transmittal {
   const purpose = (t.purpose ?? t.purpose_code ?? 'for_information') as TransmittalPurpose;
   const response_due = t.response_due ?? t.response_due_date ?? null;
   const locked = t.locked ?? t.is_locked ?? false;
-  return { ...t, purpose, response_due, locked } as Transmittal;
+  const recipients = (t.recipients ?? []).map(normaliseRecipient);
+  const items = (t.items ?? []).map(normaliseItem);
+  const metadata = t.metadata ?? {};
+  return { ...t, purpose, response_due, locked, recipients, items, metadata } as Transmittal;
 }
 
 export async function fetchTransmittals(filters?: TransmittalFilters): Promise<Transmittal[]> {
   const params = new URLSearchParams();
   if (filters?.project_id) params.set('project_id', filters.project_id);
   if (filters?.status) params.set('status', filters.status);
+  // Raise from the server default cap (50) to its accepted ceiling (le=100) so
+  // the list and client-side search cover up to 100 records instead of
+  // silently dropping older rows.
+  params.set('limit', '100');
   const qs = params.toString();
   const res = await apiGet<TransmittalWire[] | { items: TransmittalWire[] }>(
     `/v1/transmittals/${qs ? `?${qs}` : ''}`,

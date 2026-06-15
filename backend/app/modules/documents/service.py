@@ -715,7 +715,12 @@ class DocumentService:
 
         fields = data.model_dump(exclude_unset=True)
         if "metadata" in fields:
-            fields["metadata_"] = fields.pop("metadata")
+            _incoming = fields.pop("metadata")
+            fields["metadata_"] = (
+                {**(getattr(document, "metadata_", None) or {}), **_incoming}
+                if isinstance(_incoming, dict)
+                else _incoming
+            )
 
         # The approver signature is a Gate-B precondition, never a column -
         # pop it out of the persisted field set so it isn't passed to
@@ -1702,7 +1707,10 @@ class SheetService:
 
         fields = data.model_dump(exclude_unset=True)
         if "metadata" in fields:
-            fields["metadata_"] = fields.pop("metadata")
+            _incoming = fields.pop("metadata")
+            fields["metadata_"] = (
+                {**(getattr(sheet, "metadata_", None) or {}), **_incoming} if isinstance(_incoming, dict) else _incoming
+            )
 
         if not fields:
             return sheet

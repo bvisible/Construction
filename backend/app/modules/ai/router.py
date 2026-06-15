@@ -276,16 +276,20 @@ async def test_ai_connection(
     # Fernet-encrypted - passing the ciphertext straight to the provider
     # triggers a 401 ("AI API key is invalid or expired") even for a
     # fresh, valid key the user just pasted.
+    # Ollama and vLLM are self-hosted and authenticate by endpoint URL, not an
+    # API key, so a missing key must not block their connection test. It used to
+    # return "No API key configured" and the test could never run for them.
+    _self_hosted = provider in ("ollama", "vllm")
     key_attr = f"{provider}_api_key"
     raw = getattr(settings, key_attr, None) if settings else None
-    if not raw:
+    if not raw and not _self_hosted:
         return {
             "success": False,
             "message": f"No API key configured for {provider}. Please save your key first.",
             "latency_ms": None,
         }
-    api_key = decrypt_secret(raw)
-    if not api_key:
+    api_key = decrypt_secret(raw) if raw else ""
+    if raw and not api_key:
         return {
             "success": False,
             "message": (
@@ -307,7 +311,9 @@ async def test_ai_connection(
     # Self-hosted backends (Ollama, vLLM) may carry a user-supplied endpoint
     # in the saved metadata; everything else uses the built-in URL.
     resolved_url: str | None = None
-    saved_meta = settings.metadata_ or {}
+    # settings can be None for a self-hosted test with no saved row (the old
+    # missing-key early return used to make this unreachable).
+    saved_meta = (settings.metadata_ if settings else None) or {}
     if provider in ("ollama", "vllm") and isinstance(saved_meta, dict):
         raw_url = saved_meta.get(f"{provider}_base_url")
         has_custom_url = isinstance(raw_url, str) and bool(raw_url.strip())

@@ -89,7 +89,7 @@ export function PlotsTab({
               )}
             >
               <span className={clsx('h-2.5 w-2.5 rounded-sm border', PLOT_STATUS_COLOR[s])} />
-              <span>{s.replace('_', ' ')}</span>
+              <span>{t(`propdev.plot.status.${s}`, { defaultValue: s.replace('_', ' ') })}</span>
               <span className="font-mono tabular-nums text-content-tertiary">{count}</span>
             </button>
           );

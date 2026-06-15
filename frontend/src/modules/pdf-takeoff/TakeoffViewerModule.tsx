@@ -81,6 +81,13 @@ import {
   formatScaleRatio,
 } from './data/scale-helpers';
 import {
+  type PageScales,
+  emptyPageScales,
+  scaleForPage,
+  setPageScale as setPageScaleIn,
+  pageIsCalibrated,
+} from './data/page-scales';
+import {
   hitTest,
   insertVertexAt,
   deleteVertexAt,
@@ -186,6 +193,11 @@ interface Measurement {
   height?: number; // Height for rectangle/highlight
   /** Free-form notes entered via the properties panel. */
   notes?: string;
+  /** Opening deduction: an `area` measurement that represents a void
+   *  (door, window, cut-out) whose area is SUBTRACTED from the gross area
+   *  of its group so a net area = gross - openings. Stored as a positive
+   *  gross area; only the rollup subtracts it. Only meaningful for area. */
+  isDeduction?: boolean;
   /** Server ID (set after first persistence sync). */
   serverId?: string;
   /** Linked BOQ position id — the canonical "this measurement feeds that position". */
@@ -342,8 +354,25 @@ export default function TakeoffViewerModule({
   const [activePoints, setActivePoints] = useState<Point[]>([]);
   const [countLabel, setCountLabel] = useState(t('takeoff_viewer.default_count_label', { defaultValue: 'Element' }));
 
-  // Scale
-  const [scale, setScale] = useState<ScaleConfig>({ pixelsPerUnit: 100, unitLabel: 'm' });
+  // Scale - PER PAGE (per sheet). A multi-sheet drawing set has a different
+  // scale per page (floor plan 1:50, site plan 1:500, ...), so the calibration
+  // is keyed by 1-indexed page with a single document default for pages that
+  // have not been calibrated yet. ``scale`` below is the effective scale for
+  // the *current* page; the rest of the module reads it unchanged.
+  const [pageScales, setPageScales] = useState<PageScales>(emptyPageScales);
+  const scale = useMemo(
+    () => scaleForPage(pageScales, currentPage),
+    [pageScales, currentPage],
+  );
+  /** Set the scale for the CURRENT page only (calibration applies to the
+   *  page it was set on). Other uncalibrated pages keep the document
+   *  default. */
+  const setScale = useCallback(
+    (next: ScaleConfig) => {
+      setPageScales((prev) => setPageScaleIn(prev, currentPage, next));
+    },
+    [currentPage],
+  );
   const [showScaleDialog, setShowScaleDialog] = useState(false);
   const [scaleRefPixels, setScaleRefPixels] = useState(0);
   const [scaleRefReal, setScaleRefReal] = useState(1);
@@ -356,13 +385,16 @@ export default function TakeoffViewerModule({
   const [showCalibrationDialog, setShowCalibrationDialog] = useState(false);
   const [calibrationPixels, setCalibrationPixels] = useState(0);
   const [calibrationMode, setCalibrationMode] = useState(false);
-  /** Cached last calibration (for badge display) — real length + unit.  */
-  const [lastCalibration, setLastCalibration] = useState<
-    { realLength: number; unit: 'm' | 'mm' | 'ft' | 'in' } | null
-  >(null);
-  /** True once the user has performed at least one two-click calibration
-   *  — drives the "Calibrated · 1:N @ Lm" status badge. */
-  const [isCalibrated, setIsCalibrated] = useState(false);
+  /** Cached last calibration PER PAGE (for badge display) - real length +
+   *  unit. Keyed by page so the badge always reflects the current sheet. */
+  const [lastCalibrationByPage, setLastCalibrationByPage] = useState<
+    Record<number, { realLength: number; unit: 'm' | 'mm' | 'ft' | 'in' }>
+  >({});
+  const lastCalibration = lastCalibrationByPage[currentPage] ?? null;
+  /** True when the CURRENT page has its own calibration - drives the
+   *  "Calibrated · 1:N @ Lm" status badge. Per-page so navigating to an
+   *  uncalibrated sheet correctly shows "not calibrated". */
+  const isCalibrated = pageIsCalibrated(pageScales, currentPage);
 
   // //// NEOFFICE PATCH — vector room detection in-flight flag
   const [roomsLoading, setRoomsLoading] = useState(false);
@@ -496,6 +528,13 @@ export default function TakeoffViewerModule({
 
   // Document persistence + server sync
   const [fileName, setFileName] = useState<string | null>(null);
+  // Per-page text-layer audit (8.2.0). When a document was opened from the
+  // server we fetch its metadata to learn how many pages came back with no
+  // text layer (likely scanned drawings that need OCR) so the viewer can flag
+  // them instead of presenting them as silently empty. ``null`` = not loaded /
+  // not applicable (e.g. a freshly dropped local file).
+  const [noTextLayer, setNoTextLayer] = useState<{ count: number; pages: number[] } | null>(null);
+  const [noTextBannerDismissed, setNoTextBannerDismissed] = useState(false);
   const activeProjectId = useProjectContextStore((s) => s.activeProjectId);
   const activeProjectName = useProjectContextStore((s) => s.activeProjectName);
   const effectiveProjectId = projectId || activeProjectId || undefined;
@@ -517,8 +556,14 @@ export default function TakeoffViewerModule({
     documentId: visionDocumentId,
     measurements,
     setMeasurements: (ms) => setMeasurements(ms),
+    // Per-page scale: the hook persists the whole page-scale model and
+    // migrates a legacy single-scale document into the default on load.
+    pageScales,
+    setPageScales: (ps) => setPageScales(ps),
+    // The current page's effective scale is still sent on each measurement
+    // (scale_pixels_per_unit) so the server-side B8 recompute uses the same
+    // ratio the row was drawn at.
     scale,
-    setScale: (s) => setScale(s),
     projectId: effectiveProjectId,
   });
 
@@ -681,6 +726,35 @@ export default function TakeoffViewerModule({
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialPdfUrl, initialPdfName]);
+
+  /* ── Fetch server-side document metadata (text-layer audit) ───────── */
+  // When a PDF is opened from the server (filmstrip / deep link) the URL is
+  // ``/v1/takeoff/documents/{id}/download/``. We pull the document metadata so
+  // the viewer can flag pages that came back with no text layer (likely
+  // scanned drawings that need OCR). Best-effort: any failure leaves the
+  // banner hidden rather than blocking the drawing.
+  useEffect(() => {
+    setNoTextLayer(null);
+    setNoTextBannerDismissed(false);
+    if (!initialPdfUrl) return;
+    const match = initialPdfUrl.match(/\/documents\/([^/?#]+)/);
+    const docId = match?.[1];
+    if (!docId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const meta = await takeoffApi.getDocument(decodeURIComponent(docId));
+        if (cancelled || !meta) return;
+        const count = meta.pages_without_text ?? 0;
+        if (count > 0) {
+          setNoTextLayer({ count, pages: meta.pages_without_text_list ?? [] });
+        }
+      } catch {
+        /* metadata is advisory - ignore and leave the banner hidden */
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [initialPdfUrl]);
 
   /* ── Warn on unsaved changes (tab close / navigation) ────────────── */
 
@@ -884,15 +958,32 @@ export default function TakeoffViewerModule({
           ctx.lineTo(pt.x * dpr * zoom, pt.y * dpr * zoom);
         }
         ctx.closePath();
-        ctx.globalAlpha = 0.15;
-        ctx.fill();
-        ctx.globalAlpha = 1;
-        ctx.stroke();
+        // An opening deduction (area void) renders in a warning red with a
+        // dashed outline so the estimator can see at a glance which areas are
+        // being subtracted from the net.
+        const isVoid = m.type === 'area' && m.isDeduction;
+        if (isVoid) {
+          ctx.save();
+          ctx.fillStyle = '#ef4444';
+          ctx.strokeStyle = '#ef4444';
+          ctx.globalAlpha = 0.18;
+          ctx.fill();
+          ctx.globalAlpha = 1;
+          ctx.setLineDash([6 * dpr, 4 * dpr]);
+          ctx.stroke();
+          ctx.restore();
+        } else {
+          ctx.globalAlpha = 0.15;
+          ctx.fill();
+          ctx.globalAlpha = 1;
+          ctx.stroke();
+        }
         // Measurement value label at centroid
         const cx = m.points.reduce((s, p) => s + p.x, 0) / m.points.length * dpr * zoom;
         const cy = m.points.reduce((s, p) => s + p.y, 0) / m.points.length * dpr * zoom;
         ctx.font = `${12 * dpr}px sans-serif`;
-        ctx.fillText(m.label, cx, cy);
+        // Prefix a minus so the on-canvas number reads as a subtraction.
+        ctx.fillText(isVoid ? `- ${m.label}` : m.label, cx, cy);
         // Annotation above centroid
         drawAnnotationLabel(m.annotation, cx, cy - 14 * dpr, color);
       }
@@ -2159,8 +2250,16 @@ export default function TakeoffViewerModule({
       const effScale = res.scale_ratio ? presetScale(res.scale_ratio) : scale;
       if (res.scale_ratio && !effScale.invalid) {
         setScale(effScale);
-        setIsCalibrated(true);
-        setLastCalibration(null);
+        // setScale targets the current page and marks it calibrated
+        // (isCalibrated derives from pageIsCalibrated). Drop any manual
+        // calibration badge for this page: the scale came from auto
+        // room-detection, not a 2-point calibration. (v8.2 per-page model;
+        // the map holds non-null badges so we delete the key rather than null.)
+        setLastCalibrationByPage((prev) => {
+          const next = { ...prev };
+          delete next[currentPage];
+          return next;
+        });
       }
 
       const proposals = await takeoffApi.planRead.proposals(res.run_id);
@@ -2233,23 +2332,25 @@ export default function TakeoffViewerModule({
    *  it's clear the conversion was honoured. */
   const handleCalibrationConfirm = useCallback(
     (nextScale: ScaleConfig, entry?: { realLength: number; unit: CalibrationUnit }) => {
+      // setScale targets the CURRENT page; that also marks the page as
+      // calibrated (isCalibrated derives from pageIsCalibrated).
+      const page = currentPage;
       setScale(nextScale);
       setShowCalibrationDialog(false);
       setScalePoints([]);
-      setIsCalibrated(true);
       const meters = calibrationPixels > 0 ? calibrationPixels / nextScale.pixelsPerUnit : 0;
       // Prefer the user's own entry/unit; fall back to derived metres.
       const badge = entry ?? { realLength: meters, unit: 'm' as const };
-      setLastCalibration(badge);
+      setLastCalibrationByPage((prev) => ({ ...prev, [page]: badge }));
       const metricSuffix =
         badge.unit === 'm' ? '' : ` (${meters.toFixed(2)} m)`;
       addToast({
         type: 'success',
         title: t('takeoff_viewer.calibrated', { defaultValue: 'Scale calibrated' }),
-        message: `${formatScaleRatio(nextScale)} · ${badge.realLength} ${badge.unit}${metricSuffix}`,
+        message: `${formatScaleRatio(nextScale)} · ${badge.realLength} ${badge.unit}${metricSuffix} · ${t('takeoff_viewer.calibrated_page', { defaultValue: 'page {{page}}', page })}`,
       });
     },
-    [addToast, t, calibrationPixels],
+    [addToast, t, calibrationPixels, currentPage, setScale],
   );
 
   const handleCalibrationCancel = useCallback(() => {
@@ -2257,18 +2358,29 @@ export default function TakeoffViewerModule({
     setScalePoints([]);
   }, []);
 
-  /* ── Recalculate measurements when scale changes ───────────────── */
+  /* ── Recalculate measurements when a PAGE'S scale changes ─────────────
+   * Per-page scale (per sheet) means a calibration on page 3 must re-derive
+   * only page-3 measurements, each against page 3's scale - not the whole
+   * document against one global scale. We diff the previous vs current
+   * ``pageScales`` and recompute every measurement whose OWN page's
+   * effective scale moved, using that page's old scale (to re-project
+   * volume depth) and new scale (for area / length). */
 
-  const scaleRef = useRef(scale);
+  const pageScalesRef = useRef(pageScales);
   useEffect(() => {
-    const prev = scaleRef.current;
-    scaleRef.current = scale;
-    // Skip if scale hasn't actually changed (same pixelsPerUnit)
-    if (prev.pixelsPerUnit === scale.pixelsPerUnit) return;
+    const prevPS = pageScalesRef.current;
+    pageScalesRef.current = pageScales;
+    if (prevPS === pageScales) return;
     setMeasurements((ms) =>
       ms.map((m) => {
         if (m.type === 'count') return m; // counts are scale-independent
         if (isAnnotationType(m.type)) return m; // annotations are scale-independent
+        // Each measurement uses ITS page's scale, old vs new. Skip rows on
+        // pages whose effective scale did not change so we never churn a
+        // sheet the user did not touch.
+        const prev = scaleForPage(prevPS, m.page);
+        const scale = scaleForPage(pageScales, m.page);
+        if (prev.pixelsPerUnit === scale.pixelsPerUnit) return m;
         if (m.type === 'distance' && m.points.length === 2) {
           const dist = pixelDistance(m.points[0]!.x, m.points[0]!.y, m.points[1]!.x, m.points[1]!.y);
           const realDist = toRealDistance(dist, scale);
@@ -2320,7 +2432,7 @@ export default function TakeoffViewerModule({
         return m;
       }),
     );
-  }, [scale]);
+  }, [pageScales]);
 
   /* ── Zoom controls ───────────────────────────────────────────────── */
 
@@ -2471,12 +2583,18 @@ export default function TakeoffViewerModule({
     for (const [groupName, groupMs] of Object.entries(byGroup)) {
       for (const m of groupMs) {
         const escapeCsv = (s: string) => `"${s.replace(/"/g, '""')}"`;
+        // Opening deductions are stored as a positive gross area but net out
+        // of the totals (net = gross - openings). Mirror the Excel and ledger
+        // exports: show the row value as negative and flag the type, so the
+        // CSV rows and subtotals reconcile instead of reporting inflated gross.
+        const signedValue = m.isDeduction ? -m.value : m.value;
+        const typeLabel = m.isDeduction ? `${m.type} (deduction)` : m.type;
         rows.push(
           [
             escapeCsv(groupName),
-            escapeCsv(m.type),
+            escapeCsv(typeLabel),
             escapeCsv(m.annotation),
-            m.value.toFixed(3),
+            signedValue.toFixed(3),
             escapeCsv(m.unit),
             String(m.page),
           ].join(','),
@@ -2487,17 +2605,20 @@ export default function TakeoffViewerModule({
       const areaMs = groupMs.filter((m) => m.type === 'area');
       const volMs = groupMs.filter((m) => m.type === 'volume');
       const countMs = groupMs.filter((m) => m.type === 'count');
+      // Subtotals net out opening deductions (gross - openings), matching the
+      // Excel subtotal and the legend. Only area carries the flag today, but
+      // the sign-flip is applied uniformly so it stays correct if that changes.
       if (distMs.length > 0) {
-        rows.push(`"${groupName} - Subtotal","distance","Total distance",${distMs.reduce((s, m) => s + m.value, 0).toFixed(3)},"${distMs[0]!.unit}",""`);
+        rows.push(`"${groupName} - Subtotal","distance","Total distance",${distMs.reduce((s, m) => s + (m.isDeduction ? -m.value : m.value), 0).toFixed(3)},"${distMs[0]!.unit}",""`);
       }
       if (areaMs.length > 0) {
-        rows.push(`"${groupName} - Subtotal","area","Total area",${areaMs.reduce((s, m) => s + m.value, 0).toFixed(3)},"${areaMs[0]!.unit}",""`);
+        rows.push(`"${groupName} - Subtotal","area","Total area",${areaMs.reduce((s, m) => s + (m.isDeduction ? -m.value : m.value), 0).toFixed(3)},"${areaMs[0]!.unit}",""`);
       }
       if (volMs.length > 0) {
-        rows.push(`"${groupName} - Subtotal","volume","Total volume",${volMs.reduce((s, m) => s + m.value, 0).toFixed(3)},"${volMs[0]!.unit}",""`);
+        rows.push(`"${groupName} - Subtotal","volume","Total volume",${volMs.reduce((s, m) => s + (m.isDeduction ? -m.value : m.value), 0).toFixed(3)},"${volMs[0]!.unit}",""`);
       }
       if (countMs.length > 0) {
-        rows.push(`"${groupName} - Subtotal","count","Total count",${countMs.reduce((s, m) => s + m.value, 0).toFixed(0)},"pcs",""`);
+        rows.push(`"${groupName} - Subtotal","count","Total count",${countMs.reduce((s, m) => s + (m.isDeduction ? -m.value : m.value), 0).toFixed(0)},"pcs",""`);
       }
     }
     const csvContent = rows.join('\n');
@@ -4169,9 +4290,9 @@ export default function TakeoffViewerModule({
               {/* RIGHT — Hero text + supported formats cards */}
               <div className="flex flex-col justify-center gap-4">
                 <div>
-                  <h1 className="text-2xl font-bold text-content-primary tracking-tight leading-tight">
+                  <h2 className="text-2xl font-bold text-content-primary tracking-tight leading-tight">
                     {t('takeoff.landing_hero_title', { defaultValue: 'PDF Takeoff' })}
-                  </h1>
+                  </h2>
                   <p className="text-base text-content-secondary mt-3 leading-relaxed">
                     {t('takeoff.landing_hero_subtitle', {
                       defaultValue: 'Click-to-measure on any drawing \u2014 lengths, areas, counts \u2014 with AI that suggests quantities and sends them straight into your BOQ.',
@@ -4582,6 +4703,49 @@ export default function TakeoffViewerModule({
               </label>
               </div>
             </div>
+
+            {/* No-text-layer banner (8.2.0) — surfaces how many pages came back
+                with no text layer (usually scanned drawings) so a partly- or
+                fully-scanned PDF is clearly flagged for OCR instead of being
+                silently treated as empty. Dismissible per opened document. */}
+            {noTextLayer && noTextLayer.count > 0 && !noTextBannerDismissed && (
+              <div
+                className="mb-2 flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-800 dark:border-amber-700/60 dark:bg-amber-900/20 dark:text-amber-200"
+                role="status"
+                data-testid="takeoff-needs-ocr-banner"
+              >
+                <Scan size={15} className="mt-0.5 shrink-0" aria-hidden="true" />
+                <div className="flex-1">
+                  <span className="font-semibold">
+                    {totalPages > 0 && noTextLayer.count >= totalPages
+                      ? t('takeoff.needs_ocr_banner_all', {
+                          defaultValue: 'No text layer found - this looks like a scanned drawing and likely needs OCR.',
+                        })
+                      : t('takeoff.needs_ocr_banner', {
+                          defaultValue: '{{n}} of {{total}} pages have no text layer and likely need OCR.',
+                          n: noTextLayer.count,
+                          total: totalPages || noTextLayer.count,
+                        })}
+                  </span>
+                  {noTextLayer.pages.length > 0 && noTextLayer.pages.length <= 30 && (
+                    <span className="ml-1 opacity-80">
+                      {t('takeoff.needs_ocr_banner_pages', {
+                        defaultValue: 'Pages: {{pages}}',
+                        pages: noTextLayer.pages.join(', '),
+                      })}
+                    </span>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setNoTextBannerDismissed(true)}
+                  className="shrink-0 rounded p-0.5 text-amber-700 hover:bg-amber-100 dark:text-amber-300 dark:hover:bg-amber-900/40"
+                  aria-label={t('takeoff.needs_ocr_banner_dismiss', { defaultValue: 'Dismiss' })}
+                >
+                  <X size={14} />
+                </button>
+              </div>
+            )}
 
             {/* Canvas — the PDF render surface is a genuinely-needed internal
                 scroll region (drawings are far larger than any viewport).
@@ -5136,6 +5300,28 @@ export default function TakeoffViewerModule({
                   </div>
                 </div>
 
+                {/* Opening deduction toggle - area measurements only. A
+                    deduction (door / window / cut-out) is subtracted from the
+                    group's gross area so a net area = gross - openings. */}
+                {selectedMeasurement.type === 'area' && (
+                  <label
+                    className="flex items-center gap-2 rounded border border-border/60 bg-surface-secondary/40 px-2 py-1.5 cursor-pointer"
+                    data-testid="prop-deduction-toggle"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={Boolean(selectedMeasurement.isDeduction)}
+                      onChange={(e) => updateSelectedMeasurement({ isDeduction: e.target.checked })}
+                      className="h-3.5 w-3.5 accent-semantic-error"
+                    />
+                    <span className="text-[11px] text-content-secondary">
+                      {t('takeoff_viewer.prop_deduction', {
+                        defaultValue: 'Opening / deduction (subtract from net area)',
+                      })}
+                    </span>
+                  </label>
+                )}
+
                 {/* Annotation / label */}
                 <div>
                   <label className="text-[10px] font-semibold text-content-tertiary block mb-0.5">
@@ -5264,6 +5450,7 @@ export default function TakeoffViewerModule({
                       onClick={saveNow}
                       className="p-1 rounded hover:bg-surface-secondary text-content-tertiary transition-colors"
                       title={t('takeoff_viewer.save_measurements', { defaultValue: 'Save measurements' })}
+                      aria-label={t('takeoff_viewer.save_measurements', { defaultValue: 'Save measurements' })}
                     >
                       <Save className="h-3.5 w-3.5" />
                     </button>
@@ -5307,6 +5494,14 @@ export default function TakeoffViewerModule({
                         <button
                           onClick={() => toggleGroupCollapse(groupName)}
                           className="p-0.5 rounded hover:bg-surface-secondary text-content-tertiary transition-colors"
+                          aria-label={isCollapsed
+                            ? t('takeoff_viewer.expand_group', { defaultValue: 'Expand group' })
+                            : t('takeoff_viewer.collapse_group', { defaultValue: 'Collapse group' })
+                          }
+                          title={isCollapsed
+                            ? t('takeoff_viewer.expand_group', { defaultValue: 'Expand group' })
+                            : t('takeoff_viewer.collapse_group', { defaultValue: 'Collapse group' })
+                          }
                         >
                           {isCollapsed ? <ChevronDown size={10} /> : <ChevronUp size={10} />}
                         </button>
@@ -5492,6 +5687,8 @@ export default function TakeoffViewerModule({
                                     <button
                                       onClick={() => setLinkingMeasurementId(null)}
                                       className="text-content-tertiary hover:text-content-primary transition-colors"
+                                      aria-label={t('common.close', { defaultValue: 'Close' })}
+                                      title={t('common.close', { defaultValue: 'Close' })}
                                     >
                                       <X size={10} />
                                     </button>
@@ -5739,6 +5936,14 @@ export default function TakeoffViewerModule({
                         <button
                           onClick={() => toggleGroupCollapse('__annotations__')}
                           className="p-0.5 rounded hover:bg-surface-secondary text-content-tertiary transition-colors"
+                          aria-label={annoCollapsed
+                            ? t('takeoff_viewer.expand_group', { defaultValue: 'Expand group' })
+                            : t('takeoff_viewer.collapse_group', { defaultValue: 'Collapse group' })
+                          }
+                          title={annoCollapsed
+                            ? t('takeoff_viewer.expand_group', { defaultValue: 'Expand group' })
+                            : t('takeoff_viewer.collapse_group', { defaultValue: 'Collapse group' })
+                          }
                         >
                           {annoCollapsed ? <ChevronDown size={10} /> : <ChevronUp size={10} />}
                         </button>

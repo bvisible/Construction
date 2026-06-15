@@ -66,8 +66,10 @@ import {
   SkeletonTable,
   DismissibleInfo,
   IntroRichText,
+  ModuleGuideButton,
 } from '@/shared/ui';
 import { PageHeader } from '@/shared/ui/PageHeader';
+import { crmGuide } from './crmGuide';
 import {
   WideModal,
   WideModalSection,
@@ -349,15 +351,21 @@ export function CRMPage() {
             'Drag deals across the pipeline, log activity in a click. People come from Contacts, won deals link to Projects.',
         })}
         actions={
-          view !== 'insights' && (
-            <Button
-              variant="primary"
-              icon={<Plus size={14} />}
-              onClick={() => setCreateOpen(true)}
-            >
-              {newLabel}
-            </Button>
-          )
+          <>
+            <ModuleGuideButton
+              content={crmGuide}
+              onCta={() => setCreateOpen(true)}
+            />
+            {view !== 'insights' && (
+              <Button
+                variant="primary"
+                icon={<Plus size={14} />}
+                onClick={() => setCreateOpen(true)}
+              >
+                {newLabel}
+              </Button>
+            )}
+          </>
         }
       />
 
@@ -775,6 +783,7 @@ function DealCard({
   onClick?: () => void;
   dragging?: boolean;
 }) {
+  const { t } = useTranslation();
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: opp.id,
   });
@@ -790,7 +799,7 @@ function DealCard({
       <div className="flex items-start gap-1.5">
         <button
           type="button"
-          aria-label="drag"
+          aria-label={t('crm.drag_deal', { defaultValue: 'Drag to move deal' })}
           className="mt-0.5 cursor-grab text-content-tertiary opacity-0 group-hover:opacity-100 touch-none"
           {...attributes}
           {...listeners}

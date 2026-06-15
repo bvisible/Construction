@@ -945,7 +945,10 @@ async def update_progress_claim(
     service = ContractsService(session)
     fields = data.model_dump(exclude_unset=True)
     if "metadata" in fields:
-        fields["metadata_"] = fields.pop("metadata")
+        _incoming = fields.pop("metadata")
+        fields["metadata_"] = (
+            {**(getattr(obj, "metadata_", None) or {}), **_incoming} if isinstance(_incoming, dict) else _incoming
+        )
     # Status changes must go through the lifecycle transition endpoints
     # (submit / approve / certify / reject / mark-paid). They enforce the
     # claim FSM and emit the events finance / dashboards subscribe to; a raw

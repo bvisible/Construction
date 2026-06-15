@@ -178,7 +178,12 @@ class TransmittalService:
 
         fields = data.model_dump(exclude_unset=True, exclude={"recipients", "items"})
         if "metadata" in fields:
-            fields["metadata_"] = fields.pop("metadata")
+            _incoming = fields.pop("metadata")
+            fields["metadata_"] = (
+                {**(getattr(transmittal, "metadata_", None) or {}), **_incoming}
+                if isinstance(_incoming, dict)
+                else _incoming
+            )
 
         if fields:
             await self.repo.update_fields(transmittal_id, **fields)

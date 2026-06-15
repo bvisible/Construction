@@ -149,15 +149,21 @@ export function EditMarkupModal({
 
   const trimmedLabel = label.trim();
   const trimmedText = text.trim();
-  const canSubmit = trimmedLabel.length > 0 && !updateMut.isPending;
+  // Mirror the creation contract (AddMarkupModal): a markup is valid with
+  // either a label or text. Requiring a label here used to lock text-only
+  // markups out of editing entirely.
+  const canSubmit = (trimmedLabel.length > 0 || trimmedText.length > 0) && !updateMut.isPending;
 
   const handleSubmit = () => {
     if (!canSubmit) return;
     const payload: UpdateMarkupPayload = {
-      label: trimmedLabel,
-      // Send empty string to clear the field server-side rather than
-      // sending undefined (which is "no change" in PATCH semantics).
-      text: trimmedText,
+      // Pass null (not "") when empty so the column is cleared to NULL
+      // rather than stored as an empty string. The `text` and `label`
+      // columns are nullable and the rest of the app treats NULL as
+      // "no value". Sending undefined would mean "no change" in PATCH
+      // semantics, so we send null explicitly to clear.
+      label: trimmedLabel || null,
+      text: trimmedText || null,
       color,
       // M3 — re-assign (or clear) the markup owner. Empty select value ⇒
       // null on the wire (Unassigned); a UUID sets the assignee.
@@ -201,7 +207,6 @@ export function EditMarkupModal({
               className="block text-xs font-medium text-content-secondary mb-1.5"
             >
               {t('markups.label_field', { defaultValue: 'Title' })}
-              <span className="text-semantic-error ml-0.5">*</span>
             </label>
             <input
               id="edit-markup-label"
@@ -306,6 +311,13 @@ export function EditMarkupModal({
 
         {/* Footer */}
         <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-border-light">
+          {!trimmedLabel && !trimmedText && (
+            <span className="mr-auto text-2xs text-content-tertiary">
+              {t('markups.label_or_text_required', {
+                defaultValue: 'Enter a title or description to save.',
+              })}
+            </span>
+          )}
           <Button variant="ghost" size="sm" onClick={onClose} disabled={updateMut.isPending}>
             {t('common.cancel', { defaultValue: 'Cancel' })}
           </Button>

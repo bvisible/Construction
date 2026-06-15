@@ -971,10 +971,13 @@ class CarbonService:
         )
 
     async def update_epd(self, epd_id: uuid.UUID, data: EPDRecordUpdate) -> EPDRecord:
-        await self.get_epd(epd_id)
+        epd = await self.get_epd(epd_id)
         fields = data.model_dump(exclude_unset=True)
         if "metadata" in fields:
-            fields["metadata_"] = fields.pop("metadata")
+            _incoming = fields.pop("metadata")
+            fields["metadata_"] = (
+                {**(getattr(epd, "metadata_", None) or {}), **_incoming} if isinstance(_incoming, dict) else _incoming
+            )
         if fields:
             await self.epd_repo.update_fields(epd_id, **fields)
         return await self.get_epd(epd_id)
@@ -1039,10 +1042,15 @@ class CarbonService:
         factor_id: uuid.UUID,
         data: MaterialCarbonFactorUpdate,
     ) -> MaterialCarbonFactor:
-        await self.get_factor(factor_id)
+        factor = await self.get_factor(factor_id)
         fields = data.model_dump(exclude_unset=True)
         if "metadata" in fields:
-            fields["metadata_"] = fields.pop("metadata")
+            _incoming = fields.pop("metadata")
+            fields["metadata_"] = (
+                {**(getattr(factor, "metadata_", None) or {}), **_incoming}
+                if isinstance(_incoming, dict)
+                else _incoming
+            )
         if fields:
             await self.factor_repo.update_fields(factor_id, **fields)
         return await self.get_factor(factor_id)
@@ -1135,7 +1143,10 @@ class CarbonService:
             )
         fields = data.model_dump(exclude_unset=True)
         if "metadata" in fields:
-            fields["metadata_"] = fields.pop("metadata")
+            _incoming = fields.pop("metadata")
+            fields["metadata_"] = (
+                {**(getattr(inv, "metadata_", None) or {}), **_incoming} if isinstance(_incoming, dict) else _incoming
+            )
         if fields:
             await self.inventory_repo.update_fields(inventory_id, **fields)
         return await self.get_inventory(inventory_id)
@@ -1277,10 +1288,13 @@ class CarbonService:
         entry_id: uuid.UUID,
         data: EmbodiedCarbonEntryUpdate,
     ) -> EmbodiedCarbonEntry:
-        await self.get_embodied_entry(entry_id)
+        entry = await self.get_embodied_entry(entry_id)
         fields = data.model_dump(exclude_unset=True)
         if "metadata" in fields:
-            fields["metadata_"] = fields.pop("metadata")
+            _incoming = fields.pop("metadata")
+            fields["metadata_"] = (
+                {**(getattr(entry, "metadata_", None) or {}), **_incoming} if isinstance(_incoming, dict) else _incoming
+            )
         if fields:
             await self.embodied_repo.update_fields(entry_id, **fields)
         return await self.get_embodied_entry(entry_id)
@@ -1357,10 +1371,13 @@ class CarbonService:
         entry_id: uuid.UUID,
         data: Scope1EntryUpdate,
     ) -> Scope1Entry:
-        await self.get_scope1(entry_id)
+        entry = await self.get_scope1(entry_id)
         fields = data.model_dump(exclude_unset=True)
         if "metadata" in fields:
-            fields["metadata_"] = fields.pop("metadata")
+            _incoming = fields.pop("metadata")
+            fields["metadata_"] = (
+                {**(getattr(entry, "metadata_", None) or {}), **_incoming} if isinstance(_incoming, dict) else _incoming
+            )
         if fields:
             await self.scope1_repo.update_fields(entry_id, **fields)
         return await self.get_scope1(entry_id)
@@ -1402,10 +1419,13 @@ class CarbonService:
         entry_id: uuid.UUID,
         data: Scope2EntryUpdate,
     ) -> Scope2Entry:
-        await self.get_scope2(entry_id)
+        entry = await self.get_scope2(entry_id)
         fields = data.model_dump(exclude_unset=True)
         if "metadata" in fields:
-            fields["metadata_"] = fields.pop("metadata")
+            _incoming = fields.pop("metadata")
+            fields["metadata_"] = (
+                {**(getattr(entry, "metadata_", None) or {}), **_incoming} if isinstance(_incoming, dict) else _incoming
+            )
         if fields:
             await self.scope2_repo.update_fields(entry_id, **fields)
         return await self.get_scope2(entry_id)
@@ -1444,10 +1464,13 @@ class CarbonService:
         entry_id: uuid.UUID,
         data: Scope3EntryUpdate,
     ) -> Scope3Entry:
-        await self.get_scope3(entry_id)
+        entry = await self.get_scope3(entry_id)
         fields = data.model_dump(exclude_unset=True)
         if "metadata" in fields:
-            fields["metadata_"] = fields.pop("metadata")
+            _incoming = fields.pop("metadata")
+            fields["metadata_"] = (
+                {**(getattr(entry, "metadata_", None) or {}), **_incoming} if isinstance(_incoming, dict) else _incoming
+            )
         if fields:
             await self.scope3_repo.update_fields(entry_id, **fields)
         return await self.get_scope3(entry_id)
@@ -1491,7 +1514,12 @@ class CarbonService:
         target = await self.get_target(target_id)
         fields = data.model_dump(exclude_unset=True)
         if "metadata" in fields:
-            fields["metadata_"] = fields.pop("metadata")
+            _incoming = fields.pop("metadata")
+            fields["metadata_"] = (
+                {**(getattr(target, "metadata_", None) or {}), **_incoming}
+                if isinstance(_incoming, dict)
+                else _incoming
+            )
         if fields:
             await self.target_repo.update_fields(target_id, **fields)
         refreshed = await self.get_target(target_id)
@@ -1630,10 +1658,15 @@ class CarbonService:
         report_id: uuid.UUID,
         data: SustainabilityReportUpdate,
     ) -> SustainabilityReport:
-        await self.get_report(report_id)
+        report = await self.get_report(report_id)
         fields = data.model_dump(exclude_unset=True)
         if "metadata" in fields:
-            fields["metadata_"] = fields.pop("metadata")
+            _incoming = fields.pop("metadata")
+            fields["metadata_"] = (
+                {**(getattr(report, "metadata_", None) or {}), **_incoming}
+                if isinstance(_incoming, dict)
+                else _incoming
+            )
         if fields:
             await self.report_repo.update_fields(report_id, **fields)
         return await self.get_report(report_id)

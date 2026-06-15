@@ -8709,7 +8709,6 @@
       "module_category": "core",
       "files": [
         "__init__.py",
-        "_opencde_mount.py",
         "bcf_xml.py",
         "import_service.py",
         "manifest.py",

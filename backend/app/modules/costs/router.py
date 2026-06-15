@@ -734,8 +734,13 @@ async def search_cost_items(
                         skip_count_via_cache = True
                         break
             else:
-                cached_total = sum(int(e.get("count", 0)) for e in stats)
-                skip_count_via_cache = True
+                # No region filter: the per-region sum omits region-less rows,
+                # so use the cached grand total (which includes them). Only skip
+                # the COUNT when that accurate total is available.
+                total_active = _region_cache.get("total_active")
+                if isinstance(total_active, int):
+                    cached_total = total_active
+                    skip_count_via_cache = True
 
     if skip_count_via_cache:
         items, _, has_more, next_cursor = await service.search_costs_paginated(
@@ -835,7 +840,7 @@ async def search_cost_items(
 
 import time as _time
 
-_region_cache: dict[str, Any] = {"regions": None, "stats": None, "categories": None, "ts": 0}
+_region_cache: dict[str, Any] = {"regions": None, "stats": None, "categories": None, "total_active": None, "ts": 0}
 # 1-hour TTL on the regions/stats/categories aggregates. Originally 30 s,
 # bumped to 5 min, then to 60 min after the BOQ "Add from Database" modal
 # was reported as taking 18 seconds to open on a cold backend. With 100 k+
@@ -918,6 +923,19 @@ async def region_stats(
     )
     stats = [{"region": row[0], "count": row[1]} for row in result.all()]
     _region_cache["stats"] = stats
+    # The per-region stats above deliberately exclude region-less rows (region
+    # IS NULL / ""). The unfiltered search counts ALL active items, so using the
+    # sum of per-region counts as the no-region total undercounts by exactly the
+    # region-less items. Cache the true grand total (regioned + region-less) so
+    # the search fast-path stays accurate without losing the count optimisation.
+    region_less = (
+        await session.execute(
+            select(func.count(CostItem.id))
+            .where(CostItem.is_active.is_(True))
+            .where((CostItem.region.is_(None)) | (CostItem.region == ""))
+        )
+    ).scalar_one()
+    _region_cache["total_active"] = sum(s["count"] for s in stats) + int(region_less or 0)
     _region_cache["ts"] = now
     return stats
 
@@ -2524,15 +2542,22 @@ async def list_cost_catalogs(
 async def update_cost_catalog(
     catalog_id: uuid.UUID,
     data: CostCatalogUpdate,
-    _user_id: CurrentUserId,
+    user: CurrentUserPayload,
     service: CostCatalogService = Depends(_get_catalog_service),
 ) -> CostCatalogResponse:
     """Update a catalog's name / description / currency.
+
+    Scoped by ownership (``CostCatalog.created_by``): a non-owner caller
+    gets a 404 (existence is not leaked), matching the module convention.
+    Admins bypass the ownership check.
 
     A currency change is rejected (409) while the catalog has items: the
     stored rates are denominated in the old currency and would be silently
     corrupted by a re-label.
     """
+    owner_id = _parse_user_uuid((user or {}).get("sub"))
+    is_admin = (user or {}).get("role") == "admin"
+    await service.get_owned_catalog(catalog_id, owner_id=owner_id, is_admin=is_admin)
     catalog = await service.update_catalog(catalog_id, data)
     return _catalog_response(catalog, await service.count_items(catalog_id))
 
@@ -2543,7 +2568,7 @@ async def update_cost_catalog(
 )
 async def delete_cost_catalog(
     catalog_id: uuid.UUID,
-    _user_id: CurrentUserId,
+    user: CurrentUserPayload,
     mode: str = Query(
         default="keep_items",
         pattern="^(keep_items|delete_items)$",
@@ -2554,7 +2579,15 @@ async def delete_cost_catalog(
     ),
     service: CostCatalogService = Depends(_get_catalog_service),
 ) -> dict[str, Any]:
-    """Delete a catalog, either keeping or soft-deleting its items."""
+    """Delete a catalog, either keeping or soft-deleting its items.
+
+    Scoped by ownership (``CostCatalog.created_by``): a non-owner caller
+    gets a 404 (existence is not leaked), matching the module convention.
+    Admins bypass the ownership check.
+    """
+    owner_id = _parse_user_uuid((user or {}).get("sub"))
+    is_admin = (user or {}).get("role") == "admin"
+    await service.get_owned_catalog(catalog_id, owner_id=owner_id, is_admin=is_admin)
     affected = await service.delete_catalog(catalog_id, mode=mode)
     _invalidate_cost_cache()
     return {"deleted": str(catalog_id), "mode": mode, "items_affected": affected}
@@ -2567,10 +2600,14 @@ async def delete_cost_catalog(
 async def export_cost_catalog_excel(
     catalog_id: uuid.UUID,
     session: SessionDep,
-    _user_id: CurrentUserId,
+    user: CurrentUserPayload,
     service: CostCatalogService = Depends(_get_catalog_service),
 ) -> StreamingResponse:
     """Export ONE catalog's items as an Excel file.
+
+    Scoped by ownership (``CostCatalog.created_by``): a non-owner caller
+    gets a 404 (existence is not leaked) so this never streams another
+    user's rate list. Admins bypass the ownership check.
 
     Columns: code, description, unit, rate, currency, classification.
     Text cells go through ``_excel_safe`` so user-supplied values can not
@@ -2579,7 +2616,9 @@ async def export_cost_catalog_excel(
     """
     from openpyxl import Workbook
 
-    catalog = await service.get_catalog(catalog_id)
+    owner_id = _parse_user_uuid((user or {}).get("sub"))
+    is_admin = (user or {}).get("role") == "admin"
+    catalog = await service.get_owned_catalog(catalog_id, owner_id=owner_id, is_admin=is_admin)
 
     wb = Workbook(write_only=True)
     ws = wb.create_sheet(title="Catalog")
@@ -3235,7 +3274,7 @@ def _validate_cost_upload(content: bytes, filename: str) -> bool:
     dependencies=[Depends(RequirePermission("costs.create"))],
 )
 async def preview_cost_file(
-    _user_id: CurrentUserId,
+    user: CurrentUserPayload,
     file: UploadFile = File(..., description="Excel (.xlsx) or CSV (.csv) file"),
     catalog_id: str | None = Form(
         default=None,
@@ -3292,7 +3331,13 @@ async def preview_cost_file(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=f"catalog_id is not a valid UUID: {catalog_id!r}",
             ) from exc
-        catalog = await catalog_service.get_catalog(catalog_uuid)
+        # Ownership gate: echoing a catalog's name/currency must require the
+        # caller to own it (or be admin), matching the import endpoint. The
+        # unscoped get_catalog used here leaked any catalog's name + currency to
+        # any holder of costs.create who guessed its UUID.
+        owner_uuid = _parse_user_uuid((user or {}).get("sub"))
+        is_admin = (user or {}).get("role") == "admin"
+        catalog = await catalog_service.get_owned_catalog(catalog_uuid, owner_id=owner_uuid, is_admin=is_admin)
         catalog_info = {"id": str(catalog.id), "name": catalog.name, "currency": catalog.currency}
 
     return {

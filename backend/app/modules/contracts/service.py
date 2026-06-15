@@ -708,7 +708,12 @@ class ContractsService:
         contract = await self.get_contract(contract_id)
         fields: dict[str, Any] = data.model_dump(exclude_unset=True)
         if "metadata" in fields:
-            fields["metadata_"] = fields.pop("metadata")
+            _incoming = fields.pop("metadata")
+            fields["metadata_"] = (
+                {**(getattr(contract, "metadata_", None) or {}), **_incoming}
+                if isinstance(_incoming, dict)
+                else _incoming
+            )
         # Status changes must go through the lifecycle transition endpoints
         # (state-machine validation + signed_at stamping + event emission).
         # A raw PATCH would skip all of that and corrupt the lifecycle.
@@ -1286,7 +1291,10 @@ class ContractsService:
             raise HTTPException(status_code=404, detail="Contract line not found")
         fields = data.model_dump(exclude_unset=True)
         if "metadata" in fields:
-            fields["metadata_"] = fields.pop("metadata")
+            _incoming = fields.pop("metadata")
+            fields["metadata_"] = (
+                {**(getattr(line, "metadata_", None) or {}), **_incoming} if isinstance(_incoming, dict) else _incoming
+            )
         # Recompute total if quantity / unit_rate changed.
         qty = Decimal(str(fields.get("quantity", line.quantity) or 0))
         rate = Decimal(str(fields.get("unit_rate", line.unit_rate) or 0))

@@ -14,7 +14,12 @@
 import { useState, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import {
+  useQuery,
+  useQueries,
+  useMutation,
+  useQueryClient,
+} from '@tanstack/react-query';
 import clsx from 'clsx';
 import {
   Building2,
@@ -43,6 +48,7 @@ import {
   RecoveryCard,
   Breadcrumb,
   ModuleHelpButton,
+  ModuleGuideButton,
   SkeletonGrid,
 } from '@/shared/ui';
 import {
@@ -64,8 +70,20 @@ import {
   type AccommodationKind,
 } from './api';
 import { HrAutobookModal } from './HrAutobookModal';
+import { accommodationGuide } from './accommodationGuide';
 
 type KindFilter = 'all' | AccommodationKind;
+
+/**
+ * Page size for the accommodation list. The list endpoint validates `limit`
+ * against an upper bound (<= PAGE_SIZE) and returns a plain array (no total),
+ * so we page client-side with `offset`: each "Load more" fetches the next
+ * PAGE_SIZE window as its own cached query and we concatenate them. When the
+ * last window comes back full we assume more rows may exist and keep the
+ * button. Requesting a single oversized `limit` would be rejected (422), so
+ * we never widen past PAGE_SIZE.
+ */
+const PAGE_SIZE = 200;
 
 const KIND_ICON: Record<AccommodationKind, typeof Building2> = {
   worker_camp: Tent,
@@ -98,12 +116,34 @@ export function AccommodationListPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [hrAutobookOpen, setHrAutobookOpen] = useState(false);
 
-  const accommodationsQuery = useQuery({
-    queryKey: ['accommodation', 'list'],
-    queryFn: () => listAccommodations({ limit: 200 }),
+  // How many PAGE_SIZE windows to request. "Load more" bumps it by one.
+  // Each window is a separate offset-paged query so the requested `limit`
+  // never exceeds PAGE_SIZE (the endpoint rejects anything larger with 422).
+  const [pageCount, setPageCount] = useState(1);
+
+  const pageQueries = useQueries({
+    queries: Array.from({ length: pageCount }, (_, i) => ({
+      queryKey: ['accommodation', 'list', i],
+      queryFn: () =>
+        listAccommodations({ limit: PAGE_SIZE, offset: i * PAGE_SIZE }),
+    })),
   });
-  const accommodations = accommodationsQuery.data ?? [];
-  const isLoading = accommodationsQuery.isLoading;
+
+  const accommodations = pageQueries.flatMap((q) => q.data ?? []);
+  const isLoading = pageQueries[0]?.isLoading ?? true;
+  const listErrorQuery = pageQueries.find((q) => q.isError);
+  const isError = Boolean(listErrorQuery);
+  const listError = listErrorQuery?.error ?? null;
+  const refetchAll = () => {
+    for (const q of pageQueries) void q.refetch();
+  };
+
+  // The endpoint returns no total, so we infer "more may exist" when the
+  // last window came back filled to PAGE_SIZE exactly.
+  const lastPage = pageQueries[pageQueries.length - 1]?.data ?? [];
+  const mayHaveMore = lastPage.length >= PAGE_SIZE;
+  const isFetchingMore =
+    pageQueries.some((q) => q.isFetching) && !isLoading;
 
   const { data: projects = [] } = useQuery({
     queryKey: ['projects', 'list'],
@@ -190,6 +230,7 @@ export function AccommodationListPage() {
         })}
         actions={
           <>
+            <ModuleGuideButton content={accommodationGuide} />
             <ModuleHelpButton tourId="accommodation" />
             <Button
               variant="ghost"
@@ -384,11 +425,8 @@ export function AccommodationListPage() {
       >
       {isLoading ? (
         <SkeletonGrid items={6} />
-      ) : accommodationsQuery.isError ? (
-        <RecoveryCard
-          error={accommodationsQuery.error}
-          onRetry={() => accommodationsQuery.refetch()}
-        />
+      ) : isError ? (
+        <RecoveryCard error={listError} onRetry={refetchAll} />
       ) : filtered.length === 0 ? (
         <EmptyState
           icon={<Building2 size={22} aria-hidden="true" />}
@@ -436,19 +474,57 @@ export function AccommodationListPage() {
           }
         />
       ) : (
-        <div
-          data-testid="accommodation-grid"
-          className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4"
-        >
-          {filtered.map((a) => (
-            <AccommodationCard
-              key={a.id}
-              a={a}
-              projectName={projectNameById.get(a.project_id)}
-              onOpen={() => navigate(`/accommodation/${a.id}`)}
-            />
-          ))}
-        </div>
+        <>
+          <div
+            data-testid="accommodation-grid"
+            className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4"
+          >
+            {filtered.map((a) => (
+              <AccommodationCard
+                key={a.id}
+                a={a}
+                projectName={projectNameById.get(a.project_id)}
+                onOpen={() => navigate(`/accommodation/${a.id}`)}
+              />
+            ))}
+          </div>
+
+          {/* Pagination footer — the list endpoint caps at PAGE_SIZE rows
+              per window, so we surface how many are loaded and offer a
+              "Load more" to widen the window. Hidden once everything fits. */}
+          {(mayHaveMore || pageCount > 1) && (
+            <div
+              data-testid="accommodation-pagination"
+              className="mt-4 flex flex-col items-center gap-2"
+            >
+              <p className="text-xs text-content-tertiary tabular-nums">
+                {mayHaveMore
+                  ? t('accommodation.pagination.showing_capped', {
+                      defaultValue: 'Showing {{count}} - more may exist',
+                      count: accommodations.length,
+                    })
+                  : t('accommodation.pagination.showing_all', {
+                      defaultValue: 'Showing all {{count}}',
+                      count: accommodations.length,
+                    })}
+              </p>
+              {mayHaveMore && (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => setPageCount((c) => c + 1)}
+                  loading={isFetchingMore}
+                  disabled={isFetchingMore}
+                  data-testid="accommodation-load-more"
+                >
+                  {t('accommodation.pagination.load_more', {
+                    defaultValue: 'Load more',
+                  })}
+                </Button>
+              )}
+            </div>
+          )}
+        </>
       )}
       </div>
 

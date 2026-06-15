@@ -53,6 +53,13 @@ class TakeoffDocumentResponse(BaseModel):
     project_id: str | None = None
     content_type: str
     uploaded_at: datetime | None = Field(None, alias="created_at")
+    # Per-page text-layer audit (8.2.0). ``pages_without_text`` is how many
+    # pages came back with no text layer (usually scanned drawings that need
+    # OCR); ``pages_without_text_list`` is their 1-based page numbers. Both
+    # default to 0 / [] so a document with a full text layer - and any caller
+    # that ignores the fields - is unaffected.
+    pages_without_text: int = 0
+    pages_without_text_list: list[int] = Field(default_factory=list)
 
     model_config = {"from_attributes": True, "populate_by_name": True}
 
@@ -209,6 +216,15 @@ class TakeoffMeasurementCreate(BaseModel):
     count_value: int | None = Field(default=None, ge=0)
     scale_pixels_per_unit: float | None = Field(default=None, gt=0)
     linked_boq_position_id: str | None = None
+    is_deduction: bool = Field(
+        default=False,
+        description=(
+            "Mark this area measurement as an opening / void (door, window, "
+            "cut-out). Its area is subtracted from the gross area of its group "
+            "so a net area = gross - openings. Only meaningful for area "
+            "measurements; ignored for other types."
+        ),
+    )
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -235,6 +251,7 @@ class TakeoffMeasurementUpdate(BaseModel):
     count_value: int | None = Field(default=None, ge=0)
     scale_pixels_per_unit: float | None = Field(default=None, gt=0)
     linked_boq_position_id: str | None = None
+    is_deduction: bool | None = None
     metadata: dict[str, Any] | None = None
 
 
@@ -267,6 +284,7 @@ class TakeoffMeasurementResponse(BaseModel):
     confidence: float | None = None
     review_status: str = "confirmed"
     # #### END NEOFFICE PATCH
+    is_deduction: bool = False
     metadata: dict[str, Any] = Field(default_factory=dict, validation_alias="metadata_")
     created_by: str = ""
     created_at: datetime

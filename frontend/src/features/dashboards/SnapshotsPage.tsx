@@ -6,9 +6,9 @@
  * frozen parquet dataset that later tasks (T02 auto-chart, T03
  * autocomplete, T04 filters, …) analyse.
  */
-import { useCallback, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   Plus,
@@ -21,6 +21,7 @@ import {
   History,
   Calculator,
   Ruler,
+  Loader2,
 } from 'lucide-react';
 
 import {
@@ -29,6 +30,7 @@ import {
   Button,
   Card,
   EmptyState,
+  ModuleGuideButton,
   Skeleton,
 } from '@/shared/ui';
 import { PageHeader } from '@/shared/ui/PageHeader';
@@ -45,8 +47,12 @@ import {
 import { SnapshotCreateModal } from './SnapshotCreateModal';
 import { SnapshotTimeline } from './SnapshotTimeline';
 import { SnapshotDiffView } from './SnapshotDiffView';
+import { dashboardsGuide } from './dashboardsGuide';
 
 type DashboardsView = 'list' | 'timeline' | 'diff';
+
+/** Snapshots fetched per page in the list view (offset pagination). */
+const SNAPSHOTS_PAGE_SIZE = 50;
 
 function formatNumber(n: number): string {
   return new Intl.NumberFormat('en-US').format(n);
@@ -80,11 +86,29 @@ export function SnapshotsPage() {
   const [diffA, setDiffA] = useState<string>('');
   const [diffB, setDiffB] = useState<string>('');
 
-  const snapshotsQuery = useQuery({
+  const snapshotsQuery = useInfiniteQuery({
     queryKey: ['dashboards-snapshots', activeProjectId],
-    queryFn: () => listSnapshots(activeProjectId!),
+    queryFn: ({ pageParam }) =>
+      listSnapshots(activeProjectId!, {
+        limit: SNAPSHOTS_PAGE_SIZE,
+        offset: pageParam,
+      }),
     enabled: !!activeProjectId,
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, allPages) => {
+      const loaded = allPages.reduce((sum, p) => sum + p.items.length, 0);
+      return loaded < lastPage.total ? loaded : undefined;
+    },
   });
+
+  // Surface the raw error to the console so power users / support can
+  // see the server's detail message (project not found, forbidden, 503…).
+  useEffect(() => {
+    if (snapshotsQuery.isError) {
+      // eslint-disable-next-line no-console
+      console.error('[dashboards] snapshot list load failed:', snapshotsQuery.error);
+    }
+  }, [snapshotsQuery.isError, snapshotsQuery.error]);
 
   const deleteMutation = useMutation({
     mutationFn: (snapshotId: string) => deleteSnapshot(snapshotId),
@@ -144,7 +168,8 @@ export function SnapshotsPage() {
     );
   }
 
-  const snapshots = snapshotsQuery.data?.items ?? [];
+  const snapshots = snapshotsQuery.data?.pages.flatMap((p) => p.items) ?? [];
+  const totalSnapshots = snapshotsQuery.data?.pages[0]?.total ?? snapshots.length;
 
   return (
     <div className="space-y-5 animate-fade-in" data-testid="dashboards-snapshots-page">
@@ -167,6 +192,13 @@ export function SnapshotsPage() {
         })}
         actions={
           <>
+            {/* How it works guide - explains snapshots and the
+                create / browse / timeline / compare flow. Leads the
+                action cluster as the help pill, next to the view tabs. */}
+            <ModuleGuideButton
+              content={dashboardsGuide}
+              onCta={() => setCreateOpen(true)}
+            />
             <div className="flex rounded-lg border border-border-light p-0.5" role="tablist">
               <ViewTab
                 active={view === 'list'}
@@ -272,7 +304,7 @@ export function SnapshotsPage() {
                     {t('dashboards.diff_pick_placeholder', { defaultValue: 'Select a snapshot…' })}
                   </option>
                   {snapshots.map((s) => (
-                    <option key={s.id} value={s.id}>
+                    <option key={s.id} value={s.id} disabled={s.id === diffB}>
                       {s.label}
                     </option>
                   ))}
@@ -292,7 +324,7 @@ export function SnapshotsPage() {
                     {t('dashboards.diff_pick_placeholder', { defaultValue: 'Select a snapshot…' })}
                   </option>
                   {snapshots.map((s) => (
-                    <option key={s.id} value={s.id}>
+                    <option key={s.id} value={s.id} disabled={s.id === diffA}>
                       {s.label}
                     </option>
                   ))}
@@ -300,7 +332,18 @@ export function SnapshotsPage() {
               </label>
             </div>
           </Card>
-          {diffA && diffB && diffA !== diffB ? (
+          {diffA && diffB && diffA === diffB ? (
+            <EmptyState
+              icon={<GitCompare className="h-10 w-10 text-neutral-500" />}
+              title={t('dashboards.diff_same_title', {
+                defaultValue: 'Same snapshot selected',
+              })}
+              description={t('dashboards.diff_same_desc', {
+                defaultValue:
+                  'Snapshots A and B point at the same dataset. Pick a different snapshot for B to see what changed.',
+              })}
+            />
+          ) : diffA && diffB ? (
             <SnapshotDiffView snapshotAId={diffA} snapshotBId={diffB} />
           ) : (
             <EmptyState
@@ -331,9 +374,25 @@ export function SnapshotsPage() {
       {snapshotsQuery.isError && (
         <Card>
           <div className="p-4 text-sm text-rose-300">
-            {t('dashboards.snapshots_load_failed', {
-              defaultValue: 'Could not load snapshots.',
-            })}
+            <p>
+              {t('dashboards.snapshots_load_failed', {
+                defaultValue: 'Could not load snapshots.',
+              })}
+            </p>
+            {snapshotsQuery.error instanceof Error && snapshotsQuery.error.message && (
+              <p className="mt-2 font-mono text-xs text-rose-400/80">
+                {snapshotsQuery.error.message}
+              </p>
+            )}
+            <Button
+              size="sm"
+              variant="ghost"
+              className="mt-3"
+              onClick={() => snapshotsQuery.refetch()}
+              data-testid="dashboards-snapshots-retry"
+            >
+              {t('common.retry', { defaultValue: 'Retry' })}
+            </Button>
           </div>
         </Card>
       )}
@@ -361,20 +420,52 @@ export function SnapshotsPage() {
       )}
 
       {snapshots.length > 0 && (
-        <div className="grid gap-3 md:grid-cols-2">
-          {snapshots.map((s) => (
-            <SnapshotCard
-              key={s.id}
-              snapshot={s}
-              onDelete={() => deleteMutation.mutate(s.id)}
-              deleting={deleteMutation.isPending && deleteMutation.variables === s.id}
-              onMatchToCost={() =>
-                navigate(`/match-elements?project=${encodeURIComponent(activeProjectId)}`)
-              }
-              onTakeoff={() => navigate('/takeoff?tab=documents')}
-            />
-          ))}
-        </div>
+        <>
+          <div className="grid gap-3 md:grid-cols-2">
+            {snapshots.map((s) => (
+              <SnapshotCard
+                key={s.id}
+                snapshot={s}
+                onDelete={() => deleteMutation.mutate(s.id)}
+                deleting={deleteMutation.isPending && deleteMutation.variables === s.id}
+                onMatchToCost={() =>
+                  navigate(`/match-elements?project=${encodeURIComponent(activeProjectId)}`)
+                }
+                onTakeoff={() => navigate('/takeoff?tab=documents')}
+              />
+            ))}
+          </div>
+          <div
+            className="flex flex-col items-center gap-2 pt-1 text-xs text-neutral-500"
+            data-testid="dashboards-snapshots-footer"
+          >
+            <span>
+              {t('dashboards.snapshots_shown_count', {
+                defaultValue: 'Showing {{shown}} of {{total}}',
+                shown: formatNumber(snapshots.length),
+                total: formatNumber(totalSnapshots),
+              })}
+            </span>
+            {snapshotsQuery.hasNextPage && (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => snapshotsQuery.fetchNextPage()}
+                disabled={snapshotsQuery.isFetchingNextPage}
+                data-testid="dashboards-snapshots-load-more"
+              >
+                {snapshotsQuery.isFetchingNextPage ? (
+                  <>
+                    <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                    {t('common.loading', { defaultValue: 'Loading…' })}
+                  </>
+                ) : (
+                  t('dashboards.snapshots_load_more', { defaultValue: 'Load more' })
+                )}
+              </Button>
+            )}
+          </div>
+        </>
       )}
         </>
       )}

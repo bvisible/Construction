@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
+  AlertTriangle,
   ArrowLeft,
   Coins,
   Pencil,
@@ -28,6 +29,7 @@ import {
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { DismissibleInfo } from '@/shared/ui/DismissibleInfo';
 import { useToastStore } from '@/stores/useToastStore';
+import { useFxRatesStore, getFxRate } from '@/stores/useFxRatesStore';
 import { getErrorMessage } from '@/shared/lib/api';
 import { projectsApi, type Project, type ProjectFxRate } from './api';
 import { CURRENCY_GROUPS, CreateProjectModal } from './CreateProjectPage';
@@ -97,6 +99,9 @@ function FxRateModal({
   const [customCode, setCustomCode] = useState('');
 
   const flat = useMemo(flattenCurrencies, []);
+  // Approximate market rates (seeded, per-device) used only as a sanity
+  // reference for the inversion guard below - never to convert money.
+  const ratesVsUsd = useFxRatesStore((s) => s.ratesVsUsd);
 
   useEffect(() => {
     if (!open) return;
@@ -246,7 +251,7 @@ function FxRateModal({
             <Input
               label={t('project.settings.fx.rate_label', {
                 defaultValue: 'Rate (1 unit of this currency = X {{base}})',
-                base: baseCurrency || '—',
+                base: baseCurrency || '-',
               })}
               type="text"
               inputMode="decimal"
@@ -292,6 +297,58 @@ function FxRateModal({
                       code: effectiveCode,
                     })}
                   </div>
+                </div>
+              );
+            })()}
+            {/* Issue #111 - inversion / implausibility guard. The seeded
+             * market rates give a rough "typical" value for known currency
+             * pairs. If the entered rate sits close to the inverse of that
+             * typical value (and far from it), the user almost certainly
+             * typed the rate upside down; if it is just wildly far off, flag
+             * it as unusual. Soft, non-blocking: exotic or fast-moving rates
+             * stay valid, and unknown currencies skip the check entirely. */}
+            {rateLooksValid && effectiveCode && baseCurrency && !isSameAsBase && (() => {
+              const rateNum = parseFloat(rate);
+              if (!Number.isFinite(rateNum) || rateNum <= 0) return null;
+              const expected = getFxRate(effectiveCode, baseCurrency, ratesVsUsd);
+              if (!expected || !Number.isFinite(expected) || expected <= 0) return null;
+              const offBy = Math.max(rateNum / expected, expected / rateNum);
+              const inverse = 1 / expected;
+              const offByInverse = Math.max(rateNum / inverse, inverse / rateNum);
+              const looksInverted = offByInverse < 3 && offBy > 9;
+              const looksUnusual = !looksInverted && offBy > 25;
+              if (!looksInverted && !looksUnusual) return null;
+              const fmt = (n: number) =>
+                n >= 1000 || n < 0.001
+                  ? n.toLocaleString(undefined, { maximumSignificantDigits: 6 })
+                  : n.toLocaleString(undefined, { maximumFractionDigits: 6 });
+              return (
+                <div
+                  role="status"
+                  className="flex gap-2 rounded-lg border border-semantic-warning/40 bg-semantic-warning/10 px-3 py-2 text-xs text-content-secondary"
+                >
+                  <AlertTriangle
+                    size={14}
+                    className="mt-0.5 shrink-0 text-semantic-warning"
+                    aria-hidden
+                  />
+                  <span>
+                    {looksInverted
+                      ? t('project.settings.fx.guard_inverted', {
+                          defaultValue:
+                            'This looks inverted. A typical rate is about 1 {{code}} = {{value}} {{base}}. If you meant "{{base}} per {{code}}", enter the value the other way around.',
+                          code: effectiveCode,
+                          base: baseCurrency,
+                          value: fmt(expected),
+                        })
+                      : t('project.settings.fx.guard_unusual', {
+                          defaultValue:
+                            'This rate is far from the typical 1 {{code}} = {{value}} {{base}}. Double-check it before saving.',
+                          code: effectiveCode,
+                          base: baseCurrency,
+                          value: fmt(expected),
+                        })}
+                  </span>
                 </div>
               );
             })()}
@@ -892,7 +949,7 @@ export function ProjectSettingsPage() {
                 <th className="px-4 py-2 font-medium text-right">
                   {t('project.settings.fx.col_rate', {
                     defaultValue: 'Rate to {{base}}',
-                    base: baseCurrency || '—',
+                    base: baseCurrency || '-',
                   })}
                 </th>
                 <th className="px-4 py-2 w-24" />
@@ -938,7 +995,7 @@ export function ProjectSettingsPage() {
                     <td className="px-4 py-2.5 text-content-secondary">
                       {row.label || (
                         <span className="text-content-tertiary italic">
-                          {t('project.settings.fx.no_label', { defaultValue: '—' })}
+                          {t('project.settings.fx.no_label', { defaultValue: '-' })}
                         </span>
                       )}
                     </td>

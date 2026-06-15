@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
@@ -12,6 +12,8 @@ import {
   ArrowUpDown,
   ChevronUp,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Download,
   BarChart3,
   Search,
@@ -20,11 +22,18 @@ import {
   RefreshCw,
   Wallet,
 } from 'lucide-react';
-import { Breadcrumb, Button, Card, Badge, Skeleton, EmptyState } from '@/shared/ui';
+import { Breadcrumb, Button, Card, Badge, Skeleton, EmptyState, ModuleGuideButton } from '@/shared/ui';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { DismissibleInfo, IntroRichText } from '@/shared/ui/DismissibleInfo';
+import { analyticsGuide } from './analyticsGuide';
 
 /* ── Helpers ─────────────────────────────────────────────────────────── */
+
+// Rows rendered per page in the comparison table. The overview endpoint
+// returns every owned project in one payload, so for large portfolios we
+// paginate on the client to keep the table (and its bar chart) responsive
+// instead of mounting hundreds of rows at once.
+const PAGE_SIZE = 50;
 
 function compactCurrency(value: number, currency = 'EUR'): string {
   const safe = currency && /^[A-Z]{3}$/.test(currency) ? currency : 'EUR';
@@ -89,11 +98,22 @@ export function AnalyticsPage() {
   const [regionFilter, setRegionFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [search, setSearch] = useState('');
+  // Debounced copy of the raw search box value. The expensive filter/sort
+  // memo (and table re-render) keys off this, so typing only recomputes once
+  // the user pauses for 300ms instead of on every keystroke.
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [page, setPage] = useState(0);
 
   const { data, isLoading, isError, refetch, isFetching } = useQuery<AnalyticsOverview>({
     queryKey: ['analytics', 'overview'],
     queryFn: () => apiGet<AnalyticsOverview>('/v1/projects/analytics/overview/'),
   });
+
+  // Debounce the search box (300ms), mirroring the costs browser pattern.
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(search), 300);
+    return () => clearTimeout(timer);
+  }, [search]);
 
   const regions = useMemo(() => {
     if (!data?.projects) return [];
@@ -105,8 +125,8 @@ export function AnalyticsPage() {
     let filtered = data.projects;
     if (regionFilter) filtered = filtered.filter(p => p.region === regionFilter);
     if (statusFilter) filtered = filtered.filter(p => p.status === statusFilter);
-    if (search) {
-      const q = search.toLowerCase();
+    if (debouncedSearch) {
+      const q = debouncedSearch.toLowerCase();
       filtered = filtered.filter(p => p.name.toLowerCase().includes(q));
     }
     return [...filtered].sort((a, b) => {
@@ -118,7 +138,23 @@ export function AnalyticsPage() {
       }
       return sortDir === 'asc' ? cmp : -cmp;
     });
-  }, [data?.projects, sortField, sortDir, regionFilter, statusFilter, search]);
+  }, [data?.projects, sortField, sortDir, regionFilter, statusFilter, debouncedSearch]);
+
+  // Reset to the first page whenever the result set changes (new filter,
+  // search, sort, or freshly fetched data) so the user never lands on an
+  // out-of-range page showing nothing.
+  useEffect(() => {
+    setPage(0);
+  }, [debouncedSearch, regionFilter, statusFilter, sortField, sortDir, data?.projects]);
+
+  // Total pages for the current filtered set (at least one, even when empty).
+  const pageCount = Math.max(1, Math.ceil(sortedProjects.length / PAGE_SIZE));
+  // Clamp the page index in case the result set shrank between renders.
+  const safePage = Math.min(page, pageCount - 1);
+  const pagedProjects = useMemo(
+    () => sortedProjects.slice(safePage * PAGE_SIZE, safePage * PAGE_SIZE + PAGE_SIZE),
+    [sortedProjects, safePage],
+  );
 
   const handleSort = (field: SortField) => {
     if (sortField === field) {
@@ -161,11 +197,12 @@ export function AnalyticsPage() {
     URL.revokeObjectURL(url);
   }, [sortedProjects, t]);
 
-  // Find the max budget for bar chart scaling
+  // Find the max budget for bar chart scaling. Scale to the rows actually
+  // shown on the current page so each page's bars use the full width.
   const maxBudget = useMemo(() => {
-    if (!sortedProjects.length) return 1;
-    return Math.max(...sortedProjects.map((p) => Math.max(p.budget, p.actual)), 1);
-  }, [sortedProjects]);
+    if (!pagedProjects.length) return 1;
+    return Math.max(...pagedProjects.map((p) => Math.max(p.budget, p.actual)), 1);
+  }, [pagedProjects]);
 
   const currencyTotals = data?.totals_by_currency ?? [];
   // Treat as multi-currency only when the backend flags it AND we actually
@@ -297,15 +334,18 @@ export function AnalyticsPage() {
           defaultValue: 'Aggregated KPIs across all projects',
         })}
         actions={
-          <Button
-            variant="secondary"
-            size="sm"
-            icon={<Download size={14} />}
-            onClick={handleExportCSV}
-            disabled={!sortedProjects.length}
-          >
-            {t('analytics.export_csv', { defaultValue: 'Export CSV' })}
-          </Button>
+          <div className="flex items-center gap-2">
+            <ModuleGuideButton content={analyticsGuide} />
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={<Download size={14} />}
+              onClick={handleExportCSV}
+              disabled={!sortedProjects.length}
+            >
+              {t('analytics.export_csv', { defaultValue: 'Export CSV' })}
+            </Button>
+          </div>
         }
       />
 
@@ -575,11 +615,23 @@ export function AnalyticsPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border-light">
-                {sortedProjects.map((p) => (
+                {pagedProjects.map((p) => (
                   <tr
                     key={p.id}
-                    className="hover:bg-surface-secondary/30 transition-colors cursor-pointer"
+                    role="button"
+                    tabIndex={0}
+                    aria-label={t('analytics.open_project_for', {
+                      defaultValue: 'Open project {{name}}',
+                      name: p.name,
+                    })}
+                    className="hover:bg-surface-secondary/30 transition-colors cursor-pointer focus:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-oe-blue"
                     onClick={() => navigate(`/projects/${p.id}`)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        navigate(`/projects/${p.id}`);
+                      }
+                    }}
                   >
                     <td className="px-4 py-3 font-medium text-content-primary whitespace-nowrap">
                       {p.name}
@@ -656,16 +708,59 @@ export function AnalyticsPage() {
             </table>
           </div>
         )}
+        {/* Pagination — only meaningful once a portfolio spills past one page.
+            Operates purely on the already-fetched, filtered result set. */}
+        {sortedProjects.length > 0 && pageCount > 1 && (
+          <div className="px-6 py-3 border-t border-border-light flex items-center justify-between gap-3">
+            <span className="text-2xs text-content-tertiary tabular-nums">
+              {t('analytics.showing_range', {
+                defaultValue: 'Showing {{from}}-{{to}} of {{total}}',
+                from: safePage * PAGE_SIZE + 1,
+                to: Math.min((safePage + 1) * PAGE_SIZE, sortedProjects.length),
+                total: sortedProjects.length,
+              })}
+            </span>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="secondary"
+                size="sm"
+                icon={<ChevronLeft size={14} />}
+                onClick={() => setPage((prev) => Math.max(0, prev - 1))}
+                disabled={safePage === 0}
+              >
+                {t('analytics.prev', { defaultValue: 'Previous' })}
+              </Button>
+              <span className="text-2xs text-content-tertiary tabular-nums whitespace-nowrap">
+                {t('analytics.page_of', {
+                  defaultValue: 'Page {{page}} of {{total}}',
+                  page: safePage + 1,
+                  total: pageCount,
+                })}
+              </span>
+              <Button
+                variant="secondary"
+                size="sm"
+                iconPosition="right"
+                icon={<ChevronRight size={14} />}
+                onClick={() => setPage((prev) => Math.min(pageCount - 1, prev + 1))}
+                disabled={safePage >= pageCount - 1}
+              >
+                {t('analytics.next', { defaultValue: 'Next' })}
+              </Button>
+            </div>
+          </div>
+        )}
       </Card>
 
-      {/* Budget Breakdown Chart */}
-      {sortedProjects.length > 0 && (
+      {/* Budget Breakdown Chart — mirrors the current table page so the bars
+          line up with the visible rows and never render hundreds at once. */}
+      {pagedProjects.length > 0 && (
         <Card>
           <h2 className="text-lg font-semibold text-content-primary mb-4">
             {t('analytics.budget_breakdown', { defaultValue: 'Budget Breakdown' })}
           </h2>
           <div className="space-y-4">
-            {[...sortedProjects]
+            {[...pagedProjects]
               .filter(p => p.budget > 0 || p.actual > 0)
               .sort((a, b) => b.budget - a.budget)
               .map((p) => {

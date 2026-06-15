@@ -361,7 +361,7 @@ class CostModelService:
         Returns:
             Updated snapshot.
         """
-        await self.get_snapshot(snapshot_id)
+        snapshot = await self.get_snapshot(snapshot_id)
 
         fields = data.model_dump(exclude_unset=True)
 
@@ -378,7 +378,12 @@ class CostModelService:
                 fields[key] = str(fields[key])
 
         if "metadata" in fields:
-            fields["metadata_"] = fields.pop("metadata")
+            _incoming = fields.pop("metadata")
+            fields["metadata_"] = (
+                {**(getattr(snapshot, "metadata_", None) or {}), **_incoming}
+                if isinstance(_incoming, dict)
+                else _incoming
+            )
 
         if fields:
             await self.snapshot_repo.update_fields(snapshot_id, **fields)
@@ -727,7 +732,10 @@ class CostModelService:
                 fields[key] = fields[key]  # GUID type handles conversion
 
         if "metadata" in fields:
-            fields["metadata_"] = fields.pop("metadata")
+            _incoming = fields.pop("metadata")
+            fields["metadata_"] = (
+                {**(getattr(line, "metadata_", None) or {}), **_incoming} if isinstance(_incoming, dict) else _incoming
+            )
 
         if fields:
             await self.budget_repo.update_fields(line_id, **fields)
@@ -1828,7 +1836,12 @@ class CostSpineService:
                     detail="parent_id does not reference a control account in this project.",
                 )
         if "metadata" in fields:
-            fields["metadata_"] = fields.pop("metadata")
+            _incoming = fields.pop("metadata")
+            fields["metadata_"] = (
+                {**(getattr(account, "metadata_", None) or {}), **_incoming}
+                if isinstance(_incoming, dict)
+                else _incoming
+            )
 
         if fields:
             await self.account_repo.update_fields(account_id, **fields)
@@ -1954,7 +1967,10 @@ class CostSpineService:
             if key in fields and fields[key] is not None:
                 fields[key] = str(fields[key])
         if "metadata" in fields:
-            fields["metadata_"] = fields.pop("metadata")
+            _incoming = fields.pop("metadata")
+            fields["metadata_"] = (
+                {**(getattr(line, "metadata_", None) or {}), **_incoming} if isinstance(_incoming, dict) else _incoming
+            )
 
         if fields:
             await self.line_repo.update_fields(line_id, **fields)

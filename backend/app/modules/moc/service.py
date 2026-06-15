@@ -193,7 +193,10 @@ class MoCService:
             )
         fields = data.model_dump(exclude_unset=True)
         if "metadata" in fields:
-            fields["metadata_"] = fields.pop("metadata")
+            _incoming = fields.pop("metadata")
+            fields["metadata_"] = (
+                {**(getattr(entry, "metadata_", None) or {}), **_incoming} if isinstance(_incoming, dict) else _incoming
+            )
         if "cost_impact" in fields and fields["cost_impact"] is not None:
             fields["cost_impact"] = _to_decimal(fields["cost_impact"])
         if not fields:

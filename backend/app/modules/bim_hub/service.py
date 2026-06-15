@@ -742,11 +742,14 @@ class BIMHubService:
         data: BIMModelUpdate,
     ) -> BIMModel:
         """Update a BIM model's fields."""
-        await self.get_model(model_id)  # 404 check
+        model = await self.get_model(model_id)  # 404 check
 
         fields = data.model_dump(exclude_unset=True)
         if "metadata" in fields:
-            fields["metadata_"] = fields.pop("metadata")
+            _incoming = fields.pop("metadata")
+            fields["metadata_"] = (
+                {**(getattr(model, "metadata_", None) or {}), **_incoming} if isinstance(_incoming, dict) else _incoming
+            )
 
         if not fields:
             return await self.get_model(model_id)
@@ -2161,7 +2164,12 @@ class BIMHubService:
 
         fields = data.model_dump(exclude_unset=True)
         if "metadata" in fields:
-            fields["metadata_"] = fields.pop("metadata")
+            _incoming = fields.pop("metadata")
+            fields["metadata_"] = (
+                {**(getattr(existing, "metadata_", None) or {}), **_incoming}
+                if isinstance(_incoming, dict)
+                else _incoming
+            )
 
         if not fields:
             return existing
@@ -3085,7 +3093,10 @@ class BIMHubService:
 
         fields = payload.model_dump(exclude_unset=True)
         if "metadata" in fields:
-            fields["metadata_"] = fields.pop("metadata")
+            _incoming = fields.pop("metadata")
+            fields["metadata_"] = (
+                {**(getattr(group, "metadata_", None) or {}), **_incoming} if isinstance(_incoming, dict) else _incoming
+            )
 
         # Normalise UUID list to str for JSON storage.
         if "element_ids" in fields and fields["element_ids"] is not None:

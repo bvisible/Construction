@@ -134,6 +134,8 @@ async def update_integration_config(
     update_data = body.model_dump(exclude_unset=True)
     for field, value in update_data.items():
         col = "metadata_" if field == "metadata" else field
+        if col == "metadata_" and isinstance(value, dict):
+            value = {**(getattr(config, "metadata_", None) or {}), **value}
         setattr(config, col, value)
 
     await session.flush()

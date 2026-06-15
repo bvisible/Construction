@@ -94,7 +94,11 @@ function renderPage() {
 describe('SnapshotsPage CONN-73 deep links', () => {
   it('renders match-to-cost and takeoff actions per snapshot card', async () => {
     renderPage();
-    await waitFor(() => expect(listSnapshots).toHaveBeenCalledWith(PROJECT_ID));
+    // listSnapshots now takes pagination opts as a second argument; assert
+    // the active project is still passed without pinning the opts shape.
+    await waitFor(() =>
+      expect(listSnapshots).toHaveBeenCalledWith(PROJECT_ID, expect.anything()),
+    );
     await waitFor(() =>
       expect(screen.getByTestId('snapshot-match-snap-a')).toBeInTheDocument(),
     );

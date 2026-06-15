@@ -547,7 +547,12 @@ class ResourcesService:
         resource = await self.get_resource(resource_id)
         fields: dict[str, Any] = data.model_dump(exclude_unset=True)
         if "metadata" in fields:
-            fields["metadata_"] = fields.pop("metadata")
+            _incoming = fields.pop("metadata")
+            fields["metadata_"] = (
+                {**(getattr(resource, "metadata_", None) or {}), **_incoming}
+                if isinstance(_incoming, dict)
+                else _incoming
+            )
         if not fields:
             return resource
         await self.resource_repo.update_fields(resource_id, **fields)
@@ -592,7 +597,10 @@ class ResourcesService:
         skill = await self.get_skill(skill_id)
         fields: dict[str, Any] = data.model_dump(exclude_unset=True)
         if "metadata" in fields:
-            fields["metadata_"] = fields.pop("metadata")
+            _incoming = fields.pop("metadata")
+            fields["metadata_"] = (
+                {**(getattr(skill, "metadata_", None) or {}), **_incoming} if isinstance(_incoming, dict) else _incoming
+            )
         if not fields:
             return skill
         await self.skill_repo.update_fields(skill_id, **fields)
@@ -675,7 +683,10 @@ class ResourcesService:
         cert = await self.get_certification(cert_id)
         fields: dict[str, Any] = data.model_dump(exclude_unset=True)
         if "metadata" in fields:
-            fields["metadata_"] = fields.pop("metadata")
+            _incoming = fields.pop("metadata")
+            fields["metadata_"] = (
+                {**(getattr(cert, "metadata_", None) or {}), **_incoming} if isinstance(_incoming, dict) else _incoming
+            )
         # Re-derive status if expiry changed
         new_valid_until = fields.get("valid_until", cert.valid_until)
         new_status_in = fields.get("status", cert.status)
@@ -733,7 +744,12 @@ class ResourcesService:
         window = await self.get_window(window_id)
         fields: dict[str, Any] = data.model_dump(exclude_unset=True)
         if "metadata" in fields:
-            fields["metadata_"] = fields.pop("metadata")
+            _incoming = fields.pop("metadata")
+            fields["metadata_"] = (
+                {**(getattr(window, "metadata_", None) or {}), **_incoming}
+                if isinstance(_incoming, dict)
+                else _incoming
+            )
         if not fields:
             return window
         await self.window_repo.update_fields(window_id, **fields)
@@ -796,7 +812,12 @@ class ResourcesService:
         assignment = await self.get_assignment(assignment_id)
         fields: dict[str, Any] = data.model_dump(exclude_unset=True)
         if "metadata" in fields:
-            fields["metadata_"] = fields.pop("metadata")
+            _incoming = fields.pop("metadata")
+            fields["metadata_"] = (
+                {**(getattr(assignment, "metadata_", None) or {}), **_incoming}
+                if isinstance(_incoming, dict)
+                else _incoming
+            )
         if not fields:
             return assignment
         # Guard the status FSM: the dedicated confirm/complete/cancel endpoints
@@ -1107,7 +1128,10 @@ class ResourcesService:
         req = await self.get_request(request_id)
         fields: dict[str, Any] = data.model_dump(exclude_unset=True)
         if "metadata" in fields:
-            fields["metadata_"] = fields.pop("metadata")
+            _incoming = fields.pop("metadata")
+            fields["metadata_"] = (
+                {**(getattr(req, "metadata_", None) or {}), **_incoming} if isinstance(_incoming, dict) else _incoming
+            )
         if "required_skills" in fields and fields["required_skills"] is not None:
             fields["required_skills"] = [str(s) for s in fields["required_skills"]]
         if not fields:
@@ -1203,7 +1227,10 @@ class ResourcesService:
         link = await self.get_link(link_id)
         fields: dict[str, Any] = data.model_dump(exclude_unset=True)
         if "metadata" in fields:
-            fields["metadata_"] = fields.pop("metadata")
+            _incoming = fields.pop("metadata")
+            fields["metadata_"] = (
+                {**(getattr(link, "metadata_", None) or {}), **_incoming} if isinstance(_incoming, dict) else _incoming
+            )
         if not fields:
             return link
         await self.link_repo.update_fields(link_id, **fields)

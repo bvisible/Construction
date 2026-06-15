@@ -72,7 +72,10 @@ class WebhookService:
         for field in ("name", "url", "secret", "events", "is_active", "metadata"):
             if field in data and data[field] is not None:
                 col = "metadata_" if field == "metadata" else field
-                setattr(webhook, col, data[field])
+                value = data[field]
+                if col == "metadata_" and isinstance(value, dict):
+                    value = {**(getattr(webhook, "metadata_", None) or {}), **value}
+                setattr(webhook, col, value)
         await self.session.flush()
         # Reload server-computed columns (updated_at onupdate=func.now()) inside
         # the async greenlet so model_validate after return doesn't lazy-load them.

@@ -410,12 +410,13 @@ export function MatchWizardFlow() {
   // A genuine project change (not the initial mount) resets all
   // downstream state so nothing stale survives the switch.
   useEffect(() => {
-    if (urlProject && urlProject !== projectId) {
-      setProjectId(urlProject);
+    const target = urlProject || activeProjectId;
+    if (target && target !== projectId) {
+      setProjectId(target);
       resetForProject();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [urlProject]);
+  }, [urlProject, activeProjectId]);
 
   // ── Queries ─────────────────────────────────────────────────────────
   const projectsQ = useQuery({ queryKey: ['projects-all'], queryFn: projectsApi.list });

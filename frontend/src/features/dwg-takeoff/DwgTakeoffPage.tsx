@@ -55,7 +55,7 @@ import {
   RotateCcw,
   GitCompare,
 } from 'lucide-react';
-import { Badge, ConfirmDialog, DismissibleInfo, ElementInfoPopover, type DWGElementPayload } from '@/shared/ui';
+import { Badge, ConfirmDialog, DismissibleInfo, ElementInfoPopover, ModuleGuideButton, type DWGElementPayload } from '@/shared/ui';
 import { useConfirm } from '@/shared/hooks/useConfirm';
 import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
@@ -103,6 +103,7 @@ import {
   DwgDrawingCompareDrawer,
   type DwgCompareOverlayState,
 } from './DwgDrawingCompareDrawer';
+import { dwgTakeoffGuide } from './dwgTakeoffGuide';
 import {
   deriveScale as deriveCalibration,
   type CalibrationState,
@@ -549,6 +550,8 @@ function OfflineReadyBadge({
             <button
               type="button"
               onClick={() => setShowHint(false)}
+              aria-label={t('common.close', { defaultValue: 'Close' })}
+              title={t('common.close', { defaultValue: 'Close' })}
               className="text-content-tertiary hover:text-content-primary"
             >
               <X size={12} />
@@ -2846,6 +2849,7 @@ export function DwgTakeoffPage() {
                           isLoading={loadingOfflineReadiness}
                           data-testid="dwg-offline-badge"
                         />
+                        <ModuleGuideButton content={dwgTakeoffGuide} />
                       </div>
                       <p className="text-base text-gray-400 mt-3 leading-relaxed">
                         {t('dwg_takeoff.hero_subtitle', { defaultValue: 'Open DWG/DXF drawings, measure areas and lengths, annotate directly on the drawing, and link measurements to your BOQ positions.' })}
@@ -3159,6 +3163,7 @@ export function DwgTakeoffPage() {
                   glancing at converter status without stealing real estate
                   from the drawing. */}
               <div className="absolute top-3 right-3 z-10 flex items-center gap-2">
+                <ModuleGuideButton content={dwgTakeoffGuide} />
                 <button
                   type="button"
                   onClick={() => setShowCompare(true)}
@@ -3329,6 +3334,8 @@ export function DwgTakeoffPage() {
                       </div>
                       <button
                         onClick={() => setLinkingEntityId(null)}
+                        aria-label={t('common.close', { defaultValue: 'Close' })}
+                        title={t('common.close', { defaultValue: 'Close' })}
                         className="text-slate-400 hover:text-slate-100 transition-colors"
                       >
                         <X size={14} />
@@ -3878,6 +3885,8 @@ export function DwgTakeoffPage() {
                               });
                             }
                           }}
+                          aria-label={t('dwg_takeoff.delete_annotation', { defaultValue: 'Delete annotation' })}
+                          title={t('dwg_takeoff.delete_annotation', { defaultValue: 'Delete annotation' })}
                           className="text-muted-foreground hover:text-red-500"
                         >
                           <Trash2 size={12} />
@@ -4652,6 +4661,8 @@ function DrawingFilmstrip({
                     e.stopPropagation();
                     onDeleteDrawing(d.id);
                   }}
+                  aria-label={t('dwg_takeoff.delete_drawing', { defaultValue: 'Delete drawing' })}
+                  title={t('dwg_takeoff.delete_drawing', { defaultValue: 'Delete drawing' })}
                   className="absolute top-0.5 right-0.5 h-4 w-4 rounded flex items-center justify-center
                              text-transparent group-hover:text-slate-400 hover:!text-red-400 hover:bg-red-500/20
                              transition-all"

@@ -31,6 +31,9 @@ export interface MeasurementCreate {
   count_value?: number | null;
   scale_pixels_per_unit?: number | null;
   linked_boq_position_id?: string | null;
+  /** Mark an area measurement as an opening / void; its area is subtracted
+   *  from the group's gross area (net = gross - openings). Area-only. */
+  is_deduction?: boolean;
   metadata?: Record<string, unknown>;
 }
 
@@ -52,6 +55,9 @@ export interface MeasurementResponse {
   count_value: number | null;
   scale_pixels_per_unit: number | null;
   linked_boq_position_id: string | null;
+  /** True when this area measurement is an opening / void subtracted from
+   *  its group's gross area. False / absent for normal measurements. */
+  is_deduction?: boolean;
   metadata: Record<string, unknown>;
   created_by: string;
   created_at: string;
@@ -168,6 +174,11 @@ export interface TakeoffDocumentResponse {
   status: string;
   project_id?: string | null;
   uploaded_at: string | null;
+  /** How many pages came back with no text layer (likely scanned drawings
+   *  that need OCR). 0 / absent for a fully text-based PDF (8.2.0). */
+  pages_without_text?: number;
+  /** The 1-based page numbers with no text layer (8.2.0). */
+  pages_without_text_list?: number[];
 }
 
 /* ── Revision compare (Item 17) ────────────────────────────────────────── */
@@ -363,6 +374,17 @@ export const takeoffApi = {
       : '/v1/takeoff/documents/';
     const payload = await apiGet<unknown>(url);
     return normalizeListResponse<TakeoffDocumentResponse>(payload, ['documents']);
+  },
+
+  /** Fetch a single takeoff document's metadata (status + the per-page
+   *  text-layer audit). Returns null when the optional `oe_takeoff` module is
+   *  disabled so the caller can degrade silently. Used by the viewer to flag
+   *  pages with no text layer that likely need OCR. */
+  getDocument: async (docId: string): Promise<TakeoffDocumentResponse | null> => {
+    if (!(await isModuleLoaded('oe_takeoff'))) return null;
+    return apiGet<TakeoffDocumentResponse>(
+      `/v1/takeoff/documents/${encodeURIComponent(docId)}`,
+    );
   },
 
   /** Delete an uploaded takeoff document. */

@@ -34,6 +34,7 @@ import {
   SkeletonTable,
   DismissibleInfo,
   IntroRichText,
+  ModuleGuideButton,
 } from '@/shared/ui';
 import { RequiresProject } from '@/shared/auth/RequiresProject';
 import {
@@ -48,6 +49,7 @@ import { PageHeader } from '@/shared/ui/PageHeader';
 import { ContractStatusPipeline } from './ContractStatusPipeline';
 import { ContractExpiryBadge } from './ContractExpiryBadge';
 import { ComplianceGate } from './ComplianceGate';
+import { contractsGuide } from './contractsGuide';
 import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { useAuthStore } from '@/stores/useAuthStore';
@@ -438,24 +440,28 @@ export function ContractsPage() {
       />
 
       <PageHeader
+        srTitle={t('nav.contracts', { defaultValue: 'Contracts' })}
         subtitle={t('contracts.subtitle', {
           defaultValue:
             'Type-aware contracts with schedule of values, retention, claims and final accounts.',
         })}
         actions={
-          <Button
-            variant="primary"
-            icon={<Plus size={14} />}
-            onClick={() => {
-              if (tab === 'claims') setNewClaimOpen(true);
-              else setCreateOpen(true);
-            }}
-            disabled={!projectId}
-          >
-            {tab === 'claims'
-              ? t('contracts.new_claim', { defaultValue: 'New Claim' })
-              : t('contracts.new_contract', { defaultValue: 'New Contract' })}
-          </Button>
+          <>
+            <ModuleGuideButton content={contractsGuide} />
+            <Button
+              variant="primary"
+              icon={<Plus size={14} />}
+              onClick={() => {
+                if (tab === 'claims') setNewClaimOpen(true);
+                else setCreateOpen(true);
+              }}
+              disabled={!projectId}
+            >
+              {tab === 'claims'
+                ? t('contracts.new_claim', { defaultValue: 'New Claim' })
+                : t('contracts.new_contract', { defaultValue: 'New Contract' })}
+            </Button>
+          </>
         }
       />
 

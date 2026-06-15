@@ -8,7 +8,7 @@ import {
   AlertTriangle, Shield, Trash2, X, Search, Filter, CalendarDays, TrendingUp,
   LayoutGrid, Activity,
 } from 'lucide-react';
-import { Button, Card, Badge, EmptyState, Breadcrumb, ConfirmDialog, DismissibleInfo, IntroRichText, RecoveryCard, SkeletonTable, SkeletonCard } from '@/shared/ui';
+import { Button, Card, Badge, EmptyState, Breadcrumb, ConfirmDialog, DismissibleInfo, IntroRichText, RecoveryCard, SkeletonTable, SkeletonCard, ModuleGuideButton } from '@/shared/ui';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { MultiCurrencyTotal } from '@/shared/ui/MultiCurrencyTotal';
 import { RequiresProject } from '@/shared/auth/RequiresProject';
@@ -21,6 +21,7 @@ import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { useTabKeyboardNav } from '@/shared/hooks/useTabKeyboardNav';
 import { MonteCarloTab } from './MonteCarloTab';
+import { riskGuide } from './riskGuide';
 
 const RISK_TAB_IDS = ['register', 'montecarlo'] as const;
 type RiskTab = (typeof RISK_TAB_IDS)[number];
@@ -407,7 +408,7 @@ function DetailView({ riskId, onBack }: { riskId: string; onBack: () => void }) 
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-4 mb-6">
         {[
           [t('risk.probability', { defaultValue: 'Probability' }), `${(risk.probability * 100).toFixed(0)}%`],
-          [t('risk.severity', { defaultValue: 'Severity' }), risk.impact_severity],
+          [t('risk.severity', { defaultValue: 'Severity' }), t(`risk.severity_${risk.impact_severity}`, { defaultValue: risk.impact_severity })],
           [t('risk.score', { defaultValue: 'Score' }), risk.risk_score.toFixed(2)],
           [t('risk.impact_cost', { defaultValue: 'Cost Impact' }), fmtCur(risk.impact_cost, risk.currency)],
           [t('risk.owner', { defaultValue: 'Owner' }), risk.owner_name || '-'],
@@ -574,7 +575,7 @@ export function RiskRegisterPage() {
   const projectId = activeProjectId || projects[0]?.id || '';
   const project = useMemo(() => projects.find((p) => p.id === projectId), [projects, projectId]);
 
-  const { data: risks = [], isLoading, isError, error, refetch } = useQuery({ queryKey: ['risks', projectId], queryFn: () => apiGet<RiskItem[]>(`/v1/risk/?project_id=${projectId}`), select: (d): RiskItem[] => normalizeListResponse(d), enabled: !!projectId });
+  const { data: risks = [], isLoading, isError, error, refetch } = useQuery({ queryKey: ['risks', projectId], queryFn: () => apiGet<RiskItem[]>(`/v1/risk/?project_id=${projectId}&limit=100`), select: (d): RiskItem[] => normalizeListResponse(d), enabled: !!projectId });
   const { data: summary } = useQuery({ queryKey: ['risk-summary', projectId], queryFn: () => apiGet<RiskSummary>(`/v1/risk/summary/?project_id=${projectId}`), enabled: !!projectId });
   const { data: matrixData } = useQuery({ queryKey: ['risk-matrix', projectId], queryFn: () => apiGet<{ cells: MatrixCell[] }>(`/v1/risk/matrix/?project_id=${projectId}`), enabled: !!projectId });
 
@@ -638,9 +639,12 @@ export function RiskRegisterPage() {
           defaultValue: 'Track project threats with probability x impact scoring, matrix and Monte Carlo analysis.',
         })}
         actions={
-          <Button variant="primary" onClick={() => setShowCreate(true)} disabled={!projectId}>
-            <Plus size={16} className="mr-1.5" />{t('risk.new', { defaultValue: 'Add Risk' })}
-          </Button>
+          <>
+            <ModuleGuideButton content={riskGuide} />
+            <Button variant="primary" onClick={() => setShowCreate(true)} disabled={!projectId}>
+              <Plus size={16} className="mr-1.5" />{t('risk.new', { defaultValue: 'Add Risk' })}
+            </Button>
+          </>
         }
       />
 
@@ -835,7 +839,7 @@ export function RiskRegisterPage() {
                       </td>
                       <td className="px-4 py-3"><Badge variant="neutral">{t(`risk.cat_${r.category}`, { defaultValue: r.category })}</Badge></td>
                       <td className="px-4 py-3 text-center text-content-secondary tabular-nums">{(r.probability * 100).toFixed(0)}%</td>
-                      <td className="px-4 py-3"><Badge variant={r.impact_severity === 'critical' ? 'error' : r.impact_severity === 'high' ? 'warning' : r.impact_severity === 'medium' ? 'blue' : 'neutral'}>{r.impact_severity}</Badge></td>
+                      <td className="px-4 py-3"><Badge variant={r.impact_severity === 'critical' ? 'error' : r.impact_severity === 'high' ? 'warning' : r.impact_severity === 'medium' ? 'blue' : 'neutral'}>{t(`risk.severity_${r.impact_severity}`, { defaultValue: r.impact_severity })}</Badge></td>
                       <td className="px-4 py-3 text-center font-medium tabular-nums text-content-primary">{r.risk_score.toFixed(1)}</td>
                       <td className="px-4 py-3"><Badge variant={STATUS_COLORS[r.status] || 'neutral'}>{t(`risk.status_${r.status}`, { defaultValue: r.status })}</Badge></td>
                       <td className="px-4 py-3 text-content-secondary text-xs truncate max-w-[100px]">{r.owner_name || '-'}</td>

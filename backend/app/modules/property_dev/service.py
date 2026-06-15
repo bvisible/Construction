@@ -1043,8 +1043,8 @@ class PropertyDevService:
         return obj
 
     async def update_development(self, dev_id: uuid.UUID, data: DevelopmentUpdate) -> Development:
-        await self.get_development(dev_id)
-        fields = _dump(data)
+        development = await self.get_development(dev_id)
+        fields = _dump(data, development)
         await self.developments.update_fields(dev_id, **fields)
         return await self.get_development(dev_id)
 
@@ -1080,8 +1080,8 @@ class PropertyDevService:
         return obj
 
     async def update_house_type(self, ht_id: uuid.UUID, data: HouseTypeUpdate) -> HouseType:
-        await self.get_house_type(ht_id)
-        await self.house_types.update_fields(ht_id, **_dump(data))
+        house_type = await self.get_house_type(ht_id)
+        await self.house_types.update_fields(ht_id, **_dump(data, house_type))
         return await self.get_house_type(ht_id)
 
     async def delete_house_type(self, ht_id: uuid.UUID) -> None:
@@ -1352,8 +1352,8 @@ class PropertyDevService:
         return obj
 
     async def update_variant(self, v_id: uuid.UUID, data: HouseTypeVariantUpdate) -> HouseTypeVariant:
-        await self.get_variant(v_id)
-        await self.variants.update_fields(v_id, **_dump(data))
+        variant = await self.get_variant(v_id)
+        await self.variants.update_fields(v_id, **_dump(data, variant))
         return await self.get_variant(v_id)
 
     async def delete_variant(self, v_id: uuid.UUID) -> None:
@@ -1400,7 +1400,7 @@ class PropertyDevService:
 
     async def update_plot(self, plot_id: uuid.UUID, data: PlotUpdate) -> Plot:
         plot = await self.get_plot(plot_id)
-        fields = _dump(data)
+        fields = _dump(data, plot)
         new_status = fields.get("status")
         if new_status:
             _ensure_transition("plot", plot.status, new_status, allowed_plot_transitions)
@@ -1510,8 +1510,8 @@ class PropertyDevService:
         return obj
 
     async def update_option_group(self, g_id: uuid.UUID, data: BuyerOptionGroupUpdate) -> BuyerOptionGroup:
-        await self.get_option_group(g_id)
-        await self.option_groups.update_fields(g_id, **_dump(data))
+        group = await self.get_option_group(g_id)
+        await self.option_groups.update_fields(g_id, **_dump(data, group))
         return await self.get_option_group(g_id)
 
     async def delete_option_group(self, g_id: uuid.UUID) -> None:
@@ -1542,8 +1542,8 @@ class PropertyDevService:
         return obj
 
     async def update_option(self, o_id: uuid.UUID, data: BuyerOptionUpdate) -> BuyerOption:
-        await self.get_option(o_id)
-        await self.options.update_fields(o_id, **_dump(data))
+        option = await self.get_option(o_id)
+        await self.options.update_fields(o_id, **_dump(data, option))
         return await self.get_option(o_id)
 
     async def delete_option(self, o_id: uuid.UUID) -> None:
@@ -1608,7 +1608,7 @@ class PropertyDevService:
 
     async def update_buyer(self, b_id: uuid.UUID, data: BuyerUpdate) -> Buyer:
         buyer = await self.get_buyer(b_id)
-        fields = _dump(data)
+        fields = _dump(data, buyer)
         new_status = fields.get("status")
         if new_status:
             _ensure_transition("buyer", buyer.status, new_status, allowed_buyer_transitions)
@@ -1786,7 +1786,7 @@ class PropertyDevService:
 
     async def update_selection(self, s_id: uuid.UUID, data: BuyerSelectionUpdate) -> BuyerSelection:
         sel = await self.get_selection(s_id)
-        fields = _dump(data)
+        fields = _dump(data, sel)
         new_status = fields.get("status")
         if new_status:
             _ensure_transition("selection", sel.status, new_status, allowed_selection_transitions)
@@ -1927,8 +1927,8 @@ class PropertyDevService:
         return obj
 
     async def update_handover(self, h_id: uuid.UUID, data: HandoverUpdate) -> Handover:
-        await self.get_handover(h_id)
-        await self.handovers.update_fields(h_id, **_dump(data))
+        handover = await self.get_handover(h_id)
+        await self.handovers.update_fields(h_id, **_dump(data, handover))
         return await self.get_handover(h_id)
 
     async def delete_handover(self, h_id: uuid.UUID) -> None:
@@ -2039,8 +2039,8 @@ class PropertyDevService:
         return obj
 
     async def update_snag(self, s_id: uuid.UUID, data: SnagUpdate) -> Snag:
-        await self.get_snag(s_id)
-        await self.snags.update_fields(s_id, **_dump(data))
+        snag = await self.get_snag(s_id)
+        await self.snags.update_fields(s_id, **_dump(data, snag))
         return await self.get_snag(s_id)
 
     async def delete_snag(self, s_id: uuid.UUID) -> None:
@@ -2280,7 +2280,7 @@ class PropertyDevService:
 
     async def update_warranty(self, w_id: uuid.UUID, data: WarrantyClaimUpdate) -> WarrantyClaim:
         claim = await self.get_warranty(w_id)
-        fields = _dump(data)
+        fields = _dump(data, claim)
         new_status = fields.get("status")
         if new_status:
             _ensure_transition("warranty", claim.status, new_status, allowed_warranty_transitions)
@@ -2372,7 +2372,7 @@ class PropertyDevService:
 
     async def update_handover_doc(self, doc_id: uuid.UUID, data: HandoverDocUpdate) -> HandoverDoc:
         doc = await self.get_handover_doc(doc_id)
-        fields = _dump(data)
+        fields = _dump(data, doc)
         # Stamp delivered_at when flipping is_delivered → True.
         if fields.get("is_delivered") is True and not doc.is_delivered:
             fields["delivered_at"] = _today_iso()
@@ -2828,7 +2828,7 @@ class PropertyDevService:
 
     async def update_lead(self, lead_id: uuid.UUID, data: LeadUpdate) -> Lead:
         lead = await self.get_lead(lead_id)
-        fields = _dump(data)
+        fields = _dump(data, lead)
         new_status = fields.get("status")
         if new_status:
             _ensure_transition("lead", lead.status, new_status, allowed_lead_transitions)
@@ -3082,7 +3082,7 @@ class PropertyDevService:
                 status_code=409,
                 detail=f"Reservation in status '{res.status}' is read-only",
             )
-        fields = _dump(data)
+        fields = _dump(data, res)
         if fields:
             await self.reservations.update_fields(r_id, **fields)
         return await self.get_reservation(r_id)
@@ -3332,7 +3332,7 @@ class PropertyDevService:
                 status_code=409,
                 detail=f"SalesContract in status '{spa.status}' is read-only",
             )
-        fields = _dump(data)
+        fields = _dump(data, spa)
         if fields:
             await self.sales_contracts.update_fields(spa_id, **fields)
         return await self.get_spa(spa_id)
@@ -3751,8 +3751,8 @@ class PropertyDevService:
         return obj
 
     async def update_payment_schedule(self, schedule_id: uuid.UUID, data: PaymentScheduleUpdate) -> PaymentSchedule:
-        await self.get_payment_schedule(schedule_id)
-        fields = _dump(data)
+        schedule = await self.get_payment_schedule(schedule_id)
+        fields = _dump(data, schedule)
         if fields:
             await self.payment_schedules.update_fields(schedule_id, **fields)
         return await self.get_payment_schedule(schedule_id)
@@ -3836,7 +3836,7 @@ class PropertyDevService:
                 status_code=409,
                 detail=f"Instalment in status '{ins.status}' is read-only",
             )
-        fields = _dump(data)
+        fields = _dump(data, ins)
         if fields:
             await self.instalments.update_fields(ins_id, **fields)
         return await self.get_instalment(ins_id)
@@ -4107,7 +4107,7 @@ class PropertyDevService:
 
     async def update_contract_party(self, party_id: uuid.UUID, data: ContractPartyUpdate) -> ContractParty:
         party = await self.get_contract_party(party_id)
-        fields = _dump(data)
+        fields = _dump(data, party)
         # Validate ownership-sum if pct is changing.
         if "ownership_pct" in fields and fields["ownership_pct"] is not None:
             spa = await self.get_spa(party.sales_contract_id)
@@ -5282,8 +5282,8 @@ async def _svc_update_broker(
     broker_id: uuid.UUID,
     data: Any,
 ) -> Broker:
-    await _svc_get_broker(svc, broker_id)
-    fields = _dump(data)
+    broker = await _svc_get_broker(svc, broker_id)
+    fields = _dump(data, broker)
     # ISO 3166-2 stays case-normalised.
     if "jurisdiction" in fields and isinstance(fields["jurisdiction"], str):
         fields["jurisdiction"] = fields["jurisdiction"].upper()
@@ -5343,8 +5343,8 @@ async def _svc_update_agreement(
     agreement_id: uuid.UUID,
     data: Any,
 ) -> CommissionAgreement:
-    await _svc_get_agreement(svc, agreement_id)
-    fields = _dump(data)
+    agreement = await _svc_get_agreement(svc, agreement_id)
+    fields = _dump(data, agreement)
     if "currency" in fields and isinstance(fields["currency"], str):
         fields["currency"] = fields["currency"].upper()
     if "specific_plot_ids" in fields and fields["specific_plot_ids"] is not None:
@@ -5546,8 +5546,8 @@ async def _svc_update_escrow_account(
     account_id: uuid.UUID,
     data: Any,
 ) -> EscrowAccount:
-    await _svc_get_escrow_account(svc, account_id)
-    await svc.escrow_accounts.update_fields(account_id, **_dump(data))
+    account = await _svc_get_escrow_account(svc, account_id)
+    await svc.escrow_accounts.update_fields(account_id, **_dump(data, account))
     return await _svc_get_escrow_account(svc, account_id)
 
 
@@ -5691,8 +5691,8 @@ async def _svc_update_price_matrix(
     matrix_id: uuid.UUID,
     data: Any,
 ) -> PriceMatrix:
-    await _svc_get_price_matrix(svc, matrix_id)
-    fields = _dump(data)
+    matrix = await _svc_get_price_matrix(svc, matrix_id)
+    fields = _dump(data, matrix)
     if fields.get("rules") is not None:
         coerced: list[dict[str, Any]] = []
         for rule in fields["rules"]:
@@ -5859,8 +5859,8 @@ async def _svc_update_phase(
     phase_id: uuid.UUID,
     data: Any,
 ) -> Phase:
-    await _svc_get_phase(svc, phase_id)
-    await svc.phases.update_fields(phase_id, **_dump(data))
+    phase = await _svc_get_phase(svc, phase_id)
+    await svc.phases.update_fields(phase_id, **_dump(data, phase))
     return await _svc_get_phase(svc, phase_id)
 
 
@@ -5892,8 +5892,8 @@ async def _svc_update_block(
     block_id: uuid.UUID,
     data: Any,
 ) -> Block:
-    await _svc_get_block(svc, block_id)
-    await svc.blocks.update_fields(block_id, **_dump(data))
+    block = await _svc_get_block(svc, block_id)
+    await svc.blocks.update_fields(block_id, **_dump(data, block))
     return await _svc_get_block(svc, block_id)
 
 
@@ -6878,11 +6878,24 @@ PropertyDevService.resolve_development_owner = (  # type: ignore[attr-defined]
 # ── Helpers ─────────────────────────────────────────────────────────────
 
 
-def _dump(data: Any) -> dict[str, Any]:
-    """Pydantic v2 ``model_dump`` that maps ``metadata`` → ``metadata_``."""
+def _dump(data: Any, existing: Any = None) -> dict[str, Any]:
+    """Pydantic v2 ``model_dump`` that maps ``metadata`` → ``metadata_``.
+
+    When ``existing`` is supplied (UPDATE paths) and the incoming ``metadata``
+    is a dict, the incoming keys are *merged* over the stored ``metadata_`` so
+    callers that resend only a subset of keys do not wipe the rest. CREATE
+    paths pass no ``existing`` and keep the wholesale write.
+    """
     fields = data.model_dump(exclude_unset=True)
     if "metadata" in fields:
-        fields["metadata_"] = fields.pop("metadata")
+        _incoming = fields.pop("metadata")
+        if existing is not None and isinstance(_incoming, dict):
+            fields["metadata_"] = {
+                **(getattr(existing, "metadata_", None) or {}),
+                **_incoming,
+            }
+        else:
+            fields["metadata_"] = _incoming
     return fields
 
 

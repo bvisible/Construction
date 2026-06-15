@@ -103,11 +103,14 @@ class RFQService:
         data: RFQUpdate,
     ) -> RFQ:
         """Update RFQ fields."""
-        await self.get_rfq(rfq_id)  # 404 check
+        rfq = await self.get_rfq(rfq_id)  # 404 check
 
         fields = data.model_dump(exclude_unset=True)
         if "metadata" in fields:
-            fields["metadata_"] = fields.pop("metadata")
+            _incoming = fields.pop("metadata")
+            fields["metadata_"] = (
+                {**(getattr(rfq, "metadata_", None) or {}), **_incoming} if isinstance(_incoming, dict) else _incoming
+            )
 
         if fields:
             await self.rfqs.update(rfq_id, **fields)

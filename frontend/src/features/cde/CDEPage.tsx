@@ -18,7 +18,7 @@ import {
   Check,
   File,
 } from 'lucide-react';
-import { Button, Card, Badge, EmptyState, Breadcrumb, DateDisplay, ConfirmDialog, RecoveryCard, SkeletonTable } from '@/shared/ui';
+import { Button, Card, Badge, EmptyState, Breadcrumb, DateDisplay, ConfirmDialog, RecoveryCard, SkeletonTable, ModuleGuideButton } from '@/shared/ui';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { DismissibleInfo, IntroRichText } from '@/shared/ui/DismissibleInfo';
 import { RequiresProject } from '@/shared/auth/RequiresProject';
@@ -44,6 +44,7 @@ import {
 } from './api';
 import { CDEHistoryDrawer } from './CDEHistoryDrawer';
 import { CDETransmittalsBadge } from './CDETransmittalsBadge';
+import { cdeGuide } from './cdeGuide';
 
 /* ── Constants ─────────────────────────────────────────────────────────── */
 
@@ -606,9 +607,14 @@ function LinkDocumentModal({
   const handleLink = async () => {
     if (selected.length === 0) return;
     setLinking(true);
-    try {
-      for (const doc of selected) {
-        await createContainerRevision(container.id, {
+
+    // Attempt every selected document independently so one failure no longer
+    // aborts the rest (the old for-await loop stopped at the first error and
+    // left the user unsure which documents were linked).
+    const docsToLink = selected;
+    const results = await Promise.allSettled(
+      docsToLink.map((doc) =>
+        createContainerRevision(container.id, {
           file_name: doc.name || doc.file_name || 'document',
           change_summary: t('cde.linked_from_documents', {
             defaultValue: 'Linked from Documents',
@@ -618,26 +624,79 @@ function LinkDocumentModal({
           // Link mode: reference the existing Document so its real file is
           // reused — never duplicate the row with a broken file path.
           document_id: doc.id,
+        }),
+      ),
+    );
+
+    const succeeded: DocItem[] = [];
+    const failed: { doc: DocItem; reason: string }[] = [];
+    results.forEach((res, i) => {
+      const doc = docsToLink[i];
+      if (!doc) return;
+      if (res.status === 'fulfilled') {
+        succeeded.push(doc);
+      } else {
+        failed.push({
+          doc,
+          reason:
+            res.reason instanceof Error
+              ? res.reason.message
+              : String(res.reason ?? ''),
         });
       }
+    });
+
+    // Keep exactly the documents that still need linking selected, so the
+    // "keep open to retry" branches below actually have something to retry
+    // (the Link button is disabled when nothing is selected). On full success
+    // `failed` is empty, so this clears the selection as before. Refresh
+    // revisions for the documents that actually linked.
+    setSelected(failed.map((f) => f.doc));
+    if (succeeded.length > 0) onLinked();
+
+    const firstFailure = failed[0];
+    const failDetail = firstFailure
+      ? t('cde.link_failed_detail', {
+          defaultValue: 'Document "{{name}}" failed: {{reason}}',
+          name: firstFailure.doc.name || firstFailure.doc.file_name || 'document',
+          reason: firstFailure.reason || t('common.error', { defaultValue: 'Error' }),
+        })
+      : '';
+
+    if (failed.length === 0) {
+      // Full success — notify and close.
       addToast({
         type: 'success',
         title: t('cde.documents_linked', {
           defaultValue: '{{count}} document(s) linked',
-          count: selected.length,
+          count: succeeded.length,
         }),
       });
-      onLinked();
+      setLinking(false);
       onClose();
-    } catch (e) {
+      return;
+    }
+
+    if (succeeded.length === 0) {
+      // Total failure — keep the modal open so the user can retry.
       addToast({
         type: 'error',
-        title: t('common.error', { defaultValue: 'Error' }),
-        message: e instanceof Error ? e.message : 'Failed to link',
+        title: t('cde.link_failed', { defaultValue: 'Could not link documents' }),
+        message: failDetail,
       });
-    } finally {
-      setLinking(false);
+    } else {
+      // Partial success — report both counts and keep the modal open.
+      addToast({
+        type: 'warning',
+        title: t('cde.link_partial', {
+          defaultValue: '{{linked}} linked, {{failed}} failed',
+          linked: succeeded.length,
+          failed: failed.length,
+        }),
+        message: failDetail,
+      });
     }
+    setLinking(false);
   };
 
   const formatSize = (bytes: number | null) => {
@@ -1026,6 +1085,7 @@ const ContainerRow = React.memo(function ContainerRow({
 });
 
 function RevisionItem({ revision }: { revision: CDERevision }) {
+  const { t } = useTranslation();
   return (
     <div className="flex items-center gap-3 rounded-lg bg-surface-secondary p-2.5 text-sm">
       <span className="font-mono font-semibold text-content-secondary w-12 shrink-0">
@@ -1033,7 +1093,7 @@ function RevisionItem({ revision }: { revision: CDERevision }) {
       </span>
       <DateDisplay value={revision.created_at} className="text-xs text-content-tertiary w-24 shrink-0" />
       <Badge variant="neutral" size="sm">
-        {revision.status}
+        {t(`cde.revision_status_${revision.status}`, { defaultValue: revision.status })}
       </Badge>
       {revision.file_name && (
         <span className="text-xs text-content-tertiary truncate">{revision.file_name}</span>
@@ -1330,6 +1390,8 @@ export function CDEPage() {
             'Organise project documents into ISO 19650 containers and move them through WIP, Shared, Published and Archived.',
         })}
         actions={
+          <>
+          <ModuleGuideButton content={cdeGuide} />
           <Button
             variant="primary"
             size="sm"
@@ -1361,6 +1423,7 @@ export function CDEPage() {
             <Plus size={14} className="mr-1 shrink-0" />
             <span>{t('cde.new_container', { defaultValue: 'New Container' })}</span>
           </Button>
+          </>
         }
       />
 
@@ -1392,23 +1455,18 @@ export function CDEPage() {
         })}
       </DismissibleInfo>
 
-      {/* Summary cards — fed by the /cde/stats aggregate endpoint */}
+      {/* Summary cards — fed by the /cde/stats aggregate endpoint. Shows the
+          full ISO 19650 lifecycle (Total + every state) so users can see how
+          many containers sit in WIP, Shared, Published and Archived at a
+          glance. */}
       {projectId && stats && stats.total > 0 && (
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
           <div className="flex flex-col rounded-xl border border-border-light bg-surface-elevated/90 p-3 shadow-xs transition-shadow duration-normal ease-oe hover:shadow-sm">
             <span className="text-2xs font-medium uppercase tracking-wide text-content-tertiary">
               {t('cde.stat_total', { defaultValue: 'Total containers' })}
             </span>
             <span className="mt-1 text-2xl font-bold tabular-nums text-content-primary">
               {stats.total}
-            </span>
-          </div>
-          <div className="flex flex-col rounded-xl border border-border-light bg-surface-elevated/90 p-3 shadow-xs transition-shadow duration-normal ease-oe hover:shadow-sm">
-            <span className="text-2xs font-medium uppercase tracking-wide text-content-tertiary">
-              {t('cde.state_published', { defaultValue: 'Published' })}
-            </span>
-            <span className="mt-1 text-2xl font-bold tabular-nums text-content-primary">
-              {stats.by_state?.published ?? 0}
             </span>
           </div>
           <div className="flex flex-col rounded-xl border border-border-light bg-surface-elevated/90 p-3 shadow-xs transition-shadow duration-normal ease-oe hover:shadow-sm">
@@ -1421,10 +1479,26 @@ export function CDEPage() {
           </div>
           <div className="flex flex-col rounded-xl border border-border-light bg-surface-elevated/90 p-3 shadow-xs transition-shadow duration-normal ease-oe hover:shadow-sm">
             <span className="text-2xs font-medium uppercase tracking-wide text-content-tertiary">
-              {t('cde.stat_with_revisions', { defaultValue: 'With revisions' })}
+              {t('cde.state_shared', { defaultValue: 'Shared' })}
             </span>
             <span className="mt-1 text-2xl font-bold tabular-nums text-content-primary">
-              {stats.latest_revisions}
+              {stats.by_state?.shared ?? 0}
+            </span>
+          </div>
+          <div className="flex flex-col rounded-xl border border-border-light bg-surface-elevated/90 p-3 shadow-xs transition-shadow duration-normal ease-oe hover:shadow-sm">
+            <span className="text-2xs font-medium uppercase tracking-wide text-content-tertiary">
+              {t('cde.state_published', { defaultValue: 'Published' })}
+            </span>
+            <span className="mt-1 text-2xl font-bold tabular-nums text-content-primary">
+              {stats.by_state?.published ?? 0}
+            </span>
+          </div>
+          <div className="flex flex-col rounded-xl border border-border-light bg-surface-elevated/90 p-3 shadow-xs transition-shadow duration-normal ease-oe hover:shadow-sm">
+            <span className="text-2xs font-medium uppercase tracking-wide text-content-tertiary">
+              {t('cde.state_archived', { defaultValue: 'Archived' })}
+            </span>
+            <span className="mt-1 text-2xl font-bold tabular-nums text-content-primary">
+              {stats.by_state?.archived ?? 0}
             </span>
           </div>
         </div>
@@ -1433,10 +1507,14 @@ export function CDEPage() {
       {/* State filter tabs */}
       <div className="flex items-center gap-1 overflow-x-auto pb-1" title={t('cde.iso19650_states_tooltip', { defaultValue: 'ISO 19650 document states: WIP = Work in Progress (being authored), Shared = shared with team for review, Published = formally approved and issued, Archived = superseded or no longer current' })}>
         {[
-          { key: '' as CDEState | '', label: 'All', count: stateCounts.all },
+          {
+            key: '' as CDEState | '',
+            label: t('cde.tab_all', { defaultValue: 'All' }),
+            count: stateCounts.all,
+          },
           ...STATE_ORDER.map((s) => ({
             key: s as CDEState | '',
-            label: STATE_CONFIG[s].label,
+            label: t(`cde.state_${s}`, { defaultValue: STATE_CONFIG[s].label }),
             count: stateCounts[s] ?? 0,
           })),
         ].map((tab) => (
@@ -1450,7 +1528,7 @@ export function CDEPage() {
                 : 'text-content-secondary hover:bg-surface-secondary hover:text-content-primary',
             )}
           >
-            {t(`cde.tab_${tab.key || 'all'}`, { defaultValue: tab.label })}
+            {tab.label}
             <span
               className={clsx(
                 'text-2xs tabular-nums px-1.5 py-0.5 rounded-full',

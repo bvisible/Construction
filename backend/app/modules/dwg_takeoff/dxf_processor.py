@@ -340,7 +340,17 @@ def generate_svg_thumbnail(file_path: str) -> str:
         backend = ezdxf_svg.SVGBackend()
         Frontend(ctx, backend).draw_layout(msp)
         if hasattr(backend, "get_string"):
-            return backend.get_string()
+            # ezdxf 1.1+ changed the signature to ``get_string(page)`` where
+            # ``page`` is a ``layout.Page`` describing the output size;
+            # ``Page(0, 0)`` auto-fits the page to the drawing extents. Older
+            # 0.x builds exposed ``get_string()`` with no argument, so fall
+            # back to that when the new signature isn't accepted.
+            try:
+                from ezdxf.addons.drawing import layout as ezdxf_layout
+
+                return backend.get_string(ezdxf_layout.Page(0, 0))
+            except TypeError:
+                return backend.get_string()
         # ezdxf 1.5+ - backend exposes ``get_xml_root()`` instead; fall
         # back to that and serialise via the stdlib.
         if hasattr(backend, "get_xml_root"):

@@ -48,6 +48,7 @@ import {
   WideModalSection,
   WideModalField,
   ContactSearchInput,
+  ModuleGuideButton,
 } from '@/shared/ui';
 import { RequiresProject } from '@/shared/auth/RequiresProject';
 import { PageHeader } from '@/shared/ui/PageHeader';
@@ -84,6 +85,7 @@ import {
 } from './api';
 import { AttendanceSection } from './AttendanceSection';
 import { RecurringSeriesDialog } from './RecurringSeriesDialog';
+import { meetingsGuide } from './meetingsGuide';
 
 /* -- Constants ------------------------------------------------------------- */
 
@@ -2329,9 +2331,11 @@ export function MeetingsPage() {
 
       {/* Header */}
       <PageHeader
+        srTitle={t('meetings.title', { defaultValue: 'Meetings' })}
         subtitle={t('meetings.subtitle', { defaultValue: 'Schedule, track, and document project meetings with action items' })}
         actions={
           <>
+            <ModuleGuideButton content={meetingsGuide} />
             <Button
               variant="secondary"
               size="sm"

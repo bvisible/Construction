@@ -40,6 +40,7 @@ import {
   WideModal,
   ConfirmDialog,
   InfoHint,
+  ModuleGuideButton,
 } from '@/shared/ui';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { RequiresProject } from '@/shared/auth/RequiresProject';
@@ -100,6 +101,7 @@ import {
   currentTasksForMaster,
 } from './api';
 import { fetchTasks, type Task } from '@/features/tasks/api';
+import { scheduleAdvancedGuide } from './scheduleAdvancedGuide';
 
 const SCHEDULE_TAB_IDS = [
   'master',
@@ -510,14 +512,17 @@ export function ScheduleAdvancedPage() {
             'Pull-planning, lookaheads, weekly commitments, constraints and baselines.',
         })}
         actions={
-          <Button
-            variant="primary"
-            icon={<Plus size={14} />}
-            onClick={() => setCreateMaster(true)}
-            disabled={!projectId}
-          >
-            {t('schedule_advanced.new_master', { defaultValue: 'New Master Schedule' })}
-          </Button>
+          <>
+            <ModuleGuideButton content={scheduleAdvancedGuide} />
+            <Button
+              variant="primary"
+              icon={<Plus size={14} />}
+              onClick={() => setCreateMaster(true)}
+              disabled={!projectId}
+            >
+              {t('schedule_advanced.new_master', { defaultValue: 'New Master Schedule' })}
+            </Button>
+          </>
         }
       />
 
@@ -1065,13 +1070,14 @@ function phaseVarianceDays(
 }
 
 function VarianceBadge({ days }: { days: number | null }) {
+  const { t } = useTranslation();
   if (days == null) return null;
   if (days === 0) {
     return (
       <span
         className="inline-flex items-center rounded-md bg-surface-secondary px-1.5 py-px text-2xs font-medium text-content-tertiary tabular-nums"
         data-testid="phase-variance-onplan"
-        title="On plan vs baseline"
+        title={t('schedule_advanced.variance_on_plan', { defaultValue: 'On plan vs baseline' })}
       >
         ±0d
       </span>
@@ -1087,7 +1093,11 @@ function VarianceBadge({ days }: { days: number | null }) {
           : 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300',
       )}
       data-testid={positive ? 'phase-variance-late' : 'phase-variance-early'}
-      title={positive ? 'Slipped vs baseline' : 'Ahead of baseline'}
+      title={
+        positive
+          ? t('schedule_advanced.variance_late', { defaultValue: 'Slipped vs baseline' })
+          : t('schedule_advanced.variance_early', { defaultValue: 'Ahead of baseline' })
+      }
     >
       {positive ? '+' : ''}
       {days}d

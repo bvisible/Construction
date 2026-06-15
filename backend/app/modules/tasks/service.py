@@ -382,7 +382,10 @@ class TaskService:
                     detail="Cannot edit a completed task",
                 )
         if "metadata" in fields:
-            fields["metadata_"] = fields.pop("metadata")
+            _incoming = fields.pop("metadata")
+            fields["metadata_"] = (
+                {**(getattr(task, "metadata_", None) or {}), **_incoming} if isinstance(_incoming, dict) else _incoming
+            )
         if "checklist" in fields and fields["checklist"] is not None:
             fields["checklist"] = [
                 entry.model_dump() if hasattr(entry, "model_dump") else entry for entry in fields["checklist"]

@@ -78,10 +78,9 @@ describe('UsageBadge', () => {
   it('folds freshness into the tooltip when band data is present', () => {
     const { container } = render(<UsageBadge count={2} band={band({ frequency: 2 })} />);
     const el = container.querySelector('[data-usage]');
-    // The combined tooltip folds in both the count and the freshness phrase.
-    // (The test i18n mock returns the raw defaultValue template without
-    // interpolating, so we assert on the template placeholders/words.)
-    expect(el?.getAttribute('title')).toMatch(/count/);
+    // The combined tooltip folds in both the usage count and the freshness
+    // phrase, e.g. "Used in 2 estimate positions, last 0d ago".
+    expect(el?.getAttribute('title')).toMatch(/2 estimate position/);
     expect(el?.getAttribute('title')).toMatch(/last/);
   });
 });

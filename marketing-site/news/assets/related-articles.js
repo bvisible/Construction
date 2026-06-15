@@ -14,6 +14,33 @@
   // for "draw the on-brand SVG placeholder".
   var ARTICLES = [
     {
+      slug: 'v8-3-0',
+      href: '/news/v8-3-0.html',
+      title: 'v8.3.0 - A South Africa construction pack, the first of our African coverage.',
+      date: '2026-06-15',
+      tag: 'Release',
+      tagClass: 'release',
+      thumb: null
+    },
+    {
+      slug: 'v8-2-0',
+      href: '/news/v8-2-0.html',
+      title: 'v8.2.0 - A project journey map, an FX inversion guard and tighter import validation.',
+      date: '2026-06-14',
+      tag: 'Release',
+      tagClass: 'release',
+      thumb: null
+    },
+    {
+      slug: 'v8-1-0',
+      href: '/news/v8-1-0.html',
+      title: 'v8.1.0 - Tighter multi-user access control and a smoother first run.',
+      date: '2026-06-14',
+      tag: 'Release',
+      tagClass: 'release',
+      thumb: null
+    },
+    {
       slug: 'v7-10-0',
       href: '/news/v7-10-0.html',
       title: 'v7.10.0 - Tables in the assistant chat, a fully translated project setup and a lighter install.',

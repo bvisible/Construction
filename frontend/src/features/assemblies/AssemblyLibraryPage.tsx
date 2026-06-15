@@ -7,6 +7,7 @@ import { Library, Search, X, Layers, Globe, AlertCircle, Loader2, Eye, Save } fr
 import { Button, Card, Badge, EmptyState, SkeletonGrid, Breadcrumb, DismissibleInfo } from '@/shared/ui';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { useToastStore } from '@/stores/useToastStore';
+import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { projectsApi } from '@/features/projects/api';
 
 import {
@@ -278,6 +279,7 @@ function TemplateDrawer({
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
+  const activeProjectId = useProjectContextStore((s) => s.activeProjectId);
   const [projectId, setProjectId] = useState<string>('');
   const [quantity, setQuantity] = useState<string>('1');
   const [applying, setApplying] = useState(false);
@@ -289,12 +291,20 @@ function TemplateDrawer({
     queryFn: () => projectsApi.list() as Promise<ProjectLite[]>,
   });
 
-  // Pick the first project by default once the list arrives.
+  // Default to the project chosen in the top bar so applying a template
+  // matches the rest of the app, falling back to the first project only
+  // when none is active. The drawer remounts on each open, so this re-seeds
+  // from the current active project every time. The user can still pick
+  // another project below.
   useEffect(() => {
     if (projectId) return;
+    if (activeProjectId) {
+      setProjectId(activeProjectId);
+      return;
+    }
     const first = projects?.[0];
     if (first) setProjectId(first.id);
-  }, [projects, projectId]);
+  }, [projects, projectId, activeProjectId]);
 
   // Step 1 — Preview. Resolves the template against the project's cost
   // catalogue WITHOUT persisting anything (the backend documents this as a

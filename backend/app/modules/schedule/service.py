@@ -603,12 +603,19 @@ class ScheduleService:
         Raises:
             HTTPException 404 if schedule not found.
         """
-        await self.get_schedule(schedule_id)
+        schedule = await self.get_schedule(schedule_id)
 
         fields = data.model_dump(exclude_unset=True)
-        # Map 'metadata' key to the model's 'metadata_' column
+        # Map 'metadata' key to the model's 'metadata_' column. Merge the
+        # incoming dict over the stored value so a partial PATCH never drops
+        # keys the caller did not resend (json_overwrite data-loss guard).
         if "metadata" in fields:
-            fields["metadata_"] = fields.pop("metadata")
+            _incoming = fields.pop("metadata")
+            fields["metadata_"] = (
+                {**(getattr(schedule, "metadata_", None) or {}), **_incoming}
+                if isinstance(_incoming, dict)
+                else _incoming
+            )
 
         if fields:
             await self.schedule_repo.update_fields(schedule_id, **fields)
@@ -1111,9 +1118,16 @@ class ScheduleService:
         if "boq_position_ids" in fields and fields["boq_position_ids"] is not None:
             fields["boq_position_ids"] = [str(pid) for pid in fields["boq_position_ids"]]
 
-        # Map 'metadata' key to the model's 'metadata_' column
+        # Map 'metadata' key to the model's 'metadata_' column. Merge the
+        # incoming dict over the stored value so a partial PATCH never drops
+        # keys the caller did not resend (json_overwrite data-loss guard).
         if "metadata" in fields:
-            fields["metadata_"] = fields.pop("metadata")
+            _incoming = fields.pop("metadata")
+            fields["metadata_"] = (
+                {**(getattr(activity, "metadata_", None) or {}), **_incoming}
+                if isinstance(_incoming, dict)
+                else _incoming
+            )
 
         # Recalculate duration if dates changed
         new_start = fields.get("start_date", activity.start_date)

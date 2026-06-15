@@ -321,7 +321,11 @@ class SavedViewService:
         if payload.is_pinned is not None:
             fields["is_pinned"] = payload.is_pinned
         if payload.metadata_ is not None:
-            fields["metadata_"] = payload.metadata_
+            fields["metadata_"] = (
+                {**(getattr(view, "metadata_", None) or {}), **payload.metadata_}
+                if isinstance(payload.metadata_, dict)
+                else payload.metadata_
+            )
         return await self.repo.update_fields(view, fields)
 
     async def delete_view(self, view_id: uuid.UUID, ctx: ScopeContext) -> None:
