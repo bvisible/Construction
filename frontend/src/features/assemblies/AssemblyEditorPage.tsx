@@ -40,7 +40,34 @@ import {
 
 /* -- Constants ------------------------------------------------------------ */
 
-const UNITS = ['m', 'm2', 'm3', 'kg', 't', 'pcs', 'lsum', 'h', 'set', 'lm'];
+// Base quantity units first, then composite yield/productivity units used in
+// rendement-style estimating (effort per produced unit, e.g. 0.175 h/m2 to form
+// a slab, and the inverse productivity form m2/h). Existing units are kept in
+// place so assemblies already saved with them keep rendering unchanged.
+const UNITS = [
+  'm',
+  'm2',
+  'm3',
+  'kg',
+  't',
+  'pcs',
+  'lsum',
+  'h',
+  'set',
+  'lm',
+  // Effort per produced unit (labor / machine / tooling yield).
+  'h/m',
+  'h/m2',
+  'h/m3',
+  'h/ml',
+  'h/pcs',
+  'h/t',
+  // Productivity (produced units per hour) — inverse of the above.
+  'm/h',
+  'm2/h',
+  'm3/h',
+  'pcs/h',
+];
 
 /* -- Component ------------------------------------------------------------ */
 
