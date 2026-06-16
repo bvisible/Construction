@@ -86,6 +86,12 @@ RESOURCE_TYPES: tuple[str, ...] = (
     "material",
     "labor",
     "equipment",
+    # //// NEOFFICE PATCH — "tooling" separates small tracked tools (drill,
+    # disc cutter, mixer) from heavy plant ("equipment", e.g. a crane). Protti
+    # estimates and tracks these distinctly (small-tooling QR allocation), and
+    # the yield (h per produced unit) applies to it like labor/equipment. The
+    # column is a free-form varchar so this is additive (no migration).
+    "tooling",
     "operator",
     "subcontractor",
     "overhead",

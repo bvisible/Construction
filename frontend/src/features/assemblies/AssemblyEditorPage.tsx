@@ -185,6 +185,11 @@ export function AssemblyEditorPage() {
           unit: 'h',
           metadata: { rental_days: 0, fuel_cost: 0 },
         },
+        tooling: {
+          description: t('assemblies.seed_tooling', { defaultValue: 'New tool' }),
+          unit: 'h',
+          metadata: {},
+        },
         operator: {
           description: t('assemblies.seed_operator', { defaultValue: 'New operator' }),
           unit: 'h',
@@ -948,6 +953,7 @@ const RESOURCE_TYPE_STYLES: Record<string, string> = {
   material: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-400',
   labor: 'bg-blue-50 text-blue-700 dark:bg-blue-900/20 dark:text-blue-400',
   equipment: 'bg-amber-50 text-amber-700 dark:bg-amber-900/20 dark:text-amber-400',
+  tooling: 'bg-cyan-50 text-cyan-700 dark:bg-cyan-900/20 dark:text-cyan-400',
   operator: 'bg-orange-50 text-orange-700 dark:bg-orange-900/20 dark:text-orange-400',
   subcontractor: 'bg-violet-50 text-violet-700 dark:bg-violet-900/20 dark:text-violet-400',
   overhead: 'bg-slate-100 text-slate-700 dark:bg-slate-800/40 dark:text-slate-300',
@@ -959,6 +965,7 @@ const RESOURCE_TYPE_BAR: Record<string, string> = {
   material: 'bg-emerald-500',
   labor: 'bg-blue-500',
   equipment: 'bg-amber-500',
+  tooling: 'bg-cyan-500',
   operator: 'bg-orange-500',
   subcontractor: 'bg-violet-500',
   overhead: 'bg-slate-500',
@@ -1071,6 +1078,7 @@ function ComponentRow({
               <option value="material">{t('assemblies.type_material', { defaultValue: 'Mat' })}</option>
               <option value="labor">{t('assemblies.type_labor', { defaultValue: 'Labor' })}</option>
               <option value="equipment">{t('assemblies.type_equipment', { defaultValue: 'Equip' })}</option>
+              <option value="tooling">{t('assemblies.type_tooling', { defaultValue: 'Outil.' })}</option>
               <option value="operator">{t('assemblies.type_operator', { defaultValue: 'Oper' })}</option>
               <option value="subcontractor">{t('assemblies.type_subcontractor', { defaultValue: 'Sub' })}</option>
               <option value="overhead">{t('assemblies.type_overhead', { defaultValue: 'OH' })}</option>
@@ -1639,6 +1647,7 @@ function BreakdownSidebar({
     'material',
     'labor',
     'equipment',
+    'tooling',
     'operator',
     'subcontractor',
     'overhead',
@@ -1650,11 +1659,13 @@ function BreakdownSidebar({
         ? t('assemblies.type_labor_full', { defaultValue: 'Labor' })
         : rt === 'equipment'
           ? t('assemblies.type_equipment_full', { defaultValue: 'Equipment' })
-          : rt === 'operator'
-            ? t('assemblies.type_operator_full', { defaultValue: 'Operator' })
-            : rt === 'subcontractor'
-              ? t('assemblies.type_subcontractor_full', { defaultValue: 'Subcontract' })
-              : t('assemblies.type_overhead_full', { defaultValue: 'Overhead' });
+          : rt === 'tooling'
+            ? t('assemblies.type_tooling_full', { defaultValue: 'Tooling' })
+            : rt === 'operator'
+              ? t('assemblies.type_operator_full', { defaultValue: 'Operator' })
+              : rt === 'subcontractor'
+                ? t('assemblies.type_subcontractor_full', { defaultValue: 'Subcontract' })
+                : t('assemblies.type_overhead_full', { defaultValue: 'Overhead' });
   // Show every category that has components, not only the priced ones, so a
   // line you just added is visible (at 0) while you type its price in, and a
   // category with several components never silently drops out.
