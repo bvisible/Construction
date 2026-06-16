@@ -525,7 +525,13 @@ def _build_settings_response(settings: AISettings) -> AISettingsResponse:
     )
     has_cloud_key = any(_usable(getattr(settings, attr, None)) for attr in _CLOUD_KEY_ATTRS)
     has_local_provider = bool(ollama_url) or bool(vllm_url)
-    ai_ready = has_cloud_key or has_local_provider
+    # //// NEOFFICE PATCH — the NORA/olares provider is resolved from
+    # site_config (oce_olares_base_url + oce_olares_api_key) and bypasses the
+    # per-user cloud keys above (same mechanism as preferred_model_override).
+    # Without counting it here, ai_ready stays False and the UI shows
+    # "AI not connected" even though every call routes to NORA fine. Reuse the
+    # _olares_configured flag computed above for the model rebrand.
+    ai_ready = has_cloud_key or has_local_provider or _olares_configured
 
     return AISettingsResponse(
         id=settings.id,
