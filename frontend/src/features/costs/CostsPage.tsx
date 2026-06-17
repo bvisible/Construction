@@ -1183,10 +1183,16 @@ export function CostsPage() {
         </button>
       </div>
 
-      <div className="lg:grid lg:grid-cols-[260px_minmax(0,1fr)] lg:gap-5">
+      {/* //// NEOFFICE PATCH — was lg:grid-cols-[260px_minmax(0,1fr)]. When the
+          category sidebar is hidden (display:none), a grid leaves the content in
+          the first 260px column and the 1fr column empty, so the whole page
+          collapsed into a narrow left strip. Flex degrades correctly: the
+          content (lg:flex-1) takes the full width when the aside is hidden, and
+          sits next to the 260px aside when it is shown. */}
+      <div className="lg:flex lg:gap-5">
 
       {/* Category sidebar (desktop) — mirrors the BOQ "From Database" modal */}
-      <aside className="hidden lg:block lg:sticky lg:top-4 lg:self-start lg:max-h-[calc(100vh-2rem)]">
+      <aside className="hidden lg:block lg:w-[260px] lg:shrink-0 lg:sticky lg:top-4 lg:self-start lg:max-h-[calc(100vh-2rem)]">
         <Card padding="none" className="overflow-hidden">
           <div className="px-3 py-2.5 border-b border-border-light bg-surface-secondary/40">
             <span className="text-xs font-semibold text-content-secondary">
@@ -1218,7 +1224,7 @@ export function CostsPage() {
         </Card>
       </aside>
 
-      <div className="min-w-0">
+      <div className="min-w-0 lg:flex-1">
 
       {/* Search & Filters */}
       <Card padding="none" className="mb-6">
