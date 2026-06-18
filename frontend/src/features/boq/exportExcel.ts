@@ -328,7 +328,7 @@ export function buildBOQSheetData(options: ExportOptions): {
   rows.push(summaryRow('COST SUMMARY', null));
   merge(rows.length - 1, 1, rows.length - 1, 4);
 
-  const directCost = positions.filter((p) => !isSection(p)).reduce((sum, p) => sum + p.total, 0);
+  const directCost = positions.filter((p) => !isSection(p)).reduce((sum, p) => sum + (Number(p.total) || 0), 0);
   rows.push(summaryRow('Direct Cost', directCost));
 
   for (const m of markupTotals) {
@@ -389,13 +389,13 @@ export function buildSummarySheetData(options: ExportOptions): {
 
   const ungroupedItems = grouped.ungrouped.filter((p) => !isSection(p));
   if (ungroupedItems.length > 0) {
-    const ungroupedTotal = ungroupedItems.reduce((sum, p) => sum + p.total, 0);
+    const ungroupedTotal = ungroupedItems.reduce((sum, p) => sum + (Number(p.total) || 0), 0);
     rows.push(['Ungrouped Items', ungroupedItems.length, ungroupedTotal]);
   }
 
   rows.push([null, null, null]);
 
-  const directCost = positions.filter((p) => !isSection(p)).reduce((sum, p) => sum + p.total, 0);
+  const directCost = positions.filter((p) => !isSection(p)).reduce((sum, p) => sum + (Number(p.total) || 0), 0);
   rows.push(['Direct Cost', null, directCost]);
   for (const m of markupTotals) {
     rows.push([`  + ${m.name} (${m.percentage}%)`, null, m.amount]);

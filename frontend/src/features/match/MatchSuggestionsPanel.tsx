@@ -1044,7 +1044,7 @@ const CandidateCard = memo(function CandidateCard({
       {/* Mid row: unit / unit-rate / region */}
       <div className="flex items-center gap-2 text-[11px] text-content-secondary">
         <span className="font-medium text-content-primary">
-          {candidate.unit_rate.toFixed(2)} {candidate.currency}
+          {Number(candidate.unit_rate).toFixed(2)} {candidate.currency}
         </span>
         <span>·</span>
         <span>

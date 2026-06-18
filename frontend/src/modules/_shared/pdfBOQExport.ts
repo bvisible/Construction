@@ -28,7 +28,7 @@ export function generateBOQPrintHTML(
 ): string {
   const { projectName = 'Project', boqName = 'Bill of Quantities', includePrices = true, date = new Date().toLocaleDateString() } = options;
 
-  const totalValue = positions.reduce((sum, p) => sum + (p.isSection ? 0 : p.total), 0);
+  const totalValue = positions.reduce((sum, p) => sum + (p.isSection ? 0 : Number(p.total) || 0), 0);
   const posCount = positions.filter((p) => !p.isSection).length;
 
   const formatCurrency = (val: number) =>

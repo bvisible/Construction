@@ -488,7 +488,7 @@ export function ResourceSummary({ boqId, locale = 'de-DE' }: { boqId: string; lo
                             <td />
                             <td className="px-3 py-2 text-right text-xs font-bold text-content-primary tabular-nums">
                               {fmt.format(
-                                filteredResources.reduce((sum, r) => sum + r.total_cost, 0),
+                                filteredResources.reduce((sum, r) => sum + (Number(r.total_cost) || 0), 0),
                               )}
                             </td>
                             <td className="px-3 py-2 text-right text-xs font-bold text-content-primary tabular-nums">

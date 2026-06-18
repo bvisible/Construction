@@ -49,7 +49,7 @@
 
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <link rel="manifest" href="/site.webmanifest" />
-  <meta name="theme-color" content="#0284c7" />
+  <meta name="theme-color" content="#2d5e8e" />
 
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -88,9 +88,9 @@
     /* THEME TOKENS - Breeze sky palette                                 */
     /* ================================================================ */
     :root {
-      --bg-0: #f7fbff;
-      --bg-1: #edf5ff;
-      --bg-2: #e7f2fd;
+      --bg-0: #f1f2f3;
+      --bg-1: #ebeced;
+      --bg-2: #e4e5e7;
       --ink-0: #0b1220;
       --ink-1: #1e293b;
       --ink-2: #475569;
@@ -101,11 +101,11 @@
       --card: #ffffff;
       --code-bg: #0f172a;
       --code-fg: #e2e8f0;
-      --accent: #0284c7;
-      --accent-2: #0ea5e9;
-      --accent-3: #2563eb;
-      --accent-4: #6366f1;
-      --accent-5: #06b6d4;
+      --accent: #2d5e8e;
+      --accent-2: #3c6fa0;
+      --accent-3: #244c74;
+      --accent-4: #2d5e8e;
+      --accent-5: #3c6fa0;
     }
     [data-theme="dark"] {
       --bg-0: #0b1220;
@@ -121,9 +121,9 @@
       --card: #111a2c;
       --code-bg: #0a0f1c;
       --code-fg: #e2e8f0;
-      --accent: #38bdf8;
-      --accent-2: #7dd3fc;
-      --accent-3: #60a5fa;
+      --accent: #6ba2d8;
+      --accent-2: #84b3e2;
+      --accent-3: #5a90c8;
     }
 
     *, *::before, *::after { box-sizing: border-box; }
@@ -520,7 +520,7 @@
       font-size: 14px;
       line-height: 1.7;
       overflow-x: auto;
-      border: 1px solid rgba(56, 189, 248, 0.18);
+      border: 1px solid rgba(107, 162, 216, 0.09);
       box-shadow: 0 18px 40px -20px rgba(2, 90, 160, 0.25);
     }
     .codewrap .cmd::before {
@@ -528,7 +528,7 @@
       color: #64748b;
       user-select: none;
     }
-    .codewrap .tok-cmd { color: #7dd3fc; }
+    .codewrap .tok-cmd { color: #84b3e2; }
     .codewrap .tok-arg { color: #e2e8f0; }
     .codewrap .tok-flag { color: #fbbf24; }
     .codewrap .tok-amp { color: #64748b; padding: 0 4px; }
@@ -548,8 +548,8 @@
       transition: background 0.15s ease, border-color 0.15s ease;
     }
     .copy-btn:hover {
-      background: rgba(56, 189, 248, 0.18);
-      border-color: rgba(56, 189, 248, 0.4);
+      background: rgba(107, 162, 216, 0.09);
+      border-color: rgba(107, 162, 216, 0.09);
     }
     .copy-btn.is-copied {
       background: rgba(34, 197, 94, 0.18);

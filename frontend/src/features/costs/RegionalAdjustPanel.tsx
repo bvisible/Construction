@@ -77,8 +77,14 @@ export function RegionalAdjustPanel({
   }, [data, onApplyPreview]);
 
   const deltaPct = useMemo(() => {
-    if (!data || data.base_rate === 0) return 0;
-    return ((data.adjusted_rate - data.base_rate) / data.base_rate) * 100;
+    if (!data) return 0;
+    // Money fields arrive as Decimal strings on the wire (DecimalMoney
+    // serializer in backend/app/modules/costs/schemas.py), so coerce to
+    // numbers before any arithmetic or .toFixed formatting.
+    const base = Number(data.base_rate);
+    const adjusted = Number(data.adjusted_rate);
+    if (!base) return 0;
+    return ((adjusted - base) / base) * 100;
   }, [data]);
 
   return (
@@ -157,7 +163,7 @@ export function RegionalAdjustPanel({
                 ? '…'
                 : isError || !data
                   ? '—'
-                  : data.adjusted_rate.toFixed(2)}
+                  : Number(data.adjusted_rate).toFixed(2)}
             </div>
           </div>
         </div>
@@ -167,7 +173,7 @@ export function RegionalAdjustPanel({
             <div className="text-2xs text-content-tertiary">
               {t('costs.regional_adjust.factor', { defaultValue: 'Factor' })}
               {' × '}
-              <span className="font-mono tabular-nums">{data.factor_applied.toFixed(4)}</span>
+              <span className="font-mono tabular-nums">{Number(data.factor_applied).toFixed(4)}</span>
             </div>
             <div
               className={clsx(

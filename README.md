@@ -134,6 +134,7 @@ Professional BOQ, 4D scheduling, 5D cost model, and tendering - all in one open-
 <td valign="top">
 
 <picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/people-dark.svg"><img src="docs/readme-icons/people-light.svg" width="14" align="center" alt=""></picture> **Community**
+- [Contributors](#contributors)
 - [Support the Project](#support-the-project)
 - [AI Disclaimer](#ai-disclaimer)
 - [Trademarks](#trademarks)
@@ -1053,6 +1054,14 @@ OpenConstructionERP is built and maintained by the community. If you find it use
 - <picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/comment-discussion-dark.svg"><img src="docs/readme-icons/comment-discussion-light.svg" width="14" align="center" alt=""></picture> **[Join Discussions](https://t.me/datadrivenconstruction)** - ask questions, share ideas, help others
 - <picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/bug-dark.svg"><img src="docs/readme-icons/bug-light.svg" width="14" align="center" alt=""></picture> **[Report issues](https://github.com/datadrivenconstruction/OpenConstructionERP/issues)** - help us improve
 - <picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/briefcase-dark.svg"><img src="docs/readme-icons/briefcase-light.svg" width="14" align="center" alt=""></picture> **[Professional consulting](https://datadrivenconstruction.io/contact-support/)** - custom deployment, training, enterprise support
+
+## Contributors
+
+OpenConstructionERP is shaped by the people who report bugs, request features, and ask the sharp questions that push the platform forward. We credit every one of them.
+
+For security reasons we do not merge external pull requests. When someone reports a bug or sends a patch, we re-implement the fix ourselves in our own sandbox and review it before it ships. That keeps one audited source of truth for a codebase that companies run in production, and it avoids pulling in code we did not write. The credit goes to the person who reported the problem or proposed the idea, and the implementation is our own.
+
+See **[CONTRIBUTORS.md](CONTRIBUTORS.md)** for the full list. Want to join it? [Open an issue](https://github.com/datadrivenconstruction/OpenConstructionERP/issues) or say hello in the [community chat](https://t.me/datadrivenconstruction).
 
 ## Security
 

@@ -314,13 +314,7 @@ export function AssemblyEditorPage() {
   }
 
   const components = assembly.components ?? [];
-  // //// NEOFFICE PATCH — cast every Decimal-as-string value with Number()
-  // so neither the fallback sum nor the headline ever becomes NaN through
-  // string concatenation (backend serialises Decimal columns as strings).
-  const computedTotal = components.reduce(
-    (sum, c) => sum + (Number(c.total ?? 0) || 0),
-    0,
-  );
+  const computedTotal = components.reduce((sum, c) => sum + (Number(c.total) || 0), 0);
   // Prefer the server-persisted total_rate for the headline figure: it already
   // reflects the bid factor AND any per-type typed-formula adjustments
   // (waste / burden / fuel) that the naive client-side sum does not mirror.

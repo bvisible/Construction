@@ -586,7 +586,10 @@ async def get_forecast(
     _perm: None = Depends(RequirePermission("crm.read")),
     service: CrmService = Depends(_get_service),
 ) -> ForecastResponse:
-    forecast = await service.get_forecast(period, owner_user_id)
+    try:
+        forecast = await service.get_forecast(period, owner_user_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
     return ForecastResponse.model_validate(forecast)
 
 
@@ -597,7 +600,10 @@ async def compute_forecast_endpoint(
     _perm: None = Depends(RequirePermission("crm.compute_forecast")),
     service: CrmService = Depends(_get_service),
 ) -> ForecastResponse:
-    forecast = await service.compute_and_store_forecast(period, owner_user_id)
+    try:
+        forecast = await service.compute_and_store_forecast(period, owner_user_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
     return ForecastResponse.model_validate(forecast)
 
 

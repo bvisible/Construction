@@ -285,9 +285,14 @@ export default function GAEBExchangeModule() {
         ordinal: p.ordinal,
         description: p.description,
         unit: p.unit,
-        quantity: p.quantity,
-        unitRate: p.unit_rate,
-        total: p.total ?? p.quantity * p.unit_rate,
+        // Money/quantity arrive as Decimal strings on the wire; coerce so
+        // export (.toFixed) and totals never crash on a real BOQ import.
+        quantity: Number(p.quantity) || 0,
+        unitRate: Number(p.unit_rate) || 0,
+        total:
+          p.total != null
+            ? Number(p.total) || 0
+            : (Number(p.quantity) || 0) * (Number(p.unit_rate) || 0),
         section: p.section,
         parentId: p.parent_id,
         isSection: p.is_section,

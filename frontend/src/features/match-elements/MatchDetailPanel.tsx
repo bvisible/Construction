@@ -309,7 +309,7 @@ export function MatchDetailPanel({ sessionId, group, onClose }: Props) {
                           <td className="px-2 py-1.5 font-mono text-xs">{cand.code}</td>
                           <td className="px-2 py-1.5 text-xs">{cand.description}</td>
                           <td className="px-2 py-1.5 text-right text-xs tabular-nums">
-                            {cand.unit_rate.toFixed(2)} {cand.currency}/{cand.unit}
+                            {Number(cand.unit_rate).toFixed(2)} {cand.currency}/{cand.unit}
                           </td>
                           <td className="px-2 py-1.5 text-right">
                             <ConfidencePill band={cand.confidence_band} score={cand.score} />
@@ -382,7 +382,7 @@ export function MatchDetailPanel({ sessionId, group, onClose }: Props) {
                     {t('match_elements.detail.apply_total', 'Total')}
                   </span>
                   <strong className="tabular-nums">
-                    {applyQ.data.grand_total.toFixed(2)}{' '}
+                    {Number(applyQ.data.grand_total).toFixed(2)}{' '}
                     {applyQ.data.currency ?? ''}
                   </strong>
                 </div>
@@ -392,8 +392,8 @@ export function MatchDetailPanel({ sessionId, group, onClose }: Props) {
                   <div className="text-xs text-slate-500 mb-1">{p.section_path.join(' → ')}</div>
                   <div className="font-medium text-sm">{p.description}</div>
                   <div className="text-xs text-slate-600 dark:text-slate-300 mt-1">
-                    {p.quantity.toFixed(2)} {p.unit} × {p.unit_rate.toFixed(2)} {p.currency} ={' '}
-                    <strong className="tabular-nums">{p.line_total.toFixed(2)} {p.currency}</strong>
+                    {Number(p.quantity).toFixed(2)} {p.unit} × {Number(p.unit_rate).toFixed(2)} {p.currency} ={' '}
+                    <strong className="tabular-nums">{Number(p.line_total).toFixed(2)} {p.currency}</strong>
                   </div>
                   {p.resources.length > 0 && (
                     <div className="mt-2 pl-3 border-l-2 border-slate-200 dark:border-slate-700">
@@ -401,7 +401,7 @@ export function MatchDetailPanel({ sessionId, group, onClose }: Props) {
                       {p.resources.map((r, i) => (
                         <div key={i} className="text-xs flex justify-between text-slate-600 dark:text-slate-300">
                           <span>{r.description} (×{r.factor})</span>
-                          <span className="tabular-nums">{r.quantity.toFixed(2)} {r.unit}</span>
+                          <span className="tabular-nums">{Number(r.quantity).toFixed(2)} {r.unit}</span>
                         </div>
                       ))}
                     </div>

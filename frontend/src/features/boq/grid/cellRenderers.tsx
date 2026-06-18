@@ -3611,14 +3611,14 @@ export function EditableResourceRow({ data, ctx, slots, leftPad }: { data: Recor
   // Pill tooltip — surface variant code + price + delta-vs-mean chip.
   const variantPillTooltip = (() => {
     if (!hasVariants) return '';
-    const meanRate = availableVariantStats!.mean;
-    const minRate = availableVariantStats!.min;
-    const maxRate = availableVariantStats!.max;
+    const meanRate = Number(availableVariantStats!.mean);
+    const minRate = Number(availableVariantStats!.min);
+    const maxRate = Number(availableVariantStats!.max);
     const range = `${minRate.toFixed(2)} – ${maxRate.toFixed(2)} ${resourceCurrency}`;
     if (resourceVariant) {
       const delta =
         meanRate > 0
-          ? Math.round(((resourceVariant.price - meanRate) / meanRate) * 100)
+          ? Math.round(((Number(resourceVariant.price) - meanRate) / meanRate) * 100)
           : null;
       const deltaStr =
         delta == null ? '' : ` (${delta > 0 ? '+' : ''}${delta}% vs avg)`;
@@ -3626,7 +3626,7 @@ export function EditableResourceRow({ data, ctx, slots, leftPad }: { data: Recor
         defaultValue:
           'Variant: {{label}} @ {{price}} {{currency}}{{delta}}. Click to switch.',
         label: resourceVariant.label,
-        price: resourceVariant.price.toFixed(2),
+        price: Number(resourceVariant.price).toFixed(2),
         currency: resourceCurrency,
         delta: deltaStr,
       });

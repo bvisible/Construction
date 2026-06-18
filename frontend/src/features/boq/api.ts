@@ -529,8 +529,8 @@ export function buildHierarchy(positions: Position[]): HierarchyNode[] {
     return children.map((pos) => {
       const childNodes = buildChildren(pos.id, level + 1);
       const subtotal = isSection(pos)
-        ? childNodes.reduce((sum, c) => sum + c.subtotal, 0)
-        : pos.total;
+        ? childNodes.reduce((sum, c) => sum + (Number(c.subtotal) || 0), 0)
+        : Number(pos.total) || 0;
       return { position: pos, level, children: childNodes, subtotal };
     });
   }

@@ -70,7 +70,7 @@ export function AIChatPanel({
       setMessages((prev) => prev.filter((m) => m.id !== 'loading'));
 
       const hasItems = response.items.length > 0;
-      const total = response.items.reduce((s, item) => s + (item.total ?? 0), 0);
+      const total = response.items.reduce((s, item) => s + (Number(item.total) || 0), 0);
       const currency = context.currency || '';
       const summary = hasItems
         ? t('boq.ai_generated_summary', {

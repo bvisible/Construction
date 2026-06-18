@@ -218,11 +218,11 @@ export function ProjectAnalyticsGrid({ projectId }: ProjectAnalyticsGridProps) {
     if (vendors.length === 0) return [];
     const top3 = vendors.slice(0, 3);
     const rest = vendors.slice(3);
-    const pieData = top3.map((v) => ({ name: v.company_name, value: v.total }));
+    const pieData = top3.map((v) => ({ name: v.company_name, value: Number(v.total) || 0 }));
     if (rest.length > 0) {
       pieData.push({
         name: 'other',
-        value: rest.reduce((acc, v) => acc + v.total, 0),
+        value: rest.reduce((acc, v) => acc + (Number(v.total) || 0), 0),
       });
     }
     return pieData;

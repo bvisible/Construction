@@ -316,8 +316,13 @@ interface RoomDetectionProposalResponse {
 interface TakeoffViewerModuleProps {
   /** URL to pre-load a PDF from (e.g. `/api/v1/takeoff/documents/{id}/download/`). */
   initialPdfUrl?: string;
-  /** Optional filename to associate with the pre-loaded PDF (used for persistence key). */
+  /** Optional filename to associate with the pre-loaded PDF (display only). */
   initialPdfName?: string;
+  /** Stable document UUID for this PDF (issue #238). Measurement identity is
+   *  ``projectId`` + this id, never the filename. Openers that know the id
+   *  (Project Files, filmstrip, deep-link) pass it explicitly; when omitted
+   *  it is recovered from ``initialPdfUrl``. The explicit prop wins. */
+  initialDocumentId?: string | null;
   /** Optional measurement id to auto-select + scroll-to once the measurement
    *  list lands (used by the /markups → /takeoff deep-link). Matches either
    *  the frontend id or the server-side UUID. */
@@ -334,6 +339,7 @@ interface TakeoffViewerModuleProps {
 export default function TakeoffViewerModule({
   initialPdfUrl,
   initialPdfName,
+  initialDocumentId,
   initialMeasurementId,
   recentDocuments,
   onOpenRecentDocument,
@@ -528,6 +534,10 @@ export default function TakeoffViewerModule({
 
   // Document persistence + server sync
   const [fileName, setFileName] = useState<string | null>(null);
+  // Stable document UUID (issue #238). Measurement identity is projectId +
+  // this id. Resolved below from the explicit prop or the download URL; null
+  // for a freshly dropped local file (which then persists locally only).
+  const [documentId, setDocumentId] = useState<string | null>(initialDocumentId ?? null);
   // Per-page text-layer audit (8.2.0). When a document was opened from the
   // server we fetch its metadata to learn how many pages came back with no
   // text layer (likely scanned drawings that need OCR) so the viewer can flag
@@ -553,7 +563,10 @@ export default function TakeoffViewerModule({
   const [isExportingXlsx, setIsExportingXlsx] = useState(false);
   const { hasPersistedData, saveNow, clearPersisted, syncing, syncedToServer } = useMeasurementPersistence({
     fileName,
-    documentId: visionDocumentId,
+    // Stable document UUID (issue #238): drives the localStorage key + server
+    // sync. From the initialDocumentId prop (= viewerDoc.id), recovered from
+    // the URL when the prop is absent.
+    documentId,
     measurements,
     setMeasurements: (ms) => setMeasurements(ms),
     // Per-page scale: the hook persists the whole page-scale model and
@@ -606,6 +619,10 @@ export default function TakeoffViewerModule({
       setTotalPages(doc.numPages);
       setCurrentPage(1);
       setFileName(file.name); // Triggers persistence hook to load saved measurements
+      // A freshly dropped local file has no server document UUID yet (issue
+      // #238): clear the id so the persistence hook keeps it local-only and
+      // never syncs filename-keyed rows to the server.
+      setDocumentId(null);
       setActivePoints([]);
       undoStackRef.current = [];
       redoStackRef.current = [];
@@ -755,6 +772,30 @@ export default function TakeoffViewerModule({
     })();
     return () => { cancelled = true; };
   }, [initialPdfUrl]);
+
+  /* ── Resolve the stable document UUID (issue #238) ────────────────────
+   * Measurement identity is projectId + this id, never the filename. The
+   * explicit ``initialDocumentId`` prop wins (the opener knows it); when
+   * absent we recover the id from the download URL. Both the takeoff
+   * (``/takeoff/documents/{id}/``) and Project Files (``/documents/{id}/``)
+   * URLs carry it in the same capture group. A fresh local drop has neither
+   * a prop nor a server URL, so documentId stays null and the persistence
+   * hook keeps that file local-only until an upload yields a real id. */
+  useEffect(() => {
+    if (initialDocumentId) {
+      setDocumentId(initialDocumentId);
+      return;
+    }
+    if (initialPdfUrl) {
+      const m = initialPdfUrl.match(/\/documents\/([^/?#]+)/);
+      if (m?.[1]) {
+        setDocumentId(decodeURIComponent(m[1]));
+        return;
+      }
+    }
+    // No explicit id and no server URL to recover one from.
+    setDocumentId(null);
+  }, [initialDocumentId, initialPdfUrl]);
 
   /* ── Warn on unsaved changes (tab close / navigation) ────────────── */
 

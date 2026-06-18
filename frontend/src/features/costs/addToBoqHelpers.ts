@@ -286,7 +286,7 @@ export function buildBoqPositionDraft(
   }
 
   // ── Step 4: position unit_rate + cost breakdown summary ────────────────
-  const resourcesTotal = resources.reduce((s, r) => s + (r.total ?? 0), 0);
+  const resourcesTotal = resources.reduce((s, r) => s + (Number(r.total) || 0), 0);
   const unitRate = resources.length > 0 ? resourcesTotal : item.rate ?? 0;
 
   const metadata: Record<string, unknown> = {

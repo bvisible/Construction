@@ -428,7 +428,7 @@ function renderBOQTables(
 
   // Ungrouped positions (if any)
   if (ungrouped.length > 0) {
-    const ungroupedSubtotal = ungrouped.reduce((sum, p) => sum + p.total, 0);
+    const ungroupedSubtotal = ungrouped.reduce((sum, p) => sum + (Number(p.total) || 0), 0);
     renderSection('', 'Ungrouped Items', ungrouped, ungroupedSubtotal);
   }
 }
@@ -458,7 +458,7 @@ function renderSummary(
     formatCurrency(s.subtotal, options.currency, locale),
   ]);
   if (ungrouped.length > 0) {
-    const ungroupedTotal = ungrouped.reduce((sum, p) => sum + p.total, 0);
+    const ungroupedTotal = ungrouped.reduce((sum, p) => sum + (Number(p.total) || 0), 0);
     sectionRows.push(['Ungrouped Items', formatCurrency(ungroupedTotal, options.currency, locale)]);
   }
 

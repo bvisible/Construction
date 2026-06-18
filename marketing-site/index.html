@@ -137,9 +137,9 @@
     /* THEME TOKENS - BREEZE (modern sky blue, unified canvas)           */
     /* ================================================================ */
     :root {
-      --bg-0: #f7fbff;             /* ultra-light sky base */
-      --bg-1: #edf5ff;             /* pale blue */
-      --bg-2: #e7f2fd;             /* cool blue tint */
+      --bg-0: #f1f2f3;             /* ultra-light sky base */
+      --bg-1: #ebeced;             /* pale blue */
+      --bg-2: #e4e5e7;             /* cool blue tint */
       --bg-panel: transparent;     /* unified - no framed panel */
       --ink-0: #0b1220;            /* deep slate text */
       --ink-1: #1e293b;
@@ -148,28 +148,28 @@
       --line-0: rgba(15, 23, 42, 0.05);
       --line-1: rgba(15, 23, 42, 0.09);
       --line-2: rgba(15, 23, 42, 0.14);
-      --accent: #0284c7;           /* sky-600 */
-      --accent-2: #0ea5e9;         /* sky-500 */
-      --accent-3: #2563eb;         /* blue-600 */
-      --accent-4: #6366f1;         /* indigo-500 */
-      --accent-5: #06b6d4;         /* cyan-500 */
-      --accent-6: #0891b2;         /* cyan-600 */
+      --accent: #2d5e8e;           /* sky-600 */
+      --accent-2: #3c6fa0;         /* sky-500 */
+      --accent-3: #244c74;         /* blue-600 */
+      --accent-4: #2d5e8e;         /* indigo-500 */
+      --accent-5: #3c6fa0;         /* cyan-500 */
+      --accent-6: #244c74;         /* cyan-600 */
 
       /* Three.js palette - unified sky tones */
-      --three-bldg-a: 0xdbeafe;    /* blue-100 */
-      --three-bldg-b: 0xe0f2fe;    /* sky-100 */
-      --three-bldg-c: 0xcffafe;    /* cyan-100 */
+      --three-bldg-a: 0xedeef0;    /* blue-100 */
+      --three-bldg-b: 0xe8eaec;    /* sky-100 */
+      --three-bldg-c: 0xf2f3f5;    /* cyan-100 */
       --three-edge: 0x0b1220;      /* deep slate edges */
-      --three-glow-a: 0x0284c7;    /* sky-600 glow */
-      --three-glow-b: 0x0ea5e9;    /* sky-500 glow */
-      --three-glow-c: 0x2563eb;    /* blue-600 glow */
-      --three-road: 0xbfdbfe;      /* soft blue road */
-      --three-particle: 0x0ea5e9;  /* sky particle dust */
-      --three-ambient: 0xf7fbff;   /* same as bg - no seams */
+      --three-glow-a: 0x2d5e8e;    /* muted accent glow */
+      --three-glow-b: 0x3c6fa0;    /* muted accent glow */
+      --three-glow-c: 0x244c74;    /* muted accent glow */
+      --three-road: 0xdde0e3;      /* soft blue road */
+      --three-particle: 0x3c6fa0;  /* muted particle dust */
+      --three-ambient: 0xf1f2f3;   /* same as bg - no seams */
       --three-key: 0xffffff;
-      --three-fill: 0x0ea5e9;
-      --three-fog: 0xf7fbff;       /* SAME as bg-0 → visually merges */
-      --three-ground: 0xedf5ff;    /* soft sky ground */
+      --three-fill: 0x3c6fa0;
+      --three-fog: 0xf1f2f3;       /* SAME as bg-0 → visually merges */
+      --three-ground: 0xebeced;    /* soft sky ground */
       --three-tree: 0x06b6d4;      /* cyan tree */
       --three-car: 0x2563eb;       /* blue cars */
 
@@ -187,12 +187,12 @@
       --line-0: rgba(255,255,255,0.06);
       --line-1: rgba(255,255,255,0.10);
       --line-2: rgba(255,255,255,0.18);
-      --accent: #38bdf8;
-      --accent-2: #7dd3fc;
-      --accent-3: #60a5fa;
-      --accent-4: #818cf8;
-      --accent-5: #22d3ee;
-      --accent-6: #67e8f9;
+      --accent: #6ba2d8;
+      --accent-2: #84b3e2;
+      --accent-3: #5a90c8;
+      --accent-4: #6ba2d8;
+      --accent-5: #84b3e2;
+      --accent-6: #5a90c8;
 
       --three-bldg-a: 0x152238;
       --three-bldg-b: 0x0f1d33;
@@ -285,7 +285,7 @@
     .bg-gradient {
       position: absolute;
       inset: 0;
-      background: linear-gradient(160deg, #f7fbff 0%, #f1f7ff 40%, #edf5ff 72%, #e7f2fd 100%);
+      background: linear-gradient(160deg, #f1f2f3 0%, #eeeff0 40%, #ebeced 72%, #e4e5e7 100%);
       transition: opacity 0.5s ease;
     }
     [data-theme="dark"] .bg-gradient {
@@ -309,7 +309,7 @@
       left: -5%;
       width: 820px;
       height: 820px;
-      background: radial-gradient(circle at 50% 50%, rgba(14, 165, 233, 0.16), transparent 70%);
+      background: radial-gradient(circle at 50% 50%, rgba(94, 100, 108, 0.06), transparent 70%);
       animation-delay: 0s;
     }
     .blob-mint {
@@ -317,7 +317,7 @@
       right: -10%;
       width: 900px;
       height: 900px;
-      background: radial-gradient(circle at 50% 50%, rgba(37, 99, 235, 0.12), transparent 70%);
+      background: radial-gradient(circle at 50% 50%, rgba(94, 100, 108, 0.05), transparent 70%);
       animation-delay: -18s;
     }
     .blob-amber {
@@ -325,17 +325,17 @@
       right: 14%;
       width: 620px;
       height: 620px;
-      background: radial-gradient(circle at 50% 50%, rgba(6, 182, 212, 0.12), transparent 72%);
+      background: radial-gradient(circle at 50% 50%, rgba(94, 100, 108, 0.04), transparent 72%);
       animation-delay: -32s;
     }
     [data-theme="dark"] .blob-coral {
-      background: radial-gradient(circle at 50% 50%, rgba(56, 189, 248, 0.12), transparent 70%);
+      background: radial-gradient(circle at 50% 50%, rgba(107, 162, 216, 0.09), transparent 70%);
     }
     [data-theme="dark"] .blob-mint {
-      background: radial-gradient(circle at 50% 50%, rgba(96, 165, 250, 0.10), transparent 70%);
+      background: radial-gradient(circle at 50% 50%, rgba(107, 162, 216, 0.07), transparent 70%);
     }
     [data-theme="dark"] .blob-amber {
-      background: radial-gradient(circle at 50% 50%, rgba(34, 211, 238, 0.08), transparent 72%);
+      background: radial-gradient(circle at 50% 50%, rgba(107, 162, 216, 0.05), transparent 72%);
     }
 
     @keyframes breeze-drift {
@@ -373,13 +373,13 @@
     }
     @media (hover: none) { .cursor-glow { display: none; } }
 
-    /* Warm grain noise overlay */
+    /* Fine grain overlay - subtle concrete texture */
     .bg-noise {
       position: absolute;
       inset: 0;
-      background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.45 0 0 0 0 0.30 0 0 0 0 0.22 0 0 0 0.5 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
-      background-size: 240px 240px;
-      opacity: 0.04;
+      background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='480' height='480'><filter id='m'><feTurbulence type='fractalNoise' baseFrequency='0.02' numOctaves='3' seed='4' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.46 0 0 0 0 0.46 0 0 0 0 0.46 0 0 0 0.5 0'/></filter><filter id='g'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.34 0 0 0 0 0.34 0 0 0 0 0.34 0 0 0 0.7 0'/></filter><rect width='100%25' height='100%25' filter='url(%23m)'/><rect width='100%25' height='100%25' filter='url(%23g)'/></svg>");
+      background-size: 480px 480px;
+      opacity: 0.075;
       mix-blend-mode: multiply;
     }
     [data-theme="dark"] .bg-noise {
@@ -962,7 +962,7 @@
       color: #e2e8f0;
       overflow-x: auto;
     }
-    .mg-kw { color: #67e8f9; }
+    .mg-kw { color: #5a90c8; }
     .mg-str { color: #fca5a5; }
     .mg-fn { color: #fde68a; }
     .mg-checklist {
@@ -1082,10 +1082,10 @@
       font-weight: 500;
       letter-spacing: -0.005em;
       transition: transform 0.2s ease, background 0.25s ease, box-shadow 0.25s ease;
-      box-shadow: 0 6px 18px -6px rgba(14, 165, 233, 0.55);
+      box-shadow: 0 6px 18px -6px rgba(45, 94, 142, 0.10);
     }
-    [data-theme="dark"] .install-pill { color: var(--ink-0); box-shadow: 0 6px 18px -6px rgba(56, 189, 248, 0.45); }
-    .install-pill:hover { transform: translateY(-1px); box-shadow: 0 10px 22px -6px rgba(14, 165, 233, 0.65); }
+    [data-theme="dark"] .install-pill { color: var(--ink-0); box-shadow: 0 6px 18px -6px rgba(107, 162, 216, 0.09); }
+    .install-pill:hover { transform: translateY(-1px); box-shadow: 0 10px 22px -6px rgba(45, 94, 142, 0.10); }
     .install-pill .arrow { transition: transform 0.2s ease; }
     .install-pill:hover .arrow { transform: translateX(2px); }
 
@@ -1096,9 +1096,9 @@
       padding: 8px 14px;
       margin-right: 8px;
       border-radius: 999px;
-      background: rgba(2, 132, 199, 0.08);
+      background: rgba(45, 94, 142, 0.08);
       color: var(--accent);
-      border: 1px solid rgba(2, 132, 199, 0.28);
+      border: 1px solid rgba(45, 94, 142, 0.28);
       font-size: 13px;
       font-weight: 600;
       letter-spacing: -0.005em;
@@ -1107,16 +1107,16 @@
     }
     .demo-pill:hover {
       transform: translateY(-1px);
-      background: rgba(2, 132, 199, 0.14);
-      border-color: rgba(2, 132, 199, 0.45);
+      background: rgba(45, 94, 142, 0.14);
+      border-color: rgba(45, 94, 142, 0.45);
       color: var(--accent);
     }
     .demo-pill svg {
       color: var(--accent);
       flex-shrink: 0;
     }
-    [data-theme="dark"] .demo-pill { background: rgba(56, 189, 248, 0.1); color: var(--accent); border-color: rgba(56, 189, 248, 0.32); }
-    [data-theme="dark"] .demo-pill:hover { background: rgba(56, 189, 248, 0.16); border-color: rgba(56, 189, 248, 0.5); }
+    [data-theme="dark"] .demo-pill { background: rgba(107, 162, 216, 0.09); color: var(--accent); border-color: rgba(107, 162, 216, 0.09); }
+    [data-theme="dark"] .demo-pill:hover { background: rgba(107, 162, 216, 0.09); border-color: rgba(107, 162, 216, 0.09); }
     @media (max-width: 720px) {
       .demo-pill span { display: none; }
       .demo-pill { padding: 8px 10px; margin-right: 4px; }
@@ -1823,10 +1823,17 @@
     .hc-pos-d5 { left: calc(var(--cl-d-x) + var(--hc-col));                top: calc(var(--cl-d-y) + var(--hc-h) + var(--hc-zig)); }
     .hc-pos-d6 { left: calc(var(--cl-d-x) + var(--hc-col) * 2);            top: calc(var(--cl-d-y) + var(--hc-h)); }
 
+    /* Extra module hexes - more cells to reflect the growing module count.
+       Each tiles one step off an existing neighbour (no overlap). */
+    .hc-pos-a4 { left: calc(var(--cl-a-x) + var(--hc-col));                top: calc(var(--cl-a-y) + var(--hc-h) + var(--hc-zig)); }
+    .hc-pos-b6 { left: calc(var(--cl-b-x) + var(--hc-col) * 3);            top: calc(var(--cl-b-y) + var(--hc-zig)); }
+
     /* Entrance stagger - each cluster cascades in as a chunk. */
     .hc-pos-a1 { animation-delay: 1.55s; }
     .hc-pos-a2 { animation-delay: 1.61s; }
     .hc-pos-a3 { animation-delay: 1.67s; }
+    .hc-pos-a4 { animation-delay: 1.71s; }
+    .hc-pos-b6 { animation-delay: 1.96s; }
     .hc-pos-b1 { animation-delay: 1.74s; }
     .hc-pos-b2 { animation-delay: 1.80s; }
     .hc-pos-b3 { animation-delay: 1.86s; }
@@ -2288,12 +2295,12 @@
     .btn-primary {
       background: var(--accent);
       color: #fff;
-      box-shadow: 0 8px 22px -8px rgba(14, 165, 233, 0.55);
+      box-shadow: 0 8px 22px -8px rgba(45, 94, 142, 0.10);
     }
-    [data-theme="dark"] .btn-primary { color: var(--ink-0); box-shadow: 0 8px 22px -8px rgba(56, 189, 248, 0.45); }
+    [data-theme="dark"] .btn-primary { color: var(--ink-0); box-shadow: 0 8px 22px -8px rgba(107, 162, 216, 0.09); }
     .btn-primary:hover {
       transform: translateY(-1px);
-      box-shadow: 0 14px 32px -8px rgba(14, 165, 233, 0.70);
+      box-shadow: 0 14px 32px -8px rgba(45, 94, 142, 0.10);
     }
     .btn-primary .arrow { transition: transform 0.2s ease; }
     .btn-primary:hover .arrow { transform: translateX(3px); }
@@ -2719,6 +2726,28 @@
          pause between demo and data-flow. */
       margin: clamp(56px, 6vw, 96px) auto clamp(64px, 7vw, 112px);
       padding: 0 clamp(16px, 3vw, 40px);
+    }
+    /* Monochrome social proof, global scope. Both logo blocks (demo
+       sign-ups and DataDrivenConstruction clients) plus the reviewer
+       portraits sit in greyscale and bloom to full colour on hover.
+       The .ddc-trusted rules below stay (more specific) so that block
+       is unchanged; this catches the second logo block and the photos. */
+    .ddc-brand-logo {
+      filter: grayscale(1) contrast(1.05) brightness(0.95);
+      opacity: 0.78;
+      transition: filter .25s ease, opacity .25s ease;
+    }
+    .ddc-logo:hover .ddc-brand-logo {
+      filter: grayscale(0);
+      opacity: 1;
+    }
+    .ddc-tst-avatar img {
+      filter: grayscale(1);
+      transition: filter .3s ease;
+    }
+    .ddc-tst:hover .ddc-tst-avatar img,
+    .ddc-tst-avatar img:hover {
+      filter: grayscale(0);
     }
     /* Monochrome logos - brand parity, no rainbow distraction. Hover
        restores full colour for the curious visitor. */
@@ -3285,7 +3314,7 @@
       backdrop-filter: blur(10px);
       -webkit-backdrop-filter: blur(10px);
       border: 1px solid var(--line-1);
-      box-shadow: 0 10px 22px -14px rgba(14, 165, 233, 0.14);
+      box-shadow: 0 10px 22px -14px rgba(45, 94, 142, 0.10);
       overflow: hidden;
       transition: transform 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
       text-decoration: none;
@@ -3295,7 +3324,7 @@
     .ddc-card:hover {
       transform: translateY(-3px);
       border-color: color-mix(in oklab, var(--accent) 20%, var(--line-1));
-      box-shadow: 0 24px 48px -18px rgba(14, 165, 233, 0.22);
+      box-shadow: 0 24px 48px -18px rgba(45, 94, 142, 0.10);
     }
     .ddc-card-hero {
       display: flex;
@@ -3497,7 +3526,7 @@
       border-radius: 16px;
       background: color-mix(in oklab, #ffffff 64%, transparent);
       border: 1px solid var(--line-1);
-      box-shadow: 0 10px 22px -14px rgba(14, 165, 233, 0.14);
+      box-shadow: 0 10px 22px -14px rgba(45, 94, 142, 0.10);
       transition: box-shadow 0.3s ease, transform 0.3s ease;
       margin: 0;
       display: flex;
@@ -3505,7 +3534,7 @@
     }
     .ddc-tq-card:hover {
       transform: translateY(-3px);
-      box-shadow: 0 24px 48px -18px rgba(14, 165, 233, 0.2);
+      box-shadow: 0 24px 48px -18px rgba(45, 94, 142, 0.10);
     }
     .ddc-tq-mark {
       position: absolute;
@@ -3758,7 +3787,7 @@
       border: 1px solid var(--line-1);
       border-bottom: 0;
       box-shadow:
-        0 40px 80px -28px rgba(14, 165, 233, 0.28),
+        0 40px 80px -28px rgba(45, 94, 142, 0.10),
         0 20px 40px -18px rgba(15, 23, 42, 0.16);
       transition: box-shadow 0.5s ease;
     }
@@ -3864,7 +3893,7 @@
       justify-content: center;
       opacity: 0;
       transition: opacity 0.25s ease, transform 0.25s ease, background 0.2s ease;
-      box-shadow: 0 14px 32px -16px rgba(14, 165, 233, 0.35);
+      box-shadow: 0 14px 32px -16px rgba(45, 94, 142, 0.10);
     }
     .hp-nav svg { width: 20px; height: 20px; }
     .hp-nav:hover {
@@ -4086,6 +4115,13 @@
       box-shadow:
         inset 0 1px 0 color-mix(in oklab, #ffffff 34%, transparent),
         0 2px 6px -4px color-mix(in oklab, var(--tint, var(--accent)) 35%, transparent);
+    }
+    .mod-cell-icon {
+      transition: transform 0.24s cubic-bezier(.34, 1.56, .64, 1);
+    }
+    .mod-cell:hover .mod-cell-icon,
+    .mod-cell:focus-visible .mod-cell-icon {
+      transform: rotate(-6deg) scale(1.12);
     }
     .mod-cell-icon svg {
       width: 13px;
@@ -4358,7 +4394,7 @@
     }
     .stat-card:hover {
       transform: translateY(-3px);
-      box-shadow: 0 16px 36px -14px rgba(14, 165, 233, 0.25);
+      box-shadow: 0 16px 36px -14px rgba(45, 94, 142, 0.10);
       border-color: color-mix(in oklab, var(--accent) 40%, var(--line-1));
     }
     .stat-card::before {
@@ -4807,7 +4843,7 @@
       border: 1px solid var(--line-1);
       background: color-mix(in oklab, #ffffff 50%, transparent);
       box-shadow:
-        0 34px 64px -22px rgba(14, 165, 233, 0.22),
+        0 34px 64px -22px rgba(45, 94, 142, 0.10),
         0 14px 28px -12px rgba(15, 23, 42, 0.10);
     }
     .tour-stage-chrome {
@@ -5053,7 +5089,7 @@
       background: var(--accent);
       color: #ffffff;
       transform: scale(1.08);
-      box-shadow: 0 6px 14px -6px rgba(14, 165, 233, 0.55);
+      box-shadow: 0 6px 14px -6px rgba(45, 94, 142, 0.10);
     }
     .tt-chip.is-active .tt-title { color: var(--ink-0); font-weight: 600; }
 
@@ -5193,7 +5229,7 @@
       backdrop-filter: blur(16px) saturate(160%);
       -webkit-backdrop-filter: blur(16px) saturate(160%);
       overflow: hidden;
-      box-shadow: 0 20px 44px -20px rgba(14, 165, 233, 0.22);
+      box-shadow: 0 20px 44px -20px rgba(45, 94, 142, 0.10);
     }
     .boq-card-head {
       display: flex;
@@ -5982,7 +6018,7 @@
     .quote-card:hover {
       transform: translateY(-4px);
       border-color: color-mix(in oklab, var(--accent) 35%, var(--line-1));
-      box-shadow: 0 20px 44px -20px rgba(14, 165, 233, 0.28);
+      box-shadow: 0 20px 44px -20px rgba(45, 94, 142, 0.10);
     }
     .quote-mark {
       font-family: 'Fraunces', serif;
@@ -7161,7 +7197,7 @@
       content: '';
       position: absolute;
       inset: 0;
-      background: radial-gradient(600px 200px at 80% 0%, rgba(14, 165, 233, 0.12), transparent 55%);
+      background: radial-gradient(600px 200px at 80% 0%, rgba(45, 94, 142, 0.10), transparent 55%);
       pointer-events: none;
     }
     .dx-tabs {
@@ -7187,8 +7223,8 @@
     }
     .dx-tab:hover { color: rgba(226, 232, 240, 0.9); }
     .dx-tab.is-active {
-      color: #38bdf8;
-      border-bottom-color: #38bdf8;
+      color: #6ba2d8;
+      border-bottom-color: #6ba2d8;
     }
     .dx-tab-copy {
       margin-left: auto;
@@ -7203,7 +7239,7 @@
       cursor: pointer;
       transition: background 0.2s ease, color 0.2s ease;
     }
-    .dx-tab-copy:hover { background: rgba(56, 189, 248, 0.1); color: #7dd3fc; }
+    .dx-tab-copy:hover { background: rgba(107, 162, 216, 0.09); color: #84b3e2; }
     .dx-tab-copy.is-copied { background: rgba(16, 185, 129, 0.15); color: #10b981; }
     .dx-code {
       padding: 18px 22px;
@@ -7222,7 +7258,7 @@
     .dx-code .tok-key { color: #c4b5fd; }
     .dx-code .tok-str { color: #86efac; }
     .dx-code .tok-num { color: #fbbf24; }
-    .dx-code .tok-fn  { color: #7dd3fc; }
+    .dx-code .tok-fn  { color: #84b3e2; }
     .dx-code .tok-com { color: #64748b; font-style: italic; }
     .dx-code .tok-op  { color: #f472b6; }
     .dx-code-pane { display: none; }
@@ -7662,13 +7698,13 @@
       font-size: 18px;
       color: #fff;
     }
-    .ref-icon-book { background: linear-gradient(135deg, #8b5cf6, #6366f1); }
+    .ref-icon-book { background: linear-gradient(135deg, #8b5cf6, #2d5e8e); }
     .ref-icon-cad  { background: linear-gradient(135deg, var(--accent), var(--accent-3)); }
-    .ref-icon-cwicr { background: linear-gradient(135deg, #10b981, #0891b2); }
+    .ref-icon-cwicr { background: linear-gradient(135deg, #10b981, #244c74); }
     .ref-icon-agents { background: linear-gradient(135deg, #f97316, #ec4899); }
     .ref-icon-excel { background: linear-gradient(135deg, #16a34a, #0d9488); }
-    .ref-icon-skills { background: linear-gradient(135deg, #6366f1, #0891b2); }
-    .ref-icon-cad2data { background: linear-gradient(135deg, #0ea5e9, #0891b2); }
+    .ref-icon-skills { background: linear-gradient(135deg, #2d5e8e, #244c74); }
+    .ref-icon-cad2data { background: linear-gradient(135deg, #3c6fa0, #244c74); }
     .ref-icon-gh { background: linear-gradient(135deg, #1f2937, #374151); }
     .ref-icon-ddc { background: linear-gradient(135deg, var(--accent-3), var(--accent)); }
     .voices-ref-card .ref-body { min-width: 0; }
@@ -8268,7 +8304,7 @@
       transform: translateX(3px);
       border-color: color-mix(in oklab, var(--tint, var(--accent)) 45%, var(--line-1));
       background: color-mix(in oklab, #ffffff 72%, transparent);
-      box-shadow: 0 12px 28px -14px rgba(14, 165, 233, 0.22);
+      box-shadow: 0 12px 28px -14px rgba(45, 94, 142, 0.10);
     }
     .module-card .module-arrow {
       width: 18px; height: 18px;
@@ -8414,7 +8450,7 @@
     }
     .price-card:hover {
       transform: translateY(-4px);
-      box-shadow: 0 20px 44px -20px rgba(14, 165, 233, 0.22);
+      box-shadow: 0 20px 44px -20px rgba(45, 94, 142, 0.10);
     }
     .price-card.is-featured {
       border-color: color-mix(in oklab, var(--accent) 55%, transparent);
@@ -8569,11 +8605,11 @@
     .price-cta.primary {
       background: var(--accent);
       color: #fff;
-      box-shadow: 0 8px 22px -8px rgba(14, 165, 233, 0.55);
+      box-shadow: 0 8px 22px -8px rgba(45, 94, 142, 0.10);
     }
     .price-cta.primary:hover {
       transform: translateY(-1px);
-      box-shadow: 0 14px 32px -8px rgba(14, 165, 233, 0.70);
+      box-shadow: 0 14px 32px -8px rgba(45, 94, 142, 0.10);
     }
     .price-cta.ghost {
       border-color: var(--line-2);
@@ -9593,6 +9629,7 @@
       transform: rotate(0deg) translateY(-6px) scale(1.04);
       z-index: 10 !important;
     }
+    .gnf-card:hover .gnf-card-inner img { filter: grayscale(0) contrast(1); }
     .gnf-card-inner {
       background: #ffffff;
       padding: 10px 10px 0;
@@ -9605,6 +9642,8 @@
       overflow: hidden;
     }
     .gnf-card-inner img {
+      filter: grayscale(1) contrast(1.02);
+      transition: filter .35s ease;
       display: block;
       width: 100%;
       height: auto;
@@ -9761,6 +9800,7 @@
       padding-top: 14px;
       border-top: 1px solid var(--line-1);
     }
+    .gnf-tst:hover .gnf-tst-avatar img { filter: grayscale(0); }
     .gnf-tst-avatar {
       width: 48px; height: 48px;
       border-radius: 50%;
@@ -9772,6 +9812,8 @@
         0 4px 10px -4px color-mix(in oklab, var(--accent) 40%, rgba(15,23,42,0.22));
     }
     .gnf-tst-avatar img {
+      filter: grayscale(1);
+      transition: filter .35s ease;
       width: 100%;
       height: 100%;
       object-fit: cover;
@@ -10188,10 +10230,10 @@
     /* SECTION 13: FINAL CTA                                             */
     /* ================================================================ */
     .final-cta {
-      max-width: 1280px;
+      max-width: 1080px;
       margin: 0 auto;
-      padding: clamp(60px, 8vw, 100px);
-      border-radius: 32px;
+      padding: clamp(36px, 5vw, 60px);
+      border-radius: 24px;
       border: 1px solid color-mix(in oklab, var(--accent) 20%, var(--line-1));
       background:
         radial-gradient(circle at 85% 15%, color-mix(in oklab, var(--accent) 22%, transparent), transparent 55%),
@@ -10207,8 +10249,8 @@
     .final-cta-title {
       font-family: 'Inter Tight', sans-serif;
       font-weight: 500;
-      font-size: clamp(36px, 4.6vw, 72px);
-      line-height: 1.04;
+      font-size: clamp(30px, 3.6vw, 52px);
+      line-height: 1.05;
       letter-spacing: -0.04em;
       color: var(--ink-0);
       margin: 0 0 18px;
@@ -10223,10 +10265,10 @@
       letter-spacing: -0.03em;
     }
     .final-cta-sub {
-      font-size: clamp(15px, 1.1vw, 17px);
-      line-height: 1.55;
+      font-size: clamp(14px, 1vw, 16px);
+      line-height: 1.5;
       color: var(--ink-2);
-      margin: 0 0 30px;
+      margin: 0 auto 20px;
       max-width: 52ch;
       margin-inline: auto;
     }
@@ -10271,9 +10313,9 @@
        the pip line reads as a real, copyable command rather than a tiny pill. */
     .final-cta-install {
       max-width: 620px;
-      margin: 24px auto 26px;
-      padding: 20px 22px 18px;
-      border-radius: 18px;
+      margin: 16px auto 14px;
+      padding: 14px 16px 12px;
+      border-radius: 14px;
       border: 1px solid color-mix(in oklab, var(--accent) 16%, var(--line-1));
       background: color-mix(in oklab, #ffffff 60%, transparent);
       box-shadow: 0 24px 56px -36px color-mix(in oklab, var(--accent) 42%, rgba(15, 23, 42, 0.3)), inset 0 1px 0 rgba(255, 255, 255, 0.5);
@@ -11301,9 +11343,9 @@
     [data-theme="dark"] h2 em,
     [data-theme="dark"] h3 em {
       background: linear-gradient(110deg,
-        #7dd3fc 5%,
-        #38bdf8 45%,
-        #60a5fa 95%) !important;
+        #84b3e2 5%,
+        #6ba2d8 45%,
+        #5a90c8 95%) !important;
     }
     /* ── Module-cards grid ───────────────────────────────────────────
        Sits between the "Skip the sales call. See it work." headline and
@@ -12027,16 +12069,16 @@
         /* The whole CTA column is sized to one consistent width so the install
            card, the download button and the [macOS][Linux][star] row all line
            up. 503px = 335 (download) + 72 + 72 + 2x12 gap, the old full row. */
-        .hero-cta-stack { display: flex; flex-direction: column; gap: 12px; margin-top: 4px; width: 503px; max-width: 100%; }
+        .hero-cta-stack { display: flex; flex-direction: column; gap: 9px; margin-top: 4px; width: 352px; max-width: 100%; }
         .hero-cta-main { width: 100%; }
         /* The big primary download button */
         .btn-hero-dl {
           position: relative; overflow: hidden; isolation: isolate;
           display: flex; align-items: center; gap: 13px;
           width: 100%; box-sizing: border-box;
-          min-height: 72px;
-          height: 72px;
-          padding: 12px 24px; border-radius: 16px;
+          min-height: 64px;
+          height: 64px;
+          padding: 11px 24px; border-radius: 14px;
           font-family: 'Inter Tight', Inter, sans-serif;
           font-size: 18px; font-weight: 680; letter-spacing: -0.01em;
           color: #fff; text-decoration: none; cursor: pointer;
@@ -12083,15 +12125,15 @@
         }
         .hero-platform-icon {
           position: relative;
-          min-height: 72px;
-          height: 72px;
-          width: 72px;
+          min-height: 56px;
+          height: 56px;
+          width: 58px;
           display: inline-flex;
           flex-direction: column;
           align-items: center;
           justify-content: center;
-          gap: 4px;
-          padding: 9px 8px;
+          gap: 3px;
+          padding: 6px 6px;
           color: var(--ink-1);
           background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(255, 255, 255, 0.80));
           border: 1px solid var(--line-1);
@@ -12125,15 +12167,15 @@
           display: inline-flex;
           align-items: center;
           justify-content: flex-start;
-          gap: 12px;
+          gap: 10px;
           flex: 1 1 auto;
           min-width: 0;
-          height: 72px;
-          min-height: 72px;
-          padding: 12px 18px;
+          height: 56px;
+          min-height: 56px;
+          padding: 9px 14px;
           border-radius: 16px;
           font-family: 'Inter Tight', Inter, sans-serif;
-          font-size: 16px;
+          font-size: 13.5px;
           font-weight: 700;
           letter-spacing: 0;
           color: var(--ink-1);
@@ -12144,10 +12186,10 @@
           backdrop-filter: blur(10px);
           transition: transform 0.18s ease, border-color 0.18s ease, color 0.18s ease, background 0.18s ease, box-shadow 0.18s ease;
         }
-        .hero-star-pill svg { width: 21px; height: 21px; fill: currentColor; flex: none; }
+        .hero-star-pill svg { width: 18px; height: 18px; fill: currentColor; flex: none; }
         .hero-star-text { display: flex; flex-direction: column; line-height: 1.13; min-width: 0; }
-        .hero-star-title { color: var(--ink-0); }
-        .hero-star-sub { margin-top: 3px; font-family: Inter, sans-serif; font-size: 12px; font-weight: 600; color: var(--ink-2); }
+        .hero-star-title { color: var(--ink-0); white-space: nowrap; }
+        .hero-star-sub { margin-top: 2px; font-family: Inter, sans-serif; font-size: 11px; font-weight: 600; color: var(--ink-2); white-space: nowrap; }
         .hero-star-pill:hover {
           transform: translateY(-2px);
           color: var(--accent-3);
@@ -12182,8 +12224,8 @@
           box-sizing: border-box;
           display: flex;
           flex-direction: column;
-          gap: 10px;
-          padding: 14px 16px 15px;
+          gap: 7px;
+          padding: 10px 14px 11px;
           background: var(--card-bg);
           border: 1px solid var(--line-1);
           border-radius: 16px;
@@ -12206,7 +12248,7 @@
           fill: none; stroke: var(--accent-3); stroke-width: 2.2;
           stroke-linecap: round; stroke-linejoin: round;
         }
-        .hero-cmd-lane { display: flex; flex-direction: column; gap: 8px; }
+        .hero-cmd-lane { display: flex; flex-direction: column; gap: 6px; }
         .hero-cmd { display: flex; align-items: stretch; gap: 8px; }
         .hero-cmd-chip {
           flex: 1; min-width: 0;
@@ -12214,7 +12256,7 @@
           background: var(--code-bg, #0f172a);
           border: 1px solid var(--line-1);
           border-radius: 11px;
-          padding: 9px 12px;
+          padding: 7px 11px;
         }
         .hero-cmd-tag {
           flex: none;
@@ -12290,17 +12332,17 @@
           </a>
           <a class="hero-demo-link" href="/demo">
             <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
-            <span data-i18n="hero.try_demo">Or try the live demo in your browser, nothing to install</span>
+            <span data-i18n="hero.try_demo">Or try the live demo in your browser</span>
           </a>
         </div>
         <div class="hero-secondary-row">
           <span class="hero-platform-icons" aria-label="Other platform downloads">
             <a class="hero-platform-icon" href="/download#card-macos" aria-label="Download for macOS">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><defs><linearGradient id="osapple-h1" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#bcbcc2"/><stop offset="1" stop-color="#56565b"/></linearGradient></defs><path fill="url(#osapple-h1)" d="M16.4 12.6c0-2.1 1.7-3.1 1.8-3.2-1-1.4-2.5-1.6-3-1.6-1.3-.1-2.5.7-3.1.7-.6 0-1.6-.7-2.7-.7-1.4 0-2.6.8-3.3 2-1.4 2.4-.4 6 1 8 .7 1 1.4 2 2.5 2 1 0 1.4-.6 2.6-.6 1.2 0 1.5.6 2.6.6 1.1 0 1.8-1 2.4-2 .8-1.1 1.1-2.2 1.1-2.3 0-.1-2.1-.8-2.1-3.1zM14.5 6.3c.6-.7 1-1.6.9-2.6-.8 0-1.8.5-2.4 1.2-.5.6-1 1.6-.9 2.5.9.1 1.8-.4 2.4-1.1z"/></svg>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16.4 12.6c0-2.1 1.7-3.1 1.8-3.2-1-1.4-2.5-1.6-3-1.6-1.3-.1-2.5.7-3.1.7-.6 0-1.6-.7-2.7-.7-1.4 0-2.6.8-3.3 2-1.4 2.4-.4 6 1 8 .7 1 1.4 2 2.5 2 1 0 1.4-.6 2.6-.6 1.2 0 1.5.6 2.6.6 1.1 0 1.8-1 2.4-2 .8-1.1 1.1-2.2 1.1-2.3 0-.1-2.1-.8-2.1-3.1zM14.5 6.3c.6-.7 1-1.6.9-2.6-.8 0-1.8.5-2.4 1.2-.5.6-1 1.6-.9 2.5.9.1 1.8-.4 2.4-1.1z"/></svg>
               <span>macOS</span>
             </a>
             <a class="hero-platform-icon" href="/download#card-linux" aria-label="Linux install options">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#1b1b1b" d="M12 2.3c-2.5 0-4 1.9-4 4.3 0 1 .3 1.6.3 2.3 0 .9-.6 1.5-1.4 2.6-1 1.3-2 2.9-2 4.9 0 1.1.35 2 .9 2.6l-.7 1.3c-.2.35.05.8.45.8h.95c.15.5.55.85 1.1.95 1 .18 2-.05 2.6-.55.25-.2.45-.3.8-.3s.55.1.8.3c.6.5 1.6.73 2.6.55.55-.1.95-.45 1.1-.95h.95c.4 0 .65-.45.45-.8l-.7-1.3c.55-.6.9-1.5.9-2.6 0-2-1-3.6-2-4.9-.8-1.1-1.4-1.7-1.4-2.6 0-.7.3-1.3.3-2.3 0-2.4-1.5-4.3-4-4.3z"/><ellipse cx="9.7" cy="19.3" rx="2.05" ry="1" fill="#f6a800" transform="rotate(-20 9.7 19.3)"/><ellipse cx="14.3" cy="19.3" rx="2.05" ry="1" fill="#f6a800" transform="rotate(20 14.3 19.3)"/><path fill="#fff" d="M12 8.6c-2 0-3.3 1.8-3.3 4.1 0 1.7.45 3.3 1.3 4.4.55.7 1.25 1.05 2 1.05s1.45-.35 2-1.05c.85-1.1 1.3-2.7 1.3-4.4 0-2.3-1.3-4.1-3.3-4.1z"/><ellipse cx="10.45" cy="10.6" rx=".95" ry="1.3" fill="#1b1b1b"/><ellipse cx="13.55" cy="10.6" rx=".95" ry="1.3" fill="#1b1b1b"/><circle cx="10.72" cy="10.2" r=".28" fill="#fff"/><circle cx="13.82" cy="10.2" r=".28" fill="#fff"/><path fill="#f6a800" d="M12 11.5l1.45 1-1.45 1.15-1.45-1.15z"/><path fill="#d98e00" d="M12 12.65l1.45-.15-1.45 1.15-1.45-1.15z"/></svg>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path fill-rule="evenodd" clip-rule="evenodd" d="M12 2.3c-2.05 0-3.55 1.6-3.55 3.95 0 .95.3 1.55.3 2.3 0 .85-.55 1.4-1.3 2.4-.9 1.2-1.95 2.7-1.95 4.75 0 1.45.5 2.55 1.3 3.35l-1.2 2.05c-.22.38.05.85.49.85H7.1c.18.5.62.85 1.2.95 1.05.18 2.2-.05 2.85-.6.27-.22.5-.32.85-.32s.58.1.85.32c.65.55 1.8.78 2.85.6.58-.1 1.02-.45 1.2-.95h1.01c.44 0 .71-.47.49-.85l-1.2-2.05c.8-.8 1.3-1.9 1.3-3.35 0-2.05-1.05-3.55-1.95-4.75-.75-1-1.3-1.55-1.3-2.4 0-.75.3-1.35.3-2.3C15.55 3.9 14.05 2.3 12 2.3Zm-1.65 3.5c.48 0 .82.45.82 1s-.34 1-.82 1-.83-.45-.83-1 .35-1 .83-1Zm3.3 0c.48 0 .83.45.83 1s-.35 1-.83 1-.82-.45-.82-1 .34-1 .82-1Zm-1.65 2.45c.6 0 1.55.3 1.95.85.12.17-.02.38-.25.45l-1.4.45c-.2.06-.4.06-.6 0l-1.4-.45c-.23-.07-.37-.28-.25-.45.4-.55 1.35-.85 1.95-.85Z"/></svg>
               <span>Linux</span>
             </a>
           </span>
@@ -12480,6 +12522,12 @@
           </span>
           <span class="hc-face hc-face-back"><span class="hc-feature" data-i18n-html="hero.mod_schedules_feature">Gantt<br>&amp; BOQ</span></span>
         </span>
+        <span class="hc-cell hc-pos-a4" style="--tint: var(--accent);" tabindex="0">
+          <span class="hc-face hc-face-front">
+            <span class="hc-ico" aria-hidden="true">☎</span><span class="hc-title">CRM</span><span class="hc-sub">pipeline</span>
+          </span>
+          <span class="hc-face hc-face-back"><span class="hc-feature">Leads<br>&amp; deals</span></span>
+        </span>
 
         <!-- CLUSTER B (5 hexes, top-right) - measurement &amp; cost. Blue tint. -->
         <span class="hc-cell hc-pos-b1" style="--tint: var(--accent-3);" tabindex="0">
@@ -12511,6 +12559,12 @@
             <span class="hc-ico" aria-hidden="true">⎋</span><span class="hc-title" data-i18n="hero.mod_tenders_title">Tenders</span><span class="hc-sub" data-i18n="hero.mod_tenders_sub">bid packs</span>
           </span>
           <span class="hc-face hc-face-back"><span class="hc-feature" data-i18n-html="hero.mod_tenders_feature">Compare<br>bids</span></span>
+        </span>
+        <span class="hc-cell hc-pos-b6" style="--tint: var(--accent-3);" tabindex="0">
+          <span class="hc-face hc-face-front">
+            <span class="hc-ico" aria-hidden="true">♻</span><span class="hc-title">Carbon</span><span class="hc-sub">5D LCA</span>
+          </span>
+          <span class="hc-face hc-face-back"><span class="hc-feature">Embodied<br>CO&#8322;</span></span>
         </span>
 
         <!-- CLUSTER C (4 hexes, bottom-left) - execution. Cyan tint. -->
@@ -12548,6 +12602,12 @@
         <!-- CLUSTER D (5 hexes, bottom-right) - operations, finance, admin.
              Cyan tint. (AI removed: it's a cross-cutting capability, not
              a business module - lives in Takeoff / Costs instead.) -->
+        <span class="hc-cell hc-pos-d1" style="--tint: var(--accent-5);" tabindex="0">
+          <span class="hc-face hc-face-front">
+            <span class="hc-ico" aria-hidden="true">✎</span><span class="hc-title">Daily log</span><span class="hc-sub">site diary</span>
+          </span>
+          <span class="hc-face hc-face-back"><span class="hc-feature">Diary<br>&amp; weather</span></span>
+        </span>
         <span class="hc-cell hc-pos-d6" style="--tint: var(--accent-5);" tabindex="0">
           <span class="hc-face hc-face-front">
             <span class="hc-ico" aria-hidden="true">⛭</span><span class="hc-title" data-i18n="hero.mod_equipment_title">Equipment</span><span class="hc-sub" data-i18n="hero.mod_equipment_sub">fleet</span>
@@ -14311,19 +14371,19 @@
         <svg viewBox="0 0 1200 500" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
           <defs>
             <linearGradient id="dfGradIn" x1="0" y1="0" x2="1" y2="0">
-              <stop offset="0%"   stop-color="#0ea5e9" stop-opacity="0"/>
-              <stop offset="50%"  stop-color="#0ea5e9" stop-opacity="0.95"/>
-              <stop offset="100%" stop-color="#0284c7" stop-opacity="0"/>
+              <stop offset="0%"   stop-color="#3c6fa0" stop-opacity="0"/>
+              <stop offset="50%"  stop-color="#3c6fa0" stop-opacity="0.95"/>
+              <stop offset="100%" stop-color="#2d5e8e" stop-opacity="0"/>
             </linearGradient>
             <linearGradient id="dfGradMid" x1="0" y1="0" x2="1" y2="0">
-              <stop offset="0%"   stop-color="#0284c7" stop-opacity="0"/>
-              <stop offset="50%"  stop-color="#0284c7" stop-opacity="0.95"/>
-              <stop offset="100%" stop-color="#2563eb" stop-opacity="0"/>
+              <stop offset="0%"   stop-color="#2d5e8e" stop-opacity="0"/>
+              <stop offset="50%"  stop-color="#2d5e8e" stop-opacity="0.95"/>
+              <stop offset="100%" stop-color="#244c74" stop-opacity="0"/>
             </linearGradient>
             <linearGradient id="dfGradOut" x1="0" y1="0" x2="1" y2="0">
-              <stop offset="0%"   stop-color="#2563eb" stop-opacity="0"/>
-              <stop offset="50%"  stop-color="#2563eb" stop-opacity="0.95"/>
-              <stop offset="100%" stop-color="#0ea5e9" stop-opacity="0"/>
+              <stop offset="0%"   stop-color="#244c74" stop-opacity="0"/>
+              <stop offset="50%"  stop-color="#244c74" stop-opacity="0.95"/>
+              <stop offset="100%" stop-color="#3c6fa0" stop-opacity="0"/>
             </linearGradient>
           </defs>
 
@@ -14394,29 +14454,29 @@
           <!-- 3 stacked stages inside the pivot -->
           <g transform="translate(450, 60)">
             <!-- Stage 1: DDC + Canonical -->
-            <circle r="11" cx="11" cy="11" fill="#0284c7"/>
+            <circle r="11" cx="11" cy="11" fill="#2d5e8e"/>
             <text x="11" y="15" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" font-weight="700" fill="#fff">1</text>
             <text class="df-name" x="32" y="14" style="font-size:14px;">DDC cad2data → Canonical</text>
             <text class="df-tag"  x="32" y="30" style="font-size:10.5px;">elements · geometry · quantities</text>
             <text class="df-tag"  x="32" y="44" style="font-size:10.5px;">JSON + Parquet · single source</text>
           </g>
 
-          <line x1="446" y1="158" x2="734" y2="158" stroke="rgba(2,132,199,0.25)" stroke-dasharray="3 3"/>
+          <line x1="446" y1="158" x2="734" y2="158" stroke="rgba(45,94,142,0.25)" stroke-dasharray="3 3"/>
 
           <g transform="translate(450, 178)">
             <!-- Stage 2: Classify + Price -->
-            <circle r="11" cx="11" cy="11" fill="#0284c7"/>
+            <circle r="11" cx="11" cy="11" fill="#2d5e8e"/>
             <text x="11" y="15" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" font-weight="700" fill="#fff">2</text>
             <text class="df-name" x="32" y="14" style="font-size:14px;">Classify · price</text>
             <text class="df-tag"  x="32" y="30" style="font-size:10.5px;">DIN 276 · NRM · MasterFormat</text>
             <text class="df-tag"  x="32" y="44" style="font-size:10.5px;">GAEB · CWICR ~55K vector match</text>
           </g>
 
-          <line x1="446" y1="276" x2="734" y2="276" stroke="rgba(2,132,199,0.25)" stroke-dasharray="3 3"/>
+          <line x1="446" y1="276" x2="734" y2="276" stroke="rgba(45,94,142,0.25)" stroke-dasharray="3 3"/>
 
           <g transform="translate(450, 296)">
             <!-- Stage 3: Validate -->
-            <circle r="11" cx="11" cy="11" fill="#0284c7"/>
+            <circle r="11" cx="11" cy="11" fill="#2d5e8e"/>
             <text x="11" y="15" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" font-weight="700" fill="#fff">3</text>
             <text class="df-name" x="32" y="14" style="font-size:14px;">Validate</text>
             <text class="df-tag"  x="32" y="30" style="font-size:10.5px;">46 rules · 5 packs</text>
@@ -15802,6 +15862,47 @@ manifest = <span class="tok-fn">ModuleManifest</span>(
         </a>
       </article>
     </div>
+
+    <!-- Free for students & educators - sits right under the price cards, where cost is on the mind -->
+    <style>
+      .student-band{max-width:1280px;margin:22px auto 0;position:relative;overflow:hidden;border:1px solid color-mix(in oklab,var(--accent,#2d5e8e) 30%,var(--line-1,rgba(15,23,42,.09)));border-radius:20px;padding:30px clamp(20px,3vw,40px);background:radial-gradient(120% 150% at 0% 0%,color-mix(in oklab,var(--accent,#2d5e8e) 13%,transparent) 0%,transparent 55%),radial-gradient(120% 150% at 100% 100%,color-mix(in oklab,var(--accent-5,#3c6fa0) 13%,transparent) 0%,transparent 55%),var(--card-bg,rgba(255,255,255,.6));display:grid;grid-template-columns:1.5fr .9fr;gap:28px;align-items:center}
+      .student-band .sb-eyebrow{display:inline-flex;align-items:center;gap:8px;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--accent,#2d5e8e);margin-bottom:12px}
+      .student-band .sb-eyebrow svg{width:17px;height:17px}
+      .student-band h3{font-family:'Inter Tight','Inter',sans-serif;font-weight:600;font-size:clamp(22px,2.6vw,30px);line-height:1.12;letter-spacing:-.02em;color:var(--ink-0,#0b1220);margin:0 0 10px}
+      .student-band h3 em{font-family:'Instrument Serif',serif;font-style:italic;font-weight:400;color:var(--accent,#2d5e8e)}
+      .student-band p{font-size:15px;line-height:1.6;color:var(--ink-2,#475569);margin:0 0 16px;max-width:56ch}
+      .student-band .sb-chips{display:flex;flex-wrap:wrap;gap:8px}
+      .student-band .sb-chip{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;color:var(--ink-1,#1e293b);background:color-mix(in oklab,var(--accent,#2d5e8e) 7%,transparent);border:1px solid color-mix(in oklab,var(--accent,#2d5e8e) 20%,var(--line-1,rgba(15,23,42,.09)));border-radius:999px;padding:6px 12px}
+      .student-band .sb-chip svg{width:14px;height:14px;color:var(--accent,#2d5e8e);flex:0 0 auto}
+      .student-band .sb-aside{display:flex;flex-direction:column;align-items:flex-start;gap:14px}
+      .student-band .sb-cta{display:inline-flex;align-items:center;gap:9px;padding:13px 22px;border-radius:12px;background:linear-gradient(135deg,var(--accent,#2d5e8e),var(--accent-3,#244c74));color:#fff;font-family:'Inter Tight','Inter',sans-serif;font-weight:600;font-size:15px;box-shadow:0 12px 28px -10px color-mix(in oklab,var(--accent,#2d5e8e) 65%,transparent);transition:transform .15s ease,box-shadow .25s ease}
+      .student-band .sb-cta:hover{transform:translateY(-1px)}
+      .student-band .sb-cta svg{width:14px;height:14px}
+      .student-band .sb-note{font-size:12px;color:var(--ink-3,#94a3b8);line-height:1.5}
+      @media(max-width:760px){.student-band{grid-template-columns:1fr;gap:18px;padding:24px 20px}}
+    </style>
+    <div class="student-band reveal" aria-label="Free for students and educators">
+      <div>
+        <div class="sb-eyebrow">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 10L12 5 3 10l9 5 9-5z"/><path d="M7 12v4.5c0 1.4 2.2 2.5 5 2.5s5-1.1 5-2.5V12"/></svg>
+          <span data-i18n="pricing.student_eyebrow">Students &amp; education</span>
+        </div>
+        <h3 data-i18n-html="pricing.student_title">Free for students and educators - <em>everything, not just the app</em>.</h3>
+        <p data-i18n="pricing.student_desc">Learning, teaching or doing research? You get the whole thing for free: the full platform, the cad2data converters and the regional cost data. Build your coursework, a thesis, even your own student startup on it.</p>
+        <div class="sb-chips">
+          <span class="sb-chip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg><span data-i18n="pricing.student_chip1">Platform + converters + cost data</span></span>
+          <span class="sb-chip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg><span data-i18n="pricing.student_chip2">Verify with your academic email</span></span>
+          <span class="sb-chip"><svg viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><path d="M12 3l1.9 4.6L18.5 9l-4.6 1.4L12 15l-1.9-4.6L5.5 9l4.6-1.4z"/></svg><span data-i18n="pricing.student_chip3">Student startups count too</span></span>
+        </div>
+      </div>
+      <div class="sb-aside">
+        <a class="sb-cta" href="/license-request#students">
+          <span data-i18n="pricing.student_cta">Get free access</span>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+        </a>
+        <div class="sb-note" data-i18n="pricing.student_note">Also free for non-profits and open-source maintainers.</div>
+      </div>
+    </div>
   </section>
 
   <!-- ================================================================ -->
@@ -16957,7 +17058,7 @@ manifest = <span class="tok-fn">ModuleManifest</span>(
       flex-shrink: 0;
     }
     .p8020-mod[data-tier="t2"] .p8020-mod-ico { color: var(--accent-3); background: color-mix(in oklab, var(--accent-3) 10%, transparent); }
-    .p8020-mod[data-tier="t3"] .p8020-mod-ico { color: var(--accent-5, #6366f1); background: color-mix(in oklab, var(--accent-5, #6366f1) 10%, transparent); }
+    .p8020-mod[data-tier="t3"] .p8020-mod-ico { color: var(--accent-5, #2d5e8e); background: color-mix(in oklab, var(--accent-5, #2d5e8e) 10%, transparent); }
     .p8020-mod-name {
       font-family: 'Inter Tight', sans-serif;
       font-weight: 700;
@@ -17390,11 +17491,11 @@ manifest = <span class="tok-fn">ModuleManifest</span>(
         </a>
         <span class="hero-platform-icons" aria-label="Other platform downloads">
           <a class="hero-platform-icon" href="/download#card-macos" aria-label="Download for macOS (Apple)">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><defs><linearGradient id="osapple-h2" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#bcbcc2"/><stop offset="1" stop-color="#56565b"/></linearGradient></defs><path fill="url(#osapple-h2)" d="M16.4 12.6c0-2.1 1.7-3.1 1.8-3.2-1-1.4-2.5-1.6-3-1.6-1.3-.1-2.5.7-3.1.7-.6 0-1.6-.7-2.7-.7-1.4 0-2.6.8-3.3 2-1.4 2.4-.4 6 1 8 .7 1 1.4 2 2.5 2 1 0 1.4-.6 2.6-.6 1.2 0 1.5.6 2.6.6 1.1 0 1.8-1 2.4-2 .8-1.1 1.1-2.2 1.1-2.3 0-.1-2.1-.8-2.1-3.1zM14.5 6.3c.6-.7 1-1.6.9-2.6-.8 0-1.8.5-2.4 1.2-.5.6-1 1.6-.9 2.5.9.1 1.8-.4 2.4-1.1z"/></svg>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16.4 12.6c0-2.1 1.7-3.1 1.8-3.2-1-1.4-2.5-1.6-3-1.6-1.3-.1-2.5.7-3.1.7-.6 0-1.6-.7-2.7-.7-1.4 0-2.6.8-3.3 2-1.4 2.4-.4 6 1 8 .7 1 1.4 2 2.5 2 1 0 1.4-.6 2.6-.6 1.2 0 1.5.6 2.6.6 1.1 0 1.8-1 2.4-2 .8-1.1 1.1-2.2 1.1-2.3 0-.1-2.1-.8-2.1-3.1zM14.5 6.3c.6-.7 1-1.6.9-2.6-.8 0-1.8.5-2.4 1.2-.5.6-1 1.6-.9 2.5.9.1 1.8-.4 2.4-1.1z"/></svg>
             <span>Apple</span>
           </a>
           <a class="hero-platform-icon" href="/download#card-linux" aria-label="Linux install options">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#1b1b1b" d="M12 2.3c-2.5 0-4 1.9-4 4.3 0 1 .3 1.6.3 2.3 0 .9-.6 1.5-1.4 2.6-1 1.3-2 2.9-2 4.9 0 1.1.35 2 .9 2.6l-.7 1.3c-.2.35.05.8.45.8h.95c.15.5.55.85 1.1.95 1 .18 2-.05 2.6-.55.25-.2.45-.3.8-.3s.55.1.8.3c.6.5 1.6.73 2.6.55.55-.1.95-.45 1.1-.95h.95c.4 0 .65-.45.45-.8l-.7-1.3c.55-.6.9-1.5.9-2.6 0-2-1-3.6-2-4.9-.8-1.1-1.4-1.7-1.4-2.6 0-.7.3-1.3.3-2.3 0-2.4-1.5-4.3-4-4.3z"/><ellipse cx="9.7" cy="19.3" rx="2.05" ry="1" fill="#f6a800" transform="rotate(-20 9.7 19.3)"/><ellipse cx="14.3" cy="19.3" rx="2.05" ry="1" fill="#f6a800" transform="rotate(20 14.3 19.3)"/><path fill="#fff" d="M12 8.6c-2 0-3.3 1.8-3.3 4.1 0 1.7.45 3.3 1.3 4.4.55.7 1.25 1.05 2 1.05s1.45-.35 2-1.05c.85-1.1 1.3-2.7 1.3-4.4 0-2.3-1.3-4.1-3.3-4.1z"/><ellipse cx="10.45" cy="10.6" rx=".95" ry="1.3" fill="#1b1b1b"/><ellipse cx="13.55" cy="10.6" rx=".95" ry="1.3" fill="#1b1b1b"/><circle cx="10.72" cy="10.2" r=".28" fill="#fff"/><circle cx="13.82" cy="10.2" r=".28" fill="#fff"/><path fill="#f6a800" d="M12 11.5l1.45 1-1.45 1.15-1.45-1.15z"/><path fill="#d98e00" d="M12 12.65l1.45-.15-1.45 1.15-1.45-1.15z"/></svg>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path fill-rule="evenodd" clip-rule="evenodd" d="M12 2.3c-2.05 0-3.55 1.6-3.55 3.95 0 .95.3 1.55.3 2.3 0 .85-.55 1.4-1.3 2.4-.9 1.2-1.95 2.7-1.95 4.75 0 1.45.5 2.55 1.3 3.35l-1.2 2.05c-.22.38.05.85.49.85H7.1c.18.5.62.85 1.2.95 1.05.18 2.2-.05 2.85-.6.27-.22.5-.32.85-.32s.58.1.85.32c.65.55 1.8.78 2.85.6.58-.1 1.02-.45 1.2-.95h1.01c.44 0 .71-.47.49-.85l-1.2-2.05c.8-.8 1.3-1.9 1.3-3.35 0-2.05-1.05-3.55-1.95-4.75-.75-1-1.3-1.55-1.3-2.4 0-.75.3-1.35.3-2.3C15.55 3.9 14.05 2.3 12 2.3Zm-1.65 3.5c.48 0 .82.45.82 1s-.34 1-.82 1-.83-.45-.83-1 .35-1 .83-1Zm3.3 0c.48 0 .83.45.83 1s-.35 1-.83 1-.82-.45-.82-1 .34-1 .82-1Zm-1.65 2.45c.6 0 1.55.3 1.95.85.12.17-.02.38-.25.45l-1.4.45c-.2.06-.4.06-.6 0l-1.4-.45c-.23-.07-.37-.28-.25-.45.4-.55 1.35-.85 1.95-.85Z"/></svg>
             <span>Linux</span>
           </a>
         </span>
@@ -17498,8 +17599,8 @@ manifest = <span class="tok-fn">ModuleManifest</span>(
     .pa-section {
       padding: clamp(64px, 9vw, 120px) 0 clamp(48px, 6vw, 80px);
       background:
-        radial-gradient(1100px 520px at 80% -10%, color-mix(in oklab, #0284c7 6%, transparent), transparent 60%),
-        radial-gradient(900px 480px at -10% 110%, color-mix(in oklab, #2563eb 5%, transparent), transparent 65%),
+        radial-gradient(1100px 520px at 80% -10%, color-mix(in oklab, #2d5e8e 6%, transparent), transparent 60%),
+        radial-gradient(900px 480px at -10% 110%, color-mix(in oklab, #244c74 5%, transparent), transparent 65%),
         var(--bg, #fafafa);
       position: relative;
       border-top: 1px solid #ececec;
@@ -17523,10 +17624,10 @@ manifest = <span class="tok-fn">ModuleManifest</span>(
       font-family: 'JetBrains Mono', monospace;
       font-size: 11.5px; font-weight: 600;
       letter-spacing: 0.18em; text-transform: uppercase;
-      color: #0284c7; margin: 0 0 14px;
+      color: #2d5e8e; margin: 0 0 14px;
       display: inline-flex; align-items: center; gap: 12px;
     }
-    .pa-eyebrow::before { content: ""; width: 26px; height: 1.5px; background: #0284c7; }
+    .pa-eyebrow::before { content: ""; width: 26px; height: 1.5px; background: #2d5e8e; }
     .pa-head h2 {
       font-family: 'Inter Tight', sans-serif;
       font-size: clamp(34px, 4.6vw, 56px); font-weight: 700;
@@ -17536,7 +17637,7 @@ manifest = <span class="tok-fn">ModuleManifest</span>(
     .pa-head h2 em {
       font-family: 'Fraunces', 'Instrument Serif', serif;
       font-style: italic; font-weight: 400; letter-spacing: -0.025em;
-      background: linear-gradient(110deg, #0ea5e9 5%, #0284c7 45%, #2563eb 95%);
+      background: linear-gradient(110deg, #3c6fa0 5%, #2d5e8e 45%, #244c74 95%);
       -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
     }
     .pa-lede {
@@ -17562,7 +17663,7 @@ manifest = <span class="tok-fn">ModuleManifest</span>(
     }
     .pa-stat-num em {
       font-family: 'Fraunces', serif; font-style: italic; font-weight: 400;
-      background: linear-gradient(110deg, #0ea5e9 5%, #0284c7 45%, #2563eb 95%);
+      background: linear-gradient(110deg, #3c6fa0 5%, #2d5e8e 45%, #244c74 95%);
       -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
     }
     .pa-stat-num small {
@@ -17589,7 +17690,7 @@ manifest = <span class="tok-fn">ModuleManifest</span>(
       position: relative;
       padding: 36px 36px 30px;
       border-radius: 24px;
-      background: linear-gradient(160deg, #ffffff 0%, #f4f8ff 100%);
+      background: linear-gradient(160deg, #ffffff 0%, #e9eaec 100%);
       border: 1px solid #cbd5e1;
       overflow: hidden;
       isolation: isolate;
@@ -17604,15 +17705,15 @@ manifest = <span class="tok-fn">ModuleManifest</span>(
       width: 600px; height: 600px;
       border-radius: 50%;
       background: radial-gradient(circle,
-        color-mix(in oklab, #0ea5e9 18%, transparent) 0%,
+        color-mix(in oklab, #3c6fa0 18%, transparent) 0%,
         transparent 60%);
       z-index: -1;
       transition: transform 0.5s ease;
     }
     .pa-featured:hover {
       transform: translateY(-4px);
-      border-color: #0284c7;
-      box-shadow: 0 30px 60px -28px color-mix(in oklab, #0284c7 50%, transparent);
+      border-color: #2d5e8e;
+      box-shadow: 0 30px 60px -28px color-mix(in oklab, #2d5e8e 50%, transparent);
       text-decoration: none;
     }
     .pa-featured:hover::before { transform: scale(1.1) translateY(-20px); }
@@ -17622,21 +17723,21 @@ manifest = <span class="tok-fn">ModuleManifest</span>(
       font-family: 'JetBrains Mono', monospace;
       font-size: 11px; font-weight: 600;
       letter-spacing: 0.1em; text-transform: uppercase;
-      color: #0284c7;
+      color: #2d5e8e;
       padding: 6px 12px; border-radius: 999px;
-      background: color-mix(in oklab, #0284c7 10%, transparent);
-      border: 1px solid color-mix(in oklab, #0284c7 22%, transparent);
+      background: color-mix(in oklab, #2d5e8e 10%, transparent);
+      border: 1px solid color-mix(in oklab, #2d5e8e 22%, transparent);
       width: fit-content;
       margin-bottom: 22px;
     }
     .pa-featured-tag::before {
       content: ""; width: 7px; height: 7px;
-      border-radius: 50%; background: #0284c7;
+      border-radius: 50%; background: #2d5e8e;
       animation: paLiveDot 1.6s ease-in-out infinite;
     }
     @keyframes paLiveDot {
-      0%, 100% { box-shadow: 0 0 0 0 color-mix(in oklab, #0284c7 60%, transparent); }
-      50%      { box-shadow: 0 0 0 5px color-mix(in oklab, #0284c7 0%, transparent); }
+      0%, 100% { box-shadow: 0 0 0 0 color-mix(in oklab, #2d5e8e 60%, transparent); }
+      50%      { box-shadow: 0 0 0 5px color-mix(in oklab, #2d5e8e 0%, transparent); }
     }
 
     .pa-featured h3 {
@@ -17647,7 +17748,7 @@ manifest = <span class="tok-fn">ModuleManifest</span>(
     }
     .pa-featured h3 em {
       font-family: 'Fraunces', serif; font-style: italic; font-weight: 400;
-      background: linear-gradient(110deg, #0ea5e9 5%, #0284c7 45%, #2563eb 95%);
+      background: linear-gradient(110deg, #3c6fa0 5%, #2d5e8e 45%, #244c74 95%);
       -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
     }
     .pa-featured p {
@@ -17695,7 +17796,7 @@ manifest = <span class="tok-fn">ModuleManifest</span>(
     }
     .pa-gauge-num em {
       font-family: 'Fraunces', serif; font-style: italic; font-weight: 400;
-      background: linear-gradient(110deg, #0ea5e9, #0284c7, #2563eb);
+      background: linear-gradient(110deg, #3c6fa0, #2d5e8e, #244c74);
       -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
     }
     .pa-gauge-of {
@@ -17714,9 +17815,9 @@ manifest = <span class="tok-fn">ModuleManifest</span>(
     }
     .pa-band-mini:nth-child(1) { background: color-mix(in oklab, #dc2626 8%, #f4f4f6); }
     .pa-band-mini:nth-child(2) { background: color-mix(in oklab, #f59e0b 8%, #f4f4f6); }
-    .pa-band-mini:nth-child(3) { background: color-mix(in oklab, #0ea5e9 9%, #f4f4f6); }
-    .pa-band-mini:nth-child(4) { background: color-mix(in oklab, #0284c7 11%, #f4f4f6); border: 1.5px solid #0284c7; }
-    .pa-band-mini:nth-child(5) { background: color-mix(in oklab, #2563eb 12%, #f4f4f6); }
+    .pa-band-mini:nth-child(3) { background: color-mix(in oklab, #3c6fa0 9%, #f4f4f6); }
+    .pa-band-mini:nth-child(4) { background: color-mix(in oklab, #2d5e8e 11%, #f4f4f6); border: 1.5px solid #2d5e8e; }
+    .pa-band-mini:nth-child(5) { background: color-mix(in oklab, #244c74 12%, #f4f4f6); }
     .pa-band-mini-name {
       font-family: 'Inter Tight', sans-serif; font-weight: 700;
       font-size: 10.5px; color: #0b1220; line-height: 1.2;
@@ -17737,11 +17838,11 @@ manifest = <span class="tok-fn">ModuleManifest</span>(
     .pa-featured-cta {
       display: inline-flex; align-items: center; gap: 10px;
       padding: 13px 22px; border-radius: 999px;
-      background: linear-gradient(135deg, #0ea5e9, #0284c7, #2563eb);
+      background: linear-gradient(135deg, #3c6fa0, #2d5e8e, #244c74);
       color: #fff;
       font-family: 'Inter Tight', sans-serif; font-weight: 600;
       font-size: 14px; letter-spacing: -0.005em;
-      box-shadow: 0 12px 28px -10px color-mix(in oklab, #0284c7 60%, transparent);
+      box-shadow: 0 12px 28px -10px color-mix(in oklab, #2d5e8e 60%, transparent);
       transition: transform 0.22s ease, filter 0.22s ease;
     }
     .pa-featured:hover .pa-featured-cta {
@@ -17774,15 +17875,15 @@ manifest = <span class="tok-fn">ModuleManifest</span>(
       content: ""; position: absolute;
       top: 0; left: 0; bottom: 0;
       width: 3px;
-      background: var(--pa-tint, #0284c7);
+      background: var(--pa-tint, #2d5e8e);
       transform: scaleY(0.3);
       transform-origin: center;
       transition: transform 0.3s ease;
     }
     .pa-side-card:hover {
       transform: translateX(4px);
-      border-color: var(--pa-tint, #0284c7);
-      box-shadow: 0 18px 36px -22px color-mix(in oklab, var(--pa-tint, #0284c7) 50%, transparent);
+      border-color: var(--pa-tint, #2d5e8e);
+      box-shadow: 0 18px 36px -22px color-mix(in oklab, var(--pa-tint, #2d5e8e) 50%, transparent);
       text-decoration: none;
     }
     .pa-side-card:hover::before { transform: scaleY(1); }
@@ -17790,13 +17891,13 @@ manifest = <span class="tok-fn">ModuleManifest</span>(
     .pa-side-icon {
       width: 60px; height: 60px;
       border-radius: 14px;
-      background: color-mix(in oklab, var(--pa-tint, #0284c7) 8%, transparent);
+      background: color-mix(in oklab, var(--pa-tint, #2d5e8e) 8%, transparent);
       display: flex; align-items: center; justify-content: center;
-      color: var(--pa-tint, #0284c7);
+      color: var(--pa-tint, #2d5e8e);
       transition: background 0.3s ease, transform 0.3s ease;
     }
     .pa-side-card:hover .pa-side-icon {
-      background: var(--pa-tint, #0284c7);
+      background: var(--pa-tint, #2d5e8e);
       color: #fff;
       transform: rotate(-4deg) scale(1.05);
     }
@@ -17806,7 +17907,7 @@ manifest = <span class="tok-fn">ModuleManifest</span>(
     .pa-side-eyebrow {
       font-family: 'JetBrains Mono', monospace; font-size: 10.5px;
       font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
-      color: var(--pa-tint, #0284c7); margin-bottom: 4px;
+      color: var(--pa-tint, #2d5e8e); margin-bottom: 4px;
     }
     .pa-side-title {
       font-family: 'Inter Tight', sans-serif; font-weight: 700;
@@ -17815,7 +17916,7 @@ manifest = <span class="tok-fn">ModuleManifest</span>(
     }
     .pa-side-title em {
       font-family: 'Fraunces', serif; font-style: italic; font-weight: 400;
-      color: var(--pa-tint, #0284c7);
+      color: var(--pa-tint, #2d5e8e);
     }
     .pa-side-desc {
       font-size: 13px; line-height: 1.5; color: #475569; margin: 0 0 6px;
@@ -17831,8 +17932,8 @@ manifest = <span class="tok-fn">ModuleManifest</span>(
       background: #f4f4f6; color: #475569;
     }
     .pa-side-tag.is-accent {
-      background: color-mix(in oklab, var(--pa-tint, #0284c7) 12%, transparent);
-      color: var(--pa-tint, #0284c7);
+      background: color-mix(in oklab, var(--pa-tint, #2d5e8e) 12%, transparent);
+      color: var(--pa-tint, #2d5e8e);
     }
 
     .pa-side-arrow {
@@ -17843,7 +17944,7 @@ manifest = <span class="tok-fn">ModuleManifest</span>(
       transition: all 0.22s ease;
     }
     .pa-side-card:hover .pa-side-arrow {
-      background: var(--pa-tint, #0284c7); color: #fff;
+      background: var(--pa-tint, #2d5e8e); color: #fff;
       transform: translateX(2px);
     }
     .pa-side-arrow svg { width: 14px; height: 14px; }
@@ -17911,9 +18012,9 @@ manifest = <span class="tok-fn">ModuleManifest</span>(
               <svg viewBox="0 0 140 140">
                 <defs>
                   <linearGradient id="paGaugeGrad" x1="0" y1="0" x2="1" y2="1">
-                    <stop offset="0%"   stop-color="#0ea5e9"/>
-                    <stop offset="55%"  stop-color="#0284c7"/>
-                    <stop offset="100%" stop-color="#2563eb"/>
+                    <stop offset="0%"   stop-color="#3c6fa0"/>
+                    <stop offset="55%"  stop-color="#2d5e8e"/>
+                    <stop offset="100%" stop-color="#244c74"/>
                   </linearGradient>
                 </defs>
                 <circle class="pa-gauge-track" cx="70" cy="70" r="58"/>
@@ -17948,7 +18049,7 @@ manifest = <span class="tok-fn">ModuleManifest</span>(
                 </div>
               </div>
               <div style="margin-top:12px; font-family:'JetBrains Mono',monospace; font-size:11px; color:#475569; letter-spacing:0.04em;">
-                ▸ Sample result: <b style="color:#0284c7;">Established</b> · 27 / 44 · 61% maturity
+                ▸ Sample result: <b style="color:#2d5e8e;">Established</b> · 27 / 44 · 61% maturity
               </div>
             </div>
           </div>
@@ -17967,7 +18068,7 @@ manifest = <span class="tok-fn">ModuleManifest</span>(
         <!-- SIDE STACK: services, industries, standards -->
         <div class="pa-side-stack">
 
-          <a class="pa-side-card" href="/services.html" style="--pa-tint: #0ea5e9;">
+          <a class="pa-side-card" href="/services.html" style="--pa-tint: #3c6fa0;">
             <div class="pa-side-icon">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
                 <circle cx="12" cy="12" r="9"/>
@@ -17991,7 +18092,7 @@ manifest = <span class="tok-fn">ModuleManifest</span>(
             </div>
           </a>
 
-          <a class="pa-side-card" href="/industries.html" style="--pa-tint: #0284c7;">
+          <a class="pa-side-card" href="/industries.html" style="--pa-tint: #2d5e8e;">
             <div class="pa-side-icon">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M3 21h18M5 21V8l4-3 4 3v13M13 21V11l4-2 4 2v10"/>
@@ -18014,7 +18115,7 @@ manifest = <span class="tok-fn">ModuleManifest</span>(
             </div>
           </a>
 
-          <a class="pa-side-card" href="/standards.html" style="--pa-tint: #2563eb;">
+          <a class="pa-side-card" href="/standards.html" style="--pa-tint: #244c74;">
             <div class="pa-side-icon">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/>
@@ -19272,7 +19373,9 @@ manifest = <span class="tok-fn">ModuleManifest</span>(
     /* ================================================================ */
     /* DATA LABELS - 17 categories, injected into .label-layer           */
     /* ================================================================ */
-    const LABEL_DATA = [
+    const LABEL_DATA = [];
+    /* 3D number-card overlays removed at founder request
+    const LABEL_DATA_OLD = [
       { pos: new THREE.Vector3(10, 16, 10), cat: 'cost',     icon: '€',  title: '€ 4.28M',         sub: 'Tower 01 · total',         tint: 'var(--accent)' },
       { pos: new THREE.Vector3(18, 8,  4),  cat: 'area',     icon: '□',  title: '12,840 m²',       sub: 'gross floor area',         tint: 'var(--accent-4)' },
       { pos: new THREE.Vector3(4,  6, 14),  cat: 'volume',   icon: '◈',  title: '38,520 m³',       sub: 'structural concrete',      tint: 'var(--accent-2)' },
@@ -19291,6 +19394,7 @@ manifest = <span class="tok-fn">ModuleManifest</span>(
       { pos: new THREE.Vector3(18, 2,  2),  cat: 'permit',   icon: '✓',  title: 'permit approved', sub: 'city · 2026-03-12',        tint: 'var(--accent-5)' },
       { pos: new THREE.Vector3(10, 4,  18), cat: 'region',   icon: '◊',  title: '×1.05 factor',    sub: 'regional cost factor',     tint: 'var(--accent-6)' },
     ];
+    */
 
     const labelLayer = document.getElementById('label-layer');
     const labelEls = [];
@@ -20935,7 +21039,7 @@ manifest = <span class="tok-fn">ModuleManifest</span>(
         try {
           // Cache-bust on each release so updated copy reaches users without
           // a hard refresh. LOCALE_VERSION is bumped on every content change.
-          const LOCALE_VERSION = '20260605b';
+          const LOCALE_VERSION = '20260615a';
           const res = await fetch(`locales/${lang}.json?v=${LOCALE_VERSION}`, { cache: 'default' });
           if (!res.ok) throw 0;
           const json = await res.json();

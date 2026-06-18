@@ -120,7 +120,7 @@ export function parseSpreadsheetData(
     errors,
     metadata: {
       positionCount: positions.length,
-      totalValue: positions.reduce((sum, p) => sum + p.total, 0),
+      totalValue: positions.reduce((sum, p) => sum + (Number(p.total) || 0), 0),
     },
   };
 }

@@ -2028,6 +2028,20 @@ def _v3_qdrant_url() -> str | None:
     return getattr(s, "cwicr_qdrant_url", None) or getattr(s, "qdrant_url", None)
 
 
+def _demo_mode_enabled() -> bool:
+    """True on the public hosted demo (env ``OE_DEMO_MODE``).
+
+    Mirrors the flag exposed by ``GET /api/system/status``. On the demo we
+    block catalogue downloads: each DDC v3 snapshot is 400-900 MB and the
+    shared demo box has neither the disk nor the single-core CPU budget to
+    host them. Self-hosted installs leave ``OE_DEMO_MODE`` unset and keep
+    full access to every published catalogue.
+    """
+    import os
+
+    return os.environ.get("OE_DEMO_MODE", "").lower() in ("1", "true", "yes")
+
+
 @router.get("/catalogues-v3/")
 async def list_v3_catalogues() -> dict:
     """List the 30 CWICR v3 catalogues with install status.
@@ -2103,6 +2117,9 @@ async def list_v3_catalogues() -> dict:
 
     return {
         "catalogues": catalogues,
+        # Public-demo flag so the frontend can disable installs and show the
+        # "download to self-host" notice. False on every normal install.
+        "demo_mode": _demo_mode_enabled(),
         "server": {
             "url": qdrant_url,
             "reachable": server_reachable,
@@ -2157,6 +2174,19 @@ async def install_v3_catalogue(
             status.HTTP_409_CONFLICT,
             f"DDC has not yet published the v3 snapshot for {region}. "
             "Track the catalogue in /setup/databases and try again later.",
+        )
+
+    # Public demo: block catalogue downloads. Every v3 snapshot is 400-900 MB
+    # and the shared demo box (small disk, single core) cannot host them. The
+    # demo ships its own small reference cost index; loading additional cost
+    # databases is a self-host feature.
+    if _demo_mode_enabled():
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Installing cost databases is disabled on the public demo. Each "
+            "catalogue is 400+ MB and the demo runs on a small shared box. To "
+            "load this region or your own cost data, download and run "
+            "OpenConstructionERP on your own machine: pip install openconstructionerp.",
         )
 
     qdrant_url = _v3_qdrant_url()

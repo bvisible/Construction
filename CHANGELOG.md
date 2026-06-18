@@ -5,6 +5,23 @@ All notable changes to OpenConstructionERP are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [8.3.3] - 2026-06-15
+
+### Fixed
+
+- Totals that summed money values arriving from the server as text were concatenating instead of adding, which produced wrong figures. This is fixed across the Excel and PDF bill-of-quantities exports and their cost summaries, the assembly editor and library rate rollups, the BOQ tree and resource subtotals, the cost model planned, committed, actual, forecast and variance columns, the bid analysis vendor breakdown, and the ERP chat and AI estimate totals. Every amount is coerced to a number before it is added.
+
+## [8.3.2] - 2026-06-15
+
+### Fixed
+
+- Money values that the server sends as text no longer break the screens that display them. Tender comparison and bill-of-quantities exports to Excel and CSV, the reports and analytics totals, the cost benchmark and the 5D cost model, the regional rate adjustment and the cost-match panels now format every amount safely, so pages that could go blank render their numbers correctly.
+- The sales forecast endpoints now return a clear validation message instead of a server error when the requested period cannot be computed.
+
+### Security
+
+- Access checks were tightened so an account only reads and changes records in projects it can reach. Locking and unlocking a bill of quantities, the safety toolbox-talk and corrective-action endpoints, importing timecards, and applying or duplicating another person's shared saved view now confirm project access first.
+
 ## [8.3.1] - 2026-06-15
 
 ### Changed

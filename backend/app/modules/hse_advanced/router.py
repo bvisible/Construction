@@ -530,10 +530,13 @@ async def record_toolbox_talk(
 @router.get("/toolbox-talks/{item_id}", response_model=ToolboxTalkResponse)
 async def get_toolbox_talk(
     item_id: uuid.UUID,
+    user_id: CurrentUserId,
+    session: SessionDep,
     _perm: None = Depends(RequirePermission("hse_advanced.read")),
     service: HSEAdvancedService = Depends(_get_service),
 ) -> ToolboxTalkResponse:
     obj = await service.get_toolbox_talk(item_id)
+    await _guard_project(obj.project_id, user_id, session)
     return ToolboxTalkResponse.model_validate(obj)
 
 
@@ -541,9 +544,13 @@ async def get_toolbox_talk(
 async def update_toolbox_talk(
     item_id: uuid.UUID,
     data: ToolboxTalkUpdate,
+    user_id: CurrentUserId,
+    session: SessionDep,
     _perm: None = Depends(RequirePermission("hse_advanced.update")),
     service: HSEAdvancedService = Depends(_get_service),
 ) -> ToolboxTalkResponse:
+    existing = await service.get_toolbox_talk(item_id)
+    await _guard_project(existing.project_id, user_id, session)
     obj = await service.update_toolbox_talk(item_id, data)
     return ToolboxTalkResponse.model_validate(obj)
 
@@ -551,10 +558,13 @@ async def update_toolbox_talk(
 @router.delete("/toolbox-talks/{item_id}", status_code=204)
 async def delete_toolbox_talk(
     item_id: uuid.UUID,
+    user_id: CurrentUserId,
+    session: SessionDep,
     _perm: None = Depends(RequirePermission("hse_advanced.delete")),
     service: HSEAdvancedService = Depends(_get_service),
 ) -> None:
-    await service.get_toolbox_talk(item_id)
+    existing = await service.get_toolbox_talk(item_id)
+    await _guard_project(existing.project_id, user_id, session)
     await service.talk_repo.delete(item_id)
 
 
@@ -565,9 +575,13 @@ async def delete_toolbox_talk(
 async def add_attendance(
     item_id: uuid.UUID,
     entries: list[ToolboxAttendanceEntry],
+    user_id: CurrentUserId,
+    session: SessionDep,
     _perm: None = Depends(RequirePermission("hse_advanced.update")),
     service: HSEAdvancedService = Depends(_get_service),
 ) -> list[ToolboxAttendanceResponse]:
+    talk = await service.get_toolbox_talk(item_id)
+    await _guard_project(talk.project_id, user_id, session)
     rows = await service.add_attendance(item_id, entries)
     return [ToolboxAttendanceResponse.model_validate(r) for r in rows]
 
@@ -1187,10 +1201,14 @@ async def update_permit_prereqs(
 async def set_five_whys(
     item_id: uuid.UUID,
     payload: CAPAFiveWhysPayload,
+    user_id: CurrentUserId,
+    session: SessionDep,
     _perm: None = Depends(RequirePermission("hse_advanced.update")),
     service: HSEAdvancedService = Depends(_get_service),
 ) -> CAPAResponse:
     """Record a 5-Whys structured root-cause chain on a CAPA."""
+    existing = await service.get_capa(item_id)
+    await _guard_project(existing.project_id, user_id, session)
     obj = await service.set_capa_five_whys(item_id, payload)
     return CAPAResponse.model_validate(obj)
 
@@ -1200,10 +1218,13 @@ async def verify_effectiveness(
     item_id: uuid.UUID,
     payload: CAPAEffectivenessPayload,
     user_id: CurrentUserId,
+    session: SessionDep,
     _perm: None = Depends(RequirePermission("hse_advanced.verify_effectiveness")),
     service: HSEAdvancedService = Depends(_get_service),
 ) -> CAPAResponse:
     """ISO 9001 §10.2.1 - verify a completed CAPA's effectiveness."""
+    existing = await service.get_capa(item_id)
+    await _guard_project(existing.project_id, user_id, session)
     verifier: uuid.UUID | None = None
     try:
         verifier = uuid.UUID(str(user_id)) if user_id else None

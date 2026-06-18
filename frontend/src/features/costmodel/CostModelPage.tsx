@@ -77,7 +77,7 @@ function formatCurrency(amount: number, currency: string): string {
       maximumFractionDigits: 0,
     }).format(amount);
   } catch {
-    return `${amount.toFixed(0)} ${safe}`;
+    return `${Number(amount).toFixed(0)} ${safe}`;
   }
 }
 
@@ -459,11 +459,11 @@ const BudgetTable = memo(function BudgetTable({
   const totals = useMemo(() => {
     return safeCategories.reduce(
       (acc, cat) => ({
-        planned: acc.planned + cat.planned,
-        committed: acc.committed + cat.committed,
-        actual: acc.actual + cat.actual,
-        forecast: acc.forecast + cat.forecast,
-        variance: acc.variance + cat.variance,
+        planned: acc.planned + (Number(cat.planned) || 0),
+        committed: acc.committed + (Number(cat.committed) || 0),
+        actual: acc.actual + (Number(cat.actual) || 0),
+        forecast: acc.forecast + (Number(cat.forecast) || 0),
+        variance: acc.variance + (Number(cat.variance) || 0),
       }),
       { planned: 0, committed: 0, actual: 0, forecast: 0, variance: 0 },
     );

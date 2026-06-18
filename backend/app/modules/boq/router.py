@@ -1380,6 +1380,7 @@ async def duplicate_position(
 async def lock_boq(
     boq_id: uuid.UUID,
     user_id: CurrentUserId,
+    payload: CurrentUserPayload,
     service: BOQService = Depends(_get_service),
 ) -> BOQResponse:
     """Lock a BOQ to prevent further edits.
@@ -1405,6 +1406,11 @@ async def lock_boq(
     from sqlalchemy import update as sa_update
 
     from app.modules.boq.models import BOQ
+
+    # IDOR guard - lock is a state transition; mirror duplicate_boq and the
+    # PATCH/DELETE routes so a boq.update holder cannot lock a BOQ on a
+    # project they are not a member of (admins bypass inside the helper).
+    await _verify_boq_owner(service.session, boq_id, str(user_id), payload)
 
     # Existence check up-front: gives us a clean 404 (vs the ambiguous
     # 409 you'd otherwise get from a race-loser-or-missing row).
@@ -1492,6 +1498,10 @@ async def unlock_boq(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only admin or manager can unlock a BOQ.",
         )
+
+    # IDOR guard - a project manager must also belong to this BOQ's project
+    # (admins bypass inside the helper), matching lock_boq and the mutators.
+    await _verify_boq_owner(service.session, boq_id, str(user_id), payload)
 
     # Existence check first (separates 404 from race-loser).
     await service.get_boq(boq_id)

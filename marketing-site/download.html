@@ -46,10 +46,10 @@
 <style>
 /* ---------- theme tokens ---------- */
 :root{
-  --bg-0:#f7fbff; --bg-1:#edf5ff; --bg-2:#e7f2fd;
+  --bg-0:#f1f2f3; --bg-1:#ebeced; --bg-2:#e4e5e7;
   --ink-0:#0b1220; --ink-1:#1e293b; --ink-2:#475569; --ink-3:#94a3b8;
   --line-0:rgba(15,23,42,.05); --line-1:rgba(15,23,42,.09); --line-2:rgba(15,23,42,.14);
-  --accent:#0284c7; --accent-2:#0ea5e9; --accent-3:#2563eb; --accent-5:#06b6d4;
+  --accent:#2d5e8e; --accent-2:#3c6fa0; --accent-3:#244c74; --accent-5:#3c6fa0;
   --card-bg:rgba(255,255,255,.78);
   --shadow-card:0 1px 2px rgba(15,23,42,.04), 0 12px 32px -16px rgba(15,23,42,.16);
   color-scheme:light;
@@ -58,7 +58,7 @@
   --bg-0:#0b1220; --bg-1:#0f1828; --bg-2:#111a2c;
   --ink-0:#eff6ff; --ink-1:#cfe0f5; --ink-2:#94a3b8; --ink-3:#64748b;
   --line-0:rgba(255,255,255,.06); --line-1:rgba(255,255,255,.10); --line-2:rgba(255,255,255,.16);
-  --accent:#38bdf8; --accent-2:#7dd3fc; --accent-3:#60a5fa; --accent-5:#22d3ee;
+  --accent:#6ba2d8; --accent-2:#84b3e2; --accent-3:#5a90c8; --accent-5:#84b3e2;
   --card-bg:rgba(17,26,44,.72);
   --shadow-card:0 1px 2px rgba(0,0,0,.3), 0 14px 36px -18px rgba(0,0,0,.6);
   color-scheme:dark;
@@ -84,13 +84,13 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 
 /* ---------- background ---------- */
 .bg-wrap{position:fixed;inset:0;pointer-events:none;z-index:0;overflow:hidden}
-.bg-gradient{position:absolute;inset:0;background:linear-gradient(160deg,#f7fbff 0%,#f1f7ff 40%,#edf5ff 72%,#e7f2fd 100%);}
+.bg-gradient{position:absolute;inset:0;background:linear-gradient(160deg,#f1f2f3 0%,#eeeff0 40%,#ebeced 72%,#e4e5e7 100%);}
 [data-theme="dark"] .bg-gradient{background:linear-gradient(160deg,#0b1220 0%,#0d1626 45%,#0b1220 100%);}
 .blob{position:absolute;border-radius:999px;filter:blur(120px);animation:drift 50s ease-in-out infinite alternate}
-.blob-a{top:-10%;left:-5%;width:820px;height:820px;background:radial-gradient(circle at 50% 50%,rgba(14,165,233,.16),transparent 70%);animation-delay:0s}
-.blob-b{bottom:-15%;right:-10%;width:900px;height:900px;background:radial-gradient(circle at 50% 50%,rgba(37,99,235,.12),transparent 70%);animation-delay:-18s}
-[data-theme="dark"] .blob-a{background:radial-gradient(circle at 50% 50%,rgba(56,189,248,.14),transparent 70%)}
-[data-theme="dark"] .blob-b{background:radial-gradient(circle at 50% 50%,rgba(96,165,250,.12),transparent 70%)}
+.blob-a{top:-10%;left:-5%;width:820px;height:820px;background:radial-gradient(circle at 50% 50%,rgba(45, 94, 142, 0.10),transparent 70%);animation-delay:0s}
+.blob-b{bottom:-15%;right:-10%;width:900px;height:900px;background:radial-gradient(circle at 50% 50%,rgba(45, 94, 142, 0.08),transparent 70%);animation-delay:-18s}
+[data-theme="dark"] .blob-a{background:radial-gradient(circle at 50% 50%,rgba(107, 162, 216, 0.09),transparent 70%)}
+[data-theme="dark"] .blob-b{background:radial-gradient(circle at 50% 50%,rgba(107, 162, 216, 0.07),transparent 70%)}
 @keyframes drift{0%{transform:translate3d(-3%,-2%,0) scale(1)}50%{transform:translate3d(4%,3%,0) scale(1.08)}100%{transform:translate3d(-2%,4%,0) scale(.96)}}
 @media(prefers-reduced-motion:reduce){.blob{animation:none}}
 
@@ -128,9 +128,9 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 [data-theme="dark"] .github-pill:hover{background:color-mix(in oklab,#ffffff 12%,transparent);}
 .github-pill svg{width:15px;height:15px;fill:currentColor;}
 
-.install-pill{display:inline-flex;align-items:center;gap:8px;padding:9px 16px;border-radius:999px;background:var(--accent);color:#fff;font-size:13px;font-weight:500;letter-spacing:-.005em;text-decoration:none;transition:transform .2s ease,background .25s ease,box-shadow .25s ease;box-shadow:0 6px 18px -6px rgba(14,165,233,.55);}
-[data-theme="dark"] .install-pill{color:var(--ink-0);box-shadow:0 6px 18px -6px rgba(56,189,248,.45);}
-.install-pill:hover{transform:translateY(-1px);box-shadow:0 10px 22px -6px rgba(14,165,233,.65);}
+.install-pill{display:inline-flex;align-items:center;gap:8px;padding:9px 16px;border-radius:999px;background:var(--accent);color:#fff;font-size:13px;font-weight:500;letter-spacing:-.005em;text-decoration:none;transition:transform .2s ease,background .25s ease,box-shadow .25s ease;box-shadow:0 6px 18px -6px rgba(45, 94, 142, 0.10);}
+[data-theme="dark"] .install-pill{color:var(--ink-0);box-shadow:0 6px 18px -6px rgba(107, 162, 216, 0.09);}
+.install-pill:hover{transform:translateY(-1px);box-shadow:0 10px 22px -6px rgba(45, 94, 142, 0.10);}
 .install-pill svg{display:block;}
 
 .nav-burger{display:none;align-items:center;justify-content:center;width:36px;height:36px;border-radius:10px;border:1px solid var(--line-1);background:color-mix(in oklab,#ffffff 60%,transparent);cursor:pointer;color:var(--ink-0);transition:background .2s ease,border-color .2s ease;}
@@ -497,7 +497,7 @@ a.dl-dl.btn-primary{color:#fff;}
       <article class="dl-card" id="card-windows" data-os="windows">
         <header class="dl-card-head">
           <span class="dl-glyph" aria-hidden="true">
-            <svg viewBox="0 0 24 24"><defs><linearGradient id="oswin-dl" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#3aa0ef"/><stop offset="1" stop-color="#0067c0"/></linearGradient></defs><rect x="2.6" y="2.6" width="8.4" height="8.4" rx="1" fill="url(#oswin-dl)"/><rect x="13" y="2.6" width="8.4" height="8.4" rx="1" fill="url(#oswin-dl)"/><rect x="2.6" y="13" width="8.4" height="8.4" rx="1" fill="url(#oswin-dl)"/><rect x="13" y="13" width="8.4" height="8.4" rx="1" fill="url(#oswin-dl)"/></svg>
+            <svg viewBox="0 0 24 24"><path d="M3 5.4 10.4 4.3v6.6H3zM10.4 11.6v6.6L3 17.1V11.6zM11.5 4.1 21 2.7v8.2h-9.5zM21 11.9v8.2l-9.5-1.4v-6.8z"/></svg>
           </span>
           <div class="dl-card-id">
             <h2 class="dl-card-name">Windows</h2>
@@ -528,7 +528,7 @@ a.dl-dl.btn-primary{color:#fff;}
       <article class="dl-card" id="card-macos" data-os="macos">
         <header class="dl-card-head">
           <span class="dl-glyph" aria-hidden="true">
-            <svg viewBox="0 0 24 24"><defs><linearGradient id="osapple-dl" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#bcbcc2"/><stop offset="1" stop-color="#56565b"/></linearGradient></defs><path fill="url(#osapple-dl)" d="M16.4 12.6c0-2.1 1.7-3.1 1.8-3.2-1-1.4-2.5-1.6-3-1.6-1.3-.1-2.5.7-3.1.7-.6 0-1.6-.7-2.7-.7-1.4 0-2.6.8-3.3 2-1.4 2.4-.4 6 1 8 .7 1 1.4 2 2.5 2 1 0 1.4-.6 2.6-.6 1.2 0 1.5.6 2.6.6 1.1 0 1.8-1 2.4-2 .8-1.1 1.1-2.2 1.1-2.3 0-.1-2.1-.8-2.1-3.1zM14.5 6.3c.6-.7 1-1.6.9-2.6-.8 0-1.8.5-2.4 1.2-.5.6-1 1.6-.9 2.5.9.1 1.8-.4 2.4-1.1z"/></svg>
+            <svg viewBox="0 0 24 24"><path d="M16.4 12.6c0-2.1 1.7-3.1 1.8-3.2-1-1.4-2.5-1.6-3-1.6-1.3-.1-2.5.7-3.1.7-.6 0-1.6-.7-2.7-.7-1.4 0-2.6.8-3.3 2-1.4 2.4-.4 6 1 8 .7 1 1.4 2 2.5 2 1 0 1.4-.6 2.6-.6 1.2 0 1.5.6 2.6.6 1.1 0 1.8-1 2.4-2 .8-1.1 1.1-2.2 1.1-2.3 0-.1-2.1-.8-2.1-3.1zM14.5 6.3c.6-.7 1-1.6.9-2.6-.8 0-1.8.5-2.4 1.2-.5.6-1 1.6-.9 2.5.9.1 1.8-.4 2.4-1.1z"/></svg>
           </span>
           <div class="dl-card-id">
             <h2 class="dl-card-name">macOS</h2>
@@ -559,7 +559,7 @@ a.dl-dl.btn-primary{color:#fff;}
       <article class="dl-card" id="card-linux" data-os="linux">
         <header class="dl-card-head">
           <span class="dl-glyph" aria-hidden="true">
-            <svg viewBox="0 0 24 24"><path fill="#1b1b1b" d="M12 2.3c-2.5 0-4 1.9-4 4.3 0 1 .3 1.6.3 2.3 0 .9-.6 1.5-1.4 2.6-1 1.3-2 2.9-2 4.9 0 1.1.35 2 .9 2.6l-.7 1.3c-.2.35.05.8.45.8h.95c.15.5.55.85 1.1.95 1 .18 2-.05 2.6-.55.25-.2.45-.3.8-.3s.55.1.8.3c.6.5 1.6.73 2.6.55.55-.1.95-.45 1.1-.95h.95c.4 0 .65-.45.45-.8l-.7-1.3c.55-.6.9-1.5.9-2.6 0-2-1-3.6-2-4.9-.8-1.1-1.4-1.7-1.4-2.6 0-.7.3-1.3.3-2.3 0-2.4-1.5-4.3-4-4.3z"/><ellipse cx="9.7" cy="19.3" rx="2.05" ry="1" fill="#f6a800" transform="rotate(-20 9.7 19.3)"/><ellipse cx="14.3" cy="19.3" rx="2.05" ry="1" fill="#f6a800" transform="rotate(20 14.3 19.3)"/><path fill="#fff" d="M12 8.6c-2 0-3.3 1.8-3.3 4.1 0 1.7.45 3.3 1.3 4.4.55.7 1.25 1.05 2 1.05s1.45-.35 2-1.05c.85-1.1 1.3-2.7 1.3-4.4 0-2.3-1.3-4.1-3.3-4.1z"/><ellipse cx="10.45" cy="10.6" rx=".95" ry="1.3" fill="#1b1b1b"/><ellipse cx="13.55" cy="10.6" rx=".95" ry="1.3" fill="#1b1b1b"/><circle cx="10.72" cy="10.2" r=".28" fill="#fff"/><circle cx="13.82" cy="10.2" r=".28" fill="#fff"/><path fill="#f6a800" d="M12 11.5l1.45 1-1.45 1.15-1.45-1.15z"/><path fill="#d98e00" d="M12 12.65l1.45-.15-1.45 1.15-1.45-1.15z"/></svg>
+            <svg viewBox="0 0 24 24"><path fill-rule="evenodd" clip-rule="evenodd" d="M12 2.3c-2.05 0-3.55 1.6-3.55 3.95 0 .95.3 1.55.3 2.3 0 .85-.55 1.4-1.3 2.4-.9 1.2-1.95 2.7-1.95 4.75 0 1.45.5 2.55 1.3 3.35l-1.2 2.05c-.22.38.05.85.49.85H7.1c.18.5.62.85 1.2.95 1.05.18 2.2-.05 2.85-.6.27-.22.5-.32.85-.32s.58.1.85.32c.65.55 1.8.78 2.85.6.58-.1 1.02-.45 1.2-.95h1.01c.44 0 .71-.47.49-.85l-1.2-2.05c.8-.8 1.3-1.9 1.3-3.35 0-2.05-1.05-3.55-1.95-4.75-.75-1-1.3-1.55-1.3-2.4 0-.75.3-1.35.3-2.3C15.55 3.9 14.05 2.3 12 2.3Zm-1.65 3.5c.48 0 .82.45.82 1s-.34 1-.82 1-.83-.45-.83-1 .35-1 .83-1Zm3.3 0c.48 0 .83.45.83 1s-.35 1-.83 1-.82-.45-.82-1 .34-1 .82-1Zm-1.65 2.45c.6 0 1.55.3 1.95.85.12.17-.02.38-.25.45l-1.4.45c-.2.06-.4.06-.6 0l-1.4-.45c-.23-.07-.37-.28-.25-.45.4-.55 1.35-.85 1.95-.85Z"/></svg>
           </span>
           <div class="dl-card-id">
             <h2 class="dl-card-name">Linux</h2>

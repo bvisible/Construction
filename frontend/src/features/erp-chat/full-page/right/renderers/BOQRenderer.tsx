@@ -31,7 +31,10 @@ export default function BOQRenderer({ data }: { data: unknown }) {
     );
   }
 
-  const grandTotal = items.reduce((sum, it) => sum + (it.total ?? (it.quantity ?? 0) * (it.unit_rate ?? 0)), 0);
+  const grandTotal = items.reduce(
+    (sum, it) => sum + (Number(it.total ?? (it.quantity ?? 0) * (it.unit_rate ?? 0)) || 0),
+    0,
+  );
 
   const cellBase: React.CSSProperties = {
     padding: '8px 10px',

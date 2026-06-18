@@ -163,8 +163,8 @@ function CompareModal({ boqIdA, boqIdB, currencyA, currencyB, onClose }: Compare
     }
 
     // Add ungrouped totals if any
-    const ungroupedTotalA = groupA.ungrouped.reduce((s, p) => s + p.total, 0);
-    const ungroupedTotalB = groupB.ungrouped.reduce((s, p) => s + p.total, 0);
+    const ungroupedTotalA = groupA.ungrouped.reduce((s, p) => s + (Number(p.total) || 0), 0);
+    const ungroupedTotalB = groupB.ungrouped.reduce((s, p) => s + (Number(p.total) || 0), 0);
     if (ungroupedTotalA > 0 || ungroupedTotalB > 0) {
       paired.push({
         key: '__ungrouped__',

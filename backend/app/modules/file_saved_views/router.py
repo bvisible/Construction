@@ -212,6 +212,18 @@ async def use_saved_view(
     user_uuid = _user_uuid(current_user_id)
     service = SavedViewService(session)
     try:
+        existing = await service.get(view_id, user_uuid)
+    except SavedViewNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Saved view not found",
+        ) from exc
+    # IDOR guard: a shared view owned by someone else is only reachable to
+    # members of its project. ``_load`` returns shared rows without a
+    # membership check (it trusts the router), so enforce it here.
+    if existing.user_id != user_uuid and existing.project_id is not None:
+        await verify_project_access(existing.project_id, current_user_id, session)
+    try:
         view = await service.use(view_id, user_uuid)
     except SavedViewNotFoundError as exc:
         raise HTTPException(
@@ -238,6 +250,18 @@ async def duplicate_saved_view(
 ) -> SavedViewResponse:
     user_uuid = _user_uuid(current_user_id)
     service = SavedViewService(session)
+    try:
+        original = await service.get(view_id, user_uuid)
+    except SavedViewNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Saved view not found",
+        ) from exc
+    # IDOR guard: cloning a shared view owned by someone else would copy its
+    # filter definition out of a project the caller may not access. ``_load``
+    # trusts the router for membership, so verify it before duplicating.
+    if original.user_id != user_uuid and original.project_id is not None:
+        await verify_project_access(original.project_id, current_user_id, session)
     try:
         clone = await service.duplicate(view_id, user_uuid)
     except SavedViewNotFoundError as exc:

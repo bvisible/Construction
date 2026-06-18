@@ -765,9 +765,11 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
       }
       return next;
     });
-    // Force AG Grid to refresh ordinal cells so chevron state updates
-    scheduleGridRefresh(['ordinal', '_expand', 'description', 'quantity', 'unit_rate', 'total']);
-  }, [scheduleGridRefresh]);
+    // The chevron + per-position rollup cells repaint via the effect keyed on
+    // ``expandedPositions`` (defined below). Refreshing here with a detached
+    // setTimeout used to race the ag-grid-react wrapper's prop-apply pass and
+    // left the first click looking like a no-op — see that effect's note.
+  }, []);
 
   /* ── Variant-picker auto-open signal ──────────────────────────────
    *  Triggered by the position-description "V" icon.  We ensure the
@@ -1430,7 +1432,7 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
     let resTotal = 0;
     for (let i = 0; i < resources.length; i++) {
       const r = resources[i]!;
-      const rTotal = r.total ?? r.quantity * r.unit_rate;
+      const rTotal = Number(r.total ?? r.quantity * r.unit_rate) || 0;
       // Issue #111 (skolodi follow-up) — the per-position resource
       // subtotal (``_positionResourceTotal``, rendered on the
       // "Add resource" row) is one of the TWO places the contributor
@@ -1699,6 +1701,37 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
       api.redrawRows({ rowNodes: sectionNodes as never[] });
     }
   }, [sectionSubtotalFingerprint]);
+
+  /* ── Expand/collapse resources: refresh the chevron deterministically ──
+   * The ``_expand`` chevron is a cell renderer that reads ``isExpanded``
+   * from the grid ``context`` (``expandedPositions``). AG Grid does NOT
+   * re-render cell renderers when the ``context`` reference changes, so the
+   * chevron only repaints when something forces a cell refresh. Toggling
+   * used to do that with a fire-and-forget ``setTimeout(0)`` inside the
+   * click handler — but that timer is not ordered after the ag-grid-react
+   * wrapper has pushed the new ``context``/``rowData`` into the grid (the
+   * wrapper applies prop changes in a passive effect). When the timer won
+   * the race it called ``refreshCells`` against the PREVIOUS context, the
+   * chevron kept pointing right and the freshly built resource rows had not
+   * been applied yet, so the first click looked like a no-op and only the
+   * second click "worked".
+   *
+   * Driving the refresh from an effect keyed on ``expandedPositions`` fixes
+   * the ordering for good: React commits the new ``rowData`` + ``context``
+   * to the grid first, THEN runs this effect, so ``refreshCells`` always
+   * re-reads the current expansion state. Same proven pattern as the
+   * displayCurrency / section-subtotal redraw effects above. The new
+   * resource rows themselves are inserted by the immutable ``rowData``
+   * update (getRowId is set), so this only has to repaint the chevron and
+   * the per-position rollup columns the toggle affects. */
+  useEffect(() => {
+    const api = gridApiRef.current;
+    if (!api) return;
+    api.refreshCells({
+      columns: ['ordinal', '_expand', 'description', 'quantity', 'unit_rate', 'total'],
+      force: true,
+    });
+  }, [expandedPositions]);
 
   /* ── Pinned bottom rows (footer) ──────────────────────────────── */
   const pinnedBottomRowData = useMemo(() => footerRows, [footerRows]);
@@ -2491,13 +2524,10 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
         ...(effCode ? { code: effCode } : {}),
       });
       setManualResourceDialog(null);
+      // Auto-expand so the new resource row is visible. The chevron + rollup
+      // cells repaint via the ``expandedPositions`` effect (no detached
+      // setTimeout, which used to race the grid's prop-apply pass).
       setExpandedPositions((prev) => new Set(prev).add(positionId));
-      setTimeout(() => {
-        gridApiRef.current?.refreshCells({
-          columns: ['ordinal', '_expand', 'description', 'quantity', 'unit_rate', 'total'],
-          force: true,
-        });
-      }, 0);
     },
     [manualResourceDialog, onAddManualResource],
   );

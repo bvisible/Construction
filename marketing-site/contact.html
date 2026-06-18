@@ -32,9 +32,9 @@
 /* Tokens mirror license-request.html so the visual language stays
    consistent across the marketing site. */
 :root{
-  --bg-0:#f7fbff;
-  --bg-1:#edf5ff;
-  --bg-2:#e7f2fd;
+  --bg-0:#f1f2f3;
+  --bg-1:#ebeced;
+  --bg-2:#e4e5e7;
   --ink-0:#0b1220;
   --ink-1:#1e293b;
   --ink-2:#475569;
@@ -42,10 +42,10 @@
   --line-0:rgba(15,23,42,.05);
   --line-1:rgba(15,23,42,.09);
   --line-2:rgba(15,23,42,.14);
-  --accent:#0284c7;
-  --accent-2:#0ea5e9;
-  --accent-3:#2563eb;
-  --accent-5:#06b6d4;
+  --accent:#2d5e8e;
+  --accent-2:#3c6fa0;
+  --accent-3:#244c74;
+  --accent-5:#3c6fa0;
   --card-bg:rgba(255,255,255,.78);
   --shadow-card:0 1px 2px rgba(15,23,42,.04), 0 12px 32px -16px rgba(15,23,42,.16);
   color-scheme:light;
@@ -70,10 +70,10 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 ::selection{background:color-mix(in oklab,var(--accent) 28%,transparent);color:var(--ink-0)}
 
 .bg-wrap{position:fixed;inset:0;pointer-events:none;z-index:0;overflow:hidden}
-.bg-gradient{position:absolute;inset:0;background:linear-gradient(160deg,#f7fbff 0%,#f1f7ff 40%,#edf5ff 72%,#e7f2fd 100%);}
+.bg-gradient{position:absolute;inset:0;background:linear-gradient(160deg,#f1f2f3 0%,#eeeff0 40%,#ebeced 72%,#e4e5e7 100%);}
 .blob{position:absolute;border-radius:999px;filter:blur(120px);animation:drift 50s ease-in-out infinite alternate}
-.blob-a{top:-10%;left:-5%;width:820px;height:820px;background:radial-gradient(circle at 50% 50%,rgba(14,165,233,.16),transparent 70%);animation-delay:0s}
-.blob-b{bottom:-15%;right:-10%;width:900px;height:900px;background:radial-gradient(circle at 50% 50%,rgba(37,99,235,.12),transparent 70%);animation-delay:-18s}
+.blob-a{top:-10%;left:-5%;width:820px;height:820px;background:radial-gradient(circle at 50% 50%,rgba(45, 94, 142, 0.10),transparent 70%);animation-delay:0s}
+.blob-b{bottom:-15%;right:-10%;width:900px;height:900px;background:radial-gradient(circle at 50% 50%,rgba(45, 94, 142, 0.08),transparent 70%);animation-delay:-18s}
 @keyframes drift{0%{transform:translate3d(-3%,-2%,0) scale(1)}50%{transform:translate3d(4%,3%,0) scale(1.08)}100%{transform:translate3d(-2%,4%,0) scale(.96)}}
 
 .page-body{position:relative;z-index:1;flex:1;display:flex;flex-direction:column}

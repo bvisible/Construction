@@ -42,10 +42,10 @@ export function generateCSV(
       escapeCSV(pos.ordinal),
       escapeCSV(pos.description),
       escapeCSV(pos.unit),
-      pos.quantity.toFixed(3),
+      Number(pos.quantity).toFixed(3),
     ];
     if (includePrices) {
-      row.push(pos.unitRate.toFixed(2), pos.total.toFixed(2));
+      row.push(Number(pos.unitRate).toFixed(2), Number(pos.total).toFixed(2));
     }
     if (template.classification && pos.classification) {
       const code = Object.values(pos.classification)[0] ?? '';
@@ -73,7 +73,7 @@ export function exportToCSV(
     blob,
     filename: filename.endsWith('.csv') ? filename : `${filename}.csv`,
     positionCount: positions.filter((p) => !p.isSection).length,
-    totalValue: positions.reduce((sum, p) => sum + (p.isSection ? 0 : p.total), 0),
+    totalValue: positions.reduce((sum, p) => sum + (p.isSection ? 0 : Number(p.total) || 0), 0),
   };
 }
 

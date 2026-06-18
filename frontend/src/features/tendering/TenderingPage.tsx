@@ -1409,14 +1409,14 @@ function PackageDetail({
     const rows = comparison.rows.map(row => [
       row.description,
       row.unit,
-      row.budget_rate.toFixed(2),
-      ...row.bids.map(b => b.unit_rate.toFixed(2)),
+      Number(row.budget_rate).toFixed(2),
+      ...row.bids.map(b => Number(b.unit_rate).toFixed(2)),
     ]);
     const footer = [
       t('tendering.total', 'TOTAL'),
       '',
-      comparison.budget_total.toFixed(0),
-      ...comparison.bid_totals.map(bt => bt.total.toFixed(0)),
+      Number(comparison.budget_total).toFixed(0),
+      ...comparison.bid_totals.map(bt => Number(bt.total).toFixed(0)),
     ];
     const csv = [headers, ...rows, footer].map(r => r.map(esc).join(',')).join('\n');
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });

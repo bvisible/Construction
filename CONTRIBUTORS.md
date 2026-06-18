@@ -135,6 +135,20 @@ implementation is our own.
   the in-app reporter
   ([#167](https://github.com/datadrivenconstruction/OpenConstructionERP/issues/167),
   [#168](https://github.com/datadrivenconstruction/OpenConstructionERP/issues/168)).
+- **thiemotorres** ([@thiemotorres](https://github.com/thiemotorres)): reported that
+  `make quickstart` served only 404s because of a broken SPA fallback handler, and flagged
+  stale project names, hardcoded local paths and wrong GitHub links across the docs
+  ([#48](https://github.com/datadrivenconstruction/OpenConstructionERP/pull/48)).
+- **braedonsaunders** ([@braedonsaunders](https://github.com/braedonsaunders)): traced CWICR
+  cost-database imports failing on PostgreSQL to the importer always deriving a SQLite path and
+  connection regardless of the configured backend, so a Docker quickstart against Postgres
+  downloaded a catalog and then failed at insert time
+  ([#107](https://github.com/datadrivenconstruction/OpenConstructionERP/pull/107)).
+- **gbatkhuyag** ([@gbatkhuyag](https://github.com/gbatkhuyag)): proposed and drafted Mongolian
+  (`mn`) language support across the backend and frontend, which led to the Mongolian locale the
+  app now ships
+  ([#125](https://github.com/datadrivenconstruction/OpenConstructionERP/pull/125),
+  [#137](https://github.com/datadrivenconstruction/OpenConstructionERP/pull/137)).
 
 See the full list of everyone who has contributed:
 

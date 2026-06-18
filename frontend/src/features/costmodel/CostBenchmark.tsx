@@ -57,7 +57,7 @@ function formatCurrencyValue(amount: number, currency: string): string {
       maximumFractionDigits: 0,
     }).format(amount);
   } catch {
-    return `${amount.toFixed(0)} ${safe}`;
+    return `${Number(amount).toFixed(0)} ${safe}`;
   }
 }
 

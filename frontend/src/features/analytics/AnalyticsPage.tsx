@@ -181,10 +181,10 @@ export function AnalyticsPage() {
       `"${p.name.replace(/"/g, '""')}"`,
       p.region,
       p.currency,
-      p.budget.toFixed(0),
-      p.actual.toFixed(0),
-      p.variance.toFixed(0),
-      p.variance_pct == null ? '' : `${p.variance_pct.toFixed(1)}%`,
+      Number(p.budget).toFixed(0),
+      Number(p.actual).toFixed(0),
+      Number(p.variance).toFixed(0),
+      p.variance_pct == null ? '' : `${Number(p.variance_pct).toFixed(1)}%`,
       p.status,
     ].join(','));
     const csv = [headers.join(','), ...rows].join('\n');

@@ -634,9 +634,9 @@ async function downloadTenderComparisonReport(
           ].join(','),
         );
         for (const bt of comparison.bid_totals) {
-          csvLines.push([bt.company_name, bt.total.toFixed(2), bt.currency, `${bt.deviation_pct.toFixed(1)}%`, bt.status].join(','));
+          csvLines.push([bt.company_name, Number(bt.total).toFixed(2), bt.currency, `${Number(bt.deviation_pct).toFixed(1)}%`, bt.status].join(','));
         }
-        csvLines.push(`${t('reports.csv_budget_total', { defaultValue: 'Budget Total' })},${comparison.budget_total.toFixed(2)}`);
+        csvLines.push(`${t('reports.csv_budget_total', { defaultValue: 'Budget Total' })},${Number(comparison.budget_total).toFixed(2)}`);
       }
     } catch { /* skip comparison if unavailable */ }
 
@@ -719,7 +719,7 @@ async function downloadChangeOrderReport(
       `"${o.title.replace(/"/g, '""')}"`,
       o.reason_category,
       o.status,
-      o.cost_impact.toFixed(2),
+      Number(o.cost_impact).toFixed(2),
       String(o.schedule_impact_days),
       String(o.item_count),
       o.created_at?.slice(0, 10) || '',
@@ -779,7 +779,7 @@ async function downloadRiskRegisterReport(
       r.code,
       `"${r.title.replace(/"/g, '""')}"`,
       `${(r.probability * 100).toFixed(0)}%`,
-      r.impact_cost.toFixed(0),
+      Number(r.impact_cost).toFixed(0),
       r.impact_severity,
       r.risk_score.toFixed(1),
       r.status,
@@ -839,18 +839,23 @@ async function downloadCashFlowReport(
   let prevPlanned = 0;
   let prevActual = 0;
   for (const p of sCurve.periods) {
-    const plannedPeriod = p.planned - prevPlanned;
-    const actualPeriod = p.actual - prevActual;
+    // S-curve money fields arrive as Decimal strings; coerce once so both
+    // the per-period subtraction and .toFixed below stay numeric.
+    const planned = Number(p.planned) || 0;
+    const earned = Number(p.earned) || 0;
+    const actual = Number(p.actual) || 0;
+    const plannedPeriod = planned - prevPlanned;
+    const actualPeriod = actual - prevActual;
     csvLines.push([
       p.period,
-      p.planned.toFixed(0),
-      p.earned.toFixed(0),
-      p.actual.toFixed(0),
+      planned.toFixed(0),
+      earned.toFixed(0),
+      actual.toFixed(0),
       plannedPeriod.toFixed(0),
       actualPeriod.toFixed(0),
     ].join(','));
-    prevPlanned = p.planned;
-    prevActual = p.actual;
+    prevPlanned = planned;
+    prevActual = actual;
   }
 
   downloadBlob(csvLines.join('\n'), `${projectName}_cash_flow.csv`, 'text/csv');

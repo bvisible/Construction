@@ -62,6 +62,9 @@ interface ServerInfo {
 interface CataloguesResponse {
   catalogues: Catalogue[];
   server: ServerInfo;
+  /** True on the public hosted demo - disables catalogue installs and shows
+   *  the "download to self-host" notice. Absent/false on local installs. */
+  demo_mode?: boolean;
 }
 
 // ── API helpers ──────────────────────────────────────────────────────────
@@ -128,17 +131,29 @@ function InstallButton({
   status,
   isPending,
   onInstall,
+  demoMode,
 }: {
   region: string;
   status: InstallStatus;
   isPending: boolean;
   onInstall: () => void;
+  demoMode: boolean;
 }) {
   const { t } = useTranslation();
   if (status === 'loaded') {
     return (
       <span className="text-[11px] text-content-tertiary">
         {t('catalogues.installed_hint', 'Ready to use')}
+      </span>
+    );
+  }
+  // Public demo: installs are blocked server-side (each snapshot is 400+ MB
+  // and the demo box is small). Surface that here instead of an Install
+  // button that would just return 403.
+  if (demoMode) {
+    return (
+      <span className="text-[11px] text-content-quaternary italic">
+        {t('catalogues.demo_install_disabled', 'Self-host to install')}
       </span>
     );
   }
@@ -263,6 +278,10 @@ export function CataloguesPanelCard({ preferredRegion }: Props) {
     return [];
   }, [cataloguesQ.data]);
 
+  // Public-demo flag from the backend - gates the install buttons and the
+  // self-host notice below. Falsey on every normal (self-hosted) install.
+  const demoMode = cataloguesQ.data?.demo_mode === true;
+
   // Sort with preferred region first, then by status order, then alpha.
   // Server already pre-sorts by status — we only re-pin the project's
   // expected region so the install path is one scroll away.
@@ -355,6 +374,28 @@ export function CataloguesPanelCard({ preferredRegion }: Props) {
 
       {open && (
         <div className="relative border-t border-border px-4 py-3">
+          {demoMode && (
+            <div
+              role="note"
+              className="mb-3 flex items-start gap-2 rounded-md border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 px-3 py-2 text-[11px] text-amber-900 dark:text-amber-200"
+            >
+              <AlertCircle size={13} className="shrink-0 mt-0.5" />
+              <div>
+                <div className="font-semibold">
+                  {t(
+                    'catalogues.demo_notice_title',
+                    'Public demo - cost databases are read-only here',
+                  )}
+                </div>
+                <div className="mt-0.5">
+                  {t(
+                    'catalogues.demo_notice_body',
+                    'You can browse the cost databases the full product ships, but installing them is disabled on the demo (each is 400+ MB and it runs on a small shared box). To load any region, or your own cost data, download and run OpenConstructionERP on your own PC or server: pip install openconstructionerp.',
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
           {/* Top-of-card progress strip — visible while React Query is
               fetching (initial load OR an install-triggered refetch) and
               while ANY install is mid-flight (the floating dock shows the
@@ -488,6 +529,7 @@ export function CataloguesPanelCard({ preferredRegion }: Props) {
                           status={isPending ? 'installing' : c.install_status}
                           isPending={isPending}
                           onInstall={() => handleInstall(c)}
+                          demoMode={demoMode}
                         />
                       </td>
                     </tr>

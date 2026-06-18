@@ -182,7 +182,7 @@ export function AssembliesPage() {
     for (const a of ratedItems) {
       const code = (a.currency || 'EUR').toUpperCase();
       const acc = byCurrency.get(code) ?? { sum: 0, count: 0 };
-      acc.sum += a.total_rate;
+      acc.sum += Number(a.total_rate) || 0;
       acc.count += 1;
       byCurrency.set(code, acc);
     }

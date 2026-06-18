@@ -38,9 +38,9 @@
 <style>
 /* ============ TOKENS (Breeze theme, mirrors main site) ============ */
 :root{
-  --bg-0:#f7fbff;
-  --bg-1:#edf5ff;
-  --bg-2:#e7f2fd;
+  --bg-0:#f1f2f3;
+  --bg-1:#ebeced;
+  --bg-2:#e4e5e7;
   --ink-0:#0b1220;
   --ink-1:#1e293b;
   --ink-2:#475569;
@@ -48,13 +48,13 @@
   --line-0:rgba(15,23,42,.05);
   --line-1:rgba(15,23,42,.09);
   --line-2:rgba(15,23,42,.14);
-  --accent:#0284c7;
-  --accent-2:#0ea5e9;
-  --accent-3:#2563eb;
-  --accent-5:#06b6d4;
+  --accent:#2d5e8e;
+  --accent-2:#3c6fa0;
+  --accent-3:#244c74;
+  --accent-5:#3c6fa0;
   --card-bg:rgba(255,255,255,.72);
   --shadow-card:0 1px 2px rgba(15,23,42,.04), 0 12px 32px -16px rgba(15,23,42,.16);
-  --shadow-card-hover:0 1px 2px rgba(15,23,42,.04), 0 24px 48px -18px rgba(2,132,199,.22);
+  --shadow-card-hover:0 1px 2px rgba(15,23,42,.04), 0 24px 48px -18px rgba(45,94,142,.22);
   color-scheme:light;
 }
 
@@ -81,12 +81,12 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 .bg-wrap{position:fixed;inset:0;pointer-events:none;z-index:0;overflow:hidden}
 .bg-gradient{
   position:absolute;inset:0;
-  background:linear-gradient(160deg,#f7fbff 0%,#f1f7ff 40%,#edf5ff 72%,#e7f2fd 100%);
+  background:linear-gradient(160deg,#f1f2f3 0%,#eeeff0 40%,#ebeced 72%,#e4e5e7 100%);
 }
 .blob{position:absolute;border-radius:999px;filter:blur(120px);animation:drift 50s ease-in-out infinite alternate}
-.blob-a{top:-10%;left:-5%;width:820px;height:820px;background:radial-gradient(circle at 50% 50%,rgba(14,165,233,.16),transparent 70%);animation-delay:0s}
-.blob-b{bottom:-15%;right:-10%;width:900px;height:900px;background:radial-gradient(circle at 50% 50%,rgba(37,99,235,.12),transparent 70%);animation-delay:-18s}
-.blob-c{top:32%;right:14%;width:620px;height:620px;background:radial-gradient(circle at 50% 50%,rgba(6,182,212,.12),transparent 72%);animation-delay:-32s}
+.blob-a{top:-10%;left:-5%;width:820px;height:820px;background:radial-gradient(circle at 50% 50%,rgba(45, 94, 142, 0.10),transparent 70%);animation-delay:0s}
+.blob-b{bottom:-15%;right:-10%;width:900px;height:900px;background:radial-gradient(circle at 50% 50%,rgba(45, 94, 142, 0.08),transparent 70%);animation-delay:-18s}
+.blob-c{top:32%;right:14%;width:620px;height:620px;background:radial-gradient(circle at 50% 50%,rgba(45, 94, 142, 0.06),transparent 72%);animation-delay:-32s}
 @keyframes drift{
   0%{transform:translate3d(-3%,-2%,0) scale(1)}
   50%{transform:translate3d(4%,3%,0) scale(1.08)}
@@ -94,9 +94,9 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 }
 .bg-noise{
   position:absolute;inset:0;
-  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.45 0 0 0 0 0.30 0 0 0 0 0.22 0 0 0 0.5 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
-  background-size:240px 240px;
-  opacity:.04;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='480' height='480'><filter id='m'><feTurbulence type='fractalNoise' baseFrequency='0.02' numOctaves='3' seed='4' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.46 0 0 0 0 0.46 0 0 0 0 0.46 0 0 0 0.5 0'/></filter><filter id='g'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.34 0 0 0 0 0.34 0 0 0 0 0.34 0 0 0 0.7 0'/></filter><rect width='100%25' height='100%25' filter='url(%23m)'/><rect width='100%25' height='100%25' filter='url(%23g)'/></svg>");
+  background-size:480px 480px;
+  opacity:.075;
   mix-blend-mode:multiply;
 }
 .page-body{position:relative;z-index:1;flex:1;display:flex;flex-direction:column}
@@ -428,7 +428,7 @@ h1.display em{
     <section class="hero reveal">
       <span class="eyebrow" data-i18n="page.license.eyebrow">Commercial Licence Request</span>
       <h1 class="display" data-i18n-html="page.license.hero_title">Run OpenConstructionERP <em>for your business</em>, with full commercial rights.</h1>
-      <p class="hero-lede" data-i18n="page.license.hero_lede">Drop the AGPL source-disclosure obligation. Keep private modifications. Deploy multi-tenant or white-label. Get direct vendor support. Three tiers, all quoted on request, invoiced in EUR.</p>
+      <p class="hero-lede" data-i18n="page.license.hero_lede">Clear, published prices in EUR. Licences are one-time and perpetual, the converters and cost data are yearly, and it is all free for students and educators.</p>
       <div id="refBadge" class="ref-badge">
         <span class="dot"></span>
         <span data-i18n-html="page.license.referred_by">Referred by partner: <strong id="refCode">-</strong></span>
@@ -441,9 +441,9 @@ h1.display em{
         <span class="tier-icon" aria-hidden="true">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18M5 21V8l7-5 7 5v13M9 21v-8h6v8"/></svg>
         </span>
-        <div class="tier-name" data-i18n="page.license.tier1_name">Starter</div>
-        <div class="tier-price" data-i18n="page.license.tier_price_on_request">on request</div>
-        <p class="tier-desc" data-i18n="page.license.tier1_desc">Commercial use of OpenConstructionERP for a single organisation. Drops the AGPL source-disclosure obligation, includes email support and minor updates.</p>
+        <div class="tier-name" data-i18n="page.license.tier1_name">Commercial licence</div>
+        <div class="tier-price" data-i18n-html="page.license.tier1_price">&euro;5,000 <span style="font-size:13px;font-weight:500;color:var(--ink-3)">one-time</span></div>
+        <p class="tier-desc" data-i18n="page.license.tier1_desc">Commercial use for a single company, unlimited users. Drops the AGPL source-disclosure obligation. First year of updates and support included, then 20% per year.</p>
         <ul>
           <li data-i18n-html="page.license.tier1_li1"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>Single organisation, unlimited internal users</li>
           <li data-i18n-html="page.license.tier1_li2"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>Private modifications, no copyleft</li>
@@ -456,8 +456,8 @@ h1.display em{
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
         </span>
         <div class="tier-name" data-i18n="page.license.tier2_name">White-label SaaS</div>
-        <div class="tier-price" data-i18n="page.license.tier_price_on_request">on request</div>
-        <p class="tier-desc" data-i18n="page.license.tier2_desc">Host OpenConstructionERP under your own brand for paying tenants. Up to 10 organisations, priority support, custom theming and domain.</p>
+        <div class="tier-price" data-i18n-html="page.license.tier2_price">&euro;10,000 <span style="font-size:13px;font-weight:500;color:var(--ink-3)">one-time</span></div>
+        <p class="tier-desc" data-i18n="page.license.tier2_desc">Host OpenConstructionERP under your own brand for paying tenants. Up to 10 organisations, then +&euro;3,000 per extra 10. Priority support, custom theming and domain.</p>
         <ul>
           <li data-i18n-html="page.license.tier2_li1"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>Up to 10 paying tenants</li>
           <li data-i18n-html="page.license.tier2_li2"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>Custom branding, domain, login flow</li>
@@ -470,7 +470,7 @@ h1.display em{
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
         </span>
         <div class="tier-name" data-i18n="page.license.tier3_name">DDC cad2data converters</div>
-        <div class="tier-price" data-i18n="page.license.tier_price_on_request">on request</div>
+        <div class="tier-price" data-i18n-html="page.license.tier3_price">&euro;3,600 <span style="font-size:13px;font-weight:500;color:var(--ink-3)">per year</span></div>
         <p class="tier-desc" data-i18n="page.license.tier3_desc">Commercial licence for the DDC cad2data pipeline - RVT / IFC / DWG / DGN → canonical JSON. Server-side deployment or embedded SDK.</p>
         <ul>
           <li data-i18n-html="page.license.tier3_li1"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>Linux .deb packages, signed amd64 + arm64</li>
@@ -478,6 +478,114 @@ h1.display em{
           <li data-i18n-html="page.license.tier3_li3"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>Per-server or embedded SDK licence</li>
         </ul>
       </div>
+    </section>
+
+    <style>
+    /* Full price list + student grant - published pricing */
+    .pl-eyebrow,.st-eyebrow{display:inline-flex;align-items:center;gap:8px;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--accent)}
+    .st-eyebrow svg{width:17px;height:17px}
+    .pl-head{max-width:760px}
+    .pl-head h2{font-family:'Inter Tight','Inter',sans-serif;font-weight:600;font-size:clamp(26px,3.4vw,38px);letter-spacing:-.025em;line-height:1.1;margin:14px 0 12px;color:var(--ink-0)}
+    .pl-head h2 em{font-family:'Instrument Serif',serif;font-style:italic;font-weight:400;color:var(--accent)}
+    .pl-head p{font-size:15px;line-height:1.65;color:var(--ink-2);margin:0}
+    .pl-table{margin-top:28px;border:1px solid var(--line-1);border-radius:18px;overflow:hidden;background:var(--card-bg);box-shadow:var(--shadow-card)}
+    .pl-row{display:grid;grid-template-columns:1fr auto;gap:20px;align-items:center;padding:18px 24px;border-bottom:1px solid var(--line-1)}
+    .pl-row:last-child{border-bottom:0}
+    .pl-row.free{background:color-mix(in oklab,var(--accent) 5%,transparent)}
+    .pl-item b{display:block;font-family:'Inter Tight','Inter',sans-serif;font-weight:600;font-size:15.5px;color:var(--ink-0);letter-spacing:-.01em}
+    .pl-item span{display:block;font-size:13px;color:var(--ink-2);line-height:1.5;margin-top:3px}
+    .pl-price{font-family:'Inter Tight','Inter',sans-serif;font-weight:600;font-size:20px;color:var(--ink-0);white-space:nowrap;text-align:right}
+    .pl-price em{display:block;font-family:'JetBrains Mono',ui-monospace,monospace;font-style:normal;font-weight:500;font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3);margin-top:3px}
+    .pl-price.free-tag{color:var(--accent)}
+    .pl-terms{margin-top:22px;display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px}
+    .pl-term{display:flex;gap:10px;font-size:13px;color:var(--ink-2);line-height:1.5}
+    .pl-term svg{flex:0 0 auto;width:16px;height:16px;color:var(--accent);margin-top:1px}
+    .students-section{position:relative;overflow:hidden;border:1px solid color-mix(in oklab,var(--accent) 30%,var(--line-1));border-radius:22px;padding:clamp(28px,4vw,48px);background:radial-gradient(120% 150% at 0% 0%,color-mix(in oklab,var(--accent) 12%,transparent) 0%,transparent 55%),radial-gradient(120% 150% at 100% 100%,color-mix(in oklab,var(--accent-5) 12%,transparent) 0%,transparent 55%),var(--card-bg)}
+    .students-section h2{font-family:'Inter Tight','Inter',sans-serif;font-weight:600;font-size:clamp(24px,3.2vw,36px);letter-spacing:-.025em;line-height:1.1;margin:10px 0 12px;color:var(--ink-0);max-width:22ch}
+    .students-section h2 em{font-family:'Instrument Serif',serif;font-style:italic;font-weight:400;color:var(--accent)}
+    .students-section .st-lede{font-size:15.5px;line-height:1.65;color:var(--ink-2);margin:0 0 24px;max-width:64ch}
+    .st-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:22px;margin-bottom:28px}
+    .st-col h4{display:flex;align-items:center;gap:8px;font-family:'Inter Tight','Inter',sans-serif;font-weight:600;font-size:14px;color:var(--ink-0);margin:0 0 6px}
+    .st-col h4 svg{width:16px;height:16px;color:var(--accent);flex:0 0 auto}
+    .st-col p{font-size:13px;color:var(--ink-2);line-height:1.55;margin:0}
+    .st-cta{display:inline-flex;align-items:center;gap:9px;padding:13px 22px;border-radius:12px;background:linear-gradient(135deg,var(--accent),var(--accent-3));color:#fff;font-family:'Inter Tight','Inter',sans-serif;font-weight:600;font-size:15px;box-shadow:0 12px 28px -10px color-mix(in oklab,var(--accent) 65%,transparent);transition:transform .15s ease}
+    .st-cta:hover{transform:translateY(-1px)}
+    .st-cta svg{width:14px;height:14px}
+    @media(max-width:760px){.st-grid{grid-template-columns:1fr;gap:16px}}
+    </style>
+
+    <!-- FULL PRICE LIST -->
+    <section class="pricelist-section reveal">
+      <div class="pl-head">
+        <span class="pl-eyebrow" data-i18n="page.license.pl_eyebrow">Full price list</span>
+        <h2 data-i18n-html="page.license.pl_title">Everything, in <em>plain numbers</em>.</h2>
+        <p data-i18n="page.license.pl_desc">Published prices in EUR. Licences are one-time and perpetual; the first year of updates and support is included, then 20% per year. Converters and cost data are yearly. No hidden tiers.</p>
+      </div>
+      <div class="pl-table">
+        <div class="pl-row">
+          <div class="pl-item"><b data-i18n="page.license.pl_lic_name">Commercial licence</b><span data-i18n="page.license.pl_lic_desc">Per company, unlimited users. Drops the AGPL source-disclosure obligation.</span></div>
+          <div class="pl-price" data-i18n-html="page.license.pl_lic_price">&euro;5,000 <em>one-time</em></div>
+        </div>
+        <div class="pl-row">
+          <div class="pl-item"><b data-i18n="page.license.pl_wl_name">White-label / OEM</b><span data-i18n="page.license.pl_wl_desc">Your brand, embed or resell. Up to 10 tenants, then +&euro;3,000 per extra 10.</span></div>
+          <div class="pl-price" data-i18n-html="page.license.pl_wl_price">&euro;10,000 <em>one-time</em></div>
+        </div>
+        <div class="pl-row">
+          <div class="pl-item"><b data-i18n="page.license.pl_conv_name">cad2data converters</b><span data-i18n="page.license.pl_conv_desc">RVT / IFC / DWG / DGN to canonical JSON. Format updates included.</span></div>
+          <div class="pl-price" data-i18n-html="page.license.pl_conv_price">&euro;3,600 <em>per year</em></div>
+        </div>
+        <div class="pl-row">
+          <div class="pl-item"><b data-i18n="page.license.pl_cwicr_name">CWICR cost database</b><span data-i18n="page.license.pl_cwicr_desc">One region, 55,000+ priced items. Yours to keep.</span></div>
+          <div class="pl-price" data-i18n-html="page.license.pl_cwicr_price">&euro;1,500 <em>one-time / region</em></div>
+        </div>
+        <div class="pl-row">
+          <div class="pl-item"><b data-i18n="page.license.pl_impl_name">Implementation</b><span data-i18n="page.license.pl_impl_desc">Onboarding, data migration and training, by us or a local partner.</span></div>
+          <div class="pl-price" data-i18n-html="page.license.pl_impl_price">from &euro;6,000 <em>one-time</em></div>
+        </div>
+        <div class="pl-row">
+          <div class="pl-item"><b data-i18n="page.license.pl_maint_name">Maintenance</b><span data-i18n="page.license.pl_maint_desc">All updates plus standard support. The first year is included.</span></div>
+          <div class="pl-price" data-i18n-html="page.license.pl_maint_price">20% <em>per year, from year 2</em></div>
+        </div>
+        <div class="pl-row">
+          <div class="pl-item"><b data-i18n="page.license.pl_sla_name">Priority SLA</b><span data-i18n="page.license.pl_sla_desc">Guaranteed response times. Optional upgrade on top of maintenance.</span></div>
+          <div class="pl-price" data-i18n-html="page.license.pl_sla_price">&euro;2,400 <em>per year</em></div>
+        </div>
+        <div class="pl-row free">
+          <div class="pl-item"><b data-i18n="page.license.pl_comm_name">Community support</b><span data-i18n="page.license.pl_comm_desc">GitHub, documentation and the community forum.</span></div>
+          <div class="pl-price free-tag" data-i18n="page.license.pl_comm_price">Free</div>
+        </div>
+      </div>
+      <div class="pl-terms">
+        <div class="pl-term"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><span data-i18n="page.license.pl_term1">Your rate is locked while you keep renewing.</span></div>
+        <div class="pl-term"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg><span data-i18n="page.license.pl_term2">Stop maintenance anytime - you keep your version forever.</span></div>
+        <div class="pl-term"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/></svg><span data-i18n="page.license.pl_term3">30-day trial of the commercial features and converters on request.</span></div>
+        <div class="pl-term"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/></svg><span data-i18n="page.license.pl_term4">Partners resell all of this and keep 70%.</span></div>
+      </div>
+    </section>
+
+    <!-- FREE FOR STUDENTS & EDUCATORS -->
+    <section class="students-section reveal" id="students">
+      <span class="st-eyebrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 10L12 5 3 10l9 5 9-5z"/><path d="M7 12v4.5c0 1.4 2.2 2.5 5 2.5s5-1.1 5-2.5V12"/></svg><span data-i18n="page.license.st_eyebrow">Students &amp; education</span></span>
+      <h2 data-i18n-html="page.license.st_title">Free for students and educators - <em>everything</em>.</h2>
+      <p class="st-lede" data-i18n="page.license.st_lede">If you are learning, teaching or doing research, you get all of it at no cost: the full platform, the cad2data converters and the regional cost data. The same software companies pay for.</p>
+      <div class="st-grid">
+        <div class="st-col">
+          <h4><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg><span data-i18n="page.license.st_col1_title">What you get</span></h4>
+          <p data-i18n="page.license.st_col1_desc">The full platform, the converters and the regional cost data. Nothing held back, nothing gated.</p>
+        </div>
+        <div class="st-col">
+          <h4><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg><span data-i18n="page.license.st_col2_title">Who qualifies</span></h4>
+          <p data-i18n="page.license.st_col2_desc">Students, teachers and researchers. Verify with your academic email (.edu or your university domain).</p>
+        </div>
+        <div class="st-col">
+          <h4><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 10L12 5 3 10l9 5 9-5z"/><path d="M7 12v4.5c0 1.4 2.2 2.5 5 2.5s5-1.1 5-2.5V12"/></svg><span data-i18n="page.license.st_col3_title">How it is used</span></h4>
+          <p data-i18n="page.license.st_col3_desc">Coursework, theses, research, even student startups. When it turns into a funded company, move to a commercial licence.</p>
+        </div>
+      </div>
+      <a class="st-cta" href="#form">
+        <span data-i18n="page.license.st_cta">Apply with your academic email</span>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+      </a>
     </section>
 
     <!-- STEPS -->
@@ -552,9 +660,12 @@ h1.display em{
               <label for="tier" data-i18n-html="page.license.label_tier">Licence tier <span class="req">*</span></label>
               <select id="tier" required>
                 <option value="" data-i18n="page.license.option_select">Select…</option>
-                <option value="starter" data-i18n="page.license.option_starter">Starter - on request</option>
-                <option value="whitelabel" data-i18n="page.license.option_whitelabel">White-label SaaS (up to 10 tenants)</option>
-                <option value="converters" data-i18n="page.license.option_converters">DDC cad2data converters</option>
+                <option value="starter" data-i18n="page.license.option_starter">Commercial licence - €5,000 one-time</option>
+                <option value="whitelabel" data-i18n="page.license.option_whitelabel">White-label / OEM - €10,000 one-time</option>
+                <option value="converters" data-i18n="page.license.option_converters">cad2data converters - €3,600/yr</option>
+                <option value="cwicr" data-i18n="page.license.option_cwicr">CWICR cost database - €1,500/region</option>
+                <option value="student" data-i18n="page.license.option_student">Student / education - free</option>
+                <option value="nonprofit" data-i18n="page.license.option_nonprofit">Academia / non-profit / open-source - free</option>
                 <option value="other" data-i18n="page.license.option_other">Not sure yet - please advise</option>
               </select>
             </div>

@@ -911,6 +911,7 @@ async def cert_expiry_scan(
 async def import_timecards(
     payload: dict,
     user_id: CurrentUserId,
+    session: SessionDep,
     _perm: None = Depends(RequirePermission("resources.assign")),
     service: ResourcesService = Depends(_get_service),
 ) -> dict:
@@ -934,4 +935,22 @@ async def import_timecards(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="default_status must be one of completed|confirmed|proposed",
         )
+
+    # IDOR guard - rows may carry a body-supplied project_id; verify the caller
+    # can access each distinct project before importing assignments into it.
+    seen_projects: set[str] = set()
+    for _row in rows:
+        pid = _row.get("project_id") if isinstance(_row, dict) else None
+        if not pid or str(pid) in seen_projects:
+            continue
+        seen_projects.add(str(pid))
+        try:
+            pid_uuid = uuid.UUID(str(pid))
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid project_id in timecard row: {pid}",
+            )
+        await verify_project_access(pid_uuid, user_id, session)
+
     return await service.import_timecards(rows, default_status=default_status, user_id=user_id)

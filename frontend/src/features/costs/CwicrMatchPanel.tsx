@@ -292,7 +292,7 @@ export function CwicrMatchPanel(props: CwicrMatchPanelProps) {
                 <td>
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.375rem' }}>
                     <span>
-                      {row.unit_rate.toFixed(2)} {row.currency}
+                      {Number(row.unit_rate).toFixed(2)} {row.currency}
                     </span>
                     {/* Variant badge — backend MatchResult currently doesn't
                         carry variant_count, so this is a no-op until the
