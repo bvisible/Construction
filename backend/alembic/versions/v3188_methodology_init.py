@@ -116,8 +116,13 @@ def upgrade() -> None:
             sa.Column("composites", sa.JSON(), nullable=False, server_default="{}"),
             sa.Column("cascade_steps", sa.JSON(), nullable=False, server_default="[]"),
             sa.Column("vat_rate", sa.String(length=50), nullable=True),
-            sa.Column("is_builtin", sa.Boolean(), nullable=False, server_default="0"),
-            sa.Column("is_editable", sa.Boolean(), nullable=False, server_default="1"),
+            # //// NEOFFICE PATCH — PostgreSQL-safe boolean defaults
+            # WHY: osiris runs PostgreSQL; sa.Boolean server_default="0"/"1"
+            #      renders as DEFAULT '0' which can fail / is non-canonical on PG.
+            #      Use sa.text("false"/"true") like the other PG-safe migrations.
+            sa.Column("is_builtin", sa.Boolean(), nullable=False, server_default=sa.text("false")),
+            sa.Column("is_editable", sa.Boolean(), nullable=False, server_default=sa.text("true")),
+            # //// END NEOFFICE PATCH
             sa.Column("metadata", sa.JSON(), nullable=False, server_default="{}"),
             sa.UniqueConstraint("slug", name="uq_methodology_slug"),
         )
@@ -144,7 +149,9 @@ def upgrade() -> None:
             sa.Column("key", sa.String(length=80), nullable=False),
             sa.Column("label", sa.String(length=255), nullable=False),
             sa.Column("kind", sa.String(length=20), nullable=False, server_default="flat"),
-            sa.Column("is_required", sa.Boolean(), nullable=False, server_default="0"),
+            # //// NEOFFICE PATCH — PostgreSQL-safe boolean default (see above)
+            sa.Column("is_required", sa.Boolean(), nullable=False, server_default=sa.text("false")),
+            # //// END NEOFFICE PATCH
             sa.Column("sort_order", sa.Integer(), nullable=False, server_default="0"),
             sa.Column("metadata", sa.JSON(), nullable=False, server_default="{}"),
         )
