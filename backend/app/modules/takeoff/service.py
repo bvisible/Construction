@@ -647,8 +647,66 @@ def _measurement_dimension(measurement: Any) -> str | None:
     return _unit_dimension(getattr(measurement, "measurement_unit", None))
 
 
-# Directory where uploaded PDF files are stored on disk
-_TAKEOFF_DOCUMENTS_DIR = Path.home() / ".openestimator" / "takeoff_documents"
+# Sub-directory (under the unified data root) where uploaded PDF files live.
+_TAKEOFF_DOCUMENTS_SUBDIR = "takeoff_documents"
+
+
+def _takeoff_documents_dir() -> Path:
+    """Return the active directory where takeoff PDFs are WRITTEN.
+
+    Anchored under :func:`app.core.storage.resolve_data_dir` so it honours
+    ``OE_DATA_DIR`` / ``DATA_DIR`` / ``OE_CLI_DATA_DIR`` (and the persistent
+    per-user home for wheel installs) exactly like the storage backend and the
+    BIM hub. The old code hard-coded ``~/.openestimator/takeoff_documents`` -
+    the WRONG brand namespace, ignoring every env override - so on a container
+    or external-Postgres redeploy the PDF bytes were lost while the document
+    row stayed present (download 404 "PDF file not found on disk").
+
+    Resolved lazily, PER CALL (not at import time), so a test monkeypatch or an
+    operator setting ``OE_DATA_DIR`` after import takes effect, and so this
+    module is not import-coupled to ``app.config``/Postgres.
+    """
+    from app.core.storage import resolve_data_dir
+
+    return resolve_data_dir() / _TAKEOFF_DOCUMENTS_SUBDIR
+
+
+def _find_existing_takeoff_pdf(doc_id: str) -> Path | None:
+    """Resolve ``{doc_id}.pdf`` to an existing file, READ-ONLY back-compat.
+
+    The active data root is tried first; if the PDF is not there we probe every
+    other platform-owned data root (:func:`app.core.storage.safe_data_roots`)
+    AND the legacy ``~/.openestimator`` brand-namespace path that pre-8.6.1
+    builds physically wrote to. This is what lets a PDF written under a DIFFERENT
+    data-dir resolution still be served instead of 404'ing.
+
+    Reads fall back; WRITES never do (uploads always go to
+    :func:`_takeoff_documents_dir`). The filename is a server-generated UUID, so
+    there is no path-traversal surface here, but containment against the
+    platform-owned roots is still verified by the router via
+    :func:`app.core.storage.is_within_safe_root`. Returns ``None`` when the PDF
+    exists nowhere.
+    """
+    from app.core.storage import safe_data_roots
+
+    name = f"{doc_id}.pdf"
+    candidates: list[Path] = [_takeoff_documents_dir() / name]
+    for root in safe_data_roots():
+        candidates.append(root / _TAKEOFF_DOCUMENTS_SUBDIR / name)
+    # Legacy brand-namespace path some pre-8.6.1 installs wrote to directly.
+    candidates.append(Path.home() / ".openestimator" / _TAKEOFF_DOCUMENTS_SUBDIR / name)
+    seen: set[Path] = set()
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            continue
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        if resolved.is_file():
+            return resolved
+    return None
 
 
 def _describe_pdf_input(content: bytes, *, filename: str | None = None) -> str:
@@ -1095,10 +1153,14 @@ class TakeoffService:
                 detail="Failed to parse PDF document. Please check the file and try again.",
             )
 
-        # Save the PDF file to disk so it can be retrieved later for viewing
-        _TAKEOFF_DOCUMENTS_DIR.mkdir(parents=True, exist_ok=True)
+        # Save the PDF file to disk so it can be retrieved later for viewing.
+        # WRITE always lands under the active resolved data root (never a
+        # back-compat fallback) so it survives redeploys when OE_DATA_DIR points
+        # at a persistent volume.
+        documents_dir = _takeoff_documents_dir()
+        documents_dir.mkdir(parents=True, exist_ok=True)
         doc_id = uuid.uuid4()
-        file_path = _TAKEOFF_DOCUMENTS_DIR / f"{doc_id}.pdf"
+        file_path = documents_dir / f"{doc_id}.pdf"
         file_path.write_bytes(content)
 
         # Scanned PDFs without OCR get a distinct status so the UI
@@ -1451,6 +1513,47 @@ class TakeoffService:
             limit=limit,
         )
 
+    async def detect_scale_from_text(self, doc_id: str) -> dict[str, Any]:
+        """Detect an explicit drawing scale from a document's text layer.
+
+        Tier-1, AI-free: scans the per-page ``text`` already extracted into
+        ``TakeoffDocument.page_data`` for the explicit scale note the architect
+        typed in the title block ("SCALE 1:100", '1/4" = 1\'-0"') via the pure
+        :mod:`app.modules.takeoff.scale_detect` parser, and returns the best
+        candidate plus the full ranked list. Nothing is persisted or applied -
+        the user confirms the offered scale in the calibration dialog (CLAUDE.md
+        rule 7).
+
+        Returns ``{best, candidates, source}`` where ``best`` is ``None`` when
+        the drawing carries no explicit scale note (an honest empty result, not
+        a fabricated guess). A 404 is raised when the document does not exist;
+        the caller has already gated tenant access (Audit B5).
+        """
+        from app.modules.takeoff import scale_detect as _scale_detect
+
+        doc = await self.repo.get_by_id(uuid.UUID(doc_id))
+        if doc is None:
+            raise HTTPException(status_code=404, detail="Takeoff document not found")
+
+        best, ranked = _scale_detect.detect_best_scale(doc.page_data or [])
+
+        def _as_dict(c: _scale_detect.ScaleCandidate) -> dict[str, Any]:
+            return {
+                "ratio": c.ratio,
+                "label": c.label,
+                "confidence": c.confidence,
+                "page": c.page,
+                "evidence": c.evidence,
+                "source": c.source,
+                "detail": c.detail,
+            }
+
+        return {
+            "best": _as_dict(best) if best is not None else None,
+            "candidates": [_as_dict(c) for c in ranked],
+            "source": "text_layer",
+        }
+
     async def recognize_candidates(
         self,
         doc_id: str,
@@ -1479,8 +1582,16 @@ class TakeoffService:
             raise HTTPException(status_code=404, detail="Takeoff document not found")
         validate_page_for_document(doc, page)
 
-        file_path = Path(doc.file_path) if doc.file_path else _TAKEOFF_DOCUMENTS_DIR / f"{doc_id}.pdf"
-        if not file_path.exists():
+        # Read-only back-compat resolution: probe the active root and every
+        # platform-owned data root (and the legacy ~/.openestimator path) so a
+        # PDF written under a different data-dir resolution is still found,
+        # before falling back to the persisted path.
+        file_path = _find_existing_takeoff_pdf(doc_id)
+        if file_path is None and doc.file_path:
+            candidate = Path(doc.file_path)
+            if candidate.exists():
+                file_path = candidate
+        if file_path is None:
             raise HTTPException(
                 status_code=404,
                 detail="The stored PDF for this document is no longer on disk. Re-upload it to recognize.",
@@ -1582,6 +1693,74 @@ class TakeoffService:
             "notes": "no_vector_layer",
         }
 
+    async def find_similar_symbols(
+        self,
+        doc_id: str,
+        page: int,
+        seed_x: float,
+        seed_y: float,
+    ) -> dict[str, Any]:
+        """Find every symbol on a page matching the one under ``(seed_x, seed_y)``.
+
+        Seeded "count by example": the user clicks one symbol on the vector PDF
+        page and this returns the centroids of all near-identical symbols so
+        they can confirm them as a single count measurement. Vector-only and
+        DB-free - nothing is persisted (CLAUDE.md rule 7). A scanned/raster
+        page (no vector layer) returns an empty hit set with
+        ``note='no_vector_layer'`` rather than fabricated geometry.
+        """
+        from app.modules.takeoff import recognize as _recognize
+
+        doc = await self.repo.get_by_id(uuid.UUID(doc_id))
+        if doc is None:
+            raise HTTPException(status_code=404, detail="Takeoff document not found")
+        validate_page_for_document(doc, page)
+
+        # Same read-only back-compat resolution as recognize_candidates.
+        file_path = _find_existing_takeoff_pdf(doc_id)
+        if file_path is None and doc.file_path:
+            candidate = Path(doc.file_path)
+            if candidate.exists():
+                file_path = candidate
+        if file_path is None:
+            raise HTTPException(
+                status_code=404,
+                detail="The stored PDF for this document is no longer on disk. Re-upload it to search.",
+            )
+
+        try:
+            import pymupdf  # noqa: PLC0415 - base dep; lazy-imported so a broken wheel degrades to a clear 400
+        except ImportError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Symbol search could not load its PDF reader (PyMuPDF). It ships with "
+                    "the platform, so this usually means a broken install. Reinstall "
+                    "openconstructionerp."
+                ),
+            ) from exc
+
+        try:
+            content = file_path.read_bytes()
+            pdf = pymupdf.open(stream=content, filetype="pdf")
+            try:
+                pg = pdf[page - 1]
+                drawings = pg.get_drawings()
+            finally:
+                pdf.close()
+        except HTTPException:
+            raise
+        except Exception:
+            logger.exception("takeoff.similar_symbols failed to read page for doc %s page %s", doc_id, page)
+            raise HTTPException(
+                status_code=422,
+                detail="Could not read this page. The PDF may be corrupt or password-protected.",
+            ) from None
+
+        result = _recognize.find_similar_symbols(drawings, seed_x, seed_y)
+        result["page"] = page
+        return result
+
     async def update_measurement(
         self,
         measurement_id: uuid.UUID,
@@ -1620,7 +1799,17 @@ class TakeoffService:
         if "document_id" in fields:
             await self._validate_document_id(fields["document_id"], item.project_id)
         if "metadata" in fields:
-            fields["metadata_"] = fields.pop("metadata")
+            # MERGE incoming metadata over the stored value rather than
+            # replacing the whole JSON column. A blind overwrite drops
+            # server-stamped keys (ai_takeoff_run_id, verdict, compare_key)
+            # that the client never echoes back. Mirrors the metadata-merge
+            # pattern used elsewhere (e.g. boq add_custom_column):
+            # new = {**existing, **incoming}. ``update_fields`` persists this
+            # fresh dict via an explicit UPDATE ... VALUES, so no in-place
+            # ORM mutation / flag_modified is needed here.
+            incoming_meta = fields.pop("metadata") or {}
+            existing_meta = item.metadata_ if isinstance(item.metadata_, dict) else {}
+            fields["metadata_"] = {**existing_meta, **incoming_meta}
         if "points" in fields and fields["points"] is not None:
             fields["points"] = [p.model_dump() for p in data.points]  # type: ignore[union-attr]
 
@@ -2488,8 +2677,15 @@ class TakeoffService:
             if doc is None:
                 await self._fail_plan_read(run_id, "document_missing", start)
                 return
-            file_path = Path(doc.file_path) if doc.file_path else _TAKEOFF_DOCUMENTS_DIR / f"{run.document_id}.pdf"
-            if not file_path.exists():
+            # Read-only back-compat resolution (see recognize path): find the
+            # PDF across every platform-owned data root before falling back to
+            # the persisted path, so a redeployed volume still resolves.
+            file_path = _find_existing_takeoff_pdf(run.document_id)
+            if file_path is None and doc.file_path:
+                candidate = Path(doc.file_path)
+                if candidate.exists():
+                    file_path = candidate
+            if file_path is None:
                 await self._fail_plan_read(run_id, "pdf_not_on_disk", start)
                 return
             content = file_path.read_bytes()
@@ -2738,9 +2934,6 @@ class TakeoffService:
         blocked = 0
         for prop in proposals:
             mid = str(prop.id)
-            if prop.review_status != "proposed":
-                skipped += 1
-                continue
             if wanted is not None and mid not in wanted:
                 skipped += 1
                 continue
@@ -2752,6 +2945,9 @@ class TakeoffService:
             if verdict == "error":
                 blocked += 1
                 continue
+            # The DB write is identical for every confirmed row; flip the row to
+            # confirmed via the repository, which keeps the ORM identity cache
+            # coherent and matches the access pattern the unit tests mock.
             await self.measurement_repo.update_fields(prop.id, review_status="confirmed")
             confirmed_ids.append(mid)
 
@@ -2768,41 +2964,6 @@ class TakeoffService:
             "skipped": skipped,
             "blocked": blocked,
             "measurement_ids": confirmed_ids,
-        }
-
-    async def reject_plan_read(
-        self,
-        run_id: uuid.UUID,
-        *,
-        measurement_ids: list[str] | None,
-    ) -> dict[str, Any]:
-        """Reject selected plan-read proposals by removing their rows.
-
-        Rejected proposals should disappear from the canvas and from future
-        measurement reloads. They are still auditable through the run's aggregate
-        counts/validation report, while confirmed measurements remain ordinary
-        takeoff rows.
-        """
-        proposals = await self.measurement_repo.list_proposals_for_run(run_id)
-        wanted = {str(m) for m in measurement_ids} if measurement_ids else None
-
-        rejected_ids: list[str] = []
-        skipped = 0
-        for prop in proposals:
-            mid = str(prop.id)
-            if prop.review_status != "proposed":
-                skipped += 1
-                continue
-            if wanted is not None and mid not in wanted:
-                skipped += 1
-                continue
-            await self.measurement_repo.delete(prop.id)
-            rejected_ids.append(mid)
-
-        return {
-            "rejected": len(rejected_ids),
-            "skipped": skipped,
-            "measurement_ids": rejected_ids,
         }
 
 

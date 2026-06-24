@@ -121,6 +121,20 @@ class PartnerPackManifest(BaseModel):
         default=None,
         description="Tax template slug to set as default (e.g. 'ca_gst_pst').",
     )
+    default_methodology: str | None = Field(
+        default=None,
+        description=(
+            "Slug of a built-in estimating-methodology template (see "
+            "app.modules.methodology.templates - e.g. 'germany', "
+            "'united_states', 'uzbekistan', 'railway_infrastructure'). When "
+            "set, applying the pack activates this methodology on the pack's "
+            "demo project, and every project created while the pack is active "
+            "inherits it as its active methodology. None keeps the platform "
+            "flat international default. An unknown slug is reported as a "
+            "warning at apply time, never an error (validated against the live "
+            "template catalogue, so this field carries no regex pattern)."
+        ),
+    )
 
     # Validation rule presets
     validation_rule_packs: list[str] = Field(
@@ -252,6 +266,7 @@ class PartnerPackManifest(BaseModel):
             "cwicr_regions": self.cwicr_regions,
             "default_currency": self.default_currency,
             "default_tax_template": self.default_tax_template,
+            "default_methodology": self.default_methodology,
             "validation_rule_packs": self.validation_rule_packs,
             "demo_template_ids": self.demo_template_ids,
             "default_modules": self.default_modules,

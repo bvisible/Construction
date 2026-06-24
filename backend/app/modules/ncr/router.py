@@ -214,6 +214,20 @@ async def create_variation_from_ncr(
         # currency. Split a clean numeric amount + any leading ISO code here.
         amount, parsed_currency = _parse_cost_impact(ncr.cost_impact)
 
+        # Guard the escalated amount exactly as ChangeOrderCreate does: an
+        # absurd-magnitude NCR cost (e.g. a fat-fingered 16-digit value) would
+        # otherwise be stored raw on the numeric ChangeOrder and poison the
+        # approved-CO rollup / overflow the column. Reuse the CO money validator.
+        from app.modules.changeorders.schemas import _validate_decimal
+
+        try:
+            _validate_decimal(amount, "cost_impact")
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="NCR cost impact is outside the supported range.",
+            ) from exc
+
         # Prefer the currency parsed from the NCR's own cost_impact; otherwise fall
         # back to the project's real currency. NEVER hardcode "EUR" - load the
         # project's currency, and leave blank ("") if the project has none set.
@@ -269,6 +283,10 @@ async def create_variation_from_ncr(
             "ncr_id": str(ncr_id),
             "title": order.title,
         }
+    except HTTPException:
+        # Let our own 4xx (e.g. the cost-range guard above) propagate instead of
+        # being masked as a 500 by the broad handler below.
+        raise
     except ImportError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,

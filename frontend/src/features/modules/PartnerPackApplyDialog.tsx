@@ -30,6 +30,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import {
   AlertTriangle,
   Boxes,
+  Calculator,
   CheckCircle2,
   Coins,
   Database,
@@ -511,6 +512,19 @@ export function PartnerPackApplyDialog({
                   ))}
                 </span>
               </Row>
+
+              {plan.default_methodology && (
+                <Row
+                  icon={<Calculator size={15} />}
+                  label={t('modules.pack_methodology', {
+                    defaultValue: 'Estimating methodology',
+                  })}
+                >
+                  <Badge variant="neutral" size="sm">
+                    {plan.default_methodology.replace(/_/g, ' ')}
+                  </Badge>
+                </Row>
+              )}
 
               {/* Data this activation installs: work catalog + resources. */}
               <Row

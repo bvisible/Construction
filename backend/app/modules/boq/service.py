@@ -1298,7 +1298,11 @@ def _position_total_in_base(
     if code and code != base and fx_rates_map:
         fx = fx_rates_map.get(code)
         if fx:
-            converted = _to_decimal(fx, default=Decimal("1"))
+            # Default 0 (not 1) so a present-but-unparseable rate
+            # ("n/a", "1,5", ...) fails the > 0 guard below and the amount
+            # stays in its own units instead of silently converting at 1:1.
+            # Matches _resource_total_in_base's bad-rate handling.
+            converted = _to_decimal(fx)
             if converted > 0:
                 amount = amount * converted
     return amount
@@ -2509,15 +2513,35 @@ class BOQService:
         cent = Decimal("0.01")
         breakdown: dict[uuid.UUID, dict[str, Any]] = {}
 
-        # Active markups for the whole set in one query (sort_order applied),
-        # so per-BOQ markup arithmetic reuses the canonical helper that powers
-        # get_boq_structured / the editor.
+        # Batched loads to keep this hot list path O(1) round trips instead of
+        # O(BOQs). Previously this looped per BOQ firing ``_resolve_project_fx``
+        # (an identical Project JOIN BOQ query) AND an unbounded
+        # ``list_all_for_boq`` per iteration - up to ~2xN queries plus a full
+        # position-table load for a 100-BOQ page on the 1-core VPS.
+        #
+        #  * Active markups for the whole set in one query (sort_order applied),
+        #    so per-BOQ markup arithmetic reuses the canonical helper that
+        #    powers get_boq_structured / the editor.
+        #  * Every position for the whole set in one ``boq_id IN (...)`` query,
+        #    grouped by BOQ (same no-limit / no-eager-load rollup contract as
+        #    ``list_all_for_boq``).
+        #  * The owning project id per BOQ in one query, then the project FX
+        #    table resolved ONCE per distinct project (every BOQ on a list page
+        #    shares the same project - Issue #111 conversion is unchanged, it
+        #    only stops re-running the identical FX lookup per BOQ).
         markups_by_boq = await self.boq_repo.active_markups_for_boqs(boq_ids)
+        positions_by_boq = await self.position_repo.list_all_for_boqs(boq_ids)
+        project_by_boq = await self.position_repo.project_ids_for_boqs(boq_ids)
+
+        fx_by_project: dict[uuid.UUID, tuple[str, dict[str, str]]] = {}
+        for project_id in set(project_by_boq.values()):
+            fx_by_project[project_id] = await self._resolve_project_fx_by_project(project_id)
 
         for boq_id in boq_ids:
-            base_currency, fx_map = await self._resolve_project_fx(boq_id)
+            project_id = project_by_boq.get(boq_id)
+            base_currency, fx_map = fx_by_project.get(project_id, ("", {})) if project_id else ("", {})
             base = (base_currency or "").strip().upper()
-            positions = await self.position_repo.list_all_for_boq(boq_id)
+            positions = positions_by_boq.get(boq_id, [])
 
             direct_cost = Decimal("0")
             currencies: set[str] = set()
@@ -2576,9 +2600,18 @@ class BOQService:
         boq = await self.get_boq(boq_id)
 
         fields = data.model_dump(exclude_unset=True)
-        # Map 'metadata' key to the model's 'metadata_' column
+        # Map 'metadata' key to the model's 'metadata_' column.
+        # MERGE the incoming metadata into the row's existing JSON instead of
+        # replacing the whole column - a PATCH that carries only a couple of
+        # keys must not wipe every other key (silent JSON data loss). Mirrors
+        # the merge pattern used in update_position above.
         if "metadata" in fields:
-            fields["metadata_"] = fields.pop("metadata")
+            incoming_meta = fields.pop("metadata")
+            existing_meta = boq.metadata_ if isinstance(boq.metadata_, dict) else {}
+            if isinstance(incoming_meta, dict):
+                fields["metadata_"] = {**existing_meta, **incoming_meta}
+            else:
+                fields["metadata_"] = incoming_meta
 
         if fields:
             await self.boq_repo.update_fields(boq_id, **fields)
@@ -2597,7 +2630,29 @@ class BOQService:
         Raises HTTPException 404 if not found.
         """
         boq = await self.get_boq(boq_id)
-        project_id = str(boq.project_id)
+        project_uuid = boq.project_id
+        project_id = str(project_uuid)
+
+        # Capture the soon-to-be-deleted position IDs BEFORE the cascade so
+        # we can scrub them out of any Schedule Activity.boq_position_ids JSON
+        # arrays - the same orphan-reference guard ``delete_position`` applies.
+        # The DB CASCADE removes the position rows but leaves those JSON
+        # references dangling (they would point at IDs that no longer exist).
+        # Done while the rows are still present and using the project id
+        # captured up front (the BOQ row is gone after the delete, so the
+        # helper could not re-resolve it).
+        deleted_position_ids = [
+            str(pid)
+            for pid in (await self.session.execute(select(Position.id).where(Position.boq_id == boq_id)))
+            .scalars()
+            .all()
+        ]
+        if deleted_position_ids:
+            await self._scrub_activity_position_refs(
+                boq_id,
+                deleted_position_ids,
+                project_id=project_uuid,
+            )
 
         await self.boq_repo.delete(boq_id)
 
@@ -4234,11 +4289,16 @@ class BOQService:
         updated = 0
         unchanged = 0
         failed_ids: list[uuid.UUID] = []
-        # Pre-load all positions in one pass to surface 404s early.
-        # The membership check protects against cross-BOQ id smuggling.
+        # Pre-load all positions in a single batch query to surface 404s early
+        # (was an N+1: one ``get_by_id`` per id). The membership check still
+        # protects against cross-BOQ id smuggling, and validating in
+        # ``payload.ids`` order keeps the 404 detail pointing at the same
+        # offending id the per-row loop would have reported first.
+        loaded = await self.position_repo.list_by_ids(list(payload.ids))
+        loaded_by_id: dict[uuid.UUID, Position] = {row.id: row for row in loaded}
         positions: dict[uuid.UUID, Position] = {}
         for pid in payload.ids:
-            row = await self.position_repo.get_by_id(pid)
+            row = loaded_by_id.get(pid)
             if row is None or row.boq_id != boq_id:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
@@ -4833,12 +4893,21 @@ class BOQService:
         self,
         boq_id: uuid.UUID,
         deleted_position_ids: list[str],
+        *,
+        project_id: uuid.UUID | None = None,
     ) -> None:
         """Remove deleted position IDs from Activity.boq_position_ids JSON arrays.
 
         Schedule activities can link to BOQ positions via a JSON array of IDs;
         when those positions are deleted, the activity holds dangling references.
         This helper finds activities in the same project and scrubs the stale IDs.
+
+        ``project_id`` may be supplied directly by callers that have already
+        deleted (or are about to delete) the owning BOQ - the internal
+        ``BOQ.project_id`` lookup would return nothing once the row is gone,
+        so the explicit value keeps the scrub working for ``delete_boq`` /
+        ``restore_snapshot``. When omitted (the ``delete_position`` path,
+        where the BOQ survives) it is resolved from ``boq_id`` as before.
         """
         try:
             from sqlalchemy import select, update
@@ -4846,11 +4915,13 @@ class BOQService:
             from app.modules.boq.models import BOQ
             from app.modules.schedule.models import Activity, Schedule
 
-            # Find all schedules in the same project as this BOQ
-            boq_row = (await self.session.execute(select(BOQ.project_id).where(BOQ.id == boq_id))).first()
-            if not boq_row:
-                return
-            project_id = boq_row[0]
+            # Resolve the project scope. Prefer the caller-supplied value
+            # (the BOQ may already be deleted); otherwise look it up.
+            if project_id is None:
+                boq_row = (await self.session.execute(select(BOQ.project_id).where(BOQ.id == boq_id))).first()
+                if not boq_row:
+                    return
+                project_id = boq_row[0]
 
             stmt = (
                 select(Activity)
@@ -4981,9 +5052,18 @@ class BOQService:
         if "fixed_amount" in fields:
             fields["fixed_amount"] = str(fields["fixed_amount"])
 
-        # Map 'metadata' key to the model's 'metadata_' column
+        # Map 'metadata' key to the model's 'metadata_' column.
+        # MERGE the incoming metadata into the row's existing JSON instead of
+        # replacing the whole column - a PATCH that carries only a couple of
+        # keys must not wipe every other key (silent JSON data loss). Mirrors
+        # the merge pattern used in update_position above.
         if "metadata" in fields:
-            fields["metadata_"] = fields.pop("metadata")
+            incoming_meta = fields.pop("metadata")
+            existing_meta = markup.metadata_ if isinstance(markup.metadata_, dict) else {}
+            if isinstance(incoming_meta, dict):
+                fields["metadata_"] = {**existing_meta, **incoming_meta}
+            else:
+                fields["metadata_"] = incoming_meta
 
         if fields:
             refreshed = await self.markup_repo.update_fields(markup_id, **fields)
@@ -6281,7 +6361,7 @@ class BOQService:
         For each position, reads ``metadata_.resources`` (list of dicts with
         keys ``type``, ``total``, ``name``, ``unit``, ``quantity``, ``unit_rate``).
         Resource costs are scaled by the position quantity and aggregated into
-        categories: labor, material, equipment, subcontractor, other.
+        categories: labor, material, machinery, equipment, subcontractor, other.
 
         If no resource metadata is found on any position, the full position
         total is categorised based on description keyword heuristics.
@@ -6565,7 +6645,18 @@ class BOQService:
             res_type: Raw resource type from position metadata.
 
         Returns:
-            One of: labor, material, equipment, subcontractor, other.
+            One of: labor, material, machinery, equipment, subcontractor, other.
+
+        ``machinery`` (construction plant/mechanisms that perform the work) is
+        kept distinct from ``equipment`` (installed equipment). Methodologies
+        that follow the post-Soviet СМР/SMR convention price the two on
+        different cascade bases - machinery rides inside the SMR works base
+        while installed equipment carries only some markups - so folding
+        machinery into equipment (as this normaliser used to) silently zeroed
+        the machinery base and over-stated equipment for the Uzbekistan /
+        railway templates. A methodology that does NOT split them simply lists
+        both resource types under one base token, so the finer category is
+        purely additive and never loses money for the flat templates.
         """
         res_type = res_type.lower().strip()
         if res_type in ("labor", "labour", "work", "lohn", "arbeit"):
@@ -6579,11 +6670,17 @@ class BOQService:
         ):
             return "material"
         if res_type in (
+            "machinery",
+            "machine",
+            "maschine",
+            "mechanism",
+            "mechanisms",
+        ):
+            return "machinery"
+        if res_type in (
             "equipment",
             "plant",
-            "machinery",
             "geraet",
-            "maschine",
         ):
             return "equipment"
         if res_type in (
@@ -6601,11 +6698,19 @@ class BOQService:
 
         Used as a fallback when no resource metadata is available.
 
+        ``machinery`` (construction plant/mechanisms that perform the work -
+        cranes, excavators, pumps) is bucketed distinctly from ``equipment``
+        (installed/hired equipment - scaffolding, containers, rentals) so this
+        heuristic path stays consistent with ``_normalize_resource_category``
+        and the cost-breakdown categories. The machinery keywords are checked
+        before the broader equipment keywords so a "Kran"/"Bagger" position is
+        not swallowed by ``equipment``.
+
         Args:
             description: BOQ position description text.
 
         Returns:
-            One of: labor, material, equipment, other.
+            One of: labor, material, machinery, equipment, other.
         """
         desc_lower = (description or "").lower()
 
@@ -6676,17 +6781,32 @@ class BOQService:
             "mauern",
             "betonieren",
         )
-        equipment_keywords = (
+        # Construction plant / mechanisms that perform the work. Kept distinct
+        # from installed/hired ``equipment`` and checked first so these are not
+        # swallowed by the broader equipment list below.
+        machinery_keywords = (
             "kran",
             "crane",
             "bagger",
             "excavator",
+            "machine",
+            "maschine",
+            "mechanism",
+            "pump",
+            "pumpe",
+            "lader",
+            "loader",
+            "walze",
+            "roller",
+            "planierraupe",
+            "bulldozer",
+            "dozer",
+        )
+        equipment_keywords = (
             "geruest",
             "scaffold",
             "equipment",
-            "machine",
-            "pump",
-            "pumpe",
+            "geraet",
             "container",
             "transport",
             "miete",
@@ -6700,6 +6820,9 @@ class BOQService:
         for kw in labor_keywords:
             if kw in desc_lower:
                 return "labor"
+        for kw in machinery_keywords:
+            if kw in desc_lower:
+                return "machinery"
         for kw in equipment_keywords:
             if kw in desc_lower:
                 return "equipment"
@@ -7032,10 +7155,23 @@ class BOQService:
     # ── Snapshot operations ────────────────────────────────────────────────
 
     async def list_snapshots(self, boq_id: uuid.UUID) -> list[BOQSnapshot]:
-        """List all snapshots for a BOQ, newest first."""
-        from sqlalchemy import select
+        """List all snapshots for a BOQ, newest first.
 
-        stmt = select(BOQSnapshot).where(BOQSnapshot.boq_id == boq_id).order_by(BOQSnapshot.created_at.desc())
+        ``snapshot_data`` holds the full serialized positions+markups blob
+        (potentially several MB for a large BOQ) and is NOT needed to render
+        the version-history list - the router only reads id/name/created_at/
+        created_by. ``defer`` keeps the heavy JSON column out of the SELECT
+        so opening the drawer no longer pulls every snapshot's full payload.
+        """
+        from sqlalchemy import select
+        from sqlalchemy.orm import defer
+
+        stmt = (
+            select(BOQSnapshot)
+            .where(BOQSnapshot.boq_id == boq_id)
+            .order_by(BOQSnapshot.created_at.desc())
+            .options(defer(BOQSnapshot.snapshot_data))
+        )
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
@@ -7123,10 +7259,27 @@ class BOQService:
 
         data = snap.snapshot_data
 
+        # Capture the current position IDs BEFORE wiping them. Restore
+        # recreates every position with a FRESH UUID, so any Schedule
+        # Activity.boq_position_ids JSON array that referenced the old rows
+        # would be left pointing at IDs that no longer exist. Scrub those
+        # dangling references - the same orphan guard ``delete_position`` /
+        # ``delete_boq`` apply. (The BOQ row survives, so the helper resolves
+        # the project scope from ``boq_id`` itself.)
+        old_position_ids = [
+            str(pid)
+            for pid in (await self.session.execute(select(Position.id).where(Position.boq_id == boq_id)))
+            .scalars()
+            .all()
+        ]
+
         # Delete current positions AND markups
         await self.session.execute(sa_delete(Position).where(Position.boq_id == boq_id))
         await self.session.execute(sa_delete(BOQMarkup).where(BOQMarkup.boq_id == boq_id))
         await self.session.flush()
+
+        if old_position_ids:
+            await self._scrub_activity_position_refs(boq_id, old_position_ids)
 
         # Recreate positions from snapshot. Keep a map from each snapshot
         # position's OLD id to the freshly created row so the parent links can
@@ -8747,7 +8900,12 @@ class BOQService:
         Project Intelligence widgets.
         """
         from sqlalchemy import select as _select
+        from sqlalchemy.orm import noload as _noload
 
+        # These always-on widgets only read scalar columns of each position
+        # (total/quantity/classification/...); suppress the children/parent
+        # selectin eager loads so this project-wide fetch is a single query
+        # instead of three (main + parent_id IN (...) + id IN (...)).
         stmt = (
             _select(Position)
             .join(BOQ, Position.boq_id == BOQ.id)
@@ -8755,6 +8913,7 @@ class BOQService:
             .where(Position.unit != "")
             .order_by(Position.sort_order, Position.ordinal)
             .limit(self._PI_POSITION_CAP)
+            .options(_noload(Position.children), _noload(Position.parent))
         )
         rows = await self.session.execute(stmt)
         return list(rows.scalars().all())

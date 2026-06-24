@@ -10,6 +10,12 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_serializer
 
+# Upper bound for client-supplied money - a finite-but-absurd claimed_amount
+# (e.g. 1e400) otherwise sums into gross and reaches retention quantize() ->
+# InvalidOperation -> 500. ge=0 already rejects NaN/Infinity. Mirrors the
+# changeorders/subcontractors bound.
+_MONEY_MAX = Decimal("1e15")
+
 PORTAL_ROLES = r"^(client|investor|consultant|subcontractor|supplier|building_user)$"
 USER_STATUSES = r"^(invited|active|suspended|expired)$"
 LINK_PURPOSES = r"^(login|document_signature|payment_submission)$"
@@ -440,7 +446,7 @@ class PaymentApplicationSubmitLine(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
     work_package_id: UUID
-    claimed_amount: Decimal = Field(..., ge=0)
+    claimed_amount: Decimal = Field(..., ge=0, le=_MONEY_MAX)
 
 
 class PaymentApplicationSubmitPayload(BaseModel):

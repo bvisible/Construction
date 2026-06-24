@@ -30,6 +30,7 @@ import {
   Wallet,
   ClipboardList,
   ExternalLink,
+  Orbit,
 } from 'lucide-react';
 import {
   Button,
@@ -95,6 +96,8 @@ import {
   type SclBundleManifest,
 } from './api';
 import { dailyDiaryGuide } from './dailyDiaryGuide';
+import { Panorama360Viewer } from './Panorama360Viewer';
+import { is360Photo, panoramaImageUrl } from './panorama360';
 
 type Tab = 'diaries' | 'today' | 'archive';
 
@@ -2061,6 +2064,9 @@ function PhotoGrid({
   onUpload: () => void;
 }) {
   const { t } = useTranslation();
+  // The photo currently open in the 360 spherical viewer (null = closed).
+  const [pano, setPano] = useState<DiaryPhoto | null>(null);
+  const panoUrl = pano ? panoramaImageUrl(pano) : null;
   return (
     <Card padding="md">
       <div className="flex items-center gap-2 mb-3">
@@ -2089,22 +2095,70 @@ function PhotoGrid({
         </p>
       ) : (
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-6">
-          {photos.slice(0, 24).map((p) => (
-            <div
-              key={p.id}
-              className="aspect-square overflow-hidden rounded-md bg-surface-secondary border border-border-light"
-            >
-              {(p.thumbnail_url || p.file_url) && (
-                <img
-                  src={p.thumbnail_url || p.file_url}
-                  alt={p.description || ''}
-                  loading="lazy"
-                  className="h-full w-full object-cover"
-                />
-              )}
-            </div>
-          ))}
+          {photos.slice(0, 24).map((p) => {
+            const thumb = p.thumbnail_url || p.file_url;
+            const is360 = is360Photo(p);
+            const badge = is360 && (
+              <span
+                className="pointer-events-none absolute left-1 top-1 inline-flex items-center gap-0.5 rounded-md bg-black/70 px-1.5 py-0.5 text-2xs font-semibold text-white"
+                data-testid="daily-diary-photo-360-badge"
+              >
+                <Orbit size={10} />
+                {t('daily_diary.badge_360', { defaultValue: '360' })}
+              </span>
+            );
+            // 360 photos become a button that opens the spherical viewer;
+            // flat photos stay a plain non-interactive tile.
+            return is360 ? (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => setPano(p)}
+                className="group relative aspect-square overflow-hidden rounded-md border border-border-light bg-surface-secondary focus:outline-none focus:ring-2 focus:ring-oe-blue/50"
+                title={t('daily_diary.view_360', { defaultValue: 'View 360 panorama' })}
+                aria-label={t('daily_diary.view_360', { defaultValue: 'View 360 panorama' })}
+                data-testid="daily-diary-photo-360"
+              >
+                {thumb && (
+                  <img
+                    src={thumb}
+                    alt={p.description || ''}
+                    loading="lazy"
+                    className="h-full w-full object-cover transition-transform group-hover:scale-105"
+                  />
+                )}
+                {badge}
+                <span className="absolute inset-0 flex items-center justify-center bg-black/0 transition-colors group-hover:bg-black/25">
+                  <Orbit
+                    size={22}
+                    className="text-white opacity-0 drop-shadow transition-opacity group-hover:opacity-100"
+                  />
+                </span>
+              </button>
+            ) : (
+              <div
+                key={p.id}
+                className="relative aspect-square overflow-hidden rounded-md bg-surface-secondary border border-border-light"
+              >
+                {thumb && (
+                  <img
+                    src={thumb}
+                    alt={p.description || ''}
+                    loading="lazy"
+                    className="h-full w-full object-cover"
+                  />
+                )}
+              </div>
+            );
+          })}
         </div>
+      )}
+      {pano && panoUrl && (
+        <Panorama360Viewer
+          imageUrl={panoUrl}
+          label={pano.description || pano.location_label || undefined}
+          onClose={() => setPano(null)}
+        />
       )}
     </Card>
   );

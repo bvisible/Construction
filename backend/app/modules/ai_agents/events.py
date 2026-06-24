@@ -93,17 +93,40 @@ async def _fire_subscribed_agents(trigger: str, data: dict) -> int:  # type: ign
     from app.modules.ai_agents.service import AgentService
 
     project_id = _coerce_project_id(data.get("project_id"))
+    # Both wired triggers (rfi_created, document_uploaded) are project-scoped.
+    # Without a resolvable project we cannot enforce per-creator access, and
+    # firing anyway would leak the event payload into a foreign user's run, so a
+    # project-scoped trigger never fires without a project.
+    if project_id is None:
+        return 0
     user_input = _build_input(trigger, data)
     fired = 0
     async with async_session_factory() as session:
         service = AgentService(session)
+        # list_subscribed_to_trigger returns EVERY user's subscription
+        # platform-wide, so each agent must be gated on its creator's access to
+        # THIS event's project - otherwise an agent fires on, and receives the
+        # full context of, other tenants' events (automated cross-tenant leak).
+        from app.modules.projects.repository import ProjectRepository
+        from app.modules.teams.access import is_project_member
+
+        project = await ProjectRepository(session).get_by_id(project_id)
+        if project is None:
+            return 0
+        owner_id_s = str(project.owner_id)
         agents = await service.custom_repo.list_subscribed_to_trigger(trigger)
-        for agent in agents:
-            # Snapshot identity before start_run (its update_fields expires the
-            # identity map; later attribute access would emit an illegal lazy
-            # SELECT on the async session).
-            agent_user_id = agent.user_id
-            agent_name = agent.agent_name
+        # Snapshot identity for EVERY subscriber BEFORE the loop, while all
+        # instances are still fresh from the query. The first start_run()'s
+        # update_fields() calls session.expire_all(), which expires every other
+        # agent still in the list; an in-loop snapshot would therefore read an
+        # already-expired sibling on iteration 2+ and emit an illegal lazy
+        # SELECT (MissingGreenlet), dropping every subscriber after the first.
+        targets = [(a.user_id, a.agent_name) for a in agents]
+        for agent_user_id, agent_name in targets:
+            # Fire only for subscribers whose creator owns or is a member of the
+            # event's project; skip everyone else (cross-tenant firing guard).
+            if owner_id_s != str(agent_user_id) and not await is_project_member(session, project_id, agent_user_id):
+                continue
             try:
                 await service.start_run(
                     user_id=agent_user_id,

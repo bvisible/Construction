@@ -454,3 +454,89 @@ async def test_kpi_endpoint_returns_aggregated_dashboard_payload(client: AsyncCl
     # MTTR is a non-negative float (we just resolved a row).
     assert body["mttr_hours"] is not None
     assert body["mttr_hours"] >= 0.0
+
+
+# ── 6. API-contract: typed models picker ──────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_models_endpoint_returns_typed_option_shape(client: AsyncClient, auth, project_id, monkeypatch):
+    """GET /models is a typed list[ClashModelOption], not a bare dict dump.
+
+    Exactly the four contract fields are present (id / name / element_count
+    / status), with the right wire types, and nothing else leaks from the
+    ORM row. ``element_count`` is a non-negative int; ``status`` is the
+    model's processing state.
+    """
+    model_id, _run_id, _results = await _seed_run(
+        project_id,
+        _separated_pair_specs(n_pairs=1, base_x=5000.0),
+        monkeypatch=monkeypatch,
+    )
+
+    resp = await client.get(
+        f"/api/v1/clash/projects/{project_id}/models",
+        headers=auth,
+    )
+    assert resp.status_code == 200, resp.text
+    models = resp.json()
+    assert isinstance(models, list)
+    mine = [m for m in models if m["id"] == model_id]
+    assert len(mine) == 1, f"seeded model {model_id} not in picker: {models!r}"
+    m = mine[0]
+    # The response_model projects exactly these keys - no ORM internals.
+    assert set(m.keys()) == {"id", "name", "element_count", "status"}
+    assert isinstance(m["id"], str)
+    assert isinstance(m["name"], str) and m["name"]
+    assert isinstance(m["element_count"], int)
+    assert m["element_count"] >= 0
+    assert m["status"] is None or isinstance(m["status"], str)
+
+
+# ── 7. API-contract: consistent filter validation (422) ───────────────────
+
+
+@pytest.mark.asyncio
+async def test_results_filters_reject_unknown_enum_values(client: AsyncClient, auth, project_id, monkeypatch):
+    """An unknown status / clash_type / severity filter is 422, not a silent empty page."""
+    _model_id, run_id, results = await _seed_run(
+        project_id,
+        _separated_pair_specs(n_pairs=2, base_x=6000.0),
+        monkeypatch=monkeypatch,
+    )
+    assert len(results) == 2
+    base = f"/api/v1/clash/projects/{project_id}/runs/{run_id}/results"
+
+    # Unknown values across the three enum filters → 422.
+    for qs in ("status=bogus", "clash_type=bogus", "severity=bogus"):
+        bad = await client.get(f"{base}?{qs}", headers=auth)
+        assert bad.status_code == 422, f"{qs} should be 422: {bad.status_code} {bad.text}"
+
+    # Valid values still return a page (regression guard for the contract).
+    for qs in ("status=new", "clash_type=hard", "severity=critical"):
+        ok = await client.get(f"{base}?{qs}", headers=auth)
+        assert ok.status_code == 200, f"{qs} should be 200: {ok.text}"
+        body = ok.json()
+        assert set(body.keys()) >= {"items", "total", "offset", "limit"}
+        assert isinstance(body["items"], list)
+
+
+@pytest.mark.asyncio
+async def test_export_csv_filters_reject_unknown_enum_values(client: AsyncClient, auth, project_id, monkeypatch):
+    """CSV export mirrors the results-list filter contract (422 on a bad enum)."""
+    _model_id, run_id, results = await _seed_run(
+        project_id,
+        _separated_pair_specs(n_pairs=2, base_x=7000.0),
+        monkeypatch=monkeypatch,
+    )
+    assert len(results) == 2
+    base = f"/api/v1/clash/projects/{project_id}/runs/{run_id}/export-csv"
+
+    for qs in ("status=bogus", "clash_type=bogus", "severity=bogus"):
+        bad = await client.get(f"{base}?{qs}", headers=auth)
+        assert bad.status_code == 422, f"{qs} should be 422: {bad.status_code} {bad.text}"
+
+    # A valid filter streams CSV.
+    ok = await client.get(f"{base}?status=new", headers=auth)
+    assert ok.status_code == 200, ok.text
+    assert "text/csv" in ok.headers.get("content-type", "")

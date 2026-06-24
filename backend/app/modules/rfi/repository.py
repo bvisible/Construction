@@ -25,7 +25,18 @@ class RFIRepository:
         limit: int = 50,
         status: str | None = None,
         search: str | None = None,
+        with_total: bool = True,
     ) -> tuple[list[RFI], int]:
+        """List a page of RFIs for a project, newest first.
+
+        PERF: when ``with_total`` is False the ``COUNT(*)`` over the (possibly
+        ILIKE-filtered) base query is skipped entirely - that aggregate is a
+        second scan of the same predicate, and the list endpoint discards the
+        count anyway (it returns a bare ``list[RFIResponse]``). Callers that
+        actually need the total (paginated views / tests asserting the count)
+        keep the default ``True``. When skipped, the returned total is the
+        length of the page slice so the tuple shape never changes.
+        """
         base = select(RFI).where(RFI.project_id == project_id)
         if status is not None:
             base = base.where(RFI.status == status)
@@ -41,12 +52,16 @@ class RFIRepository:
                 )
             )
 
-        count_stmt = select(func.count()).select_from(base.subquery())
-        total = (await self.session.execute(count_stmt)).scalar_one()
-
         stmt = base.order_by(RFI.created_at.desc()).offset(offset).limit(limit)
         result = await self.session.execute(stmt)
-        return list(result.scalars().all()), total
+        rows = list(result.scalars().all())
+
+        if not with_total:
+            return rows, len(rows)
+
+        count_stmt = select(func.count()).select_from(base.subquery())
+        total = (await self.session.execute(count_stmt)).scalar_one()
+        return rows, total
 
     async def next_rfi_number(self, project_id: uuid.UUID) -> str:
         """‌⁠‍Generate the next ``RFI-NNN`` number using MAX to avoid duplicates.

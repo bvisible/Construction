@@ -32,6 +32,14 @@ class PurchaseOrderRepository:
         """
         from sqlalchemy.orm import selectinload
 
+        # ``populate_existing`` forces the eager loaders to overwrite any
+        # already-cached column values and relationship collections on an
+        # identity-mapped instance. Without it, a PO that is still in the
+        # session with an ``items`` collection that was loaded empty (e.g. a
+        # freshly created PO whose line items were inserted afterwards, or a PO
+        # whose items were just replaced) would keep that stale empty/old
+        # collection, since ``selectinload`` will not clobber an already-loaded
+        # one. This makes ``get`` an authoritative "current state" read.
         stmt = (
             select(PurchaseOrder)
             .options(
@@ -39,6 +47,7 @@ class PurchaseOrderRepository:
                 selectinload(PurchaseOrder.goods_receipts),
             )
             .where(PurchaseOrder.id == po_id)
+            .execution_options(populate_existing=True)
         )
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
@@ -52,8 +61,20 @@ class PurchaseOrderRepository:
         limit: int = 50,
         offset: int = 0,
     ) -> tuple[list[PurchaseOrder], int]:
-        """List POs with filters and pagination."""
-        base = select(PurchaseOrder)
+        """List POs with filters and pagination.
+
+        The PO list response (``POResponse``) never serialises
+        ``goods_receipts``, but the relationship defaults to ``lazy="selectin"``
+        on the model, so a plain ``select(PurchaseOrder)`` would still fire an
+        extra batched SELECT for every listed PO's goods receipts AND a second
+        one for their line items - pure waste on a hot list path. ``noload``
+        suppresses that GR eager-load for the list only (``items`` is kept
+        because the response includes it); the detail ``get`` still eager-loads
+        both relationships.
+        """
+        from sqlalchemy.orm import noload
+
+        base = select(PurchaseOrder).options(noload(PurchaseOrder.goods_receipts))
 
         if project_id is not None:
             base = base.where(PurchaseOrder.project_id == project_id)
@@ -89,6 +110,18 @@ class PurchaseOrderRepository:
         await self.session.execute(stmt)
         await self.session.flush()
         self.session.expire_all()
+
+    async def lock_for_update(self, po_id: uuid.UUID) -> None:
+        """Take a row-level write lock on a PO for the rest of the transaction.
+
+        A concurrent transaction that calls this for the same PO blocks until
+        this transaction commits, serialising read-modify-write critical
+        sections (e.g. incrementing the cumulative ``retainage_released_amount``
+        string column, which cannot be incremented atomically in SQL). ``FOR
+        UPDATE`` is honoured on PostgreSQL, the only supported backend. Mirrors
+        the ``with_for_update`` pattern in cde/property_dev repositories.
+        """
+        await self.session.execute(select(PurchaseOrder.id).where(PurchaseOrder.id == po_id).with_for_update())
 
     async def stats_for_project(self, project_id: uuid.UUID) -> dict:
         """Compute aggregate procurement statistics for a project.
@@ -215,8 +248,26 @@ class GoodsReceiptRepository:
         self.session = session
 
     async def get(self, gr_id: uuid.UUID) -> GoodsReceipt | None:
-        """Get goods receipt by ID (with items via selectin)."""
-        return await self.session.get(GoodsReceipt, gr_id)
+        """Get goods receipt by ID (with items via selectin).
+
+        Uses an explicit ``selectinload`` + ``populate_existing`` rather than a
+        bare ``session.get`` so ``items`` is authoritatively (re)loaded even
+        when the row is already in the identity map in an expired state - e.g.
+        straight after ``confirm_if_draft``/``update`` call
+        ``session.expire_all()``. Without it a later synchronous ``.items``
+        access (or response serialisation) could lazy-load from a sync context
+        and raise MissingGreenlet on the async session.
+        """
+        from sqlalchemy.orm import selectinload
+
+        stmt = (
+            select(GoodsReceipt)
+            .options(selectinload(GoodsReceipt.items))
+            .where(GoodsReceipt.id == gr_id)
+            .execution_options(populate_existing=True)
+        )
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
 
     async def list(
         self,
@@ -300,6 +351,27 @@ class GoodsReceiptRepository:
         await self.session.execute(stmt)
         await self.session.flush()
         self.session.expire_all()
+
+    async def confirm_if_draft(self, gr_id: uuid.UUID) -> bool:
+        """Atomically flip a goods receipt draft -> confirmed.
+
+        Returns True only when THIS call performed the transition (the row was
+        still ``draft``). The ``WHERE status = 'draft'`` predicate makes a
+        concurrent second confirm a no-op at the DB level, so two requests
+        racing on the same GR cannot both flip it and double-publish
+        ``procurement.gr.confirmed`` (which would let finance double-count the
+        receipt against the budget). Mirrors the conditional-update idempotency
+        guard used for status transitions elsewhere.
+        """
+        stmt = (
+            update(GoodsReceipt)
+            .where(GoodsReceipt.id == gr_id, GoodsReceipt.status == "draft")
+            .values(status="confirmed")
+        )
+        result = await self.session.execute(stmt)
+        await self.session.flush()
+        self.session.expire_all()
+        return (result.rowcount or 0) > 0
 
 
 class GRItemRepository:

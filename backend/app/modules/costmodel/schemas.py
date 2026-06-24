@@ -456,6 +456,17 @@ class EVMResponse(BaseModel):
         description="True when SPI was clamped to the safe [0, 5] range (e.g. project "
         "has not started yet, making PV approximate). Treat the value as indicative only.",
     )
+    currency: str = Field(
+        "",
+        description="Project base currency for all EVM amounts (bac/ac/eac/etc/vac).",
+    )
+    mixed_currency: bool = Field(
+        False,
+        description="True when the budget lines span more than one currency, so a "
+        "missing fx_rate may have blended unconverted foreign amounts into BAC/AC. "
+        "Treat the absolute figures as indicative when set (mirrors the dashboard "
+        "and spine-rollup flags).",
+    )
 
 
 class WhatIfAdjustments(BaseModel):

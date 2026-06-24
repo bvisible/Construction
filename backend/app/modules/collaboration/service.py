@@ -212,13 +212,24 @@ class CollaborationService:
         created_by: uuid.UUID,
     ) -> Viewpoint:
         """Create a standalone viewpoint."""
-        # Validate linked comment exists
+        # Validate the linked comment exists AND belongs to the same entity the
+        # caller was access-checked against (the router only gates entity_type /
+        # entity_id). Without the entity match a caller could attach a viewpoint
+        # carrying arbitrary data/metadata to another tenant's comment by passing
+        # their own entity here plus a foreign comment_id; that viewpoint would
+        # then surface inside the victim's comment thread. Mirror the
+        # parent-entity guard in create_comment.
         if data.comment_id is not None:
             comment = await self.comment_repo.get(data.comment_id)
             if comment is None:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail="Linked comment not found",
+                )
+            if comment.entity_type != data.entity_type or comment.entity_id != data.entity_id:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Linked comment belongs to a different entity",
                 )
 
         viewpoint = Viewpoint(

@@ -23,6 +23,10 @@ logger = logging.getLogger(__name__)
 
 ZERO = Decimal("0")
 QUANTIZE = Decimal("0.01")
+# Upper bound for money values. A finite-but-absurd magnitude (e.g. '1e400')
+# survives Decimal() and then overflows quantize() in calculate_forecast,
+# aborting the whole batch; clamp such inputs to ZERO at the _dec() choke point.
+_MONEY_MAX = Decimal("1e15")
 
 # Event published when a freshly-computed forecast breaches a project
 # AlertRule. Item #24 (risk/task auto-escalation) subscribes to this - we
@@ -40,11 +44,19 @@ FORECAST_KPI_CODES = frozenset(
 
 
 def _dec(value: str) -> Decimal:
-    """‌⁠‍Safely convert string to Decimal."""
+    """‌⁠‍Safely convert a string to a finite, bounded Decimal.
+
+    Returns ZERO for unparseable, non-finite (NaN/Infinity) or absurd-magnitude
+    input so a downstream quantize() in calculate_forecast can never raise
+    InvalidOperation and abort the whole forecast batch.
+    """
     try:
-        return Decimal(value)
+        d = Decimal(value)
     except (InvalidOperation, ValueError):
         return ZERO
+    if not d.is_finite() or abs(d) >= _MONEY_MAX:
+        return ZERO
+    return d
 
 
 @dataclass
@@ -481,6 +493,14 @@ class EVMService:
             except HTTPException:
                 # No snapshot for this project - nothing to forecast yet.
                 results.append({"project_id": str(pid), "status": "no_snapshot"})
+                continue
+            except ArithmeticError:
+                # A poisoned stored value (non-finite / overflow -> an
+                # InvalidOperation, which is an ArithmeticError) must not abort
+                # the whole batch; skip just this project. _dec() guards new
+                # inputs - this covers legacy / raw-written rows.
+                logger.exception("Forecast computation failed for project %s", pid)
+                results.append({"project_id": str(pid), "status": "error"})
                 continue
 
             breaches = await self.evaluate_forecast_against_rules(forecast, pid)

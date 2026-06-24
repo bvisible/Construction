@@ -19,12 +19,6 @@ import { aiEstimatorApi } from './api';
 /** True when the user has any usable LLM provider configured. */
 export function hasLlmKey(settings: AISettings | undefined): boolean {
   if (!settings) return false;
-  // The backend `ai_ready` flag is authoritative and already accounts for
-  // providers resolved server-side that carry no per-user key flag here — in
-  // particular the NORA/olares provider (configured via site_config, not the
-  // cloud-key list below). Trust it first so a NORA-only setup is not shown as
-  // "not connected". The key-flag scan stays as a fallback.
-  if (settings.ai_ready === true) return true;
   const keyFlags: (keyof AISettings)[] = [
     'anthropic_api_key_set',
     'openai_api_key_set',

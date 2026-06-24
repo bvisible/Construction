@@ -8,7 +8,11 @@ import { apiDelete, apiGet, apiPatch, apiPost } from '@/shared/lib/api';
 
 /* ── Types ─────────────────────────────────────────────────────────────── */
 
-export type TransmittalStatus = 'draft' | 'issued' | 'acknowledged' | 'closed';
+// Mirrors the backend status lifecycle exactly: draft -> issued -> responded
+// (the service sets `responded` once every recipient has submitted a response).
+// Receipt acknowledgement is tracked per recipient (`acknowledged_at`), never as
+// a transmittal status - the UI derives an "acknowledged" stat from recipients.
+export type TransmittalStatus = 'draft' | 'issued' | 'responded';
 
 export type TransmittalPurpose =
   | 'for_approval'

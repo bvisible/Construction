@@ -392,17 +392,26 @@ function AIConfigurationCard() {
   // Derived values for the currently selected provider.
   const defaultModel = settings?.default_models?.[selectedProvider] ?? '';
   const hasKeySet = isKeySetForProvider(settings, selectedProvider);
+  // Local runtimes (Ollama / vLLM) authenticate by server URL, not an API key.
+  // The backend AISettingsUpdate schema has no ``<provider>_api_key`` field for
+  // them, so sending one is silently dropped and looks like the key vanished
+  // (issue #244). Hide the key input for these and use the Server URL instead.
+  const isKeyless = ['ollama', 'vllm'].includes(selectedProvider);
+  // A usable base URL exists when the user typed one or one is already stored.
+  const hasBaseUrl = Boolean(baseUrlInput.trim()) || baseUrlTouched;
 
   // Test connection mutation — auto-saves unsaved key / model before testing
   // so the test exercises the exact provider + model id the real estimate
   // calls will use (this is what surfaces stale-model failures early).
   const testMutation = useMutation({
     mutationFn: async () => {
-      const hasNewKey = hasUnsavedKey && Boolean(apiKeyInput.trim());
+      const hasNewKey = !isKeyless && hasUnsavedKey && Boolean(apiKeyInput.trim());
       const needsSave = modelTouched || baseUrlTouched || hasNewKey;
       if (needsSave) {
         const update: Record<string, unknown> = { preferred_model: selectedProvider };
-        if (hasUnsavedKey && apiKeyInput.trim()) {
+        // Never attach <provider>_api_key for keyless local runtimes - the
+        // backend schema has no such field and would silently drop it.
+        if (!isKeyless && hasUnsavedKey && apiKeyInput.trim()) {
           update[`${selectedProvider}_api_key`] = apiKeyInput.trim();
         }
         if (modelTouched) {
@@ -476,7 +485,9 @@ function AIConfigurationCard() {
       const update: Record<string, unknown> = {
         preferred_model: selectedProvider,
       };
-      if (hasUnsavedKey && apiKeyInput.trim()) {
+      // Never attach <provider>_api_key for keyless local runtimes - the
+      // backend schema has no such field and would silently drop it.
+      if (!isKeyless && hasUnsavedKey && apiKeyInput.trim()) {
         const keyField = `${selectedProvider}_api_key`;
         update[keyField] = apiKeyInput.trim();
       }
@@ -634,7 +645,9 @@ function AIConfigurationCard() {
             </div>
           </div>
 
-          {/* API Key input */}
+          {/* API Key input - hidden for keyless local runtimes (Ollama / vLLM),
+              which authenticate via the Server URL field below instead. */}
+          {!isKeyless && (
           <div>
             <div className="flex items-center justify-between mb-1.5">
               <label htmlFor="ai-api-key" className="text-sm font-medium text-content-primary">
@@ -665,7 +678,7 @@ function AIConfigurationCard() {
                         defaultValue: `Paste your ${AI_PROVIDERS.find((p) => p.id === selectedProvider)?.keyPrefix || ''}... key here`,
                       })
                 }
-                className="h-10 w-full rounded-lg border border-border bg-surface-primary px-3 pr-20 font-mono text-sm text-content-primary placeholder:text-content-tertiary focus:outline-none focus:ring-2 focus:ring-oe-blue/30 focus:border-oe-blue focus:shadow-[0_0_0_4px_rgba(214, 138, 89,0.08)] transition-all duration-normal ease-oe hover:border-content-tertiary"
+                className="h-10 w-full rounded-lg border border-border bg-surface-primary px-3 pr-20 font-mono text-sm text-content-primary placeholder:text-content-tertiary focus:outline-none focus:ring-2 focus:ring-oe-blue/30 focus:border-oe-blue focus:shadow-[0_0_0_4px_rgba(0,113,227,0.08)] transition-all duration-normal ease-oe hover:border-content-tertiary"
               />
               <button
                 type="button"
@@ -684,12 +697,18 @@ function AIConfigurationCard() {
               })}
             </p>
           </div>
+          )}
 
           {/* The endpoint input only appears for self-hosted runtimes. */}
-          {['ollama', 'vllm'].includes(selectedProvider) ? (
+          {isKeyless ? (
             <div><label htmlFor="ai-base-url" className={baseUrlLabelClass}>{
                 t('settings.ai_base_url', { defaultValue: 'Server URL' })
               }</label>
+              <p className="mb-1.5 text-xs text-content-tertiary">{
+                t('settings.ai_keyless_hint', {
+                  defaultValue: 'No API key needed - this provider runs locally. Just enter the server address below.',
+                })
+              }</p>
               <input id="ai-base-url" type="text" autoComplete="off" spellCheck={false}
                 value={baseUrlInput} className={baseUrlInputClass}
                 placeholder={selectedProvider === 'vllm' ? 'http://localhost:8000' : 'http://localhost:11434'}
@@ -757,7 +776,12 @@ function AIConfigurationCard() {
         <Button
           variant="secondary"
           onClick={() => testMutation.mutate()}
-          disabled={testMutation.isPending || (!hasKeySet && !hasUnsavedKey)}
+          disabled={
+            testMutation.isPending ||
+            // Keyless local runtimes test against a server URL (typed or stored);
+            // keyed providers need a stored or freshly entered API key.
+            (isKeyless ? !hasBaseUrl : !hasKeySet && !hasUnsavedKey)
+          }
           title={
             baseUrlTouched || modelTouched || hasUnsavedKey
               ? t('settings.ai_test_save_hint', {
@@ -780,8 +804,13 @@ function AIConfigurationCard() {
           onClick={() => saveMutation.mutate()}
           disabled={
             saveMutation.isPending ||
-            (!(hasUnsavedKey || modelTouched || baseUrlTouched) &&
-              selectedProvider === settings?.provider)
+            // Keyless local runtimes can save once a server URL is present
+            // (typed or stored) so users are not blocked by the hidden key
+            // field. Keyed providers keep the prior unsaved-changes gate.
+            (isKeyless
+              ? !hasBaseUrl && selectedProvider === settings?.provider
+              : !(hasUnsavedKey || modelTouched || baseUrlTouched) &&
+                selectedProvider === settings?.provider)
           }
           loading={saveMutation.isPending}
         >

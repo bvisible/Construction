@@ -20,10 +20,9 @@ from collections import OrderedDict
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query, status
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import async_session_factory
-from app.dependencies import CurrentUserId, CurrentUserPayload, RequirePermission, SessionDep
+from app.dependencies import CurrentUserId, CurrentUserPayload, RequirePermission, SessionDep, verify_project_access
 from app.modules.ai_agents.schemas import (
     CUSTOM_AGENT_CATEGORIES,
     AgentDescriptor,
@@ -113,36 +112,6 @@ def _idempotency_record(user_id: str, key: str, run_id: uuid.UUID) -> None:
 
 def _get_service(session: SessionDep) -> AgentService:
     return AgentService(session)
-
-
-async def _assert_project_access(
-    session: AsyncSession,
-    project_id: uuid.UUID,
-    user_id: uuid.UUID,
-) -> None:
-    """Raise 404/403 unless ``user_id`` owns or is a member of ``project_id``.
-
-    Mirrors the BOQ module's guard: 404 when the project doesn't exist (so
-    we never confirm/deny existence of a project the caller can't see), 403
-    when it exists but the caller is neither owner nor a team member.
-    """
-    from app.modules.projects.repository import ProjectRepository
-    from app.modules.teams.access import is_project_member
-
-    project = await ProjectRepository(session).get_by_id(project_id)
-    if project is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Project not found",
-        )
-    if str(project.owner_id) == str(user_id):
-        return
-    if await is_project_member(session, project_id, user_id):
-        return
-    raise HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
-        detail="You do not have access to this project",
-    )
 
 
 # ── Agent / tool catalogues ──────────────────────────────────────────────
@@ -664,7 +633,14 @@ async def _run_in_background(
                 await bg_session.commit()
 
             runner = AgentRunner(bridge, on_step=_persist)
-            context = {"project_id": str(project_id)} if project_id else None
+            # Always thread the invoking user into the trusted runner context
+            # so data-reading tools can re-verify per-call project access (the
+            # LLM cannot forge this - the runner strips any model-supplied
+            # __agent_context__ and re-injects this dict). project_id is added
+            # only when a project is in scope.
+            context: dict[str, str] = {"user_id": str(user_id)}
+            if project_id:
+                context["project_id"] = str(project_id)
             result = await runner.run(target, user_input, context=context)
 
             await service.run_repo.update_fields(
@@ -728,7 +704,7 @@ async def create_run(
     # this a user could tag runs to projects they don't own. Owner OR team
     # member is allowed (same rule the BOQ module uses).
     if request.project_id is not None:
-        await _assert_project_access(session, request.project_id, uid)
+        await verify_project_access(request.project_id, user_id, session)
 
     # Idempotency replay: return existing run for the same key within TTL.
     if idempotency_key:
@@ -856,10 +832,11 @@ async def get_run(
     """Return the full run incl. ordered steps timeline."""
     uid = uuid.UUID(user_id)
     run = await service.get_run(run_id)
-    if run is None:
+    # 404 (not 403) when the run belongs to another user, so we never confirm
+    # the existence of a run_id the caller is not allowed to see (IDOR / UUID
+    # existence-oracle defence - same policy as verify_project_access).
+    if run is None or str(run.user_id) != str(uid):
         raise HTTPException(status_code=404, detail="Run not found")
-    if str(run.user_id) != str(uid):
-        raise HTTPException(status_code=403, detail="You can only view your own runs")
     steps = await service.get_run_steps(run_id)
     return _serialise_run(run, steps=steps)
 
@@ -931,7 +908,7 @@ async def apply_run_proposals(
         raise
     if boq is None:
         raise HTTPException(status_code=404, detail="BOQ not found")
-    await _assert_project_access(session, boq.project_id, uid)
+    await verify_project_access(boq.project_id, user_id, session)
 
     try:
         result = await service.apply_run_proposals(
@@ -973,7 +950,3 @@ def _serialise_run(run: Any, *, steps: list[Any]) -> AgentRunResponse:
         updated_at=run.updated_at,
         steps=[AgentStepResponse.model_validate(s) for s in steps],
     )
-
-
-# Silence "imported but unused" - kept for type imports used at runtime.
-_ = AsyncSession

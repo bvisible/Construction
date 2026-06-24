@@ -9,6 +9,12 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+# Upper bound for money fields - mirrors changeorders/full_evm/risk/punchlist.
+# Far above any realistic deal value yet within Decimal/Numeric(18,2) limits so
+# _q2()/quantize() can never raise InvalidOperation on a finite-but-absurd input
+# (ge=0 already rejects NaN/Infinity for these Decimal fields).
+_MONEY_MAX = Decimal("1e15")
+
 # ── PipelineStage ─────────────────────────────────────────────────────────
 
 
@@ -216,7 +222,7 @@ class LeadConvertRequest(BaseModel):
 
     account_id: UUID
     title: str = Field(..., min_length=1, max_length=500)
-    estimated_value: Decimal = Field(default=Decimal("0"), ge=0)
+    estimated_value: Decimal = Field(default=Decimal("0"), ge=0, le=_MONEY_MAX)
     currency: str = Field(default="", max_length=8)
     expected_close_date: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
     stage_id: UUID
@@ -233,7 +239,7 @@ class OpportunityCreate(BaseModel):
     account_id: UUID
     title: str = Field(..., min_length=1, max_length=500)
     description: str = Field(default="", max_length=10000)
-    estimated_value: Decimal = Field(default=Decimal("0"), ge=0)
+    estimated_value: Decimal = Field(default=Decimal("0"), ge=0, le=_MONEY_MAX)
     currency: str = Field(default="", max_length=8)
     expected_close_date: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
     probability_percent: int = Field(default=0, ge=0, le=100)
@@ -258,7 +264,7 @@ class OpportunityUpdate(BaseModel):
 
     title: str | None = Field(default=None, max_length=500)
     description: str | None = Field(default=None, max_length=10000)
-    estimated_value: Decimal | None = Field(default=None, ge=0)
+    estimated_value: Decimal | None = Field(default=None, ge=0, le=_MONEY_MAX)
     currency: str | None = Field(default=None, max_length=8)
     expected_close_date: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
     probability_percent: int | None = Field(default=None, ge=0, le=100)

@@ -20,6 +20,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.events import event_bus
+from app.core.json_merge import merge_metadata
 from app.core.sql_numeric import numeric_value
 from app.modules.procurement.models import (
     GoodsReceipt,
@@ -505,8 +506,11 @@ class ProcurementService:
 
         # Reload the PO so the freshly inserted line items are populated on the
         # ``items`` relationship. ``po_repo.create`` refreshed the PO BEFORE the
-        # items were inserted, so without this re-fetch the response would carry
-        # an empty ``items: []`` collection (BUG-015).
+        # items existed, caching an empty ``items`` collection on the
+        # identity-mapped instance; ``po_repo.get`` re-reads it with
+        # ``populate_existing`` so ``selectinload`` overwrites that stale empty
+        # collection (a plain selectinload would keep the cached one), giving
+        # the create response its line items (BUG-015).
         if data.items:
             reloaded = await self.po_repo.get(po.id)
             if reloaded is not None:
@@ -634,12 +638,13 @@ class ProcurementService:
         subtotal or tax are changed.
         """
         po = await self.get_po(po_id)  # 404 check
+        prior_status = po.status
 
         fields = data.model_dump(exclude_unset=True, exclude={"items"})
         if "metadata" in fields:
             _incoming = fields.pop("metadata")
             fields["metadata_"] = (
-                {**(getattr(po, "metadata_", None) or {}), **_incoming} if isinstance(_incoming, dict) else _incoming
+                merge_metadata(getattr(po, "metadata_", None), _incoming) if isinstance(_incoming, dict) else _incoming
             )
 
         # Re-apply the vendor prequalification gate (TOP-30 #20) only when the
@@ -681,6 +686,25 @@ class ProcurementService:
 
         # Replace items if provided
         if data.items is not None:
+            # Guard the destructive replace: ``delete_by_po`` hard-deletes the
+            # existing PO line rows, and ``GoodsReceiptItem.po_item_id`` is an
+            # ``ON DELETE SET NULL`` FK back to them. So replacing items on a PO
+            # that already has goods receipts silently NULLs the po_item_id link
+            # on every received line, orphaning the received-quantity linkage and
+            # corrupting the over-receipt cap, the 3-way match, and the
+            # fully-received rollup (received quantities can no longer be tied to
+            # any PO line). Once deliveries exist the line items are no longer
+            # safe to mutate - refuse the replace with a 409. Header fields
+            # (notes, payment_terms, status, etc.) already applied above are
+            # unaffected; only the items[] payload is rejected.
+            if po.goods_receipts:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=(
+                        "Cannot replace line items on a purchase order that already has goods receipts; "
+                        "the received quantities are linked to the existing line items."
+                    ),
+                )
             await self.po_item_repo.delete_by_po(po_id)
             item_amounts: list[Decimal] = []
             for idx, item_data in enumerate(data.items):
@@ -742,6 +766,33 @@ class ProcurementService:
                 "status": updated.status,
             },
         )
+
+        # Max-Audit #10: when a PO LEAVES the ``approved`` state its budget
+        # commitment must be reversed. The PO FSM allows ``approved -> draft``
+        # (revert) and ``approved -> cancelled``; publish a compensating event
+        # carrying ``amount_total`` so finance can decrement ``committed`` by
+        # exactly what this PO committed. Without this the commitment ledger
+        # only ever grows and phantom commitments corrupt the dashboard / EVM.
+        if prior_status == "approved" and updated.status != prior_status:
+            if updated.status == "cancelled":
+                _decommit_event = "procurement.po.cancelled"
+            elif updated.status == "draft":
+                _decommit_event = "procurement.po.reverted"
+            else:
+                _decommit_event = None
+            if _decommit_event is not None:
+                await _safe_publish(
+                    _decommit_event,
+                    {
+                        "po_id": str(po_id),
+                        "project_id": str(updated.project_id),
+                        "po_number": updated.po_number,
+                        "amount_total": updated.amount_total,
+                        "currency_code": updated.currency_code or "",
+                        "prior_status": prior_status,
+                        "status": updated.status,
+                    },
+                )
 
         updated.vendor_warnings = vendor_warnings  # type: ignore[attr-defined]
 
@@ -916,15 +967,40 @@ class ProcurementService:
                 detail="Release amount must be positive",
             )
 
-        held = po.retainage_held()
+        # Serialise the cap-check + increment against concurrent releases.
+        # ``retainage_released_amount`` is a Decimal-STRING column, so it cannot
+        # be incremented atomically in SQL (no ``col = col + :amt``). Without a
+        # lock, two concurrent releases both read the same ``released_sum``, both
+        # pass the held-balance cap, and both write the same new total - a lost
+        # update that over-releases retainage (two audit rows, but the PO shows
+        # only one release). Take a row-level write lock on the PO, then re-read
+        # it FRESH under the lock so the cap and the write are one critical
+        # section. The lock releases at request-transaction commit.
+        await self.po_repo.lock_for_update(po_id)
+        locked = await self.po_repo.get(po_id)
+        # retainage_amount depends only on amount_total / retention_percent,
+        # which this path never mutates; the freshly-locked row is authoritative
+        # for the cumulative released total. ``retainage_held`` already floors at
+        # zero, so a concurrent release that drained the balance first leaves
+        # held=0 here and the cap below rejects this one.
+        held = (locked or po).retainage_held()
         if release_amount > held:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Release amount {release_amount} exceeds held retainage {held}",
             )
 
-        released_sum = _to_decimal(po.retainage_released_amount)
+        released_sum = _to_decimal((locked or po).retainage_released_amount)
         new_released = released_sum + release_amount
+        # Capture the scalar PO fields the audit row + event need BEFORE the
+        # update: ``po_repo.update`` calls ``expire_all()``, after which reading
+        # ``po.project_id`` / ``po.po_number`` / ``po.currency_code`` would
+        # trigger a lazy reload from sync context (MissingGreenlet on the async
+        # session).
+        src = locked or po
+        po_project_id = src.project_id
+        po_number = src.po_number
+        po_currency = src.currency_code or ""
         await self.po_repo.update(po_id, retainage_released_amount=str(new_released))
 
         now = datetime.now(UTC).isoformat()
@@ -950,9 +1026,9 @@ class ProcurementService:
                 action="retainage_released",
                 reason=reason or "Retainage released via release_po_retainage()",
                 metadata={
-                    "po_number": po.po_number,
+                    "po_number": po_number,
                     "release_amount": str(release_amount),
-                    "currency_code": po.currency_code or "",
+                    "currency_code": po_currency,
                     "retainage_released_total": str(new_released),
                 },
             )
@@ -963,10 +1039,10 @@ class ProcurementService:
             "procurement.po.retainage_released",
             {
                 "po_id": str(po_id),
-                "project_id": str(po.project_id),
-                "po_number": po.po_number,
+                "project_id": str(po_project_id),
+                "po_number": po_number,
                 "release_amount": str(release_amount),
-                "currency_code": po.currency_code or "",
+                "currency_code": po_currency,
                 "released_by": str(user_id) if user_id else None,
                 "release_reason": reason,
                 "retainage_released_total": str(new_released),
@@ -975,9 +1051,9 @@ class ProcurementService:
 
         logger.info(
             "Retainage released on PO %s: amount=%s %s",
-            po.po_number,
+            po_number,
             release_amount,
-            po.currency_code or "",
+            po_currency,
         )
         return release
 
@@ -1037,6 +1113,25 @@ class ProcurementService:
         - PO exists and is in a receivable status (issued or partially_received)
         - received_qty <= ordered_qty for each GR item (when po_item_id provided)
         """
+        # A goods receipt always enters its FSM at "draft"; confirmation is a
+        # separate step via confirm_goods_receipt(), which is the ONLY path that
+        # runs the confirm-time over-receipt cap, rolls the PO up to
+        # partially_received/completed, and publishes ``procurement.gr.confirmed``
+        # so finance moves the committed slice to actual. ``GRCreate.status`` has
+        # no enum guard, so a caller could otherwise POST a GR already
+        # ``status="confirmed"`` and strand the PO + budget in an inconsistent
+        # state (the receipt counts as confirmed for over-receipt math but the PO
+        # never flips and no finance event fires). Reject it here, mirroring the
+        # draft-only entry guard on create_po().
+        if data.status != "draft":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"A goods receipt must be created in 'draft' status, not '{data.status}'. "
+                    "Use the confirm action to advance it."
+                ),
+            )
+
         po = await self.get_po(data.po_id)  # 404 check
 
         # PO must be in a status that accepts goods receipts
@@ -1181,11 +1276,18 @@ class ProcurementService:
                 detail=f"Cannot confirm goods receipt in status '{gr.status}'",
             )
 
+        # Capture po_id while ``gr`` is attached and fresh. confirm_if_draft()
+        # below calls session.expire_all(); afterwards even a scalar read like
+        # ``gr.po_id`` would lazy-load from a sync context and raise
+        # MissingGreenlet on the async session. Reusing this local keeps the
+        # post-confirm re-fetch off the expired instance.
+        po_id = gr.po_id
+
         # Re-apply the cumulative over-receipt cap at confirm time: prior
         # confirmed receipts on the same po_item_id plus this receipt's lines
         # must not exceed the ordered quantity. ``exclude_receipt_id`` keeps
         # this GR out of the prior sum so it is not counted against itself.
-        po = await self.get_po(gr.po_id)
+        po = await self.get_po(po_id)
         po_items_by_id = {item.id: item for item in po.items}
         linked_ids = [it.po_item_id for it in gr.items if it.po_item_id is not None]
         already_received = await self._confirmed_received_by_item(
@@ -1214,26 +1316,53 @@ class ProcurementService:
                     ),
                 )
 
-        await self.gr_repo.update(gr_id, status="confirmed")
+        # Flip draft -> confirmed atomically. The conditional UPDATE (WHERE
+        # status='draft') is the idempotency guard against a double-confirm
+        # race: two concurrent confirm requests both pass the read-time
+        # ``gr.status != "draft"`` check above (separate READ COMMITTED
+        # transactions), but only ONE wins the conditional write. The loser
+        # gets won=False and 409s instead of re-publishing
+        # ``procurement.gr.confirmed`` and re-running the PO rollup (which would
+        # double-count this receipt against the budget).
+        won = await self.gr_repo.confirm_if_draft(gr_id)
+        if not won:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Goods receipt was already confirmed by a concurrent request.",
+            )
 
-        # gr_repo.update() calls session.expire_all(), which detaches the
-        # eager-loaded relationships on the ``po`` fetched above for the cap
-        # check; a later synchronous attribute/relationship access would then
-        # lazy-load from sync context and raise MissingGreenlet on the async
-        # session. Re-fetch a fresh, fully eager-loaded PO for the status
-        # rollup and the receipt-value computation below (this also sees the
-        # GR just flipped to confirmed).
-        po = await self.get_po(gr.po_id)
+        # confirm_if_draft() calls session.expire_all(), which expires EVERY
+        # instance in the session - including ``gr`` and the ``po`` fetched
+        # above. Any later synchronous attribute read on an expired instance
+        # (a relationship, or even a scalar like ``gr.po_id``/``po.po_number``)
+        # would lazy-load from a sync context and raise MissingGreenlet on the
+        # async session, so we re-fetch off the ``po_id`` captured before the
+        # confirm. This re-fetch also sees the GR just flipped to confirmed.
+        po = await self.get_po(po_id)
+        # Snapshot the scalar PO field used in the log lines below: po_repo.update()
+        # also calls expire_all(), so reading po.po_number after it would hit the
+        # same MissingGreenlet trap.
+        po_number = po.po_number
 
-        # Update PO status based on total received quantities
+        # Update PO status based on total received quantities.
+        status_changed = False
         if po.status in ("issued", "partially_received"):
             all_fully_received = self._check_po_fully_received(po)
             if all_fully_received:
                 await self.po_repo.update(po.id, status="completed")
-                logger.info("PO %s fully received, status -> completed", po.po_number)
+                logger.info("PO %s fully received, status -> completed", po_number)
+                status_changed = True
             elif po.status == "issued":
                 await self.po_repo.update(po.id, status="partially_received")
-                logger.info("PO %s partially received", po.po_number)
+                logger.info("PO %s partially received", po_number)
+                status_changed = True
+
+        # po_repo.update() expired the session again; re-fetch a fresh, fully
+        # eager-loaded PO so the receipt-value computation and the event payload
+        # below read live relationship/column data instead of lazy-loading from
+        # a sync context.
+        if status_changed:
+            po = await self.get_po(po_id)
 
         updated = await self.gr_repo.get(gr_id)
         if updated is None:
@@ -1336,36 +1465,29 @@ class ProcurementService:
         try:
             from app.modules.finance.models import Invoice, InvoiceLineItem
 
-            # Find invoices whose JSON metadata.po_id == this PO id. Plain
-            # equality on the JSON-rendered string is SQLite-portable.
-            inv_stmt = _select(Invoice.id).where(
+            # Find invoices whose JSON metadata.po_id == this PO id. Fetch the
+            # id AND metadata_ together so the link filter needs no second pass
+            # over the same id set (previously a separate ``meta_stmt`` re-read
+            # the metadata for every id this query already returned).
+            inv_stmt = _select(Invoice.id, Invoice.metadata_).where(
                 Invoice.project_id == po.project_id,
                 Invoice.invoice_direction == "payable",
             )
-            inv_ids = [row[0] for row in (await self.session.execute(inv_stmt)).all()]
-            if inv_ids:
+            inv_rows = (await self.session.execute(inv_stmt)).all()
+            linked_invoice_ids: set[uuid.UUID] = {
+                inv_id for inv_id, meta in inv_rows if isinstance(meta, dict) and str(meta.get("po_id")) == str(po_id)
+            }
+            if linked_invoice_ids:
+                # Pull line items only for the invoices actually linked to this
+                # PO, not every payable invoice in the project - both fewer rows
+                # over the wire and a tighter IN clause.
                 line_stmt = _select(
-                    InvoiceLineItem.invoice_id,
                     InvoiceLineItem.sort_order,
                     InvoiceLineItem.quantity,
-                ).where(InvoiceLineItem.invoice_id.in_(inv_ids))
+                ).where(InvoiceLineItem.invoice_id.in_(linked_invoice_ids))
                 line_rows = (await self.session.execute(line_stmt)).all()
 
-                # Filter invoices that explicitly link to this PO via metadata.
-                # We re-fetch the metadata_ column in bulk to avoid loading
-                # full Invoice objects.
-                meta_stmt = _select(Invoice.id, Invoice.metadata_).where(
-                    Invoice.id.in_(inv_ids),
-                )
-                meta_rows = (await self.session.execute(meta_stmt)).all()
-                linked_invoice_ids: set[uuid.UUID] = set()
-                for inv_id, meta in meta_rows:
-                    if isinstance(meta, dict) and str(meta.get("po_id")) == str(po_id):
-                        linked_invoice_ids.add(inv_id)
-
-                for inv_id, sort_order, qty in line_rows:
-                    if inv_id not in linked_invoice_ids:
-                        continue
+                for sort_order, qty in line_rows:
                     invoiced_by_sort[sort_order] = invoiced_by_sort.get(sort_order, Decimal("0")) + _to_decimal(qty)
         except Exception:  # noqa: BLE001 - finance is optional
             logger.debug("Finance lookup skipped for PO %s match-status", po_id)
@@ -1430,15 +1552,26 @@ class ProcurementService:
         supplier_contact_id: str,
         project_id: uuid.UUID | None = None,
         period_days: int = 365,
+        accessible_project_ids: set[uuid.UUID] | None = None,
     ) -> dict:
         """Return supplier KPIs for the trailing window.
 
         Returns a dict shaped like :class:`SupplierScorecardResponse`. All
-        rates are 0.0–1.0; a supplier with zero POs gets all-zero fields
+        rates are 0.0-1.0; a supplier with zero POs gets all-zero fields
         instead of raising (no division-by-zero crash).
 
         ``project_id`` scopes the query to a single project (used by the
         UI when the user opens a scorecard from a project's PO list).
+
+        ``accessible_project_ids`` scopes the cross-project overview (when
+        ``project_id`` is omitted) to only the projects the caller may see.
+        ``None`` is the "do not filter" sentinel (admin / single-project
+        path already gated by ``project_id``); a SET restricts the
+        aggregate to those project ids. An EMPTY set means the caller can
+        reach no project, so every aggregate must come back empty rather
+        than leaking a supplier's PO totals across other tenants' projects
+        (IDOR on the cross-project supplier overview). Mirrors the
+        ``app.dependencies.accessible_project_ids`` contract.
         """
         from datetime import UTC, datetime, timedelta
 
@@ -1452,26 +1585,57 @@ class ProcurementService:
         po_filters = [PurchaseOrder.vendor_contact_id == supplier_contact_id]
         if project_id is not None:
             po_filters.append(PurchaseOrder.project_id == project_id)
+        elif accessible_project_ids is not None:
+            # Cross-project overview for a non-admin: restrict to the
+            # caller's own projects. An empty set yields ``IN ()`` which
+            # matches nothing, so the supplier's totals never leak across
+            # tenants the caller cannot access.
+            po_filters.append(PurchaseOrder.project_id.in_(accessible_project_ids))
         # Trailing window: filter by created_at (PO ``issue_date`` is a
         # free-form string and may be NULL).
         po_filters.append(PurchaseOrder.created_at >= datetime.fromisoformat(cutoff))
 
-        po_count_stmt = _select(_func.count()).select_from(PurchaseOrder).where(_and(*po_filters))
-        total_po_count = (await self.session.execute(po_count_stmt)).scalar_one() or 0
+        # Single PO scan: count, value+currency, ids, and the delivery-date
+        # lookup all derive from the same filtered row set. Previously these
+        # were four separate queries (COUNT, amount+currency, ids, deliveries)
+        # that re-applied the identical ``po_filters`` four times; folding them
+        # into one SELECT cuts three round trips per scorecard read.
+        po_rows = (
+            await self.session.execute(
+                _select(
+                    PurchaseOrder.id,
+                    PurchaseOrder.amount_total,
+                    PurchaseOrder.currency_code,
+                    PurchaseOrder.delivery_date,
+                ).where(_and(*po_filters))
+            )
+        ).all()
 
-        # SUM amount_total as Python Decimal (string column).
-        po_value_stmt = _select(PurchaseOrder.amount_total, PurchaseOrder.currency_code).where(_and(*po_filters))
-        po_value_rows = (await self.session.execute(po_value_stmt)).all()
-        total_po_value = Decimal("0")
-        currency = ""
-        for amt, cur in po_value_rows:
-            total_po_value += _to_decimal(amt)
-            if not currency and cur:
-                currency = cur
-
-        # PO ids in scope - drives the GR + line-variance queries.
-        po_ids_stmt = _select(PurchaseOrder.id).where(_and(*po_filters))
-        po_ids = [row[0] for row in (await self.session.execute(po_ids_stmt)).all()]
+        total_po_count = len(po_rows)
+        po_ids: list[uuid.UUID] = []
+        # PO delivery-date lookup (string ISO dates compare lexicographically
+        # when both are YYYY-MM-DD); drives the on-time check below.
+        po_delivery_map: dict[uuid.UUID, str | None] = {}
+        # Group PO value per currency so a cross-project overview never blends
+        # different currencies into one meaningless total (a supplier can hold
+        # POs in a EUR project and a GBP project). Report the dominant currency's
+        # total and flag the rest via ``mixed_currency``.
+        value_by_currency: dict[str, Decimal] = {}
+        for po_row_id, amt, cur, delivery in po_rows:
+            po_ids.append(po_row_id)
+            po_delivery_map[po_row_id] = delivery
+            value_by_currency[cur or ""] = value_by_currency.get(cur or "", Decimal("0")) + _to_decimal(amt)
+        # Headline = the (non-blank) currency with the largest aggregate value;
+        # fall back to the blank-currency bucket only when that is all there is.
+        _named = {c: v for c, v in value_by_currency.items() if c}
+        if _named:
+            # Tie-break on the currency code so two identical calls always report
+            # the same headline currency when aggregates are exactly equal (the
+            # PO scan has no ORDER BY, so row order is otherwise DB-dependent).
+            currency, total_po_value = max(_named.items(), key=lambda kv: (kv[1], kv[0]))
+        else:
+            currency, total_po_value = "", value_by_currency.get("", Decimal("0"))
+        mixed_currency = len(_named) > 1
 
         # ── GR aggregates (on-time + rejection) ─────────────────────────
         # ``on_time_count`` covers GRs whose parent PO had a delivery_date AND
@@ -1485,21 +1649,13 @@ class ProcurementService:
         rejected_count = 0
         if po_ids:
             gr_stmt = _select(
-                GoodsReceipt.id,
                 GoodsReceipt.po_id,
                 GoodsReceipt.receipt_date,
                 GoodsReceipt.status,
             ).where(GoodsReceipt.po_id.in_(po_ids))
             gr_rows = (await self.session.execute(gr_stmt)).all()
 
-            # Build PO delivery-date lookup once (string ISO dates compare
-            # lexicographically when both are YYYY-MM-DD).
-            po_deliveries_stmt = _select(PurchaseOrder.id, PurchaseOrder.delivery_date).where(
-                PurchaseOrder.id.in_(po_ids)
-            )
-            po_delivery_map = {row[0]: row[1] for row in (await self.session.execute(po_deliveries_stmt)).all()}
-
-            for _gr_id, gr_po_id, receipt_date, gr_status in gr_rows:
+            for gr_po_id, receipt_date, gr_status in gr_rows:
                 total_gr_count += 1
                 if gr_status == "rejected":
                     rejected_count += 1
@@ -1561,6 +1717,7 @@ class ProcurementService:
             "total_po_count": total_po_count,
             "total_po_value": str(total_po_value),
             "currency": currency,
+            "mixed_currency": mixed_currency,
             "on_time_delivery_pct": on_time_pct,
             "qty_variance_pct": qty_variance_pct,
             "gr_rejection_rate": rejection_rate,

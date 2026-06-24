@@ -202,6 +202,7 @@ class ProjectControlsService:
         period_start: _date | None = None,
         period_end: _date | None = None,
         thresholds: dict[str, dict[str, Any]] | None = None,
+        allowed_project_ids: set[uuid.UUID] | None = None,
     ) -> dict[str, Any]:
         """Compute the whole controls spine in one round-trip.
 
@@ -209,6 +210,11 @@ class ProjectControlsService:
         in). Money KPIs carry their own per-currency breakdown so the client
         groups by ISO code in portfolio mode; the snapshot surfaces an overall
         ``multi_currency`` flag and a headline ``currency``.
+
+        ``allowed_project_ids`` scopes a portfolio snapshot (``project_id is
+        None``) to the caller's accessible projects (IDOR defence): ``None`` is
+        unrestricted (admin / already-gated single project), a set restricts to
+        those ids, and an empty set yields zeroed aggregates.
         """
         # Flatten the spine into (domain, code) pairs preserving order so the
         # gathered results map back cleanly.
@@ -224,6 +230,7 @@ class ProjectControlsService:
                 project_id=project_id,
                 period_start=period_start,
                 period_end=period_end,
+                allowed_project_ids=allowed_project_ids,
             )
 
         results = await asyncio.gather(*[_one(code) for _, code in flat])
@@ -309,18 +316,25 @@ class ProjectControlsService:
         *,
         project_id: uuid.UUID | None,
         limit: int = 100,
+        allowed_project_ids: set[uuid.UUID] | None = None,
     ) -> dict[str, Any]:
         """Return the underlying rows for a KPI, each enriched with a deep link.
 
         Delegates to the shared ``kpis.drilldown`` record providers, then maps
         each row's ``kind`` to an in-app cross-module deep link so a click on
         the dashboard jumps straight to the owning module's detail page.
+
+        ``allowed_project_ids`` scopes a portfolio drill (``project_id is None``)
+        to the caller's accessible projects (IDOR defence): ``None`` is
+        unrestricted (admin / already-gated single project), a set restricts to
+        those ids, and an empty set returns no rows.
         """
         rows = await kpi_registry.drilldown(
             code,
             self.session,
             project_id=project_id,
             limit=limit,
+            allowed_project_ids=allowed_project_ids,
         )
         records = [{"fields": row, "deep_link": _deep_link(row)} for row in rows]
         return {

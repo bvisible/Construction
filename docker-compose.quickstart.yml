@@ -66,6 +66,10 @@ services:
       # Frontend serving
       SERVE_FRONTEND: "true"
       ALLOWED_ORIGINS: "http://localhost:8080,http://localhost"
+      # Persistent data dir - pins the unified resolver at the /data volume
+      # below so BIM geometry survives container recreate (otherwise the
+      # resolver defaults to ~/.openestimate in the ephemeral container layer).
+      OE_DATA_DIR: /data
       # Defaults
       APP_ENV: development
       APP_DEBUG: "false"

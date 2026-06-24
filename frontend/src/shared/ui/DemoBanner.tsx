@@ -16,11 +16,13 @@
 
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { AlertTriangle, X, Download, ExternalLink } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
+import { AlertTriangle, Gauge, X, Download, ExternalLink } from 'lucide-react';
 
 const SESSION_KEY = 'oe_demo_modal_dismissed';
 
 export function DemoBanner() {
+  const { t } = useTranslation();
   const [modalOpen, setModalOpen] = useState(false);
 
   // Reuse the shared ['system-status'] query so DashboardPage and this banner
@@ -50,25 +52,61 @@ export function DemoBanner() {
 
   return (
     <>
-      {/* Persistent thin strip at the very top */}
+      {/* Persistent strip at the very top */}
       <div
         role="alert"
-        className="sticky top-0 z-50 flex items-center justify-center gap-2 px-4 py-1.5 text-xs font-medium text-amber-950 bg-gradient-to-r from-amber-300 via-amber-200 to-amber-300 border-b border-amber-500/40 shadow-sm dark:text-amber-100 dark:from-amber-900/40 dark:via-amber-800/40 dark:to-amber-900/40 dark:border-amber-500/30"
+        className="sticky top-0 z-50 flex flex-wrap items-center justify-center gap-x-3 gap-y-1.5 px-4 py-2.5 text-[13px] font-medium text-amber-950 bg-gradient-to-r from-amber-300 via-amber-200 to-amber-300 border-b border-amber-500/40 shadow-sm dark:text-amber-100 dark:from-amber-900/40 dark:via-amber-800/40 dark:to-amber-900/40 dark:border-amber-500/30"
       >
-        <AlertTriangle size={13} className="shrink-0" />
-        <span className="truncate">
-          Public demo - do not upload real data. For production use, install
-          locally:
+        <span className="flex items-center gap-2">
+          <AlertTriangle size={14} className="shrink-0" />
+          <span>
+            {t('demo_banner.strip_no_real_data')}
+          </span>
+        </span>
+        {/* Performance / sample-data caveat — always visible, not just in the modal */}
+        <span className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-amber-900/10 dark:bg-amber-100/10 text-[12px]">
+          <Gauge size={12} className="shrink-0 text-amber-700 dark:text-amber-300" />
+          <span className="text-amber-900 dark:text-amber-200">
+            {t('demo_banner.strip_perf_caveat')}
+          </span>
         </span>
         <code className="px-1.5 py-0.5 rounded bg-amber-900/15 text-amber-950 font-mono text-[11px] dark:bg-amber-100/10 dark:text-amber-100">
           pip install openconstructionerp
         </code>
+        <span className="flex items-center gap-2.5">
+          <span className="opacity-80">{t('demo_banner.strip_or_download')}</span>
+          <a
+            href="https://openconstructionerp.com/download"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 underline underline-offset-2 hover:text-amber-900 dark:hover:text-amber-50"
+          >
+            <Download size={12} className="shrink-0" />
+            Windows
+          </a>
+          <a
+            href="https://openconstructionerp.com/download"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline underline-offset-2 hover:text-amber-900 dark:hover:text-amber-50"
+          >
+            macOS
+          </a>
+          <a
+            href="https://openconstructionerp.com/download"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline underline-offset-2 hover:text-amber-900 dark:hover:text-amber-50"
+          >
+            Linux
+          </a>
+        </span>
         <button
           type="button"
           onClick={() => setModalOpen(true)}
-          className="ml-1 underline underline-offset-2 hover:text-amber-900 dark:hover:text-amber-50"
+          className="underline underline-offset-2 hover:text-amber-900 dark:hover:text-amber-50"
         >
-          Why?
+          {t('demo_banner.strip_why')}
         </button>
       </div>
 
@@ -89,10 +127,10 @@ export function DemoBanner() {
               </div>
               <div className="flex-1 min-w-0">
                 <h2 className="text-lg font-bold text-content-primary leading-tight">
-                  This is a public demo
+                  {t('demo_banner.modal_title')}
                 </h2>
                 <p className="text-xs text-content-tertiary mt-0.5">
-                  Read this before you click around
+                  {t('demo_banner.modal_subtitle')}
                 </p>
               </div>
               <button
@@ -107,59 +145,64 @@ export function DemoBanner() {
 
             {/* Body */}
             <div className="px-6 pb-2 space-y-3 text-sm text-content-secondary leading-relaxed">
+              {/* Sample-data callout — prominent, above the bullet list */}
+              <div className="flex items-start gap-2.5 rounded-lg bg-blue-50 dark:bg-blue-950/30 border border-blue-200/60 dark:border-blue-500/20 px-3 py-2.5">
+                <span className="shrink-0 mt-0.5 text-blue-600 dark:text-blue-400 font-bold text-xs uppercase tracking-wider">
+                  {t('demo_banner.modal_sample_data_label')}
+                </span>
+                <span className="text-xs text-blue-800 dark:text-blue-300">
+                  {t('demo_banner.modal_sample_data_body')}
+                </span>
+              </div>
+
               <p>
-                You're looking at the public hosted demo of{' '}
+                {t('demo_banner.modal_intro_before_vps')}{' '}
                 <strong className="text-content-primary">
                   OpenConstructionERP
                 </strong>
-                . It runs on a{' '}
+                {'. '}{t('demo_banner.modal_intro_runs_on')}{' '}
                 <strong className="text-content-primary">
-                  small 2&nbsp;GB&nbsp;RAM VPS
+                  {t('demo_banner.modal_intro_vps_spec')}
                 </strong>{' '}
-                shared with every visitor on the internet - it is meant for a{' '}
+                {t('demo_banner.modal_intro_shared')}{' '}
                 <strong className="text-content-primary">
-                  quick surface walkthrough
+                  {t('demo_banner.modal_intro_walkthrough')}
                 </strong>{' '}
-                of the product, nothing more. Specifically:
+                {t('demo_banner.modal_intro_nothing_more')}
               </p>
               <ul className="space-y-2 pl-1">
                 <li className="flex gap-2.5">
                   <span className="shrink-0 w-1.5 h-1.5 rounded-full bg-red-500 mt-1.5" />
                   <span>
                     <strong className="text-content-primary">
-                      Do not upload real or confidential data.
+                      {t('demo_banner.modal_bullet_no_data_heading')}
                     </strong>{' '}
-                    Anything you put here is visible to other demo visitors.
+                    {t('demo_banner.modal_bullet_no_data_body')}
                   </span>
                 </li>
                 <li className="flex gap-2.5">
                   <span className="shrink-0 w-1.5 h-1.5 rounded-full bg-amber-500 mt-1.5" />
                   <span>
                     <strong className="text-content-primary">
-                      Expect a surface-level look only.
+                      {t('demo_banner.modal_bullet_perf_heading')}
                     </strong>{' '}
-                    Heavy features (CAD/BIM conversion, AI inference, vector
-                    search) need real RAM and are tuned for local installs -
-                    on the 2&nbsp;GB demo box they may be slow, rate-limited,
-                    or simply unavailable. For benchmarks or full workflows,
-                    install locally.
+                    {t('demo_banner.modal_bullet_perf_body')}
                   </span>
                 </li>
                 <li className="flex gap-2.5">
                   <span className="shrink-0 w-1.5 h-1.5 rounded-full bg-emerald-500 mt-1.5" />
                   <span>
                     <strong className="text-content-primary">
-                      Install locally for real work.
+                      {t('demo_banner.modal_bullet_install_heading')}
                     </strong>{' '}
-                    The full product runs on your own machine in two minutes.
-                    Your data stays on your computer.
+                    {t('demo_banner.modal_bullet_install_body')}
                   </span>
                 </li>
               </ul>
 
               <div className="mt-4 rounded-lg bg-surface-secondary border border-border-light p-3">
                 <div className="text-[10px] font-bold uppercase tracking-wider text-content-quaternary mb-1.5">
-                  Install locally - 3 commands
+                  {t('demo_banner.modal_install_box_label')}
                 </div>
                 <code className="block font-mono text-[12px] text-content-primary leading-relaxed">
                   pip install openconstructionerp
@@ -196,7 +239,7 @@ export function DemoBanner() {
                 onClick={closeModal}
                 className="px-4 py-2 text-xs font-semibold text-white bg-oe-blue rounded-lg hover:bg-oe-blue-dark transition-colors"
               >
-                I understand, continue
+                {t('demo_banner.modal_cta')}
               </button>
             </div>
           </div>

@@ -1616,15 +1616,20 @@ function PackageDetail({
                 {t('tendering.evaluate', 'Evaluate Bids')}
               </Button>
             )}
-            {pkg.status === 'evaluating' && (
+            {/* CONN-40: once a tender is awarded, take the winning scope into
+                Contracts instead of dead-ending. The awarded rates already
+                live on the BOQ, so the contract is formalised downstream. */}
+            {pkg.status === 'awarded' && (
               <Button
                 variant="primary"
                 size="sm"
-                icon={<Award size={14} />}
-                loading={updateStatusMutation.isPending}
-                onClick={() => updateStatusMutation.mutate('awarded')}
+                icon={<ArrowRight size={14} />}
+                onClick={() => navigate('/contracts')}
+                title={t('tendering.formalise_contract_title', {
+                  defaultValue: 'Open Contracts to formalise the awarded scope',
+                })}
               >
-                {t('tendering.mark_awarded', 'Mark Awarded')}
+                {t('tendering.formalise_contract', 'Formalise as Contract')}
               </Button>
             )}
             {/* CONN-40: once a tender is awarded, take the winning scope into

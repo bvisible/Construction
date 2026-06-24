@@ -27,6 +27,7 @@ import {
   Loader2,
   MessageSquare,
   Paperclip,
+  Pencil,
   User,
   X,
 } from 'lucide-react';
@@ -46,14 +47,18 @@ import {
   closeRFI,
   getRFI,
   respondToRFI,
+  updateRFI,
   type RespondRFIPayload,
 } from './api';
 import {
   BIC_SIDE_CFG,
+  CreateRFIModal,
   PRIORITY_DOT,
   STATUS_CONFIG,
   ballInCourtSide,
+  buildUpdatePayload,
   daysOverdue,
+  type RFIFormData,
 } from './RFIPage';
 import { ApprovalInstanceCard } from '@/features/approval-routes';
 
@@ -212,6 +217,7 @@ export function RFIDetailPage() {
   const addToast = useToastStore((s) => s.addToast);
   const { rfiId } = useParams<{ rfiId: string }>();
   const [responding, setResponding] = useState(false);
+  const [editing, setEditing] = useState(false);
 
   const {
     data: rfi,
@@ -325,6 +331,28 @@ export function RFIDetailPage() {
         title: t('rfi.respond_failed', {
           defaultValue: 'Failed to submit response',
         }),
+        message: e.message,
+      }),
+  });
+
+  const updateMut = useMutation({
+    mutationFn: (data: RFIFormData) =>
+      updateRFI(rfiId as string, {
+        ...buildUpdatePayload(data),
+        linked_drawing_ids: data.linked_drawing_ids,
+      }),
+    onSuccess: () => {
+      invalidate();
+      setEditing(false);
+      addToast({
+        type: 'success',
+        title: t('rfi.updated', { defaultValue: 'RFI updated successfully' }),
+      });
+    },
+    onError: (e: Error) =>
+      addToast({
+        type: 'error',
+        title: t('rfi.update_failed', { defaultValue: 'Failed to update RFI' }),
         message: e.message,
       }),
   });
@@ -520,6 +548,18 @@ export function RFIDetailPage() {
           >
             {t('rfi.back_to_list', { defaultValue: 'Back to RFIs' })}
           </Button>
+          {/* Edit - the PATCH endpoint refuses edits once an RFI is closed
+              / void (400), so the affordance is hidden for those states. */}
+          {rfi.status !== 'closed' && rfi.status !== 'void' && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setEditing(true)}
+              icon={<Pencil size={14} />}
+            >
+              {t('rfi.action_edit', { defaultValue: 'Edit' })}
+            </Button>
+          )}
           {rfi.status === 'open' && (
             <Button
               variant="primary"
@@ -586,7 +626,7 @@ export function RFIDetailPage() {
                   }
                 />
                 <span className="text-xs font-semibold uppercase tracking-wider text-content-tertiary">
-                  {t('rfi.label_response', { defaultValue: 'Official response' })}
+                  {t('rfi.label_official_response', { defaultValue: 'Official response' })}
                 </span>
               </div>
               {rfi.responded_at && (
@@ -729,14 +769,14 @@ export function RFIDetailPage() {
               </Row>
               <Row
                 label={t('rfi.field_assigned_to', {
-                  defaultValue: 'Assigned to',
+                  defaultValue: 'Assigned To',
                 })}
               >
                 {displayUser(rfi.assigned_to)}
               </Row>
               <Row
                 label={t('rfi.field_ball_in_court', {
-                  defaultValue: 'Ball in court',
+                  defaultValue: 'Ball in Court',
                 })}
               >
                 {displayUser(rfi.ball_in_court)}
@@ -795,7 +835,7 @@ export function RFIDetailPage() {
             <dl className="space-y-3">
               <Row
                 label={t('rfi.field_due_date', {
-                  defaultValue: 'Response due date',
+                  defaultValue: 'Response Due Date',
                 })}
               >
                 <span
@@ -891,6 +931,20 @@ export function RFIDetailPage() {
         >
           <X size={14} />
         </button>
+      )}
+
+      {/* Edit modal - reuses the create form seeded from this RFI, wired to
+          the PATCH endpoint. Keyed on the RFI id so it re-seeds cleanly. */}
+      {editing && (
+        <CreateRFIModal
+          key={rfi.id}
+          editing={rfi}
+          onClose={() => setEditing(false)}
+          onSubmit={(data) => updateMut.mutate(data)}
+          isPending={updateMut.isPending}
+          projectName={project?.name}
+          projectId={rfi.project_id}
+        />
       )}
 
       <ConfirmDialog {...confirmProps} />

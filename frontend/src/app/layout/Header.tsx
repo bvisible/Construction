@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { Search, ChevronDown, ChevronRight, LogOut, User, Settings, Menu, MessageSquarePlus, FolderOpen, CheckCircle2, XCircle, Bug, BookOpen, Loader2, Upload, HelpCircle, Mail, ExternalLink, Github, Sun, Moon, Monitor, Info, Globe } from 'lucide-react';
+import { Search, ChevronDown, ChevronRight, LogOut, User, Settings, Menu, MessageSquarePlus, FolderOpen, CheckCircle2, XCircle, Bug, BookOpen, Loader2, Upload, HelpCircle, GraduationCap, Mail, ExternalLink, Github, Sun, Moon, Monitor, Info, Globe } from 'lucide-react';
 import clsx from 'clsx';
 import { SUPPORTED_LANGUAGES, getLanguageByCode } from '../i18n';
 import { useAuthStore } from '@/stores/useAuthStore';
@@ -746,6 +746,7 @@ function BugReportMenu() {
 function HelpMenu() {
   const { t } = useTranslation();
   const addToast = useToastStore((s) => s.addToast);
+  const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -811,6 +812,22 @@ function HelpMenu() {
           role="menu"
           className="absolute right-0 top-full mt-1.5 w-60 rounded-xl border border-border-light bg-surface-elevated shadow-lg animate-scale-in py-1 z-40"
         >
+          {/* In-app guided explanation of every module - the "How it works"
+              hub. Lives first so it is the most discoverable help action. */}
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setOpen(false);
+              navigate('/how-it-works');
+            }}
+            className="flex w-full items-center gap-2.5 px-3 py-2 text-sm text-content-primary hover:bg-surface-secondary transition-colors"
+          >
+            <GraduationCap size={14} className="text-oe-blue shrink-0" />
+            <span className="flex-1 text-left">{t('howto.menu_item', { defaultValue: 'How it works' })}</span>
+          </button>
+          <div className="my-1 border-t border-border-light" role="separator" />
+
           {/* External resources. Documentation points at the official docs
               site so users land on the maintained guides, not the raw repo. */}
           <a
@@ -1425,7 +1442,7 @@ function ProjectSwitcher() {
             }
           }}
           className={clsx(
-            // WCAG AA fix 2026-05-27: text-oe-blue-text (#d68a59) on bg-oe-blue-subtle
+            // WCAG AA fix 2026-05-27: text-oe-blue-text (#0071e3) on bg-oe-blue-subtle
             // failed 4.35:1; text-oe-blue-text passes at 8.05:1.
             'flex items-center gap-2 pl-1.5 pr-2 h-9 text-[13px] min-w-0',
             activeProjectId ? 'text-oe-blue-text' : 'text-oe-blue-text/85 hover:text-oe-blue-text',

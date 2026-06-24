@@ -20,6 +20,15 @@ empty states so the LLM can answer honestly:
 * **No results for this query** - the project IS indexed but nothing
   matched. Returns ``matches=[]`` with an explicit note so the agent can
   say "not found in the project documents" instead of guessing.
+
+Access control (IDOR defence): the run's invoking user is threaded into the
+tool via the trusted ``__agent_context__`` (the runner strips any LLM-forged
+context and re-injects the real one). Before reading anything the tool
+verifies that user owns or belongs to the target project via
+:func:`._access.assert_user_can_access_project`; on denial - or when no user
+is in scope - it returns the same ``{"error": "unavailable"}`` shape as a
+missing index, so the LLM never reads another tenant's documents and the
+project's existence is never leaked.
 """
 
 from __future__ import annotations
@@ -28,6 +37,10 @@ import logging
 import uuid
 from typing import Any
 
+from app.modules.ai_agents.agents._access import (
+    assert_user_can_access_project,
+    coerce_user_id,
+)
 from app.modules.ai_agents.base import (
     Agent,
     FunctionTool,
@@ -80,6 +93,19 @@ async def _tool_search_documents(
     """
     q_clean = (q or "").strip()
 
+    # The trusted invoking user is threaded into __agent_context__ by the
+    # runner (the LLM cannot forge it - any model-supplied context is stripped
+    # and the real one re-injected). Fail closed: with no user in scope we
+    # cannot authorize a cross-tenant read, so report the index as unreadable.
+    user_uuid = coerce_user_id(__agent_context__)
+    if user_uuid is None:
+        return {
+            "query": q_clean,
+            "matches": [],
+            "error": "unavailable",
+            "detail": ("No authenticated user in scope - cannot search documents. Do not invent document content."),
+        }
+
     # Resolve the project scope: explicit arg wins, else the trusted
     # runner context. The LLM cannot forge the context (the runner strips
     # any LLM-supplied __agent_context__ and re-injects the real one).
@@ -123,6 +149,22 @@ async def _tool_search_documents(
         from app.modules.file_search.service import search_content
 
         async with async_session_factory() as session:
+            # IDOR guard: the invoking user must own or belong to this project
+            # before we read ANYTHING from it. On denial we return the same
+            # "unavailable" shape as a missing index so we never leak whether
+            # the project exists across tenants.
+            if not await assert_user_can_access_project(session, project_uuid, user_uuid):
+                return {
+                    "query": q_clean,
+                    "project_id": str(project_uuid),
+                    "matches": [],
+                    "error": "unavailable",
+                    "detail": (
+                        "No access to this project, so its documents could not "
+                        "be searched. Do not invent any document content."
+                    ),
+                }
+
             # First establish whether the project has ANY indexed content.
             # This is what lets us tell "no index / unavailable" apart from
             # "indexed, but nothing matched this query".

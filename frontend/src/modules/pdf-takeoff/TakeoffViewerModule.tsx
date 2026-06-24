@@ -11,6 +11,10 @@ import {
   ZoomIn,
   ZoomOut,
   Maximize,
+  MoveHorizontal,
+  Focus,
+  Hand,
+  Spline,
   ChevronLeft,
   ChevronRight,
   MousePointer2,
@@ -50,6 +54,7 @@ import {
   X,
   Check,
   AlertTriangle,
+  Search,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { useToastStore } from '../../stores/useToastStore';
@@ -104,10 +109,35 @@ import {
   shouldHandleShortcut,
 } from '../../features/takeoff/lib/takeoff-shortcuts';
 import {
+  clampZoom,
+  computeFitZoom,
+  computeZoomToBox,
+  boundingBoxOfPoints,
+  zoomAtCursorScroll,
+  wheelZoomStep,
+  orthoSnap,
+  computeDrawReadout,
+  type DrawReadout,
+} from '../../features/takeoff/lib/takeoff-viewport';
+import {
+  THUMB_MAX_WIDTH,
+  computeThumbScale,
+  pagesNearestFirst,
+  capThumbCache,
+  countMeasurementsByPage,
+} from '../../features/takeoff/lib/takeoff-thumbnails';
+import {
+  itemsFromTextContent,
+  findMatchesInPage,
+  type TextItem,
+  type TextMatch,
+} from '../../features/takeoff/lib/takeoff-textsearch';
+import {
   computeGroupSummaries,
   formatGroupTotal,
 } from '../../features/takeoff/lib/takeoff-groups';
 import { CalibrationDialog } from '../../features/takeoff/components/CalibrationDialog';
+import { ScaleAutoDetect } from '../../features/takeoff/components/ScaleAutoDetect';
 import { MeasurementLedger } from '../../features/takeoff/components/MeasurementLedger';
 import {
   buildExportFilename,
@@ -131,6 +161,25 @@ type MeasureTool = 'select' | 'distance' | 'polyline' | 'area' | 'rectarea' | 'v
 type AnnotationToolType = 'cloud' | 'arrow' | 'text' | 'rectangle' | 'highlight';
 
 const ANNOTATION_TOOLS: AnnotationToolType[] = ['cloud', 'arrow', 'text', 'rectangle', 'highlight'];
+
+// --- Takeoff toolbar styling primitives ---------------------------------
+// Kept together so every control in the two-row toolbar shares one rhythm:
+// 28px (h-7) hit targets, soft "segmented" group tracks (a faint surface
+// pill behind related buttons, in place of hairline dividers) and a single
+// clear active treatment per category. `tbBtn` returns the className for a
+// toolbar button given its on/off state and which accent its active state
+// uses (blue = measure, orange = markup, purple = scale, neutral = view).
+const TB_GROUP = 'inline-flex items-center gap-0.5 rounded-lg bg-surface-secondary/70 p-0.5';
+type TbAccent = 'blue' | 'orange' | 'purple' | 'neutral';
+function tbBtn(active: boolean, accent: TbAccent = 'neutral'): string {
+  const base =
+    'inline-flex h-7 items-center justify-center gap-1.5 rounded-md px-1.5 text-xs font-medium transition-colors disabled:opacity-30 disabled:pointer-events-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-oe-blue/40';
+  if (!active) return `${base} text-content-secondary hover:bg-surface-primary hover:text-content-primary`;
+  if (accent === 'blue') return `${base} bg-oe-blue text-white shadow-sm`;
+  if (accent === 'orange') return `${base} bg-orange-500 text-white shadow-sm`;
+  if (accent === 'purple') return `${base} bg-purple-500 text-white shadow-sm`;
+  return `${base} bg-surface-primary text-content-primary shadow-xs`;
+}
 
 /** Check if a tool is an annotation tool */
 const isAnnotationTool = (tool: MeasureTool): tool is AnnotationToolType =>
@@ -354,6 +403,48 @@ export default function TakeoffViewerModule({
   const [zoom, setZoom] = useState(1.0);
   const [isLoading, setIsLoading] = useState(false);
 
+  /* ── Page thumbnails sidebar ──────────────────────────────────────────
+   * A left strip of small page previews for multi-page sets (click to jump,
+   * current page highlighted, per-page measurement badge). Pure render maths
+   * live in features/takeoff/lib/takeoff-thumbnails.ts; this state only drives
+   * the strip. Thumbnails render into throwaway offscreen canvases (never the
+   * live canvas/overlay) so they cannot disturb the main page render. */
+  const [showThumbnails, setShowThumbnails] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('takeoff.showThumbnails') !== 'false';
+    } catch {
+      return true;
+    }
+  });
+  useEffect(() => {
+    try { localStorage.setItem('takeoff.showThumbnails', String(showThumbnails)); } catch { /* ignore */ }
+  }, [showThumbnails]);
+  /** page number -> data-URL of a small rendered preview, lazily filled and
+   *  LRU-capped (see capThumbCache) so a 300-page set never holds 300 bitmaps. */
+  const [thumbs, setThumbs] = useState<Record<number, string>>({});
+  /** Mirror of `thumbs` for the render loop to read which pages already have a
+   *  bitmap without taking `thumbs` as an effect dependency (which would loop). */
+  const thumbsRef = useRef(thumbs);
+  thumbsRef.current = thumbs;
+  /** in-flight guard so the render loop never renders the same page twice. */
+  const thumbRenderQueueRef = useRef<Set<number>>(new Set());
+
+  /* ── Find on sheet (text search) ──────────────────────────────────────
+   * A search box over the current document's pdf.js text layer: lists matches
+   * by page, click to jump+zoom and highlight on the canvas. The tricky
+   * coordinate conversion (pdf.js bottom-left text space -> top-left overlay
+   * space) is isolated + unit-tested in takeoff-textsearch.ts. Client-only. */
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchMatches, setSearchMatches] = useState<TextMatch[]>([]);
+  const [activeMatchIdx, setActiveMatchIdx] = useState(-1);
+  /** True while the debounced fan-out is scanning page text layers. */
+  const [searchBusy, setSearchBusy] = useState(false);
+  /** per-page extracted+placed text items so re-searching never re-fetches a
+   *  page's text layer. Cleared when the document changes. */
+  const textLayerCacheRef = useRef<Map<number, TextItem[]>>(new Map());
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
   // Measurement state
   const [activeTool, setActiveTool] = useState<MeasureTool>('select');
   const [measurements, setMeasurements] = useState<Measurement[]>([]);
@@ -426,6 +517,42 @@ export default function TakeoffViewerModule({
 
   // Touch state for pinch-to-zoom
   const touchStateRef = useRef<{ initialDistance: number; initialZoom: number } | null>(null);
+
+  /* ── Viewport interaction (fit / ortho / pan / readout / hover) ───────
+   * All the pure geometry lives in features/takeoff/lib/takeoff-viewport.ts;
+   * this state only drives the React surface (toolbar toggles, the live HUD
+   * and the hover tooltip). Zoom-at-cursor + touch pinch already exist and
+   * are left intact. */
+
+  /** Ortho lock toggle (toolbar). When on - or while Shift is held - a new
+   *  segment is constrained to 0 / 45 / 90 degrees from its anchor. The
+   *  draw + render paths read `orthoLock || shiftHeldRef.current`. */
+  const [orthoLock, setOrthoLock] = useState(false);
+  /** True while Shift is physically held, so a momentary press locks the
+   *  segment without flipping the persistent toggle (CAD-standard). */
+  const shiftHeldRef = useRef(false);
+
+  /** Space-drag / middle-mouse pan transient. Lives in a ref so the
+   *  mid-pan mousemove never triggers a re-render storm; `panning` state
+   *  only flips the cursor + suppresses click-to-place. */
+  const panRef = useRef<{ startX: number; startY: number; scrollLeft: number; scrollTop: number } | null>(null);
+  const [panning, setPanning] = useState(false);
+  /** True while the Space bar is held - arms pan on the next mousedown and
+   *  shows the grab cursor. Cleared on keyup / blur. */
+  const [spaceHeld, setSpaceHeld] = useState(false);
+  const spaceHeldRef = useRef(false);
+
+  /** Live pointer position in PDF units while a measure tool is active,
+   *  drives the running-length HUD. Null when the pointer is off-canvas. */
+  const [liveCursor, setLiveCursor] = useState<Point | null>(null);
+
+  /** Hover tooltip for an existing measurement in select mode: the measured
+   *  value / group / linked BOQ reference, anchored at the cursor. */
+  const [hoverInfo, setHoverInfo] = useState<{
+    measurementId: string;
+    x: number;
+    y: number;
+  } | null>(null);
 
   // Measurement groups
   const [activeGroup, setActiveGroup] = useState('General');
@@ -797,6 +924,19 @@ export default function TakeoffViewerModule({
     setDocumentId(null);
   }, [initialDocumentId, initialPdfUrl]);
 
+  /* ── Reset per-document caches when the open PDF changes ──────────────
+   * Thumbnails and extracted text layers are keyed by page number, so they
+   * MUST be dropped when a different document is opened or they would show
+   * the previous file's previews / find a previous file's text. */
+  useEffect(() => {
+    setThumbs({});
+    thumbRenderQueueRef.current.clear();
+    textLayerCacheRef.current.clear();
+    setSearchQuery('');
+    setSearchMatches([]);
+    setActiveMatchIdx(-1);
+  }, [pdfDoc]);
+
   /* ── Warn on unsaved changes (tab close / navigation) ────────────── */
 
   useEffect(() => {
@@ -878,6 +1018,61 @@ export default function TakeoffViewerModule({
       try { activeTask?.cancel(); } catch { /* ignore */ }
     };
   }, [pdfDoc, currentPage, zoom]);
+
+  /* ── Render page thumbnails (sidebar previews) ────────────────────────
+   * Renders previews for the visible neighbourhood first (pagesNearestFirst),
+   * yielding a frame between pages so the main page render and pointer
+   * handling stay responsive on a large set. Offscreen canvases at dpr 1 keep
+   * memory modest; the result map is LRU-capped around the current page.
+   * `thumbs` is deliberately NOT in the dep array - it is read through the
+   * in-flight guard + functional setState, so including it would re-run the
+   * effect on every rendered page and loop. */
+  useEffect(() => {
+    if (!pdfDoc || !showThumbnails || totalPages <= 1) return;
+    let cancelled = false;
+    const queue = thumbRenderQueueRef.current;
+    (async () => {
+      for (const n of pagesNearestFirst(currentPage, totalPages)) {
+        if (cancelled) return;
+        // Skip pages already rendered (thumbsRef) or currently rendering (queue).
+        if (queue.has(n) || thumbsRef.current[n] !== undefined) continue;
+        queue.add(n);
+        try {
+          const page = await pdfDoc.getPage(n);
+          if (cancelled) { queue.delete(n); return; }
+          const scale = computeThumbScale(page.getViewport({ scale: 1 }).width, THUMB_MAX_WIDTH);
+          const vp = page.getViewport({ scale });
+          const off = document.createElement('canvas');
+          off.width = Math.max(1, Math.ceil(vp.width));
+          off.height = Math.max(1, Math.ceil(vp.height));
+          const offCtx = off.getContext('2d');
+          if (!offCtx) { queue.delete(n); continue; }
+          await page.render({ canvasContext: offCtx, viewport: vp }).promise;
+          if (cancelled) { queue.delete(n); return; }
+          const url = off.toDataURL('image/png');
+          setThumbs((prev) => capThumbCache({ ...prev, [n]: url }, currentPage));
+        } catch {
+          /* a cancelled render or a bad page: drop it and move on */
+        } finally {
+          queue.delete(n);
+        }
+        // Yield a frame so navigation + drawing never block on thumbnails.
+        await new Promise<void>((r) => requestAnimationFrame(() => r()));
+      }
+    })();
+    return () => { cancelled = true; };
+    // `thumbs` intentionally excluded - see comment above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pdfDoc, showThumbnails, currentPage, totalPages]);
+
+  /** Keep the current-page thumbnail in view as the page changes. */
+  useEffect(() => {
+    if (!showThumbnails) return;
+    const el = document.querySelector<HTMLElement>(
+      `[data-testid="thumbnail-item"][data-page="${currentPage}"]`,
+    );
+    el?.scrollIntoView({ block: 'nearest' });
+  }, [currentPage, showThumbnails]);
 
   /* ── Draw overlay (measurements + active drawing) ────────────────── */
 
@@ -1258,6 +1453,42 @@ export default function TakeoffViewerModule({
       }
     }
 
+    // Live rubber-band from the last placed point to the cursor for the
+    // linear / polygon tools, so an ortho-locked segment is visible before
+    // the click lands. The cursor is already ortho-snapped upstream. A faint
+    // closing edge back to the first vertex hints the area a polygon will
+    // enclose. Skipped while panning (the cursor is not placing points).
+    if (
+      liveCursor &&
+      !panning &&
+      activePoints.length > 0 &&
+      (activeTool === 'distance' ||
+        activeTool === 'polyline' ||
+        activeTool === 'area' ||
+        activeTool === 'volume')
+    ) {
+      const last = activePoints[activePoints.length - 1]!;
+      ctx.save();
+      ctx.strokeStyle = '#2563EB';
+      ctx.lineWidth = 1.5 * dpr;
+      ctx.setLineDash([5 * dpr, 4 * dpr]);
+      ctx.beginPath();
+      ctx.moveTo(last.x * dpr * zoom, last.y * dpr * zoom);
+      ctx.lineTo(liveCursor.x * dpr * zoom, liveCursor.y * dpr * zoom);
+      ctx.stroke();
+      // Closing-edge hint for polygons (3+ vertices placed).
+      if ((activeTool === 'area' || activeTool === 'volume') && activePoints.length >= 2) {
+        const first = activePoints[0]!;
+        ctx.globalAlpha = 0.4;
+        ctx.beginPath();
+        ctx.moveTo(liveCursor.x * dpr * zoom, liveCursor.y * dpr * zoom);
+        ctx.lineTo(first.x * dpr * zoom, first.y * dpr * zoom);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+      ctx.restore();
+    }
+
     // In-progress rectangle/highlight drag preview
     if (rectStartPoint && isDraggingRect && activePoints.length === 1) {
       const p0 = rectStartPoint;
@@ -1413,7 +1644,34 @@ export default function TakeoffViewerModule({
         ctx.restore();
       }
     }
-  }, [measurements, activePoints, currentPage, zoom, settingScale, scalePoints, activeTool, hiddenGroups, scale, annotationColor, rectStartPoint, isDraggingRect, selectedMeasurementId, dragPreview]);
+
+    // Find-on-sheet highlights for the current page. Drawn last so they sit
+    // on top of measurements. Boxes are in the same top-left PDF-unit space as
+    // measurement points, so the same `* dpr * zoom` transform applies. The
+    // active match is a stronger orange; the rest are a translucent yellow.
+    if (searchMatches.length > 0) {
+      ctx.save();
+      for (let k = 0; k < searchMatches.length; k++) {
+        const mt = searchMatches[k]!;
+        if (mt.page !== currentPage) continue;
+        const x = mt.box.minX * dpr * zoom;
+        const y = mt.box.minY * dpr * zoom;
+        const w = (mt.box.maxX - mt.box.minX) * dpr * zoom;
+        const h = (mt.box.maxY - mt.box.minY) * dpr * zoom;
+        const isActive = k === activeMatchIdx;
+        ctx.globalAlpha = isActive ? 0.45 : 0.25;
+        ctx.fillStyle = isActive ? '#F59E0B' : '#FACC15';
+        ctx.fillRect(x, y, w, h);
+        if (isActive) {
+          ctx.globalAlpha = 0.95;
+          ctx.lineWidth = 1.5 * dpr;
+          ctx.strokeStyle = '#D97706';
+          ctx.strokeRect(x, y, w, h);
+        }
+      }
+      ctx.restore();
+    }
+  }, [measurements, activePoints, currentPage, zoom, settingScale, scalePoints, activeTool, hiddenGroups, scale, annotationColor, rectStartPoint, isDraggingRect, selectedMeasurementId, dragPreview, liveCursor, panning, searchMatches, activeMatchIdx]);
 
   /* ── Canvas click handler ────────────────────────────────────────── */
 
@@ -1602,11 +1860,31 @@ export default function TakeoffViewerModule({
 
   const handleCanvasClick = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
+      // A pan gesture that ended on this element must not also place a point.
+      if (panRef.current || spaceHeldRef.current) return;
       const rect = overlayRef.current?.getBoundingClientRect();
       if (!rect) return;
       const x = (e.clientX - rect.left) / zoom;
       const y = (e.clientY - rect.top) / zoom;
-      const point: Point = { x, y };
+      let point: Point = { x, y };
+
+      // Ortho / angle lock: when the toggle is on or Shift is held, constrain
+      // the new segment to 0 / 45 / 90 degrees from the previous placed point.
+      // Only the multi-point linear + polygon tools have a meaningful anchor;
+      // rectangles are inherently axis-aligned and the first click has no
+      // anchor to snap against.
+      if (
+        (orthoLock || shiftHeldRef.current) &&
+        activePoints.length > 0 &&
+        (activeTool === 'distance' ||
+          activeTool === 'polyline' ||
+          activeTool === 'area' ||
+          activeTool === 'volume' ||
+          activeTool === 'cloud' ||
+          activeTool === 'arrow')
+      ) {
+        point = orthoSnap(activePoints[activePoints.length - 1]!, point);
+      }
 
       // Setting scale mode (legacy meters-only dialog OR new calibration).
       if (settingScale) {
@@ -1826,7 +2104,7 @@ export default function TakeoffViewerModule({
         return;
       }
     },
-    [activeTool, activePoints, scale, currentPage, countLabel, settingScale, scalePoints, zoom, pushUndo, nextAnnotation, activeGroup, annotationColor, rectStartPoint],
+    [activeTool, activePoints, scale, currentPage, countLabel, settingScale, scalePoints, zoom, pushUndo, nextAnnotation, activeGroup, annotationColor, rectStartPoint, orthoLock],
   );
 
   // Keep the ref in sync so touch handler can call it
@@ -2075,6 +2353,24 @@ export default function TakeoffViewerModule({
    *  design. */
   const handleCanvasMouseDown = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
+      // Pan gesture: middle mouse (button 1) anywhere, or left-drag while the
+      // Space bar is held. Works in any tool and is captured before tool logic
+      // so it never places a measurement. The actual move + release are driven
+      // by window listeners so a pan that leaves the canvas still tracks.
+      if (e.button === 1 || (e.button === 0 && spaceHeldRef.current)) {
+        const c = containerRef.current;
+        if (c) {
+          panRef.current = {
+            startX: e.clientX,
+            startY: e.clientY,
+            scrollLeft: c.scrollLeft,
+            scrollTop: c.scrollTop,
+          };
+          setPanning(true);
+          e.preventDefault();
+        }
+        return;
+      }
       if (activeTool !== 'select' || e.button !== 0) return;
       const pt = pointerToPdf(e);
       if (!pt) return;
@@ -2185,25 +2481,79 @@ export default function TakeoffViewerModule({
     [pointerToPdf],
   );
 
-  /* ── Mouse move for rectangle/highlight drag preview ──────────────── */
+  /* ── Mouse move: edit drag, rect preview, live readout, hover ─────── */
 
   const handleCanvasMouseMove = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
+      // A pan in progress is driven by the window listener; ignore here.
+      if (panRef.current) return;
       if (dragRef.current) {
         handleEditDragMove(e);
         return;
       }
+      const pt = pointerToPdf(e);
+
       if ((activeTool === 'rectangle' || activeTool === 'highlight' || activeTool === 'rectarea') && rectStartPoint) {
-        const rect = overlayRef.current?.getBoundingClientRect();
-        if (!rect) return;
-        const x = (e.clientX - rect.left) / zoom;
-        const y = (e.clientY - rect.top) / zoom;
-        setActivePoints([{ x, y }]);
+        if (!pt) return;
+        setActivePoints([pt]);
         setIsDraggingRect(true);
+        return;
+      }
+
+      // Live readout: track the cursor (ortho-snapped against the last placed
+      // point when the lock is engaged) while a linear / polygon measure tool
+      // is active, so the HUD can show the running segment + cumulative length.
+      if (
+        pt &&
+        (activeTool === 'distance' ||
+          activeTool === 'polyline' ||
+          activeTool === 'area' ||
+          activeTool === 'volume')
+      ) {
+        const anchor = activePoints[activePoints.length - 1];
+        const snapped =
+          anchor && (orthoLock || shiftHeldRef.current) ? orthoSnap(anchor, pt) : pt;
+        setLiveCursor(snapped);
+      } else if (liveCursor) {
+        setLiveCursor(null);
+      }
+
+      // Hover tooltip: in select mode, surface the topmost measurement under
+      // the cursor (value / group / linked BOQ). Reuses the same hit-test the
+      // selection path uses so the hover target matches what a click selects.
+      if (activeTool === 'select' && pt) {
+        const z = zoomRef.current || 1;
+        const onPage = editableOnPage();
+        let foundId: string | null = null;
+        for (let i = onPage.length - 1; i >= 0; i--) {
+          const m = onPage[i]!;
+          if (hitTest(pt, m, z, m.id === selectedMeasurementIdRef.current)) {
+            foundId = m.id;
+            break;
+          }
+        }
+        if (foundId) {
+          const rect = overlayRef.current?.getBoundingClientRect();
+          setHoverInfo({
+            measurementId: foundId,
+            x: rect ? e.clientX - rect.left : pt.x * z,
+            y: rect ? e.clientY - rect.top : pt.y * z,
+          });
+        } else if (hoverInfo) {
+          setHoverInfo(null);
+        }
+      } else if (hoverInfo) {
+        setHoverInfo(null);
       }
     },
-    [activeTool, rectStartPoint, zoom, handleEditDragMove],
+    [activeTool, rectStartPoint, pointerToPdf, handleEditDragMove, activePoints, orthoLock, liveCursor, editableOnPage, hoverInfo],
   );
+
+  /** Clear the transient HUD / hover state when the pointer leaves the canvas. */
+  const handleCanvasMouseLeave = useCallback(() => {
+    if (liveCursor) setLiveCursor(null);
+    if (hoverInfo) setHoverInfo(null);
+  }, [liveCursor, hoverInfo]);
 
   const handleCanvasMouseUp = useCallback(() => {
     if (dragRef.current) finishDrag(true);
@@ -2214,9 +2564,25 @@ export default function TakeoffViewerModule({
    * edges of a large drawing) would leave the shape stuck in preview. */
   useEffect(() => {
     const onMove = (e: MouseEvent) => {
+      // Pan takes priority: translate scroll by the pointer delta. Scrolling
+      // the container directly (not via state) keeps the pan smooth.
+      const pan = panRef.current;
+      if (pan) {
+        const c = containerRef.current;
+        if (c) {
+          c.scrollLeft = pan.scrollLeft - (e.clientX - pan.startX);
+          c.scrollTop = pan.scrollTop - (e.clientY - pan.startY);
+        }
+        return;
+      }
       if (dragRef.current) handleEditDragMove(e);
     };
     const onUp = () => {
+      if (panRef.current) {
+        panRef.current = null;
+        setPanning(false);
+        return;
+      }
       if (dragRef.current) finishDrag(true);
     };
     window.addEventListener('mousemove', onMove);
@@ -2477,9 +2843,220 @@ export default function TakeoffViewerModule({
 
   /* ── Zoom controls ───────────────────────────────────────────────── */
 
-  const zoomIn = useCallback(() => setZoom((z) => Math.min(z * 1.25, 4)), []);
-  const zoomOut = useCallback(() => setZoom((z) => Math.max(z / 1.25, 0.25)), []);
-  const zoomFit = useCallback(() => setZoom(1), []);
+  const zoomIn = useCallback(() => setZoom((z) => clampZoom(z * 1.25)), []);
+  const zoomOut = useCallback(() => setZoom((z) => clampZoom(z / 1.25)), []);
+
+  /** Current page size in PDF user units, derived from the rendered canvas:
+   *  `canvas.width = pageWidthPdfUnits * zoom * dpr`, so we invert that. The
+   *  page only changes size between pages / re-renders, so reading it off the
+   *  live canvas avoids holding a second source of truth. Returns null before
+   *  the first render. */
+  const pageSizePdf = useCallback((): { width: number; height: number } | null => {
+    const canvas = canvasRef.current;
+    if (!canvas || canvas.width === 0) return null;
+    const dpr = window.devicePixelRatio || 1;
+    const z = zoomRef.current || 1;
+    return {
+      width: canvas.width / (z * dpr),
+      height: canvas.height / (z * dpr),
+    };
+  }, []);
+
+  /** Inner (content) size of the scroll container in CSS px. */
+  const viewportSize = useCallback((): { width: number; height: number } => {
+    const c = containerRef.current;
+    return { width: c?.clientWidth ?? 0, height: c?.clientHeight ?? 0 };
+  }, []);
+
+  /** Fit the page to the viewport for a mode, re-anchoring scroll to the
+   *  top-left (width fit) / center (page fit) so the result is framed. */
+  const fitToViewport = useCallback(
+    (mode: 'width' | 'page') => {
+      const page = pageSizePdf();
+      if (!page) return;
+      const vp = viewportSize();
+      const next = computeFitZoom(page.width, page.height, vp.width, vp.height, mode);
+      setZoom(next);
+      // After the canvas re-lays-out at the new zoom, reset scroll so the page
+      // origin is visible (width) or the page is centered (page fit).
+      requestAnimationFrame(() => {
+        const c = containerRef.current;
+        if (!c) return;
+        if (mode === 'width') {
+          c.scrollLeft = 0;
+          c.scrollTop = 0;
+        } else {
+          // Center the (now fully visible) page in the viewport.
+          c.scrollLeft = Math.max(0, (page.width * next - c.clientWidth) / 2);
+          c.scrollTop = Math.max(0, (page.height * next - c.clientHeight) / 2);
+        }
+      });
+    },
+    [pageSizePdf, viewportSize],
+  );
+
+  const zoomFit = useCallback(() => fitToViewport('page'), [fitToViewport]);
+
+  /** Zoom + pan so the selected measurement(s) on the current page fill the
+   *  viewport with a margin. No-op (with a hint toast) when nothing on the
+   *  current page is selected. */
+  const zoomToSelection = useCallback(() => {
+    const selId = selectedMeasurementIdRef.current;
+    const sel = measurementsRef.current.find(
+      (m) => m.id === selId && m.page === currentPageRef.current,
+    );
+    if (!sel || sel.points.length === 0) {
+      addToast({
+        type: 'info',
+        title: t('takeoff_viewer.zoom_selection_none', { defaultValue: 'Select a measurement first' }),
+      });
+      return;
+    }
+    const box = boundingBoxOfPoints(sel.points);
+    if (!box) return;
+    const vp = viewportSize();
+    const res = computeZoomToBox(box, vp.width, vp.height, {
+      fallbackZoom: zoomRef.current || 1,
+    });
+    setZoom(res.zoom);
+    requestAnimationFrame(() => {
+      const c = containerRef.current;
+      if (!c) return;
+      c.scrollLeft = res.scrollLeft;
+      c.scrollTop = res.scrollTop;
+    });
+  }, [viewportSize, addToast, t]);
+
+  /* ── Find on sheet: debounced text-layer scan ─────────────────────────
+   * On a (trimmed) query, scan every page's pdf.js text layer for matches,
+   * caching the placed text items per page so re-searching is instant. The
+   * cap (FIND_MATCH_CAP) keeps the result list and the highlight loop bounded
+   * on a large set. Bails and clears on an empty query / closed panel. */
+  const FIND_MATCH_CAP = 500;
+  useEffect(() => {
+    const q = searchQuery.trim();
+    if (!pdfDoc || !searchOpen || q.length === 0) {
+      setSearchMatches([]);
+      setActiveMatchIdx(-1);
+      setSearchBusy(false);
+      return;
+    }
+    let cancelled = false;
+    setSearchBusy(true);
+    const handle = window.setTimeout(() => {
+      (async () => {
+        const all: TextMatch[] = [];
+        try {
+          for (let n = 1; n <= totalPages; n++) {
+            if (cancelled) return;
+            let items = textLayerCacheRef.current.get(n);
+            if (!items) {
+              const page = await pdfDoc.getPage(n);
+              if (cancelled) return;
+              const vp = page.getViewport({ scale: 1 }); // PDF-unit space
+              const content = await page.getTextContent();
+              if (cancelled) return;
+              // pdf.js items are TextItem | TextMarkedContent; the helper reads
+              // them structurally and skips markers (no transform).
+              items = itemsFromTextContent(
+                content.items as unknown as Parameters<typeof itemsFromTextContent>[0],
+                vp.height,
+              );
+              textLayerCacheRef.current.set(n, items);
+            }
+            const hits = findMatchesInPage(items, q, n, all.length);
+            for (const h of hits) {
+              all.push(h);
+              if (all.length >= FIND_MATCH_CAP) break;
+            }
+            if (all.length >= FIND_MATCH_CAP) break;
+          }
+        } catch {
+          /* a cancelled / failed text-layer read: surface what we found */
+        }
+        if (cancelled) return;
+        setSearchMatches(all);
+        setActiveMatchIdx(all.length ? 0 : -1);
+        setSearchBusy(false);
+      })();
+    }, 250);
+    return () => { cancelled = true; window.clearTimeout(handle); };
+  }, [pdfDoc, searchOpen, searchQuery, totalPages]);
+
+  /** Jump to (and highlight) a match: flip to its page if needed, frame its
+   *  box with the existing zoom-to-box machinery, then apply the scroll once
+   *  the canvas has re-laid-out. The fit zoom is capped so a single short word
+   *  does not slam the page to 400%. */
+  const goToMatch = useCallback(
+    (i: number) => {
+      const match = searchMatches[i];
+      if (!match) return;
+      setActiveMatchIdx(i);
+      const pageChanged = match.page !== currentPageRef.current;
+      if (pageChanged) setCurrentPage(match.page);
+      const apply = () => {
+        const vp = viewportSize();
+        if (vp.width === 0 || vp.height === 0) return;
+        const res = computeZoomToBox(match.box, vp.width, vp.height, {
+          marginFraction: 0.6, // keep some context around a small word
+          fallbackZoom: zoomRef.current || 1,
+        });
+        // Cap the fit at 3x so a tiny word does not slam the page to 400%, but
+        // never zoom OUT below the current view just to frame a match.
+        const cappedZoom = Math.max(Math.min(res.zoom, 3), zoomRef.current || 1);
+        setZoom(cappedZoom);
+        requestAnimationFrame(() => {
+          const c = containerRef.current;
+          if (!c) return;
+          // Recompute scroll for the (possibly capped) zoom so the box centers.
+          const midX = (match.box.minX + match.box.maxX) / 2;
+          const midY = (match.box.minY + match.box.maxY) / 2;
+          c.scrollLeft = Math.max(0, midX * cappedZoom - vp.width / 2);
+          c.scrollTop = Math.max(0, midY * cappedZoom - vp.height / 2);
+        });
+      };
+      // When the page changes the canvas re-renders asynchronously; defer a
+      // frame (twice) so the new page has laid out before we scroll to the box.
+      if (pageChanged) {
+        requestAnimationFrame(() => requestAnimationFrame(apply));
+      } else {
+        apply();
+      }
+    },
+    [searchMatches, viewportSize],
+  );
+
+  /** Step to the next / previous match (wraps), used by the panel buttons and
+   *  the Enter / Shift+Enter shortcuts inside the search input. */
+  const stepMatch = useCallback(
+    (dir: 1 | -1) => {
+      const count = searchMatches.length;
+      if (count === 0) return;
+      const base = activeMatchIdx < 0 ? (dir === 1 ? -1 : 0) : activeMatchIdx;
+      const next = (base + dir + count) % count;
+      goToMatch(next);
+    },
+    [searchMatches.length, activeMatchIdx, goToMatch],
+  );
+
+  /** Live readout (cursor coordinate + running / cumulative length) for the
+   *  HUD shown while a linear / polygon measure tool is active. Null when no
+   *  such tool is drawing so the HUD hides. */
+  const drawReadout: DrawReadout | null = useMemo(() => {
+    if (
+      !liveCursor ||
+      !(activeTool === 'distance' || activeTool === 'polyline' || activeTool === 'area' || activeTool === 'volume')
+    ) {
+      return null;
+    }
+    return computeDrawReadout(activePoints, liveCursor, scale);
+  }, [liveCursor, activeTool, activePoints, scale]);
+
+  /** The measurement currently hovered in select mode (for the tooltip). */
+  const hoverMeasurement = useMemo(
+    () => (hoverInfo ? measurements.find((m) => m.id === hoverInfo.measurementId) ?? null : null),
+    [hoverInfo, measurements],
+  );
 
   // Mouse-wheel zoom on the canvas container. Native listener with
   // `{ passive: false }` so we can preventDefault — React's synthetic
@@ -2492,21 +3069,27 @@ export default function TakeoffViewerModule({
 
     const handleWheel = (e: WheelEvent) => {
       e.preventDefault();
-      const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
       const rect = container.getBoundingClientRect();
       const cx = e.clientX - rect.left;
       const cy = e.clientY - rect.top;
 
       setZoom((prev) => {
-        const raw = prev * factor;
-        const next = Math.round(Math.max(0.25, Math.min(4, raw)) * 100) / 100;
+        const next = wheelZoomStep(prev, e.deltaY);
         if (next === prev) return prev;
-        const ratio = next / prev;
-        // Re-anchor scroll on next frame so the new canvas size is laid out.
+        // Re-anchor scroll on next frame so the new canvas size is laid out;
+        // keeps the world point under the cursor stationary (shared maths).
         requestAnimationFrame(() => {
           if (containerRef.current) {
-            containerRef.current.scrollLeft = (container.scrollLeft + cx) * ratio - cx;
-            containerRef.current.scrollTop = (container.scrollTop + cy) * ratio - cy;
+            const { scrollLeft, scrollTop } = zoomAtCursorScroll(
+              prev,
+              next,
+              container.scrollLeft,
+              container.scrollTop,
+              cx,
+              cy,
+            );
+            containerRef.current.scrollLeft = scrollLeft;
+            containerRef.current.scrollTop = scrollTop;
           }
         });
         return next;
@@ -2537,6 +3120,13 @@ export default function TakeoffViewerModule({
   const pageMeasurements = useMemo(
     () => measurements.filter((m) => m.page === currentPage),
     [measurements, currentPage],
+  );
+
+  /** Measurement count per 1-indexed page, for the thumbnail badge and the
+   *  page-jump dropdown (both read the same memo so they never disagree). */
+  const countsByPage = useMemo(
+    () => countMeasurementsByPage(measurements),
+    [measurements],
   );
 
   /** Group page measurements by their group name */
@@ -3991,9 +4581,16 @@ export default function TakeoffViewerModule({
     }
   }, []);
 
-  /** Keyboard shortcuts: per-tool letters, Ctrl+Z/Y redo/undo, Esc cancel. */
+  /** Keyboard shortcuts: per-tool letters, Ctrl+Z/Y redo/undo, Esc cancel,
+   *  Space (pan), Shift (ortho lock), Shift+1/2/3 (fit width / page /
+   *  selection). */
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      // Track the live Shift state so the draw path can engage ortho without
+      // flipping the persistent toggle. Updated on every keydown regardless of
+      // focus so it never goes stale.
+      shiftHeldRef.current = e.shiftKey;
+
       // Undo / Redo — handled even inside inputs (standard browser semantics).
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !e.shiftKey) {
         e.preventDefault();
@@ -4038,6 +4635,28 @@ export default function TakeoffViewerModule({
       if (!shouldHandleShortcut(e.target)) return;
       if (e.ctrlKey || e.metaKey || e.altKey) return;
 
+      // Space: arm pan (grab cursor + suppress click-to-place). preventDefault
+      // so the page does not scroll while Space is held over the canvas.
+      if (e.code === 'Space' || e.key === ' ') {
+        e.preventDefault();
+        if (!spaceHeldRef.current) {
+          spaceHeldRef.current = true;
+          setSpaceHeld(true);
+        }
+        return;
+      }
+
+      // Fit shortcuts (Shift+1 / Shift+2 / Shift+3). Digit codes are used so
+      // the binding is layout-stable. These do not collide with the
+      // single-letter tool shortcuts (see takeoff-shortcuts.ts).
+      if (e.shiftKey && (e.code === 'Digit1' || e.code === 'Digit2' || e.code === 'Digit3')) {
+        e.preventDefault();
+        if (e.code === 'Digit1') fitToViewport('width');
+        else if (e.code === 'Digit2') fitToViewport('page');
+        else zoomToSelection();
+        return;
+      }
+
       // Delete / Backspace. If a specific vertex is active on the selected
       // measurement and removing it keeps the shape valid, delete just that
       // vertex and recompute (#194). Otherwise fall through to deleting the
@@ -4076,9 +4695,34 @@ export default function TakeoffViewerModule({
         selectTool(tool);
       }
     };
+    const upHandler = (e: KeyboardEvent) => {
+      shiftHeldRef.current = e.shiftKey;
+      if (e.code === 'Space' || e.key === ' ') {
+        spaceHeldRef.current = false;
+        setSpaceHeld(false);
+        // A pan that was mid-drag when Space released ends cleanly.
+        if (panRef.current) {
+          panRef.current = null;
+          setPanning(false);
+        }
+      }
+    };
+    // A window blur (alt-tab) would otherwise strand the Space/Shift held
+    // state on, leaving a stuck grab cursor / ortho lock.
+    const blurHandler = () => {
+      shiftHeldRef.current = false;
+      spaceHeldRef.current = false;
+      setSpaceHeld(false);
+    };
     window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [handleUndo, handleRedo, selectTool, activePoints.length, rectStartPoint, showTextInput, showScaleDialog, showVolumeDepthInput, selectedMeasurementId, calibrationMode, settingScale, measurements, finishDrag, commitGeometryEdit, pushUndo]);
+    window.addEventListener('keyup', upHandler);
+    window.addEventListener('blur', blurHandler);
+    return () => {
+      window.removeEventListener('keydown', handler);
+      window.removeEventListener('keyup', upHandler);
+      window.removeEventListener('blur', blurHandler);
+    };
+  }, [handleUndo, handleRedo, selectTool, activePoints.length, rectStartPoint, showTextInput, showScaleDialog, showVolumeDepthInput, selectedMeasurementId, calibrationMode, settingScale, measurements, finishDrag, commitGeometryEdit, pushUndo, fitToViewport, zoomToSelection]);
 
   /* ── Render ──────────────────────────────────────────────────────── */
 
@@ -4426,213 +5070,392 @@ export default function TakeoffViewerModule({
       {/* Viewer + Sidebar (PDF on the left, Measurements panel on the right) */}
       {pdfDoc && (
         <div className="flex gap-4 min-w-0">
-          {/* Left: PDF + Toolbar */}
-          <div className="flex-1 min-w-0 space-y-2">
-            {/* Toolbar - two rows so every control is always visible without a
-                horizontal scrollbar. Row 1: page navigation, zoom and the
-                drawing tools; row 2: scale, calibration, legend and the
-                history/file actions. */}
-            <div className="flex flex-col gap-1.5 rounded-lg border border-border bg-surface-primary p-1.5">
-              <div className="flex items-center gap-1 flex-wrap">
-              {/* Page nav */}
-              <button onClick={prevPage} disabled={currentPage <= 1} className="p-1.5 rounded hover:bg-surface-secondary disabled:opacity-30 transition-colors" aria-label={t('takeoff_viewer.prev_page', { defaultValue: 'Previous page' })}>
-                <ChevronLeft size={16} />
-              </button>
-              <details className="relative shrink-0" data-testid="page-jump">
-                <summary className="text-xs text-content-secondary tabular-nums px-1 cursor-pointer hover:text-content-primary list-none select-none whitespace-nowrap" title={t('takeoff_viewer.jump_to_page', { defaultValue: 'Click to jump to a page' })}>
-                  {currentPage}/{totalPages}
-                </summary>
-                {totalPages > 1 && (
-                  <div className="absolute left-0 top-full mt-1 z-30 max-h-72 w-44 overflow-y-auto rounded-lg border border-border bg-surface-elevated shadow-lg p-1">
-                    {Array.from({ length: totalPages }, (_, i) => i + 1).map((p) => {
-                      const cnt = measurements.filter((m) => m.page === p).length;
-                      return (
-                        <button
-                          key={p}
-                          type="button"
-                          onClick={(e) => {
-                            setCurrentPage(p);
-                            (e.currentTarget.closest('details') as HTMLDetailsElement | null)?.removeAttribute('open');
-                          }}
-                          className={`flex w-full items-center justify-between gap-2 rounded px-2 py-1 text-xs ${p === currentPage ? 'bg-oe-blue text-white' : 'text-content-secondary hover:bg-surface-secondary'}`}
-                        >
-                          <span className="tabular-nums">{t('takeoff_viewer.page_label', { defaultValue: 'Page' })} {p}</span>
-                          {cnt > 0 && (
-                            <span className={`tabular-nums rounded-full px-1.5 py-0.5 text-[10px] ${p === currentPage ? 'bg-white/20' : 'bg-purple-500/15 text-purple-500'}`}>
-                              {cnt}
-                            </span>
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-              </details>
-              <button onClick={nextPage} disabled={currentPage >= totalPages} className="p-1.5 rounded hover:bg-surface-secondary disabled:opacity-30 transition-colors" aria-label={t('takeoff_viewer.next_page', { defaultValue: 'Next page' })}>
-                <ChevronRight size={16} />
-              </button>
-
-              <span className="w-px h-5 bg-border mx-1" />
-
-              {/* Zoom */}
-              <button onClick={zoomOut} className="p-1.5 rounded hover:bg-surface-secondary transition-colors" title={t('takeoff_viewer.zoom_out', { defaultValue: 'Zoom out' })} aria-label={t('takeoff_viewer.zoom_out', { defaultValue: 'Zoom out' })}>
-                <ZoomOut size={16} />
-              </button>
-              <span className="text-xs text-content-tertiary tabular-nums w-10 text-center">{(zoom * 100).toFixed(0)}%</span>
-              <button onClick={zoomIn} className="p-1.5 rounded hover:bg-surface-secondary transition-colors" title={t('takeoff_viewer.zoom_in', { defaultValue: 'Zoom in' })} aria-label={t('takeoff_viewer.zoom_in', { defaultValue: 'Zoom in' })}>
-                <ZoomIn size={16} />
-              </button>
-              <button onClick={zoomFit} className="p-1.5 rounded hover:bg-surface-secondary transition-colors" title={t('takeoff_viewer.zoom_fit', { defaultValue: 'Fit' })} aria-label={t('takeoff_viewer.zoom_fit', { defaultValue: 'Fit' })}>
-                <Maximize size={16} />
-              </button>
-
-              <span className="w-px h-5 bg-border mx-1" />
-
-              {/* Measure tools */}
-              {([
-                { tool: 'select' as MeasureTool, icon: MousePointer2, label: t('takeoff_viewer.tool_select', { defaultValue: 'Select' }) },
-                { tool: 'distance' as MeasureTool, icon: Minus, label: t('takeoff_viewer.tool_distance', { defaultValue: 'Distance' }) },
-                { tool: 'polyline' as MeasureTool, icon: Route, label: t('takeoff_viewer.tool_polyline', { defaultValue: 'Polyline' }) },
-                { tool: 'area' as MeasureTool, icon: Pentagon, label: t('takeoff_viewer.tool_area', { defaultValue: 'Area' }) },
-                { tool: 'rectarea' as MeasureTool, icon: RectangleHorizontal, label: t('takeoff_viewer.tool_rectarea', { defaultValue: 'Rectangle' }) },
-                { tool: 'volume' as MeasureTool, icon: Box, label: t('takeoff_viewer.tool_volume', { defaultValue: 'Volume' }) },
-                { tool: 'count' as MeasureTool, icon: Hash, label: t('takeoff_viewer.tool_count', { defaultValue: 'Count' }) },
-              ] as const).map(({ tool, icon: Icon, label }) => (
+          {/* Page thumbnails strip - only for multi-page sets and when toggled
+              on. Click a thumbnail to jump; the current page is ringed; a badge
+              shows that page's measurement count. */}
+          {totalPages > 1 && showThumbnails && (
+            <div
+              className="w-32 shrink-0 overflow-y-auto rounded-lg border border-border bg-surface-primary p-2 space-y-2"
+              style={{ maxHeight: 'calc(100vh - 396px)' }}
+              data-testid="thumbnail-strip"
+            >
+              {Array.from({ length: totalPages }, (_, i) => i + 1).map((n) => (
                 <button
-                  key={tool}
-                  onClick={() => selectTool(tool)}
-                  className={`flex items-center gap-1 px-2 py-1.5 rounded text-xs transition-colors ${
-                    activeTool === tool
-                      ? 'bg-oe-blue text-white'
-                      : 'hover:bg-surface-secondary text-content-secondary'
-                  }`}
-                  title={labelWithShortcut(label, tool)}
-                  aria-label={labelWithShortcut(label, tool)}
-                  aria-pressed={activeTool === tool}
-                  data-tool={tool}
-                  data-shortcut={SHORTCUT_LETTER[tool]}
+                  key={n}
+                  type="button"
+                  onClick={() => setCurrentPage(n)}
+                  data-testid="thumbnail-item"
+                  data-page={n}
+                  data-current={n === currentPage}
+                  aria-current={n === currentPage ? 'page' : undefined}
+                  className={clsx(
+                    'group block w-full overflow-hidden rounded border bg-white transition-colors',
+                    n === currentPage
+                      ? 'ring-2 ring-oe-blue border-oe-blue'
+                      : 'border-border hover:border-oe-blue/60',
+                  )}
+                  title={t('takeoff_viewer.thumb_page', { defaultValue: 'Page {{n}}', n })}
                 >
-                  <Icon size={14} />
-                  <span className="hidden sm:inline">{label}</span>
-                </button>
-              ))}
-
-              {/* Recognize — offline AI vector detection (issue #194). Not a
-                  draw tool: it scans the page's vector layer and drops
-                  confidence-scored suggestions the user confirms. Sits in the
-                  measure group, styled distinctly so it reads as an action. */}
-              <button
-                onClick={handleRecognize}
-                disabled={recognizeBusy}
-                className="flex items-center gap-1 px-2 py-1.5 rounded text-xs font-medium transition-colors bg-gradient-to-r from-violet-500 to-indigo-500 text-white hover:from-violet-600 hover:to-indigo-600 disabled:opacity-50 disabled:pointer-events-none shadow-sm"
-                title={t('takeoff_viewer.recognize_hint', { defaultValue: 'Scan this page and suggest measurements (AI proposes, you confirm)' })}
-                aria-label={t('takeoff_viewer.recognize', { defaultValue: 'Recognize' })}
-                data-testid="recognize-button"
-              >
-                {recognizeBusy ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
-                <span className="hidden sm:inline">{t('takeoff_viewer.recognize', { defaultValue: 'Recognize' })}</span>
-              </button>
-
-              {/* Read plan with AI — vision-LLM plan reading (issue #194). The
-                  opt-in, BYO-key, cost-capped complement to offline Recognize:
-                  it reads room names and a scale a vision model can see but
-                  OpenCV cannot. Hidden when no vision key is configured so the
-                  feature degrades gracefully (the offline Recognize button is
-                  unaffected). AI proposes, the user confirms. */}
-              {planReadVision?.available && (
-                <button
-                  onClick={handleReadWithAi}
-                  disabled={planReadBusy}
-                  className="flex items-center gap-1 px-2 py-1.5 rounded text-xs font-medium transition-colors bg-gradient-to-r from-fuchsia-500 to-purple-600 text-white hover:from-fuchsia-600 hover:to-purple-700 disabled:opacity-50 disabled:pointer-events-none shadow-sm"
-                  title={t('takeoff_viewer.plan_read.hint', {
-                    defaultValue: 'Read this page with a vision AI: room names and scale (AI proposes, you confirm)',
-                  })}
-                  aria-label={t('takeoff_viewer.plan_read.action', { defaultValue: 'Read plan with AI' })}
-                  data-testid="plan-read-ai-button"
-                >
-                  {planReadBusy ? <Loader2 size={14} className="animate-spin" /> : <Scan size={14} />}
-                  <span className="hidden sm:inline">
-                    {t('takeoff_viewer.plan_read.action', { defaultValue: 'Read plan with AI' })}
+                  {thumbs[n] ? (
+                    <img src={thumbs[n]} alt={t('takeoff_viewer.thumb_page', { defaultValue: 'Page {{n}}', n })} className="block w-full" />
+                  ) : (
+                    <div className="flex aspect-[1/1.4] items-center justify-center text-content-tertiary">
+                      <Loader2 size={16} className="animate-spin" />
+                    </div>
+                  )}
+                  <span className="flex items-center justify-between gap-1 px-1 py-0.5 text-[10px] text-content-secondary">
+                    <span className="tabular-nums">{n}</span>
+                    {countsByPage[n] ? (
+                      <span className="tabular-nums rounded-full bg-purple-500/15 px-1 text-purple-500" data-testid="thumbnail-badge">
+                        {countsByPage[n]}
+                      </span>
+                    ) : null}
                   </span>
                 </button>
-              )}
-
-              {/* Save PDF — burn the current measurements + markups into a
-                  downloadable PDF (with a summary page). Always-visible
-                  shortcut to the same export as the right panel, so users
-                  don't have to scroll the measurements list to find it. */}
-              <button
-                onClick={handleExportPdf}
-                disabled={isExportingPdf || !pdfDoc}
-                className="flex items-center gap-1 px-2 py-1.5 rounded text-xs font-medium transition-colors bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50 disabled:pointer-events-none shadow-sm"
-                title={t('takeoff_viewer.save_pdf_hint', { defaultValue: 'Save this drawing as a PDF with your measurements and markups' })}
-                aria-label={t('takeoff_viewer.save_pdf', { defaultValue: 'Save PDF' })}
-                data-testid="toolbar-export-pdf-button"
-              >
-                {isExportingPdf ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
-                <span className="hidden sm:inline">{t('takeoff_viewer.save_pdf', { defaultValue: 'Save PDF' })}</span>
-              </button>
-
-              {/* Annotation tools divider */}
-              <span className="w-px h-5 bg-border mx-1" />
-
-              {/* Annotation markup tools */}
-              {([
-                { tool: 'cloud' as MeasureTool, icon: Cloud, label: t('takeoff_viewer.tool_cloud', { defaultValue: 'Cloud' }) },
-                { tool: 'arrow' as MeasureTool, icon: ArrowUpRight, label: t('takeoff_viewer.tool_arrow', { defaultValue: 'Arrow' }) },
-                { tool: 'text' as MeasureTool, icon: Type, label: t('takeoff_viewer.tool_text', { defaultValue: 'Text' }) },
-                { tool: 'rectangle' as MeasureTool, icon: Square, label: t('takeoff_viewer.tool_rectangle', { defaultValue: 'Rectangle' }) },
-                { tool: 'highlight' as MeasureTool, icon: Highlighter, label: t('takeoff_viewer.tool_highlight', { defaultValue: 'Highlight' }) },
-              ] as const).map(({ tool, icon: Icon, label }) => (
-                <button
-                  key={tool}
-                  onClick={() => selectTool(tool)}
-                  className={`flex items-center gap-1 px-2 py-1.5 rounded text-xs transition-colors ${
-                    activeTool === tool
-                      ? 'bg-orange-500 text-white'
-                      : 'hover:bg-surface-secondary text-content-secondary'
-                  }`}
-                  title={labelWithShortcut(label, tool)}
-                  aria-label={labelWithShortcut(label, tool)}
-                  aria-pressed={activeTool === tool}
-                  data-tool={tool}
-                  data-shortcut={SHORTCUT_LETTER[tool]}
-                >
-                  <Icon size={14} />
-                </button>
               ))}
+            </div>
+          )}
+          {/* Left: PDF + Toolbar */}
+          <div className="flex-1 min-w-0 space-y-2">
+            {/* Toolbar - two grouped rows so every control stays visible
+                without a horizontal scrollbar. Row 1 = navigate + view +
+                document actions; row 2 = scale + drawing tools. Related
+                controls sit in soft "segmented" tracks instead of being
+                separated by hairline dividers. */}
+            <div className="flex flex-col gap-1.5 rounded-lg border border-border bg-surface-primary p-1.5 shadow-xs">
+              <div className="flex items-center gap-1 flex-wrap">
+              {/* Page nav - prev / jump / next in one segmented track. */}
+              <div className={TB_GROUP}>
+                <button onClick={prevPage} disabled={currentPage <= 1} className={tbBtn(false)} aria-label={t('takeoff_viewer.prev_page', { defaultValue: 'Previous page' })}>
+                  <ChevronLeft size={16} />
+                </button>
+                <details className="relative shrink-0" data-testid="page-jump">
+                  <summary className="inline-flex h-7 cursor-pointer list-none select-none items-center rounded-md px-2 text-xs font-medium tabular-nums text-content-secondary transition-colors hover:bg-surface-primary hover:text-content-primary" title={t('takeoff_viewer.jump_to_page', { defaultValue: 'Click to jump to a page' })}>
+                    {currentPage}/{totalPages}
+                  </summary>
+                  {totalPages > 1 && (
+                    <div className="absolute left-0 top-full mt-1 z-30 max-h-72 w-44 overflow-y-auto rounded-lg border border-border bg-surface-elevated shadow-lg p-1">
+                      {Array.from({ length: totalPages }, (_, i) => i + 1).map((p) => {
+                        const cnt = countsByPage[p] ?? 0;
+                        return (
+                          <button
+                            key={p}
+                            type="button"
+                            onClick={(e) => {
+                              setCurrentPage(p);
+                              (e.currentTarget.closest('details') as HTMLDetailsElement | null)?.removeAttribute('open');
+                            }}
+                            className={`flex w-full items-center justify-between gap-2 rounded px-2 py-1 text-xs ${p === currentPage ? 'bg-oe-blue text-white' : 'text-content-secondary hover:bg-surface-secondary'}`}
+                          >
+                            <span className="tabular-nums">{t('takeoff_viewer.page_label', { defaultValue: 'Page' })} {p}</span>
+                            {cnt > 0 && (
+                              <span className={`tabular-nums rounded-full px-1.5 py-0.5 text-[10px] ${p === currentPage ? 'bg-white/20' : 'bg-purple-500/15 text-purple-500'}`}>
+                                {cnt}
+                              </span>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </details>
+                <button onClick={nextPage} disabled={currentPage >= totalPages} className={tbBtn(false)} aria-label={t('takeoff_viewer.next_page', { defaultValue: 'Next page' })}>
+                  <ChevronRight size={16} />
+                </button>
               </div>
 
-              {/* Row 2: scale, calibration, legend, history and file */}
+              {/* Find on sheet - text search over the document's text layer.
+                  The toggle opens an anchored panel; matches list by page and
+                  click to jump+zoom+highlight. Client-only (pdf.js text). */}
+              <div className="relative shrink-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSearchOpen((v) => {
+                      const next = !v;
+                      if (next) {
+                        // Focus the input on the next frame (after it mounts).
+                        requestAnimationFrame(() => searchInputRef.current?.focus());
+                      }
+                      return next;
+                    });
+                  }}
+                  className={tbBtn(searchOpen, 'blue')}
+                  title={t('takeoff_viewer.find_hint', { defaultValue: 'Find text on this drawing' })}
+                  aria-label={t('takeoff_viewer.find_aria', { defaultValue: 'Find on sheet' })}
+                  aria-expanded={searchOpen}
+                  data-testid="find-on-sheet-toggle"
+                >
+                  <Search size={15} />
+                  <span className="hidden sm:inline">{t('takeoff_viewer.find', { defaultValue: 'Find' })}</span>
+                </button>
+                {searchOpen && (
+                  <div
+                    className="absolute left-0 top-full mt-1 z-40 w-72 rounded-lg border border-border bg-surface-elevated shadow-xl p-2 space-y-2"
+                    data-testid="find-on-sheet-panel"
+                  >
+                    <div className="flex items-center gap-1">
+                      <div className="relative flex-1">
+                        <Search size={13} className="absolute left-2 top-1/2 -translate-y-1/2 text-content-tertiary pointer-events-none" />
+                        <input
+                          ref={searchInputRef}
+                          type="text"
+                          value={searchQuery}
+                          onChange={(e) => setSearchQuery(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              stepMatch(e.shiftKey ? -1 : 1);
+                            } else if (e.key === 'Escape') {
+                              e.preventDefault();
+                              setSearchOpen(false);
+                            }
+                          }}
+                          placeholder={t('takeoff_viewer.find_placeholder', { defaultValue: 'Find text on sheet…' })}
+                          className="w-full rounded border border-border bg-surface-primary pl-7 pr-2 py-1 text-xs text-content-primary placeholder:text-content-tertiary focus:border-oe-blue focus:outline-none"
+                          data-testid="find-on-sheet-input"
+                          autoComplete="off"
+                          spellCheck={false}
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => stepMatch(-1)}
+                        disabled={searchMatches.length === 0}
+                        className="p-1 rounded hover:bg-surface-secondary text-content-secondary disabled:opacity-30 disabled:pointer-events-none"
+                        title={t('takeoff_viewer.find_prev', { defaultValue: 'Previous match (Shift+Enter)' })}
+                        aria-label={t('takeoff_viewer.find_prev', { defaultValue: 'Previous match' })}
+                        data-testid="find-prev"
+                      >
+                        <ChevronUp size={14} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => stepMatch(1)}
+                        disabled={searchMatches.length === 0}
+                        className="p-1 rounded hover:bg-surface-secondary text-content-secondary disabled:opacity-30 disabled:pointer-events-none"
+                        title={t('takeoff_viewer.find_next', { defaultValue: 'Next match (Enter)' })}
+                        aria-label={t('takeoff_viewer.find_next', { defaultValue: 'Next match' })}
+                        data-testid="find-next"
+                      >
+                        <ChevronDown size={14} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSearchOpen(false)}
+                        className="p-1 rounded hover:bg-surface-secondary text-content-tertiary"
+                        aria-label={t('takeoff_viewer.find_close', { defaultValue: 'Close find' })}
+                        data-testid="find-close"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                    {/* Status line: match count / busy / empty. */}
+                    <div className="flex items-center justify-between px-0.5 text-[11px] text-content-tertiary" data-testid="find-match-count">
+                      {searchBusy ? (
+                        <span className="flex items-center gap-1"><Loader2 size={11} className="animate-spin" />{t('takeoff_viewer.find_searching', { defaultValue: 'Searching…' })}</span>
+                      ) : searchQuery.trim().length === 0 ? (
+                        <span>{t('takeoff_viewer.find_type_hint', { defaultValue: 'Type to search the text on this drawing' })}</span>
+                      ) : searchMatches.length === 0 ? (
+                        <span data-testid="find-no-matches">{t('takeoff_viewer.find_no_matches', { defaultValue: 'No matches on this document' })}</span>
+                      ) : (
+                        <span className="tabular-nums">
+                          {t('takeoff_viewer.find_count', {
+                            defaultValue: '{{current}} of {{total}}',
+                            current: activeMatchIdx >= 0 ? activeMatchIdx + 1 : 0,
+                            total: searchMatches.length,
+                          })}
+                        </span>
+                      )}
+                    </div>
+                    {/* Results list. */}
+                    {searchMatches.length > 0 && (
+                      <div className="max-h-56 overflow-y-auto rounded border border-border divide-y divide-border">
+                        {searchMatches.map((m, i) => (
+                          <button
+                            key={`${m.page}-${m.index}`}
+                            type="button"
+                            onClick={() => goToMatch(i)}
+                            data-testid="find-result"
+                            data-page={m.page}
+                            data-index={m.index}
+                            data-active={i === activeMatchIdx}
+                            className={`flex w-full items-start gap-2 px-2 py-1.5 text-left text-[11px] transition-colors ${
+                              i === activeMatchIdx ? 'bg-oe-blue/10' : 'hover:bg-surface-secondary'
+                            }`}
+                          >
+                            <span className="shrink-0 rounded bg-surface-secondary px-1 py-0.5 font-mono text-[10px] text-content-secondary tabular-nums">
+                              {t('takeoff_viewer.find_page_chip', { defaultValue: 'p{{n}}', n: m.page })}
+                            </span>
+                            <span className="min-w-0 flex-1 truncate text-content-primary">{m.snippet}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Zoom - out / level / in / fit-width / fit-page / fit-selection. */}
+              <div className={TB_GROUP}>
+                <button onClick={zoomOut} className={tbBtn(false)} title={t('takeoff_viewer.zoom_out', { defaultValue: 'Zoom out' })} aria-label={t('takeoff_viewer.zoom_out', { defaultValue: 'Zoom out' })}>
+                  <ZoomOut size={16} />
+                </button>
+                <span className="inline-flex h-7 min-w-[2.75rem] items-center justify-center px-1 text-xs tabular-nums text-content-tertiary">{(zoom * 100).toFixed(0)}%</span>
+                <button onClick={zoomIn} className={tbBtn(false)} title={t('takeoff_viewer.zoom_in', { defaultValue: 'Zoom in' })} aria-label={t('takeoff_viewer.zoom_in', { defaultValue: 'Zoom in' })}>
+                  <ZoomIn size={16} />
+                </button>
+                <button onClick={() => fitToViewport('width')} className={tbBtn(false)} title={t('takeoff_viewer.fit_width_hint', { defaultValue: 'Fit the page to the viewport width (Shift+1)' })} aria-label={t('takeoff_viewer.fit_width', { defaultValue: 'Fit width' })}>
+                  <MoveHorizontal size={16} />
+                </button>
+                <button onClick={zoomFit} className={tbBtn(false)} title={t('takeoff_viewer.fit_page_hint', { defaultValue: 'Fit the whole page in view (Shift+2)' })} aria-label={t('takeoff_viewer.fit_page', { defaultValue: 'Fit page' })}>
+                  <Maximize size={16} />
+                </button>
+                <button onClick={zoomToSelection} disabled={!selectedMeasurementId} className={tbBtn(false)} title={t('takeoff_viewer.zoom_selection_hint', { defaultValue: 'Zoom to the selected measurement (Shift+3)' })} aria-label={t('takeoff_viewer.zoom_selection', { defaultValue: 'Zoom to selection' })}>
+                  <Focus size={16} />
+                </button>
+              </div>
+
+              {/* Ortho lock + pan affordance. Ortho also engages while Shift is
+                  physically held (CAD-standard); pan engages on Space or
+                  middle-mouse, so the pan glyph is an indicator + hint. */}
+              <div className={TB_GROUP}>
+                <button
+                  onClick={() => setOrthoLock((v) => !v)}
+                  className={tbBtn(orthoLock, 'blue')}
+                  title={t('takeoff_viewer.ortho_lock_hint', { defaultValue: 'Constrain new segments to 0, 45 or 90 degrees (hold Shift, or toggle here)' })}
+                  aria-label={t('takeoff_viewer.ortho_lock', { defaultValue: 'Ortho lock' })}
+                  aria-pressed={orthoLock}
+                  data-testid="ortho-lock-toggle"
+                >
+                  <Spline size={16} />
+                </button>
+                <span
+                  className={`inline-flex h-7 items-center justify-center rounded-md px-1.5 transition-colors ${spaceHeld || panning ? 'bg-oe-blue text-white shadow-sm' : 'text-content-tertiary'}`}
+                  title={t('takeoff_viewer.pan_hint', { defaultValue: 'Drag to pan. Hold Space or use the middle mouse button while any tool is active.' })}
+                  aria-label={t('takeoff_viewer.pan', { defaultValue: 'Pan' })}
+                >
+                  <Hand size={16} />
+                </span>
+              </div>
+
+              {/* Right cluster - view toggles, history and document actions,
+                  pushed to the right so row 1 reads navigate -> view -> act. */}
+              <div className="ml-auto flex items-center gap-1.5">
+                {/* View toggles */}
+                <div className={TB_GROUP}>
+                  {totalPages > 1 && (
+                    <button
+                      onClick={() => setShowThumbnails((v) => !v)}
+                      className={tbBtn(showThumbnails)}
+                      title={t('takeoff_viewer.toggle_thumbnails', { defaultValue: 'Toggle page thumbnails' })}
+                      aria-label={t('takeoff_viewer.toggle_thumbnails', { defaultValue: 'Toggle page thumbnails' })}
+                      aria-pressed={showThumbnails}
+                      data-testid="thumbnails-toggle"
+                    >
+                      <Layers size={15} />
+                      <span className="hidden sm:inline">{t('takeoff_viewer.thumbnails', { defaultValue: 'Pages' })}</span>
+                    </button>
+                  )}
+                  <button
+                    onClick={() => setShowLegend((v) => !v)}
+                    className={tbBtn(showLegend)}
+                    title={t('takeoff_viewer.toggle_legend', { defaultValue: 'Toggle legend' })}
+                    aria-label={t('takeoff_viewer.toggle_legend', { defaultValue: 'Toggle legend' })}
+                    aria-pressed={showLegend}
+                    data-testid="legend-toggle"
+                  >
+                    <List size={15} />
+                    <span className="hidden sm:inline">{t('takeoff_viewer.legend', { defaultValue: 'Legend' })}</span>
+                  </button>
+                </div>
+
+                {/* History - undo / redo / clear */}
+                <div className={TB_GROUP}>
+                  <button
+                    onClick={handleUndo}
+                    disabled={undoCount === 0}
+                    className={tbBtn(false)}
+                    title={t('takeoff.undo', { defaultValue: 'Undo' }) + ' (Ctrl+Z)'}
+                    aria-label={t('takeoff.undo', { defaultValue: 'Undo' })}
+                    data-testid="undo-button"
+                  >
+                    <Undo2 size={15} />
+                  </button>
+                  <button
+                    onClick={handleRedo}
+                    disabled={redoCount === 0}
+                    className={tbBtn(false)}
+                    title={t('takeoff.redo', { defaultValue: 'Redo' }) + ' (Ctrl+Y)'}
+                    aria-label={t('takeoff.redo', { defaultValue: 'Redo' })}
+                    data-testid="redo-button"
+                  >
+                    <Redo2 size={15} />
+                  </button>
+                  <button
+                    onClick={() => measurements.length > 0 ? setShowClearConfirm(true) : undefined}
+                    className={tbBtn(false)}
+                    title={t('takeoff_viewer.clear_all', { defaultValue: 'Clear all' })}
+                    aria-label={t('takeoff_viewer.clear_all', { defaultValue: 'Clear all' })}
+                  >
+                    <Trash2 size={15} />
+                  </button>
+                </div>
+
+                {/* Save PDF - the document's hero action. */}
+                <button
+                  onClick={handleExportPdf}
+                  disabled={isExportingPdf || !pdfDoc}
+                  className="inline-flex h-7 items-center gap-1.5 rounded-md bg-emerald-600 px-2.5 text-xs font-semibold text-white shadow-xs transition-all hover:bg-emerald-700 hover:shadow-sm disabled:opacity-50 disabled:pointer-events-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/50"
+                  title={t('takeoff_viewer.save_pdf_hint', { defaultValue: 'Save this drawing as a PDF with your measurements and markups' })}
+                  aria-label={t('takeoff_viewer.save_pdf', { defaultValue: 'Save PDF' })}
+                  data-testid="toolbar-export-pdf-button"
+                >
+                  {isExportingPdf ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+                  <span className="hidden sm:inline">{t('takeoff_viewer.save_pdf', { defaultValue: 'Save PDF' })}</span>
+                </button>
+
+                {/* New file */}
+                <label className={`${tbBtn(false)} cursor-pointer`} title={t('takeoff_viewer.load_new_pdf', { defaultValue: 'Load new PDF' })} aria-label={t('takeoff_viewer.load_new_pdf', { defaultValue: 'Load new PDF' })}>
+                  <Upload size={15} />
+                  <input type="file" accept="application/pdf" onChange={handleFileUpload} className="hidden" />
+                </label>
+              </div>
+              </div>
+
+              {/* Row 2: scale and the drawing tools. Scale controls lead, then
+                  the measure tools, then the markup tools; the AI-assist
+                  actions (Recognize / Read-with-AI) sit at the right. */}
               <div className="flex items-center gap-1 flex-wrap">
-              {/* Scale */}
-              <button
-                onClick={() => { setCalibrationMode(false); setSettingScale(true); setScalePoints([]); }}
-                className={`flex items-center gap-1 px-2 py-1.5 rounded text-xs transition-colors ${
-                  settingScale && !calibrationMode ? 'bg-purple-500 text-white' : 'hover:bg-surface-secondary text-content-secondary'
-                }`}
-                title={t('takeoff_viewer.set_scale', { defaultValue: 'Set scale' })}
-                aria-label={t('takeoff_viewer.set_scale', { defaultValue: 'Set scale' })}
-              >
-                <Settings2 size={14} />
-                <span className="hidden sm:inline">{t('takeoff_viewer.scale', { defaultValue: 'Scale' })}</span>
-              </button>
+              {/* Scale + calibration controls, grouped in one segmented track. */}
+              <div className={TB_GROUP}>
+                {/* Scale */}
+                <button
+                  onClick={() => { setCalibrationMode(false); setSettingScale(true); setScalePoints([]); }}
+                  className={tbBtn(settingScale && !calibrationMode, 'purple')}
+                  title={t('takeoff_viewer.set_scale', { defaultValue: 'Set scale' })}
+                  aria-label={t('takeoff_viewer.set_scale', { defaultValue: 'Set scale' })}
+                  aria-pressed={settingScale && !calibrationMode}
+                >
+                  <Settings2 size={15} />
+                  <span className="hidden sm:inline">{t('takeoff_viewer.scale', { defaultValue: 'Scale' })}</span>
+                </button>
+                {/* Calibrate - two-click with multi-unit dialog */}
+                <button
+                  onClick={handleStartCalibration}
+                  className={tbBtn(calibrationMode, 'purple')}
+                  title={t('takeoff_viewer.calibrate', { defaultValue: 'Calibrate scale (two-click)' })}
+                  aria-label={t('takeoff_viewer.calibrate', { defaultValue: 'Calibrate scale' })}
+                  aria-pressed={calibrationMode}
+                  data-testid="calibrate-button"
+                >
+                  <Ruler size={15} />
+                  <span className="hidden sm:inline">{t('takeoff_viewer.calibrate', { defaultValue: 'Calibrate' })}</span>
+                </button>
+              </div>
 
-              {/* Calibrate — two-click with multi-unit dialog */}
-              <button
-                onClick={handleStartCalibration}
-                className={`flex items-center gap-1 px-2 py-1.5 rounded text-xs transition-colors ${
-                  calibrationMode ? 'bg-purple-500 text-white' : 'hover:bg-surface-secondary text-content-secondary'
-                }`}
-                title={t('takeoff_viewer.calibrate', { defaultValue: 'Calibrate scale (two-click)' })}
-                aria-label={t('takeoff_viewer.calibrate', { defaultValue: 'Calibrate scale' })}
-                data-testid="calibrate-button"
-              >
-                <Ruler size={14} />
-                <span className="hidden sm:inline">{t('takeoff_viewer.calibrate', { defaultValue: 'Calibrate' })}</span>
-              </button>
-
-              {/* //// NEOFFICE PATCH — vector room detection (precise wall-following contours) */}
+              {/* //// NEOFFICE PATCH — vector room detection (precise wall-following
+                  contours). Injected into the upstream v8.8.4 toolbar after Calibrate. */}
               <button
                 onClick={handleDetectRooms}
                 disabled={roomsLoading || !visionDocumentId}
@@ -4652,13 +5475,15 @@ export default function TakeoffViewerModule({
                     : t('takeoff_viewer.detect_rooms_short', { defaultValue: 'Pièces' })}
                 </span>
               </button>
+              {/* //// END NEOFFICE PATCH */}
 
-              {/* Calibration status badge — compact: ratio · length, no
-                  "Calibrated" word (the green tick implies it). One line. */}
+              {/* Calibration status chip - ratio + length when calibrated, an
+                  amber "Not calibrated" warning otherwise. Click to (re)calibrate.
+                  Reuses the scale purple so it reads as part of the scale group. */}
               {isCalibrated && !calibrationMode && !settingScale && (
                 <button
                   onClick={handleStartCalibration}
-                  className="flex items-center gap-1 px-1.5 py-1 rounded text-[10px] font-mono whitespace-nowrap shrink-0 bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 hover:bg-purple-200 dark:hover:bg-purple-900/50 transition-colors border border-purple-300/50 dark:border-purple-700/50"
+                  className="inline-flex h-7 items-center gap-1.5 rounded-md border border-purple-300/60 bg-purple-50 px-2 text-[11px] font-medium text-purple-700 transition-colors hover:bg-purple-100 dark:border-purple-700/50 dark:bg-purple-900/25 dark:text-purple-300 dark:hover:bg-purple-900/40"
                   title={t('takeoff_viewer.calibrated_tooltip', {
                     defaultValue: 'Calibrated · {{ratio}}{{atLen}} - click to recalibrate',
                     ratio: formatScaleRatio(scale),
@@ -4668,82 +5493,125 @@ export default function TakeoffViewerModule({
                   })}
                   data-testid="calibration-badge"
                 >
-                  <Check size={11} className="text-purple-500 shrink-0" />
-                  <span>{formatScaleRatio(scale)}</span>
+                  <Check size={13} className="shrink-0 text-purple-500" />
+                  <span className="font-mono tabular-nums">{formatScaleRatio(scale)}</span>
                   {lastCalibration && (
-                    <span className="text-purple-500/80">
-                      · {lastCalibration.realLength} {lastCalibration.unit}
-                    </span>
+                    <span className="font-mono tabular-nums text-purple-500/80">· {lastCalibration.realLength} {lastCalibration.unit}</span>
                   )}
                 </button>
               )}
-              {/* Uncalibrated warning — shortened to a single chip. */}
               {!isCalibrated && !calibrationMode && !settingScale && (
                 <button
                   onClick={handleStartCalibration}
-                  className="flex items-center gap-1 px-1.5 py-1 rounded text-[10px] font-mono whitespace-nowrap shrink-0 bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 hover:bg-amber-200 dark:hover:bg-amber-900/50 transition-colors border border-amber-300/50 dark:border-amber-700/50"
+                  className="inline-flex h-7 items-center gap-1.5 rounded-md border border-amber-300/60 bg-amber-50 px-2 text-[11px] font-medium text-amber-700 transition-colors hover:bg-amber-100 dark:border-amber-700/50 dark:bg-amber-900/25 dark:text-amber-300 dark:hover:bg-amber-900/40"
                   title={t('takeoff_viewer.uncalibrated_hint', { defaultValue: 'Drawing is not calibrated - measurements may be inaccurate. Click to calibrate.' })}
                   data-testid="uncalibrated-badge"
                 >
-                  <AlertTriangle size={11} className="text-amber-500 shrink-0" />
-                  <span>{t('takeoff_viewer.calibrate_short', { defaultValue: 'Calibrate' })}</span>
+                  <AlertTriangle size={13} className="shrink-0 text-amber-500" />
+                  <span>{t('takeoff_viewer.not_calibrated', { defaultValue: 'Not calibrated' })}</span>
                 </button>
               )}
 
-              {/* Legend toggle — shows/hides the color-coded group legend
-                  card in the bottom-left of the canvas viewport. */}
+              {/* Measure tools - one segmented track, icon-only with tooltips
+                  + shortcut letters; the armed tool gets the blue accent. */}
+              <div className={TB_GROUP} role="group" aria-label={t('takeoff_viewer.measure_tools', { defaultValue: 'Measure tools' })}>
+                {([
+                  { tool: 'select' as MeasureTool, icon: MousePointer2, label: t('takeoff_viewer.tool_select', { defaultValue: 'Select' }) },
+                  { tool: 'distance' as MeasureTool, icon: Minus, label: t('takeoff_viewer.tool_distance', { defaultValue: 'Distance' }) },
+                  { tool: 'polyline' as MeasureTool, icon: Route, label: t('takeoff_viewer.tool_polyline', { defaultValue: 'Polyline' }) },
+                  { tool: 'area' as MeasureTool, icon: Pentagon, label: t('takeoff_viewer.tool_area', { defaultValue: 'Area' }) },
+                  { tool: 'rectarea' as MeasureTool, icon: RectangleHorizontal, label: t('takeoff_viewer.tool_rectarea', { defaultValue: 'Rectangle' }) },
+                  { tool: 'volume' as MeasureTool, icon: Box, label: t('takeoff_viewer.tool_volume', { defaultValue: 'Volume' }) },
+                  { tool: 'count' as MeasureTool, icon: Hash, label: t('takeoff_viewer.tool_count', { defaultValue: 'Count' }) },
+                ] as const).map(({ tool, icon: Icon, label }) => (
+                  <button
+                    key={tool}
+                    onClick={() => selectTool(tool)}
+                    className={tbBtn(activeTool === tool, 'blue')}
+                    title={labelWithShortcut(label, tool)}
+                    aria-label={labelWithShortcut(label, tool)}
+                    aria-pressed={activeTool === tool}
+                    data-tool={tool}
+                    data-shortcut={SHORTCUT_LETTER[tool]}
+                  >
+                    <Icon size={15} />
+                  </button>
+                ))}
+              </div>
+
+              {/* Markup tools - second segmented track; orange accent marks
+                  the armed annotation tool. */}
+              <div className={TB_GROUP} role="group" aria-label={t('takeoff_viewer.markup_tools', { defaultValue: 'Markup tools' })}>
+                {([
+                  { tool: 'cloud' as MeasureTool, icon: Cloud, label: t('takeoff_viewer.tool_cloud', { defaultValue: 'Cloud' }) },
+                  { tool: 'arrow' as MeasureTool, icon: ArrowUpRight, label: t('takeoff_viewer.tool_arrow', { defaultValue: 'Arrow' }) },
+                  { tool: 'text' as MeasureTool, icon: Type, label: t('takeoff_viewer.tool_text', { defaultValue: 'Text' }) },
+                  { tool: 'rectangle' as MeasureTool, icon: Square, label: t('takeoff_viewer.tool_rectangle', { defaultValue: 'Rectangle' }) },
+                  { tool: 'highlight' as MeasureTool, icon: Highlighter, label: t('takeoff_viewer.tool_highlight', { defaultValue: 'Highlight' }) },
+                ] as const).map(({ tool, icon: Icon, label }) => (
+                  <button
+                    key={tool}
+                    onClick={() => selectTool(tool)}
+                    className={tbBtn(activeTool === tool, 'orange')}
+                    title={labelWithShortcut(label, tool)}
+                    aria-label={labelWithShortcut(label, tool)}
+                    aria-pressed={activeTool === tool}
+                    data-tool={tool}
+                    data-shortcut={SHORTCUT_LETTER[tool]}
+                  >
+                    <Icon size={15} />
+                  </button>
+                ))}
+              </div>
+
+              {/* AI assist - offline Recognize (issue #194) + optional vision
+                  Read-with-AI. Pushed right as the two hero actions of the row. */}
               <button
-                onClick={() => setShowLegend((v) => !v)}
-                className={`flex items-center gap-1 px-2 py-1.5 rounded text-xs transition-colors ml-auto ${
-                  showLegend
-                    ? 'bg-surface-secondary text-content-primary'
-                    : 'hover:bg-surface-secondary text-content-secondary'
-                }`}
-                title={t('takeoff_viewer.toggle_legend', { defaultValue: 'Toggle legend' })}
-                aria-label={t('takeoff_viewer.toggle_legend', { defaultValue: 'Toggle legend' })}
-                aria-pressed={showLegend}
-                data-testid="legend-toggle"
+                onClick={handleRecognize}
+                disabled={recognizeBusy}
+                className="ml-auto inline-flex h-7 items-center gap-1.5 rounded-md bg-gradient-to-r from-violet-500 to-indigo-500 px-2.5 text-xs font-semibold text-white shadow-xs transition-all hover:from-violet-600 hover:to-indigo-600 hover:shadow-sm disabled:opacity-50 disabled:pointer-events-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/50"
+                title={t('takeoff_viewer.recognize_hint', { defaultValue: 'Scan this page and suggest measurements (AI proposes, you confirm)' })}
+                aria-label={t('takeoff_viewer.recognize', { defaultValue: 'Recognize' })}
+                data-testid="recognize-button"
               >
-                <List size={14} />
-                <span className="hidden sm:inline">{t('takeoff_viewer.legend', { defaultValue: 'Legend' })}</span>
+                {recognizeBusy ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+                <span className="hidden sm:inline">{t('takeoff_viewer.recognize', { defaultValue: 'Recognize' })}</span>
               </button>
 
-              {/* Undo */}
-              <button
-                onClick={handleUndo}
-                disabled={undoCount === 0}
-                className="flex items-center gap-1 px-2 py-1.5 rounded text-xs transition-colors hover:bg-surface-secondary text-content-secondary disabled:opacity-30 disabled:pointer-events-none"
-                title={t('takeoff.undo', { defaultValue: 'Undo' }) + ' (Ctrl+Z)'}
-                data-testid="undo-button"
-              >
-                <Undo2 size={14} />
-                <span className="hidden sm:inline">{t('takeoff.undo', { defaultValue: 'Undo' })}</span>
-              </button>
+              {planReadVision?.available && (
+                <button
+                  onClick={handleReadWithAi}
+                  disabled={planReadBusy}
+                  className="inline-flex h-7 items-center gap-1.5 rounded-md bg-gradient-to-r from-fuchsia-500 to-purple-600 px-2.5 text-xs font-semibold text-white shadow-xs transition-all hover:from-fuchsia-600 hover:to-purple-700 hover:shadow-sm disabled:opacity-50 disabled:pointer-events-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fuchsia-400/50"
+                  title={t('takeoff_viewer.plan_read.hint', {
+                    defaultValue: 'Read this page with a vision AI: room names and scale (AI proposes, you confirm)',
+                  })}
+                  aria-label={t('takeoff_viewer.plan_read.action', { defaultValue: 'Read plan with AI' })}
+                  data-testid="plan-read-ai-button"
+                >
+                  {planReadBusy ? <Loader2 size={14} className="animate-spin" /> : <Scan size={14} />}
+                  <span className="hidden sm:inline">
+                    {t('takeoff_viewer.plan_read.action', { defaultValue: 'Read plan with AI' })}
+                  </span>
+                </button>
+              )}
 
-              {/* Redo */}
-              <button
-                onClick={handleRedo}
-                disabled={redoCount === 0}
-                className="flex items-center gap-1 px-2 py-1.5 rounded text-xs transition-colors hover:bg-surface-secondary text-content-secondary disabled:opacity-30 disabled:pointer-events-none"
-                title={t('takeoff.redo', { defaultValue: 'Redo' }) + ' (Ctrl+Y)'}
-                data-testid="redo-button"
-              >
-                <Redo2 size={14} />
-                <span className="hidden sm:inline">{t('takeoff.redo', { defaultValue: 'Redo' })}</span>
-              </button>
-
-              {/* Clear */}
-              <button onClick={() => measurements.length > 0 ? setShowClearConfirm(true) : undefined} className="p-1.5 rounded hover:bg-surface-secondary text-content-tertiary transition-colors" title={t('takeoff_viewer.clear_all', { defaultValue: 'Clear all' })} aria-label={t('takeoff_viewer.clear_all', { defaultValue: 'Clear all' })}>
-                <Trash2 size={14} />
-              </button>
-
-              {/* New file */}
-              <label className="p-1.5 rounded hover:bg-surface-secondary text-content-tertiary transition-colors cursor-pointer" title={t('takeoff_viewer.load_new_pdf', { defaultValue: 'Load new PDF' })} aria-label={t('takeoff_viewer.load_new_pdf', { defaultValue: 'Load new PDF' })}>
-                <Upload size={14} />
-                <input type="file" accept="application/pdf" onChange={handleFileUpload} className="hidden" />
-              </label>
               </div>
             </div>
+
+            {/* Scale auto-detect suggestion - kept on its own slim strip
+                directly below the toolbar so the two toolbar rows stay clean.
+                Only for server-side documents (it needs a document id to scan)
+                and hidden while actively setting or calibrating scale so it
+                never competes with those flows. Nothing auto-applies - the
+                user confirms via "Use this" (CLAUDE.md rule 7). */}
+            {documentId && !calibrationMode && !settingScale && (
+              <ScaleAutoDetect
+                documentId={documentId}
+                pageNumber={currentPage}
+                onApply={(next) => setScale(next)}
+              />
+            )}
 
             {/* No-text-layer banner (8.2.0) — surfaces how many pages came back
                 with no text layer (usually scanned drawings) so a partly- or
@@ -4806,17 +5674,106 @@ export default function TakeoffViewerModule({
               <canvas
                 ref={overlayRef}
                 className="absolute top-0 left-0"
-                style={{ cursor: activeTool === 'select' ? (dragPreview ? 'grabbing' : 'default') : 'crosshair' }}
+                style={{
+                  cursor: panning
+                    ? 'grabbing'
+                    : spaceHeld
+                      ? 'grab'
+                      : activeTool === 'select'
+                        ? (dragPreview ? 'grabbing' : 'default')
+                        : 'crosshair',
+                }}
                 onClick={handleCanvasClick}
                 onDoubleClick={handleCanvasDblClick}
                 onContextMenu={handleCanvasContextMenu}
                 onMouseDown={handleCanvasMouseDown}
                 onMouseMove={handleCanvasMouseMove}
                 onMouseUp={handleCanvasMouseUp}
+                onMouseLeave={handleCanvasMouseLeave}
                 onTouchStart={handleTouchStart}
                 onTouchMove={handleTouchMove}
                 onTouchEnd={handleTouchEnd}
               />
+
+              {/* Live drawing readout HUD - cursor coordinate + running
+                  segment / cumulative length while a measure tool draws.
+                  Bottom-right so it never collides with the bottom-left legend
+                  or the top tool hint. Lengths hide when the page has no
+                  scale (the helper returns null) so we never show "0 m". */}
+              {drawReadout && (
+                <div
+                  className="absolute bottom-2 right-2 z-10 rounded-lg border border-border bg-surface-primary/95 dark:bg-gray-800/95 backdrop-blur-sm shadow-lg px-3 py-2 text-[11px] font-mono text-content-secondary pointer-events-none space-y-0.5"
+                  data-testid="draw-readout"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="text-content-quaternary uppercase tracking-wide">
+                      {t('takeoff_viewer.readout_position', { defaultValue: 'Position' })}
+                    </span>
+                    <span className="tabular-nums text-content-primary">
+                      {drawReadout.cursor.x}, {drawReadout.cursor.y}
+                    </span>
+                  </div>
+                  {drawReadout.segment != null && (
+                    <div className="flex items-center gap-2">
+                      <span className="text-content-quaternary uppercase tracking-wide">
+                        {t('takeoff_viewer.readout_segment', { defaultValue: 'Segment' })}
+                      </span>
+                      <span className="tabular-nums text-content-primary">
+                        {formatMeasurement(drawReadout.segment, drawReadout.unit)}
+                      </span>
+                    </div>
+                  )}
+                  {drawReadout.total != null && (
+                    <div className="flex items-center gap-2">
+                      <span className="text-content-quaternary uppercase tracking-wide">
+                        {t('takeoff_viewer.readout_total', { defaultValue: 'Total' })}
+                      </span>
+                      <span className="tabular-nums text-content-primary">
+                        {formatMeasurement(drawReadout.total, drawReadout.unit)}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Hover tooltip on an existing measurement (select mode) -
+                  value, group and linked BOQ position. Offset from the cursor
+                  so it does not sit under the pointer; pointer-events disabled
+                  so it never eats the click. */}
+              {hoverInfo && hoverMeasurement && (
+                <div
+                  className="absolute z-20 max-w-[220px] rounded-md border border-border bg-surface-primary/95 dark:bg-gray-800/95 backdrop-blur-sm shadow-lg px-2.5 py-1.5 text-[11px] pointer-events-none"
+                  style={{ left: `${hoverInfo.x + 14}px`, top: `${hoverInfo.y + 14}px` }}
+                  data-testid="measurement-hover-tooltip"
+                >
+                  <div className="font-semibold text-content-primary truncate">
+                    {hoverMeasurement.annotation || hoverMeasurement.label || hoverMeasurement.type}
+                  </div>
+                  {hoverMeasurement.label && (
+                    <div className="tabular-nums text-content-secondary">{hoverMeasurement.label}</div>
+                  )}
+                  <div className="mt-0.5 flex items-center gap-1 text-content-tertiary">
+                    <span className="uppercase tracking-wide text-[10px]">
+                      {t('takeoff_viewer.tooltip_group', { defaultValue: 'Group' })}
+                    </span>
+                    <span>{hoverMeasurement.group || 'General'}</span>
+                  </div>
+                  <div className="mt-0.5 text-[10px]">
+                    {hoverMeasurement.linkedPositionOrdinal ? (
+                      <span className="text-emerald-600 dark:text-emerald-400 font-mono">
+                        {t('takeoff_viewer.tooltip_linked', {
+                          defaultValue: 'Linked to {{pos}}',
+                          pos: hoverMeasurement.linkedPositionOrdinal,
+                        })}
+                      </span>
+                    ) : (
+                      <span className="text-content-quaternary">
+                        {t('takeoff_viewer.tooltip_unlinked', { defaultValue: 'Not linked to a BOQ position' })}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
               {settingScale && (
                 <div
                   className="absolute top-2 left-2 bg-purple-500/90 text-white px-3 py-1.5 rounded-lg text-xs font-medium"

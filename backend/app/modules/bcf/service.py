@@ -65,9 +65,20 @@ class BCFService:
 
     # ── Topics ─────────────────────────────────────────────────────────
 
-    async def list_topics(self, project_id: uuid.UUID) -> list[BCFTopic]:
-        """List all topics for a project, newest first."""
-        return await self.repo.list_topics(project_id)
+    async def list_topics(
+        self,
+        project_id: uuid.UUID,
+        *,
+        offset: int = 0,
+        limit: int = BCFRepository.MAX_TOPICS_LIMIT,
+    ) -> list[BCFTopic]:
+        """List topics for a project, newest first.
+
+        Pagination defaults to a full (but bounded) page so existing callers
+        are unaffected; ``offset`` / ``limit`` let the endpoint page when a
+        project grows past the repository's hard cap.
+        """
+        return await self.repo.list_topics(project_id, offset=offset, limit=limit)
 
     async def get_topic(self, project_id: uuid.UUID, topic_id: uuid.UUID) -> BCFTopic:
         """Load one topic, asserting it belongs to ``project_id``."""

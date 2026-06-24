@@ -122,7 +122,9 @@ export function ClashRuleEditor({
       }
     >
       {isLoading ? (
-        <div className="py-6 text-center text-content-tertiary">Loading…</div>
+        <div className="py-6 text-center text-content-tertiary">
+          {t('common.loading', { defaultValue: 'Loading...' })}
+        </div>
       ) : (
         <div className="space-y-3">
           <table
@@ -165,6 +167,9 @@ export function ClashRuleEditor({
                     <td className="px-2 py-2">
                       <input
                         type="text"
+                        aria-label={t('clash.rules.disc_a', {
+                          defaultValue: 'Discipline A',
+                        })}
                         className="w-full rounded border border-border px-2 py-1 bg-surface-primary"
                         value={r.discipline_a}
                         onChange={(e) =>
@@ -181,6 +186,9 @@ export function ClashRuleEditor({
                     <td className="px-2 py-2">
                       <input
                         type="text"
+                        aria-label={t('clash.rules.disc_b', {
+                          defaultValue: 'Discipline B',
+                        })}
                         className="w-full rounded border border-border px-2 py-1 bg-surface-primary"
                         value={r.discipline_b}
                         onChange={(e) =>
@@ -200,6 +208,9 @@ export function ClashRuleEditor({
                         min={0}
                         max={10}
                         step={0.001}
+                        aria-label={t('clash.rules.tolerance', {
+                          defaultValue: 'Tolerance (m)',
+                        })}
                         className="w-full rounded border border-border px-2 py-1 bg-surface-primary text-right"
                         value={r.tolerance_m}
                         onChange={(e) =>
@@ -221,6 +232,9 @@ export function ClashRuleEditor({
                     </td>
                     <td className="px-2 py-2">
                       <select
+                        aria-label={t('clash.rules.severity', {
+                          defaultValue: 'Severity',
+                        })}
                         className="w-full rounded border border-border px-2 py-1 bg-surface-primary"
                         value={r.severity_override ?? ''}
                         onChange={(e) =>
@@ -239,7 +253,14 @@ export function ClashRuleEditor({
                           )
                         }
                       >
-                        <option value="">—</option>
+                        <option
+                          value=""
+                          aria-label={t('clash.rules.severity_none', {
+                            defaultValue: 'No override',
+                          })}
+                        >
+                          —
+                        </option>
                         <option value="critical">critical</option>
                         <option value="high">high</option>
                         <option value="medium">medium</option>
@@ -249,6 +270,9 @@ export function ClashRuleEditor({
                     <td className="px-2 py-2 text-center">
                       <input
                         type="checkbox"
+                        aria-label={t('clash.rules.enabled', {
+                          defaultValue: 'Enabled',
+                        })}
                         checked={r.enabled}
                         onChange={(e) =>
                           setDraft((d) =>

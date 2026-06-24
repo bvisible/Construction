@@ -547,6 +547,16 @@ class DashboardResult:
         }
 
 
+# ── EVM summary (scalar earned-value rollup) ─────────────────────────────
+# The pure math lives in ``evm_math`` (no ORM / DB imports) so it can be unit
+# tested in isolation. Re-exported here for the existing call sites / router.
+from app.modules.schedule.evm_math import (  # noqa: E402
+    EvmCostRow,
+    EvmSummary,
+    compute_evm_summary,
+)
+
+
 class ScheduleDashboardService:
     """Computes overall progress, SPI/CPI and an S-curve for a schedule."""
 
@@ -937,8 +947,11 @@ __all__ = [
     "DryRunResult",
     "EacPredicateResolver",
     "EacScheduleLinkService",
+    "EvmCostRow",
+    "EvmSummary",
     "ScheduleDashboardService",
     "ScheduleProgressService",
     "ScheduleSnapshotService",
+    "compute_evm_summary",
     "import_schedule_csv",
 ]

@@ -5,6 +5,185 @@ All notable changes to OpenConstructionERP are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [8.8.4] - 2026-06-22
+
+A security and data-integrity hardening release from a deep internal audit.
+
+### Security
+
+- Procurement records now enforce per-project access on every action. You can view, submit, approve, reject, convert, issue, acknowledge, close, receive against or three-way-match a purchase requisition, purchase order, goods receipt or vendor invoice only in projects you can already reach. Previously these endpoints checked only a global role, so any account with the editor or manager role could act on another tenant's procurement and invoice-matching records by supplying their ids.
+- The custom document-template preview no longer renders unsanitised HTML. Template bodies are now cleaned both when saved and before they are previewed, so a template author can no longer plant a script or event-handler payload that would run in another staff member's session when they open the template editor.
+- Private cost-catalogue items now enforce catalogue ownership on read, edit and delete, matching the catalogue-level endpoints. One account can no longer read or change another account's private rates by guessing an item id. The shared global catalogue is unaffected.
+- The estimate-at-completion calculation engine now requires the right role for every action: viewer to read, editor to create or edit rules and rulesets, manager to delete, and editor to run, re-run, cancel or compile. Previously any signed-in account, including a read-only viewer, could create, edit, delete or run the rules that drive cost and validation outputs.
+- Creating a property development, a sales lead or a buyer now verifies you can access the referenced project or parent development before writing, so a development and the plots, buyers and contracts under it can no longer be attached to another tenant's project by id.
+- Validating a requirement set against a BIM model now checks that the model belongs to a project you can access, closing a path that let a requirement set in one project be validated against another tenant's model and read back element counts and property matches.
+- The bill-of-quantities quantity-mapping rules list is now scoped to the projects you can access, so the takeoff and costing rules of other tenants are no longer returned.
+- The cross-tenant cleanup of orphaned BIM storage is now restricted to administrators rather than project managers, matching its global and destructive scope.
+- The single-record read endpoints for job-safety analyses, permits to work, safety audits, audit findings, corrective actions and investigations now enforce project access, so these safety records can no longer be read across tenants by id.
+- Saved business-intelligence dashboards now compute their portfolio KPIs against only the projects the viewer can access, and the dashboard snapshot cache is keyed by the viewer's scope, so a shared dashboard no longer returns cost and earned-value figures aggregated across every tenant.
+- The clash AI triage batch endpoint now authorises every clash in the request rather than only the first, so a batch can no longer be used to triage and read clashes that belong to another tenant's project.
+- Uploading a new document revision now honours folder-level write permission, so a member who holds only a read-only grant on a restricted folder can no longer replace a protected file's contents by posting a revision.
+
+### Fixed
+
+- Bill-of-quantities fixed-amount markups, for example a flat site overhead, bond or contingency, now add into the totals as numbers rather than as text. The editor footer, the Markups panel and the Excel and PDF exports now show the same correct net, VAT and gross figures. Previously a fixed markup could concatenate into the footer total, read as zero in the panel, and carry the wrong totals into the exported documents.
+- Posting realised cost to a budget line now locks the row while it updates, so two postings arriving at the same time from different sources, for example an invoice payment and a labour event, can no longer overwrite each other and silently under-count the actual cost.
+- The bill-of-quantities list now resolves the project exchange rate once and totals positions in a single batched query instead of running a separate set of queries for every bill, so opening a project with many bills is faster and far lighter on the server.
+- Budget committed cost is now reversed when a purchase order is cancelled or reverted from approved, and re-approving an order no longer adds its commitment a second time, so the committed figure and the earned-value and CPI forecasts derived from it stay accurate.
+- Editing a Geo Hub anchor, tileset, imagery layer, terrain source, viewpoint or overlay now merges your change into the saved metadata instead of replacing it, so geocode precision, provenance and other stored keys are no longer lost on a partial edit.
+- The Monte Carlo contingency histogram now reads its bin bounds as numbers, so the chart's axis labels show real values instead of "NaN".
+- Editing a safety incident or observation now merges your change into the saved metadata instead of replacing it, so the recorded man-hours that drive the LTIFR and TRIR safety rates are no longer wiped by an unrelated edit.
+- Inspection signatures now carry a database uniqueness constraint on the signer and role, and completion counts distinct signatories, so a concurrent double-sign can no longer inflate the signatory count or let one person satisfy a multi-signatory completion gate.
+- The ITP-plan "Export compliance (CSV)" download now sends the authentication header through an authed fetch, so it downloads the dossier instead of opening a 401 error page.
+- The compliance-documents register now shows a clear error with a retry when its list fails to load, instead of a misleading "No compliance documents yet" empty state.
+- The nightly and on-demand KPI recalculation now gives each project its own database session, so a single failing query on one project can no longer abort the shared transaction and zero out the KPI snapshots for every project after it.
+- The project-intelligence KPI hero now shows loading and error states instead of defaulting to healthy green zeros, so a failed metric load is no longer indistinguishable from a genuinely healthy project.
+
+## [8.8.3] - 2026-06-21
+
+### Security
+
+- Rebuilding the bill-of-quantities semantic-search index now enforces the same access rules as the rest of the module. You can re-index a single bill or a single project only when you can already open it, and a full re-index of every project is restricted to administrators. Previously any account permitted to edit a bill could rebuild - or, with the purge option, wipe - another tenant's search index by supplying its project or bill id.
+
+### Fixed
+
+- The bill-of-quantities resource summary now converts foreign-currency resources into the project's base currency before adding them up, so the per-type subtotals and the grand total no longer blend different currencies. A resource priced in a currency that has no configured exchange rate is kept in its own units rather than dropped, matching how the cost breakdown already behaves.
+- Editing a bill of quantities, a markup line or a takeoff measurement now merges your change into the record's saved metadata instead of replacing the whole block, so values the server stamps in the background (for example takeoff-run, comparison and verdict markers) are no longer lost when you save an unrelated edit.
+- The safety total-recordable-incident-rate (TRIR) indicator and its drill-down now read the safety incident records correctly. The metric previously always reported zero and the drill-down was always empty.
+- A bill-of-quantities position priced in a foreign currency whose exchange rate is present but unreadable is now kept in its own units instead of being converted one-to-one, matching the resource-level behaviour.
+- The federated BIM viewer no longer throws when the browser or device has no WebGL2 support; it now fails softly so the rest of the page keeps working.
+- Currency amounts in the cost-breakdown and resource-summary panels render reliably from the server's exact values, avoiding occasional malformed totals.
+- Confirming many detected takeoff measurements at once now writes them in a single database operation instead of one round-trip per row.
+- Installing a CAD or BIM converter no longer fails with a "request timed out" error when the download is slow to start. The install always runs in the background and the converters panel updates when it finishes, even if the initial request is dropped by a busy backend or a flaky connection.
+
+## [8.8.2] - 2026-06-21
+
+### Added
+
+- BIM/CAD converters now install themselves with no manual steps. The first time you upload a `.rvt`, `.ifc`, `.dwg` or `.dgn` file, the matching converter is fetched and provisioned in the background, with an inline notice showing progress; you no longer have to open Settings and click Install. The install tries several methods in turn so it works across the widest range of hosts: a system `apt` install when the service runs as root, a rootless unpack into the app's own data directory otherwise, and a built-in pure-Python `.deb` reader when neither `dpkg` nor `apt` is present (minimal containers, non-Debian distributions). Downloads resume and retry on slow or flaky links, and the binary is self-tested after install. Terminal install steps remain documented for locked-down networks, but only as a genuine last resort.
+
+### Fixed
+
+- Bill-of-quantities exports and side-by-side comparison now convert foreign-currency amounts into the project's base currency before totalling, at both the position and the resource level. An export that mixed currencies previously added the raw figures together; the Excel and PDF exports and the compare view now apply the project exchange rates so the totals reconcile (#150).
+
+## [8.8.1] - 2026-06-21
+
+### Fixed
+
+- Takeoff: a PDF uploaded for quantity takeoff now stays attached to the active project, so it remains in the document list after a page reload. Previously the upload was saved with no project; because the takeoff document list is filtered by the active project, the freshly uploaded file disappeared on refresh. The server already verifies the caller's access to the project before storing the file (#242).
+
+## [8.8.0] - 2026-06-21
+
+### Added
+
+- Monte-Carlo cost-risk analysis for a bill of quantities. It runs thousands of correlated, PERT-distributed iterations to produce a full cost distribution rather than a single point estimate: P5 to P95 percentile bands, mean and standard deviation, a probability S-curve (the chance the total lands at or under any given figure), a recommended contingency at your target confidence level, and a tornado chart showing which positions drive the most variance. A one-factor correlation keeps systemic risk from cancelling out across lines.
+- An in-app "How it works" hub, reachable from the Help menu, that explains every module - what it does, the main steps to use it, and a few practical tips - translated into all 27 languages.
+- Lightweight 2D maps in the Geo Hub with a basemap switcher, so you can place and review project locations without loading the full 3D globe.
+- A DIN 276 element breakdown in cost benchmarks, with a short plain-language guide to reading it.
+- Count by example in takeoff: pick one symbol on a drawing and the tool finds and counts the matching symbols across the sheet.
+
+### Fixed
+
+- A bill-of-quantities parent position now rolls its children's progress up as a quantity-weighted average (falling back to a simple average when the children carry no quantity), so a parent's percent-complete reflects the relative size of its parts instead of treating every child equally.
+- Contract cumulative completed value is now recomputed on the server, so progress claims always reconcile to the stored line items rather than drifting from a client-side figure.
+- A quality pass across the lower-traffic modules fixed currency display, action-button gating and several save and persistence issues, so edits land reliably and amounts render in the project's currency.
+- Installing a BIM/CAD converter no longer fails with "signal timed out" on a slow server, leaving you stuck on simplified placeholder geometry. The download now runs in the background and the converter panel updates when it finishes, instead of the request being cancelled mid-download (a 100-300 MB download could never complete inside a single request window, especially behind a reverse proxy). The Linux download also retries and resumes interrupted transfers, and the offline package list was refreshed to match the published repository. If automatic install still cannot finish on a locked-down network, terminal install steps for Linux are documented in `docs/INSTALL_LINUX.md`.
+
+### Security
+
+- The ERP chat assistant and the project-intelligence advisor now honour project team membership when checking access. A user added to a project's team can reach it, while a project the caller may not see returns the same "not found" result as a missing one, so neither data nor a project's existence leaks across the tenant boundary.
+- The property-development broker performance leaderboard now scopes strictly to the caller's own brokers. Previously any account that could open the dashboard saw every tenant's broker activity, gross merchandise value and commission; the figures are now restricted to brokers the account owns (administrators still see the whole platform).
+- Updated the bundled undici, ws, js-yaml, vite and @babel/core build-time dependencies to their patched releases, clearing all known advisories (twelve in total, five high-severity). These are development and build-time tooling libraries that do not ship in the running application, so the update changes no application behaviour.
+
+## [8.7.1] - 2026-06-20
+
+### Fixed
+
+- The recurring "Request timed out" message no longer floods the screen on a busy or slow server. Repeated timeout notices are coalesced to one, a timed-out request is no longer retried (which previously produced a second notice), and the request budget was raised so a slow-but-valid response now succeeds instead of being cancelled.
+- A CAD drawing whose conversion was interrupted by a server restart or update no longer shows a "Converting..." spinner forever. An interrupted conversion is detected and reported as a clear, actionable error so you can remove the drawing and upload it again instead of waiting indefinitely.
+- The AI Estimator no longer runs its source-analysis step twice when you start a new estimate, halving the time and cost of that first stage.
+- The transmittals page now reflects the real transmittal lifecycle (draft, issued, responded) instead of statuses that were never produced, so its filter and summary cards match what you see.
+- The guided AI estimate form (used when no AI provider key is configured) no longer shows raw internal labels for its questions, and its Yes/No answers are now translated.
+- Point cloud files using the conventional COPC double extension (.copc.laz) are now recognised as COPC rather than plain LAZ.
+- The Geo Hub "auto-anchor all projects" action no longer appears to fail on workspaces with many projects: it waits for the server to finish placing every project instead of giving up early.
+
+### Security
+
+- The AI agent tools that read a project's documents, cost summary or bill of quantities now verify that the person running the agent has access to the target project before reading anything. Previously a custom agent could be pointed at another project's id and read data across the tenant boundary; a denied or unknown target now returns the same "not found" result as a missing one, so neither data nor a resource's existence is leaked. Scheduled and event-triggered agent runs are likewise confined to projects their owner can access.
+
+## [8.7.0] - 2026-06-20
+
+### Added
+
+- A country or industry pack can now carry its own estimating methodology and apply it automatically. When you install a pack, its demo project - and any new project you create while that pack is active - starts on the pack's methodology (for example the United States, United Kingdom, India, Germany or Australia cascade) instead of the generic international method, so estimates follow local convention out of the box.
+- Estimates built with the methodology engine export to PDF and Excel.
+- Point cloud scans in LAS, LAZ and COPC formats can be read directly. The reader is an installable extra and the supported formats are stated up front, so an unsupported file (such as E57, which needs the additional package) is reported clearly instead of failing silently.
+- The methodologies page shows its template gallery even when no project is open, so you can browse what ships before starting one.
+- Clash results can be suppressed in bulk, and file-manager uploads are routed by file kind.
+- Several existing capabilities are now surfaced in the interface: a dedicated viewer for 360-degree panorama photos, data-validation results that export to Excel, 4D and earned-value progress in the schedule view, a scan-versus-design overlay, an offline pending-changes indicator, and a single approvals inbox.
+
+### Fixed
+
+- A BIM model that is ready but carries no 3D geometry - for example when no native converter produced one - now shows a clear "No 3D geometry" notice instead of a blank canvas. Reported in [#59](https://github.com/datadrivenconstruction/OpenConstructionERP/issues/59).
+- The 3D viewer releases its WebGL context when you navigate away, so opening several models in one session no longer exhausts the browser's available contexts and falsely reports "3D view unavailable".
+- Core list pages now show a recoverable error message instead of a blank screen when a request fails.
+- A deep-quality pass across the bill-of-quantities, clash, procurement, RFI and schedule modules fixed more than 150 correctness, performance and usability issues - including locale-aware parsing of European-formatted amounts (for example 1.234,56) in GAEB import, atomic goods-receipt handling in procurement, and faster critical-path scheduling.
+
+### Security
+
+- A broad security and data-integrity hardening pass across many modules. Cross-tenant access gaps were closed so portfolio analytics, cross-project similarity, collaboration viewpoints, accommodation and others scope strictly to the projects you may access. Monetary inputs across change orders, risk, QMS, punch lists and bids now reject invalid values (not-a-number, infinity, absurd magnitudes) so one bad entry can no longer corrupt a project-wide total or crash a report. Financial roll-ups no longer blend different currencies into a single mislabelled figure. Partial edits no longer silently drop the fields they did not mention. A shared tenant-scope and money-handling layer, plus a continuous-integration check, were added to keep these from regressing.
+
+## [8.6.1] - 2026-06-19
+
+### Fixed
+
+- BIM and takeoff files now resolve across platforms and installation types. Geometry or PDFs written under one data directory - for example a packaged desktop install versus a from-source run, or a custom data directory - are now found and served instead of appearing as a ready-but-empty model. Files written by earlier versions are still read from their previous locations.
+
+## [8.6.0] - 2026-06-18
+
+### Added
+
+- A data-driven estimating methodology engine. Instead of one fixed markup chain, a project can now follow a named methodology that you build and edit in the app: a typed bill-of-quantities hierarchy, analytical dimensions, named funding sources, and a cascade of markups that build on one another. Country and industry templates ship ready to install - including a Uzbekistan cascade and a railway breakdown that price construction machinery inside the SMR works base while keeping installed equipment as a separate base - and every methodology coexists with, and is switchable against, the existing international method. The cascade editor shows a live preview and reconciles its arithmetic against the server, so the figures you see are the figures that are stored.
+
+### Fixed
+
+- Construction machinery is now costed separately from installed equipment in the bill-of-quantities cost breakdown. A resource typed as machinery used to be folded into the equipment category, which understated the works base and overstated equipment for methodologies that price the two differently, such as the post-Soviet SMR convention used by the Uzbekistan and railway templates. The breakdown now reports a distinct Machinery category; a methodology that does not separate the two is unaffected.
+
+### Security
+
+- Updated the bundled DOMPurify, protobuf.js and tmp dependencies to their patched releases to clear known advisories. These are transitive build-time and runtime libraries and the update changes no behaviour.
+
+## [8.5.0] - 2026-06-18
+
+### Added
+
+- The DWG and DXF quantity takeoff is now a full vector takeoff. Because a drawing is exact vector geometry rather than pixels, every wall, slab and pipe already carries its true length and area, so one click produces a per-layer quantity table with the right unit for each layer, whether that is area, length or a simple count, and it measures arcs, ellipses and hatched fills as well. A count tool adds a count-by-block rollup for repeated symbols, and the whole table exports to Excel in one click. You can also search the drawing text: TEXT and MTEXT labels are found, highlighted and framed with zoom-to-match.
+- The PDF takeoff viewer now works much more like a real drawing tool. A page-thumbnail sidebar lets you move between sheets at a glance, find-on-sheet searches the text layer and jumps to each hit, and the viewer gained fit-to-page and fit-to-width, zoom-to-selection, panning, an orthogonal lock for straight measurements, a live measurement readout and a hover tooltip. Large sheets now fit correctly the first time they open.
+- PDF takeoff can detect the drawing scale. It reads the scale printed in the drawing's text layer, for example 1:100, and offers it for one-click confirmation, so measurements are calibrated without first tracing a known dimension. The detected value is always shown for you to confirm and is never applied on its own.
+- Structural steel can be priced by mass. A cost item can carry a mass per unit and a structural category, and a member priced by length is converted to mass on its way into a bill of quantities, so steel that is sold by weight is estimated correctly.
+- Custom cost items now group under a "My categories" heading in the costs sidebar, so a category you created, such as "Structural Steel", is browsable directly instead of being reachable only through search.
+- The point cloud reader is now an installable extra, and scans can be deleted from the workspace.
+- A short video introducing the platform is linked from the left sidebar. The first close collapses it to a single line, a second close hides it for the rest of the session, and it returns on the next page load.
+- The new and reworded interface text in this release is translated into all 26 other languages.
+
+### Fixed
+
+- Local AI providers that do not need an API key, such as Ollama, no longer ask for one. The API key field is hidden for these providers, a short hint points to the server address instead, and both Test connection and Save work without a key. Reported in [#244](https://github.com/datadrivenconstruction/OpenConstructionERP/issues/244).
+- The 3D model viewer now degrades gracefully instead of failing when the browser cannot create a full-quality WebGL context. On marginal GPUs, virtual machines or remote-desktop sessions it retries with a simpler context, dropping antialiasing and the logarithmic depth buffer, before showing the "3D view unavailable" notice, so the model renders in more environments.
+
+## [8.4.0] - 2026-06-17
+
+### Changed
+
+- The public hosted demo keeps its bundled cost databases read-only. Each regional catalogue is several hundred megabytes and the demo runs on a small shared server, so installing a catalogue there is now disabled with a clear note that points to self-hosting. Browsing every catalogue the full product ships is unchanged, and nothing is restricted on your own machine or server.
+
+### Fixed
+
+- PDF takeoff measurements are now scoped to the project and the specific document they were drawn on, rather than keyed by the document's file name. Two files that share a name, in the same project or across projects, no longer surface each other's measurements. Reported in [#238](https://github.com/datadrivenconstruction/OpenConstructionERP/issues/238).
+- The resources under a bill-of-quantities position now expand on the first click of the chevron instead of needing a second click, the way every other expander in the grid already did.
+
 ## [8.3.3] - 2026-06-15
 
 ### Fixed

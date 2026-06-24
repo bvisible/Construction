@@ -1,5 +1,6 @@
 import { apiGet, apiPost, apiPut, apiPatch, apiDelete } from '@/shared/lib/api';
 import type { CostVariant, VariantStats } from '@/features/costs/api';
+import { resourceAwareTotalInBase } from './boqHelpers';
 
 /* ── Core BOQ types ──────────────────────────────────────────────────── */
 
@@ -158,7 +159,13 @@ export interface Markup {
   markup_type: 'percentage' | 'fixed';
   category: 'overhead' | 'profit' | 'tax' | 'contingency' | 'insurance' | 'bond' | 'other';
   percentage: number;
-  fixed_amount: number;
+  /**
+   * v3 §10 contract: the backend serialises this Decimal money field as a
+   * JSON *string* (e.g. ``"500.00"``), so keep the type honest and coerce
+   * with ``toNum`` from ``@/shared/lib/money`` before any arithmetic — a bare
+   * ``+`` string-concatenates ("1000" + "500.00" → "1000500.00").
+   */
+  fixed_amount: number | string;
   apply_to: 'direct_cost' | 'subtotal' | 'cumulative';
   sort_order: number;
   is_active: boolean;
@@ -435,11 +442,16 @@ export interface SectionGroup {
 export function groupPositionsIntoSections(
   positions: Position[],
   /**
-   * Optional FX context (Issue #111). When supplied, child positions
-   * priced in a non-base currency (``metadata.currency``) are converted
-   * into ``baseCurrency`` before being added to the section subtotal.
-   * Without this, mixed-currency BOQs sum foreign-currency totals
-   * directly into base subtotals, producing nonsensical figures.
+   * Optional FX context (Issue #111 / #150). When supplied, child positions
+   * priced in a non-base currency are converted into ``baseCurrency`` before
+   * being added to the section subtotal. This covers BOTH a position-level
+   * ``metadata.currency`` AND the harder case the contributor's data hits:
+   * a position with NO ``metadata.currency`` but whose ``metadata.resources``
+   * are priced in a foreign currency (its stored ``total`` was built from
+   * ``Σ(r.qty × r.rate)`` with no FX applied). Without this, mixed-currency
+   * BOQs sum foreign-currency totals directly into base subtotals, producing
+   * nonsensical figures — and the Excel/PDF exports + version-compare were
+   * doing exactly that because they called this helper with no fxOpts.
    */
   fxOpts?: {
     baseCurrency?: string;
@@ -456,19 +468,24 @@ export function groupPositionsIntoSections(
   const fxRates = fxOpts?.fxRates;
 
   const rebase = (pos: Position): number => {
-    // Coerce defensively — ``pos.total`` may still be a decimal string
-    // here if the list wasn't run through ``normalizePosition`` first;
-    // adding a raw string into ``subtotal`` concatenates → NaN (#131).
-    const total = toFiniteNumber(pos.total);
-    if (!baseCurrency) return total;
-    const meta = ((pos as { metadata?: Record<string, unknown> }).metadata
-      ?? {}) as Record<string, unknown>;
-    const sourceCurrency = (meta.currency as string | undefined) || baseCurrency;
-    if (sourceCurrency === baseCurrency || !fxRates) return total;
-    const fx = fxRates.find((r) => r.currency === sourceCurrency);
-    const fxRate = fx ? Number(fx.rate) : NaN;
-    if (!fx || !Number.isFinite(fxRate) || fxRate <= 0) return total;
-    return total * fxRate;
+    // Backward-compatible: with no FX context, return the raw (coerced)
+    // position total exactly as before. ``toFiniteNumber`` guards against a
+    // decimal string slipping through unnormalized (adding a raw string into
+    // ``subtotal`` concatenates → NaN, #131).
+    if (!baseCurrency) return toFiniteNumber(pos.total);
+    // Resource-currency-aware roll-up — the SAME conversion the editor grid
+    // (columnDefs ``totalFormatter`` / ``directCost``) uses, so exported and
+    // compared subtotals match what the user sees on screen (#150).
+    return resourceAwareTotalInBase(
+      pos as unknown as {
+        total?: number | string | null;
+        quantity?: number | string | null;
+        metadata?: Record<string, unknown> | null;
+        metadata_?: Record<string, unknown> | null;
+      },
+      baseCurrency,
+      fxRates,
+    );
   };
 
   // First pass: identify sections
@@ -908,11 +925,19 @@ export interface SensitivityItem {
   share_pct: number;
   impact_low: number;
   impact_high: number;
+  /* Probabilistic upgrade (present when method === 'monte_carlo'). */
+  variance_contribution_pct?: number | null;
+  rank_correlation?: number | null;
+  swing_low?: number | null;
+  swing_high?: number | null;
 }
 
 export interface SensitivityResponse {
   base_total: number;
   variation_pct: number;
+  method?: string;
+  iterations?: number;
+  correlation?: number;
   items: SensitivityItem[];
 }
 
@@ -1090,25 +1115,46 @@ export interface CostRiskDriver {
   ordinal: string;
   description: string;
   contribution_pct: number;
+  rank_correlation?: number;
+  swing_low?: number;
+  swing_high?: number;
 }
 
 export interface CostRiskPercentiles {
+  p5?: number;
   p10: number;
   p25: number;
   p50: number;
   p75: number;
   p80: number;
   p90: number;
+  p95?: number;
+}
+
+export interface CostRiskCdfPoint {
+  cost: number;
+  cumulative_prob: number;
 }
 
 export interface CostRiskResponse {
   iterations: number;
+  /* Money fields arrive as Decimal-as-strings on the wire (v3 §10). */
   base_total: number;
+  mean?: number;
+  std_dev?: number;
+  cv_pct?: number;
   percentiles: CostRiskPercentiles;
   contingency_p80: number;
   contingency_pct: number;
   recommended_budget: number;
+  target_confidence?: number;
+  prob_within_base?: number;
+  correlation?: number;
+  seed?: number;
+  convergence_status?: string;
+  convergence_margin_pct?: number;
   histogram: CostRiskHistogramBin[];
+  cdf?: CostRiskCdfPoint[];
   risk_drivers: CostRiskDriver[];
 }
 
@@ -1536,12 +1582,15 @@ export const boqApi = {
     ),
 
   /* Monte Carlo Cost Risk */
-  getCostRisk: (boqId: string, iterations = 1000) =>
-    apiGet<CostRiskResponse>(
-      `/v1/boq/boqs/${boqId}/cost-risk/?iterations=${iterations}`,
-    ),
+  getCostRisk: (boqId: string, correlation?: number) => {
+    const qs = correlation == null ? '' : `?correlation=${correlation}`;
+    return apiGet<CostRiskResponse>(`/v1/boq/boqs/${boqId}/cost-risk/${qs}`);
+  },
 
-  /* Statistics — aggregated BOQ metrics */
+  /* Statistics — aggregated BOQ metrics.
+   * Money fields (direct_cost / grand_total / avg_unit_rate) follow the
+   * Decimal-as-string wire contract (v3 §10) - parse with Number()/a money
+   * helper at the call site, never assume a JS number. */
   getStatistics: (boqId: string) =>
     apiGet<{
       boq_id: string;
@@ -1549,9 +1598,9 @@ export const boqApi = {
       status: string;
       position_count: number;
       section_count: number;
-      direct_cost: number;
-      grand_total: number;
-      avg_unit_rate: number;
+      direct_cost: string;
+      grand_total: string;
+      avg_unit_rate: string;
       completion_pct: number;
       unit_breakdown: Record<string, number>;
       source_breakdown: Record<string, number>;

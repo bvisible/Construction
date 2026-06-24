@@ -142,6 +142,9 @@ const PunchListPage = lazy(() =>
   import('@/features/punchlist/PunchListPage').then((m) => ({ default: m.PunchListPage }))
 );
 const CloseoutPage = lazy(() => import('@/features/closeout/CloseoutPage'));
+const InboxPage = lazy(() =>
+  import('@/features/inbox').then((m) => ({ default: m.InboxPage })),
+);
 const FieldReportsPage = lazy(() =>
   import('@/features/fieldreports/FieldReportsPage').then((m) => ({ default: m.FieldReportsPage }))
 );
@@ -509,6 +512,7 @@ const IntegrationsPage = lazy(() =>
 const AboutPage = lazy(() =>
   import('@/features/about/AboutPage').then((m) => ({ default: m.AboutPage }))
 );
+const HowItWorksPage = lazy(() => import('@/features/help/HowItWorksPage'));
 
 // CPMView is keyed by the schedule it analyses, so the route reads :id and
 // forwards it through. Kept as a tiny inline component to avoid bloating
@@ -978,6 +982,7 @@ export default function App() {
 
         <Route path="/analytics" element={<P title="Analytics"><AnalyticsPage /></P>} />
 
+        <Route path="/inbox" element={<P title="Inbox"><InboxPage /></P>} />
         <Route path="/dashboards" element={<P title="Dashboards"><SnapshotsPage /></P>} />
         <Route path="/projects/:projectId/dashboards" element={<P title="Dashboards"><SnapshotsPage /></P>} />
 
@@ -1075,6 +1080,7 @@ export default function App() {
         {/* //// END NEOFFICE PATCH */}
         <Route path="/integrations" element={<P title="Integrations"><IntegrationsPage /></P>} />
         <Route path="/about" element={<P title="About"><AboutPage /></P>} />
+        <Route path="/how-it-works" element={<P title="How it works"><HowItWorksPage /></P>} />
         <Route path="/project-intelligence" element={<P title="Project Intelligence"><ProjectIntelligencePage /></P>} />
         {/* Architecture Map — internal tool, admin-only. Surfaces module
             dependency graph + DDC integrity audit; not for day-to-day use. */}

@@ -27,6 +27,8 @@ import {
   CloudSun,
   HardHat,
   Camera,
+  Wallet,
+  Inbox,
 } from 'lucide-react';
 
 export interface DashboardWidgetMeta {
@@ -59,12 +61,28 @@ export const DASHBOARD_WIDGETS: readonly DashboardWidgetMeta[] = [
     icon: AlertTriangle,
   },
   {
+    id: 'inbox',
+    labelKey: 'dashboard.layout.w_inbox',
+    labelDefault: 'Inbox',
+    descKey: 'dashboard.layout.w_inbox_desc',
+    descDefault: 'Pending approvals and alerts awaiting you, in one list',
+    icon: Inbox,
+  },
+  {
     id: 'kpi',
     labelKey: 'dashboard.layout.w_kpi',
     labelDefault: 'KPI ribbon',
     descKey: 'dashboard.layout.w_kpi_desc',
     descDefault: 'Portfolio totals - value, projects, schedules',
     icon: TrendingUp,
+  },
+  {
+    id: 'finance_summary',
+    labelKey: 'dashboard.layout.w_finance_summary',
+    labelDefault: 'Finance summary',
+    descKey: 'dashboard.layout.w_finance_summary_desc',
+    descDefault: 'Estimated value, open change orders and budget warnings',
+    icon: Wallet,
   },
   {
     id: 'projects',

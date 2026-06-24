@@ -24,6 +24,7 @@ import {
   type DrainSummary,
   type EnqueueInput,
   type FieldHeadersProvider,
+  type QueuedOp,
 } from '@/shared/lib/offline';
 
 /* ── Connectivity hook ─────────────────────────────────────────────────── */
@@ -43,6 +44,12 @@ export interface FieldSyncState {
   online: boolean;
   /** Number of captured writes still awaiting replay (drives the badge). */
   pending: number;
+  /**
+   * The captured writes still awaiting replay, in FIFO order. Drives the
+   * pending-sync review panel (item type, time, status, retry count). Kept in
+   * sync with `pending` via the queue's change events.
+   */
+  pendingOps: QueuedOp[];
   /** True while a drain is running. */
   syncing: boolean;
   /** Per-item outcomes from the most recent drain (for the review surface). */
@@ -65,13 +72,18 @@ const DRAIN_DEBOUNCE_MS = 1000;
 export function useFieldSync(getHeaders: FieldHeadersProvider): FieldSyncState {
   const online = useConnectivity();
   const [pending, setPending] = useState(0);
+  const [pendingOps, setPendingOps] = useState<QueuedOp[]>([]);
   const [syncing, setSyncing] = useState(false);
   const [lastResults, setLastResults] = useState<DrainResult[]>([]);
 
   const queue = getFieldQueue(getHeaders);
 
   const refreshPending = useCallback(async () => {
-    setPending(await queue.pendingCount());
+    // Pull the full op list once and derive the count from it so the badge and
+    // the review panel can never disagree (single source of truth per refresh).
+    const ops = await queue.pending();
+    setPendingOps(ops);
+    setPending(ops.length);
   }, [queue]);
 
   const syncNow = useCallback(async (): Promise<DrainSummary | null> => {
@@ -127,5 +139,5 @@ export function useFieldSync(getHeaders: FieldHeadersProvider): FieldSyncState {
     return () => clearTimeout(timer);
   }, [online, syncNow]);
 
-  return { online, pending, syncing, lastResults, enqueue, syncNow, discard };
+  return { online, pending, pendingOps, syncing, lastResults, enqueue, syncNow, discard };
 }

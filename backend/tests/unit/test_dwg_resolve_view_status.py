@@ -80,3 +80,45 @@ def test_resolve_view_status_never_returns_uploaded() -> None:
             )
             assert out in {"ready", "empty", "error", "processing", "needs_conversion"}
             assert out != "uploaded"
+
+
+@pytest.mark.parametrize(
+    ("status_value", "file_format", "converter_present", "age_seconds", "expected"),
+    [
+        # Orphaned conversion: still processing/uploaded with no entities and
+        # untouched far past the convert timeout -> terminal error. This is the
+        # fix for the "Converting... 2547m" infinite spinner a real user hit
+        # after reinstalling (the background task died with the old process).
+        ("processing", "dwg", True, 999_999.0, "error"),
+        ("uploaded", "dwg", True, 999_999.0, "error"),
+        ("processing", "dxf", None, 999_999.0, "error"),
+        # Fresh / recent conversions are left alone (genuinely mid-flight).
+        ("processing", "dwg", True, 1.0, "processing"),
+        ("uploaded", "dwg", True, 1.0, "processing"),
+        # No age available -> staleness never triggers (back-compat with callers
+        # that do not pass age_seconds, e.g. the existing pure-function tests).
+        ("processing", "dwg", True, None, "processing"),
+        # A genuinely terminal stored state is never overridden by age.
+        ("error", "dwg", False, 999_999.0, "error"),
+        ("ready", "dwg", False, 999_999.0, "ready"),
+        ("needs_conversion", "dwg", True, 999_999.0, "needs_conversion"),
+    ],
+)
+def test_resolve_view_status_stale_conversion(
+    status_value: str,
+    file_format: str,
+    converter_present: bool | None,
+    age_seconds: float | None,
+    expected: str,
+) -> None:
+    """An orphaned conversion resolves to a terminal ``error``, never a spinner."""
+    assert (
+        resolve(
+            status_value=status_value,
+            file_format=file_format,
+            has_entities=False,
+            converter_present=converter_present,
+            age_seconds=age_seconds,
+        )
+        == expected
+    )

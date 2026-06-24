@@ -31,6 +31,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import select as _select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.csv_safety import neutralise_formula
 from app.dependencies import CurrentUserId, RequirePermission, SessionDep
 from app.modules.clash.models import ClashIssue as _IssueModel
 from app.modules.clash.models import ClashRun as _RunModel
@@ -38,12 +39,16 @@ from app.modules.clash.schemas import (
     CLASH_GROUP_BY,
     CLASH_PROPERTY_GROUP_PREFIX,
     CLASH_SEVERITIES,
+    CLASH_STATUSES,
+    CLASH_TYPES,
     ClashApplyRuleRequest,
     ClashApplyRuleResponse,
     ClashBCFExportRequest,
     ClashBCFExportResponse,
     ClashBCFImportResponse,
     ClashBulkResultUpdate,
+    ClashBulkSuppressRequest,
+    ClashBulkSuppressResponse,
     ClashBulkUpdateResponse,
     ClashCategoriesResponse,
     ClashCategoryItem,
@@ -56,6 +61,7 @@ from app.modules.clash.schemas import (
     ClashIssuePage,
     ClashIssueRead,
     ClashKpiResponse,
+    ClashModelOption,
     ClashProfileApplyRequest,
     ClashProfileCreate,
     ClashProfileRead,
@@ -77,10 +83,13 @@ from app.modules.clash.schemas import (
 from app.modules.clash.service import ClashService
 
 _MAX_EXPORT_ROWS = 25_000
-# Upper bound on the BCF import payload. 100 MiB matches the BCF
+# Upper bound on the BCF import payload. 500 MiB matches the BCF
 # module's own gate and the BCFReader default - federated coordination
 # packages with hundreds of viewpoints can legitimately exceed 25 MiB.
 _MAX_BCF_UPLOAD_BYTES = 500 * 1024 * 1024
+# Human-readable cap for the 413 detail, derived from the byte limit so the
+# message can never drift from the constant it describes.
+_MAX_BCF_UPLOAD_MIB = _MAX_BCF_UPLOAD_BYTES // (1024 * 1024)
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +116,7 @@ async def _require_project_access(session: AsyncSession, project_id: uuid.UUID, 
 
 @router.get(
     "/projects/{project_id}/models",
+    response_model=list[ClashModelOption],
     dependencies=[Depends(RequirePermission("clash.read"))],
 )
 async def list_models(
@@ -114,17 +124,19 @@ async def list_models(
     user_id: CurrentUserId,
     session: SessionDep,
     service: ClashService = Depends(_get_service),
-) -> list[dict]:
+) -> list[ClashModelOption]:
     """‌⁠‍Lightweight BIM-model list for the run-config picker."""
     await _require_project_access(session, project_id, user_id)
     models = await service.repo.models_for_project(project_id)
     return [
-        {
-            "id": str(m.id),
-            "name": getattr(m, "name", None) or getattr(m, "filename", "Model"),
-            "element_count": int(getattr(m, "element_count", 0) or 0),
-            "status": getattr(m, "status", None),
-        }
+        ClashModelOption(
+            # ``name`` falls back filename -> generic so the required str is
+            # never None even when the source row carries neither.
+            id=str(m.id),
+            name=(getattr(m, "name", None) or getattr(m, "filename", None) or "Model"),
+            element_count=int(getattr(m, "element_count", 0) or 0),
+            status=getattr(m, "status", None),
+        )
         for m in models
     ]
 
@@ -428,6 +440,20 @@ async def list_results(
 ) -> ClashResultPage:
     await _require_project_access(session, project_id, user_id)
     await service.get_run(project_id, run_id)  # 404 if run not in project
+    # Validate the enum-style filters up-front so an unknown value gets a
+    # clear 422 rather than silently returning an empty page (the repo
+    # filters with ``==``). Mirrors the existing severity check so the
+    # whole filter contract is consistent.
+    if status_filter is not None and status_filter not in CLASH_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid clash status '{status_filter}'",
+        )
+    if clash_type is not None and clash_type not in CLASH_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid clash type '{clash_type}'",
+        )
     if severity is not None and severity not in CLASH_SEVERITIES:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -470,13 +496,18 @@ async def update_result(
     await _require_project_access(session, project_id, user_id)
     add_comment: dict | None = None
     if data.add_comment is not None:
-        author = (data.add_comment.author or "").strip()
-        if not author:
-            author = await service.resolve_author(user_id)
+        # Authorship is server-authoritative (mirrors the bcf module): the
+        # comment is always attributed to the authenticated caller. A
+        # client-supplied ``author`` / ``author_id`` is deliberately
+        # ignored so an editor cannot post a triage note under another
+        # person's identity (comment-author spoofing). The real frontend
+        # only ever sends ``text`` + ``reply_to`` anyway, so this is
+        # behaviour-preserving for the app and only closes the attack surface.
+        author = await service.resolve_author(user_id)
         add_comment = {
             "text": data.add_comment.text,
             "author": author,
-            "author_id": data.add_comment.author_id or str(user_id),
+            "author_id": str(user_id),
             "reply_to": data.add_comment.reply_to or None,
         }
     result = await service.update_result(
@@ -525,6 +556,39 @@ async def bulk_update_results(
     return ClashBulkUpdateResponse(updated=updated, requested=len(data.result_ids))
 
 
+@router.post(
+    "/projects/{project_id}/runs/{run_id}/results/suppress",
+    response_model=ClashBulkSuppressResponse,
+    dependencies=[Depends(RequirePermission("clash.update"))],
+)
+async def bulk_suppress_results(
+    project_id: uuid.UUID,
+    run_id: uuid.UUID,
+    data: ClashBulkSuppressRequest,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    service: ClashService = Depends(_get_service),
+) -> ClashBulkSuppressResponse:
+    """Suppress the smart issues behind a selection of review-table rows.
+
+    Backs the review table's "Suppress selected" bulk action. The
+    selection is keyed by clash result id; the server maps each to its
+    underlying issue signature and flips the matching issues to
+    ``ignored`` (so the signatures won't auto-resurface in future runs)
+    in a single transaction. Foreign / unknown ids are dropped and
+    reported in ``skipped_ids`` rather than raised (IDOR-safe).
+    """
+    await _require_project_access(session, project_id, user_id)
+    outcome = await service.bulk_suppress_results(
+        project_id,
+        run_id,
+        data.result_ids,
+        data.reason,
+        user_id,
+    )
+    return ClashBulkSuppressResponse(**outcome)
+
+
 @router.get(
     "/projects/{project_id}/runs/{run_id}/compare",
     response_model=ClashCompareResponse,
@@ -571,6 +635,18 @@ async def export_csv(
     """
     await _require_project_access(session, project_id, user_id)
     run = await service.get_run(project_id, run_id)
+    # Same filter contract as the JSON results list: an unknown enum value
+    # is a 422, not a silently-empty CSV.
+    if status_filter is not None and status_filter not in CLASH_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid clash status '{status_filter}'",
+        )
+    if clash_type is not None and clash_type not in CLASH_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid clash type '{clash_type}'",
+        )
     if severity is not None and severity not in CLASH_SEVERITIES:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -605,20 +681,25 @@ async def export_csv(
         ]
     )
     for i, r in enumerate(rows, start=1):
+        # ``neutralise_formula`` defends against CSV formula injection
+        # (BUG-CSV-INJECTION): a source-controlled element name / discipline
+        # / assignee like ``=cmd|'/c calc'!A0`` would otherwise be executed
+        # by Excel when a colleague opens the export. Numeric cells pass
+        # through unchanged (the helper only rewrites dangerous strings).
         writer.writerow(
             [
                 i,
-                r.a_name,
-                r.a_discipline,
-                r.b_name,
-                r.b_discipline,
-                r.clash_type,
-                getattr(r, "severity", "medium") or "medium",
+                neutralise_formula(r.a_name),
+                neutralise_formula(r.a_discipline),
+                neutralise_formula(r.b_name),
+                neutralise_formula(r.b_discipline),
+                neutralise_formula(r.clash_type),
+                neutralise_formula(getattr(r, "severity", "medium") or "medium"),
                 r.penetration_m,
                 r.distance_m,
-                r.status,
-                r.assigned_to or "",
-                getattr(r, "due_date", None) or "",
+                neutralise_formula(r.status),
+                neutralise_formula(r.assigned_to or ""),
+                neutralise_formula(getattr(r, "due_date", None) or ""),
             ]
         )
     csv_text = buf.getvalue()
@@ -689,7 +770,7 @@ async def import_bcf(
     if len(payload) > _MAX_BCF_UPLOAD_BYTES:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail="BCF archive exceeds 100 MiB upload cap.",
+            detail=f"BCF archive exceeds {_MAX_BCF_UPLOAD_MIB} MiB upload cap.",
         )
     matched, unmatched, errors = await service.import_bcf(project_id, run_id, payload, actor=str(user_id))
     return ClashBCFImportResponse(matched=matched, unmatched=unmatched, errors=errors)

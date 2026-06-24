@@ -44,6 +44,7 @@ function rfi(partial: Partial<RFI>): RFI {
     date_required: null,
     response_due_date: null,
     linked_drawing_ids: [],
+    attachments: [],
     change_order_id: null,
     created_by: null,
     priority: null,
@@ -153,6 +154,17 @@ describe('daysOverdue', () => {
     const far = daysOverdue(isoDaysFromNow(-30))!;
     const near = daysOverdue(isoDaysFromNow(-3))!;
     expect(far).toBeGreaterThan(near);
+  });
+
+  it('returns the exact integer day count (no off-by-one)', () => {
+    // The helper must read the bare YYYY-MM-DD due date on the same
+    // calendar basis it parses it (UTC), so a due date is never shifted a
+    // day earlier in negative-offset timezones. A date N days in the past
+    // is exactly +N overdue; today is exactly 0.
+    expect(daysOverdue(isoDaysFromNow(0))).toBe(0);
+    expect(daysOverdue(isoDaysFromNow(-1))).toBe(1);
+    expect(daysOverdue(isoDaysFromNow(-7))).toBe(7);
+    expect(daysOverdue(isoDaysFromNow(1))).toBe(-1);
   });
 });
 

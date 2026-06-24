@@ -808,7 +808,10 @@ class FinanceService:
             """
             amount = _safe_decimal(raw)
             converted, _missing = _convert_to_base(
-                {(currency or "").strip().upper(): float(amount)},
+                # Keep money as Decimal end to end - _convert_to_base coerces via
+                # _safe_decimal, so float() here would only re-introduce binary
+                # imprecision the module is careful to avoid.
+                {(currency or "").strip().upper(): amount},
                 base_currency=base_currency,
                 fx_rates_map=fx_map,
             )
@@ -1059,7 +1062,9 @@ class FinanceService:
 
         def _to_base(raw: object) -> Decimal:
             converted, _missing = _convert_to_base(
-                {claim_currency: float(_safe_decimal(raw))},
+                # Decimal end to end (no lossy float round-trip); the stored
+                # invoice line/subtotal/retention amounts are derived from this.
+                {claim_currency: _safe_decimal(raw)},
                 base_currency=base_currency,
                 fx_rates_map=fx_map,
             )
@@ -1352,7 +1357,8 @@ class FinanceService:
         base_currency = (getattr(project, "currency", "") or "").strip().upper() if project else ""
         fx_map = _project_fx_map(project)
         converted, _missing = _convert_to_base(
-            {(currency or "").strip().upper(): float(_safe_decimal(payment.amount))},
+            # Decimal end to end (no lossy float round-trip) for the posted actual.
+            {(currency or "").strip().upper(): _safe_decimal(payment.amount)},
             base_currency=base_currency,
             fx_rates_map=fx_map,
         )

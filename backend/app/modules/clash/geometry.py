@@ -154,14 +154,17 @@ class ElementGeom:
 
 
 def _repo_data_root() -> pathlib.Path:
-    """Return ``<repo>/data`` - the local storage root for BIM blobs.
+    """Return the active local storage root for BIM blobs.
 
-    Mirrors :func:`app.core.storage._default_local_base_dir` so this
-    module never invents a second path scheme. This file lives at
-    ``backend/app/modules/clash/geometry.py`` → ``parents[4]`` == repo
-    root.
+    Defers to :func:`app.core.storage.resolve_data_dir` so this module never
+    invents a second path scheme - it honours OE_DATA_DIR / DATA_DIR /
+    OE_CLI_DATA_DIR exactly like the storage backend, instead of hard-coding
+    the package-relative ``<repo>/data`` (which broke standalone deployments
+    that set OE_DATA_DIR).
     """
-    return pathlib.Path(__file__).resolve().parents[4] / "data"
+    from app.core.storage import resolve_data_dir
+
+    return resolve_data_dir()
 
 
 def _is_template_node(node_name: str) -> bool:

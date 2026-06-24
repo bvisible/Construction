@@ -118,6 +118,11 @@ def _plan(m: PartnerPackManifest) -> dict[str, Any]:
         warnings.append(
             f"Default tax template '{m.default_tax_template}' is recorded for reference (no automatic tax resolver yet)."
         )
+    if m.default_methodology:
+        warnings.append(
+            f"Estimating methodology '{m.default_methodology}' will be activated on the pack's demo "
+            "project and seeded on new projects created while the pack is active."
+        )
     if m.cwicr_regions:
         warnings.append(
             f"CWICR regions {', '.join(m.cwicr_regions)} are recorded; cost data is not downloaded automatically."
@@ -141,6 +146,7 @@ def _plan(m: PartnerPackManifest) -> dict[str, Any]:
         "rule_packs_documentation_only": rules_docs_only,
         "cwicr_regions": list(m.cwicr_regions or []),
         "default_tax_template": m.default_tax_template,
+        "default_methodology": m.default_methodology,
         "demo_project": _pack_demo_info(m.slug),
         "warnings": warnings,
     }
@@ -223,6 +229,14 @@ async def apply_pack(
             if demo_id:
                 async with async_session_factory() as demo_session:
                     demo_res = await install_demo_project(demo_session, demo_id, partner_pack=m.slug)
+                    # Activate the pack's estimating methodology on the demo
+                    # project in the same transaction so it opens with the
+                    # partner's cascade (bases + markup steps), not the flat
+                    # international default. Builtin template slug only; an
+                    # unknown slug is skipped with a warning. Fail-soft.
+                    _meth_effect = await _activate_pack_methodology(demo_session, m, demo_res.get("project_id"))
+                    if _meth_effect:
+                        effects["methodology"] = _meth_effect
                     await demo_session.commit()
                 effects["demo_project"] = {
                     "demo_id": demo_id,
@@ -278,6 +292,49 @@ async def apply_pack(
         "warnings": plan["warnings"],
         "plan": plan,
     }
+
+
+async def _activate_pack_methodology(
+    session: Any, m: PartnerPackManifest, project_id_raw: Any
+) -> dict[str, Any] | None:
+    """Set the pack's ``default_methodology`` as a project's active methodology.
+
+    Writes ``metadata_['methodology_slug']`` directly (the same pointer
+    :func:`app.modules.methodology.service.set_active_methodology` maintains) on
+    the given project inside the caller's transaction, so a ``commit`` by the
+    caller persists it atomically with the demo install. Only a known built-in
+    template slug is honoured; an unknown slug is logged and skipped. Returns an
+    effect dict ``{"slug", "project_id"}`` or ``None`` when nothing was set.
+    Fully fail-soft: any error is swallowed so methodology never aborts an apply.
+    """
+    meth_slug = getattr(m, "default_methodology", None)
+    if not meth_slug or not project_id_raw:
+        return None
+    try:
+        # Pure data module (no DB/Pydantic/FastAPI import) - safe and cheap.
+        from app.modules.methodology.templates import TEMPLATES_BY_SLUG
+
+        if meth_slug not in TEMPLATES_BY_SLUG:
+            logger.warning(
+                "Pack %s default_methodology '%s' is not a known template; skipped",
+                m.slug,
+                meth_slug,
+            )
+            return None
+        from app.modules.projects.models import Project
+
+        pid = project_id_raw if isinstance(project_id_raw, uuid.UUID) else uuid.UUID(str(project_id_raw))
+        proj = await session.get(Project, pid)
+        if proj is None:
+            return None
+        md = dict(proj.metadata_ or {})
+        md["methodology_slug"] = meth_slug
+        proj.metadata_ = md
+        logger.info("Partner-pack apply: methodology '%s' activated on demo project %s", meth_slug, pid)
+        return {"slug": meth_slug, "project_id": str(pid)}
+    except Exception as exc:  # noqa: BLE001 - methodology never aborts an apply
+        logger.warning("Partner-pack apply: methodology activation failed: %s", exc)
+        return None
 
 
 async def _untag_pack_projects(slug: str) -> int:

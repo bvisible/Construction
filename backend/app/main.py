@@ -1238,13 +1238,34 @@ def create_app() -> FastAPI:
     from fastapi.exceptions import RequestValidationError
     from fastapi.responses import JSONResponse
 
+    from app.middleware.request_id import get_request_id
+
     @app.exception_handler(Exception)
     async def global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-        logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
-        return JSONResponse(
-            status_code=500,
-            content={"detail": "Internal server error"},
+        # Surface the SAME correlation id the RequestIDMiddleware already
+        # assigned (and echoed on the X-Request-ID response header) - do NOT
+        # mint a new one. A client / support engineer can quote this id and we
+        # can find the matching ``logger.exception`` line below in the server
+        # logs (the RequestIDLogFilter tags every record with it). The full
+        # stack trace stays server-side; the client only ever sees the opaque
+        # id, never the exception text.
+        request_id = get_request_id()
+        logger.exception(
+            "Unhandled exception on %s %s (request_id=%s)",
+            request.method,
+            request.url.path,
+            request_id or "-",
         )
+        body: dict[str, str] = {"detail": "Internal server error"}
+        if request_id:
+            body["request_id"] = request_id
+        response = JSONResponse(status_code=500, content=body)
+        # The exception path bypasses the RequestIDMiddleware's normal
+        # response-header injection (the middleware's call_next raised), so
+        # re-attach the header here for trace correlation parity.
+        if request_id:
+            response.headers["X-Request-ID"] = request_id
+        return response
 
     # BUG-API02: sanitise FastAPI's default RequestValidationError response.
     #
@@ -2744,7 +2765,14 @@ def create_app() -> FastAPI:
                 except Exception:
                     logger.exception("KPI recalculation scheduler failed")
 
-        asyncio.create_task(_kpi_scheduler())
+        # Background schedulers are skipped under OE_TEST_FAST_STARTUP: the test
+        # suite stands up a fresh app (and thus a fresh set of these loops) per
+        # module on a single shared event loop. Left running, each module's
+        # detached loops accumulate and periodically open their own DB sessions,
+        # eventually exhausting the PostgreSQL connection cap (TooManyConnections)
+        # for later modules. Production (flag unset) starts them as before.
+        if not _fast_startup:
+            asyncio.create_task(_kpi_scheduler())
 
         # ── File-trash retention purge (24-hour interval) ─────────────
         # Walks ``oe_file_trash`` once a day and hard-deletes every row
@@ -2753,9 +2781,10 @@ def create_app() -> FastAPI:
         # doesn't end up running two parallel purge loops against the
         # same database.
         try:
-            from app.modules.file_trash.jobs import register_jobs as _ft_register_jobs
+            if not _fast_startup:
+                from app.modules.file_trash.jobs import register_jobs as _ft_register_jobs
 
-            _ft_register_jobs()
+                _ft_register_jobs()
         except Exception:
             logger.exception("file_trash scheduler registration failed")
 
@@ -2849,7 +2878,8 @@ def create_app() -> FastAPI:
             except Exception:
                 logger.debug("Cost-DB pre-warm failed (non-fatal)", exc_info=True)
 
-        asyncio.create_task(_prewarm_cost_caches())
+        if not _fast_startup:
+            asyncio.create_task(_prewarm_cost_caches())
 
         # ── Scheduled reports worker (1-minute tick) ────────────────────
         # Polls oe_reporting_template for rows whose ``next_run_at`` is
@@ -2921,15 +2951,17 @@ def create_app() -> FastAPI:
                 except Exception:
                     logger.exception("Reports scheduler tick failed")
 
-        asyncio.create_task(_reports_scheduler())
+        if not _fast_startup:
+            asyncio.create_task(_reports_scheduler())
 
         # No-code agent builder: fire scheduled custom agents (item #29). The
         # loop lives in the ai_agents module and self-schedules via asyncio;
         # fail-soft so a scheduler hiccup never blocks startup.
         try:
-            from app.modules.ai_agents.scheduler import start_scheduler
+            if not _fast_startup:
+                from app.modules.ai_agents.scheduler import start_scheduler
 
-            start_scheduler()
+                start_scheduler()
         except Exception:  # noqa: BLE001 - never block startup on the scheduler
             logger.exception("AI agent scheduler failed to start")
 
@@ -2951,7 +2983,8 @@ def create_app() -> FastAPI:
                 except Exception:
                     logger.exception("Risk escalation sweep tick failed")
 
-        asyncio.create_task(_risk_escalation_sweeper())
+        if not _fast_startup:
+            asyncio.create_task(_risk_escalation_sweeper())
 
         _section("Ready")
         # Friendly multi-line ready banner. The CLI (`openestimate serve`)

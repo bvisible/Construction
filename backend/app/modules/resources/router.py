@@ -831,15 +831,54 @@ async def rank_candidates(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Invalid home_project_id: {exc}",
             ) from exc
+
+    # Guard the numeric tuning knobs. Previously a non-numeric
+    # ``weight_*`` / ``limit`` (e.g. "high", null, a list) reached a bare
+    # ``float()`` / ``int()`` and surfaced as an unhandled 500. Parse each
+    # explicitly and answer with a 400 so the client sees actionable input
+    # feedback instead of a server error.
+    def _coerce_weight(key: str, default: float) -> float:
+        raw = payload.get(key)
+        if raw is None or raw == "":
+            return default
+        try:
+            return float(raw)
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid {key}: expected a number",
+            ) from exc
+
+    weight_skill = _coerce_weight("weight_skill", 0.6)
+    weight_availability = _coerce_weight("weight_availability", 0.3)
+    weight_proximity = _coerce_weight("weight_proximity", 0.1)
+
+    limit_raw = payload.get("limit")
+    if limit_raw is None or limit_raw == "":
+        limit = 20
+    else:
+        try:
+            limit = int(limit_raw)
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid limit: expected an integer",
+            ) from exc
+        if limit < 1:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid limit: must be >= 1",
+            )
+
     return await service.rank_candidates(
         skill_ids,
         start,
         end,
         home_project_id=home_pid,
-        weight_skill=float(payload.get("weight_skill") or 0.6),
-        weight_availability=float(payload.get("weight_availability") or 0.3),
-        weight_proximity=float(payload.get("weight_proximity") or 0.1),
-        limit=int(payload.get("limit") or 20),
+        weight_skill=weight_skill,
+        weight_availability=weight_availability,
+        weight_proximity=weight_proximity,
+        limit=limit,
     )
 
 

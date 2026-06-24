@@ -28,6 +28,7 @@ import { registerFieldServiceWorker } from '@/shared/lib/offline';
 import { ModuleGuideButton } from '@/shared/ui';
 import { useFieldSync } from './useFieldSync';
 import { OfflineStatusBadge } from './OfflineStatusBadge';
+import { SyncQueuePanel } from './SyncQueuePanel';
 import { readFieldSession } from './fieldApi';
 import { TodayTab, CaptureTab, CrewTab } from './FieldTabs';
 import { fieldGuide } from './fieldGuide';
@@ -74,7 +75,8 @@ export function FieldShellPage() {
 
   // Stable headers provider so the queue sender is constructed once.
   const getHeaders = useCallback(() => fieldAuthHeaders(), []);
-  const { online, pending, syncing, syncNow, enqueue } = useFieldSync(getHeaders);
+  const { online, pending, pendingOps, syncing, syncNow, enqueue, discard } =
+    useFieldSync(getHeaders);
 
   // Register the scoped field service worker so the shell + last-viewed data
   // load offline. Best-effort: a failure does not affect the IndexedDB queue.
@@ -118,17 +120,25 @@ export function FieldShellPage() {
         {tab === 'capture' && <CaptureTab session={session} enqueue={enqueue} />}
         {tab === 'crew' && <CrewTab session={session} enqueue={enqueue} />}
         {tab === 'profile' && (
-          <div className="flex flex-1 flex-col items-center justify-center gap-2 px-4 py-8 text-center">
-            <p className="text-sm text-slate-500">
-              {session
-                ? t('field.profile_signed_in', { defaultValue: 'Signed in as a field worker.' })
-                : t('field.no_session', { defaultValue: 'Open the link from your SMS to start.' })}
-            </p>
-            <p className="text-xs text-slate-400">
-              {online
-                ? t('field.sync_online', { defaultValue: 'Online - changes sync automatically.' })
-                : t('field.sync_offline', { defaultValue: 'Offline - changes are saved and will sync.' })}
-            </p>
+          <div className="flex flex-1 flex-col">
+            <div className="flex flex-col items-center gap-2 px-4 py-6 text-center">
+              <p className="text-sm text-slate-500">
+                {session
+                  ? t('field.profile_signed_in', { defaultValue: 'Signed in as a field worker.' })
+                  : t('field.no_session', { defaultValue: 'Open the link from your SMS to start.' })}
+              </p>
+              <p className="text-xs text-slate-400">
+                {online
+                  ? t('field.sync_online', { defaultValue: 'Online - changes sync automatically.' })
+                  : t('field.sync_offline', { defaultValue: 'Offline - changes are saved and will sync.' })}
+              </p>
+            </div>
+            {/* Pending-sync review queue: lists offline captures awaiting replay
+                with per-item retry/dismiss. */}
+            <SyncQueuePanel
+              state={{ online, pendingOps, syncing, syncNow, discard }}
+              className="border-t border-slate-100"
+            />
           </div>
         )}
       </main>

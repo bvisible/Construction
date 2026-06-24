@@ -11,6 +11,11 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+# Upper bound for money fields - far above any realistic rework cost yet within
+# Decimal's precision so quantize() below can never raise InvalidOperation on a
+# finite-but-absurd input. Mirrors changeorders/schemas.py:_MONEY_MAX.
+_MONEY_MAX = Decimal("1e15")
+
 # ── Punch Item schemas ──────────────────────────────────────────────────
 
 
@@ -55,8 +60,16 @@ class PunchItemCreate(BaseModel):
             d = Decimal(v)
         except InvalidOperation as exc:
             raise ValueError(f"rework_cost must be a valid decimal string, got {v!r}") from exc
+        # Reject non-finite FIRST: Decimal("NaN") < 0 itself raises
+        # InvalidOperation, and "Infinity" / "1e400" would otherwise reach
+        # quantize() and raise there - either way a non-ValueError escapes
+        # Pydantic as an opaque 500 instead of a clean 422.
+        if not d.is_finite():
+            raise ValueError("rework_cost must be a finite number (no NaN/Infinity)")
         if d < 0:
             raise ValueError("rework_cost must be non-negative")
+        if d >= _MONEY_MAX:
+            raise ValueError("rework_cost is outside the supported range")
         # Normalise: round to 4 dp, drop trailing zeros
         return str(d.quantize(Decimal("0.0001")).normalize())
 
@@ -99,8 +112,12 @@ class PunchItemUpdate(BaseModel):
             d = Decimal(v)
         except InvalidOperation as exc:
             raise ValueError(f"rework_cost must be a valid decimal string, got {v!r}") from exc
+        if not d.is_finite():
+            raise ValueError("rework_cost must be a finite number (no NaN/Infinity)")
         if d < 0:
             raise ValueError("rework_cost must be non-negative")
+        if d >= _MONEY_MAX:
+            raise ValueError("rework_cost is outside the supported range")
         return str(d.quantize(Decimal("0.0001")).normalize())
 
 

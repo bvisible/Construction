@@ -328,7 +328,13 @@ export function autoAnchorFromAddress(
 
 /** Bulk auto-anchor every caller-accessible un-anchored project. */
 export function bulkAutoAnchorFromAddress(): Promise<BulkAnchorSummary> {
-  return apiPost<BulkAnchorSummary>(`${BASE}/anchors/from-address/bulk/`, {});
+  // The backend serialises every project through the geocoder at >=1 req/sec
+  // (a process-global rate limit) over up to 200 rows, so a workspace with
+  // many un-cached projects comfortably exceeds the default 45s mutation
+  // budget. Opt into the long-running budget so the primary empty-state CTA
+  // waits for the real per-project summary instead of aborting at 45s and
+  // showing a spurious "Bulk auto-anchor failed" toast while pins keep landing.
+  return apiPost<BulkAnchorSummary>(`${BASE}/anchors/from-address/bulk/`, {}, { longRunning: true });
 }
 
 /* ── Anchored projects (Global Geo Hub pin layer) ───────────────────── */

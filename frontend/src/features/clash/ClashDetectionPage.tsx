@@ -101,15 +101,18 @@ import {
   type ClashGroupingDimension,
   type ClashMatrixCell,
 } from './api';
-import { buildClashBimLink } from './clashBimLink';
+import { buildClashBimLink, buildSelectionSetBimLink } from './clashBimLink';
+import { deriveSelectionSetFromFindings } from './clashSelectionSet';
 import {
   createDebouncedPersist,
   loadFilters,
 } from './clashFilterPersistence';
 import { ClashClusterChips } from './ClashClusterChips';
+import { ClashRunDiffBadge } from './ClashRunDiffBadge';
 import { ClashRuleEditor } from './ClashRuleEditor';
 import { ClashRuleSuggestionBanner } from './ClashRuleSuggestionBanner';
 import { ClashKpiPanel } from './ClashKpiPanel';
+import { ClashSmartIssuesPanel } from './ClashSmartIssuesPanel';
 import { ClashCostImpactColumn } from './ClashCostImpactColumn';
 import { clashGuide } from './clashGuide';
 
@@ -209,7 +212,13 @@ type ResultGroupBy =
   | 'status'
   | 'element_a';
 
-const OPEN_STATUSES = ['new', 'active'];
+// Statuses that still need attention - MUST match the backend's
+// ``schemas.OPEN_STATUSES`` (new, active, reviewed). The server computes
+// every matrix/KPI ``open_count`` with ``reviewed`` included, and
+// ``ClashKpiPanel`` + the "Open" matrix badges already count it as open;
+// dropping it here made the page's "Open" KPI tile and the ``open`` quick
+// filter silently disagree with those surfaces for any reviewed clash.
+const OPEN_STATUSES = ['new', 'active', 'reviewed'];
 const STATUS_OPTIONS = [
   'new',
   'active',
@@ -535,6 +544,9 @@ export function ClashDetectionPage() {
   // Wave A4 — UI flags for the new rule editor modal + KPI dashboard tab.
   const [rulesOpen, setRulesOpen] = useState(false);
   const [kpiTabOpen, setKpiTabOpen] = useState(false);
+  // Project-wide Smart Issues management panel (persistent clash identities
+  // + suppress/unsuppress). Toggled from the run header like the KPI tab.
+  const [issuesTabOpen, setIssuesTabOpen] = useState(false);
 
   // Table state.
   const [sortKey, setSortKey] = useState<SortKey>('idx');
@@ -1129,6 +1141,86 @@ export function ClashDetectionPage() {
         queryKey: ['clash-results', projectId, runId],
       });
       qc.invalidateQueries({ queryKey: ['clash-run', projectId, runId] });
+    },
+  });
+
+  // Bulk suppression. Flips the smart issues behind the selected rows to
+  // ``ignored`` in ONE request (so the signatures won't auto-resurface in
+  // future runs) and records the reason on each. Optimistically marks the
+  // selected rows ``ignored``; the authoritative state arrives on
+  // invalidate (the server skips rows that have no smart issue yet, which
+  // the success toast surfaces via the skipped count).
+  const suppressMut = useMutation({
+    mutationFn: (v: { ids: string[]; reason: string }) =>
+      clashApi.bulkSuppressResults(projectId, runId, {
+        result_ids: v.ids,
+        reason: v.reason,
+      }),
+    onMutate: async (v) => {
+      await qc.cancelQueries({
+        queryKey: ['clash-results', projectId, runId],
+      });
+      const prev = qc.getQueryData<{ items: ClashResult[] }>([
+        'clash-results',
+        projectId,
+        runId,
+      ]);
+      const idSet = new Set(v.ids);
+      qc.setQueryData<{ items: ClashResult[] }>(
+        ['clash-results', projectId, runId],
+        (old) =>
+          old
+            ? {
+                ...old,
+                items: old.items.map((r) =>
+                  idSet.has(r.id) ? { ...r, status: 'ignored' } : r,
+                ),
+              }
+            : old,
+      );
+      return { prev };
+    },
+    onError: (e: Error, _v, ctx) => {
+      if (ctx?.prev)
+        qc.setQueryData(['clash-results', projectId, runId], ctx.prev);
+      addToast({
+        type: 'error',
+        title: t('clash.bulk_suppress_failed', {
+          defaultValue: 'Bulk suppression failed',
+        }),
+        message: e.message,
+      });
+    },
+    onSuccess: (res) => {
+      addToast({
+        type: 'success',
+        title: t('clash.bulk_suppress_done', {
+          defaultValue: '{{n}} clash(es) suppressed',
+          n: res.suppressed_count,
+        }),
+        // Some rows have no smart issue yet (e.g. a brand-new run not
+        // finalized) and are reported back as skipped, not suppressed.
+        message:
+          res.skipped_count > 0
+            ? t('clash.bulk_suppress_skipped', {
+                defaultValue: '{{n}} could not be suppressed and were skipped',
+                n: res.skipped_count,
+              })
+            : undefined,
+      });
+      setSelResults(new Set());
+    },
+    onSettled: () => {
+      qc.invalidateQueries({
+        queryKey: ['clash-results', projectId, runId],
+      });
+      qc.invalidateQueries({ queryKey: ['clash-run', projectId, runId] });
+      // Suppressing result rows flips their underlying smart issues to
+      // ``ignored``; keep the project-wide Smart Issues panel and the
+      // run-diff badge (whose "ignored" bucket is derived from these
+      // identities) in sync with the review table.
+      qc.invalidateQueries({ queryKey: ['clash-issues', projectId] });
+      qc.invalidateQueries({ queryKey: ['clash', projectId] });
     },
   });
 
@@ -2596,6 +2688,7 @@ export function ClashDetectionPage() {
                   )}
                 >
                   <button
+                    type="button"
                     className="flex-1 truncate text-left"
                     title={r.description || r.name}
                     onClick={() =>
@@ -2622,6 +2715,7 @@ export function ClashDetectionPage() {
                     </span>
                   </button>
                   <button
+                    type="button"
                     aria-label={t('common.delete', {
                       defaultValue: 'Delete',
                     })}
@@ -2731,6 +2825,11 @@ export function ClashDetectionPage() {
                 projectId={projectId}
                 runId={runId}
               />
+              {/* Smart-issue lifecycle vs the previous run (new / persisting
+                  / resolved / reopened / suppressed). Self-hides on a
+                  project's first run. Complements the geometric Compare
+                  panel above, which needs an explicit base-run pick. */}
+              <ClashRunDiffBadge projectId={projectId} runId={runId} />
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <ClashClusterChips
                   projectId={projectId}
@@ -2748,6 +2847,19 @@ export function ClashDetectionPage() {
                     {t('clash.rules.open_editor', { defaultValue: 'Rules…' })}
                   </Button>
                   <Button
+                    variant={issuesTabOpen ? 'primary' : 'secondary'}
+                    size="sm"
+                    onClick={() => setIssuesTabOpen((v) => !v)}
+                  >
+                    {issuesTabOpen
+                      ? t('clash.issues.hide', {
+                          defaultValue: 'Hide smart issues',
+                        })
+                      : t('clash.issues.show', {
+                          defaultValue: 'Smart issues',
+                        })}
+                  </Button>
+                  <Button
                     variant={kpiTabOpen ? 'primary' : 'secondary'}
                     size="sm"
                     onClick={() => setKpiTabOpen((v) => !v)}
@@ -2758,6 +2870,9 @@ export function ClashDetectionPage() {
                   </Button>
                 </div>
               </div>
+              {issuesTabOpen && (
+                <ClashSmartIssuesPanel projectId={projectId} />
+              )}
               {kpiTabOpen && (
                 <ClashKpiPanel projectId={projectId} runId={runId} />
               )}
@@ -2942,7 +3057,9 @@ export function ClashDetectionPage() {
                               return (
                                 <td key={col} className="p-1">
                                   <button
+                                    type="button"
                                     disabled={c === 0}
+                                    aria-pressed={isActive}
                                     onClick={() =>
                                       setFPair((cur) =>
                                         cur === pairKey ? '' : pairKey,
@@ -3216,6 +3333,8 @@ export function ClashDetectionPage() {
                       {STATUS_OPTIONS.map((s) => (
                         <button
                           key={s}
+                          type="button"
+                          aria-pressed={fStatus.has(s)}
                           onClick={() => toggleStatusFilter(s)}
                           className={clsx(
                             'rounded-full px-2 py-0.5 text-2xs font-medium transition-colors',
@@ -3241,6 +3360,8 @@ export function ClashDetectionPage() {
                       {SEVERITY_OPTIONS.map((s) => (
                         <button
                           key={s}
+                          type="button"
+                          aria-pressed={fSeverity.has(s)}
                           onClick={() => toggleSeverityFilter(s)}
                           className={clsx(
                             'rounded-full px-2 py-0.5 text-2xs font-medium capitalize transition-colors',
@@ -3384,6 +3505,7 @@ export function ClashDetectionPage() {
                         />
                       )}
                       <button
+                        type="button"
                         onClick={clearAllFilters}
                         className="ml-1 text-2xs font-medium text-oe-blue hover:underline"
                       >
@@ -3906,6 +4028,7 @@ export function ClashDetectionPage() {
                                     </Badge>
                                   )}
                                   <button
+                                    type="button"
                                     aria-label={t('clash.open_detail', {
                                       defaultValue:
                                         'Open clash details',
@@ -3920,6 +4043,7 @@ export function ClashDetectionPage() {
                                     <MessageSquare className="h-3.5 w-3.5" />
                                   </button>
                                   <button
+                                    type="button"
                                     aria-label={t('clash.export_row', {
                                       defaultValue:
                                         'Export this clash to BCF',
@@ -3966,7 +4090,30 @@ export function ClashDetectionPage() {
                 {selResults.size > 0 && sorted.length > 0 && (
                   <BulkActionsBar
                     count={selResults.size}
-                    busy={bulkMut.isPending}
+                    busy={bulkMut.isPending || suppressMut.isPending}
+                    onSuppress={async (reason) => {
+                      const trimmed = reason.trim();
+                      if (!trimmed) return;
+                      const ok = await confirm({
+                        title: t('clash.bulk_suppress_title', {
+                          defaultValue: 'Suppress selected clashes?',
+                        }),
+                        message: t('clash.bulk_suppress_confirm', {
+                          defaultValue:
+                            'Suppress {{n}} selected clash(es)? Their signatures will be marked ignored and will not auto-resurface in future runs. You can lift a suppression later.',
+                          n: selResults.size,
+                        }),
+                        confirmLabel: t('clash.bulk_suppress_action', {
+                          defaultValue: 'Suppress',
+                        }),
+                        variant: 'warning',
+                      });
+                      if (!ok) return;
+                      suppressMut.mutate({
+                        ids: Array.from(selResults),
+                        reason: trimmed,
+                      });
+                    }}
                     onSetSeverity={async (sv) => {
                       const ok = await confirm({
                         title: t('clash.bulk_severity_title', {
@@ -4001,6 +4148,50 @@ export function ClashDetectionPage() {
                       });
                     }}
                     onClear={() => setSelResults(new Set())}
+                    onViewIn3D={() => {
+                      // Build a viewer selection set from the chosen findings:
+                      // the union of every interfering element, framed on the
+                      // group's mean centroid. Opens the model owning the most
+                      // referenced elements (the deep-link addresses one
+                      // model); a mixed-model selection warns first.
+                      const chosen = allResults.filter((r) =>
+                        selResults.has(r.id),
+                      );
+                      const sel = deriveSelectionSetFromFindings(chosen);
+                      if (sel.elementIds.length === 0 || !sel.modelId) {
+                        useToastStore.getState().addToast({
+                          type: 'warning',
+                          title: t('clash.sel3d_none_title', {
+                            defaultValue: 'No elements to show',
+                          }),
+                          message: t('clash.sel3d_none_msg', {
+                            defaultValue:
+                              'The selected findings reference no locatable model elements.',
+                          }),
+                        });
+                        return;
+                      }
+                      if (sel.mixedModels) {
+                        useToastStore.getState().addToast({
+                          type: 'info',
+                          title: t('clash.sel3d_mixed_title', {
+                            defaultValue: 'Opening one model',
+                          }),
+                          message: t('clash.sel3d_mixed_msg', {
+                            defaultValue:
+                              'These findings span several models. The 3D view isolates the elements in the model with the most of them; elements in other models are not shown.',
+                          }),
+                        });
+                      }
+                      navigate(
+                        buildSelectionSetBimLink({
+                          projectId,
+                          modelId: sel.modelId,
+                          elementIds: sel.elementIds,
+                          focus: sel.focus,
+                        }),
+                      );
+                    }}
                     t={t}
                   />
                 )}
@@ -4016,6 +4207,7 @@ export function ClashDetectionPage() {
                             n: selResults.size,
                           })}
                           <button
+                            type="button"
                             onClick={() => setSelResults(new Set())}
                             className="text-oe-blue hover:underline"
                           >
@@ -4468,6 +4660,9 @@ function SortableTh({
   const isActive = sortKey === k;
   return (
     <th
+      aria-sort={
+        isActive ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'
+      }
       className={clsx(
         'select-none px-3 py-2.5 font-medium',
         align === 'right' ? 'text-right' : 'text-left',
@@ -4475,6 +4670,7 @@ function SortableTh({
       )}
     >
       <button
+        type="button"
         onClick={() => onSort(k)}
         className={clsx(
           'inline-flex items-center gap-1 hover:text-content-primary',
@@ -4504,13 +4700,18 @@ function FilterChip({
   label: string;
   onClear: () => void;
 }) {
+  const { t } = useTranslation();
   return (
     <span className="inline-flex items-center gap-1 rounded-full bg-oe-blue/10 py-0.5 pl-2 pr-1 text-2xs font-medium text-oe-blue">
       <span className="max-w-[160px] truncate">{label}</span>
       <button
+        type="button"
         onClick={onClear}
         className="rounded-full p-0.5 hover:bg-oe-blue/20"
-        aria-label="clear"
+        aria-label={t('clash.filters.removeChip', {
+          defaultValue: 'Remove filter: {{label}}',
+          label,
+        })}
       >
         <X className="h-3 w-3" />
       </button>
@@ -4643,7 +4844,9 @@ function BulkActionsBar({
   onSetSeverity,
   onSetStatus,
   onSetAssignee,
+  onSuppress,
   onClear,
+  onViewIn3D,
   t,
 }: {
   count: number;
@@ -4651,10 +4854,14 @@ function BulkActionsBar({
   onSetSeverity: (s: ClashSeverity) => void;
   onSetStatus: (s: string) => void;
   onSetAssignee: (v: string) => void;
+  onSuppress: (reason: string) => void;
   onClear: () => void;
+  /** Build a viewer selection set from the chosen findings and open it in 3D. */
+  onViewIn3D: () => void;
   t: TFn;
 }) {
   const [assignee, setAssignee] = useState('');
+  const [suppressReason, setSuppressReason] = useState('');
   return (
     <div className="flex flex-wrap items-center gap-2 border-t border-oe-blue/30 bg-oe-blue/[0.05] p-3 text-xs">
       <span className="font-semibold text-oe-blue">
@@ -4663,6 +4870,20 @@ function BulkActionsBar({
           n: count,
         })}
       </span>
+      {/* Build a viewer selection set from the chosen findings: isolate
+          every element they reference and frame them together in 3D. */}
+      <Button
+        size="sm"
+        variant="secondary"
+        icon={<Boxes className="h-3.5 w-3.5" />}
+        onClick={onViewIn3D}
+        title={t('clash.bulk_view3d_hint', {
+          defaultValue:
+            'Open the 3D model with every element these findings reference isolated and framed.',
+        })}
+      >
+        {t('clash.bulk_view3d', { defaultValue: 'View in 3D' })}
+      </Button>
       <label className="flex items-center gap-1">
         <span className="text-content-tertiary">
           {t('clash.bulk_severity', { defaultValue: 'Severity' })}
@@ -4732,7 +4953,35 @@ function BulkActionsBar({
           {t('clash.bulk_assign_apply', { defaultValue: 'Apply' })}
         </Button>
       </label>
+      {/* Suppress the selection's smart issues - flips them to ``ignored``
+          so the signatures won't auto-resurface in future runs. A reason
+          is required (audit trail); the parent gates it behind a confirm. */}
+      <label className="flex items-center gap-1">
+        <span className="text-content-tertiary">
+          {t('clash.bulk_suppress', { defaultValue: 'Suppress' })}
+        </span>
+        <input
+          value={suppressReason}
+          onChange={(e) => setSuppressReason(e.target.value)}
+          placeholder={t('clash.bulk_suppress_reason_ph', {
+            defaultValue: 'reason (required)',
+          })}
+          className="h-7 w-44 rounded-md border border-border bg-surface-primary px-2 text-2xs"
+        />
+        <Button
+          size="sm"
+          variant="secondary"
+          disabled={busy || !suppressReason.trim()}
+          onClick={() => {
+            onSuppress(suppressReason);
+            setSuppressReason('');
+          }}
+        >
+          {t('clash.bulk_suppress_action', { defaultValue: 'Suppress' })}
+        </Button>
+      </label>
       <button
+        type="button"
         onClick={onClear}
         className="ml-auto text-2xs font-medium text-content-tertiary hover:text-content-primary"
       >
@@ -4865,6 +5114,7 @@ function FacetRail({
       />
       <div className="md:col-span-2 lg:col-span-3">
         <button
+          type="button"
           onClick={onClear}
           className="text-2xs font-medium text-oe-blue hover:underline"
         >

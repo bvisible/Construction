@@ -1,11 +1,14 @@
 /** Upload dialog — multi-file uploader for the file manager.
  *
- * Reuses the documents module's upload endpoint and the global upload
- * queue store so completed uploads roll up into the same FloatingQueuePanel
- * that runs everywhere else in the app.
- *
- * Migration target: TODO — once each kind has its own upload endpoint
- * (BIM, DWG, photos), branch on selectedKind here and route accordingly.
+ * Routes each upload to the endpoint that owns its kind so files land in
+ * the right pipeline instead of all becoming generic documents:
+ *   - BIM models (RVT / IFC / …) → POST /api/v1/bim/upload-cad/
+ *   - DWG / DXF drawings        → POST /api/v1/dwg/drawings/upload/
+ *   - everything else           → POST /api/v1/documents/upload/
+ * The dedicated BIM/DWG endpoints stream the body server-side, so a large
+ * model still uploads safely; only the documents path uses the resumable
+ * chunked client (which assembles into the document store). Completed
+ * uploads roll up into the same FloatingQueuePanel used everywhere else.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -43,14 +46,33 @@ export function UploadDialog({
   const [dragOver, setDragOver] = useState(false);
   const [uploading, setUploading] = useState(false);
 
-  // Map FileKind → documents-module category. The current upload endpoint
-  // only accepts the documents-module taxonomy; mapping here keeps the
-  // unified UI honest while we wait for per-kind endpoints (TODO above).
+  // Map FileKind → documents-module category. Used only by the documents
+  // pipeline (the kinds that don't have a dedicated endpoint); BIM/DWG
+  // route to their own modules below.
   const categoryForKind = useCallback((kind: FileKind | null): string => {
     if (kind === 'photo') return 'photo';
-    if (kind === 'sheet' || kind === 'dwg_drawing' || kind === 'bim_model') return 'drawing';
+    if (kind === 'sheet') return 'drawing';
     return 'other';
   }, []);
+
+  // Resolve where a kind's upload should go. ``bim_model`` and
+  // ``dwg_drawing`` have their own ingest endpoints (and their own
+  // storage + conversion pipelines); everything else stays on the
+  // documents endpoint. The dedicated endpoints take a single ``file``
+  // multipart field plus a ``project_id`` query param and stream the body
+  // server-side, so they don't use the resumable chunked client.
+  const directUploadUrl = useCallback(
+    (kind: FileKind | null): string | null => {
+      if (kind === 'bim_model') {
+        return `/api/v1/bim/upload-cad/?project_id=${projectId}`;
+      }
+      if (kind === 'dwg_drawing') {
+        return `/api/v1/dwg/drawings/upload/?project_id=${projectId}`;
+      }
+      return null;
+    },
+    [projectId],
+  );
 
   // Lock background scroll when modal is open.
   useEffect(() => {
@@ -89,6 +111,10 @@ export function UploadDialog({
 
       const token = useAuthStore.getState().accessToken;
       const cat = categoryForKind(defaultKind);
+      // Non-null for BIM/DWG kinds → upload goes straight to that module's
+      // ingest endpoint (single-shot, server-streamed) instead of the
+      // documents pipeline / resumable client.
+      const directUrl = directUploadUrl(defaultKind);
       setUploading(true);
 
       for (const file of validFiles) {
@@ -126,8 +152,11 @@ export function UploadDialog({
           // Large files take the resumable, chunked path: real progress and
           // automatic per-chunk retry so a flaky connection no longer
           // restarts the whole transfer from zero. Small files keep the
-          // simpler single-shot multipart upload below.
-          if (file.size >= RESUMABLE_THRESHOLD_BYTES) {
+          // simpler single-shot multipart upload below. The resumable client
+          // assembles into the documents store, so it's only valid for
+          // documents kinds - BIM/DWG always take the single-shot path to
+          // their own endpoint (which streams server-side regardless of size).
+          if (!directUrl && file.size >= RESUMABLE_THRESHOLD_BYTES) {
             try {
               updateQueueTask(taskId, {
                 message: t('files.uploading_chunked', {
@@ -170,7 +199,8 @@ export function UploadDialog({
             }, estimatedMs / 18);
 
             const res = await fetch(
-              `/api/v1/documents/upload/?project_id=${projectId}&category=${cat}`,
+              directUrl ??
+                `/api/v1/documents/upload/?project_id=${projectId}&category=${cat}`,
               { method: 'POST', headers, body: formData },
             );
 
@@ -210,6 +240,7 @@ export function UploadDialog({
       projectId,
       defaultKind,
       categoryForKind,
+      directUploadUrl,
       addToast,
       addQueueTask,
       updateQueueTask,

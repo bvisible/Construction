@@ -67,10 +67,14 @@ def geometry_key(
 ) -> str:
     """‌⁠‍Return the storage key for a geometry file with extension ``ext``.
 
-    ``ext`` may be given with or without a leading dot.
+    ``ext`` may be given with or without a leading dot. The extension is
+    lower-cased so keys are always written/probed in a single canonical case;
+    a converter on a case-sensitive filesystem (Linux) that emitted
+    ``geometry.GLB`` is still located via the case-insensitive fallback in
+    :func:`find_geometry_key`.
     """
     clean_ext = ext if ext.startswith(".") else f".{ext}"
-    return f"{bim_model_prefix(project_id, model_id)}/geometry{clean_ext}"
+    return f"{bim_model_prefix(project_id, model_id)}/geometry{clean_ext.lower()}"
 
 
 def original_cad_key(
@@ -167,6 +171,37 @@ async def find_geometry_key(
         key = geometry_key(project_id, model_id, ext)
         if await backend.exists(key):
             return key, ext
+
+    # Case-insensitive fallback: a converter on a case-sensitive filesystem
+    # (Linux) may have written ``geometry.GLB``/``geometry.Dae``. The exact
+    # probes above are lower-case only, so list the model prefix once and match
+    # ``geometry.<ext>`` ignoring case, returning the REAL stored key. This also
+    # rescues models written before keys were canonicalised to lower-case.
+    #
+    # ``include_backcompat_roots=True`` so the listing spans the SAME data roots
+    # the exact-case ``exists()`` probe above already covers (it resolves via
+    # ``_existing_path_for`` which falls back across ``safe_data_roots()``).
+    # Without it an uppercase ``geometry.GLB`` stranded under a back-compat root
+    # - e.g. a standalone/Docker/macOS deployment whose blobs predate the
+    # OE_DATA_DIR fix - would be ready-in-DB but 404 here.
+    prefix = bim_model_prefix(project_id, model_id)
+    try:
+        entries = await backend.list_prefix(prefix, include_backcompat_roots=True)
+    except NotImplementedError:
+        entries = []
+    except Exception:  # noqa: BLE001 - listing must never raise into the caller
+        logger.exception("find_geometry_key: list_prefix failed for prefix=%s", prefix)
+        entries = []
+    for stored_key, _size in entries:
+        name = stored_key.rsplit("/", 1)[-1].lower()
+        for ext in exts:
+            if name == f"geometry{ext}":
+                logger.info(
+                    "find_geometry_key: matched %s case-insensitively for model %s",
+                    stored_key,
+                    model_id,
+                )
+                return stored_key, ext
     return None
 
 
@@ -273,38 +308,38 @@ async def compute_artifact_size_bytes(
 ) -> int:
     """Return total bytes of conversion artifacts for a single model.
 
-    For the local backend this walks the model directory on disk
-    (excluding ``original.*``).  For S3 this would be a ``list_objects_v2``
-    sweep - we fall back to counting the geometry-key candidates only,
-    which keeps the call cheap for the common case (single GLB).
+    For backends implementing ``list_prefix`` this is a single bulk sweep of
+    the model prefix (excluding ``original.*``). For the local backend the
+    sweep spans every platform-owned data root via
+    ``include_backcompat_roots=True`` so a blob stranded under a pre-8.6.1
+    default/back-compat root is still counted (otherwise the artifact size
+    under-reports for those deployments). For S3 this is a ``list_objects_v2``
+    sweep; for backends without ``list_prefix`` we fall back to counting the
+    geometry-key candidates only, which keeps the call cheap for the common
+    case (single GLB).
     """
     backend = _backend()
     prefix = bim_model_prefix(project_id, model_id)
 
-    # Fast path - local backend has a base_dir we can walk directly.
-    base_dir = getattr(backend, "base_dir", None)
-    if base_dir is not None:
-        from pathlib import Path  # local import: avoids broadening top-of-module deps
+    # Bulk path - one listing spans every (back-compat) data root.
+    if list_prefix_supported():
+        try:
+            entries = await backend.list_prefix(prefix, include_backcompat_roots=True)
+        except NotImplementedError:
+            entries = None
+        except Exception:  # noqa: BLE001 - sizing is best-effort, never fatal
+            logger.exception("compute_artifact_size_bytes: list_prefix failed for prefix=%s", prefix)
+            entries = []
+        if entries is not None:
+            total = 0
+            for stored_key, size_bytes in entries:
+                # Exclude raw uploads; everything else is treated as an artifact.
+                if stored_key.rsplit("/", 1)[-1].lower().startswith("original."):
+                    continue
+                total += size_bytes
+            return total
 
-        root = Path(str(base_dir))
-        for part in prefix.split("/"):
-            root = root / part
-        if not root.is_dir():
-            return 0
-        total = 0
-        for child in root.rglob("*"):
-            if not child.is_file():
-                continue
-            # Exclude raw uploads; everything else is treated as an artifact.
-            if child.name.lower().startswith("original."):
-                continue
-            try:
-                total += child.stat().st_size
-            except OSError:
-                continue
-        return total
-
-    # Fallback (S3 etc.) - probe the well-known geometry keys.
+    # Fallback (community backends without list_prefix) - probe geometry keys.
     total = 0
     for ext in _ARTIFACT_EXTENSIONS:
         if ext not in GEOMETRY_EXTENSIONS:
@@ -360,7 +395,10 @@ async def bulk_model_storage_summary(
     backend = _backend()
     prefix = project_bim_prefix(project_id)
     try:
-        entries = await backend.list_prefix(prefix)
+        # Span back-compat roots so a model whose artifacts live under a
+        # pre-8.6.1 default root still reports its geometry/size here instead
+        # of appearing artifact-less (ready-in-DB but empty/404 on serve).
+        entries = await backend.list_prefix(prefix, include_backcompat_roots=True)
     except NotImplementedError:
         logger.debug(
             "Storage backend %s does not implement list_prefix; BIM list endpoint will fall back to per-model probes.",

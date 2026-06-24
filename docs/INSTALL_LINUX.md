@@ -183,6 +183,79 @@ Note: installs set up before the rename may still run under the legacy unit name
 
 ---
 
+## 7. BIM/CAD converters (.rvt / .ifc / .dwg / .dgn)
+
+Native CAD/BIM files are turned into element data + 3D geometry by the DDC
+`cad2data` converters. On Linux these ship as signed `.deb` packages from
+`https://pkg.datadrivenconstruction.io` (amd64 only for now - arm64 is not yet
+published). IFC also has a built-in text fallback parser, so `.ifc` files still
+import without the binary - just with simplified placeholder geometry instead of
+real meshes.
+
+**You normally do not need this section.** The app installs the converter
+automatically the first time you upload a CAD/BIM file (and you can also trigger
+it from **Settings -> BIM Converters -> Install**). The download runs in the
+background and the panel updates when it finishes. It tries several methods so it
+works on the widest range of hosts:
+
+- it does **not** require root - the packages are unpacked into the app's own
+  data directory (`~/.openestimator/converters/`), so an unprivileged service
+  account can provision the converter on its own;
+- it does **not** require `dpkg`/`apt` - it unpacks the `.deb` payload with a
+  built-in pure-Python reader when those tools are absent (minimal containers,
+  non-Debian distros);
+- it resumes interrupted downloads and retries slow or flaky links
+  automatically, and self-tests the binary after install.
+
+On a slow server link the first download (the IFC chain is ~114 MB) can take a
+few minutes - that is expected; let it run.
+
+Only if the automatic install genuinely cannot complete (no outbound network, a
+blocking proxy, or an unsupported CPU architecture) install it from the terminal
+as a fallback. **amd64 only** - check your arch with `uname -m` (`x86_64` =
+amd64). On arm64 the binary converter is not yet published, so `.ifc` files fall
+back to the built-in placeholder parser.
+
+### Option A - signed apt source (recommended; auto-updates)
+
+```bash
+sudo install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://pkg.datadrivenconstruction.io/ddc-archive-keyring.gpg \
+  | sudo gpg --dearmor -o /etc/apt/keyrings/ddc-archive-keyring.gpg
+echo "deb [signed-by=/etc/apt/keyrings/ddc-archive-keyring.gpg] https://pkg.datadrivenconstruction.io stable main" \
+  | sudo tee /etc/apt/sources.list.d/ddc.list
+sudo apt update
+sudo apt install -y ddc-ifcconverter     # or ddc-rvtconverter / ddc-dwgconverter / ddc-dgnconverter
+```
+
+### Option B - direct .deb download (no apt source; one converter)
+
+Downloads the four IFC packages and lets `apt` resolve their order and system
+dependencies. (Swap the names for `ddc-rvtconverter` etc. for other formats - see
+the repo's `Packages` index for the current version numbers.)
+
+```bash
+cd /tmp
+base=https://pkg.datadrivenconstruction.io/pool/main/d
+wget $base/ddc-deps-kernel/ddc-deps-kernel_27.2_amd64.deb
+wget $base/ddc-deps-ifc/ddc-deps-ifc_27.2_amd64.deb
+wget $base/ddc-thirdparty/ddc-thirdparty_18.4.3.0_amd64.deb
+wget $base/ddc-ifcconverter/ddc-ifcconverter_18.4.3.0_amd64.deb
+sudo apt install -y ./ddc-deps-kernel_27.2_amd64.deb ./ddc-deps-ifc_27.2_amd64.deb \
+                    ./ddc-thirdparty_18.4.3.0_amd64.deb ./ddc-ifcconverter_18.4.3.0_amd64.deb
+```
+
+Either option installs the binary at `/usr/bin/IfcExporter` (or
+`RvtExporter` / `DwgExporter` / `DgnExporter`). The app finds it automatically -
+no restart needed. Confirm, then re-upload the model or click **Re-check** on the
+BIM converters panel:
+
+```bash
+ls -l /usr/bin/IfcExporter        # should exist and be > 1 KB
+```
+
+---
+
 ## Troubleshooting checklist
 
 | Symptom | Cause | Fix |
@@ -193,5 +266,6 @@ Note: installs set up before the rename may still run under the legacy unit name
 | `ModuleNotFoundError` after install | Wrong venv active | Re-run `source ~/openconstructionerp-venv/bin/activate` |
 | `Address already in use` | Port 8080 taken | `ss -tlnp \| grep 8080` then `--port 9090` (section 5) |
 | `openconstructionerp: command not found` after pipx | Path not refreshed | `pipx ensurepath` then open a new shell |
+| BIM converter install "signal timed out", stuck on placeholder geometry | A slow link aborted an older build's blocking download | Fixed in 8.8.0+: the install now runs in the background, resumes, and unpacks without root or dpkg. Retry **Settings -> BIM Converters -> Install**; only if it still fails, install from the terminal (section 7) |
 
 If you still cannot install, run `openconstructionerp doctor` (or `python -m openconstructionerp doctor`) and open an issue with the full output: https://github.com/datadrivenconstruction/OpenConstructionERP/issues

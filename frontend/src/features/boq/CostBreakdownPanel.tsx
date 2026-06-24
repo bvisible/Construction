@@ -15,6 +15,7 @@ import {
 const CATEGORY_COLORS: Record<string, string> = {
   material: '#d68a59', // blue-500
   labor: '#f59e0b', // amber-500
+  machinery: '#14b8a6', // teal-500
   equipment: '#8b5cf6', // violet-500
   subcontractor: '#ec4899', // pink-500
   other: '#6b7280', // gray-500
@@ -23,6 +24,7 @@ const CATEGORY_COLORS: Record<string, string> = {
 const CATEGORY_BG_CLASSES: Record<string, string> = {
   material: 'bg-blue-500',
   labor: 'bg-amber-500',
+  machinery: 'bg-teal-500',
   equipment: 'bg-violet-500',
   subcontractor: 'bg-pink-500',
   other: 'bg-gray-500',
@@ -31,6 +33,7 @@ const CATEGORY_BG_CLASSES: Record<string, string> = {
 const CATEGORY_TEXT_CLASSES: Record<string, string> = {
   material: 'text-blue-600 dark:text-blue-400',
   labor: 'text-amber-600 dark:text-amber-400',
+  machinery: 'text-teal-600 dark:text-teal-400',
   equipment: 'text-violet-600 dark:text-violet-400',
   subcontractor: 'text-pink-600 dark:text-pink-400',
   other: 'text-gray-600 dark:text-gray-400',
@@ -45,30 +48,46 @@ function createCBFormatter(locale: string) {
   });
 }
 
-function fmtCompact(n: number, fmt: Intl.NumberFormat): string {
-  if (Math.abs(n) >= 1_000_000) {
-    return `${fmt.format(n / 1_000_000)}M`;
-  }
-  if (Math.abs(n) >= 10_000) {
-    return `${fmt.format(n / 1_000)}K`;
-  }
-  return fmt.format(n);
+/**
+ * Coerce a money field to a finite number. The backend serialises every
+ * monetary ``Decimal`` as a JSON *string* (e.g. "1234.56"), so these values
+ * arrive as strings at runtime even though the TS types say ``number``.
+ * Doing arithmetic with ``+`` or calling ``.toFixed`` on a raw string would
+ * concatenate / throw, so every money value is funnelled through here before
+ * any arithmetic, comparison, or formatting. Mirrors the existing coercion
+ * convention in ``boqHelpers`` (``resourceAwareTotalInBase``'s ``num``).
+ */
+function toNum(value: number | string | null | undefined): number {
+  const n = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
+/**
+ * Format a money value for display. BOQ money is ALWAYS shown at full
+ * precision - K/M rounding is never acceptable for professional cost
+ * estimation (it dropped the cents on a 45,678.90 grand total and made the
+ * panel figures impossible to reconcile against the editor / exports).
+ * Mirrors the documented contract of ``boqHelpers.fmtCompact``.
+ */
+function fmtCompact(n: number | string, fmt: Intl.NumberFormat): string {
+  return fmt.format(toNum(n));
 }
 
 /** Build a CSS conic-gradient string from categories + markups. */
 function buildConicGradient(
   categories: CostBreakdownCategory[],
   markups: CostBreakdownMarkup[],
-  grandTotal: number,
+  grandTotal: number | string,
 ): string {
-  if (grandTotal <= 0) return 'conic-gradient(#e5e7eb 0deg 360deg)';
+  const total = toNum(grandTotal);
+  if (total <= 0) return 'conic-gradient(#e5e7eb 0deg 360deg)';
 
   const segments: { color: string; pct: number }[] = [];
 
   for (const cat of categories) {
     segments.push({
       color: CATEGORY_COLORS[cat.type] ?? '#6b7280',
-      pct: (cat.amount / grandTotal) * 100,
+      pct: (toNum(cat.amount) / total) * 100,
     });
   }
   for (const m of markups) {
@@ -80,7 +99,7 @@ function buildConicGradient(
     } else if (nameLower.includes('profit') || nameLower.includes('gewinn') || nameLower.includes('w&g')) {
       color = '#22c55e'; // green-500
     }
-    segments.push({ color, pct: (m.amount / grandTotal) * 100 });
+    segments.push({ color, pct: (toNum(m.amount) / total) * 100 });
   }
 
   let angle = 0;
@@ -127,7 +146,10 @@ export function CostBreakdownPanel({ boqId, locale = 'de-DE' }: { boqId: string;
     );
   }
 
-  if (!data || data.direct_cost === 0) {
+  // ``direct_cost`` arrives as a Decimal *string* ("0.00") from the API, so a
+  // strict ``=== 0`` against a number would never match and the empty-BOQ
+  // early-return would be dead. Coerce before comparing.
+  if (!data || toNum(data.direct_cost) === 0) {
     return null;
   }
 
@@ -136,6 +158,7 @@ export function CostBreakdownPanel({ boqId, locale = 'de-DE' }: { boqId: string;
       {/* ── Header ──────────────────────────────────────────────────── */}
       <button
         type="button"
+        aria-expanded={!collapsed}
         className="flex items-center justify-between w-full px-5 py-3.5 text-left hover:bg-surface-secondary/50 transition-colors"
         onClick={() => setCollapsed((prev) => !prev)}
       >
@@ -204,7 +227,7 @@ export function CostBreakdownPanel({ boqId, locale = 'de-DE' }: { boqId: string;
                     <span className="text-content-secondary">{m.name}</span>
                   </div>
                   <span className="text-content-primary font-medium tabular-nums">
-                    {((m.amount / data.grand_total) * 100).toFixed(1)}%
+                    {((toNum(m.amount) / toNum(data.grand_total)) * 100).toFixed(1)}%
                   </span>
                 </div>
               ))}
@@ -278,7 +301,8 @@ function CategoryBar({
   fmt: Intl.NumberFormat;
 }) {
   const { t } = useTranslation();
-  const widthPct = directCost > 0 ? (category.amount / directCost) * 100 : 0;
+  const directCostNum = toNum(directCost);
+  const widthPct = directCostNum > 0 ? (toNum(category.amount) / directCostNum) * 100 : 0;
 
   return (
     <div className="space-y-0.5">

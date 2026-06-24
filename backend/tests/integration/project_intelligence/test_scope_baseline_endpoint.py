@@ -85,21 +85,22 @@ async def _seed_project_with_boq(*, owner_id: str, leaf_count: int) -> uuid.UUID
     from app.modules.boq.models import BOQ, Position
     from app.modules.projects.models import Project
 
-    pid = uuid.uuid4()
     async with async_session_factory() as s:
-        s.add(
-            Project(
-                id=pid,
-                name=f"Scope-{uuid.uuid4().hex[:6]}",
-                owner_id=uuid.UUID(owner_id),
-                currency="EUR",
-                region="DACH",
-                classification_standard="din276",
-                metadata_={},
-                fx_rates=[],
-            )
+        project = Project(
+            id=uuid.uuid4(),
+            name=f"Scope-{uuid.uuid4().hex[:6]}",
+            owner_id=uuid.UUID(owner_id),
+            currency="EUR",
+            region="DACH",
+            classification_standard="din276",
+            metadata_={},
+            fx_rates=[],
         )
-        boq = BOQ(project_id=pid, name="Main")
+        s.add(project)
+        # Flush the project FIRST so its row exists before the BOQ FK insert.
+        await s.flush()
+        pid = project.id
+        boq = BOQ(project_id=project.id, name="Main")
         s.add(boq)
         await s.flush()
         s.add(

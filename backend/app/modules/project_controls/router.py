@@ -9,7 +9,9 @@ Security model:
 * When a ``project_id`` is supplied the caller must own / be a member of that
   project (``verify_project_access`` - which 404s on miss/denied to avoid
   leaking the existence of projects the caller cannot see). Project-less
-  calls are tenant-wide portfolio aggregations.
+  (portfolio) calls are scoped to the caller's accessible projects via
+  ``accessible_project_ids`` (admins get ``None`` = no filter) so a non-admin
+  cannot aggregate across other tenants' projects.
 """
 
 from __future__ import annotations
@@ -19,7 +21,13 @@ import uuid
 
 from fastapi import APIRouter, Depends, Query
 
-from app.dependencies import CurrentUserId, RequirePermission, SessionDep, verify_project_access
+from app.dependencies import (
+    CurrentUserId,
+    RequirePermission,
+    SessionDep,
+    accessible_project_ids,
+    verify_project_access,
+)
 from app.modules.bi_dashboards.kpis import _parse_date
 from app.modules.project_controls.schemas import (
     ControlsDrillResponse,
@@ -54,12 +62,16 @@ async def controls_snapshot(
     Omit ``project_id`` for a portfolio-wide aggregation. Dates are ISO
     ``YYYY-MM-DD`` strings; unparseable values are treated as absent.
     """
+    allowed: set[uuid.UUID] | None = None
     if project_id is not None:
         await verify_project_access(project_id, user_id, session)
+    else:
+        allowed = await accessible_project_ids(session, user_id)
     result = await service.snapshot(
         project_id=project_id,
         period_start=_parse_date(period_start),
         period_end=_parse_date(period_end),
+        allowed_project_ids=allowed,
     )
     return ControlsSnapshotResponse(**result)
 
@@ -79,7 +91,10 @@ async def controls_drill(
     limit: int = Query(default=100, ge=1, le=500),
 ) -> ControlsDrillResponse:
     """Return the underlying source rows behind a KPI with cross-module deep links."""
+    allowed: set[uuid.UUID] | None = None
     if project_id is not None:
         await verify_project_access(project_id, user_id, session)
-    result = await service.drill(kpi_code, project_id=project_id, limit=limit)
+    else:
+        allowed = await accessible_project_ids(session, user_id)
+    result = await service.drill(kpi_code, project_id=project_id, limit=limit, allowed_project_ids=allowed)
     return ControlsDrillResponse(**result)

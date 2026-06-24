@@ -8,6 +8,7 @@ import { Button, Badge, Breadcrumb, ModuleHelpButton, ModuleGuideButton, Confirm
 import { useConfirm } from '@/shared/hooks/useConfirm';
 import { useProgressStore } from '@/shared/ui/GlobalProgress';
 import { apiGet, apiPost, triggerDownload, extractErrorMessageFromBody } from '@/shared/lib/api';
+import { toNum } from '@/shared/lib/money';
 import { useToastStore } from '@/stores/useToastStore';
 import { useRecentStore } from '@/stores/useRecentStore';
 import { useAuthStore } from '@/stores/useAuthStore';
@@ -2169,7 +2170,10 @@ export function BOQEditorPage() {
       .map((m) => {
         let amount = 0;
         if (m.markup_type === 'fixed') {
-          amount = m.fixed_amount ?? 0;
+          // fixed_amount arrives as a Decimal-as-string ("500.00"); coerce
+          // before arithmetic so ``running += amount`` adds rather than
+          // string-concatenating (which poisoned the footer + Excel/PDF totals).
+          amount = toNum(m.fixed_amount);
         } else if (m.apply_to === 'cumulative' || m.apply_to === 'subtotal') {
           // 'subtotal' shares the cumulative base on the server (direct cost +
           // preceding markups); keep the footer Net Total / VAT / gross in step
@@ -2830,7 +2834,13 @@ export function BOQEditorPage() {
             projectName: project?.name,
             classificationStandard: project?.classification_standard,
             region: project?.region,
-            currency: (boq as unknown as Record<string, unknown>)?.currency as string ?? '\u20ac',
+            // Use the project base currency ISO code (was a stray ``boq.currency``
+            // that doesn't exist \u2192 always fell back to "\u20ac"). Issue #150: also
+            // thread the base currency + FX rates so foreign-currency resources
+            // are converted to base in the export exactly as in the grid.
+            currency: currencyCode,
+            baseCurrency: currencyCode,
+            fxRates,
             positions,
             markupTotals: markupTotalsForExport,
             netTotal,
@@ -2861,6 +2871,11 @@ export function BOQEditorPage() {
             projectName: project?.name,
             date: new Date().toISOString(),
             currency: currencySymbol,
+            // Issue #150 — convert foreign-currency resources to the project
+            // base in the PDF totals exactly as the grid does. ``directCost``
+            // (passed above) is already resource-aware base-converted.
+            baseCurrency: currencyCode,
+            fxRates,
             positions,
             markupTotals: markupTotalsForExport,
             directCost,

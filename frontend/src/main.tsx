@@ -84,10 +84,16 @@ const queryClient = new QueryClient({
       networkMode: 'offlineFirst',
       retry: (count, error) => {
         if (!navigator.onLine) return false;
-        // 4xx responses are deterministic — don't retry.
-        if (error && typeof error === 'object' && 'status' in error) {
-          const status = (error as { status: number }).status;
-          if (status >= 400 && status < 500) return false;
+        if (error && typeof error === 'object') {
+          // A client-side timeout/abort: the backend is already slow, so a
+          // retry just times out again ~45s later and shows a second toast.
+          if ((error as { isTimeout?: boolean }).isTimeout) return false;
+          if ((error as { name?: string }).name === 'AbortError') return false;
+          // 4xx responses are deterministic — don't retry.
+          if ('status' in error) {
+            const status = (error as { status: number }).status;
+            if (status >= 400 && status < 500) return false;
+          }
         }
         return count < 1;
       },

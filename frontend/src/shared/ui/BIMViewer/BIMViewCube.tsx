@@ -214,6 +214,13 @@ export function BIMViewCube({
       geometry.dispose();
       materials.forEach((m) => m.dispose());
       textures.forEach((t) => t.dispose());
+      // Release the GL context slot before dispose() so the view-cube's own
+      // renderer does not leak a context alongside the main BIM scene.
+      try {
+        renderer.forceContextLoss();
+      } catch {
+        /* context already lost */
+      }
       renderer.dispose();
     };
   }, [size]);

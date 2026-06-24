@@ -275,6 +275,41 @@ export function isNetworkBlip(entry: ErrorLogEntry): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// Backend reporter circuit-breaker
+// ---------------------------------------------------------------------------
+
+/**
+ * Lightweight circuit-breaker for the fire-and-forget backend POST.
+ *
+ * Problem (2026-06-19): the demo VPS is 1 core.  When a page throws errors
+ * in a tight loop the reporter fires one fire-and-forget fetch per error.
+ * With no fetch timeout each browser request holds a connection open until
+ * the OS TCP stack times out (often 90 s+), exhausting the browser's
+ * per-origin connection pool and causing subsequent *real* API calls to
+ * queue.  A storm of 429 responses made it worse: the backend responded but
+ * the client kept firing because the 429 was silently swallowed.
+ *
+ * Mitigations applied here:
+ *  1. ``AbortSignal.timeout(4000)`` — each POST is abandoned after 4 s so
+ *     connections are never held open long.
+ *  2. Consecutive-failure counter: after ``_CIRCUIT_OPEN_THRESHOLD``
+ *     consecutive failures (including 429) the circuit opens and no further
+ *     POSTs are sent for ``_CIRCUIT_RESET_MS`` ms.  This bounds the request
+ *     rate from a single broken session without silencing the first few
+ *     genuine reports.
+ *  3. 429 responses explicitly count as failures and open the circuit fast
+ *     (the server is telling us to back off).
+ */
+
+/** Open the circuit after this many consecutive POST failures. */
+const _CIRCUIT_OPEN_THRESHOLD = 3;
+/** Keep the circuit open for this long (ms) before allowing one probe. */
+const _CIRCUIT_RESET_MS = 60_000; // 1 minute
+
+let _consecutiveFailures = 0;
+let _circuitOpenAt = 0; // 0 = closed
+
+// ---------------------------------------------------------------------------
 // Internal state
 // ---------------------------------------------------------------------------
 
@@ -392,15 +427,25 @@ function saveToStorage(): void {
  * Fire-and-forget POST of a single entry to the backend client-error sink.
  *
  * The backend route is unauthenticated and rate-limited at 30 req/min per
- * IP, so we send each entry exactly once at capture time. ``keepalive``
- * lets the browser flush the request even if the page is unloading (so
- * navigation-time errors still reach the server).
+ * IP, so we send each entry exactly once at capture time.
  *
  * Disabled by setting ``VITE_ENABLE_ERROR_REPORTING=false`` at build time
  * (e.g. for air-gapped installs). Default is enabled.
  *
  * Anything that goes wrong here is intentionally swallowed — we never
  * want the error reporter itself to surface more errors.
+ *
+ * Circuit-breaker (2026-06-19): see ``_CIRCUIT_OPEN_THRESHOLD`` /
+ * ``_CIRCUIT_RESET_MS`` above.  Each POST that fails (network error, 429,
+ * 5xx, or timeout) increments ``_consecutiveFailures``.  Once the threshold
+ * is exceeded the circuit opens and no further POSTs are sent until the
+ * reset window expires.  A successful 202 resets the counter.
+ *
+ * ``AbortSignal.timeout(4000)`` caps each POST at 4 s so a slow/backlogged
+ * backend never holds connections open.  ``keepalive`` is intentionally
+ * omitted: keepalive + AbortSignal.timeout are incompatible in most
+ * browsers, and a 4-second hard cap is more important than flush-on-unload
+ * for a non-critical reporting channel.
  */
 function postToBackend(entry: ErrorLogEntry): void {
   try {
@@ -413,6 +458,17 @@ function postToBackend(entry: ErrorLogEntry): void {
         : undefined;
     if (flag === 'false') return;
     if (typeof fetch === 'undefined') return;
+
+    // Circuit-breaker open check.
+    const now = Date.now();
+    if (_circuitOpenAt > 0) {
+      if (now - _circuitOpenAt < _CIRCUIT_RESET_MS) {
+        // Circuit still open — drop silently.
+        return;
+      }
+      // Reset window expired — allow one probe; circuit stays open until
+      // the probe succeeds.
+    }
 
     const stackLines = (entry.stack ?? '')
       .split('\n')
@@ -429,17 +485,41 @@ function postToBackend(entry: ErrorLogEntry): void {
       path: entry.url,
     });
 
-    // Fire-and-forget — never await. keepalive lets the browser flush
-    // during page unload.
+    // AbortSignal.timeout is available in all modern browsers (Chrome 103+,
+    // Firefox 100+, Safari 16+).  Older browsers that lack it get the
+    // unguarded fetch — still correct, just without the 4-s cap.
+    const signal =
+      typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+        ? AbortSignal.timeout(4000)
+        : undefined;
+
     void fetch('/api/v1/client-errors/', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body,
-      keepalive: true,
       credentials: 'omit',
-    }).catch(() => {
-      // ignored — the error reporter must never surface errors
-    });
+      ...(signal !== undefined ? { signal } : {}),
+    })
+      .then((resp) => {
+        if (resp.ok) {
+          // Successful delivery — reset the failure counter.
+          _consecutiveFailures = 0;
+          _circuitOpenAt = 0;
+        } else {
+          // Server-side rejection (429, 5xx, etc.) — count as failure.
+          _consecutiveFailures += 1;
+          if (_consecutiveFailures >= _CIRCUIT_OPEN_THRESHOLD) {
+            _circuitOpenAt = Date.now();
+          }
+        }
+      })
+      .catch(() => {
+        // Network error or AbortError (timeout) — count as failure.
+        _consecutiveFailures += 1;
+        if (_consecutiveFailures >= _CIRCUIT_OPEN_THRESHOLD) {
+          _circuitOpenAt = Date.now();
+        }
+      });
   } catch {
     // ignored — the error reporter must never surface errors
   }

@@ -218,12 +218,24 @@ class TestAnchors:
         tenant_a,
         tenant_b,
     ):
-        # tenant_b tries to mutate tenant_a's project anchor — must 404.
-        anchors = await http_client.get(
-            f"/api/v1/geo-hub/anchors/?project_id={tenant_a['project_id']}",
+        # The sibling create test is deselected by the tenant-isolation -k
+        # filter, so create the anchor here (idempotent per project).
+        created = await http_client.post(
+            "/api/v1/geo-hub/anchors/",
+            json={
+                "project_id": tenant_a["project_id"],
+                "lat": "52.5200",
+                "lon": "13.4050",
+                "alt": "34.0",
+                "epsg_code": 4326,
+                "region_code": "DE-BE",
+                "address": "Alexanderplatz, Berlin",
+            },
             headers=tenant_a["headers"],
         )
-        anchor_id = anchors.json()[0]["id"]
+        assert created.status_code in (200, 201), created.text
+        anchor_id = created.json()["id"]
+        # tenant_b tries to mutate tenant_a's project anchor — must 404.
         res = await http_client.patch(
             f"/api/v1/geo-hub/anchors/{anchor_id}",
             json={"address": "ATTACKER WAS HERE"},
@@ -238,11 +250,23 @@ class TestAnchors:
         tenant_a,
         tenant_b,
     ):
-        anchors = await http_client.get(
-            f"/api/v1/geo-hub/anchors/?project_id={tenant_a['project_id']}",
+        # The sibling create test is deselected by the tenant-isolation -k
+        # filter, so create the anchor here (idempotent per project).
+        created = await http_client.post(
+            "/api/v1/geo-hub/anchors/",
+            json={
+                "project_id": tenant_a["project_id"],
+                "lat": "52.5200",
+                "lon": "13.4050",
+                "alt": "34.0",
+                "epsg_code": 4326,
+                "region_code": "DE-BE",
+                "address": "Alexanderplatz, Berlin",
+            },
             headers=tenant_a["headers"],
         )
-        anchor_id = anchors.json()[0]["id"]
+        assert created.status_code in (200, 201), created.text
+        anchor_id = created.json()["id"]
         res = await http_client.get(
             f"/api/v1/geo-hub/anchors/{anchor_id}",
             headers=tenant_b["headers"],
@@ -602,11 +626,22 @@ class TestImageryAndTerrain:
 
     @pytest.mark.asyncio
     async def test_imagery_idor(self, http_client, tenant_a, tenant_b):
-        layers = await http_client.get(
-            f"/api/v1/geo-hub/imagery-layers/?project_id={tenant_a['project_id']}",
+        # The sibling create test is deselected by the tenant-isolation -k
+        # filter, so create the imagery layer here.
+        created = await http_client.post(
+            "/api/v1/geo-hub/imagery-layers/",
+            json={
+                "project_id": tenant_a["project_id"],
+                "name": "OpenStreetMap",
+                "provider": "osm",
+                "url_template": "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+                "attribution": "(c) OpenStreetMap contributors",
+                "default_for_project": True,
+            },
             headers=tenant_a["headers"],
         )
-        layer_id = layers.json()[0]["id"]
+        assert created.status_code in (200, 201), created.text
+        layer_id = created.json()["id"]
         res = await http_client.patch(
             f"/api/v1/geo-hub/imagery-layers/{layer_id}",
             json={"name": "ATTACKER"},
@@ -791,11 +826,20 @@ class TestOverlays:
 
     @pytest.mark.asyncio
     async def test_overlay_idor(self, http_client, tenant_a, tenant_b):
-        ovs = await http_client.get(
-            f"/api/v1/geo-hub/overlays/?project_id={tenant_a['project_id']}",
+        # The sibling import test is deselected by the tenant-isolation -k
+        # filter, so create the overlay here via import-geojson.
+        created = await http_client.post(
+            "/api/v1/geo-hub/overlays/import-geojson/",
+            json={
+                "project_id": tenant_a["project_id"],
+                "name": "Site boundary",
+                "kind": "boundary",
+                "geojson": _SAMPLE_GEOJSON,
+            },
             headers=tenant_a["headers"],
         )
-        ov_id = ovs.json()[0]["id"]
+        assert created.status_code in (200, 201), created.text
+        ov_id = created.json()["id"]
         res = await http_client.patch(
             f"/api/v1/geo-hub/overlays/{ov_id}",
             json={"name": "ATTACKER"},
@@ -866,13 +910,33 @@ class TestViewpoints:
 
     @pytest.mark.asyncio
     async def test_viewpoint_idor(self, http_client, tenant_a, tenant_b):
-        vps = await http_client.get(
-            f"/api/v1/geo-hub/viewpoints/?project_id={tenant_a['project_id']}",
+        # The sibling create test is deselected by the tenant-isolation -k
+        # filter, so create the viewpoint here.
+        created = await http_client.post(
+            "/api/v1/geo-hub/viewpoints/",
+            json={
+                "project_id": tenant_a["project_id"],
+                "name": "Overview",
+                "camera_lat": "52.520",
+                "camera_lon": "13.405",
+                "camera_alt": "500",
+                "heading": "0",
+                "pitch": "-45",
+            },
             headers=tenant_a["headers"],
         )
-        vp_id = vps.json()[0]["id"]
-        res = await http_client.delete(
+        assert created.status_code in (200, 201), created.text
+        vp_id = created.json()["id"]
+        # Mutate (PATCH) cross-tenant rather than DELETE: PATCH needs
+        # ``geo_hub.write`` which the editor attacker HOLDS, so the request
+        # clears the RBAC gate and the 404 genuinely proves the project-access
+        # (ownership) check fired - mirroring the anchor/imagery/overlay IDOR
+        # tests. (DELETE needs ``geo_hub.delete``, which the editor lacks, so it
+        # 403s uniformly at the RBAC gate before any resource lookup - that is
+        # not an existence leak, but it would not exercise the access check.)
+        res = await http_client.patch(
             f"/api/v1/geo-hub/viewpoints/{vp_id}",
+            json={"description": "ATTACKER WAS HERE"},
             headers=tenant_b["headers"],
         )
         assert res.status_code == 404

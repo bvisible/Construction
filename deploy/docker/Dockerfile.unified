@@ -75,10 +75,17 @@ USER oe
 # default could only ever be wrong (the previous sqlite+aiosqlite default
 # crash-looped every bare `docker run` of the published image). The
 # entrypoint validates it at startup and prints how to supply one.
+# OE_DATA_DIR pins the unified data-dir resolver (app.core.storage.
+# resolve_data_dir) at the mounted /data volume below. Without it the
+# resolver's wheel/site-packages branch defaults to ~/.openestimate INSIDE
+# the container = the ephemeral container layer: BIM geometry is written
+# there, the DB row stays "ready", and a container recreate/redeploy makes
+# the geometry endpoint 404. Operators can still override it at run time.
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     SERVE_FRONTEND=true \
     VECTOR_BACKEND=lancedb \
+    OE_DATA_DIR=/data \
     VECTOR_DATA_DIR=/data/vectors \
     APP_ENV=development \
     APP_DEBUG=false \

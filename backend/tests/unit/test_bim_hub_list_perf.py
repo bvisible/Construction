@@ -87,7 +87,16 @@ class CountingStorageBackend(StorageBackend):
             raise FileNotFoundError(key)
         return len(self._blobs[key])
 
-    async def list_prefix(self, prefix: str) -> list[tuple[str, int]]:
+    async def list_prefix(
+        self,
+        prefix: str,
+        *,
+        include_backcompat_roots: bool = False,
+    ) -> list[tuple[str, int]]:
+        # ``include_backcompat_roots`` is accepted for parity with the real
+        # backends (the BIM helpers pass it) - this flat fake has a single
+        # namespace, so the flag is a no-op here.
+        _ = include_backcompat_roots
         self.calls["list_prefix"] += 1
         return [(key, len(blob)) for key, blob in self._blobs.items() if key.startswith(prefix)]
 

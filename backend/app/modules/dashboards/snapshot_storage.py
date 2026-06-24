@@ -187,17 +187,55 @@ async def resolve_local_parquet_path(
     other non-local backends this will eventually return a presigned
     URL and expect ``INSTALL httpfs`` at the DuckDB end - until that
     lands, non-local backends raise :class:`ParquetNotLocalError`.
+
+    Read-only back-compat fallback: if the Parquet is not under the
+    active ``base_dir`` (e.g. it was written under a different data-dir
+    resolution - before ``OE_DATA_DIR`` was honoured, or under the
+    package-relative default a later ``pip install -U`` replaced) we
+    probe every other platform-owned data root via
+    :func:`app.core.storage.safe_data_roots`, mirroring
+    :meth:`LocalStorageBackend._existing_path_for`. This keeps the
+    DuckDB fast-path consistent with ``backend.get()`` (which already
+    falls back) so a snapshot marked ready in the DB does not 404 here.
     """
     store = backend or get_storage_backend()
     key = parquet_key(project_id, snapshot_id, kind)
 
     if isinstance(store, LocalStorageBackend):
         # Exact same resolution rules the backend uses internally, so
-        # any key rejected by the backend is rejected identically here.
+        # any key rejected by the backend is rejected identically here
+        # (``_path_for`` raises ValueError on a path-traversal key).
         path: Path = store._path_for(key)  # noqa: SLF001 - intentional reuse
-        if not path.is_file():
-            raise FileNotFoundError(f"No Parquet file at snapshot key: {key}")
-        return str(path)
+        if path.is_file():
+            return str(path)
+        # Active base miss -> read-only fallback across the other
+        # platform-owned data roots, same containment-checked probe the
+        # backend uses in get()/exists(). Lazy import: this module is
+        # import-coupled and import-time resolution would defeat test /
+        # OE_DATA_DIR overrides; re-evaluate the roots per call.
+        from app.core.storage import safe_data_roots
+
+        active_base = store.base_dir.resolve()
+        rel_parts = key.split("/")
+        for root in safe_data_roots():
+            base = root.resolve()
+            if base == active_base:
+                continue
+            try:
+                candidate = base.joinpath(*rel_parts).resolve()
+                candidate.relative_to(base)  # path-traversal containment
+            except (OSError, ValueError):
+                continue
+            if candidate.is_file():
+                logger.info(
+                    "dashboards.snapshot_storage.resolve_local_parquet_path key=%r "
+                    "absent under active base %s; served from back-compat data root %s",
+                    key,
+                    active_base,
+                    base,
+                )
+                return str(candidate)
+        raise FileNotFoundError(f"No Parquet file at snapshot key: {key}")
 
     raise ParquetNotLocalError(
         f"Storage backend {type(store).__name__} does not expose Parquet as a "

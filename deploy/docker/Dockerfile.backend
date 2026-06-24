@@ -16,15 +16,26 @@ COPY backend/ backend/
 # DXF takeoff is already in the base dependencies, so no separate install.
 RUN pip install --no-cache-dir "./backend[server]"
 
+# Persistent data volume. OE_DATA_DIR pins the unified data-dir resolver
+# (app.core.storage.resolve_data_dir) at /data so BIM geometry and other
+# artifacts land on the mounted volume, not the ephemeral container layer
+# (where the wheel/site-packages default ~/.openestimate would put them,
+# leaving the DB row "ready" but the geometry endpoint 404 after a
+# container recreate). Operators can override OE_DATA_DIR at run time.
+RUN mkdir -p /data && chown oe:oe /data
+
 RUN chown -R oe:oe /app
 USER oe
 
 WORKDIR /app/backend
 
 ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1
+    PYTHONDONTWRITEBYTECODE=1 \
+    OE_DATA_DIR=/data
 
 EXPOSE 8000
+
+VOLUME ["/data"]
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')" || exit 1

@@ -31,9 +31,9 @@ from __future__ import annotations
 import asyncio
 import datetime as _dt
 import logging
+import uuid
 
 from app.database import async_session_factory
-from app.modules.ai_agents.models import CustomAgent
 from app.modules.ai_agents.service import AgentService
 
 logger = logging.getLogger(__name__)
@@ -65,25 +65,30 @@ def compute_next_run_at(cron_expr: str, *, after: _dt.datetime | None = None) ->
     return nxt.isoformat(timespec="seconds")
 
 
-async def _fire_due_agent(service: AgentService, agent: CustomAgent, now: _dt.datetime) -> None:
-    """Fire one due agent and advance its ``next_run_at``.
+async def _fire_due_agent(
+    service: AgentService,
+    agent_id: uuid.UUID,
+    agent_user_id: uuid.UUID,
+    agent_agent_name: str,
+    auto: dict,
+    now: _dt.datetime,
+) -> None:
+    """Fire one due agent (identified by pre-snapshotted plain values).
+
+    The caller snapshots every field BEFORE the loop: the first agent's
+    ``update_metadata()`` / ``start_run()`` calls ``session.expire_all()``,
+    after which reading an attribute off a still-unprocessed sibling ORM
+    instance would emit an illegal lazy SELECT on the async session
+    (``MissingGreenlet``) and silently skip every agent after the first.
+    Passing plain values dodges the reload entirely.
 
     The schedule clock is advanced FIRST (and committed by the caller) so a run
     that crashes mid-flight cannot wedge the agent into firing every tick - the
     next occurrence is already pinned regardless of run outcome.
     """
-    auto = dict(agent.automation) if isinstance(agent.automation, dict) else {}
     cron_expr = auto.get("cron")
     if not isinstance(cron_expr, str) or not cron_expr.strip():
         return
-
-    # Snapshot the identity BEFORE update_metadata(): that call expires the
-    # whole identity map (``session.expire_all()``), after which any attribute
-    # access on ``agent`` would emit a lazy SELECT - illegal on an async session
-    # and surfacing as ``MissingGreenlet``. Plain locals dodge the reload.
-    agent_id = agent.id
-    agent_user_id = agent.user_id
-    agent_agent_name = agent.agent_name
 
     # Advance the clock before running so a failure can't busy-loop the tick.
     try:
@@ -127,8 +132,23 @@ async def fire_due_runs(now: _dt.datetime | None = None) -> int:
     async with async_session_factory() as session:
         service = AgentService(session)
         due = await service.custom_repo.list_due_scheduled(now.isoformat(timespec="seconds"))
-        for agent in due:
-            await _fire_due_agent(service, agent, now)
+        # Snapshot every field needed for ALL due agents BEFORE the loop, while
+        # each instance is still fresh from the query. The first
+        # _fire_due_agent() expires the whole identity map
+        # (update_metadata()/start_run() -> session.expire_all()), after which
+        # reading agent.automation on a sibling would emit a lazy SELECT
+        # (MissingGreenlet) and silently skip every agent after the first.
+        snapshots = [
+            (
+                a.id,
+                a.user_id,
+                a.agent_name,
+                dict(a.automation) if isinstance(a.automation, dict) else {},
+            )
+            for a in due
+        ]
+        for agent_id, agent_user_id, agent_agent_name, auto in snapshots:
+            await _fire_due_agent(service, agent_id, agent_user_id, agent_agent_name, auto, now)
             fired += 1
         await session.commit()
     return fired

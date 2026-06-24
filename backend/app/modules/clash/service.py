@@ -423,12 +423,14 @@ def _label_for_cluster(members: list[object], cluster_id: int) -> str:
                 continue
     if not pair_counts:
         return f"Cluster {cluster_id}"
-    # Dominant pair: highest count, then alphabetic tie-break for
-    # determinism. The previous version computed `top_pair` twice with
-    # divergent tie-break logic; the first assignment was dead code, so
-    # results were inconsistent only when re-reading the variable for
-    # debugging. Keep one stable expression.
-    top_pair = max(pair_counts, key=lambda p: (pair_counts[p], -ord(p[0][:1] or "z")))
+    # Dominant pair: highest count, then a FULL-tuple alphabetic tie-break
+    # for determinism. This MUST match :func:`_dominant_pair_and_storey`
+    # exactly - the cluster list returns this ``label`` alongside that
+    # helper's ``dominant_disciplines``, so a weaker tie-break here (the
+    # old ``-ord(p[0][:1])`` only compared the first char of the first
+    # discipline and ignored the second) could name a different pair than
+    # the colour palette on a count tie. Tie on the whole ``(a, b)`` pair.
+    top_pair = max(pair_counts, key=lambda p: (pair_counts[p], p))
     label = f"{top_pair[0]} × {top_pair[1]}"
     if storey_counts:
         top_storey = max(storey_counts, key=lambda s: (storey_counts[s], -s))
@@ -535,8 +537,12 @@ def _suggest_rule_from_fps(
     counts: dict[tuple[str, str], int] = {}
     for pair in fp_pairs:
         counts[pair] = counts.get(pair, 0) + 1
-    # Largest-FP pair, ties broken alphabetically for determinism.
-    top_pair, top_count = max(counts.items(), key=lambda kv: (kv[1], -ord((kv[0][0] or "z")[:1] or "z")))
+    # Largest-FP pair, ties broken by the FULL (a, b) pair for
+    # determinism. The old key only compared the first character of the
+    # first discipline (``-ord((kv[0][0])[:1])``), so two pairs sharing a
+    # leading letter (e.g. ("Mechanical","Plumbing") vs
+    # ("Mechanical","Structural")) tied and the winner was arbitrary.
+    top_pair, top_count = max(counts.items(), key=lambda kv: (kv[1], kv[0]))
     if top_count < _FP_SUGGESTION_THRESHOLD:
         return None, "", top_count
     # Tolerance proposal: a safe 0.05 m default, widened just past the
@@ -1707,9 +1713,11 @@ class ClashService:
             # leave the run rows in place but skip the smart-issue write.
             try:
                 await self.session.flush()
-                for clash in results:
-                    if clash.signature_hash:
-                        await self.upsert_clash_with_signature(run, clash)
+                # Batched smart-issue upsert - one pair of SELECTs + one
+                # COUNT for the whole run instead of ~2-3 queries per clash
+                # (the old per-row ``upsert_clash_with_signature`` loop was
+                # a hard N+1 on federated runs that emit thousands of rows).
+                await self.upsert_clashes_with_signatures(run, results)
                 run.status = "completed"
                 run.completed_at = _now()
                 await self.finalize_run(run)
@@ -1970,11 +1978,26 @@ class ClashService:
             clash.issue_id = issue.id
             return issue
         # Hit - bump last_seen + reset missing count + transition status.
+        # Was this issue already touched *by this same run*? Within a single
+        # run two result rows can carry the same ``signature_hash`` - weak
+        # GUID-less (DWG) sources collapse a discipline/material pair to one
+        # hash, and any two clashes in the same spatial-grid bucket of the
+        # same clash_type share it too. The first such row created (or
+        # reopened) the issue and stamped ``last_seen_run_id = run.id``; the
+        # second+ must NOT advance the lifecycle a second time, or a brand-
+        # new issue with >1 member row in its very first run would wrongly
+        # read ``persisted`` (= "seen in N>1 runs"). Detect the repeat by the
+        # last-seen run already equalling this run *before* we overwrite it.
+        seen_this_run = str(existing.last_seen_run_id) == str(run.id)
         existing.last_seen_run_id = run.id
         existing.missing_run_count = 0
         if suppressed is not None:
             # An active suppression always wins, regardless of prior status.
             existing.status = "ignored"
+        elif seen_this_run:
+            # Duplicate sighting inside one run - the first row already set
+            # the correct status this run; leave it untouched (idempotent).
+            pass
         else:
             prior_status = existing.status or "new"
             if prior_status in ("resolved", "archived"):
@@ -1991,6 +2014,109 @@ class ClashService:
             # ``persisted`` stays ``persisted``.
         clash.issue_id = existing.id
         return existing
+
+    async def upsert_clashes_with_signatures(
+        self,
+        run: ClashRun,
+        clashes: list[ClashResult],
+    ) -> None:
+        """Batched equivalent of :meth:`upsert_clash_with_signature`.
+
+        The per-row helper issues two SELECTs (suppression + issue lookup)
+        and, for every brand-new issue, a COUNT-backed ``next_issue_seq``
+        plus a ``flush`` - i.e. ~2-3 round-trips *per clash*. On a federated
+        run that produces thousands of clashes this is a pathological N+1.
+
+        This method collapses the read side to a fixed number of queries:
+        one batched suppression fetch, one batched issue fetch, and one
+        ``next_issue_seq`` COUNT - then resolves every row in Python against
+        those in-memory maps, allocating the monotonic ``CLASH-NNN`` ids
+        sequentially (exactly as the per-row path would as each prior flush
+        bumped the COUNT). The lifecycle transitions are byte-for-byte the
+        same as the per-row helper (suppression wins; first sighting this
+        run advances the status, repeat sightings inside the same run are
+        idempotent); only the query count changes.
+
+        Rows whose ``signature_hash`` is empty are skipped (they carry no
+        smart-issue identity) - identical to the engine loop's guard.
+        """
+        # Only rows that actually carry a signature get an issue. Preserve
+        # input order so the deterministic, first-row-wins semantics below
+        # match the historical per-row loop exactly.
+        rows = [c for c in clashes if (c.signature_hash or "").strip()]
+        if not rows:
+            return
+
+        distinct_sigs = list({(c.signature_hash or "").strip() for c in rows})
+
+        # Two batched reads replace the per-row pair of SELECTs.
+        suppressions = await self.repo.get_suppressions_by_signatures(run.project_id, distinct_sigs)
+        issues = await self.repo.issues_by_signatures(run.project_id, distinct_sigs)
+
+        # One COUNT seeds the monotonic server-id allocator. The per-row
+        # path called ``next_issue_seq`` (COUNT + 1) after each insert+flush;
+        # since we insert without an intermediate flush we advance the
+        # counter ourselves, which yields the identical id sequence.
+        next_seq = await self.repo.next_issue_seq(run.project_id)
+
+        for clash in rows:
+            sig = (clash.signature_hash or "").strip()
+            suppressed = suppressions.get(sig)
+            existing = issues.get(sig)
+            if existing is None:
+                issue = ClashIssue(
+                    project_id=run.project_id,
+                    signature_hash=sig,
+                    status="ignored" if suppressed is not None else "new",
+                    first_seen_run_id=run.id,
+                    last_seen_run_id=run.id,
+                    missing_run_count=0,
+                    server_assigned_id=f"CLASH-{next_seq:03d}",
+                    signature_quality=(clash.signature_quality or "strong"),
+                    tags=[],
+                )
+                next_seq += 1
+                self.repo.add_issue(issue)
+                # Cache so a second row sharing this signature in the same
+                # run reuses the in-memory issue (and reads seen_this_run).
+                issues[sig] = issue
+                # ``issue.id`` is assigned on flush; the engine flushes once
+                # after this batch, then re-links result rows (see caller).
+                clash.issue_id = issue.id
+                continue
+            # Hit - mirror the per-row lifecycle. ``seen_this_run`` is true
+            # when the issue's last-seen run already equals this run, i.e.
+            # an earlier row in this same batch (or a freshly created issue
+            # above) already advanced it; repeats must stay idempotent.
+            seen_this_run = str(existing.last_seen_run_id) == str(run.id)
+            existing.last_seen_run_id = run.id
+            existing.missing_run_count = 0
+            if suppressed is not None:
+                existing.status = "ignored"
+            elif seen_this_run:
+                pass
+            else:
+                prior_status = existing.status or "new"
+                if prior_status in ("resolved", "archived"):
+                    # Reopen - the signature came back; clear the resolution.
+                    existing.status = "persisted"
+                    existing.resolved_run_id = None
+                elif prior_status in ("new", "ignored"):
+                    # Second sighting (new) or a lifted suppression (ignored)
+                    # both promote to persisted. ``persisted`` stays put.
+                    existing.status = "persisted"
+            clash.issue_id = existing.id
+
+        # Single flush assigns ids to every freshly-added issue; the caller
+        # re-links result rows whose issue was created here (their
+        # ``issue_id`` was None until this flush) in one pass.
+        await self.session.flush()
+        for clash in rows:
+            if clash.issue_id is None:
+                sig = (clash.signature_hash or "").strip()
+                created = issues.get(sig)
+                if created is not None:
+                    clash.issue_id = created.id
 
     async def finalize_run(
         self,
@@ -2146,9 +2272,6 @@ class ClashService:
         await self.unsuppress(project_id, issue.signature_hash, user_id)
         return issue
 
-    # TODO: expose via bulk endpoint - router.py is in flight with
-    # another agent, so the service method is shipped on its own and
-    # wired up in a follow-up patch.
     async def bulk_suppress(
         self,
         project_id: uuid.UUID,
@@ -2233,6 +2356,15 @@ class ClashService:
         # each affected ClashResult's history JSON column.
         actor = await self.resolve_author(str(user_id)) if user_id else "system"
 
+        # Audit fan-out source: pull every member result row of every
+        # authorized issue in ONE query and group by issue_id, instead of
+        # a per-issue SELECT inside the loop below (that was an N+1 - a
+        # bulk-suppress of K issues issued K extra round-trips).
+        member_rows: dict[uuid.UUID, list[ClashResult]] = {}
+        for r in await self.repo.results_for_issue_ids([i.id for i in authorized]):
+            if r.issue_id is not None:
+                member_rows.setdefault(r.issue_id, []).append(r)
+
         suppressed_ids: list[uuid.UUID] = []
         for issue in authorized:
             sig = (issue.signature_hash or "").strip()
@@ -2264,10 +2396,7 @@ class ClashService:
 
             # Audit trail: fan out to every result row attached to this
             # issue so the per-clash Activity tab reflects the bulk op.
-            from sqlalchemy import select as _select  # local import - see note
-
-            res_stmt = _select(ClashResult).where(ClashResult.issue_id == issue.id)
-            for r in (await self.session.execute(res_stmt)).scalars().all():
+            for r in member_rows.get(issue.id, ()):
                 self._append_history(r, actor, "suppression", prior_status, "ignored")
 
             suppressed_ids.append(issue.id)
@@ -2282,6 +2411,101 @@ class ClashService:
             "skipped_ids": skipped,
             "suppressed_count": len(suppressed_ids),
             "skipped_count": len(skipped),
+        }
+
+    async def bulk_suppress_results(
+        self,
+        project_id: uuid.UUID,
+        run_id: uuid.UUID,
+        result_ids: list[uuid.UUID],
+        reason: str,
+        user_id: uuid.UUID | str | None,
+    ) -> dict:
+        """Suppress the smart issues behind a selection of review-table rows.
+
+        The review table is keyed by :class:`ClashResult` id, but a
+        suppression is keyed by the underlying :class:`ClashIssue`
+        signature (so it survives across runs). This wrapper maps the
+        selected result ids to their distinct issue ids - run-scoped and
+        IDOR-safe via :meth:`ClashRepository.results_by_ids` - then
+        delegates to :meth:`bulk_suppress` (the tested transaction-safe
+        path). The result envelope is reported back in **result-id**
+        terms so the caller (which only holds result ids) can reconcile
+        its selection:
+
+        * ``suppressed_ids`` - results whose issue flipped to ``ignored``
+        * ``skipped_ids`` - results that did not belong to the run, had no
+          smart issue yet, or whose issue was dropped by ``bulk_suppress``
+          (e.g. missing signature)
+
+        Empty ``result_ids`` → zero-counts envelope, never raises. An
+        empty / whitespace-only ``reason`` raises 422 (same gate as the
+        single-issue path).
+        """
+        run = await self.get_run(project_id, run_id)  # IDOR + 404 guard
+
+        rsn = (reason or "").strip()
+        if not rsn:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="reason is required",
+            )
+
+        if not result_ids:
+            return {
+                "suppressed_ids": [],
+                "skipped_ids": [],
+                "suppressed_count": 0,
+                "skipped_count": 0,
+            }
+
+        # De-duplicate the selection preserving order; cap it at the same
+        # ceiling as the bulk-triage path so a runaway selection can't hold
+        # the event loop.
+        seen: set[uuid.UUID] = set()
+        unique_result_ids: list[uuid.UUID] = []
+        for rid in result_ids:
+            if rid is not None and rid not in seen:
+                seen.add(rid)
+                unique_result_ids.append(rid)
+        if len(unique_result_ids) > _MAX_RESULTS:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Bulk selection exceeds {_MAX_RESULTS} rows.",
+            )
+
+        # Run-scoped fetch (IDOR-safe): rows from another run are dropped.
+        rows = await self.repo.results_by_ids(run.id, unique_result_ids)
+        result_to_issue: dict[uuid.UUID, uuid.UUID] = {}
+        issue_ids: list[uuid.UUID] = []
+        issue_seen: set[uuid.UUID] = set()
+        for r in rows:
+            if r.issue_id is None:
+                continue
+            result_to_issue[r.id] = r.issue_id
+            if r.issue_id not in issue_seen:
+                issue_seen.add(r.issue_id)
+                issue_ids.append(r.issue_id)
+
+        outcome = await self.bulk_suppress(project_id, issue_ids, rsn, user_id)
+        suppressed_issue_ids = set(outcome["suppressed_ids"])
+
+        # Re-express the issue-level outcome in result-id terms. A selected
+        # result counts as suppressed iff its mapped issue actually flipped.
+        suppressed_results: list[uuid.UUID] = []
+        skipped_results: list[uuid.UUID] = []
+        for rid in unique_result_ids:
+            mapped = result_to_issue.get(rid)
+            if mapped is not None and mapped in suppressed_issue_ids:
+                suppressed_results.append(rid)
+            else:
+                skipped_results.append(rid)
+
+        return {
+            "suppressed_ids": suppressed_results,
+            "skipped_ids": skipped_results,
+            "suppressed_count": len(suppressed_results),
+            "skipped_count": len(skipped_results),
         }
 
     async def list_issues(
@@ -2355,9 +2579,9 @@ class ClashService:
             elif prev_run is not None:
                 reopened += 1
         # Resolved: count of issues whose resolved_run_id == run_id (the
-        # finalize_run pass stamps these).
-        all_issues = await self.repo.issues_for_project(project_id)
-        resolved = sum(1 for i in all_issues if i.resolved_run_id is not None and str(i.resolved_run_id) == str(run_id))
+        # finalize_run pass stamps these). A scoped COUNT(*) - not a load
+        # of every issue row in the project.
+        resolved = await self.repo.count_issues_resolved_by_run(project_id, run_id)
         return {
             "new": int(new),
             "persisted": int(persisted),

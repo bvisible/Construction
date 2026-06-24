@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.events import event_bus
 from app.core.i18n import get_locale
+from app.core.json_merge import merge_metadata
 from app.core.validation.messages import translate
 from app.modules.bid_management.models import (
     BidAward,
@@ -376,11 +377,29 @@ def compute_bid_summary(submissions: list[Any]) -> dict[str, Any]:
 
     Returns a dict ready to drop into :class:`SubmissionAnalyticsResponse`.
     """
-    totals = [
-        float(_to_decimal(getattr(s, "total_amount", 0)))
-        for s in submissions
-        if _to_decimal(getattr(s, "total_amount", 0)) > 0
-    ]
+    # Group positive bid totals by currency so we never blend (e.g. EUR vs JPY)
+    # into one min/max/avg. The dominant currency (most priced bids) is the
+    # reporting currency; bids in any other currency are excluded from the price
+    # stats and counted separately - the FX-never-blend rule the tendering
+    # leveling path also enforces. completeness / valid / late are currency-
+    # agnostic so they stay over the full set.
+    totals_by_currency: dict[str, list[float]] = {}
+    for s in submissions:
+        amt = _to_decimal(getattr(s, "total_amount", 0))
+        if amt <= 0:
+            continue
+        cur = (getattr(s, "currency", "") or "").strip().upper()
+        totals_by_currency.setdefault(cur, []).append(float(amt))
+
+    report_currency = ""
+    totals: list[float] = []
+    if totals_by_currency:
+        # Dominant currency = the one with the most priced bids (max() returns
+        # the first maximal key, i.e. stable over insertion order on ties).
+        report_currency = max(totals_by_currency, key=lambda c: len(totals_by_currency[c]))
+        totals = totals_by_currency[report_currency]
+    excluded_off_currency = sum(len(v) for c, v in totals_by_currency.items() if c != report_currency)
+
     completeness = [float(_to_decimal(getattr(s, "completeness_score", 0))) for s in submissions]
     valid_count = sum(1 for s in submissions if getattr(s, "is_valid", False))
     late_count = sum(1 for s in submissions if getattr(s, "open_after_deadline", False))
@@ -408,6 +427,9 @@ def compute_bid_summary(submissions: list[Any]) -> dict[str, Any]:
         "completeness_avg": comp_avg,
         "valid_count": valid_count,
         "late_count": late_count,
+        "currency": report_currency,
+        "excluded_off_currency": excluded_off_currency,
+        "mixed_currency": excluded_off_currency > 0,
     }
 
 
@@ -506,7 +528,7 @@ class BidManagementService:
         if "metadata" in fields:
             _incoming = fields.pop("metadata")
             fields["metadata_"] = (
-                {**(getattr(package, "metadata_", None) or {}), **_incoming}
+                merge_metadata(getattr(package, "metadata_", None), _incoming)
                 if isinstance(_incoming, dict)
                 else _incoming
             )
@@ -1035,6 +1057,10 @@ class BidManagementService:
         sub = await self.submission_repo.get_by_id(submission_id)
         if sub is None:
             raise HTTPException(status_code=404, detail=translate("errors.submission_not_found", locale=get_locale()))
+        # Withdrawing flips is_valid - the very field award integrity hinges on -
+        # so it must respect the same awarded/cancelled lock as every other
+        # submission mutation (mirrors update_submission / *_line).
+        await self._assert_submission_mutable(submission_id)
         sub.is_valid = False
         envelope = dict(sub.envelope_payload or {})
         envelope["withdrawn"] = True
@@ -1509,6 +1535,9 @@ class BidManagementService:
             completeness_avg=summary["completeness_avg"],
             valid_count=summary["valid_count"],
             late_count=summary["late_count"],
+            currency=summary["currency"],
+            excluded_off_currency=summary["excluded_off_currency"],
+            mixed_currency=summary["mixed_currency"],
         )
 
     # ── Leveling matrix (line-level side-by-side) ─────────────────────

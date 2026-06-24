@@ -9,7 +9,6 @@ export type ResourceType =
   | 'material'
   | 'labor'
   | 'equipment'
-  | 'tooling'
   | 'operator'
   | 'subcontractor'
   | 'overhead';

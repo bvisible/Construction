@@ -209,12 +209,36 @@ async def cancel_job(job_id: uuid.UUID, _user_id: CurrentUserId) -> JobRunRead:
 # ── Helpers ───────────────────────────────────────────────────────────────
 
 
+# Keys of ``JobRun.error_jsonb`` that are safe to expose over the API. The
+# blob written by app.core.job_runner is ``{type, message, traceback, phase}``;
+# ``traceback`` is a full Python stack trace (file paths, source lines, locals
+# context) and must NEVER cross the API boundary - it is the canonical internal
+# leak. We keep ``type`` + ``message`` (useful, bounded diagnostics) and drop
+# everything else by allowlist so a future handler that stashes extra internal
+# keys can't silently start leaking them.
+_SAFE_ERROR_KEYS = frozenset({"type", "message", "phase"})
+
+
+def _sanitize_error(error: dict | None) -> dict | None:
+    """Strip the server-side traceback (and any non-allowlisted keys) from a
+    JobRun error blob before it is returned through the API.
+
+    The full traceback stays in ``JobRun.error_jsonb`` in the database for
+    operators / server-side log correlation; only ``type`` / ``message`` /
+    ``phase`` reach the client.
+    """
+    if not isinstance(error, dict):
+        return error if error is None else None
+    return {k: v for k, v in error.items() if k in _SAFE_ERROR_KEYS} or None
+
+
 def _to_read_model(row: JobRun) -> JobRunRead:
     """Translate a JobRun ORM row into the public read model.
 
     The mapping is explicit (rather than ``model_validate(row)``) so we
     can rename ``result_jsonb`` → ``result`` / ``error_jsonb`` → ``error``
-    without leaking internal column names through the API.
+    without leaking internal column names through the API. The error blob is
+    additionally sanitised to drop the captured Python traceback.
     """
     return JobRunRead(
         id=row.id,
@@ -222,7 +246,7 @@ def _to_read_model(row: JobRun) -> JobRunRead:
         status=row.status,
         progress_percent=row.progress_percent,
         result=row.result_jsonb,
-        error=row.error_jsonb,
+        error=_sanitize_error(row.error_jsonb),
         started_at=row.started_at,
         completed_at=row.completed_at,
         retry_count=row.retry_count,

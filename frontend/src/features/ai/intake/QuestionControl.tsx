@@ -24,10 +24,17 @@ export function QuestionControl({ question, value, onChange, disabled }: Questio
   const inputId = useId();
   const whyId = useId();
 
-  const label = question.prompt;
-  // `why` is an i18n key carrying the "unlocks" justification.
+  // The prompt is EITHER an LLM-phrased sentence (AI path) OR the literal i18n
+  // key `aiest.q.<param_key>` (offline / no-key path). Translate the key form
+  // with a humanized fallback so a missing key never leaks raw to the user;
+  // pass an LLM sentence through unchanged.
+  const label = question.prompt.startsWith('aiest.')
+    ? t(question.prompt, { defaultValue: humanizeParamKey(question.param_key) })
+    : question.prompt;
+  // `why` is an i18n key carrying the "unlocks" justification; degrade a
+  // missing key to empty (no tooltip) rather than showing the raw key.
   const why = question.why
-    ? t(question.why, { defaultValue: question.why })
+    ? t(question.why, { defaultValue: question.why.startsWith('aiest.') ? '' : question.why })
     : '';
 
   const renderControl = () => {
@@ -144,4 +151,14 @@ export function QuestionControl({ question, value, onChange, disabled }: Questio
       {renderControl()}
     </div>
   );
+}
+
+// Turn a snake_case param key into a readable label when no translation exists
+// (e.g. "gross_floor_area_m2" -> "Gross floor area m2"). Mirrors the helper in
+// ParameterSheet.tsx so an untranslated offline question never shows a raw key.
+function humanizeParamKey(key: string): string {
+  return key
+    .replace(/_/g, ' ')
+    .trim()
+    .replace(/^./, (c) => c.toUpperCase());
 }

@@ -21,6 +21,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.events import event_bus
+from app.core.json_merge import merge_metadata
 from app.modules.rfi.models import RFI
 from app.modules.rfi.repository import RFIRepository
 from app.modules.rfi.schemas import RFICreate, RFIStatsResponse, RFIUpdate
@@ -246,6 +247,7 @@ class RFIService:
         limit: int = 50,
         status_filter: str | None = None,
         search: str | None = None,
+        with_total: bool = True,
     ) -> tuple[list[RFI], int]:
         return await self.repo.list_for_project(
             project_id,
@@ -253,6 +255,7 @@ class RFIService:
             limit=limit,
             status=status_filter,
             search=search,
+            with_total=with_total,
         )
 
     async def update_rfi(
@@ -290,7 +293,7 @@ class RFIService:
         if "metadata" in fields:
             incoming_meta = fields.pop("metadata")
             if isinstance(incoming_meta, dict):
-                fields["metadata_"] = {**(getattr(rfi, "metadata_", None) or {}), **incoming_meta}
+                fields["metadata_"] = merge_metadata(getattr(rfi, "metadata_", None), incoming_meta)
             else:
                 fields["metadata_"] = incoming_meta
 
@@ -495,6 +498,9 @@ class RFIService:
         rfi_number_s = rfi.rfi_number
         subject_s = rfi.subject
         raised_by_s = str(rfi.raised_by) if rfi.raised_by else None
+        # Real prior ball-in-court (may differ from assigned_to after a
+        # reassignment or a prior reopen) so the audit before_state is exact.
+        prev_bic_s = str(rfi.ball_in_court) if rfi.ball_in_court else None
         old_status = rfi.status
 
         await self.repo.update_fields(
@@ -503,7 +509,10 @@ class RFIService:
             responded_by=responded_by,
             responded_at=datetime.now(UTC).isoformat(),
             status="answered",
-            ball_in_court=str(rfi.raised_by),
+            # Flip ball-in-court back to the originator so they review the
+            # answer. ``raised_by_s`` is None-safe; ``str(rfi.raised_by)``
+            # would write the literal "None" into the GUID column.
+            ball_in_court=raised_by_s,
         )
         fresh = await self.repo.get_by_id(rfi_id)
 
@@ -525,7 +534,7 @@ class RFIService:
             module="rfi",
             parent_entity_type="project",
             parent_entity_id=project_id_s,
-            before_state={"status": old_status, "ball_in_court": assigned_s},
+            before_state={"status": old_status, "ball_in_court": prev_bic_s},
             after_state={"status": "answered", "ball_in_court": raised_by_s},
         )
 
@@ -729,10 +738,17 @@ class RFIService:
 
         if decision == "approved":
             if rfi.status == "open" and rfi.official_response:
+                # Attribute the re-affirmed answer to the decider, falling
+                # back to the assignee, then the originator. An empty string
+                # here would be written into the ``responded_by`` GUID column
+                # and raise a DataError on PostgreSQL (silently swallowed by
+                # the subscriber), dropping the transition - ``raised_by`` is
+                # NOT NULL so it is always a valid last-resort actor.
+                responder = decided_by or (str(rfi.assigned_to) if rfi.assigned_to else None) or str(rfi.raised_by)
                 return await self.respond_to_rfi(
                     rfi_id,
                     rfi.official_response,
-                    responded_by=decided_by or (str(rfi.assigned_to) if rfi.assigned_to else ""),
+                    responded_by=responder,
                     actor_role=None,  # internal caller - bypasses the assignee gate
                 )
             logger.info(

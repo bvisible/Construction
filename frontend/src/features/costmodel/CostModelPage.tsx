@@ -46,6 +46,7 @@ import { CostSpinePanel } from './CostSpinePanel';
 import { costmodelGuide } from './costmodelGuide';
 import { BudgetLineThresholdEditor, parseThreshold } from './BudgetLineThresholdEditor';
 import { getIntlLocale } from '@/shared/lib/formatters';
+import { formatCurrency as fmtMoney } from '@/shared/lib/money';
 
 /* ── Types ─────────────────────────────────────────────────────────────── */
 
@@ -67,18 +68,15 @@ interface BOQ {
 
 /* ── Helpers ───────────────────────────────────────────────────────────── */
 
-function formatCurrency(amount: number, currency: string): string {
-  const safe = /^[A-Z]{3}$/.test(currency) ? currency : 'EUR';
-  try {
-    return new Intl.NumberFormat(getIntlLocale(), {
-      style: 'currency',
-      currency: safe,
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 0,
-    }).format(amount);
-  } catch {
-    return `${Number(amount).toFixed(0)} ${safe}`;
-  }
+// Whole-currency display (no cents) for the cost-model dashboards. Delegates
+// to the shared money formatter so the Decimal-as-string coercion and the
+// no-symbol-on-unknown-currency policy live in one place; the
+// `maximumFractionDigits: 0` override keeps the existing whole-number look.
+function formatCurrency(amount: string | number, currency?: string): string {
+  return fmtMoney(amount, currency, undefined, {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  });
 }
 
 function formatCompact(amount: number, currency: string): string {
@@ -208,7 +206,7 @@ const PerformanceIndicator = memo(function PerformanceIndicator({
 
 /** EVM S-curve chart colors — semantic names for planned/earned/actual series */
 const CHART_COLORS = {
-  planned: 'var(--chart-planned, #c2723f)',
+  planned: 'var(--chart-planned, #2563eb)',
   earned: 'var(--chart-earned, #16a34a)',
   actual: 'var(--chart-actual, #dc2626)',
 } as const;

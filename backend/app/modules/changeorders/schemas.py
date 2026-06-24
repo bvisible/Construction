@@ -19,14 +19,24 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 # would overflow the underlying column.
 _INT32_MAX = 2_147_483_647
 
+# Upper bound for money fields. Far above any realistic construction amount in
+# any currency, yet well within Decimal's default 28-digit precision so the
+# downstream quantize() in the service never raises InvalidOperation on an
+# otherwise-"valid" huge input (e.g. '1e1000'), which would surface as a 500.
+_MONEY_MAX = Decimal("1e15")
+
 
 def _validate_decimal(v: str, field_name: str = "value") -> str:
     """‌⁠‍Validate that a string is a valid decimal number (allows negative - CO
     cost impacts can be credits)."""
     try:
-        Decimal(v)
+        d = Decimal(v)
     except (InvalidOperation, ValueError, TypeError) as exc:
         raise ValueError(f"Invalid decimal value for {field_name}: {v!r}") from exc
+    if not d.is_finite():
+        raise ValueError(f"{field_name} must be a finite number (no NaN/Infinity), got {v!r}")
+    if abs(d) >= _MONEY_MAX:
+        raise ValueError(f"{field_name} is outside the supported range, got {v!r}")
     return v
 
 
@@ -36,6 +46,10 @@ def _validate_non_negative_decimal(v: str, field_name: str = "value") -> str:
         d = Decimal(v)
     except (InvalidOperation, ValueError, TypeError) as exc:
         raise ValueError(f"Invalid decimal value for {field_name}: {v!r}") from exc
+    if not d.is_finite():
+        raise ValueError(f"{field_name} must be a finite number (no NaN/Infinity), got {v!r}")
+    if abs(d) >= _MONEY_MAX:
+        raise ValueError(f"{field_name} is outside the supported range, got {v!r}")
     if d < 0:
         raise ValueError(f"{field_name} must be non-negative, got {v!r}")
     return v
@@ -81,6 +95,15 @@ class ChangeOrderCreate(BaseModel):
     )
     metadata: dict[str, Any] = Field(default_factory=dict)
 
+    @field_validator("cost_impact")
+    @classmethod
+    def _check_cost_impact(cls, v: str | None) -> str | None:
+        # Reject NaN/Infinity/garbage so one bad CO cannot poison the
+        # project-wide cost rollup (which sums every CO's cost_impact).
+        if v is None:
+            return v
+        return _validate_decimal(v, "cost_impact")
+
 
 class ChangeOrderUpdate(BaseModel):
     """‌⁠‍Partial update for a change order.
@@ -120,6 +143,13 @@ class ChangeOrderUpdate(BaseModel):
                 "Status cannot be changed via PATCH. Use POST /changeorders/{id}/submit, /approve, or /reject."
             )
         return v
+
+    @field_validator("cost_impact")
+    @classmethod
+    def _check_cost_impact(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        return _validate_decimal(v, "cost_impact")
 
 
 class ChangeOrderItemResponse(BaseModel):

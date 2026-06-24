@@ -14,7 +14,7 @@ import { AlertTriangle } from 'lucide-react';
 import type { LineOfBalance, LineOfBalanceBar } from './api';
 
 const LOC_PALETTE = [
-  '#c2723f',
+  '#2563eb',
   '#059669',
   '#dc2626',
   '#d97706',

@@ -261,12 +261,13 @@ export interface BIMModelData {
   /** Whether the raw uploaded CAD file is still on storage.  Drives
    *  retry availability and the disk-usage tooltip.  Added in v2.6.29. */
   has_original?: boolean | null;
-  // //// NEOFFICE PATCH — Mirror the upstream `has_geometry` response field
-  // WHY: Backend `BIMModelResponse` exposes `has_geometry: bool = False` since
-  //      v3.2.0 but the TS interface didn't track it. The BIMPage geometryUrl
-  //      memo needs it to skip Three.js fetch on parametric-only models
-  //      (RoomPlan imports via /api/v1/neoffice/bim/import-roomplan/).
-  // REVIEW: Drop when the type is regenerated from upstream OpenAPI.
+  /** Whether geometry (GLB/DAE) is available for this model.  Derived by
+   *  the backend at response time from `canonical_file_path` (set when the
+   *  converter produced a usable mesh) and returned on every list/detail
+   *  response.  Drives whether the 3D canvas is mounted vs. the "data only"
+   *  element list; `false`/undefined means the model imported elements +
+   *  quantities but has no 3D mesh (e.g. no native CAD converter on this
+   *  server). Upstream adopted this field — our prior mirror patch retired. */
   has_geometry?: boolean;
 }
 
@@ -2597,10 +2598,9 @@ export class ElementManager {
 
   /** Subscribe to hidden-count changes. Returns an unsubscribe callback.
    *
-   *  TODO(W6.6 integration): wire hidden-count badge in BIMViewer.tsx —
-   *  render a small "{n} hidden — Show all" pill above the canvas while
-   *  `hasHidden()` is true. The pill should call `elementMgr.showAll()`
-   *  when clicked. */
+   *  Drives the floating "{n} hidden - Show all" badge in BIMViewer.tsx,
+   *  which is shown while `hasHidden()` is true and calls `showAll()` on
+   *  click. */
   onHiddenCountChange(cb: (count: number) => void): () => void {
     this.hiddenCountSubscribers.add(cb);
     // Fire once with the current value so subscribers can render synchronously.

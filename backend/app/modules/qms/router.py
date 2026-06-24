@@ -97,7 +97,7 @@ from app.modules.qms.schemas import (
     PunchItemUpdate,
     SupplierAuditLink,
 )
-from app.modules.qms.service import QMSService
+from app.modules.qms.service import QMSConflictError, QMSService
 
 router = APIRouter(tags=["qms"])
 logger = logging.getLogger(__name__)
@@ -346,6 +346,10 @@ async def sign_inspection(
             signer_ip=_client_ip(request),
             signer_user_agent=user_agent,
         )
+    except QMSConflictError as exc:
+        # Duplicate (user, role) signature - either caught by the pre-check or
+        # by the DB unique constraint on a concurrent double-sign.
+        raise _conflict(str(exc)) from exc
     except ValueError as exc:
         raise _bad(str(exc)) from exc
     return InspectionSignatureRead.model_validate(sig)
@@ -1378,9 +1382,11 @@ async def copq_detailed_report(
     session: SessionDep,
     user_id: CurrentUserId,
     project_id: uuid.UUID = Query(...),
-    rework_cost_per_punch: Decimal | None = Query(default=None, ge=0),
-    warranty_cost: Decimal | None = Query(default=None, ge=0),
-    delay_penalty_cost: Decimal | None = Query(default=None, ge=0),
+    # le bound mirrors the NCR cost_impact_amount guard so an absurd override
+    # cannot inflate this report's COPQ total (1e15 == schemas._MONEY_MAX).
+    rework_cost_per_punch: Decimal | None = Query(default=None, ge=0, le=Decimal("1e15")),
+    warranty_cost: Decimal | None = Query(default=None, ge=0, le=Decimal("1e15")),
+    delay_penalty_cost: Decimal | None = Query(default=None, ge=0, le=Decimal("1e15")),
     currency: str = Query(default=""),
     _perm: None = Depends(RequirePermission("qms.report.read")),
     service: QMSService = Depends(_get_service),

@@ -9,7 +9,15 @@
  *  - Bottom filmstrip: drawing list + upload (like BIM page)
  */
 
-import { useState, useMemo, useCallback, useRef, useEffect, type ReactNode } from 'react';
+import {
+  useState,
+  useMemo,
+  useCallback,
+  useRef,
+  useEffect,
+  type ReactNode,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from 'react';
 import {
   calculateArea,
   calculateAreaSafe,
@@ -32,6 +40,7 @@ import {
   Loader2,
   FileText,
   Layers,
+  Zap,
   MessageSquare,
   Info,
   Plus,
@@ -54,6 +63,7 @@ import {
   FileDown,
   RotateCcw,
   GitCompare,
+  Hash,
 } from 'lucide-react';
 import { Badge, ConfirmDialog, DismissibleInfo, ElementInfoPopover, ModuleGuideButton, type DWGElementPayload } from '@/shared/ui';
 import { useConfirm } from '@/shared/hooks/useConfirm';
@@ -65,6 +75,8 @@ import { boqApi, normalizePositions, type Position } from '@/features/boq/api';
 import { projectsApi } from '@/features/projects/api';
 import { installBIMConverter } from '@/features/bim/api';
 import { ConverterInstallProgressBar } from '@/features/bim/ConverterInstallProgressBar';
+import { AutoInstallConverterNotice } from '@/features/bim/AutoInstallConverterNotice';
+import { useAutoInstallConverter } from '@/features/bim/useAutoInstallConverter';
 import {
   fetchDrawing,
   fetchDrawings,
@@ -80,7 +92,7 @@ import {
   importDrawingFromDocument,
   USER_MARKUP_LAYER,
 } from './api';
-import { Undo2, Redo2, Target } from 'lucide-react';
+import { Undo2, Redo2, Target, Search, ChevronUp, ChevronDown } from 'lucide-react';
 import type {
   DxfEntity,
   DxfLayer,
@@ -95,6 +107,15 @@ import {
   type EntityContextMenuEvent,
 } from './components/DxfViewer';
 import { aggregateEntities } from './lib/group-aggregation';
+import { findTextMatches, type DwgTextMatch } from './lib/dwg-textsearch';
+import {
+  quantifyByLayer,
+  quantityFor,
+  unitForMeasure,
+  type LayerQuantity,
+  type QuantifyMeasure,
+} from './lib/auto-quantify';
+import { exportQuantifyToExcel } from './lib/dwg-quantify-export';
 import { exportCanvasToPdf } from './lib/pdf-export';
 import { ToolPalette, type DwgTool } from './components/ToolPalette';
 import { CalibrationDialog, type CalibrationStep } from './components/CalibrationDialog';
@@ -1082,6 +1103,21 @@ export function DwgTakeoffPage() {
     retry: 1,
   });
 
+  // Auto-install the DWG converter in the background the moment the user
+  // picks a .dwg file and the local converter is missing - no click. DXF
+  // files parse without a converter, so this is scoped to .dwg only. The
+  // notice + progress render inline in the upload modal below; the manual
+  // "Install converter" CTA stays as a fallback only.
+  const uploadNeedsDwgConverter =
+    !!uploadFile &&
+    uploadFile.name.toLowerCase().endsWith('.dwg') &&
+    !!offlineReadiness &&
+    !offlineReadiness.converter_available;
+  const dwgAutoInstall = useAutoInstallConverter(
+    uploadNeedsDwgConverter ? 'dwg' : null,
+    uploadNeedsDwgConverter,
+  );
+
   /** Strip the deep-link params off the URL after one shot so a refresh
    *  doesn't re-trigger selection / import. */
   const clearDeepLinkParams = useCallback(() => {
@@ -1769,6 +1805,77 @@ export function DwgTakeoffPage() {
     return filteredEntities.filter((e) => visibleNames.has(entityDisplayName(e)));
   }, [filteredEntities, visibleNames]);
 
+  /* ── Find text on drawing ───────────────────────────────────────────
+   * Parity with the PDF takeoff "find on sheet". Searches the TEXT/MTEXT
+   * entities currently rendered (visible layers only, so highlights match
+   * what's on screen), highlights every hit, and pans/zooms to the active
+   * one. MTEXT is normalised to TEXT by the backend, so both are covered. */
+  const [findOpen, setFindOpen] = useState(false);
+  const [findQuery, setFindQuery] = useState('');
+  const [activeMatchIdx, setActiveMatchIdx] = useState(0);
+  const [findFocusNonce, setFindFocusNonce] = useState(0);
+  const findInputRef = useRef<HTMLInputElement>(null);
+  const findOpenRef = useRef(false);
+  findOpenRef.current = findOpen;
+
+  const textMatches = useMemo<DwgTextMatch[]>(() => {
+    if (!findOpen || !findQuery.trim()) return [];
+    const searchable = viewerEntities.filter((e) => visibleLayers.has(e.layer));
+    return findTextMatches(searchable, findQuery);
+  }, [findOpen, findQuery, viewerEntities, visibleLayers]);
+
+  // Reset to the first hit (and zoom to it) whenever the query changes.
+  useEffect(() => {
+    if (!findOpen) return;
+    setActiveMatchIdx(0);
+    if (textMatches.length > 0) setFindFocusNonce((n) => n + 1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [findQuery, findOpen]);
+
+  const gotoMatch = useCallback(
+    (idx: number) => {
+      const n = textMatches.length;
+      if (n === 0) return;
+      setActiveMatchIdx(((idx % n) + n) % n);
+      setFindFocusNonce((x) => x + 1);
+    },
+    [textMatches.length],
+  );
+  const nextMatch = useCallback(() => gotoMatch(activeMatchIdx + 1), [gotoMatch, activeMatchIdx]);
+  const prevMatch = useCallback(() => gotoMatch(activeMatchIdx - 1), [gotoMatch, activeMatchIdx]);
+
+  const handleFindKeyDown = useCallback(
+    (e: ReactKeyboardEvent<HTMLInputElement>) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        if (e.shiftKey) prevMatch();
+        else nextMatch();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        setFindOpen(false);
+        setFindQuery('');
+      }
+    },
+    [prevMatch, nextMatch],
+  );
+
+  // Index used for display + the active highlight, clamped to the live set so a
+  // shrinking result list never points past the end for a render.
+  const safeMatchIdx = textMatches.length === 0 ? 0 : Math.min(activeMatchIdx, textMatches.length - 1);
+  const activeMatch = textMatches[safeMatchIdx] ?? null;
+  const searchBoxes = useMemo(() => textMatches.map((m) => m.box), [textMatches]);
+  const findFocusTarget = useMemo(
+    () => (activeMatch ? { box: activeMatch.box, nonce: findFocusNonce } : null),
+    [activeMatch, findFocusNonce],
+  );
+
+  // Focus the input when the bar opens.
+  useEffect(() => {
+    if (!findOpen) return;
+    const id = window.setTimeout(() => findInputRef.current?.focus(), 0);
+    return () => window.clearTimeout(id);
+  }, [findOpen]);
+
   const handleAnnotationCreated = useCallback(
     (ann: {
       type: DwgAnnotation['type'];
@@ -1823,7 +1930,19 @@ export function DwgTakeoffPage() {
         ann.type === 'circle' ||
         ann.type === 'polyline' ||
         ann.type === 'arrow' ||
-        ann.type === 'text_pin';
+        ann.type === 'text_pin' ||
+        ann.type === 'count';
+      const layerName = isPrimitive ? USER_MARKUP_LAYER : 'ANNOTATIONS';
+      // A freshly drawn markup must show up the instant it is placed. The
+      // visible-layer set is seeded ONCE per drawing from the entity layers
+      // present at load (see seededLayersForDrawingRef), so a virtual markup
+      // layer (USER_MARKUP / ANNOTATIONS) that only comes into existence after
+      // the user starts drawing is absent from that set — and
+      // `visibleAnnotations` would filter the new mark straight back out,
+      // leaving the user staring at a canvas where nothing appears. Add the
+      // target layer to the visible set up front so the mark is never hidden
+      // by its own brand-new layer.
+      setVisibleLayers((prev) => (prev.has(layerName) ? prev : new Set(prev).add(layerName)));
       createAnnotationMutation.mutate({
         project_id: effectiveProjectId,
         drawing_id: selectedDrawingId,
@@ -1833,7 +1952,7 @@ export function DwgTakeoffPage() {
         color: ann.color ?? activeColor,
         thickness: 2,
         line_width: 2,
-        layer_name: isPrimitive ? USER_MARKUP_LAYER : 'ANNOTATIONS',
+        layer_name: layerName,
         measurement_value: ann.measurement_value,
         measurement_unit: ann.measurement_unit,
         // Per-annotation scale override — carries the detail-view scale on
@@ -2018,6 +2137,40 @@ export function DwgTakeoffPage() {
     return rows;
   }, [summaryAggregate]);
 
+  /** Running total of manual count markers (annotations of type 'count'). */
+  const countTotal = useMemo(
+    () => annotations.filter((a) => a.type === 'count').length,
+    [annotations],
+  );
+
+  /**
+   * Count-by-block rollup: group INSERT entities by ``block_name`` and tally
+   * how many of each block appear in the drawing (e.g. DOOR x12, WINDOW x8).
+   * Blocks with no name fall back to a generic label. Sorted by count desc.
+   */
+  const summaryByBlock = useMemo(() => {
+    const buckets = new Map<string, number>();
+    for (const e of filteredEntities) {
+      if (e.type !== 'INSERT') continue;
+      const name = e.block_name && e.block_name.trim() ? e.block_name : 'Block';
+      buckets.set(name, (buckets.get(name) ?? 0) + 1);
+    }
+    return Array.from(buckets.entries())
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count);
+  }, [filteredEntities]);
+
+  /**
+   * Auto-quantify by layer: roll the exact vector geometry of every visible
+   * layer up into area / length / count and pick a headline measure per
+   * layer. This is DWG's signature edge over PDF takeoff - real quantities
+   * with zero manual tracing - so it leads the Summary tab.
+   */
+  const layerQuantities = useMemo(
+    () => quantifyByLayer(filteredEntities, effectiveScale),
+    [filteredEntities, effectiveScale],
+  );
+
   /** CSV export of the summary (entity-type breakdown + totals). */
   const handleExportSummaryCsv = useCallback(() => {
     const lines: string[] = [
@@ -2148,6 +2301,33 @@ export function DwgTakeoffPage() {
     addToast,
     t,
   ]);
+
+  /**
+   * Export the auto-quantify table (+ count-by-block + manual count) to a
+   * multi-sheet .xlsx workbook. exceljs is lazy-loaded inside the helper so
+   * it never weighs down the initial bundle.
+   */
+  const handleExportSummaryExcel = useCallback(async () => {
+    const drawingName = drawings.find((d) => d.id === selectedDrawingId)?.name || 'Drawing';
+    try {
+      await exportQuantifyToExcel({
+        drawingName,
+        layerQuantities,
+        byBlock: summaryByBlock,
+        countTotal,
+      });
+      addToast({
+        type: 'success',
+        title: t('dwg_takeoff.excel_exported', { defaultValue: 'Excel exported' }),
+      });
+    } catch (err) {
+      addToast({
+        type: 'error',
+        title: t('dwg_takeoff.excel_failed', { defaultValue: 'Excel export failed' }),
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }, [drawings, selectedDrawingId, layerQuantities, summaryByBlock, countTotal, addToast, t]);
 
   /**
    * Download the current viewport as a single-page A4-landscape PDF.
@@ -2494,6 +2674,136 @@ export function DwgTakeoffPage() {
     }
   }, [entities, linkPickerBoqId, linkBoqPositions, effectiveScale, ensureAnnotationForEntity, selectedDrawingId, queryClient, addToast, t]);
 
+  /**
+   * One-click "group -> BOQ": roll the whole multi-entity selection up into a
+   * single aggregate quantity (area > length > count) and book it as one new
+   * BOQ position. Resolves the target BOQ automatically - the project's
+   * active BOQ, else its first BOQ, else a freshly-created "DWG Takeoff" BOQ -
+   * so the estimator never has to leave the drawing. The destination + ordinal
+   * are surfaced in the toast (never a silent write), and the per-entity picker
+   * stays available for precise single-element linking.
+   */
+  const handleCreateBoqFromGroup = useCallback(async () => {
+    const ids = Array.from(selectedEntityIds);
+    if (ids.length === 0) return;
+    const sel = entities.filter((e) => ids.includes(e.id));
+    const agg = aggregateEntities(sel, effectiveScale);
+    let quantity = ids.length;
+    let unit = 'pcs';
+    if (agg.area > 0) {
+      quantity = agg.area;
+      unit = 'm2';
+    } else if (agg.length > 0) {
+      quantity = agg.length;
+      unit = 'm';
+    }
+
+    const drawing = drawings.find((d) => d.id === selectedDrawingId);
+    const effectiveProjectId = drawing?.project_id || projectId;
+    if (!effectiveProjectId) {
+      addToast({
+        type: 'error',
+        title: t('dwg_takeoff.annotation_failed', { defaultValue: 'Annotation could not be saved' }),
+        message: t('dwg_takeoff.no_project_context', {
+          defaultValue: 'No active project - open this drawing from its project first.',
+        }),
+      });
+      return;
+    }
+
+    setLinkingInProgress(true);
+    try {
+      // Resolve a destination BOQ without forcing the user through a picker.
+      let boqId = activeBoqIdFromStore || '';
+      if (!boqId) {
+        const boqs = await apiGet<{ id: string; name: string }[]>(
+          `/v1/boq/boqs/?project_id=${effectiveProjectId}`,
+        );
+        if (boqs.length > 0) {
+          boqId = boqs[0]!.id;
+        } else {
+          const created = await boqApi.create({
+            project_id: effectiveProjectId,
+            name: t('dwg_takeoff.default_boq_name', { defaultValue: 'DWG Takeoff' }),
+          });
+          boqId = created.id;
+        }
+      }
+
+      const boqData = await boqApi.get(boqId);
+      const positions = boqData.positions || [];
+      const dwgNums = positions
+        .map((p) => {
+          const m = /^DW\.(\d+)$/.exec(p.ordinal || '');
+          return m ? parseInt(m[1]!, 10) : 0;
+        })
+        .filter((n) => n > 0);
+      const nextNum = (dwgNums.length ? Math.max(...dwgNums) : 0) + 1;
+      const ordinal = `DW.${String(nextNum).padStart(3, '0')}`;
+      const layersInSel = Array.from(new Set(sel.map((e) => e.layer)));
+      const description =
+        layersInSel.length === 1
+          ? t('dwg_takeoff.position_group_desc_layer', {
+              defaultValue: 'From DWG group: {{layer}} ({{count}} items)',
+              layer: layersInSel[0],
+              count: ids.length,
+            })
+          : t('dwg_takeoff.position_group_desc', {
+              defaultValue: 'From DWG group ({{count}} items)',
+              count: ids.length,
+            });
+      const roundedQty = Math.round(quantity * 1000) / 1000;
+
+      const newPos = await boqApi.addPosition({
+        boq_id: boqId,
+        ordinal,
+        description,
+        unit,
+        quantity: roundedQty,
+        unit_rate: 0,
+      });
+      try {
+        await boqApi.updatePosition(newPos.id, {
+          metadata: {
+            dwg_drawing_id: selectedDrawingId ?? undefined,
+            dwg_entity_ids: ids,
+            dwg_source_layers: layersInSel,
+          },
+        });
+      } catch {
+        /* metadata is non-critical */
+      }
+
+      queryClient.invalidateQueries({ queryKey: ['boq', boqId] });
+      addToast({
+        type: 'success',
+        title: t('dwg_takeoff.group_boq_created', { defaultValue: 'BOQ position created' }),
+        message: `${boqData.name || 'BOQ'} · ${ordinal} - ${roundedQty} ${unit}`,
+      });
+      setSelectedEntityIds(new Set());
+      setEntityPopup(null);
+    } catch (err) {
+      addToast({
+        type: 'error',
+        title: t('dwg_takeoff.group_boq_failed', { defaultValue: 'Could not create BOQ position' }),
+        message: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setLinkingInProgress(false);
+    }
+  }, [
+    selectedEntityIds,
+    entities,
+    effectiveScale,
+    drawings,
+    selectedDrawingId,
+    projectId,
+    activeBoqIdFromStore,
+    queryClient,
+    addToast,
+    t,
+  ]);
+
   /* ── RFC 11: per-entity hide / isolate / group handlers ───────────── */
 
   /** Hide the currently-selected entities (or a single right-clicked one). */
@@ -2640,6 +2950,18 @@ export function DwgTakeoffPage() {
   // Global keyboard shortcuts for the page (Q1 UX #1 + #2).
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      // Find-on-drawing: Ctrl/Cmd+F opens the find bar and selects its text,
+      // from anywhere in the viewer (handled before the input guard so it works
+      // even while another field is focused).
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 'f') {
+        e.preventDefault();
+        setFindOpen(true);
+        window.setTimeout(() => {
+          findInputRef.current?.focus();
+          findInputRef.current?.select();
+        }, 0);
+        return;
+      }
       // Ignore shortcuts when typing in inputs
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
@@ -2667,7 +2989,10 @@ export function DwgTakeoffPage() {
 
       switch (e.key) {
         case 'Escape':
-          if (contextMenu) {
+          if (findOpenRef.current) {
+            setFindOpen(false);
+            setFindQuery('');
+          } else if (contextMenu) {
             setContextMenu(null);
           } else if (selectedEntityIds.size > 0) {
             setSelectedEntityIds(new Set());
@@ -2699,6 +3024,9 @@ export function DwgTakeoffPage() {
           break;
         case 'c': case 'C':
           setActiveTool('circle');
+          break;
+        case 'n': case 'N':
+          setActiveTool('count');
           break;
         case 't': case 'T':
           setActiveTool('text_pin');
@@ -2768,7 +3096,7 @@ export function DwgTakeoffPage() {
                 className="absolute inset-0 pointer-events-none z-0"
                 style={{
                   background:
-                    'radial-gradient(ellipse 60% 50% at 50% 40%, rgba(214, 138, 89,0.06) 0%, transparent 70%)',
+                    'radial-gradient(ellipse 60% 50% at 50% 40%, rgba(59,130,246,0.06) 0%, transparent 70%)',
                 }}
               />
               {/* Crosshair at center (AutoCAD UCS marker) */}
@@ -2812,12 +3140,12 @@ export function DwgTakeoffPage() {
                         className={clsx(
                           'group/drop flex flex-col items-center justify-center gap-7 rounded-xl p-20 text-center cursor-pointer transition-all flex-1 border-2 border-dashed focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-[#22252b]',
                           isDragActive
-                            ? 'border-blue-400 bg-blue-500/15 shadow-[0_0_40px_rgba(214, 138, 89,0.2)] scale-[1.01]'
-                            : 'border-[#444c5a] bg-[#1a1d23]/60 hover:border-blue-500/50 hover:bg-blue-500/5 hover:shadow-[0_0_30px_rgba(214, 138, 89,0.1)]',
+                            ? 'border-blue-400 bg-blue-500/15 shadow-[0_0_40px_rgba(59,130,246,0.2)] scale-[1.01]'
+                            : 'border-[#444c5a] bg-[#1a1d23]/60 hover:border-blue-500/50 hover:bg-blue-500/5 hover:shadow-[0_0_30px_rgba(59,130,246,0.1)]',
                         )}
                         onClick={() => setShowUpload(true)}
                       >
-                        <div className="w-20 h-20 rounded-2xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center group-hover/drop:scale-110 group-hover/drop:shadow-[0_0_20px_rgba(214, 138, 89,0.2)] transition-all">
+                        <div className="w-20 h-20 rounded-2xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center group-hover/drop:scale-110 group-hover/drop:shadow-[0_0_20px_rgba(59,130,246,0.2)] transition-all">
                           <Upload size={36} className="text-blue-400" />
                         </div>
                         <div>
@@ -2865,7 +3193,7 @@ export function DwgTakeoffPage() {
                         { icon: Layers, title: t('dwg_takeoff.feat_layers', { defaultValue: 'Layer Control' }), desc: t('dwg_takeoff.feat_layers_desc', { defaultValue: 'Toggle layers on/off, filter by entity type' }) },
                         { icon: FileUp, title: t('dwg_takeoff.feat_measure', { defaultValue: 'Measurements' }), desc: t('dwg_takeoff.feat_measure_desc', { defaultValue: 'Area, length, perimeter · link to BOQ' }) },
                       ].map((f, i) => (
-                        <div key={i} className="flex items-start gap-3 rounded-xl p-4 bg-[#22252b]/80 backdrop-blur-sm border border-[#333842] hover:border-blue-500/30 hover:shadow-[0_0_15px_rgba(214, 138, 89,0.06)] transition-all">
+                        <div key={i} className="flex items-start gap-3 rounded-xl p-4 bg-[#22252b]/80 backdrop-blur-sm border border-[#333842] hover:border-blue-500/30 hover:shadow-[0_0_15px_rgba(59,130,246,0.06)] transition-all">
                           <div className="w-8 h-8 rounded-lg bg-orange-500/10 border border-orange-500/20 flex items-center justify-center shrink-0"><f.icon size={15} className="text-orange-400" /></div>
                           <div className="min-w-0">
                             <h3 className="text-xs font-semibold text-gray-200 leading-tight">{f.title}</h3>
@@ -3001,6 +3329,9 @@ export function DwgTakeoffPage() {
                         ? { x: calibration.pointB[0], y: calibration.pointB[1] }
                         : null,
                 }}
+                searchBoxes={searchBoxes}
+                activeSearchBox={activeMatch ? activeMatch.box : null}
+                focusTarget={findFocusTarget}
               />
 
               {/* Onion-skin overlay (Item 17) — a dim wash over the current
@@ -3166,6 +3497,28 @@ export function DwgTakeoffPage() {
                 <ModuleGuideButton content={dwgTakeoffGuide} />
                 <button
                   type="button"
+                  onClick={() => setFindOpen((o) => !o)}
+                  disabled={!selectedDrawingId}
+                  className={clsx(
+                    'inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-semibold',
+                    'border border-white/60 backdrop-blur-md',
+                    'shadow-xl shadow-black/30 ring-1 ring-black/5 transition-colors',
+                    !selectedDrawingId
+                      ? 'bg-white/85 dark:bg-white/90 text-slate-400 cursor-not-allowed'
+                      : findOpen
+                        ? 'bg-oe-blue text-white hover:bg-oe-blue-dark'
+                        : 'bg-white/85 dark:bg-white/90 text-slate-800 hover:bg-white',
+                  )}
+                  title={t('dwg_takeoff.find_text_title', {
+                    defaultValue: 'Find text on the drawing (Ctrl+F)',
+                  })}
+                  data-testid="dwg-find-toggle"
+                >
+                  <Search size={14} />
+                  <span>{t('dwg_takeoff.find_text', { defaultValue: 'Find' })}</span>
+                </button>
+                <button
+                  type="button"
                   onClick={() => setShowCompare(true)}
                   disabled={!selectedDrawingId}
                   className={clsx(
@@ -3210,6 +3563,96 @@ export function DwgTakeoffPage() {
                   data-testid="dwg-offline-badge"
                 />
               </div>
+
+              {/* Find-text bar — top-center overlay, parity with the PDF
+                  takeoff "find on sheet". Highlights every TEXT/MTEXT hit and
+                  zooms to the active one; the result list jumps on click. */}
+              {findOpen && (
+                <div
+                  className="absolute top-3 left-1/2 z-20 flex -translate-x-1/2 flex-col items-stretch gap-1"
+                  data-testid="dwg-find-bar"
+                >
+                  <div className="flex items-center gap-1 rounded-lg border border-white/60 bg-white/90 px-2 py-1.5 shadow-xl shadow-black/30 ring-1 ring-black/5 backdrop-blur-md dark:bg-slate-800/95">
+                    <Search size={14} className="shrink-0 text-slate-500 dark:text-slate-300" />
+                    <input
+                      ref={findInputRef}
+                      value={findQuery}
+                      onChange={(e) => setFindQuery(e.target.value)}
+                      onKeyDown={handleFindKeyDown}
+                      placeholder={t('dwg_takeoff.find_placeholder', { defaultValue: 'Find text…' })}
+                      className="w-44 bg-transparent text-xs text-slate-800 outline-none placeholder:text-slate-400 dark:text-slate-100"
+                      data-testid="dwg-find-input"
+                      spellCheck={false}
+                      autoComplete="off"
+                    />
+                    <span
+                      className="min-w-[52px] text-center text-[11px] tabular-nums text-slate-500 dark:text-slate-300"
+                      data-testid="dwg-find-count"
+                    >
+                      {textMatches.length > 0
+                        ? `${safeMatchIdx + 1} / ${textMatches.length}`
+                        : findQuery.trim()
+                          ? t('dwg_takeoff.find_none', { defaultValue: 'No results' })
+                          : ''}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={prevMatch}
+                      disabled={textMatches.length === 0}
+                      className="rounded p-1 text-slate-600 hover:bg-black/5 disabled:opacity-40 dark:text-slate-300 dark:hover:bg-white/10"
+                      title={t('dwg_takeoff.find_prev', { defaultValue: 'Previous (Shift+Enter)' })}
+                      data-testid="dwg-find-prev"
+                    >
+                      <ChevronUp size={14} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={nextMatch}
+                      disabled={textMatches.length === 0}
+                      className="rounded p-1 text-slate-600 hover:bg-black/5 disabled:opacity-40 dark:text-slate-300 dark:hover:bg-white/10"
+                      title={t('dwg_takeoff.find_next', { defaultValue: 'Next (Enter)' })}
+                      data-testid="dwg-find-next"
+                    >
+                      <ChevronDown size={14} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFindOpen(false);
+                        setFindQuery('');
+                      }}
+                      className="rounded p-1 text-slate-600 hover:bg-black/5 dark:text-slate-300 dark:hover:bg-white/10"
+                      title={t('common.close', { defaultValue: 'Close' })}
+                      data-testid="dwg-find-close"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                  {textMatches.length > 0 && (
+                    <div
+                      className="max-h-44 w-full overflow-y-auto rounded-lg border border-white/60 bg-white/95 py-1 shadow-xl ring-1 ring-black/5 backdrop-blur-md dark:bg-slate-800/95"
+                      data-testid="dwg-find-results"
+                    >
+                      {textMatches.map((m, i) => (
+                        <button
+                          key={m.entityId}
+                          type="button"
+                          onClick={() => gotoMatch(i)}
+                          className={clsx(
+                            'block w-full truncate px-2.5 py-1 text-left text-[11px]',
+                            i === safeMatchIdx
+                              ? 'bg-oe-blue/15 font-semibold text-oe-blue'
+                              : 'text-slate-700 hover:bg-black/5 dark:text-slate-200 dark:hover:bg-white/10',
+                          )}
+                          data-testid="dwg-find-result-row"
+                        >
+                          {m.snippet}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
               {/* Floating entity info popup (shared ElementInfoPopover) —
                   only shown for a single-entity click, hidden during
                   multi-select to keep the screen readable. */}
@@ -3647,16 +4090,17 @@ export function DwgTakeoffPage() {
                 </div>
                 <div className="flex items-center gap-1.5 mt-2">
                   <button
-                    onClick={() => {
-                      const firstId = selectedEntityIds.values().next().value;
-                      if (firstId) handleOpenLinkToBoq(firstId);
-                    }}
-                    className="flex-1 flex items-center justify-center gap-1 rounded-md bg-oe-blue text-white text-[11px] font-semibold px-2 py-1 hover:bg-oe-blue-dark transition-colors"
-                    data-testid="dwg-group-link-boq"
+                    onClick={handleCreateBoqFromGroup}
+                    disabled={linkingInProgress}
+                    className="flex-1 flex items-center justify-center gap-1 rounded-md bg-oe-blue text-white text-[11px] font-semibold px-2 py-1 hover:bg-oe-blue-dark transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    data-testid="dwg-group-create-boq"
+                    title={t('dwg_takeoff.group_to_boq_title', {
+                      defaultValue: 'Book the group total as one BOQ position',
+                    })}
                   >
                     <Link2 size={11} />
-                    {t('dwg_takeoff.link_n_to_boq', {
-                      defaultValue: 'Link {{count}} to BOQ',
+                    {t('dwg_takeoff.add_n_to_boq', {
+                      defaultValue: 'Add {{count}} to BOQ',
                       count: selectedEntityIds.size,
                     })}
                   </button>
@@ -4133,9 +4577,12 @@ export function DwgTakeoffPage() {
                 <SummaryTab
                   entityCount={filteredEntities.length}
                   aggregate={summaryAggregate}
-                  byLayer={summaryByLayer}
+                  layerQuantities={layerQuantities}
                   byType={summaryByType}
+                  byBlock={summaryByBlock}
+                  countTotal={countTotal}
                   onExportCsv={handleExportSummaryCsv}
+                  onExportExcel={handleExportSummaryExcel}
                   onExportPdf={handleExportSummaryPdf}
                 />
               )}
@@ -4255,29 +4702,24 @@ export function DwgTakeoffPage() {
               )}
             </button>
 
-            {/* Install-hint banner — shown when user picks a .dwg but the
-                local converter isn't installed. DXF uploads bypass it. */}
-            {uploadFile
-              && uploadFile.name.toLowerCase().endsWith('.dwg')
-              && offlineReadiness
-              && !offlineReadiness.converter_available && (
-              <div
-                className="flex items-start gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-[11px] text-amber-700 dark:text-amber-300"
-                data-testid="dwg-upload-install-hint"
-              >
-                <WifiOff size={14} className="shrink-0 mt-0.5" />
-                <div className="space-y-1">
-                  <p className="font-semibold">
-                    {t('dwg_takeoff.offline_install', { defaultValue: 'Install converter' })}
-                  </p>
-                  <p className="leading-relaxed">
-                    {offlineReadiness.message
-                      || t('dwg_takeoff.offline_install_hint', {
-                        defaultValue:
-                          'Upload DXF files to continue without the converter, or install it to enable .dwg support.',
-                      })}
-                  </p>
-                </div>
+            {/* Auto-install of the local DWG converter (background, no click).
+                Shown when the user picks a .dwg and the converter is missing;
+                DXF uploads bypass it entirely. The notice renders only while
+                installing or after a failed attempt - on success it clears and
+                the upload proceeds. Manual install stays a fallback (the
+                OfflineReadyBadge CTA + the error-state link in the notice). */}
+            {uploadNeedsDwgConverter && (
+              <div className="space-y-1.5" data-testid="dwg-upload-install-hint">
+                <p className="flex items-start gap-1.5 text-[10px] text-content-tertiary leading-relaxed">
+                  <WifiOff size={12} className="shrink-0 mt-0.5" />
+                  <span>
+                    {t('dwg_takeoff.auto_install_dxf_note', {
+                      defaultValue:
+                        'DXF files already work without the converter - this only affects .dwg.',
+                    })}
+                  </span>
+                </p>
+                <AutoInstallConverterNotice state={dwgAutoInstall} variant="dark" />
               </div>
             )}
 
@@ -5136,9 +5578,12 @@ function ScaleTab({
 interface SummaryTabProps {
   entityCount: number;
   aggregate: { area: number; perimeter: number; length: number; count: number };
-  byLayer: { layer: string; area: number; length: number; count: number }[];
+  layerQuantities: LayerQuantity[];
   byType: { type: string; count: number }[];
+  byBlock: { name: string; count: number }[];
+  countTotal: number;
   onExportCsv: () => void;
+  onExportExcel: () => void;
   onExportPdf: () => void;
 }
 
@@ -5153,21 +5598,50 @@ interface SummaryTabProps {
 function SummaryTab({
   entityCount,
   aggregate,
-  byLayer,
+  layerQuantities,
   byType,
+  byBlock,
+  countTotal,
   onExportCsv,
+  onExportExcel,
   onExportPdf,
 }: SummaryTabProps) {
   const { t } = useTranslation();
 
-  const maxLayerMetric = useMemo(() => {
-    let m = 0;
-    for (const row of byLayer) {
-      const v = row.area > 0 ? row.area : row.length;
-      if (v > m) m = v;
+  // Per-layer override of the auto-selected headline measure. The user can,
+  // e.g., switch a layer from "area" to "length" when they want the running
+  // length of a slab edge instead of its face area.
+  const [layerMeasure, setLayerMeasure] = useState<Record<string, QuantifyMeasure>>({});
+
+  // Largest headline quantity per measure band, used to scale the share bars
+  // so area layers compare against area layers and length against length
+  // (mixing m² and m on one bar would be meaningless).
+  const maxByMeasure = useMemo(() => {
+    const m: Record<QuantifyMeasure, number> = { area: 0, length: 0, count: 0 };
+    for (const row of layerQuantities) {
+      const measure = layerMeasure[row.layer] ?? row.primary;
+      const v = quantityFor(row, measure);
+      if (v > m[measure]) m[measure] = v;
     }
     return m;
-  }, [byLayer]);
+  }, [layerQuantities, layerMeasure]);
+
+  // Grand totals across all visible layers, shown as the headline strip.
+  const quantifyTotals = useMemo(() => {
+    let area = 0;
+    let length = 0;
+    let count = 0;
+    for (const row of layerQuantities) {
+      area += row.area;
+      length += row.length;
+      count += row.count;
+    }
+    return {
+      area: Math.round(area * 100) / 100,
+      length: Math.round(length * 100) / 100,
+      count,
+    };
+  }, [layerQuantities]);
 
   if (entityCount === 0) {
     return (
@@ -5182,37 +5656,52 @@ function SummaryTab({
   return (
     <div className="flex flex-col gap-4" data-testid="dwg-summary-tab">
       {/* Header + export */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-1.5">
-          <BarChart3 size={14} className="text-oe-blue" />
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex items-center gap-1.5 pt-0.5">
+          <BarChart3 size={14} className="text-oe-blue shrink-0" />
           <h3 className="text-sm font-semibold text-foreground">
             {t('dwg_takeoff.summary_title', { defaultValue: 'Measurements Summary' })}
           </h3>
         </div>
-        <button
-          type="button"
-          onClick={onExportCsv}
-          className="inline-flex items-center gap-1 rounded-md border border-border bg-surface-secondary px-2 py-1 text-[10px] font-medium text-content-secondary hover:text-content-primary hover:bg-surface-tertiary transition-colors"
-          data-testid="dwg-summary-export"
-          title={t('dwg_takeoff.export_csv', {
-            defaultValue: 'Export measurements as CSV',
-          })}
-        >
-          <Download size={11} />
-          {t('dwg_takeoff.export_csv_short', { defaultValue: 'Export CSV' })}
-        </button>
-        <button
-          type="button"
-          onClick={onExportPdf}
-          className="inline-flex items-center gap-1 rounded-md border border-border bg-surface-secondary px-2 py-1 text-[10px] font-medium text-content-secondary hover:text-content-primary hover:bg-surface-tertiary transition-colors"
-          data-testid="dwg-summary-export-pdf"
-          title={t('dwg_takeoff.export_pdf', {
-            defaultValue: 'Export current viewport as PDF',
-          })}
-        >
-          <Download size={11} />
-          {t('dwg_takeoff.export_pdf_short', { defaultValue: 'Export PDF' })}
-        </button>
+        <div className="flex flex-wrap justify-end gap-1 shrink-0">
+          {/* Excel leads — it is the natural home for the quantity takeoff. */}
+          <button
+            type="button"
+            onClick={onExportExcel}
+            className="inline-flex items-center gap-1 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-[10px] font-semibold text-emerald-600 dark:text-emerald-300 hover:bg-emerald-500/20 transition-colors"
+            data-testid="dwg-summary-export-excel"
+            title={t('dwg_takeoff.export_excel', {
+              defaultValue: 'Export quantities as Excel (.xlsx)',
+            })}
+          >
+            <Download size={11} />
+            {t('dwg_takeoff.export_excel_short', { defaultValue: 'Excel' })}
+          </button>
+          <button
+            type="button"
+            onClick={onExportCsv}
+            className="inline-flex items-center gap-1 rounded-md border border-border bg-surface-secondary px-2 py-1 text-[10px] font-medium text-content-secondary hover:text-content-primary hover:bg-surface-tertiary transition-colors"
+            data-testid="dwg-summary-export"
+            title={t('dwg_takeoff.export_csv', {
+              defaultValue: 'Export measurements as CSV',
+            })}
+          >
+            <Download size={11} />
+            {t('dwg_takeoff.export_csv_short', { defaultValue: 'CSV' })}
+          </button>
+          <button
+            type="button"
+            onClick={onExportPdf}
+            className="inline-flex items-center gap-1 rounded-md border border-border bg-surface-secondary px-2 py-1 text-[10px] font-medium text-content-secondary hover:text-content-primary hover:bg-surface-tertiary transition-colors"
+            data-testid="dwg-summary-export-pdf"
+            title={t('dwg_takeoff.export_pdf', {
+              defaultValue: 'Export current viewport as PDF',
+            })}
+          >
+            <Download size={11} />
+            {t('dwg_takeoff.export_pdf_short', { defaultValue: 'PDF' })}
+          </button>
+        </div>
       </div>
 
       {/* KPI cards */}
@@ -5245,67 +5734,160 @@ function SummaryTab({
         />
       </div>
 
-      {/* By Layer */}
-      <div data-testid="dwg-summary-by-layer">
-        <div className="flex items-center gap-1.5 mb-1.5">
-          <Layers size={11} className="text-content-tertiary" />
-          <h4 className="text-[10px] font-semibold uppercase tracking-wider text-content-tertiary">
-            {t('dwg_takeoff.summary_by_layer', { defaultValue: 'By layer' })}
-          </h4>
-          <span className="text-[10px] text-content-quaternary tabular-nums">
-            ({byLayer.length})
+      {/* Manual count total (count tool markers) */}
+      <div
+        className="flex items-center justify-between rounded-lg border border-border-light bg-surface-secondary/50 px-2.5 py-2"
+        data-testid="dwg-summary-count-total"
+      >
+        <div className="flex items-center gap-1.5">
+          <Hash size={12} className="text-content-tertiary" />
+          <span className="text-[11px] font-medium text-content-secondary">
+            {t('dwg_takeoff.summary_count_items', { defaultValue: 'Count items' })}
           </span>
         </div>
-        <div className="space-y-1 max-h-56 overflow-y-auto pr-1">
-          {byLayer.slice(0, 20).map((row) => {
-            const metric = row.area > 0 ? row.area : row.length;
-            const share = maxLayerMetric > 0 ? (metric / maxLayerMetric) * 100 : 0;
+        <span className="text-sm font-bold tabular-nums text-content-primary">
+          {countTotal.toLocaleString()}
+        </span>
+      </div>
+
+      {/* Auto-quantify by layer — DWG's signature edge over PDF takeoff: real
+          quantities measured straight from the vectors, no manual tracing.
+          Each layer gets a headline measure (area > length > count) the user
+          can override per layer. */}
+      <div data-testid="dwg-summary-by-layer">
+        <div className="flex items-center gap-1.5 mb-0.5">
+          <Zap size={12} className="text-amber-400" />
+          <h4 className="text-[10px] font-semibold uppercase tracking-wider text-content-secondary">
+            {t('dwg_takeoff.quantify_title', { defaultValue: 'Auto-quantify by layer' })}
+          </h4>
+          <span className="text-[10px] text-content-quaternary tabular-nums">
+            ({layerQuantities.length})
+          </span>
+        </div>
+        <p className="text-[10px] text-content-tertiary mb-1.5 leading-snug">
+          {t('dwg_takeoff.quantify_subtitle', {
+            defaultValue: 'Measured straight from the drawing vectors - no manual tracing.',
+          })}
+        </p>
+
+        {/* Grand totals strip */}
+        <div className="grid grid-cols-3 gap-1 mb-2" data-testid="dwg-quantify-totals">
+          <div className="rounded-md bg-emerald-500/10 border border-emerald-500/20 px-2 py-1.5">
+            <div className="text-[9px] uppercase tracking-wide text-emerald-500/80">
+              {t('dwg_takeoff.area', 'Area')}
+            </div>
+            <div className="text-[11px] font-bold tabular-nums text-emerald-300">
+              {quantifyTotals.area > 0
+                ? quantifyTotals.area.toLocaleString(undefined, { maximumFractionDigits: 2 })
+                : '-'}
+              <span className="text-[9px] font-medium opacity-70"> m²</span>
+            </div>
+          </div>
+          <div className="rounded-md bg-violet-500/10 border border-violet-500/20 px-2 py-1.5">
+            <div className="text-[9px] uppercase tracking-wide text-violet-400/80">
+              {t('dwg_takeoff.length', 'Length')}
+            </div>
+            <div className="text-[11px] font-bold tabular-nums text-violet-300">
+              {quantifyTotals.length > 0
+                ? quantifyTotals.length.toLocaleString(undefined, { maximumFractionDigits: 2 })
+                : '-'}
+              <span className="text-[9px] font-medium opacity-70"> m</span>
+            </div>
+          </div>
+          <div className="rounded-md bg-sky-500/10 border border-sky-500/20 px-2 py-1.5">
+            <div className="text-[9px] uppercase tracking-wide text-sky-400/80">
+              {t('dwg_takeoff.count', 'Count')}
+            </div>
+            <div className="text-[11px] font-bold tabular-nums text-sky-300">
+              {quantifyTotals.count.toLocaleString()}
+              <span className="text-[9px] font-medium opacity-70"> nr</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Per-layer rows */}
+        <div className="space-y-1 max-h-72 overflow-y-auto pr-1">
+          {layerQuantities.slice(0, 30).map((row) => {
+            const measure = layerMeasure[row.layer] ?? row.primary;
+            const quantity = quantityFor(row, measure);
+            const unit = unitForMeasure(measure);
+            const max = maxByMeasure[measure] || 0;
+            const share = max > 0 ? (quantity / max) * 100 : 0;
+            const barColor =
+              measure === 'area'
+                ? 'from-emerald-500 to-emerald-400'
+                : measure === 'length'
+                  ? 'from-violet-500 to-violet-400'
+                  : 'from-sky-500 to-sky-400';
             return (
               <div
                 key={row.layer}
                 className="rounded-md border border-border-light bg-surface-secondary/50 px-2 py-1.5 hover:bg-surface-secondary transition-colors"
+                data-testid="dwg-quantify-row"
+                data-layer={row.layer}
               >
                 <div className="flex items-center justify-between gap-2 mb-1">
-                  <span className="font-mono text-[11px] text-content-primary truncate">
+                  <span
+                    className="font-mono text-[11px] text-content-primary truncate"
+                    title={row.layer}
+                  >
                     {row.layer}
                   </span>
-                  <span className="text-[10px] tabular-nums text-content-tertiary shrink-0">
-                    {row.count}
+                  <span className="text-[9px] tabular-nums text-content-tertiary shrink-0">
+                    {row.count} {t('dwg_takeoff.quantify_entities_short', { defaultValue: 'ent.' })}
                   </span>
                 </div>
-                <div className="relative h-1 rounded-full bg-surface-tertiary overflow-hidden">
+                <div className="relative h-1 rounded-full bg-surface-tertiary overflow-hidden mb-1">
                   <div
-                    className="absolute inset-y-0 left-0 bg-gradient-to-r from-oe-blue to-blue-400"
+                    className={clsx('absolute inset-y-0 left-0 bg-gradient-to-r', barColor)}
                     style={{ width: `${Math.max(share, 3)}%` }}
                   />
                 </div>
-                <div className="flex items-center justify-between mt-1 text-[10px] tabular-nums">
-                  {row.area > 0 && (
-                    <span className="text-emerald-400">
-                      {row.area.toFixed(2)} m²
-                    </span>
-                  )}
-                  {row.length > 0 && (
-                    <span className="text-violet-400">
-                      {row.length.toFixed(2)} m
-                    </span>
-                  )}
-                  {row.area === 0 && row.length === 0 && (
-                    <span className="text-content-quaternary">
-                      {t('dwg_takeoff.summary_no_measure', {
-                        defaultValue: 'no measurable geometry',
-                      })}
-                    </span>
+                <div className="flex items-center justify-between gap-2">
+                  <span
+                    className="text-[13px] font-bold tabular-nums text-content-primary"
+                    data-testid="dwg-quantify-value"
+                  >
+                    {quantity.toLocaleString(undefined, {
+                      maximumFractionDigits: measure === 'count' ? 0 : 2,
+                    })}
+                    <span className="text-[10px] font-medium text-content-tertiary"> {unit}</span>
+                  </span>
+                  {/* Measure toggle — only the measures this layer actually has. */}
+                  {row.available.length > 1 && (
+                    <div className="inline-flex rounded-md bg-surface-tertiary p-0.5">
+                      {row.available.map((m) => (
+                        <button
+                          key={m}
+                          type="button"
+                          onClick={() =>
+                            setLayerMeasure((prev) => ({ ...prev, [row.layer]: m }))
+                          }
+                          className={clsx(
+                            'px-1.5 py-0.5 rounded text-[9px] font-semibold transition-colors',
+                            measure === m
+                              ? 'bg-surface-primary text-content-primary shadow-xs'
+                              : 'text-content-tertiary hover:text-content-primary',
+                          )}
+                          title={t('dwg_takeoff.quantify_switch_measure', {
+                            defaultValue: 'Show {{measure}}',
+                            measure: m,
+                          })}
+                        >
+                          {unitForMeasure(m)}
+                        </button>
+                      ))}
+                    </div>
                   )}
                 </div>
               </div>
             );
           })}
-          {byLayer.length > 20 && (
+          {layerQuantities.length > 30 && (
             <p className="text-[10px] text-content-tertiary text-center py-1">
               {t('dwg_takeoff.summary_layers_more', {
                 defaultValue: '+{{count}} more',
-                count: byLayer.length - 20,
+                count: layerQuantities.length - 30,
               })}
             </p>
           )}
@@ -5339,6 +5921,37 @@ function SummaryTab({
           ))}
         </div>
       </div>
+
+      {/* By Block: INSERT entity rollup grouped by block name. Hidden when
+          the drawing has no block references. */}
+      {byBlock.length > 0 && (
+        <div data-testid="dwg-summary-by-block">
+          <div className="flex items-center gap-1.5 mb-1.5">
+            <Hash size={11} className="text-content-tertiary" />
+            <h4 className="text-[10px] font-semibold uppercase tracking-wider text-content-tertiary">
+              {t('dwg_takeoff.summary_by_block', { defaultValue: 'Count by block' })}
+            </h4>
+            <span className="text-[10px] text-content-quaternary tabular-nums">
+              ({byBlock.length})
+            </span>
+          </div>
+          <div className="grid grid-cols-2 gap-1">
+            {byBlock.map((row) => (
+              <div
+                key={row.name}
+                className="flex items-center justify-between rounded-md border border-border-light bg-surface-secondary/50 px-2 py-1 text-[10px]"
+              >
+                <span className="font-mono text-content-primary truncate">
+                  {row.name}
+                </span>
+                <span className="tabular-nums font-semibold text-content-secondary">
+                  {row.count}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

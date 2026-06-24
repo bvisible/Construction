@@ -468,6 +468,19 @@ class ClashRepository:
             stmt = stmt.where(ClashResult.status.in_(("new", "active", "reviewed")))
         return list((await self.session.execute(stmt)).scalars().all())
 
+    async def results_for_issue_ids(self, issue_ids: list[uuid.UUID]) -> list[ClashResult]:
+        """Every clash result attached to any of ``issue_ids`` (one query).
+
+        Powers the bulk-suppress audit fan-out: instead of one SELECT per
+        issue to find its member rows, the caller fetches them all at once
+        (the ``ix_clash_result_issue`` index backs the ``issue_id`` filter)
+        and groups them in Python. Empty input -> empty list.
+        """
+        if not issue_ids:
+            return []
+        stmt = select(ClashResult).where(ClashResult.issue_id.in_(issue_ids))
+        return list((await self.session.execute(stmt)).scalars().all())
+
     # ── ClashCluster (Wave A4) ─────────────────────────────────────────
 
     def add_clusters(self, clusters: list[ClashCluster]) -> None:
@@ -572,6 +585,20 @@ class ClashRepository:
         """Every smart issue belonging to a project (no pagination)."""
         stmt = select(ClashIssue).where(ClashIssue.project_id == project_id)
         return list((await self.session.execute(stmt)).scalars().all())
+
+    async def count_issues_resolved_by_run(self, project_id: uuid.UUID, run_id: uuid.UUID) -> int:
+        """How many of a project's issues were resolved by ``run_id``.
+
+        ``finalize_run`` stamps ``resolved_run_id`` on issues that vanished
+        in a run; the run-diff badge only needs the *count*, so this does a
+        scoped ``COUNT(*)`` rather than materialising every issue row of the
+        project (the old path loaded the whole issue table to sum a flag).
+        """
+        stmt = select(func.count()).where(
+            ClashIssue.project_id == project_id,
+            ClashIssue.resolved_run_id == run_id,
+        )
+        return int((await self.session.execute(stmt)).scalar_one() or 0)
 
     async def issues_by_signatures(self, project_id: uuid.UUID, signatures: list[str]) -> dict[str, ClashIssue]:
         """Fetch many issues at once, keyed by ``signature_hash``."""

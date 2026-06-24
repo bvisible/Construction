@@ -6,6 +6,8 @@ Endpoints:
     GET   /validation/reports?project_id=X   - List validation reports
     GET   /validation/reports/{report_id}    - Get single report
     GET   /validation/reports/{id}/sarif     - Export report as SARIF v2.1.0 JSON
+    GET   /validation/reports/{id}/export.csv  - Export findings as CSV
+    GET   /validation/reports/{id}/export.xlsx - Export findings as XLSX
     DELETE /validation/reports/{report_id}   - Delete report
     GET   /validation/rule-sets              - List available rule sets
 """
@@ -14,7 +16,7 @@ import logging
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,6 +34,7 @@ from app.modules.validation.schemas import (
     ValidationResultItem,
 )
 from app.modules.validation.service import ValidationModuleService
+from app.modules.validation.tabular_exporter import report_to_csv, report_to_xlsx
 
 logger = logging.getLogger(__name__)
 
@@ -53,13 +56,15 @@ async def _require_project_access(
     project_id: uuid.UUID | None,
     user_id: str | None,
 ) -> None:
-    """‌⁠‍Verify the current user owns (or is admin on) the referenced project.
+    """‌⁠‍Verify the current user may access the referenced project.
 
-    Central choke-point for project-scoped validation endpoints. Mirrors
-    the pattern used by ``finance.router._require_project_access``.
-    Raises HTTP 403 if the user has no access. ``None`` project_id is a
-    no-op - callers that accept global aggregates must scope at the
-    service layer.
+    Central choke-point for project-scoped validation endpoints. Delegates
+    to the canonical :func:`app.dependencies.verify_project_access`, which
+    grants access to the owner, admins, and team members, and raises HTTP
+    404 (not 403) on both "missing" and "denied" so the endpoint never
+    leaks the existence of a project UUID the caller cannot see (IDOR
+    defence). ``None`` project_id is a no-op - callers that accept global
+    aggregates must scope at the service layer.
     """
     if project_id is None:
         return
@@ -69,40 +74,9 @@ async def _require_project_access(
             detail="Authentication required",
         )
 
-    try:
-        from app.modules.projects.repository import ProjectRepository
-        from app.modules.users.repository import UserRepository
+    from app.dependencies import verify_project_access
 
-        proj_repo = ProjectRepository(session)
-        project = await proj_repo.get_by_id(project_id)
-        if project is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Project {project_id} not found",
-            )
-
-        # Admin bypass
-        try:
-            user_repo = UserRepository(session)
-            user = await user_repo.get_by_id(user_id)
-            if user is not None and getattr(user, "role", "") == "admin":
-                return
-        except Exception:  # noqa: BLE001 - best-effort admin check
-            pass
-
-        if str(getattr(project, "owner_id", "")) != str(user_id):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Access denied: you do not own this project",
-            )
-    except HTTPException:
-        raise
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Validation project access check failed for %s: %s", project_id, exc)
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Authorization check failed",
-        )
+    await verify_project_access(project_id, user_id, session)
 
 
 async def _require_report_access(
@@ -403,6 +377,80 @@ async def export_report_sarif(
     return JSONResponse(content=sarif_doc, media_type="application/sarif+json")
 
 
+# ── GET /reports/{id}/export.csv|.xlsx - Export findings as CSV / XLSX ─────
+
+
+def _export_filename(report: ValidationReport, ext: str) -> str:
+    """ASCII-safe attachment filename for a report export.
+
+    Mirrors the BOQ / reporting export filename handling: the target id is
+    coerced to printable ASCII so it is safe inside a ``Content-Disposition``
+    header (no CR/LF response-splitting, no quotes). Falls back to the report
+    id, then a constant.
+    """
+    raw = str(getattr(report, "target_id", "") or getattr(report, "id", "") or "report")
+    base = raw.encode("ascii", errors="replace").decode("ascii").replace('"', "'")
+    base = "".join(ch for ch in base if " " <= ch <= "~").strip()
+    base = base.replace("/", "-").replace("\\", "-")
+    return f"validation_{base or 'report'}.{ext}"
+
+
+@router.get(
+    "/reports/{report_id}/export.csv",
+    dependencies=[Depends(RequirePermission("validation.read"))],
+)
+async def export_report_csv(
+    report_id: uuid.UUID,
+    user_id: CurrentUserId,
+    session: SessionDep,
+) -> Response:
+    """Export a validation report's findings as a CSV file.
+
+    Project access is verified the IDOR-safe way (``_require_report_access``
+    returns 404 for a missing-or-forbidden report) before any bytes are
+    produced. Every cell is neutralised against spreadsheet formula injection
+    by the exporter.
+    """
+    report = await _require_report_access(session, report_id, user_id)
+    blob = report_to_csv(report)
+    filename = _export_filename(report, "csv")
+    return Response(
+        content=blob,
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Length": str(len(blob)),
+        },
+    )
+
+
+@router.get(
+    "/reports/{report_id}/export.xlsx",
+    dependencies=[Depends(RequirePermission("validation.read"))],
+)
+async def export_report_xlsx(
+    report_id: uuid.UUID,
+    user_id: CurrentUserId,
+    session: SessionDep,
+) -> Response:
+    """Export a validation report's findings as an .xlsx workbook.
+
+    Same IDOR guard and formula-injection neutralisation as the CSV export;
+    only the serialisation differs.
+    """
+    report = await _require_report_access(session, report_id, user_id)
+    blob = report_to_xlsx(report)
+    filename = _export_filename(report, "xlsx")
+    return Response(
+        content=blob,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Length": str(len(blob)),
+        },
+    )
+
+
 # ── GET /rule-sets - List available rule sets ─────────────────────────────
 
 
@@ -467,18 +515,24 @@ async def validation_report_similar(
 ) -> dict[str, Any]:
     """Return validation reports semantically similar to the given one."""
     from app.core.vector_index import find_similar
+    from app.dependencies import allowed_project_ids_for_similar
     from app.modules.validation.vector_adapter import validation_report_adapter
 
     # Verify the caller owns the source report's project before running
     # cross-project similarity, mirroring get_report/export_report_sarif.
     row = await _require_report_access(session, report_id, user_id)
     project_id = str(row.project_id) if row.project_id else None
+    # Restrict cross-project hits to projects the caller may access so a
+    # cross-project search never leaks reports from inaccessible projects
+    # (None == admin/unrestricted, mirroring verify_project_access).
+    allowed = await allowed_project_ids_for_similar(session, str(user_id), project_id, cross_project)
     hits = await find_similar(
         validation_report_adapter,
         row,
         project_id=project_id,
         cross_project=cross_project,
         limit=limit,
+        allowed_project_ids=allowed,
     )
     return {
         "source_id": str(report_id),

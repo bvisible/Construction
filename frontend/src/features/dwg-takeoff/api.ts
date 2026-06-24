@@ -132,7 +132,8 @@ export interface DwgAnnotation {
     | 'area'
     | 'circle'
     | 'polyline'
-    | 'line';
+    | 'line'
+    | 'count';
   points: { x: number; y: number }[];
   /** Extra geometry (radius for circles, etc.) sent to the backend as the
    *  `geometry` blob so the canvas can render primitives that aren't

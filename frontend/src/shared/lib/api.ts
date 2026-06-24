@@ -40,18 +40,31 @@ export const API_BASE = BASE_URL;
 /**
  * Default client-side request timeouts (ms).
  *
- * Most interactive reads/writes resolve in well under a second; a moderate
- * default keeps a stalled endpoint from blocking the UI for a minute and a
- * half (the old 44.3s GET budget combined with a React-Query retry meant a
- * single hung GET could freeze a screen for ~88s). The 30s GET budget still
- * covers legitimately slow reads (e.g. the /api/health alembic check and the
- * dashboard rollup) so they finish before the abort fires. The long budget is
- * kept for genuinely heavy operations (CWICR import, AI estimation, CAD/BIM
- * conversion) and must be opted into explicitly via `longRunning: true`.
+ * The deployed app often runs on a small single-core box where, under
+ * concurrent multi-user load or a cold cache, ordinary reads can briefly take
+ * 20-40s. A 45s budget tolerates those without a false "timed out" abort while
+ * still failing a genuinely hung request promptly. Crucially, timeouts are NO
+ * LONGER retried by React Query (see the retry predicate in main.tsx), so the
+ * worst-case wait is a single 45s attempt - shorter than the old 30s + retry
+ * (~60s) path - and a slow-but-valid 30-45s response now succeeds instead of
+ * being killed mid-flight.
+ *
+ * The long budget is kept for genuinely heavy operations (CWICR import, AI
+ * estimation, CAD/BIM conversion) and must be opted into via `longRunning`.
  */
-const DEFAULT_GET_TIMEOUT_MS = 30_000;
-const DEFAULT_MUTATION_TIMEOUT_MS = 30_000;
+const DEFAULT_GET_TIMEOUT_MS = 45_000;
+const DEFAULT_MUTATION_TIMEOUT_MS = 45_000;
 const LONG_RUNNING_TIMEOUT_MS = 300_000; // 5 min — import / AI / CAD only
+
+/**
+ * Coalesce timeout toasts. A slow backend can make every parallel request on a
+ * screen abort within the same instant; a toast per request floods the user
+ * with 6-7 identical "Request timed out" banners. Show at most one per window -
+ * the underlying error still propagates to each caller, so per-view error
+ * states keep working; only the duplicate global toasts are suppressed.
+ */
+let _lastTimeoutToastAt = 0;
+const TIMEOUT_TOAST_THROTTLE_MS = 12_000;
 
 /**
  * Request init accepted by the typed API helpers.
@@ -393,12 +406,23 @@ async function request<TResponse>(
         path,
         timeoutMs,
       });
-      useToastStore.getState().addToast({
-        type: 'error',
-        title: i18next.t('errors.timeout_title', { defaultValue: 'Request timed out' }),
-        message,
-      });
-      throw new Error(message);
+      // Coalesce bursts: many parallel requests on one screen abort together,
+      // so show at most one timeout toast per window instead of 6-7.
+      const nowMs = Date.now();
+      if (nowMs - _lastTimeoutToastAt > TIMEOUT_TOAST_THROTTLE_MS) {
+        _lastTimeoutToastAt = nowMs;
+        useToastStore.getState().addToast({
+          type: 'error',
+          title: i18next.t('errors.timeout_title', { defaultValue: 'Request timed out' }),
+          message,
+        });
+      }
+      // Tag the error so React Query's retry predicate skips it: retrying a
+      // client timeout just hammers the already-slow backend and times out
+      // again, doubling both the wait and the toast.
+      const timeoutError = new Error(message) as Error & { isTimeout?: boolean };
+      timeoutError.isTimeout = true;
+      throw timeoutError;
     }
     // Log network errors
     logError(

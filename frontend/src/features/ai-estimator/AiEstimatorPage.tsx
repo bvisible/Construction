@@ -266,11 +266,13 @@ export function AiEstimatorPage() {
         return next;
       });
       qc.invalidateQueries({ queryKey: ['aiest-runs', projectId] });
-      // The run is created parked at "analyzing"; stage 1 (normalise the source
-      // + detect/classify it) runs as an explicit step. Kick it off now so the
-      // confirm card (detected source + suggested config) appears instead of
-      // the analyzing spinner hanging forever.
-      analyzeM.mutate(created.id);
+      // create_run already runs stage 1 (analyze) server-side before returning
+      // (router.create_run -> service.analyze), so the run we just received
+      // already carries detected_source + suggested_config. Firing analyze
+      // again here would re-run the source-classification LLM call a second
+      // time for every new estimate. The abandoned/reload recovery path (a run
+      // parked at "analyzing" with no detected_source) is handled by the
+      // guarded effect below.
     },
     onError: (e: Error) =>
       addToast({

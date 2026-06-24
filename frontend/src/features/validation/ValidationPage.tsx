@@ -24,6 +24,11 @@ import { apiGet, apiPost, triggerDownload } from '@/shared/lib/api';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { useToastStore } from '@/stores/useToastStore';
 import { useAuthStore } from '@/stores/useAuthStore';
+import {
+  validationExportFilename,
+  validationExportPath,
+  type ValidationExportFormat,
+} from './validationExport';
 
 /* ── Types ─────────────────────────────────────────────────────────────── */
 
@@ -1028,35 +1033,45 @@ export function ValidationPage() {
     }
   }, [selectedBoqId, pdfPending, addToast, t]);
 
-  // The validation findings are persisted server-side as a ValidationReport
-  // (see /v1/validation/run/). This CSV is generated client-side from exactly
-  // what the user sees so the export always mirrors the on-screen results and
-  // applied filters' source data.
-  const handleExportCsv = useCallback(() => {
-    if (!report) return;
-    const esc = (v: string) => `"${String(v ?? '').replace(/"/g, '""')}"`;
-    const header = ['rule_id', 'rule_name', 'severity', 'status', 'message', 'element_ref', 'suggestion'];
-    const lines = report.results.map((r) =>
-      [
-        r.rule_id,
-        r.rule_name,
-        r.severity,
-        r.passed ? 'passed' : r.severity === 'error' ? 'error' : 'warning',
-        r.message,
-        r.element_ref ?? '',
-        r.suggestion ?? '',
-      ]
-        .map((c) => esc(String(c)))
-        .join(','),
-    );
-    const csv = [header.join(','), ...lines].join('\r\n');
-    const blob = new Blob(['' + csv], { type: 'text/csv;charset=utf-8;' });
-    triggerDownload(blob, `validation_findings_${selectedBoqId.slice(0, 8)}.csv`);
-    addToast({
-      type: 'success',
-      title: t('validation.csv_exported', { defaultValue: 'Findings exported' }),
-    });
-  }, [report, selectedBoqId, addToast, t]);
+  // Validation findings are persisted server-side as a ValidationReport
+  // (see /v1/validation/run/). Export is served by the validation module
+  // (GET /v1/validation/reports/{id}/export.csv|.xlsx): the backend is the
+  // single place that neutralises spreadsheet formula injection in every
+  // cell, so we download the server-rendered file rather than rebuilding it
+  // (and its escaping) in the browser.
+  const [exportPending, setExportPending] = useState<ValidationExportFormat | null>(null);
+
+  const handleExport = useCallback(
+    async (format: ValidationExportFormat) => {
+      if (!report || exportPending) return;
+      setExportPending(format);
+      try {
+        const token = useAuthStore.getState().accessToken;
+        const response = await fetch(validationExportPath(report.id, format), {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+        if (!response.ok) throw new Error(`Export failed: ${response.status}`);
+        const blob = await response.blob();
+        triggerDownload(
+          blob,
+          validationExportFilename(format, { boqId: selectedBoqId, reportId: report.id }),
+        );
+        addToast({
+          type: 'success',
+          title: t('validation.findings_exported', { defaultValue: 'Findings exported' }),
+        });
+      } catch (err) {
+        addToast({
+          type: 'error',
+          title: t('validation.export_failed', { defaultValue: 'Export failed' }),
+          message: err instanceof Error ? err.message : undefined,
+        });
+      } finally {
+        setExportPending(null);
+      }
+    },
+    [report, exportPending, selectedBoqId, addToast, t],
+  );
 
   // Raise an NCR from a failing validation finding. Deep-links to the NCR
   // module with the finding pre-filled (title, description, location and a
@@ -1354,9 +1369,25 @@ export function ValidationPage() {
               variant="secondary"
               size="md"
               icon={<Download size={16} />}
-              onClick={handleExportCsv}
+              onClick={() => handleExport('xlsx')}
+              loading={exportPending === 'xlsx'}
+              disabled={exportPending !== null}
             >
-              {t('validation.export_csv', { defaultValue: 'Export Findings (CSV)' })}
+              {exportPending === 'xlsx'
+                ? t('validation.export_pending', { defaultValue: 'Preparing export…' })
+                : t('validation.export_xlsx', { defaultValue: 'Export Findings (XLSX)' })}
+            </Button>
+            <Button
+              variant="secondary"
+              size="md"
+              icon={<Download size={16} />}
+              onClick={() => handleExport('csv')}
+              loading={exportPending === 'csv'}
+              disabled={exportPending !== null}
+            >
+              {exportPending === 'csv'
+                ? t('validation.export_pending', { defaultValue: 'Preparing export…' })
+                : t('validation.export_csv', { defaultValue: 'Export Findings (CSV)' })}
             </Button>
             <Button
               variant="ghost"

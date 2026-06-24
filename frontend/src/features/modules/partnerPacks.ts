@@ -43,6 +43,9 @@ export interface ApplyPlan {
   rule_packs_documentation_only: string[];
   cwicr_regions: string[];
   default_tax_template?: string | null;
+  /** Built-in estimating-methodology slug the pack activates on its demo
+   *  project and seeds on projects created while the pack is active. */
+  default_methodology?: string | null;
   demo_project?: PackDemoProject | null;
   warnings: string[];
 }
@@ -80,6 +83,7 @@ export interface ApplyResult {
       already_installed: boolean;
     };
     demo_project_failed?: { error: string };
+    methodology?: { slug: string; project_id: string };
   };
   skipped_disables: string[];
   warnings: string[];

@@ -89,18 +89,24 @@ export interface ClashCostImpactColumnProps {
 
 /** Confidence pill — three-step ladder mirrored from the backend service. */
 function ConfidenceChip({ confidence }: { confidence: string }) {
+  const { t } = useTranslation();
   const cls =
     confidence === 'high'
       ? 'bg-semantic-success-bg text-semantic-success'
       : confidence === 'medium'
         ? 'bg-semantic-warning-bg text-semantic-warning'
         : 'bg-surface-secondary text-content-tertiary';
+  // Translate the three known bands; fall back to the raw value (CSS-capitalised)
+  // so an unexpected confidence string still renders legibly.
+  const label = t(`clash.cost.confidence_${confidence}`, {
+    defaultValue: confidence,
+  });
   return (
     <span
-      className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium ${cls}`}
+      className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium capitalize ${cls}`}
       data-testid="clash-cost-confidence"
     >
-      {confidence}
+      {label}
     </span>
   );
 }
@@ -294,12 +300,23 @@ export function ClashCostImpactColumn({
   const displayCurrency = currency || impact.currency || 'EUR';
   const c = impact.components;
 
+  // Build the hover breakdown from i18n'd labels so the rework/labour math
+  // reads in the user's language; the numeric parts are pre-coerced via
+  // {@link toNum} so no wire string ever reaches ``toFixed``.
+  const reworkLabel = t('clash.cost.rework', { defaultValue: 'Rework' });
+  const labourLabel = t('clash.cost.labour', { defaultValue: 'Labour' });
+  const confidenceTooltipLabel = t('clash.cost.confidence', {
+    defaultValue: 'Confidence',
+  });
+  const confidenceText = t(`clash.cost.confidence_${impact.confidence}`, {
+    defaultValue: impact.confidence,
+  });
   const tooltip =
-    `Rework: ${toNum(c.rework_positions_total).toFixed(2)} ${displayCurrency} × ` +
+    `${reworkLabel}: ${toNum(c.rework_positions_total).toFixed(2)} ${displayCurrency} × ` +
     `${toNum(c.rework_factor_pct)}% = ${toNum(c.rework_subtotal).toFixed(2)} ${displayCurrency}\n` +
-    `Labour: ${toNum(c.labour_hours)}h × ${toNum(c.blended_rate).toFixed(2)} ${displayCurrency} = ` +
+    `${labourLabel}: ${toNum(c.labour_hours)}h × ${toNum(c.blended_rate).toFixed(2)} ${displayCurrency} = ` +
     `${toNum(c.labour_subtotal).toFixed(2)} ${displayCurrency}\n` +
-    `Confidence: ${impact.confidence}`;
+    `${confidenceTooltipLabel}: ${confidenceText}`;
 
   // Gate the BOQ drill-down on high confidence (the only band where a BOQ
   // position actually links to the clash; medium/low carry no positions).

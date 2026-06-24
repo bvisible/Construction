@@ -20,6 +20,14 @@ no DB session can be opened, the project does not exist, or no project id is
 available, it returns an explicit ``{"error": ...}`` observation so the LLM can
 never invent figures.
 
+Access control (IDOR defence): the run's invoking user is threaded into the
+tool via the trusted ``__agent_context__`` (the runner strips any LLM-forged
+context and re-injects the real one). Before reading any figures the tool
+verifies that user owns or belongs to the target project via
+:func:`._access.assert_user_can_access_project`; on denial - or when no user is
+in scope - it returns the ``not_found`` / ``unavailable`` error shape so the
+LLM never reads another tenant's cost data and existence is never leaked.
+
 Money rule: amounts are carried as Decimal-as-string with their ISO 4217
 currency code. The dashboard sets ``mixed_currency`` when the project's budget
 lines span more than one currency (a missing fx_rate may have left a foreign
@@ -35,6 +43,10 @@ import logging
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from app.modules.ai_agents.agents._access import (
+    assert_user_can_access_project,
+    coerce_user_id,
+)
 from app.modules.ai_agents.base import (
     Agent,
     FunctionTool,
@@ -132,6 +144,17 @@ async def _tool_project_cost_summary(
     On a missing project id, a missing project, or an unreachable database it
     returns ``{"error": ...}`` so the LLM never fabricates figures.
     """
+    # The trusted invoking user is threaded into __agent_context__ by the
+    # runner (the LLM cannot forge it - any model-supplied context is stripped
+    # and the real one re-injected). Fail closed: with no user in scope we
+    # cannot authorize a cross-tenant read, so report the data as unreadable.
+    user_uuid = coerce_user_id(__agent_context__)
+    if user_uuid is None:
+        return {
+            "error": "unavailable",
+            "detail": ("No authenticated user in scope - the cost summary could not be loaded. Do not invent figures."),
+        }
+
     pid = _resolve_project_id(project_id, __agent_context__)
     if not pid:
         return {
@@ -159,7 +182,11 @@ async def _tool_project_cost_summary(
 
         async with async_session_factory() as session:
             project = await ProjectRepository(session).get_by_id(project_uuid)
-            if project is None:
+            # IDOR guard: deny when the project is missing OR the invoking user
+            # has no access to it. Both return the SAME not_found shape so a
+            # cross-tenant project is indistinguishable from a non-existent one
+            # (never leak existence) and no figures are read.
+            if project is None or not await assert_user_can_access_project(session, project_uuid, user_uuid):
                 return {
                     "project_id": pid,
                     "error": "not_found",

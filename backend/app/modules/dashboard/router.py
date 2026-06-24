@@ -25,7 +25,9 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, Header, Query, Response
 
 from app.dependencies import CurrentUserId, SessionDep
+from app.modules.dashboard.inbox import compute_inbox
 from app.modules.dashboard.schemas import (
+    InboxResponse,
     RollupRequest,
     RollupResponse,  # noqa: F401 - re-exported in OpenAPI
 )
@@ -33,6 +35,7 @@ from app.modules.dashboard.service import (
     KNOWN_WIDGETS,
     accessible_projects,
     compute_rollup,
+    is_admin,
 )
 
 router = APIRouter(tags=["dashboard"])
@@ -197,4 +200,47 @@ async def post_rollup(
     return Response(
         content=serialized,
         media_type="application/json",
+    )
+
+
+@router.get(
+    "/inbox/",
+    response_model=InboxResponse,
+    summary="Unified approvals/alerts inbox",
+    description=(
+        "Aggregates the caller's pending approvals (file-approval steps + "
+        "change-order approval steps where they are the named approver) and "
+        "their unread in-app notifications (alerts) into one chronologically "
+        "sorted list. Reads existing per-module stores only - no new "
+        "persistence. IDOR-safe: every row is scoped to the caller's "
+        "accessible projects, and notifications are already per-user; rows "
+        "the caller can't see are silently dropped (never 403). Returns 200 "
+        "with empty data when nothing is pending."
+    ),
+)
+async def get_inbox(
+    user_id: CurrentUserId,
+    session: SessionDep,
+    limit: int = Query(
+        default=50,
+        ge=1,
+        le=200,
+        description="Maximum rows in the returned list (counts are pre-cap).",
+    ),
+) -> InboxResponse:
+    # Same accessible-project scope the rollup uses (admin-aware, partner-pack
+    # aware). Passing the resolved list (not just ids) lets the aggregator
+    # stamp project names without a second query.
+    projects = await accessible_projects(session, user_id)
+    admin = await is_admin(session, user_id)
+    payload = await compute_inbox(
+        session,
+        projects,
+        user_id,
+        is_admin=admin,
+        limit=limit,
+    )
+    return InboxResponse(
+        **payload,
+        generated_at=datetime.now(UTC).isoformat(),
     )

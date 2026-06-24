@@ -32,7 +32,7 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.upload_guards import reject_if_xlsx_bomb
-from app.dependencies import CurrentUserId, RequirePermission, SessionDep
+from app.dependencies import CurrentUserId, RequirePermission, SessionDep, verify_project_access
 from app.modules.contacts.models import Contact
 from app.modules.contacts.schemas import (
     ContactCreate,
@@ -1104,11 +1104,19 @@ async def convert_contact_to_lead(
     # enforces the FK - validate it exists rather than letting the INSERT
     # fail with an uncaught IntegrityError (500). SQLite silently accepted
     # the dangling ref; this guard makes both dialects return a 404.
-    if payload.development_id is not None and await session.get(Development, payload.development_id) is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Development {payload.development_id} not found",
-        )
+    if payload.development_id is not None:
+        development = await session.get(Development, payload.development_id)
+        if development is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Development {payload.development_id} not found",
+            )
+        # IDOR guard: Development carries no tenant_id of its own - it is scoped
+        # by its project's owner. contacts.update is a global role, so verify the
+        # caller may access the development's project before linking a Lead into
+        # it; otherwise this is a cross-tenant write and a 404-vs-201 existence
+        # oracle. verify_project_access returns 404 on denial, collapsing both.
+        await verify_project_access(development.project_id, str(user_id), session)
 
     full_name = (
         " ".join(p for p in (contact.first_name or "", contact.last_name or "") if p).strip()
@@ -1190,16 +1198,28 @@ async def convert_contact_to_buyer(
     # dangling development_id / plot_id raises an uncaught IntegrityError
     # (500). SQLite has FK enforcement off and silently accepted the
     # dangling ref. Guard here so both dialects return a clear 404.
-    if await session.get(Development, payload.development_id) is None:
+    development = await session.get(Development, payload.development_id)
+    if development is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Development {payload.development_id} not found",
         )
-    if payload.plot_id is not None and await session.get(Plot, payload.plot_id) is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Plot {payload.plot_id} not found",
-        )
+    # IDOR guard: gate on the development's owning project (contacts.update is a
+    # global role; Development is project-scoped). Cross-tenant write + UUID
+    # oracle otherwise; verify_project_access returns 404 on denial.
+    await verify_project_access(development.project_id, str(user_id), session)
+    if payload.plot_id is not None:
+        plot = await session.get(Plot, payload.plot_id)
+        if plot is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Plot {payload.plot_id} not found",
+            )
+        # A plot is owned via its parent development's project - verify that too
+        # (covers a plot under a different development than the one supplied).
+        plot_dev = await session.get(Development, plot.development_id)
+        if plot_dev is not None:
+            await verify_project_access(plot_dev.project_id, str(user_id), session)
 
     full_name = (
         " ".join(p for p in (contact.first_name or "", contact.last_name or "") if p).strip()

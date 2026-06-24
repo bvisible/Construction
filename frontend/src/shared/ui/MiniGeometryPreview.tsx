@@ -146,6 +146,14 @@ export function MiniGeometryPreview({
     controlsRef.current?.dispose();
     controlsRef.current = null;
     if (rendererRef.current) {
+      // Release the GL context slot before dispose(); many mini-previews can
+      // mount per page (one per card), so a leaked context here is the fastest
+      // way to exhaust the browser's WebGL context cap.
+      try {
+        rendererRef.current.forceContextLoss();
+      } catch {
+        /* context already lost */
+      }
       rendererRef.current.dispose();
       rendererRef.current = null;
     }

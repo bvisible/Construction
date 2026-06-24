@@ -45,7 +45,7 @@ export function Card({
 /* ── Card subcomponents for structured content ────────────────────────── */
 
 interface CardHeaderProps {
-  title: string;
+  title: ReactNode;
   subtitle?: string;
   action?: ReactNode;
   className?: string;

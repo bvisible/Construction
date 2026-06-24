@@ -30,7 +30,10 @@ class JobRunRead(BaseModel):
     )
     error: dict[str, Any] | None = Field(
         default=None,
-        description="{type, message, traceback} once status='failed'.",
+        description=(
+            "{type, message, phase} once status='failed'. The server-side "
+            "Python traceback is intentionally NOT exposed over the API."
+        ),
     )
     started_at: datetime | None = None
     completed_at: datetime | None = None

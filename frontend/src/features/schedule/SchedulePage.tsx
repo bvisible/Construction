@@ -36,6 +36,8 @@ import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { scheduleApi } from './api';
 import { PlanningCrossLinks } from './PlanningCrossLinks';
+import { EvmPanel } from './EvmPanel';
+import { Snapshot4DView } from './Snapshot4DView';
 import { scheduleGuide } from './scheduleGuide';
 import { fetchBIMModels } from '@/features/bim/api';
 import type {
@@ -86,6 +88,24 @@ function formatDate(dateStr: string): string {
     month: 'short',
     year: 'numeric',
   });
+}
+
+/**
+ * Neutralise a spreadsheet formula-injection vector before a value is written
+ * into an exported CSV/TSV cell. If the string starts with a dangerous trigger
+ * character (=, +, -, @, tab, CR, LF) a spreadsheet app evaluates it as a
+ * formula, so we prefix a single apostrophe - the cell renders unchanged but
+ * is treated as literal text. Mirrors the backend
+ * ``app.core.csv_safety.neutralise_formula`` contract.
+ *
+ * @see https://owasp.org/www-community/attacks/CSV_Injection
+ */
+function neutraliseFormula(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  const s = String(value);
+  if (s.length === 0) return s;
+  const TRIGGERS = new Set(['=', '+', '-', '@', '\t', '\r', '\n']);
+  return TRIGGERS.has(s[0]!) ? `'${s}` : s;
 }
 
 function daysBetween(start: string, end: string): number {
@@ -678,8 +698,13 @@ function GanttChart({
     );
   }
 
-  // Calculate today marker position
-  const todayOffset = daysBetween(timelineStart.toISOString(), new Date().toISOString());
+  // Calculate today marker position. Use a SIGNED day offset, not
+  // daysBetween() (which floors at 1) - otherwise a "today" that falls before
+  // the timeline start is clamped to +1 day and the marker is wrongly drawn at
+  // the left edge instead of being hidden by the 0..100 guard below.
+  const todayOffset = Math.round(
+    (new Date().getTime() - timelineStart.getTime()) / (1000 * 60 * 60 * 24),
+  );
   const todayPct = (todayOffset / totalDays) * 100;
 
   // Sort activities for stable rendering
@@ -1057,7 +1082,7 @@ function ScheduleDetail({
   const addToast = useToastStore((s) => s.addToast);
   const { confirm, ...confirmProps } = useConfirm();
   const [zoomLevel, setZoomLevel] = useState<ZoomLevel>('week');
-  const [viewMode, setViewMode] = useState<'table' | 'gantt'>('gantt');
+  const [viewMode, setViewMode] = useState<'table' | 'gantt' | 'evm' | '4d'>('gantt');
   const [showAddActivity, setShowAddActivity] = useState(false);
   const [showGenerateBOQ, setShowGenerateBOQ] = useState(false);
   const [selectedBOQId, setSelectedBOQId] = useState('');
@@ -1073,12 +1098,16 @@ function ScheduleDetail({
     activity_type: 'task',
   });
 
-  // Fetch project data for region / work calendar
+  // Fetch project data for region / work calendar / currency
   const { data: projectData } = useQuery({
     queryKey: ['project', projectId],
-    queryFn: () => apiGet<{ id: string; region: string }>(`/v1/projects/${projectId}`),
+    queryFn: () => apiGet<{ id: string; region: string; currency?: string }>(`/v1/projects/${projectId}`),
     staleTime: 300_000,
   });
+  // Project ISO currency drives EVM money formatting; blank -> no symbol
+  // (never mislabel a non-EUR amount). The activity cost columns are all
+  // project-scoped so they share this single currency.
+  const projectCurrency = projectData?.currency ?? '';
   // Resolve the work calendar from the backend so the badge matches the
   // hours-per-day / days-per-week the schedule math actually uses. The
   // client-side WORK_CALENDAR_INFO map only covers 12 exact keys and diverges
@@ -1389,14 +1418,18 @@ function ScheduleDetail({
           </Button>
           {hasActivities && (
             <>
-              {/* View mode toggle: Table vs SVG Gantt */}
+              {/* View mode toggle: Table / Gantt / EVM / 4D */}
               <div className="flex items-center gap-1 rounded-lg border border-border-light p-0.5">
                 {([
                   { key: 'table' as const, label: t('schedule.view_table', 'Table') },
                   { key: 'gantt' as const, label: t('schedule.view_gantt', 'Gantt') },
+                  { key: 'evm' as const, label: t('schedule.view_evm', { defaultValue: 'EVM' }) },
+                  { key: '4d' as const, label: t('schedule.view_4d', { defaultValue: '4D' }) },
                 ]).map((v) => (
                   <button
                     key={v.key}
+                    type="button"
+                    aria-pressed={viewMode === v.key}
                     onClick={() => setViewMode(v.key)}
                     className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
                       viewMode === v.key
@@ -1408,10 +1441,17 @@ function ScheduleDetail({
                   </button>
                 ))}
               </div>
-              <div className="flex items-center gap-1 rounded-lg border border-border-light p-0.5">
+              {/* Zoom only applies to the timeline views (table / gantt). */}
+              <div
+                className={`flex items-center gap-1 rounded-lg border border-border-light p-0.5 ${
+                  viewMode === 'evm' || viewMode === '4d' ? 'hidden' : ''
+                }`}
+              >
                 {(['day', 'week', 'month', 'quarter', 'year'] as const).map((level) => (
                   <button
                     key={level}
+                    type="button"
+                    aria-pressed={zoomLevel === level}
                     onClick={() => setZoomLevel(level)}
                     className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
                       zoomLevel === level
@@ -1458,9 +1498,16 @@ function ScheduleDetail({
                       t('schedule.export_progress', { defaultValue: 'Progress %' }),
                       t('schedule.export_status', { defaultValue: 'Status' }),
                     ].join('\t'),
+                    // String cells are run through neutraliseFormula so a
+                    // user-controlled value (e.g. an activity name beginning
+                    // with =, +, -, @) cannot execute as a formula when the
+                    // exported file is opened in a spreadsheet app. Numeric
+                    // columns pass through unchanged.
                     ...activities.map((a) => [
-                      a.wbs_code, a.name, a.activity_type, a.start_date, a.end_date,
-                      a.duration_days, a.progress_pct, a.status,
+                      neutraliseFormula(a.wbs_code), neutraliseFormula(a.name),
+                      neutraliseFormula(a.activity_type), neutraliseFormula(a.start_date),
+                      neutraliseFormula(a.end_date),
+                      a.duration_days, a.progress_pct, neutraliseFormula(a.status),
                     ].join('\t')),
                   ];
                   const blob = new Blob([rows.join('\n')], { type: 'text/tab-separated-values' });
@@ -1561,6 +1608,8 @@ function ScheduleDetail({
             ].filter((f) => f.show !== false && (f.key === 'all' || f.count > 0)).map((f) => (
               <button
                 key={f.key}
+                type="button"
+                aria-pressed={activityFilter === f.key}
                 onClick={() => setActivityFilter(f.key)}
                 className={`flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-full transition-colors ${
                   activityFilter === f.key
@@ -1605,9 +1654,18 @@ function ScheduleDetail({
             </div>
           )}
 
-          {/* Gantt chart */}
+          {/* Main content: timeline (Gantt / Table), EVM panel, or 4D snapshot */}
           <div className="mt-6">
-            {isLoading ? (
+            {viewMode === 'evm' ? (
+              <EvmPanel scheduleId={schedule.id} currency={projectCurrency} />
+            ) : viewMode === '4d' ? (
+              <Snapshot4DView
+                scheduleId={schedule.id}
+                projectId={projectId}
+                scheduleStart={schedule.start_date}
+                scheduleEnd={schedule.end_date}
+              />
+            ) : isLoading ? (
               <SkeletonTable rows={4} columns={4} />
             ) : ganttData ? (
               viewMode === 'gantt' ? (

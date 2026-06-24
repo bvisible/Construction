@@ -1615,6 +1615,37 @@ async def upload_document_revision(
     existing = await service.get_document(document_id)
     await verify_project_access(existing.project_id, user_id, session)
 
+    # Folder-level write gate. Uploading a revision replaces the served
+    # file bytes, so it must require the same write capability as
+    # ``upload_document`` / ``delete_document`` - a project member who
+    # holds only a ``viewer`` grant on a restricted folder (even with the
+    # project-wide ``documents.update`` permission) must NOT be able to
+    # overwrite protected content. 404 (not 403) keeps enumeration
+    # symmetric with the rest of the documents IDOR contract.
+    from app.modules.documents.folder_permissions_service import (
+        can_write,
+        folder_access_for,
+        kind_and_path_for_document,
+        require_read,
+    )
+
+    kind, path = kind_and_path_for_document(existing.category)
+    role = await folder_access_for(
+        session,
+        project_id=existing.project_id,
+        user_id=uuid.UUID(str(user_id)),
+        scope_kind=kind,
+        scope_path=path,
+    )
+    require_read(role)
+    # Project owner bypasses write checks (folder_access_for returns
+    # "owner" for them); a viewer grant is rejected.
+    if role != "owner" and not can_write(role):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Not found",
+        )
+
     allowed, _ = upload_limiter.is_allowed(str(user_id))
     if not allowed:
         raise HTTPException(
@@ -1869,6 +1900,7 @@ async def documents_similar(
     from sqlalchemy import select
 
     from app.core.vector_index import find_similar
+    from app.dependencies import allowed_project_ids_for_similar
     from app.modules.documents.models import Document
     from app.modules.documents.vector_adapter import document_vector_adapter
 
@@ -1887,12 +1919,17 @@ async def documents_similar(
         await _verify_project_membership_or_404(row.project_id, _user_id, session)
 
     project_id = str(row.project_id) if row.project_id is not None else None
+    # Restrict cross-project hits to projects the caller may access so the
+    # opt-in cross_project search can never leak documents from inaccessible
+    # projects (None == admin/unrestricted, mirroring verify_project_access).
+    allowed = await allowed_project_ids_for_similar(session, str(_user_id), project_id, cross_project)
     hits = await find_similar(
         document_vector_adapter,
         row,
         project_id=project_id,
         cross_project=cross_project,
         limit=limit,
+        allowed_project_ids=allowed,
     )
     return {
         "source_id": str(document_id),

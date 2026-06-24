@@ -72,8 +72,9 @@ from app.core.demo_placeholders import materialize_placeholder
 from app.core.http_headers import content_disposition_attachment
 from app.core.i18n import get_locale
 from app.core.rate_limiter import upload_limiter
+from app.core.storage import resolve_data_dir as _resolve_data_dir
 from app.core.validation.messages import translate
-from app.dependencies import CurrentUserId, RequirePermission, SessionDep
+from app.dependencies import CurrentUserId, RequirePermission, RequireRole, SessionDep, accessible_project_ids
 from app.modules.bim_hub import file_storage as bim_file_storage
 from app.modules.bim_hub.schemas import (
     AssetInfoUpdateRequest,
@@ -218,8 +219,10 @@ def _to_qty_float(val: object) -> float:
 # Legacy on-disk path kept only for backward compatibility with any
 # external code that may still import ``_BIM_DATA_DIR``.  New code MUST
 # go through :mod:`app.modules.bim_hub.file_storage` which wraps the
-# pluggable :class:`~app.core.storage.StorageBackend`.
-_BIM_DATA_DIR = pathlib.Path(__file__).resolve().parents[4] / "data" / "bim"
+# pluggable :class:`~app.core.storage.StorageBackend`.  Resolved through the
+# unified resolver so it points at the ACTIVE data root (honours OE_DATA_DIR /
+# DATA_DIR / OE_CLI_DATA_DIR) rather than the package-relative default.
+_BIM_DATA_DIR = _resolve_data_dir() / "bim"
 
 
 def _get_service(session: SessionDep) -> BIMHubService:
@@ -2983,13 +2986,32 @@ async def get_model_geometry(
         # Status promises geometry but the blob is gone - a genuine,
         # unexpected data problem worth reporting. This is the ONLY case
         # that keeps the legacy "geometry_missing" code.
+        #
+        # Log EVERY directory we searched (active root + back-compat fallbacks)
+        # so an operator can see exactly where the blob was expected. The
+        # 8.6.1 root cause was a data-dir mismatch: geometry written under one
+        # resolution, read from another. If this still fires after 8.6.1 the
+        # blob is genuinely gone, and these paths prove the search was complete.
+        try:
+            from app.core.storage import safe_data_roots as _safe_data_roots
+
+            _prefix = bim_file_storage.bim_model_prefix(project_id, model_id)
+            _searched = [str(_resolve_data_dir())] + [
+                str(p) for p in _safe_data_roots() if str(p) != str(_resolve_data_dir())
+            ]
+        except Exception:  # noqa: BLE001 - diagnostics must never break the response
+            _prefix = "<unavailable>"
+            _searched = []
         logger.warning(
             "BIM geometry MISSING for a ready model - blob gone from storage "
-            "(request_id=%s, model_id=%s, project_id=%s, status=%s)",
+            "(request_id=%s, model_id=%s, project_id=%s, status=%s, key_prefix=%s, "
+            "searched_roots=%s)",
             request_id,
             model_id,
             project_id,
             model_status,
+            _prefix,
+            _searched,
         )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -3399,14 +3421,21 @@ async def cleanup_stale_processing(
 @router.post("/cleanup-orphans/")
 async def cleanup_orphan_bim_files(
     _user_id: CurrentUserId,
-    _perm: None = Depends(RequirePermission("bim.delete")),
+    _role: None = Depends(RequireRole("admin")),
     service: BIMHubService = Depends(_get_service),
 ) -> dict[str, Any]:
     """Scan ``data/bim/`` and remove directories with no matching DB row.
 
-    Admin-grade disk hygiene. Protects against orphaned RVT/IFC/COLLADA/Excel
-    artefacts left behind by failed uploads, crashed conversions, or manual
-    DB deletes that bypassed the service layer.
+    Admin-grade disk hygiene. This is a GLOBAL, cross-tenant filesystem sweep:
+    it loads every model id in the deployment and ``rmtree``s any model
+    directory under ``data/bim/`` without a matching DB row, crossing tenant
+    boundaries. A project-level MANAGER (``bim.delete``) must never reach it,
+    so it is gated by ``RequireRole("admin")`` - the same pattern used by the
+    clear-database / demo-reset endpoints for tenant-wide bulk deletes.
+
+    Protects against orphaned RVT/IFC/COLLADA/Excel artefacts left behind by
+    failed uploads, crashed conversions, or manual DB deletes that bypassed
+    the service layer.
     """
     return await service.cleanup_orphan_bim_files()
 
@@ -4017,8 +4046,14 @@ async def list_quantity_maps(
     _perm: None = Depends(RequirePermission("bim.read")),
     service: BIMHubService = Depends(_get_service),
 ) -> BIMQuantityMapListResponse:
-    """List quantity mapping rules (global + templates)."""
-    items, total = await service.list_quantity_maps(offset=offset, limit=limit)
+    """List quantity mapping rules visible to the caller.
+
+    Scopes to the caller's accessible projects so a project-scoped rule from
+    another tenant never leaks. Global templates (``project_id IS NULL``)
+    stay visible to everyone; admins see every rule.
+    """
+    scope = await accessible_project_ids(service.session, user_id)
+    items, total = await service.list_quantity_maps(project_ids=scope, offset=offset, limit=limit)
     return BIMQuantityMapListResponse(
         items=[BIMQuantityMapResponse.model_validate(m) for m in items],
         total=total,
@@ -4048,8 +4083,14 @@ async def update_quantity_map(
     _perm: None = Depends(RequirePermission("bim.update")),
     service: BIMHubService = Depends(_get_service),
 ) -> BIMQuantityMapResponse:
-    """Update a quantity mapping rule."""
-    # If the existing rule is project-scoped, verify access to that project.
+    """Update a quantity mapping rule.
+
+    A project-scoped rule requires access to its project. A global rule
+    (``project_id IS NULL``) is a cross-tenant shared template, so only an
+    admin may mutate it - a project-level editor in any tenant must not be
+    able to silently rewrite a template every tenant sees. The 404 (not 403)
+    on the non-admin global case keeps the IDOR surface consistent.
+    """
     from app.modules.bim_hub.models import BIMQuantityMap
 
     existing = await service.session.get(BIMQuantityMap, map_id)
@@ -4060,6 +4101,16 @@ async def update_quantity_map(
         )
     if existing.project_id is not None:
         await _verify_project_access(service.session, existing.project_id, user_id)
+    else:
+        # Global/template rule: admins only. ``accessible_project_ids``
+        # returns ``None`` for admins (its "no filter" sentinel); any
+        # non-admin caller gets a set and is rejected as not-found.
+        scope = await accessible_project_ids(service.session, user_id)
+        if scope is not None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Quantity map not found",
+            )
     qmap = await service.update_quantity_map(map_id, data)
     return BIMQuantityMapResponse.model_validate(qmap)
 

@@ -28,8 +28,103 @@ import pyarrow.parquet as pq
 
 logger = logging.getLogger(__name__)
 
-# Default storage root -- matches existing BIM file storage layout.
-_DATA_ROOT = Path("data/bim")
+
+def _data_root() -> Path:
+    """Active BIM data root, resolved PER CALL (never bound at import).
+
+    Mirrors :func:`app.modules.bim_hub.service._bim_data_dir`: the path is
+    derived from :func:`app.core.storage.resolve_data_dir` (which honours
+    ``OE_DATA_DIR`` / ``DATA_DIR`` / ``OE_CLI_DATA_DIR`` before the
+    package-relative default), so the Parquet sidecar always lands beside the
+    geometry the storage backend wrote -- regardless of the service CWD
+    (systemd/launchd run with CWD=``/``) or whether an operator set
+    ``OE_DATA_DIR``. Resolving lazily also lets test env overrides take effect.
+
+    WRITES always use this active root; READS may additionally probe the
+    back-compat roots via :func:`_existing_parquet_path`.
+    """
+    from app.core.storage import resolve_data_dir
+
+    return resolve_data_dir() / "bim"
+
+
+def _existing_parquet_path(
+    project_id: str,
+    model_id: str,
+    data_root: Path | None,
+) -> Path | None:
+    """Resolve the elements Parquet path, with a read-only back-compat fallback.
+
+    The active root (``data_root`` when given, else :func:`_data_root`) is tried
+    first. When the sidecar is absent there, every OTHER platform-owned data
+    root (see :func:`app.core.storage.safe_data_roots`) is probed for the same
+    ``bim/{project}/{model}/elements.parquet`` key. This is what lets a model
+    whose Parquet was written under a DIFFERENT data-dir resolution -- e.g.
+    before ``OE_DATA_DIR`` was honoured here, or under the CWD-relative
+    ``data/bim`` literal a previous build used -- still serve element tables and
+    property filters instead of returning ``[]``.
+
+    Reads fall back; WRITES never do. Containment is re-checked against each
+    candidate root with ``relative_to`` so a crafted id can never escape a root.
+    Returns ``None`` when the sidecar exists nowhere.
+    """
+    # ``active`` is the BIM-level root (``<data-dir>/bim``). ``rel_parts`` is the
+    # key relative to a BIM-level root, so it must NOT re-prepend "bim".
+    active = (data_root if data_root is not None else _data_root()).resolve()
+    rel_parts = (project_id, model_id, "elements.parquet")
+
+    def _candidate(base: Path) -> Path | None:
+        try:
+            cand = base.joinpath(*rel_parts).resolve()
+            cand.relative_to(base)
+        except (OSError, ValueError):
+            return None
+        return cand
+
+    primary = _candidate(active)
+    if primary is not None and primary.is_file():
+        return primary
+
+    from app.core.storage import safe_data_roots
+
+    for root in safe_data_roots():
+        # safe_data_roots() entries are data-dir level; the BIM sidecars live
+        # under their ``bim/`` subdir.
+        try:
+            base = (root / "bim").resolve()
+        except OSError:
+            continue
+        if base == active:
+            continue
+        cand = _candidate(base)
+        if cand is not None and cand.is_file():
+            logger.info(
+                "bim parquet: sidecar for %s/%s absent under active root %s; served from back-compat data root %s",
+                project_id,
+                model_id,
+                active,
+                base,
+            )
+            return cand
+    return None
+
+
+def _json_safe(value: Any) -> Any:
+    """Recursively replace NaN / Infinity floats with None.
+
+    Parquet numeric columns can hold NaN or +/-Infinity (e.g. a divide-by-zero
+    derived quantity). These are valid Python floats but are NOT valid in
+    strict JSON, so they make ``json.dumps(..., allow_nan=False)`` and the
+    default FastAPI response encoder raise. Converting them to ``None`` keeps
+    the row JSON-serialisable while leaving every finite value untouched.
+    """
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    return value
 
 
 def _json_safe(value: Any) -> Any:
@@ -76,7 +171,7 @@ def write_dataframe(
     project_id: str,
     model_id: str,
     rows: list[dict[str, Any]],
-    data_root: Path = _DATA_ROOT,
+    data_root: Path | None = None,
 ) -> Path:
     """‌⁠‍Write a list of element dicts as a Parquet file.
 
@@ -84,7 +179,12 @@ def write_dataframe(
     Missing keys become null.  ZSTD compression, row groups of 50 000.
 
     Returns the path to the written ``.parquet`` file.
+
+    ``data_root`` defaults to the active :func:`_data_root` (resolved lazily).
+    WRITES never fall back to a back-compat root.
     """
+    if data_root is None:
+        data_root = _data_root()
     dest_dir = data_root / project_id / model_id
     dest_dir.mkdir(parents=True, exist_ok=True)
     parquet_path = dest_dir / "elements.parquet"
@@ -147,15 +247,15 @@ def write_dataframe(
 def read_schema(
     project_id: str,
     model_id: str,
-    data_root: Path = _DATA_ROOT,
+    data_root: Path | None = None,
 ) -> list[dict[str, str]]:
     """‌⁠‍Return column names and Arrow types from the Parquet schema.
 
     Used by the frontend to build dynamic filter dropdowns.
     Returns ``[{"name": "Fire Rating", "type": "string"}, ...]``.
     """
-    parquet_path = data_root / project_id / model_id / "elements.parquet"
-    if not parquet_path.exists():
+    parquet_path = _existing_parquet_path(project_id, model_id, data_root)
+    if parquet_path is None:
         return []
 
     schema = pq.read_schema(parquet_path)
@@ -202,7 +302,7 @@ def query_parquet(
     columns: list[str] | None = None,
     filters: list[dict[str, Any]] | None = None,
     limit: int = 10_000,
-    data_root: Path = _DATA_ROOT,
+    data_root: Path | None = None,
 ) -> list[dict[str, Any]]:
     """Query the Parquet file via DuckDB SQL.
 
@@ -219,8 +319,8 @@ def query_parquet(
     Returns:
         List of dicts (one per matching row).
     """
-    parquet_path = data_root / project_id / model_id / "elements.parquet"
-    if not parquet_path.exists():
+    parquet_path = _existing_parquet_path(project_id, model_id, data_root)
+    if parquet_path is None:
         return []
 
     try:
@@ -282,14 +382,14 @@ def column_value_counts(
     model_id: str,
     column: str,
     limit: int = 100,
-    data_root: Path = _DATA_ROOT,
+    data_root: Path | None = None,
 ) -> list[dict[str, Any]]:
     """Return value counts for a single column (for filter autocomplete).
 
     Returns ``[{"value": "F90", "count": 42}, ...]`` sorted by count desc.
     """
-    parquet_path = data_root / project_id / model_id / "elements.parquet"
-    if not parquet_path.exists():
+    parquet_path = _existing_parquet_path(project_id, model_id, data_root)
+    if parquet_path is None:
         return []
 
     # Validate column name.

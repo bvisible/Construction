@@ -73,6 +73,7 @@ import { deriveGeometry, deriveRelations } from './canonicalElementDetails';
 import { BIMContextMenu } from './BIMContextMenu';
 import type { BIMContextMenuState } from './BIMContextMenu';
 import BIMViewCube from './BIMViewCube';
+import { DeviationOverlay } from './DeviationOverlay';
 import {
   colorForRate,
   DEFAULT_5D_GRADIENT,
@@ -2875,6 +2876,36 @@ export function BIMViewer({
         </div>
       )}
 
+      {/* No-geometry notice. The model imported element data but the server
+          has no canonical 3D blob for it (no native CAD converter produced a
+          GLB/DAE, so geometryUrl is null and the geometry endpoint would
+          404). Show a calm explanation instead of a blank canvas while the
+          element / property / quantity panels stay fully usable (Colin #59).
+          Takes a back seat to the WebGL-unavailable panel, hides while
+          elements are still loading, and is click-through so it never blocks
+          the surrounding panels. */}
+      {!webglError && !geometryUrl && !isLoading && (elements?.length ?? 0) > 0 && (
+        <div
+          data-testid="bim-no-geometry"
+          className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-surface-secondary/95 p-6"
+          role="status"
+          aria-live="polite"
+        >
+          <div className="flex max-w-sm flex-col items-center gap-3 text-center">
+            <Boxes size={48} className="text-content-tertiary" aria-hidden="true" />
+            <h3 className="text-sm font-semibold text-content-primary">
+              {t('bim.no_geometry_title', { defaultValue: 'No 3D geometry for this model' })}
+            </h3>
+            <p className="text-xs leading-relaxed text-content-tertiary">
+              {t('bim.no_geometry_body', {
+                defaultValue:
+                  'The elements and quantities imported successfully, but a 3D mesh was not generated - this server has no native CAD converter installed. Element data, properties and quantities are available in the panels; install a converter and re-process the model to view it in 3D.',
+              })}
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* W6.6 Stream B — Site Compass. Mounts only after the SceneManager
           is alive so the cube never tries to read from a null ref. The
           cube is purely an indicator + cheap raycast target; positioning
@@ -3936,6 +3967,14 @@ export function BIMViewer({
         elements && elements.length > 0 && (
           <ColorModeLegend mode={colorByMode} elements={elements} />
         )}
+
+      {/* Scan-vs-design deviation overlay (bottom-left). Self-gating: renders
+          nothing unless a laser scan has been aligned to this model, so it is
+          safe to always mount. Surfaces the already-computed as-built-vs-
+          design deviation verdict as a colour legend + headline. */}
+      {projectId && modelId && (
+        <DeviationOverlay projectId={projectId} modelId={modelId} />
+      )}
 
       {/* Hidden elements badge + Show all button — bottom-right corner */}
       {(hiddenIds.size > 0 || isIsolated) && (

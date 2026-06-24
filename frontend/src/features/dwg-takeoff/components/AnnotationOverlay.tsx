@@ -108,6 +108,18 @@ export function renderAnnotations(
   drawingScale: number = 1,
   calibration?: CalibrationOverride,
 ): void {
+  // Rank count markers by creation time so the first one placed is "1" and
+  // keeps that number as more are added. Numbering by array order would be
+  // unstable: the annotations fetch returns newest-first, so every new click
+  // would shove itself in as "1" and renumber the entire tally — unusable for
+  // counting. Ranking by ``created_at`` gives a stable, intuitive sequence.
+  const countRank = new Map<string, number>();
+  annotations
+    .filter((a) => a.type === 'count')
+    .slice()
+    .sort((a, b) => (a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0))
+    .forEach((a, i) => countRank.set(a.id, i + 1));
+
   for (const ann of annotations) {
     const isSelected = ann.id === selectedId;
     const color = isSelected ? '#d68a59' : ann.color;
@@ -116,6 +128,9 @@ export function renderAnnotations(
     switch (ann.type) {
       case 'text_pin':
         renderTextPin(ctx, ann, vp, color, isSelected);
+        break;
+      case 'count':
+        renderCount(ctx, ann, vp, color, isSelected, countRank.get(ann.id) ?? 0);
         break;
       case 'arrow':
         renderArrow(ctx, ann, vp, color, isSelected, width);
@@ -311,6 +326,62 @@ function renderTextPin(
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.arc(pos.x, pos.y, markerRadius + 5, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+}
+
+/**
+ * Render a count marker: a filled circle in the annotation colour with the
+ * sequential count number centred in white. Fixed screen size (like the
+ * text-pin marker) so it stays crisp and legible at every zoom level.
+ * ``seq`` is the 1-based position of this marker among count annotations.
+ */
+function renderCount(
+  ctx: CanvasRenderingContext2D,
+  ann: DwgAnnotation,
+  vp: ViewportState,
+  color: string,
+  isSelected: boolean,
+  seq: number,
+): void {
+  if (ann.points.length < 1) return;
+  const pt0 = ann.points[0]!;
+  const pos = worldToScreen(pt0.x, pt0.y, vp);
+
+  const markerColor = isSelected ? color : ann.color || color;
+  // Fixed radius matched to the text-pin marker's visual weight. Grows a
+  // little when more than two digits so 3-digit counts still fit.
+  const label = String(seq);
+  const baseRadius = 11;
+  const radius = label.length > 2 ? baseRadius + (label.length - 2) * 3 : baseRadius;
+
+  // White halo so the marker reads against the dark canvas and any geometry.
+  ctx.beginPath();
+  ctx.arc(pos.x, pos.y, radius + 1.5, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+  ctx.fill();
+
+  // Coloured disc.
+  ctx.beginPath();
+  ctx.arc(pos.x, pos.y, radius, 0, Math.PI * 2);
+  ctx.fillStyle = markerColor;
+  ctx.fill();
+
+  // Centred white number.
+  ctx.font = '700 12px Inter, system-ui, sans-serif';
+  ctx.fillStyle = '#fff';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(label, pos.x, pos.y + 0.5);
+  ctx.textAlign = 'start';
+  ctx.textBaseline = 'alphabetic';
+
+  // Selection ring.
+  if (isSelected) {
+    ctx.strokeStyle = '#3b82f6';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(pos.x, pos.y, radius + 4, 0, Math.PI * 2);
     ctx.stroke();
   }
 }

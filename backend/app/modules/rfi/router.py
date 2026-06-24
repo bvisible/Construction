@@ -11,6 +11,7 @@ Endpoints:
     POST   /{rfi_id}/close                - Close RFI
     POST   /{rfi_id}/attachments/         - Upload reply attachment
                                             (magic-byte gated, R5)
+    GET    /{rfi_id}/attachments/{index}  - Download a stored reply attachment
 """
 
 import io
@@ -20,7 +21,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 from app.core.bulk_ops import BulkDeleteRequest, BulkStatusRequest
 from app.core.file_signature import (
@@ -43,11 +44,14 @@ from app.modules.approval_routes.schemas import (
 )
 from app.modules.approval_routes.service import ApprovalRouteService
 from app.modules.rfi.schemas import (
+    RFIBatchDeleteResponse,
+    RFIBatchStatusResponse,
     RFICreate,
     RFIRespondRequest,
     RFIResponse,
     RFIStatsResponse,
     RFIUpdate,
+    RFIVariationResponse,
     StartApprovalRequest,
 )
 from app.modules.rfi.service import RFIService
@@ -167,7 +171,15 @@ async def list_rfis(
     project_id: uuid.UUID = Query(...),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=100),
-    status_filter: str | None = Query(default=None, alias="status"),
+    status_filter: str | None = Query(
+        default=None,
+        alias="status",
+        # Validate the filter against the same enum the create/update schemas
+        # enforce. Without this an unknown value (``?status=bogus``) silently
+        # returned an empty list instead of a 422, masking client-side typos.
+        pattern=r"^(draft|open|answered|closed|void)$",
+        description="Filter by status - draft | open | answered | closed | void.",
+    ),
     search: str | None = Query(
         default=None,
         max_length=200,
@@ -177,12 +189,16 @@ async def list_rfis(
 ) -> list[RFIResponse]:
     """‌⁠‍List RFIs for a project."""
     await verify_project_access(project_id, user_id, session)
+    # PERF: this endpoint returns a bare ``list[RFIResponse]`` and discards
+    # the total, so skip the extra ``COUNT(*)`` scan the repository would
+    # otherwise run over the same (search-filtered) predicate on every page.
     rfis, _ = await service.list_rfis(
         project_id,
         offset=offset,
         limit=limit,
         status_filter=status_filter,
         search=search,
+        with_total=False,
     )
     return [_to_response(r) for r in rfis]
 
@@ -235,6 +251,7 @@ async def export_rfi_log(
     from openpyxl.styles import Font
     from sqlalchemy import select
 
+    from app.core.csv_safety import neutralise_formula
     from app.modules.projects.models import Project
     from app.modules.rfi.models import RFI
 
@@ -272,9 +289,18 @@ async def export_rfi_log(
         cell = ws.cell(row=1, column=col, value=h)
         cell.font = Font(bold=True)
 
+    # BUG-RFI-CSV-INJECTION: ``subject`` / ``official_response`` /
+    # ``cost_impact_value`` are user-controlled free text. The schema's
+    # HTML sanitiser leaves a spreadsheet-formula payload such as
+    # ``=cmd|'/c calc'!A0`` intact (it has no HTML), so without
+    # output-side neutralisation Excel would execute it when a colleague
+    # opens the downloaded log. Route every user-controlled string cell
+    # through ``neutralise_formula`` (OWASP CSV-injection defence),
+    # mirroring the BOQ exporter. Numbers / server-derived enums pass
+    # through unchanged.
     for row_idx, item in enumerate(items, 2):
-        ws.cell(row=row_idx, column=1, value=item.rfi_number)
-        ws.cell(row=row_idx, column=2, value=item.subject)
+        ws.cell(row=row_idx, column=1, value=neutralise_formula(item.rfi_number))
+        ws.cell(row=row_idx, column=2, value=neutralise_formula(item.subject))
         ws.cell(row=row_idx, column=3, value=item.status)
         ws.cell(row=row_idx, column=4, value=str(item.raised_by) if item.raised_by else "")
         ws.cell(row=row_idx, column=5, value=str(item.assigned_to) if item.assigned_to else "")
@@ -297,13 +323,13 @@ async def export_rfi_log(
                 cost_cell = f"Yes ({amount}{suffix})"
             else:
                 cost_cell = "Yes"
-        ws.cell(row=row_idx, column=10, value=cost_cell)
+        ws.cell(row=row_idx, column=10, value=neutralise_formula(cost_cell))
         ws.cell(
             row=row_idx,
             column=11,
             value=f"Yes ({item.schedule_impact_days}d)" if item.schedule_impact else "No",
         )
-        ws.cell(row=row_idx, column=12, value=item.official_response or "")
+        ws.cell(row=row_idx, column=12, value=neutralise_formula(item.official_response or ""))
 
     buf = io.BytesIO()
     wb.save(buf)
@@ -322,6 +348,7 @@ async def export_rfi_log(
 @router.post(
     "/batch/delete/",
     status_code=200,
+    response_model=RFIBatchDeleteResponse,
     dependencies=[Depends(RequirePermission("rfi.delete"))],
 )
 async def batch_delete_rfis(
@@ -329,7 +356,7 @@ async def batch_delete_rfis(
     user_id: CurrentUserId,
     session: SessionDep,
     payload: CurrentUserPayload,
-) -> dict:
+) -> RFIBatchDeleteResponse:
     """Delete multiple RFIs in one request.
 
     BUG-RFI-BULK-ADMIN: the previous implementation derived the
@@ -368,12 +395,13 @@ async def batch_delete_rfis(
         user_id,
         is_admin,
     )
-    return {"requested": len(body.ids), "deleted": deleted}
+    return RFIBatchDeleteResponse(requested=len(body.ids), deleted=deleted)
 
 
 @router.patch(
     "/batch/status/",
     status_code=200,
+    response_model=RFIBatchStatusResponse,
     dependencies=[Depends(RequirePermission("rfi.update"))],
 )
 async def batch_update_rfi_status(
@@ -381,7 +409,7 @@ async def batch_update_rfi_status(
     user_id: CurrentUserId,
     session: SessionDep,
     payload: CurrentUserPayload,
-) -> dict:
+) -> RFIBatchStatusResponse:
     """Bulk-update status on multiple RFIs.
 
     BUG-RFI-BULK-ADMIN: see ``batch_delete_rfis`` - same is_admin gap.
@@ -421,7 +449,7 @@ async def batch_update_rfi_status(
         updated,
         user_id,
     )
-    return {"requested": len(body.ids), "updated": updated, "status": body.status}
+    return RFIBatchStatusResponse(requested=len(body.ids), updated=updated, status=body.status)
 
 
 @router.get(
@@ -511,7 +539,11 @@ async def respond_to_rfi(
     return _to_response(rfi)
 
 
-@router.post("/{rfi_id}/create-variation/", status_code=201)
+@router.post(
+    "/{rfi_id}/create-variation/",
+    status_code=201,
+    response_model=RFIVariationResponse,
+)
 async def create_variation_from_rfi(
     rfi_id: uuid.UUID,
     user_id: CurrentUserId,
@@ -524,7 +556,7 @@ async def create_variation_from_rfi(
     # raise the floor for legitimate editors.
     _co_perm: None = Depends(RequirePermission("changeorders.create")),
     service: RFIService = Depends(_get_service),
-) -> dict:
+) -> RFIVariationResponse:
     """Create a change order/variation pre-filled from an RFI with cost impact.
 
     The RFI must have cost_impact=True and be in 'answered' or 'closed' status.
@@ -547,6 +579,7 @@ async def create_variation_from_rfi(
 
     # Lazy import changeorders module
     try:
+        from app.modules.changeorders.repository import ChangeOrderRepository
         from app.modules.changeorders.schemas import ChangeOrderCreate
         from app.modules.changeorders.service import ChangeOrderService
     except ImportError:
@@ -554,6 +587,35 @@ async def create_variation_from_rfi(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Change orders module is not available.",
         )
+
+    # BUG-RFI-VARIATION-DUP: idempotency guard against a double-submit /
+    # retry. ``create-variation`` is a one-RFI-to-one-CO action, but the
+    # button can be clicked twice (or the request retried after a slow
+    # network) and nothing here previously stopped a second mint - the new
+    # CO would overwrite ``rfi.change_order_id`` and orphan the first CO
+    # (whose metadata still points back at this RFI). If a CO is already
+    # linked and its row still exists, return it unchanged instead of
+    # minting a duplicate. A linked-but-missing id (the CO was hard-deleted)
+    # falls through and self-heals by minting a fresh one.
+    if rfi.change_order_id:
+        try:
+            existing_co_id = uuid.UUID(str(rfi.change_order_id))
+        except (ValueError, TypeError):
+            existing_co_id = None
+        if existing_co_id is not None:
+            existing_order = await ChangeOrderRepository(session).get_by_id(existing_co_id)
+            if existing_order is not None:
+                logger.info(
+                    "RFI %s already linked to change order %s - returning existing",
+                    rfi_id,
+                    existing_order.code,
+                )
+                return RFIVariationResponse(
+                    change_order_id=str(existing_order.id),
+                    code=existing_order.code,
+                    rfi_id=str(rfi_id),
+                    title=existing_order.title,
+                )
 
     description_parts = [
         f"Variation from RFI {rfi.rfi_number}: {rfi.subject}",
@@ -606,12 +668,12 @@ async def create_variation_from_rfi(
         order.code,
         rfi_id,
     )
-    return {
-        "change_order_id": str(order.id),
-        "code": order.code,
-        "rfi_id": str(rfi_id),
-        "title": order.title,
-    }
+    return RFIVariationResponse(
+        change_order_id=str(order.id),
+        code=order.code,
+        rfi_id=str(rfi_id),
+        title=order.title,
+    )
 
 
 @router.post(
@@ -801,3 +863,93 @@ async def upload_rfi_attachment(
     relative_path = f"rfi/attachments/{safe_name}"
     updated = await service.add_attachment(rfi_id, relative_path)
     return _to_response(updated)
+
+
+# Base directory under which every RFI reply attachment lives. The stored
+# attachment paths are relative to this (``rfi/attachments/<name>``), so the
+# download handler resolves against it and refuses anything that escapes the
+# tree. Mirrors the correspondence download gate.
+_UPLOADS_BASE = Path("uploads")
+
+# Media types we are willing to hand back, keyed by stored extension. Anything
+# not in this map is served as ``application/octet-stream`` so the browser
+# downloads rather than renders it - defence in depth against an HTML/SVG
+# payload that somehow slipped past the upload magic-byte gate.
+_DOWNLOAD_MEDIA_TYPES = {
+    ".pdf": "application/pdf",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".heic": "image/heic",
+    ".heif": "image/heif",
+    ".tif": "image/tiff",
+    ".tiff": "image/tiff",
+    ".zip": "application/zip",
+}
+
+
+@router.get(
+    "/{rfi_id}/attachments/{index}",
+    dependencies=[Depends(RequirePermission("rfi.read"))],
+)
+async def download_rfi_attachment(
+    rfi_id: uuid.UUID,
+    index: int,
+    session: SessionDep,
+    user_id: CurrentUserId = None,  # type: ignore[assignment]
+    service: RFIService = Depends(_get_service),
+) -> FileResponse:
+    """‌⁠‍Serve a stored RFI reply attachment by its list index.
+
+    The ``attachments`` column holds server-derived relative paths only;
+    the index addresses an entry rather than letting the client name a
+    path. We still resolve the path and confirm it stays inside
+    ``uploads/`` (and is not a symlink) before streaming, mirroring the
+    correspondence / documents photo-serve gate. Without this endpoint the
+    files written by ``upload_rfi_attachment`` were unreachable - the
+    upload feature had no read path.
+    """
+    existing = await service.get_rfi(rfi_id)
+    await verify_project_access(existing.project_id, str(user_id), session)
+
+    attachments = list(getattr(existing, "attachments", None) or [])
+    if index < 0 or index >= len(attachments):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Attachment not found",
+        )
+
+    relative_path = attachments[index]
+    file_path = (_UPLOADS_BASE / relative_path).resolve()
+    uploads_base = _UPLOADS_BASE.resolve()
+
+    # Path-traversal / symlink guard - the stored path is trusted (we derived
+    # it), but resolve-then-relative_to is cheap insurance against a poisoned
+    # row or a future code path that stores a client-influenced value.
+    try:
+        file_path.relative_to(uploads_base)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    if file_path.is_symlink():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Symlinks not permitted",
+        )
+
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Attachment file missing on disk",
+        )
+
+    ext = file_path.suffix.lower()
+    media_type = _DOWNLOAD_MEDIA_TYPES.get(ext, "application/octet-stream")
+    return FileResponse(
+        path=str(file_path),
+        filename=file_path.name,
+        media_type=media_type,
+        content_disposition_type="attachment",
+    )

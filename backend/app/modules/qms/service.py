@@ -16,6 +16,7 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.events import event_bus
@@ -61,6 +62,16 @@ from app.modules.qms.schemas import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class QMSConflictError(ValueError):
+    """A write lost a uniqueness/idempotency race.
+
+    Subclasses :class:`ValueError` so existing ``except ValueError`` handlers
+    still treat it as a client error, while the router can catch it
+    specifically to return ``409 Conflict`` instead of ``400``.
+    """
+
 
 # ── Configurable defaults ─────────────────────────────────────────────────
 # Rework-cost-per-open-punch default. In production this should come from
@@ -466,10 +477,18 @@ class QMSService:
         # Dedup: one (user, role) signature per inspection. Two distinct
         # roles on the same user are still allowed (e.g. GC inspector +
         # designer reviewer when one person wears both hats).
+        #
+        # The pre-flight list-then-check below gives a clean 409 in the common
+        # case, but it is NOT atomic: two concurrent sign requests for the same
+        # (inspection, user, role) can both pass it and both INSERT, inflating
+        # the signatory count and defeating the multi-signatory completion gate.
+        # The ``uq_oe_qms_inspection_signature_inspection_user_role`` unique
+        # constraint (models.py) is the backstop; we catch the resulting
+        # IntegrityError on the loser so it gets a 409 instead of an opaque 500.
         existing = await self.repo.list_signatures(inspection_id)
         for prior in existing:
             if prior.signer_user_id == signer_user_id and prior.signer_role == data.signer_role:
-                raise ValueError(
+                raise QMSConflictError(
                     f"Signer has already signed this inspection in role '{data.signer_role}'",
                 )
         now_iso = _utc_now_iso()
@@ -484,7 +503,22 @@ class QMSService:
             signer_ip=signer_ip,
             signer_user_agent=(signer_user_agent[:512] if signer_user_agent else None),
         )
-        return await self.repo.add_signature(sig)
+        try:
+            return await self.repo.add_signature(sig)
+        except IntegrityError as exc:
+            # Lost the unique-constraint race: another concurrent request
+            # inserted the same (inspection, user, role) signature first.
+            # Roll back so the session is usable, then surface a clean 409.
+            await self.session.rollback()
+            logger.info(
+                "Race on QMS signature inspection=%s user=%s role=%s (treated as duplicate)",
+                inspection_id,
+                signer_user_id,
+                data.signer_role,
+            )
+            raise QMSConflictError(
+                f"Signer has already signed this inspection in role '{data.signer_role}'",
+            ) from exc
 
     async def required_signatures(self, inspection: QMSInspection) -> int:
         """Resolve how many signatures this inspection needs to complete.
@@ -554,10 +588,16 @@ class QMSService:
                     f"(item '{pred_ok.get('predecessor_name') or pred_ok['predecessor_itp_item_id']}')",
                 )
 
+        # Count DISTINCT signers, not raw rows: ``signatories_required`` is a
+        # head-count of separate people, so one person signing in two roles
+        # must not satisfy a 2-signatory gate. (The DB unique constraint stops
+        # the same (user, role) row twice; this stops the same user counting
+        # twice across different roles.)
         sigs = await self.repo.list_signatures(inspection_id)
-        if len(sigs) < required_sigs:
+        distinct_signers = {s.signer_user_id for s in sigs}
+        if len(distinct_signers) < required_sigs:
             raise ValueError(
-                f"Cannot complete inspection: {len(sigs)}/{required_sigs} required signatures collected",
+                f"Cannot complete inspection: {len(distinct_signers)}/{required_sigs} required signatures collected",
             )
 
         update_fields: dict[str, Any] = {
@@ -645,7 +685,7 @@ class QMSService:
             inspection.project_id,
             inspection_id,
             result,
-            len(sigs),
+            len(distinct_signers),
             required_sigs,
             is_hold_point,
         )
@@ -962,6 +1002,29 @@ class QMSService:
         signatures = await self.repo.list_signatures(inspection_id)
         attachments = await self.repo.list_inspection_attachments(inspection_id)
         release = await self.repo.get_hold_point_release(inspection_id)
+        return self._assemble_inspection_compliance_record(
+            inspection,
+            item,
+            signatures,
+            attachments,
+            release,
+        )
+
+    @staticmethod
+    def _assemble_inspection_compliance_record(
+        inspection: QMSInspection,
+        item: ITPItem | None,
+        signatures: list[QMSInspectionSignature],
+        attachments: list[QMSInspectionAttachment],
+        release: QMSHoldPointRelease | None,
+    ) -> dict[str, Any]:
+        """Build the compliance record dict from already-loaded rows.
+
+        Pure / synchronous so it can be driven both by the single-inspection
+        path (which loads each piece on demand) and by the batched whole-plan
+        export (which pre-loads everything and groups in memory). The output
+        shape is identical for both callers.
+        """
         return {
             "inspection_id": str(inspection.id),
             "project_id": str(inspection.project_id),
@@ -1019,11 +1082,50 @@ class QMSService:
         if plan is None:
             raise ValueError(f"ITP plan {plan_id} not found")
         items = await self.repo.list_itp_items(plan_id)
+
+        # Batch-load the whole dossier instead of fanning out one query per
+        # control point and ~5 more per inspection (BUG-perf-qms N+1). The
+        # item ids drive the inspection fetch; the inspection ids drive the
+        # signature / attachment / release fetches. Everything is then grouped
+        # in memory so the assembled records are byte-identical to the
+        # per-inspection path.
+        item_ids = [item.id for item in items]
+        inspections = await self.repo.list_inspections_for_itp_items(item_ids)
+        inspection_ids = [ins.id for ins in inspections]
+
+        # Group inspections under their control point. The batch query orders
+        # by ``(itp_item_id, created_at)`` so each per-item bucket stays in the
+        # oldest-first order ``list_inspections_for_itp_item`` produced.
+        inspections_by_item: dict[uuid.UUID, list[QMSInspection]] = {}
+        for ins in inspections:
+            if ins.itp_item_id is not None:
+                inspections_by_item.setdefault(ins.itp_item_id, []).append(ins)
+
+        sigs_by_inspection: dict[uuid.UUID, list[QMSInspectionSignature]] = {}
+        for sig in await self.repo.list_signatures_for_inspections(inspection_ids):
+            sigs_by_inspection.setdefault(sig.inspection_id, []).append(sig)
+        atts_by_inspection: dict[uuid.UUID, list[QMSInspectionAttachment]] = {}
+        for att in await self.repo.list_inspection_attachments_for_inspections(inspection_ids):
+            atts_by_inspection.setdefault(att.inspection_id, []).append(att)
+        release_by_inspection: dict[uuid.UUID, QMSHoldPointRelease] = {
+            rel.inspection_id: rel for rel in await self.repo.list_hold_point_releases_for_inspections(inspection_ids)
+        }
+
+        # Walk items in their loaded order (``sequence`` ASC) and, within each,
+        # the oldest-first inspections - byte-for-byte the same traversal the
+        # previous nested loop produced, just without the per-row queries.
         records: list[dict[str, Any]] = []
         for item in items:
-            inspections = await self.repo.list_inspections_for_itp_item(item.id)
-            for ins in inspections:
-                records.append(await self.build_inspection_compliance_record(ins.id))
+            for ins in inspections_by_item.get(item.id, []):
+                records.append(
+                    self._assemble_inspection_compliance_record(
+                        ins,
+                        item,
+                        sigs_by_inspection.get(ins.id, []),
+                        atts_by_inspection.get(ins.id, []),
+                        release_by_inspection.get(ins.id),
+                    )
+                )
         return {
             "plan_id": str(plan.id),
             "project_id": str(plan.project_id),

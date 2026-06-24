@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { Breadcrumb, AIDisclaimerBanner, DismissibleInfo, IntroRichText, ConfirmDialog } from '@/shared/ui';
 import { apiGet, apiPost } from '@/shared/lib/api';
+import { fmtNumber } from '@/shared/lib/formatters';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
@@ -57,33 +58,38 @@ interface ChatMessage {
 /** Extract numbered options from AI text and return clean text + options array */
 function parseOptions(text: string): { cleanText: string; options: string[] } {
   const lines = text.split('\n');
-  const options: string[] = [];
-  const textLines: string[] = [];
-  let inOptions = false;
+  const candidates: string[] = [];
+  let lastNumberedIdx = -1;
 
-  for (const line of lines) {
-    const trimmed = line.trim();
-    // Match patterns: "1. Text", "1) Text", "- **Text**"
-    const numMatch = trimmed.match(/^(\d+)[.)]\s+(.+)/);
+  lines.forEach((line, idx) => {
+    // Match patterns: "1. Text", "1) Text"
+    const numMatch = line.trim().match(/^(\d+)[.)]\s+(.+)/);
     if (numMatch) {
-      inOptions = true;
-      // Strip markdown bold
-      options.push(numMatch[2]!.replace(/\*\*/g, '').trim());
-    } else if (inOptions && trimmed === '') {
-      // Blank line after options = end of options block
-      inOptions = false;
-    } else {
-      textLines.push(line);
+      lastNumberedIdx = idx;
+      candidates.push(numMatch[2]!.replace(/\*\*/g, '').trim());
     }
-  }
+  });
 
-  return {
-    cleanText: textLines
-      .join('\n')
-      .replace(/\n{3,}/g, '\n\n')
-      .trim(),
-    options,
-  };
+  // NEVER strip numbered lines from the answer: the advisor is told to answer
+  // comparisons with numbered / priced lists, so removing them mangled real
+  // answers (the data vanished from the bubble and reappeared as nonsensical
+  // re-query chips). Keep the full text intact; chips are only an *additive*
+  // affordance for a genuine clarifying-question set.
+  const cleanText = text.replace(/\n{3,}/g, '\n\n').trim();
+
+  // Surface chips only when the numbered block reads like a small choice set,
+  // not data: 2..5 items, forming the trailing block of the message, none of
+  // which look like a price / number+unit / "label: value" figure.
+  const priceLike = /\d[\d.,]*\s*(eur|usd|gbp|chf|aed|sar|%|\/\s*(m2|m3|m|km|kg|t|hr|h|pcs?|nr|ea))/i;
+  const trailing =
+    lastNumberedIdx !== -1 && lines.slice(lastNumberedIdx + 1).every((l) => l.trim() === '');
+  const looksLikeChoices =
+    candidates.length >= 2 &&
+    candidates.length <= 5 &&
+    trailing &&
+    !candidates.some((c) => priceLike.test(c) || /:\s*[€$£]?\s*\d/.test(c));
+
+  return { cleanText, options: looksLikeChoices ? candidates : [] };
 }
 
 /** Format time as HH:MM */
@@ -247,13 +253,13 @@ function ChatBubble({
               const rateLabel = s.currency
                 ? t('ai.advisor_source_rate', {
                     defaultValue: '{{rate}} {{currency}}/{{unit}}',
-                    rate: s.rate,
+                    rate: fmtNumber(s.rate),
                     currency: s.currency,
                     unit: s.unit,
                   })
                 : t('ai.advisor_source_rate_nocur', {
                     defaultValue: '{{rate}}/{{unit}}',
-                    rate: s.rate,
+                    rate: fmtNumber(s.rate),
                     unit: s.unit,
                   });
               const body = (
@@ -692,21 +698,22 @@ export function AdvisorPage() {
 
           {/* Region selector */}
           <div className="flex items-center gap-2 shrink-0">
-            <Globe size={13} className="text-content-tertiary" />
+            <Globe size={13} className="text-content-tertiary" aria-hidden="true" />
             <select
               value={region}
               onChange={(e) => setRegion(e.target.value)}
+              aria-label={t('ai.advisor_region_filter', { defaultValue: 'Filter cost sources by region' })}
               className="h-7 rounded-lg border border-border bg-surface-primary px-2 text-2xs text-content-secondary focus:outline-none focus:ring-1 focus:ring-oe-blue/30"
             >
               <option value="">{t('ai.all_regions', { defaultValue: 'All regions' })}</option>
-              <option value="DE_BERLIN">Germany (Berlin)</option>
-              <option value="UK_LONDON">UK (London)</option>
-              <option value="USA_USD">USA (USD)</option>
-              <option value="CA_TORONTO">Canada (Toronto)</option>
-              <option value="FR_PARIS">France (Paris)</option>
-              <option value="ES_BARCELONA">Spain (Barcelona)</option>
-              <option value="AE_DUBAI">UAE (Dubai)</option>
-              <option value="SA_RIYADH">Saudi Arabia</option>
+              <option value="DE_BERLIN">{t('ai.region_de_berlin', { defaultValue: 'Germany (Berlin)' })}</option>
+              <option value="UK_LONDON">{t('ai.region_uk_london', { defaultValue: 'UK (London)' })}</option>
+              <option value="USA_USD">{t('ai.region_usa_usd', { defaultValue: 'USA (USD)' })}</option>
+              <option value="CA_TORONTO">{t('ai.region_ca_toronto', { defaultValue: 'Canada (Toronto)' })}</option>
+              <option value="FR_PARIS">{t('ai.region_fr_paris', { defaultValue: 'France (Paris)' })}</option>
+              <option value="ES_BARCELONA">{t('ai.region_es_barcelona', { defaultValue: 'Spain (Barcelona)' })}</option>
+              <option value="AE_DUBAI">{t('ai.region_ae_dubai', { defaultValue: 'UAE (Dubai)' })}</option>
+              <option value="SA_RIYADH">{t('ai.region_sa_riyadh', { defaultValue: 'Saudi Arabia' })}</option>
             </select>
           </div>
 

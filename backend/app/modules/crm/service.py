@@ -990,6 +990,23 @@ class CrmService:
         opp = await self.get_opportunity(opportunity_id)
         fields = data.model_dump(exclude_unset=True)
 
+        # Closed/terminal opportunities are immutable for financially-meaningful
+        # fields. The status-transition block below only fires when the PATCH
+        # body includes ``status``; without this guard a body that omits status
+        # (e.g. ``{"estimated_value": ...}``) would silently rewrite a won/lost
+        # deal's value + recomputed weighted_value, desyncing the already-emitted
+        # crm.opportunity.won payload (Project.budget) and win/loss analytics.
+        _TERMINAL_STATUSES = {"won", "lost", "abandoned"}
+        _CLOSED_LOCKED_FIELDS = {"estimated_value", "probability_percent", "stage_id", "currency"}
+        if opp.status in _TERMINAL_STATUSES and (_CLOSED_LOCKED_FIELDS & fields.keys()):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"Cannot edit financial fields of a closed opportunity (status={opp.status}); "
+                    "reopen it or use the dedicated win/lose endpoints"
+                ),
+            )
+
         if "status" in fields and fields["status"] != opp.status:
             target_status = fields["status"]
             if target_status not in allowed_opportunity_transitions(opp.status):

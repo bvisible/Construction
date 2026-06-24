@@ -28,6 +28,26 @@ const POINT_COUNT = 2200;
 /** Half-extent of the cube the points are scattered through. */
 const SPREAD = 60;
 
+/**
+ * Feature-detect a usable WebGL2 context before we ever construct a
+ * THREE.WebGLRenderer. three.js (r163+) requires WebGL2 and THROWS
+ * synchronously when a context cannot be created - on headless Firefox /
+ * WebKit (no GPU, no software fallback) that throw escapes the effect and
+ * trips the page's React error boundary. Probing first lets this purely
+ * decorative layer no-op silently instead, so the page degrades gracefully
+ * while the chromium happy path is unchanged.
+ */
+function canUseWebGL2(): boolean {
+  if (typeof document === 'undefined') return false;
+  try {
+    const canvas = document.createElement('canvas');
+    const gl = canvas.getContext('webgl2');
+    return gl != null;
+  } catch {
+    return false;
+  }
+}
+
 export function PointCloudBackground() {
   const containerRef = useRef<HTMLDivElement>(null);
   const resolvedTheme = useThemeStore((s) => s.resolved);
@@ -44,7 +64,18 @@ export function PointCloudBackground() {
     let width = container.clientWidth || 1;
     let height = container.clientHeight || 1;
 
-    const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+    // This is a decorative, aria-hidden layer. If WebGL2 is unavailable or the
+    // renderer fails to start (common on headless Firefox / WebKit), skip it
+    // silently - the page content still renders and never throws. The real
+    // viewer surfaces its own WebGL notice; the background just stays blank.
+    if (!canUseWebGL2()) return;
+
+    let renderer: THREE.WebGLRenderer;
+    try {
+      renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+    } catch {
+      return;
+    }
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     renderer.setSize(width, height, false);
     renderer.setClearColor(0x000000, 0);
@@ -163,6 +194,13 @@ export function PointCloudBackground() {
       intersectionObserver?.disconnect();
       geometry.dispose();
       material.dispose();
+      // Release the GL context slot (not just dispose) so repeated mounts of
+      // the background do not exhaust the browser's WebGL context cap.
+      try {
+        renderer.forceContextLoss();
+      } catch {
+        /* context already lost */
+      }
       renderer.dispose();
       if (renderer.domElement.parentNode === container) {
         container.removeChild(renderer.domElement);
@@ -174,7 +212,7 @@ export function PointCloudBackground() {
     <div
       ref={containerRef}
       aria-hidden="true"
-      className="pointer-events-none absolute inset-0 -z-10 overflow-hidden opacity-70 [mask-image:radial-gradient(ellipse_75%_65%_at_50%_35%,black,transparent)]"
+      className="pointer-events-none absolute inset-0 -z-10 overflow-hidden opacity-90 [mask-image:radial-gradient(ellipse_85%_75%_at_50%_40%,black,transparent)]"
     />
   );
 }

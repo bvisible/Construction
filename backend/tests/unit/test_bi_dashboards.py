@@ -920,6 +920,43 @@ async def test_evm_kpis_registered_and_compute_safely(
     assert isinstance(result.value, Decimal)
 
 
+def test_evm_kpi_formulas_are_async() -> None:
+    """Every registered KPI formula must be an async function.
+
+    Regression guard for the EAC bug where ``@register_kpi("eac")`` sat on the
+    pure helper ``_eac_from_primitives`` instead of the async ``eac_kpi``: the
+    registry then called ``fn(session, project_id=...)`` on a sync helper that
+    only accepts four primitives, raising a TypeError that ``compute`` swallowed
+    so EAC silently returned 0. If a decorator ever lands on a sync helper
+    again this fails loudly.
+    """
+    import inspect
+
+    from app.modules.bi_dashboards import kpis
+
+    for code, fn in kpis.KPI_FORMULAS.items():
+        assert inspect.iscoroutinefunction(fn), f"KPI '{code}' formula is not async: {fn!r}"
+
+
+def test_eac_from_primitives_overrun_exceeds_bac() -> None:
+    """A project running over both cost and schedule must forecast EAC > BAC."""
+    from app.modules.bi_dashboards import kpis
+
+    eac = kpis._eac_from_primitives(bac=Decimal("1000"), pv=Decimal("500"), ev=Decimal("400"), ac=Decimal("500"))
+    assert isinstance(eac, Decimal)
+    # CPI = SPI = 0.8 -> EAC = 500 + (1000 - 400) / 0.64 = 1437.5
+    assert eac > Decimal("1000")
+    assert abs(eac - Decimal("1437.5")) < Decimal("1")
+
+
+def test_eac_from_primitives_no_progress_falls_back_to_bac() -> None:
+    """With no actuals / no progress the perf indices are undefined; EAC = BAC."""
+    from app.modules.bi_dashboards import kpis
+
+    eac = kpis._eac_from_primitives(bac=Decimal("1000"), pv=Decimal("0"), ev=Decimal("0"), ac=Decimal("0"))
+    assert eac == Decimal("1000")
+
+
 @pytest.mark.asyncio
 async def test_evm_drilldown_provider_registered(
     session: AsyncSession,
@@ -1853,3 +1890,152 @@ async def test_dso_uses_invoice_date_and_payment_dates(
     # 2026-05-01 → 2026-05-31 = 30 days
     assert result.value == Decimal("30")
     assert result.source_record_count == 1
+
+
+# ── Dashboard render/evaluate portfolio IDOR scope (audit finding #21) ──
+#
+# The standalone /kpis/* routes already thread accessible_project_ids ->
+# allowed_project_ids, but the dashboard CONSUMPTION path (render / evaluate)
+# bypassed it: a portfolio widget (project_id=None) fanned out over EVERY
+# project in the deployment, so a scoped (non-admin) caller opening a seeded
+# global/role dashboard received CPI/SPI/EVM/cost KPI values aggregated across
+# every tenant's projects, and that unrestricted value was then cached in the
+# widget snapshot and served to everyone after. These tests pin the fix:
+# render_dashboard / evaluate_dashboard now accept allowed_project_ids and
+# forward it to every portfolio _kpis.compute, and the scope-blind snapshot
+# cache is only read/written for unrestricted (admin) callers.
+
+
+async def _global_dashboard_with_portfolio_widget(svc, *, kpi_code: str = "project_count_active"):
+    """Create a global-scope dashboard with one portfolio (un-pinned) widget.
+
+    ``project_count_active`` is a portfolio KPI that simply counts the
+    projects in ``allowed_project_ids`` (or every project for an admin /
+    ``None``), so its value is a deterministic proxy for "did the scope get
+    applied" without depending on FX / currency-dominance logic.
+    """
+    from app.modules.bi_dashboards.schemas import DashboardCreate, WidgetCreate
+
+    dashboard = await svc.create_dashboard(
+        DashboardCreate(name="portfolio-board", scope="global", refresh_interval_seconds=3600),
+        owner_user_id=None,
+    )
+    await svc.create_widget(
+        WidgetCreate(dashboard_id=dashboard.id, kpi_code=kpi_code),
+    )
+    return dashboard
+
+
+@pytest.mark.asyncio
+async def test_render_dashboard_scopes_portfolio_to_allowed_projects(
+    finance_session: AsyncSession,
+) -> None:
+    """A scoped caller's portfolio widget aggregates ONLY their accessible
+    projects, never every tenant's (audit #21)."""
+    from app.modules.bi_dashboards.service import BIDashboardsService
+
+    svc = BIDashboardsService(finance_session)
+    alice_proj = await _make_project(finance_session, currency="EUR")
+    await _make_project(finance_session, currency="EUR")  # Bob's project
+    dashboard = await _global_dashboard_with_portfolio_widget(svc)
+
+    # Scoped to Alice's single project -> count must be exactly 1, not 2.
+    scoped = await svc.render_dashboard(
+        dashboard.id,
+        allowed_project_ids={alice_proj.id},
+    )
+    assert scoped is not None
+    assert scoped.widgets[0].value == Decimal("1")
+    # Scoped caller must NOT serve nor write the shared snapshot.
+    assert scoped.widgets[0].from_cache is False
+
+
+@pytest.mark.asyncio
+async def test_render_dashboard_admin_sees_full_portfolio(
+    finance_session: AsyncSession,
+) -> None:
+    """``allowed_project_ids=None`` (admin) keeps the tenant-wide view -
+    both projects are counted (audit #21 must not over-restrict admins)."""
+    from app.modules.bi_dashboards.service import BIDashboardsService
+
+    svc = BIDashboardsService(finance_session)
+    await _make_project(finance_session, currency="EUR")
+    await _make_project(finance_session, currency="EUR")
+    dashboard = await _global_dashboard_with_portfolio_widget(svc)
+
+    admin = await svc.render_dashboard(dashboard.id, allowed_project_ids=None)
+    assert admin is not None
+    # Both freshly-created projects (and any pre-existing) are visible.
+    assert admin.widgets[0].value >= Decimal("2")
+
+
+@pytest.mark.asyncio
+async def test_render_dashboard_scoped_caller_ignores_admin_snapshot(
+    finance_session: AsyncSession,
+) -> None:
+    """The scope-blind snapshot an admin render writes must NEVER be served
+    to a later scoped caller (the cache-poisoning half of audit #21)."""
+    from app.modules.bi_dashboards.service import BIDashboardsService
+
+    svc = BIDashboardsService(finance_session)
+    alice_proj = await _make_project(finance_session, currency="EUR")
+    await _make_project(finance_session, currency="EUR")  # Bob's project
+    dashboard = await _global_dashboard_with_portfolio_widget(svc)
+
+    # 1) Admin renders first -> writes a tenant-wide snapshot (value >= 2).
+    admin = await svc.render_dashboard(dashboard.id, allowed_project_ids=None)
+    assert admin is not None
+    assert admin.widgets[0].value >= Decimal("2")
+
+    # 2) Scoped caller renders -> must recompute live for their own scope
+    # (value 1) and NOT pick up the admin's cached >=2 value.
+    scoped = await svc.render_dashboard(
+        dashboard.id,
+        allowed_project_ids={alice_proj.id},
+    )
+    assert scoped is not None
+    assert scoped.widgets[0].from_cache is False
+    assert scoped.widgets[0].value == Decimal("1")
+
+
+@pytest.mark.asyncio
+async def test_render_dashboard_empty_scope_yields_zero(
+    finance_session: AsyncSession,
+) -> None:
+    """A non-admin with no accessible projects gets 0, never every project."""
+    from app.modules.bi_dashboards.service import BIDashboardsService
+
+    svc = BIDashboardsService(finance_session)
+    await _make_project(finance_session, currency="EUR")
+    await _make_project(finance_session, currency="EUR")
+    dashboard = await _global_dashboard_with_portfolio_widget(svc)
+
+    scoped = await svc.render_dashboard(dashboard.id, allowed_project_ids=set())
+    assert scoped is not None
+    assert scoped.widgets[0].value == Decimal("0")
+
+
+@pytest.mark.asyncio
+async def test_evaluate_dashboard_scopes_portfolio_to_allowed_projects(
+    finance_session: AsyncSession,
+) -> None:
+    """evaluate_dashboard (cross-filter OFF, the UI's static read path) also
+    scopes a portfolio widget to the caller's accessible projects (audit #21)."""
+    from app.modules.bi_dashboards.service import BIDashboardsService
+
+    svc = BIDashboardsService(finance_session)
+    alice_proj = await _make_project(finance_session, currency="EUR")
+    await _make_project(finance_session, currency="EUR")  # Bob's project
+    dashboard = await _global_dashboard_with_portfolio_widget(svc)
+
+    scoped = await svc.evaluate_dashboard(
+        dashboard.id,
+        allowed_project_ids={alice_proj.id},
+    )
+    assert scoped is not None
+    assert scoped.widgets[0].value == Decimal("1")
+
+    # Admin keeps the tenant-wide aggregate.
+    admin = await svc.evaluate_dashboard(dashboard.id, allowed_project_ids=None)
+    assert admin is not None
+    assert admin.widgets[0].value >= Decimal("2")

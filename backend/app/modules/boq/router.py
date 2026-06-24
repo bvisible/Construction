@@ -57,13 +57,13 @@ import asyncio
 import csv
 import io
 import logging
-import random
 import re
 import tempfile
 import uuid
 import zipfile
 from collections.abc import Iterator
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -97,6 +97,7 @@ from app.dependencies import (
     SessionDep,
     verify_project_access,
 )
+from app.modules.boq import cost_risk_engine as cre
 from app.modules.boq.copilot_schemas import (
     CopilotApplyRequest,
     CopilotApplyResponse,
@@ -115,6 +116,7 @@ from app.modules.boq.schemas import (
     BOQFromTemplateRequest,
     BOQListItem,
     BOQResponse,
+    BOQStatisticsResponse,
     BOQUpdate,
     BOQWithPositions,
     BOQWithSections,
@@ -135,6 +137,7 @@ from app.modules.boq.schemas import (
     CostItemSearchRequest,
     CostItemSearchResponse,
     CostItemSearchResult,
+    CostRiskCdfPoint,
     CostRiskDriver,
     CostRiskHistogramBin,
     CostRiskPercentiles,
@@ -148,6 +151,7 @@ from app.modules.boq.schemas import (
     EstimateClassificationResponse,
     LineItemResponse,
     MarkupCreate,
+    MarkupListResponse,
     MarkupResponse,
     MarkupUpdate,
     PositionCO2Detail,
@@ -879,6 +883,9 @@ async def suggest_rate(
 )
 async def check_anomalies(
     boq_id: uuid.UUID,
+    _user_id: CurrentUserId,
+    payload: CurrentUserPayload,
+    session: SessionDep,
     service: BOQService = Depends(_get_service),
 ) -> AnomalyCheckResponse:
     """Check all positions in a BOQ for pricing anomalies.
@@ -901,6 +908,7 @@ async def check_anomalies(
     Returns:
         AnomalyCheckResponse with anomalies list and positions_checked count.
     """
+    await _verify_boq_owner(session, boq_id, _user_id, payload)
     try:
         result = await service.check_anomalies(boq_id)
     except HTTPException:
@@ -1020,6 +1028,8 @@ async def check_scope(
     boq_id: uuid.UUID,
     data: CheckScopeRequest,
     user_id: CurrentUserId,
+    payload: CurrentUserPayload,
+    session: SessionDep,
     service: BOQService = Depends(_get_service),
 ) -> CheckScopeResponse:
     """Analyze BOQ for scope completeness - find missing trades and work packages.
@@ -1027,6 +1037,7 @@ async def check_scope(
     Sends a summary of all positions to the LLM which identifies gaps:
     missing structural items, MEP, finishes, external works, preliminaries, etc.
     """
+    await _verify_boq_owner(session, boq_id, user_id, payload)
     try:
         result = await service.check_scope_completeness(
             user_id=user_id,
@@ -1219,10 +1230,19 @@ async def get_project_activity(
 )
 async def lookup_resource_by_code(
     project_id: uuid.UUID,
-    code: str,
     user_id: CurrentUserId,
     payload: CurrentUserPayload,
     session: SessionDep,
+    # Bound the length so a pathological multi-KB value can't force an
+    # unbounded casefold + full-project position scan. The param stays
+    # REQUIRED (no default) and an empty string is still accepted - the
+    # service returns found=False - to preserve the existing contract;
+    # reference codes are short (the schema caps reference_code at 64).
+    code: str = Query(
+        ...,
+        max_length=128,
+        description="Reusable resource code to look up project-wide (e.g. '0040').",
+    ),
     service: BOQService = Depends(_get_service),
 ) -> ResourceCodeLookupResponse:
     """Issue #133 - find the first existing resource using ``code``.
@@ -2296,6 +2316,7 @@ async def create_section(
 
 @router.get(
     "/boqs/{boq_id}/markups/",
+    response_model=MarkupListResponse,
     summary="List markups",
     dependencies=[Depends(RequirePermission("boq.read"))],
 )
@@ -2305,11 +2326,11 @@ async def list_markups(
     payload: CurrentUserPayload,
     session: SessionDep,
     service: BOQService = Depends(_get_service),
-) -> dict:
+) -> MarkupListResponse:
     """List all markups for a BOQ."""
     await _verify_boq_owner(session, boq_id, user_id, payload)
     markups = await service.list_markups(boq_id)
-    return {"markups": [_markup_to_response(m) for m in markups]}
+    return MarkupListResponse(markups=[_markup_to_response(m) for m in markups])
 
 
 @router.post(
@@ -2902,6 +2923,9 @@ async def _run_import_validation(
 )
 async def recalculate_rates(
     boq_id: uuid.UUID,
+    _user_id: CurrentUserId,
+    payload: CurrentUserPayload,
+    session: SessionDep,
     service: BOQService = Depends(_get_service),
 ) -> dict[str, Any]:
     """Recalculate position unit_rates from their resource breakdowns.
@@ -2910,6 +2934,7 @@ async def recalculate_rates(
     entries in metadata, recomputes unit_rate as the sum of resource costs.
     Returns a summary with updated/skipped/total counts.
     """
+    await _verify_boq_owner(session, boq_id, _user_id, payload)
     return await service.recalculate_rates(boq_id)
 
 
@@ -2922,6 +2947,8 @@ async def recalculate_rates(
 )
 async def validate_boq(
     boq_id: uuid.UUID,
+    _user_id: CurrentUserId,
+    payload: CurrentUserPayload,
     session: SessionDep,
     service: BOQService = Depends(_get_service),
 ) -> dict[str, Any]:
@@ -2933,6 +2960,8 @@ async def validate_boq(
     """
     from app.core.validation.engine import validation_engine
     from app.modules.projects.repository import ProjectRepository
+
+    await _verify_boq_owner(session, boq_id, _user_id, payload)
 
     # Load BOQ with positions
     boq_data = await service.get_boq_with_positions(boq_id)
@@ -3087,6 +3116,7 @@ async def ai_chat_boq(
     boq_id: uuid.UUID,
     data: AIChatRequest,
     user_id: CurrentUserId,
+    payload: CurrentUserPayload,
     session: SessionDep,
     service: BOQService = Depends(_get_service),
 ) -> AIChatResponse:
@@ -3100,7 +3130,8 @@ async def ai_chat_boq(
     from app.modules.ai.ai_client import call_ai, extract_json, resolve_provider_key_model
     from app.modules.ai.repository import AISettingsRepository
 
-    # Verify BOQ exists
+    # Verify BOQ exists AND the caller owns its project (IDOR guard).
+    await _verify_boq_owner(session, boq_id, user_id, payload)
     await service.get_boq(boq_id)
 
     # Resolve AI provider from user settings. Use the (provider, key, model)
@@ -5046,6 +5077,9 @@ def _parse_rows_from_excel(
 async def import_boq_excel(
     boq_id: uuid.UUID,
     response: Response,
+    _user_id: CurrentUserId,
+    payload: CurrentUserPayload,
+    session: SessionDep,
     file: UploadFile = File(..., description="Excel (.xlsx) or CSV (.csv) file"),
     service: BOQService = Depends(_get_service),
 ) -> dict[str, Any]:
@@ -5076,7 +5110,8 @@ async def import_boq_excel(
     response.headers["Link"] = '</api/v1/boq/boqs/{boq_id}/import/auto/>; rel="successor-version"'
     response.headers["Sunset"] = "Wed, 31 Dec 2026 23:59:59 GMT"
 
-    # Verify BOQ exists (raises 404 if not found)
+    # Verify BOQ exists AND the caller owns its project (IDOR guard).
+    await _verify_boq_owner(session, boq_id, _user_id, payload)
     await service.get_boq(boq_id)
 
     # Validate file type
@@ -5447,6 +5482,9 @@ async def import_boq_excel(
 async def import_boq_gaeb(
     boq_id: uuid.UUID,
     response: Response,
+    _user_id: CurrentUserId,
+    payload: CurrentUserPayload,
+    session: SessionDep,
     file: UploadFile = File(..., description="GAEB XML file (.x83, .x84, .xml)"),
     service: BOQService = Depends(_get_service),
 ) -> dict[str, Any]:
@@ -5479,7 +5517,8 @@ async def import_boq_gaeb(
     response.headers["Link"] = '</api/v1/boq/boqs/{boq_id}/import/auto/>; rel="successor-version"'
     response.headers["Sunset"] = "Wed, 31 Dec 2026 23:59:59 GMT"
 
-    # Verify BOQ exists (raises 404 if not found)
+    # Verify BOQ exists AND the caller owns its project (IDOR guard).
+    await _verify_boq_owner(session, boq_id, _user_id, payload)
     await service.get_boq(boq_id)
 
     filename = (file.filename or "").lower()
@@ -5987,6 +6026,7 @@ async def _persist_imported_markups(
 async def import_boq_auto(
     boq_id: uuid.UUID,
     user_id: CurrentUserId,
+    payload: CurrentUserPayload,
     file: UploadFile = File(
         ...,
         description=(
@@ -6019,7 +6059,8 @@ async def import_boq_auto(
     # registry is consulted only at request time).
     from app.modules.boq.importers import REGISTERED_IMPORTERS, ImportedBOQ, ImporterParseError
 
-    # Verify BOQ exists (raises 404 if not found).
+    # Verify BOQ exists AND the caller owns its project (IDOR guard).
+    await _verify_boq_owner(session, boq_id, user_id, payload)
     await service.get_boq(boq_id)
 
     content = await file.read()
@@ -6064,6 +6105,7 @@ async def import_boq_auto(
         result = await smart_import(
             boq_id=boq_id,
             user_id=user_id,
+            payload=payload,
             response=fallback_response,
             file=file,
             service=service,
@@ -6366,6 +6408,7 @@ async def _extract_from_cad(content: bytes, ext: str, filename: str) -> dict[str
 async def smart_import(
     boq_id: uuid.UUID,
     user_id: CurrentUserId,
+    payload: CurrentUserPayload,
     response: Response,
     file: UploadFile = File(
         ...,
@@ -6400,7 +6443,10 @@ async def smart_import(
     response.headers["Link"] = '</api/v1/boq/boqs/{boq_id}/import/auto/>; rel="successor-version"'
     response.headers["Sunset"] = "Wed, 31 Dec 2026 23:59:59 GMT"
 
-    # Verify BOQ exists, capture project currency for downstream LLM prompts.
+    # Verify BOQ exists AND the caller owns its project (IDOR guard).
+    await _verify_boq_owner(session, boq_id, user_id, payload)
+
+    # Capture project currency for downstream LLM prompts.
     boq_obj = await service.get_boq(boq_id)
     _project_currency: str = ""
     try:
@@ -6772,6 +6818,14 @@ async def get_resource_summary(
     await _verify_boq_owner(session, boq_id, _user_id, payload)
     boq_data = await service.get_boq_with_positions(boq_id)
 
+    # Resolve the project's base currency + FX table so resources priced in a
+    # foreign currency are converted to the base before they are aggregated.
+    # Without this the per-type totals and grand_total would blend currencies
+    # (adding raw EUR and USD numbers). Mirrors BOQService.get_cost_breakdown;
+    # a foreign currency with no FX rate is left in its own units (never zeroed).
+    base_currency, fx_map = await service.get_export_fx(boq_id)
+    _base_cur = (base_currency or "").strip().upper()
+
     # Aggregation key: (name_lower, type_lower) → accumulator
     agg: dict[tuple[str, str], dict[str, Any]] = {}
 
@@ -6801,6 +6855,21 @@ async def get_resource_summary(
             return
 
         cost = qty * rate * max(pos_qty, 1.0)
+        # Convert this resource's subtotal into the project base currency
+        # before aggregating, so mixed-currency BOQs never blend raw numbers.
+        # A foreign currency whose rate is missing/non-positive is left in its
+        # own units (deterministic, never zeroed) - same policy as
+        # BOQService._resource_total_in_base.
+        rcur = str(raw.get("currency") or "").strip().upper()
+        if rcur and _base_cur and rcur != _base_cur and fx_map:
+            _fx = fx_map.get(rcur)
+            if _fx is not None:
+                try:
+                    _fxf = float(_fx)
+                except (ValueError, TypeError):
+                    _fxf = 0.0
+                if _fxf > 0.0 and _fxf < float("inf"):
+                    cost = cost * _fxf
         key = (name.lower(), rtype)
 
         if key not in agg:
@@ -6896,10 +6965,22 @@ async def get_resource_summary(
             )
 
     # Build flat resource list sorted by total_cost descending
+    from decimal import ROUND_HALF_UP as _RHU2
+    from decimal import Decimal as _Dec2
+
+    _Q2_RATE = _Dec2("0.01")
     resource_items: list[ResourceSummaryItem] = []
     for entry in agg.values():
         rates_list: list[float] = entry["rates"]
-        avg_rate = sum(rates_list) / len(rates_list) if rates_list else 0.0
+        # Quantity-weighted unit rate so avg_unit_rate * total_quantity
+        # reconciles with total_cost. Fall back to the unweighted arithmetic
+        # mean only when total_quantity is zero (no quantity to weight by).
+        total_qty = entry["total_quantity"]
+        if total_qty:
+            avg_rate = _Dec2(str(entry["total_cost"])) / _Dec2(str(total_qty))
+        else:
+            avg_rate = _Dec2(str(sum(rates_list) / len(rates_list))) if rates_list else _Dec2("0")
+        avg_rate = avg_rate.quantize(_Q2_RATE, rounding=_RHU2)
 
         # Resolve consensus pick across positions:
         #   * single non-"__unset__" label  → that pick
@@ -6923,14 +7004,17 @@ async def get_resource_summary(
                 type=entry["type"],
                 unit=entry["unit"],
                 total_quantity=round(entry["total_quantity"], 3),
-                avg_unit_rate=round(avg_rate, 2),
+                avg_unit_rate=avg_rate,
                 total_cost=round(entry["total_cost"], 2),
                 positions_used=len(entry["positions"]),
                 available_variants=entry["available_variants"],
                 variant_stats=entry["variant_stats"],
                 current_variant_label=current_label,
                 variant_default=variant_default,
-                currency=entry["currency"],
+                # Totals are now base-currency denominated (foreign resources
+                # were converted above), so report the base currency; fall back
+                # to the first-seen resource currency when no base is set.
+                currency=_base_cur or entry["currency"],
                 resource_code=entry["resource_code"],
                 position_refs=entry["position_refs"],
             )
@@ -7003,16 +7087,21 @@ async def get_resource_summary(
         for item in resource_items:
             pct = (float(item.total_cost) / gt_f) * 100.0
             item.abc_percentage = round(pct, 2)
-            cumulative += pct
-            # Use the cumulative threshold *before* this item rather than
-            # after - otherwise the single biggest item would always be
-            # classified A even on a flat distribution. Standard practice.
-            if cumulative <= 80.0:
+            # Classify on the cumulative percentage *before* adding this
+            # item, then advance the running total. Standard Pareto: the
+            # item that crosses the 80 % boundary still belongs to A (A
+            # items are the top run that cumulatively reach ~80 % of cost).
+            # The previous code incremented first and compared after, so an
+            # item taking the cumulative from 75 % to 85 % was demoted to B
+            # even though it is part of the 80 % cohort - contradicting this
+            # very comment and under-counting the A bucket.
+            if cumulative < 80.0:
                 item.abc_class = "A"
-            elif cumulative <= 95.0:
+            elif cumulative < 95.0:
                 item.abc_class = "B"
             else:
                 item.abc_class = "C"
+            cumulative += pct
 
     return ResourceSummaryResponse(
         total_resources=len(resource_items),
@@ -7422,7 +7511,7 @@ async def get_cost_breakdown(
     """Get a cost breakdown for a BOQ split by resource category.
 
     Analyzes all positions in the BOQ and aggregates costs into categories:
-    material, labor, equipment, subcontractor, and other. Each position's
+    material, labor, machinery, equipment, subcontractor, and other. Each position's
     ``metadata.resources`` list is used when available; otherwise, the position
     description is classified via keyword heuristics.
 
@@ -7439,6 +7528,7 @@ async def get_cost_breakdown(
 
 @router.get(
     "/boqs/{boq_id}/statistics/",
+    response_model=BOQStatisticsResponse,
     summary="Get BOQ statistics",
     dependencies=[Depends(RequirePermission("boq.read"))],
 )
@@ -7448,7 +7538,7 @@ async def get_boq_statistics(
     payload: CurrentUserPayload,
     session: SessionDep,
     service: BOQService = Depends(_get_service),
-) -> dict:
+) -> BOQStatisticsResponse:
     """Get aggregated statistics for a BOQ.
 
     Returns position count, section count, direct cost, grand total, average
@@ -7456,8 +7546,34 @@ async def get_boq_statistics(
     classification coverage.
     """
     await _verify_boq_owner(session, boq_id, _user_id, payload)
-    result = await service.get_statistics(boq_id)
-    return result.model_dump()
+    # Return the model directly so FastAPI serialises money fields
+    # (direct_cost / grand_total / avg_unit_rate) as Decimal-as-strings via
+    # the schema's ``when_used="json"`` field serializers (v3 §10). The
+    # previous ``result.model_dump()`` emitted a plain dict of Decimals,
+    # which the JSON encoder rendered as floats - silently dropping
+    # precision on large totals and breaking the money-string contract every
+    # other BOQ endpoint honours. Declaring ``response_model`` also restores
+    # the rich schema in the OpenAPI document (it was an empty object before).
+    return await service.get_statistics(boq_id)
+
+
+# ── Cost-risk simulation helpers (shared by sensitivity + Monte Carlo) ───────
+
+
+def _risk_seed(boq_id: uuid.UUID) -> int:
+    """Deterministic per-BOQ seed so the risk analysis is reproducible across
+    renders - the same BOQ always yields the same simulation."""
+    return (boq_id.int % 2_000_000_000) or 1
+
+
+def _positions_for_risk(items: list[PositionResponse]) -> list[cre.PositionInput]:
+    """Map BOQ positions to the engine's plain-float position inputs.
+
+    The line total is the most-likely value; the engine derives optimistic /
+    pessimistic bounds from the global band (a position may later carry an
+    explicit three-point estimate).
+    """
+    return [cre.PositionInput(ordinal=p.ordinal, description=p.description or "", base=float(p.total)) for p in items]
 
 
 # ── Sensitivity Analysis (Tornado Chart) ─────────────────────────────────────
@@ -7502,22 +7618,41 @@ async def get_sensitivity(
     # sensitivity model multiplies by a float factor, so work in float
     # locally (the exact value is preserved in storage / JSON response -
     # a ±10% sensitivity band does not need sub-cent exactness).
-    base_total = float(sum(p.total for p in items))
+    base_total_dec = sum((p.total for p in items), Decimal("0"))
+    base_total = float(base_total_dec)
 
     if base_total == 0 or len(items) == 0:
         return SensitivityResponse(
-            base_total=0.0,
+            base_total=Decimal("0"),
             variation_pct=variation_pct,
+            method="monte_carlo",
+            iterations=0,
+            correlation=0.0,
             items=[],
         )
 
-    factor = variation_pct / 100.0
+    # Probabilistic tornado: run the shared Monte Carlo engine so the ranking
+    # reflects each line's real share of total cost variance (under systemic
+    # correlation), and the bars can show its true P10..P90 swing - not a flat
+    # poke. The deterministic +/- variation_pct band is retained for the table.
+    result = cre.simulate(
+        _positions_for_risk(items),
+        iterations=2000,
+        optimistic_pct=variation_pct,
+        pessimistic_pct=variation_pct,
+        correlation=cre.DEFAULT_CORRELATION,
+        seed=_risk_seed(boq_id),
+        max_drivers=len(items),
+    )
+    driver_by_ord = {d.ordinal: d for d in result.drivers}
 
+    factor = variation_pct / 100.0
     sensitivity_items: list[SensitivityItem] = []
     for pos in items:
         pos_total = float(pos.total)
         share_pct = round(pos_total / base_total * 100, 2)
         impact = round(pos_total * factor, 2)
+        d = driver_by_ord.get(pos.ordinal)
         sensitivity_items.append(
             SensitivityItem(
                 ordinal=pos.ordinal,
@@ -7526,16 +7661,27 @@ async def get_sensitivity(
                 share_pct=share_pct,
                 impact_low=round(-impact, 2),
                 impact_high=round(impact, 2),
+                variance_contribution_pct=round(d.contribution_pct, 2) if d else None,
+                rank_correlation=round(d.rank_correlation, 3) if d else None,
+                swing_low=round(d.swing_low, 2) if d else None,
+                swing_high=round(d.swing_high, 2) if d else None,
             )
         )
 
-    # Sort by absolute impact descending, take top N
-    sensitivity_items.sort(key=lambda x: abs(x.impact_high), reverse=True)
+    # Rank by variance contribution (probabilistic) when available, else by the
+    # deterministic absolute impact. Take the top N.
+    sensitivity_items.sort(
+        key=lambda x: x.variance_contribution_pct if x.variance_contribution_pct is not None else abs(x.impact_high),
+        reverse=True,
+    )
     sensitivity_items = sensitivity_items[:top_n]
 
     return SensitivityResponse(
-        base_total=round(base_total, 2),
+        base_total=base_total_dec,
         variation_pct=variation_pct,
+        method="monte_carlo",
+        iterations=result.iterations,
+        correlation=result.correlation,
         items=sensitivity_items,
     )
 
@@ -7572,28 +7718,6 @@ async def get_estimate_classification(
 # ── Monte Carlo Cost Risk Analysis ───────────────────────────────────────────
 
 
-def _pert_sample(low: float, mode: float, high: float) -> float:
-    """Sample from a Beta-PERT distribution.
-
-    Uses the standard PERT parameterization with lambda=4.
-
-    Args:
-        low: Minimum value (optimistic).
-        mode: Most likely value.
-        high: Maximum value (pessimistic).
-
-    Returns:
-        A random sample from the PERT distribution in [low, high].
-    """
-    if high <= low:
-        return mode
-    lam = 4.0
-    alpha = 1.0 + lam * (mode - low) / (high - low)
-    beta_param = 1.0 + lam * (high - mode) / (high - low)
-    sample = random.betavariate(alpha, beta_param)
-    return low + (high - low) * sample
-
-
 @router.get(
     "/boqs/{boq_id}/cost-risk/",
     response_model=CostRiskResponse,
@@ -7605,33 +7729,54 @@ async def get_cost_risk(
     _user_id: CurrentUserId,
     payload: CurrentUserPayload,
     session: SessionDep,
-    iterations: int = Query(default=1000, ge=100, le=10000, description="Number of Monte Carlo iterations"),
+    iterations: int = Query(
+        default=cre.DEFAULT_ITERATIONS,
+        ge=100,
+        le=cre.MAX_ITERATIONS,
+        description="Number of Monte Carlo iterations",
+    ),
     optimistic_pct: float = Query(default=15.0, ge=0.0, le=50.0, description="Optimistic cost reduction %"),
     pessimistic_pct: float = Query(default=25.0, ge=0.0, le=100.0, description="Pessimistic cost increase %"),
+    correlation: float = Query(
+        default=cre.DEFAULT_CORRELATION,
+        ge=0.0,
+        le=0.95,
+        description="Systemic correlation between positions (0 = independent lines)",
+    ),
+    target_confidence: int = Query(
+        default=80,
+        ge=50,
+        le=95,
+        description="Confidence percentile used for the recommended budget",
+    ),
     service: BOQService = Depends(_get_service),
 ) -> CostRiskResponse:
-    """Run a Monte Carlo cost risk simulation for a BOQ.
+    """Run a correlated Monte Carlo cost risk simulation for a BOQ.
 
-    For each iteration, every non-section position's total cost is sampled
-    using a Beta-PERT distribution with:
-        - optimistic = total * (1 - optimistic_pct/100)
-        - most_likely = total
-        - pessimistic = total * (1 + pessimistic_pct/100)
+    Every non-section position is sampled from a Beta-PERT distribution; unless a
+    position carries an explicit three-point estimate, its band is derived from
+    the base total (optimistic = base*(1 - optimistic_pct/100), most-likely =
+    base, pessimistic = base*(1 + pessimistic_pct/100)). A one-factor Gaussian
+    copula links the positions with strength ``correlation`` so systemic risk
+    does not unrealistically cancel between lines.
 
-    After all iterations, percentiles (P10..P90) are computed, a histogram
-    with ~20 bins is built, and the top risk drivers (positions contributing
-    most to total variance) are identified.
-
-    Contingency is defined as P80 - P50.  Recommended budget is P80.
+    The result carries the full distribution: P5..P95 percentiles, mean,
+    standard deviation, coefficient of variation, a histogram, a cumulative
+    S-curve, the contingency needed to reach ``target_confidence``, the
+    probability the deterministic base is even achievable, a reproducible seed,
+    a convergence verdict, and the variance drivers (each line's share of total
+    variance, rank correlation to the total and P10/P90 swing).
 
     Args:
         boq_id: Target BOQ identifier.
-        iterations: Number of simulation iterations (default 1000).
-        optimistic_pct: Optimistic cost reduction percentage (default 15).
-        pessimistic_pct: Pessimistic cost increase percentage (default 25).
+        iterations: Number of simulation iterations.
+        optimistic_pct: Default downside band as a percent of base (default 15).
+        pessimistic_pct: Default upside band as a percent of base (default 25).
+        correlation: Systemic correlation between positions (0 = independent).
+        target_confidence: Percentile used for the recommended budget (default 80).
 
     Returns:
-        CostRiskResponse with percentiles, histogram, contingency, and risk drivers.
+        CostRiskResponse with the full distribution, contingency and drivers.
     """
     await _verify_boq_owner(session, boq_id, _user_id, payload)
     boq_data = await service.get_boq_with_positions(boq_id)
@@ -7642,126 +7787,91 @@ async def get_cost_risk(
     # Monte-Carlo model runs in float (the exact value is preserved in
     # storage / JSON response - a stochastic risk band does not need
     # sub-cent exactness).
-    base_total = float(sum(p.total for p in items))
+    base_total_dec = sum((p.total for p in items), Decimal("0"))
+    base_total = float(base_total_dec)
 
     if base_total == 0 or len(items) == 0:
+        zero_pct = CostRiskPercentiles(p5=0.0, p10=0.0, p25=0.0, p50=0.0, p75=0.0, p80=0.0, p90=0.0, p95=0.0)
         return CostRiskResponse(
             iterations=iterations,
-            base_total=0.0,
-            percentiles=CostRiskPercentiles(p10=0.0, p25=0.0, p50=0.0, p75=0.0, p80=0.0, p90=0.0),
+            base_total=Decimal("0"),
+            mean=Decimal("0"),
+            std_dev=Decimal("0"),
+            cv_pct=0.0,
+            percentiles=zero_pct,
             contingency_p80=0.0,
             contingency_pct=0.0,
-            recommended_budget=0.0,
+            recommended_budget=Decimal("0"),
+            target_confidence=target_confidence,
+            prob_within_base=100.0,
+            correlation=correlation,
+            seed=0,
+            convergence_status="insufficient",
+            convergence_margin_pct=0.0,
             histogram=[],
+            cdf=[],
             risk_drivers=[],
         )
 
-    opt_factor = 1.0 - optimistic_pct / 100.0
-    pess_factor = 1.0 + pessimistic_pct / 100.0
+    result = cre.simulate(
+        _positions_for_risk(items),
+        iterations=iterations,
+        optimistic_pct=optimistic_pct,
+        pessimistic_pct=pessimistic_pct,
+        correlation=correlation,
+        seed=_risk_seed(boq_id),
+        target_confidence=target_confidence,
+    )
 
-    # Pre-compute per-position bounds
-    position_bounds: list[tuple[float, float, float, str, str]] = []
-    for pos in items:
-        t = float(pos.total)
-        position_bounds.append((t * opt_factor, t, t * pess_factor, pos.ordinal, pos.description))
+    def _money(x: float) -> Decimal:
+        return Decimal(str(round(x, 2)))
 
-    # Run Monte Carlo simulation
-    iteration_totals: list[float] = []
-    # Track per-position sampled values for variance analysis
-    n_positions = len(position_bounds)
-    position_sums: list[float] = [0.0] * n_positions
-    position_sq_sums: list[float] = [0.0] * n_positions
-
-    for _ in range(iterations):
-        iter_total = 0.0
-        for idx, (low, mode, high, _ordinal, _desc) in enumerate(position_bounds):
-            sampled = _pert_sample(low, mode, high)
-            iter_total += sampled
-            position_sums[idx] += sampled
-            position_sq_sums[idx] += sampled * sampled
-        iteration_totals.append(iter_total)
-
-    # Sort for percentile extraction
-    iteration_totals.sort()
-
-    def _percentile(sorted_data: list[float], pct: float) -> float:
-        """Extract a percentile from sorted data using linear interpolation."""
-        n = len(sorted_data)
-        idx = pct / 100.0 * (n - 1)
-        lower = int(idx)
-        upper = min(lower + 1, n - 1)
-        frac = idx - lower
-        return sorted_data[lower] + frac * (sorted_data[upper] - sorted_data[lower])
-
-    p10 = round(_percentile(iteration_totals, 10), 2)
-    p25 = round(_percentile(iteration_totals, 25), 2)
-    p50 = round(_percentile(iteration_totals, 50), 2)
-    p75 = round(_percentile(iteration_totals, 75), 2)
-    p80 = round(_percentile(iteration_totals, 80), 2)
-    p90 = round(_percentile(iteration_totals, 90), 2)
-
-    contingency_p80 = round(p80 - p50, 2)
-    contingency_pct = round((contingency_p80 / p50 * 100) if p50 > 0 else 0.0, 1)
-
-    # Build histogram with ~20 bins
-    min_val = iteration_totals[0]
-    max_val = iteration_totals[-1]
-    num_bins = 20
-    bin_width = (max_val - min_val) / num_bins if max_val > min_val else 1.0
-
-    histogram: list[CostRiskHistogramBin] = []
-    for i in range(num_bins):
-        bin_start = min_val + i * bin_width
-        bin_end = min_val + (i + 1) * bin_width
-        count = 0
-        for val in iteration_totals:
-            if i == num_bins - 1:
-                # Last bin includes the upper bound
-                if bin_start <= val <= bin_end:
-                    count += 1
-            else:
-                if bin_start <= val < bin_end:
-                    count += 1
-        histogram.append(
-            CostRiskHistogramBin(
-                bin_start=round(bin_start, 2),
-                bin_end=round(bin_end, 2),
-                count=count,
-            )
+    p = result.percentiles
+    percentiles = CostRiskPercentiles(
+        p5=round(p["p5"], 2),
+        p10=round(p["p10"], 2),
+        p25=round(p["p25"], 2),
+        p50=round(p["p50"], 2),
+        p75=round(p["p75"], 2),
+        p80=round(p["p80"], 2),
+        p90=round(p["p90"], 2),
+        p95=round(p["p95"], 2),
+    )
+    histogram = [
+        CostRiskHistogramBin(bin_start=round(b.bin_start, 2), bin_end=round(b.bin_end, 2), count=b.count)
+        for b in result.histogram
+    ]
+    cdf = [CostRiskCdfPoint(cost=round(c.cost, 2), cumulative_prob=round(c.cumulative_prob, 4)) for c in result.cdf]
+    risk_drivers = [
+        CostRiskDriver(
+            ordinal=d.ordinal,
+            description=d.description,
+            contribution_pct=round(d.contribution_pct, 1),
+            rank_correlation=round(d.rank_correlation, 3),
+            swing_low=round(d.swing_low, 2),
+            swing_high=round(d.swing_high, 2),
         )
-
-    # Calculate risk drivers - positions sorted by their share of total variance
-    position_variances: list[tuple[float, str, str]] = []
-    for idx in range(n_positions):
-        mean = position_sums[idx] / iterations
-        variance = (position_sq_sums[idx] / iterations) - (mean * mean)
-        ordinal = position_bounds[idx][3]
-        description = position_bounds[idx][4]
-        position_variances.append((variance, ordinal, description))
-
-    total_variance = sum(v[0] for v in position_variances)
-
-    risk_drivers: list[CostRiskDriver] = []
-    if total_variance > 0:
-        position_variances.sort(key=lambda x: x[0], reverse=True)
-        for variance, ordinal, description in position_variances[:10]:
-            contribution_pct = round(variance / total_variance * 100, 1)
-            risk_drivers.append(
-                CostRiskDriver(
-                    ordinal=ordinal,
-                    description=description,
-                    contribution_pct=contribution_pct,
-                )
-            )
+        for d in result.drivers
+    ]
 
     return CostRiskResponse(
-        iterations=iterations,
-        base_total=round(base_total, 2),
-        percentiles=CostRiskPercentiles(p10=p10, p25=p25, p50=p50, p75=p75, p80=p80, p90=p90),
-        contingency_p80=contingency_p80,
-        contingency_pct=contingency_pct,
-        recommended_budget=p80,
+        iterations=result.iterations,
+        base_total=_money(result.base_total),
+        mean=_money(result.mean),
+        std_dev=_money(result.std_dev),
+        cv_pct=round(result.cv_pct, 1),
+        percentiles=percentiles,
+        contingency_p80=round(result.contingency, 2),
+        contingency_pct=round(result.contingency_pct, 1),
+        recommended_budget=_money(result.recommended_budget),
+        target_confidence=result.target_confidence,
+        prob_within_base=round(result.prob_within_base, 1),
+        correlation=round(result.correlation, 2),
+        seed=result.seed,
+        convergence_status=result.convergence_status,
+        convergence_margin_pct=round(result.convergence_margin_pct, 2),
         histogram=histogram,
+        cdf=cdf,
         risk_drivers=risk_drivers,
     )
 
@@ -7835,12 +7945,16 @@ class CustomColumnCreate(BaseModel):
 async def add_custom_column(
     boq_id: uuid.UUID,
     payload: CustomColumnCreate,
+    _user_id: CurrentUserId,
+    user_payload: CurrentUserPayload,
+    session: SessionDep,
     service: BOQService = Depends(_get_service),
 ) -> dict:
     """Add a custom column definition to a BOQ.
 
     Body: {"name": "supplier", "display_name": "Supplier", "column_type": "text", "options": []}
     """
+    await _verify_boq_owner(session, boq_id, _user_id, user_payload)
     name = payload.name.strip().lower().replace(" ", "_")
     if not name or not name.isidentifier():
         raise HTTPException(400, "Invalid column name - use alphanumeric + underscore")
@@ -7928,11 +8042,15 @@ async def add_custom_column(
 async def delete_custom_column(
     boq_id: uuid.UUID,
     column_name: str,
+    _user_id: CurrentUserId,
+    payload: CurrentUserPayload,
+    session: SessionDep,
     service: BOQService = Depends(_get_service),
 ) -> None:
     """Remove a custom column definition (data in positions preserved)."""
     from sqlalchemy.orm.attributes import flag_modified
 
+    await _verify_boq_owner(session, boq_id, _user_id, payload)
     boq = await service.get_boq(boq_id)
     existing_meta = boq.metadata_ if isinstance(boq.metadata_, dict) else {}
     existing_columns = list(existing_meta.get("custom_columns", []))
@@ -8033,6 +8151,9 @@ async def list_boq_variables(
 )
 async def replace_boq_variables(
     boq_id: uuid.UUID,
+    _user_id: CurrentUserId,
+    payload: CurrentUserPayload,
+    session: SessionDep,
     variables: list[BOQVariable] = Body(...),
     service: BOQService = Depends(_get_service),
 ) -> list[dict]:
@@ -8042,6 +8163,7 @@ async def replace_boq_variables(
     list is small (≤50) and the editor UI sends the whole table back
     on save, so a single round-trip keeps state simple.
     """
+    await _verify_boq_owner(session, boq_id, _user_id, payload)
     if len(variables) > _MAX_VARIABLES_PER_BOQ:
         raise HTTPException(
             400,
@@ -8097,6 +8219,9 @@ class RenumberRequest(BaseModel):
 )
 async def renumber_positions(
     boq_id: uuid.UUID,
+    _user_id: CurrentUserId,
+    payload: CurrentUserPayload,
+    session: SessionDep,
     options: RenumberRequest | None = None,
     service: BOQService = Depends(_get_service),
 ) -> dict:
@@ -8120,6 +8245,7 @@ async def renumber_positions(
     Positions are processed in their current ``sort_order`` so the user's
     drag-and-drop order is preserved. Only the ``ordinal`` field is rewritten.
     """
+    await _verify_boq_owner(session, boq_id, _user_id, payload)
     opts = options or RenumberRequest()
 
     # Step (gap) per scheme. Sequential and dotted have step=1; gap10/gap100
@@ -8247,6 +8373,7 @@ async def boq_vector_status() -> dict[str, Any]:
 async def boq_vector_reindex(
     session: SessionDep,
     _user_id: CurrentUserId,
+    payload: CurrentUserPayload,
     project_id: uuid.UUID | None = Query(default=None),
     boq_id: uuid.UUID | None = Query(default=None),
     purge_first: bool = Query(default=False),
@@ -8258,6 +8385,23 @@ async def boq_vector_reindex(
     ``purge_first=true`` to wipe the matching subset before re-encoding -
     useful when the embedding model has changed.
     """
+    # Cross-tenant guard. Reindexing - and especially ``purge_first=true``,
+    # which wipes the matching subset before re-encoding - must be scoped to
+    # data the caller owns, otherwise any holder of the "boq.update" permission
+    # could re-embed or purge another tenant's vectors by guessing ids:
+    #   - boq_id     -> must own that BOQ (or be a project member / admin)
+    #   - project_id -> must have access to that project
+    #   - neither    -> a full-tenant reindex; administrators only
+    if boq_id is not None:
+        await _verify_boq_owner(session, boq_id, _user_id, payload)
+    elif project_id is not None:
+        await verify_project_access(project_id, _user_id, session)
+    elif not (payload and payload.get("role") == "admin"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="A full vector reindex requires an administrator.",
+        )
+
     from sqlalchemy import select
     from sqlalchemy.orm import selectinload
 
@@ -8266,7 +8410,14 @@ async def boq_vector_reindex(
     from app.modules.boq.models import Position
     from app.modules.boq.vector_adapter import boq_position_adapter
 
-    stmt = select(Position).options(selectinload(Position.boq))
+    # The adapter only reads ``position.boq.project_id`` (a scalar). Load the
+    # parent BOQ but suppress its ``positions``/``markups`` selectin loads -
+    # otherwise reindexing a whole project would chain-load every BOQ's full
+    # position and markup set just to read one id per row.
+    stmt = select(Position).options(
+        selectinload(Position.boq).noload(BOQModel.positions),
+        selectinload(Position.boq).noload(BOQModel.markups),
+    )
     if boq_id is not None:
         stmt = stmt.where(Position.boq_id == boq_id)
     elif project_id is not None:
@@ -8306,10 +8457,21 @@ async def boq_position_similar(
     from sqlalchemy.orm import selectinload
 
     from app.core.vector_index import find_similar
+    from app.dependencies import allowed_project_ids_for_similar
+    from app.modules.boq.models import BOQ as BOQModel  # noqa: N811  -- domain class, not constant
     from app.modules.boq.models import Position
     from app.modules.boq.vector_adapter import boq_position_adapter
 
-    stmt = select(Position).options(selectinload(Position.boq)).where(Position.id == position_id)
+    # Only ``row.boq.project_id`` is read below; load the parent BOQ but skip
+    # its positions/markups selectin loads (a full tree load to read one id).
+    stmt = (
+        select(Position)
+        .options(
+            selectinload(Position.boq).noload(BOQModel.positions),
+            selectinload(Position.boq).noload(BOQModel.markups),
+        )
+        .where(Position.id == position_id)
+    )
     row = (await session.execute(stmt)).scalar_one_or_none()
     if row is None:
         raise HTTPException(status_code=404, detail=translate("errors.position_not_found", locale=get_locale()))
@@ -8320,12 +8482,17 @@ async def boq_position_similar(
     await _verify_boq_owner(session, row.boq_id, _user_id, payload)
 
     project_id = str(row.boq.project_id) if row.boq is not None and row.boq.project_id is not None else None
+    # Restrict cross-project hits to projects the caller may access so a
+    # cross-project search never leaks positions from inaccessible projects
+    # (None == admin/unrestricted, mirroring verify_project_access).
+    allowed = await allowed_project_ids_for_similar(session, str(_user_id), project_id, cross_project)
     hits = await find_similar(
         boq_position_adapter,
         row,
         project_id=project_id,
         cross_project=cross_project,
         limit=limit,
+        allowed_project_ids=allowed,
     )
     return {
         "source_id": str(position_id),

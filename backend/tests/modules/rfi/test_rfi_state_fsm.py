@@ -72,6 +72,7 @@ class _StubRFIRepo:
         limit: int = 50,
         status: str | None = None,
         search: str | None = None,
+        with_total: bool = True,  # signature-compatible with the real repo (count skipped in unit fakes)
     ) -> tuple[list[Any], int]:
         rows = [r for r in self.rows.values() if r.project_id == project_id]
         return rows[offset : offset + limit], len(rows)

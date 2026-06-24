@@ -19,6 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.events import event_bus
+from app.core.json_merge import merge_metadata
 from app.modules.requirements.evaluator import compute_deliverable_coverage
 from app.modules.requirements.models import (
     GateResult,
@@ -171,7 +172,10 @@ class RequirementsService:
             if key in fields and fields[key] is not None:
                 safe_fields[key] = fields[key]
         if "metadata" in fields and fields["metadata"] is not None:
-            safe_fields["metadata_"] = fields["metadata"]
+            # Shallow-merge rather than overwrite: a partial PATCH that sends
+            # only some keys must not drop existing provenance (parse_errors,
+            # lines_total written by import_from_text). Mirrors update_requirement.
+            safe_fields["metadata_"] = merge_metadata(getattr(item, "metadata_", None), fields["metadata"])
 
         if not safe_fields:
             return item
@@ -293,7 +297,9 @@ class RequirementsService:
         if "metadata" in fields:
             _incoming = fields.pop("metadata")
             fields["metadata_"] = (
-                {**(getattr(item, "metadata_", None) or {}), **_incoming} if isinstance(_incoming, dict) else _incoming
+                merge_metadata(getattr(item, "metadata_", None), _incoming)
+                if isinstance(_incoming, dict)
+                else _incoming
             )
 
         if not fields:

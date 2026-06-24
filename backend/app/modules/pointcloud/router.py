@@ -23,6 +23,8 @@ from app.modules.pointcloud.schemas import (
     PresignedPart,
     ScanDatasetList,
     ScanDatasetRead,
+    ScanDeviationRead,
+    ScanDeviationSummary,
     ScanIngestComplete,
     ScanIngestCompleteResponse,
     ScanIngestInit,
@@ -88,6 +90,26 @@ async def get_scan(
     return ScanDatasetRead.model_validate(scan)
 
 
+@router.delete("/scans/{scan_id}", status_code=204)
+async def delete_scan(
+    scan_id: uuid.UUID,
+    service: PointCloudService = Depends(_svc),
+    payload: CurrentUserPayload = None,  # type: ignore[assignment]
+    _perm: None = Depends(RequirePermission("pointcloud.delete")),
+) -> Response:
+    """Delete a scan, its registrations and its object-storage artifacts.
+
+    Gated by ``pointcloud.delete`` (MANAGER+) and, in the service, by tenant +
+    project access, so a cross-tenant or unknown id collapses to 404 rather than
+    leak scan existence. Sweeps the scan's per-scan storage prefix (raw upload
+    plus any derived COPC / tileset / DTM blobs) before removing the row, so the
+    delete frees storage and never strands a ghost in the scan list. Returns 204
+    with no body on success.
+    """
+    await service.delete_scan(scan_id, payload=payload)
+    return Response(status_code=204)
+
+
 @router.get(
     "/scans/{scan_id}/points",
     responses={
@@ -127,6 +149,57 @@ async def get_scan_points(
     )
 
 
+# ── Scan-vs-design deviation overlay ───────────────────────────────────────
+
+
+@router.get("/deviation", response_model=ScanDeviationSummary)
+async def get_model_deviation(
+    project_id: uuid.UUID = Query(
+        ...,
+        description="Project the design model belongs to (IDOR-scoped).",
+    ),
+    model_id: str = Query(
+        ...,
+        min_length=1,
+        description="Design model id whose as-built scan deviation to fetch.",
+    ),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=200),
+    service: PointCloudService = Depends(_svc),
+    payload: CurrentUserPayload = None,  # type: ignore[assignment]
+    _perm: None = Depends(RequirePermission("pointcloud.read")),
+) -> ScanDeviationSummary:
+    """Return the scan-vs-design deviation rollup for a design model.
+
+    Drives the viewer's as-built-vs-design deviation overlay + legend: every
+    scan aligned to this model contributes a deviation row classified into a
+    traffic-light severity (within / warning / over / unknown), rolled up to
+    the model's worst severity. Reuses the deviation already computed on each
+    ``ScanRegistration`` row - no math is recomputed here.
+
+    Tenant + project access is enforced in the service the IDOR-safe way: an
+    unknown or cross-tenant project collapses to 404. A model the caller can
+    see but that has no aligned scans yet returns a well-formed summary with
+    ``has_deviation=false`` (not a 404), so the viewer simply shows no overlay.
+    """
+    summary = await service.list_deviations_for_model(
+        project_id,
+        model_id,
+        payload=payload,
+        offset=offset,
+        limit=limit,
+    )
+    return ScanDeviationSummary(
+        model_id=summary["model_id"],
+        project_id=summary["project_id"],
+        has_deviation=summary["has_deviation"],
+        worst_severity=summary["worst_severity"],
+        worst_severity_color=summary["worst_severity_color"],
+        items=[ScanDeviationRead(**item) for item in summary["items"]],
+        total=summary["total"],
+    )
+
+
 # ── Presigned-direct-to-MinIO multipart ingest ─────────────────────────────
 
 
@@ -147,8 +220,8 @@ async def init_ingest(
     part. The browser / CLI uploads each 5-200 GB part straight to object
     storage; the backend never proxies the bytes. Returns 429 when too many
     uploads are being prepared at once (back-pressure), 422 for an unsupported
-    or proprietary (ReCap RCP/RCS) format, and 404 when the project is not
-    visible to the caller.
+    or proprietary (.rcp/.rcs scan container) format, and 404 when the project
+    is not visible to the caller.
     """
     result = await service.init_ingest(body, payload=payload)
     return ScanIngestInitResponse(

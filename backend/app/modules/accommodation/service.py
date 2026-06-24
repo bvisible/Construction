@@ -301,7 +301,7 @@ async def bootstrap_from_propdev_block(
     result rather than crashing.
     """
     try:
-        from app.modules.property_dev.models import Block, Plot
+        from app.modules.property_dev.models import Block, Development, Phase, Plot
     except Exception:  # noqa: BLE001 - PropDev disabled / missing
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -310,6 +310,21 @@ async def bootstrap_from_propdev_block(
 
     block = await session.get(Block, block_id)
     if block is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="PropDev block not found",
+        )
+
+    # IDOR closure: block_id is caller-supplied and a PropDev block carries no
+    # project_id of its own (ownership is block -> phase -> development ->
+    # project). Resolve that chain and require it to match THIS accommodation's
+    # already-access-checked project, so a caller cannot copy another project's
+    # (tenant's) plots into their own rooms. 404 (not 403) matches the module's
+    # not-owned posture.
+    phase = await session.get(Phase, block.phase_id) if block.phase_id else None
+    development = await session.get(Development, phase.development_id) if phase is not None else None
+    block_project_id = getattr(development, "project_id", None)
+    if block_project_id is None or str(block_project_id) != str(accommodation.project_id):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="PropDev block not found",

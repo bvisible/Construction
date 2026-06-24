@@ -365,6 +365,7 @@ async def list_drawings(
             file_format=i.file_format,
             has_entities=False,
             converter_present=converter_present,
+            age_seconds=service.conversion_age_seconds(i),
         )
         out.append(_drawing_to_response(i, view_status=view_status))
     return out
@@ -483,21 +484,30 @@ async def download_drawing(
     filename = getattr(drawing, "filename", None) or f"{drawing.id}.{fmt}"
 
     raw = getattr(drawing, "file_path", "") or ""
-    file_path = Path(raw).resolve() if raw else None
 
-    if file_path is not None and not is_within_safe_root(file_path):
+    if raw and Path(raw).is_symlink():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Symlinks not permitted",
+        )
+
+    # Resolve the source blob for READ. This honours the stored absolute path
+    # when it still exists inside a platform-owned safe root, and otherwise
+    # recovers the blob by basename across every back-compat data root (so a
+    # drawing written under a prior data-dir resolution / CWD is still served
+    # instead of being rejected by the safe-root gate and faked as a stub).
+    from app.modules.dwg_takeoff.service import resolve_source_drawing_path
+
+    resolved = resolve_source_drawing_path(raw)
+    file_path = Path(resolved) if resolved else None
+
+    if file_path is not None and not is_within_safe_root(file_path.resolve()):
         logger.warning(
             "DWG drawing %s file_path %s resolves outside the platform data roots",
             drawing.id,
             raw,
         )
         file_path = None
-
-    if file_path is not None and file_path.is_symlink():
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Symlinks not permitted",
-        )
 
     if file_path is None or not file_path.exists() or not file_path.is_file():
         # No shipped blob (demo/showcase row, or a pruned upload). Materialize a

@@ -10,6 +10,12 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+# Upper bound for money fields - mirrors changeorders/full_evm/risk/punchlist.
+# A finite-but-absurd magnitude (e.g. 1e400) otherwise sums into gross and
+# reaches retention quantize() -> InvalidOperation -> opaque 500. ge=0 already
+# rejects NaN/Infinity; this bound keeps the value inside the decimal context.
+_MONEY_MAX = Decimal("1e15")
+
 # ── R5 validators ─────────────────────────────────────────────────────────
 # Currency must be a 3-letter ISO-4217 code OR empty (caller-driven default).
 _ISO4217_RE = re.compile(r"^[A-Z]{3}$|^$")
@@ -554,9 +560,9 @@ class PaymentApplicationLineCreate(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
     work_package_id: UUID
-    claimed_amount: Decimal = Field(default=Decimal("0"), ge=0)
-    certified_amount: Decimal = Field(default=Decimal("0"), ge=0)
-    approved_amount: Decimal = Field(default=Decimal("0"), ge=0)
+    claimed_amount: Decimal = Field(default=Decimal("0"), ge=0, le=_MONEY_MAX)
+    certified_amount: Decimal = Field(default=Decimal("0"), ge=0, le=_MONEY_MAX)
+    approved_amount: Decimal = Field(default=Decimal("0"), ge=0, le=_MONEY_MAX)
 
 
 class PaymentApplicationLineResponse(BaseModel):
@@ -581,7 +587,7 @@ class PaymentApplicationCreate(BaseModel):
     application_number: str | None = Field(default=None, max_length=40)
     period_start: date | None = None
     period_end: date | None = None
-    gross_amount: Decimal = Field(default=Decimal("0"), ge=0)
+    gross_amount: Decimal = Field(default=Decimal("0"), ge=0, le=_MONEY_MAX)
     currency: str = Field(default="", max_length=3)
     lines: list[PaymentApplicationLineCreate] = Field(default_factory=list)
 

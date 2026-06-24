@@ -32,6 +32,7 @@ MANIFEST = PartnerPackManifest(
     ],
     default_currency="GBP",
     default_tax_template="uk_vat_20",
+    default_methodology="united_kingdom",
     validation_rule_packs=[
         "nrm_1_cost_planning",
         "nrm_2_detailed_measurement",

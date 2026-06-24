@@ -19,6 +19,7 @@ import {
   Paperclip,
   UploadCloud,
   Check,
+  Pencil,
 } from 'lucide-react';
 import {
   Button,
@@ -41,7 +42,7 @@ import { PageHeader } from '@/shared/ui/PageHeader';
 import { UserSearchInput } from '@/shared/ui/UserSearchInput';
 import { useConfirm } from '@/shared/hooks/useConfirm';
 import { useCreateShortcut } from '@/shared/hooks/useCreateShortcut';
-import { apiGet, apiPost, triggerDownload, extractErrorMessageFromBody } from '@/shared/lib/api';
+import { apiGet, triggerDownload, extractErrorMessageFromBody } from '@/shared/lib/api';
 import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { useAuthStore } from '@/stores/useAuthStore';
@@ -49,13 +50,16 @@ import {
   fetchRFIs,
   fetchRFIStats,
   createRFI,
+  updateRFI,
   respondToRFI,
   closeRFI,
+  createVariationFromRFI,
   RFI_DISCIPLINES,
   type RFI,
   type RFIStatus,
   type RFIPriority,
   type CreateRFIPayload,
+  type UpdateRFIPayload,
   type RespondRFIPayload,
 } from './api';
 import { rfiGuide } from './rfiGuide';
@@ -190,9 +194,24 @@ export function daysOverdue(responseDueDate: string | null): number | null {
   const now = new Date();
   // Round to midnight on both sides so a 4 PM due date doesn't read as
   // "1 day overdue" the moment the clock crosses midnight.
-  const midnight = (d: Date) =>
-    new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-  return Math.floor((midnight(now) - midnight(due)) / 86_400_000);
+  //
+  // ``response_due_date`` is a bare ``YYYY-MM-DD`` calendar date, which
+  // ``new Date()`` parses at UTC midnight. Read its wall-clock day back
+  // with the UTC getters (anything else shifts it a day earlier in
+  // negative-offset timezones, making RFIs read as overdue a day early),
+  // and read "today" from the viewer's LOCAL day. Both are re-pinned to a
+  // UTC-midnight instant so the difference is a clean integer day count.
+  const dueMidnight = Date.UTC(
+    due.getUTCFullYear(),
+    due.getUTCMonth(),
+    due.getUTCDate(),
+  );
+  const nowMidnight = Date.UTC(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate(),
+  );
+  return Math.floor((nowMidnight - dueMidnight) / 86_400_000);
 }
 
 const inputCls =
@@ -210,7 +229,7 @@ function daysOpen(createdAt: string, closedAt: string | null): number {
 
 /* ── Create RFI Modal ──────────────────────────────────────────────────── */
 
-interface RFIFormData {
+export interface RFIFormData {
   subject: string;
   question: string;
   ball_in_court: string;
@@ -248,6 +267,67 @@ const EMPTY_FORM: RFIFormData = {
   discipline: '',
   linked_drawing_ids: [],
 };
+
+/**
+ * Build the ``UpdateRFIPayload`` from edited form data. Shared by the list
+ * page and the deep RFI page so the wire contract lives in one place.
+ *
+ * Optional dates / values are sent as ``null`` when cleared so the backend
+ * unsets them rather than leaving the previous value. ``assigned_to`` /
+ * ``ball_in_court`` re-routing is manager-gated server-side and only
+ * refused when the value actually changes, so resending the current value
+ * is always safe.
+ */
+export function buildUpdatePayload(formData: RFIFormData): UpdateRFIPayload {
+  const scheduleDays = Number.parseInt(formData.schedule_impact_days, 10);
+  return {
+    subject: formData.subject,
+    question: formData.question,
+    ball_in_court: formData.ball_in_court || null,
+    assigned_to: formData.assigned_to || null,
+    response_due_date: formData.due_date || null,
+    cost_impact: formData.cost_impact,
+    cost_impact_value:
+      formData.cost_impact && formData.cost_impact_value.trim()
+        ? formData.cost_impact_value.trim()
+        : null,
+    schedule_impact: formData.schedule_impact,
+    schedule_impact_days:
+      formData.schedule_impact &&
+      Number.isFinite(scheduleDays) &&
+      scheduleDays >= 0
+        ? scheduleDays
+        : null,
+    priority: formData.priority,
+    discipline: formData.discipline || null,
+  };
+}
+
+/**
+ * Seed the create/edit form from an existing RFI. The user-resolution
+ * names (``*_name``) are left blank because the deep RFI carries only raw
+ * ids; the UserSearchInput renders the id until the user re-picks, which
+ * is acceptable for an edit flow (the value is preserved either way).
+ */
+export function formFromRfi(rfi: RFI): RFIFormData {
+  return {
+    subject: rfi.subject ?? '',
+    question: rfi.question ?? '',
+    ball_in_court: rfi.ball_in_court ?? '',
+    ball_in_court_name: '',
+    assigned_to: rfi.assigned_to ?? '',
+    assigned_to_name: '',
+    due_date: rfi.response_due_date ?? '',
+    cost_impact: rfi.cost_impact ?? false,
+    cost_impact_value: rfi.cost_impact_value ?? '',
+    schedule_impact: rfi.schedule_impact ?? false,
+    schedule_impact_days:
+      rfi.schedule_impact_days != null ? String(rfi.schedule_impact_days) : '',
+    priority: rfi.priority ?? 'normal',
+    discipline: rfi.discipline ?? '',
+    linked_drawing_ids: rfi.linked_drawing_ids ?? [],
+  };
+}
 
 /* ── Document picker types ─────────────────────────────────────────────── */
 
@@ -453,22 +533,28 @@ function DocumentPickerModal({
   );
 }
 
-function CreateRFIModal({
+export function CreateRFIModal({
   onClose,
   onSubmit,
   isPending,
   projectName,
   projectId,
+  editing,
 }: {
   onClose: () => void;
   onSubmit: (data: RFIFormData) => void;
   isPending: boolean;
   projectName?: string;
   projectId: string;
+  /** When set, the modal edits this RFI instead of creating a new one. */
+  editing?: RFI;
 }) {
   const { t } = useTranslation();
   const addToast = useToastStore((s) => s.addToast);
-  const [form, setForm] = useState<RFIFormData>(EMPTY_FORM);
+  const isEdit = Boolean(editing);
+  const [form, setForm] = useState<RFIFormData>(() =>
+    editing ? formFromRfi(editing) : EMPTY_FORM,
+  );
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [showDocPicker, setShowDocPicker] = useState(false);
   const [dragOver, setDragOver] = useState(false);
@@ -618,7 +704,14 @@ function CreateRFIModal({
       onClose={onClose}
       busy={isPending}
       size="xl"
-      title={t('rfi.new_rfi', { defaultValue: 'New RFI' })}
+      title={
+        isEdit
+          ? t('rfi.edit_rfi', {
+              defaultValue: 'Edit RFI #{{number}}',
+              number: editing?.rfi_number ?? '',
+            })
+          : t('rfi.new_rfi', { defaultValue: 'New RFI' })
+      }
       subtitle={
         projectName
           ? t('common.creating_in_project', {
@@ -635,10 +728,16 @@ function CreateRFIModal({
           <Button variant="primary" onClick={handleSubmit} disabled={isPending || !canSubmit}>
             {isPending ? (
               <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent mr-2 shrink-0" />
+            ) : isEdit ? (
+              <Check size={16} className="mr-1.5 shrink-0" />
             ) : (
               <Plus size={16} className="mr-1.5 shrink-0" />
             )}
-            <span>{t('rfi.create_rfi', { defaultValue: 'Create RFI' })}</span>
+            <span>
+              {isEdit
+                ? t('rfi.save_changes', { defaultValue: 'Save Changes' })
+                : t('rfi.create_rfi', { defaultValue: 'Create RFI' })}
+            </span>
           </Button>
         </>
       }
@@ -1042,7 +1141,7 @@ function CreateRFIModal({
               <UploadCloud size={14} />
             )}
             {uploadInFlight > 0
-              ? t('rfi.uploading', { defaultValue: 'Uploading…' })
+              ? t('rfi.uploading', { defaultValue: 'Uploading...' })
               : t('rfi.drop_or_browse', { defaultValue: 'Drop file or browse' })}
           </div>
           <input
@@ -1149,14 +1248,20 @@ const RFIRow = React.memo(function RFIRow({
   rfi,
   viewerId,
   onRespond,
+  onEdit,
   onClose,
   onCreateVariation,
+  creatingVariation = false,
 }: {
   rfi: RFI;
   viewerId: string | null;
   onRespond: (rfi: RFI) => void;
+  onEdit: (rfi: RFI) => void;
   onClose: (id: string) => void;
   onCreateVariation: (id: string) => void;
+  // True while a create-variation request is in flight (any row). Disables
+  // the button so a double-click cannot mint two change orders.
+  creatingVariation?: boolean;
 }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
@@ -1394,7 +1499,28 @@ const RFIRow = React.memo(function RFIRow({
                 {t('rfi.action_respond', { defaultValue: 'Respond' })}
               </Button>
             )}
-            {(rfi.status === 'answered' || rfi.status === 'open') && (
+            {/* Edit - surfaces the PATCH /{id} endpoint. The backend
+                refuses edits once an RFI is closed / void (400), so the
+                affordance is hidden for those terminal states. */}
+            {rfi.status !== 'closed' && rfi.status !== 'void' && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onEdit(rfi);
+                }}
+                icon={<Pencil size={14} />}
+              >
+                {t('rfi.action_edit', { defaultValue: 'Edit' })}
+              </Button>
+            )}
+            {/* Close - the backend refuses to close an RFI that has no
+                official response (400), and an RFI only reaches 'answered'
+                once a response lands. Gate on 'answered' to match the
+                detail page and the backend precondition so the action
+                never errors on an open RFI. */}
+            {rfi.status === 'answered' && (
               <Button
                 variant="ghost"
                 size="sm"
@@ -1406,19 +1532,26 @@ const RFIRow = React.memo(function RFIRow({
                 {t('rfi.action_close', { defaultValue: 'Close RFI' })}
               </Button>
             )}
-            {rfi.cost_impact && (rfi.status === 'answered' || rfi.status === 'closed') && (
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onCreateVariation(rfi.id);
-                }}
-              >
-                <DollarSign size={14} className="mr-1" />
-                {t('rfi.create_variation', { defaultValue: 'Create Variation' })}
-              </Button>
-            )}
+            {/* Hide once a variation already exists for this RFI: the backend
+                is idempotent and returns the existing change order, but
+                hiding the button removes the duplicate-mint affordance and
+                points the user at the change order they already created. */}
+            {rfi.cost_impact &&
+              (rfi.status === 'answered' || rfi.status === 'closed') &&
+              !rfi.change_order_id && (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={creatingVariation}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onCreateVariation(rfi.id);
+                  }}
+                >
+                  <DollarSign size={14} className="mr-1" />
+                  {t('rfi.create_variation', { defaultValue: 'Create Variation' })}
+                </Button>
+              )}
           </div>
         </div>
       )}
@@ -1465,6 +1598,7 @@ export function RFIPage() {
 
   // State
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [editingRfi, setEditingRfi] = useState<RFI | null>(null);
   const [respondingRfi, setRespondingRfi] = useState<RFI | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   /* Debounced copy of the search input that drives the backend `?search=`
@@ -1634,6 +1768,27 @@ export function RFIPage() {
       }),
   });
 
+  const updateMut = useMutation({
+    mutationFn: ({ id, data }: { id: string; data: UpdateRFIPayload }) =>
+      updateRFI(id, data),
+    onSuccess: (updated) => {
+      invalidateAll();
+      // Keep the deep RFI page in sync - it keys on ['rfi', id].
+      qc.invalidateQueries({ queryKey: ['rfi', updated.id] });
+      setEditingRfi(null);
+      addToast({
+        type: 'success',
+        title: t('rfi.updated', { defaultValue: 'RFI updated successfully' }),
+      });
+    },
+    onError: (e: Error) =>
+      addToast({
+        type: 'error',
+        title: t('rfi.update_failed', { defaultValue: 'Failed to update RFI' }),
+        message: e.message,
+      }),
+  });
+
   const respondMut = useMutation({
     mutationFn: ({ id, data }: { id: string; data: RespondRFIPayload }) =>
       respondToRFI(id, data),
@@ -1731,6 +1886,27 @@ export function RFIPage() {
     [],
   );
 
+  const handleEdit = useCallback(
+    (rfi: RFI) => {
+      setEditingRfi(rfi);
+    },
+    [],
+  );
+
+  const handleEditSubmit = useCallback(
+    (formData: RFIFormData) => {
+      if (!editingRfi) return;
+      updateMut.mutate({
+        id: editingRfi.id,
+        data: {
+          ...buildUpdatePayload(formData),
+          linked_drawing_ids: formData.linked_drawing_ids,
+        },
+      });
+    },
+    [updateMut, editingRfi],
+  );
+
   const handleRespondSubmit = useCallback(
     (data: RespondRFIPayload) => {
       if (!respondingRfi) return;
@@ -1755,14 +1931,10 @@ export function RFIPage() {
   );
 
   const createVariationMut = useMutation({
-    mutationFn: (rfiId: string) =>
-      apiPost<{ change_order_id: string; code: string; title: string }>(
-        // Route is POST /{rfi_id}/create-variation/ WITH a trailing slash
-        // (router.py); with redirect_slashes=False the no-slash form 404s
-        // and the Create Variation action silently fails.
-        `/v1/rfi/${rfiId}/create-variation/`,
-        {},
-      ),
+    // Centralised, typed helper (api.ts -> CreateVariationResponse). Keeps the
+    // wire contract in one place; the route uses a trailing slash because the
+    // app runs with redirect_slashes=False and the no-slash form 404s.
+    mutationFn: (rfiId: string) => createVariationFromRFI(rfiId),
     onSuccess: (data) => {
       addToast(
         {
@@ -2163,8 +2335,10 @@ export function RFIPage() {
                     rfi={rfi}
                     viewerId={viewerId}
                     onRespond={handleRespond}
+                    onEdit={handleEdit}
                     onClose={handleClose}
                     onCreateVariation={handleCreateVariation}
+                    creatingVariation={createVariationMut.isPending}
                   />
                 ))}
               </Card>
@@ -2211,7 +2385,7 @@ export function RFIPage() {
                         </div>
                       )}
                       <div className="flex items-center gap-3">
-                        <span className={isOverdue ? 'text-semantic-error font-semibold' : ''}>{days}d {t('rfi.col_days', { defaultValue: 'open' })}</span>
+                        <span className={isOverdue ? 'text-semantic-error font-semibold' : ''}>{days}d {t('rfi.days_open_short', { defaultValue: 'open' })}</span>
                         {rfi.response_due_date && (
                           <span className={isOverdue ? 'text-semantic-error font-semibold' : ''}>
                             {t('rfi.col_due', { defaultValue: 'Due' })}: {new Date(rfi.response_due_date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
@@ -2220,10 +2394,10 @@ export function RFIPage() {
                       </div>
                       <div className="flex items-center gap-2 mt-1">
                         {rfi.cost_impact && (
-                          <span className="flex items-center gap-0.5 text-amber-500"><DollarSign size={12} /> {t('rfi.cost_impact', { defaultValue: 'Cost' })}</span>
+                          <span className="flex items-center gap-0.5 text-amber-500"><DollarSign size={12} /> {t('rfi.cost_impact_short', { defaultValue: 'Cost' })}</span>
                         )}
                         {rfi.schedule_impact && (
-                          <span className="flex items-center gap-0.5 text-orange-500"><Clock size={12} /> {t('rfi.schedule_impact', { defaultValue: 'Schedule' })}</span>
+                          <span className="flex items-center gap-0.5 text-orange-500"><Clock size={12} /> {t('rfi.schedule_impact_short', { defaultValue: 'Schedule' })}</span>
                         )}
                       </div>
                     </div>
@@ -2249,6 +2423,21 @@ export function RFIPage() {
           isPending={createMut.isPending}
           projectName={projectName}
           projectId={projectId}
+        />
+      )}
+
+      {/* Edit Modal - same form, seeded from the selected RFI and wired to
+          the PATCH endpoint. Keyed on the RFI id so the form re-seeds when
+          the user edits a different row without unmounting in between. */}
+      {editingRfi && (
+        <CreateRFIModal
+          key={editingRfi.id}
+          editing={editingRfi}
+          onClose={() => setEditingRfi(null)}
+          onSubmit={handleEditSubmit}
+          isPending={updateMut.isPending}
+          projectName={projectName}
+          projectId={editingRfi.project_id}
         />
       )}
 

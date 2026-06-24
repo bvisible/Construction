@@ -13,28 +13,28 @@
   --__rev-c: "4443432d4357494352";
   --__lc-rev: 0x4f452d3236;
   /* Brand */
-  --oe-blue: #d68a59;
-  --oe-blue-hover: #c2723f;
-  --oe-blue-active: #a15a2e;
-  --oe-blue-dark: #a15a2e;
+  --oe-blue: #0071e3;
+  --oe-blue-hover: #0077ed;
+  --oe-blue-active: #006edb;
+  --oe-blue-dark: #005bb5;
   /* Theme-aware blue intended for use as TEXT on tinted/lifted surfaces.
      Pairs with --oe-blue-subtle and the semantic-info pills.
      WCAG-AA contrast fix 2026-05-27 (sequel to v5.3.0): the v5.3.0 wave
      replaced `text-oe-blue` → `text-oe-blue-dark` in 51 files. In light
-     mode that lands at #a15a2e (≈8:1 on the pill bg, perfect). But in
-     dark mode `--oe-blue-dark` is #a15a2e — only ~2:1 on lifted dark
+     mode that lands at #005bb5 (≈8:1 on the pill bg, perfect). But in
+     dark mode `--oe-blue-dark` is #1d4ed8 — only ~2:1 on lifted dark
      surfaces, FAILS hard. This new token resolves separately per theme
      so the same `text-oe-blue-text` class passes AA in both modes.
-       Light  #a15a2e → 7.4:1 on #fff, 7.0:1 on #f0f7ff
-       Dark   #e9c5a4 → 7.9:1 on #1e2130, 8.4:1 on #1a1d2b, 7.8:1 on
+       Light  #005bb5 → 7.4:1 on #fff, 7.0:1 on #f0f7ff
+       Dark   #93c5fd → 7.9:1 on #1e2130, 8.4:1 on #1a1d2b, 7.8:1 on
                         flattened bg-oe-blue-subtle (rgba 0.15 over bg) */
-  --oe-blue-text: #7e4523;
+  --oe-blue-text: #005bb5;
   /* WCAG-AA contrast fix 2026-05-27: was #e8f2fe (4.15:1 against
-     text-oe-blue #d68a59 — fails AA for normal text). Lightened to
+     text-oe-blue #0071e3 — fails AA for normal text). Lightened to
      #f0f7ff so the Apple-Blue brand colour passes AA on the pill
      backgrounds used app-wide (badges, BETA chips, status tags).
      before: #e8f2fe → 4.15:1   after: #f0f7ff → 4.70:1 (axe contrast-AA) */
-  --oe-blue-subtle: #faefe6;
+  --oe-blue-subtle: #f0f7ff;
   /* Channel triplets for Tailwind alpha modifiers (bg-oe-blue/10,
      border-oe-blue/30, hover:bg-surface-secondary/50, ...). Tailwind
      cannot inject alpha into an opaque var(), so before these existed
@@ -42,7 +42,7 @@
      the build - the class rendered nothing (found 2026-06-06, reported
      as "info blocks have no background"). MUST stay in sync with the
      hex values above/below. */
-  --oe-blue-ch: 214 138 89;
+  --oe-blue-ch: 0 113 227;
 
   /* Surfaces */
   --oe-bg: #ffffff;
@@ -178,17 +178,17 @@
      `--oe-blue-dark` is the solid button hover/active background.
      White button text needs a saturated blue here, not a tint;
      theme-aware text uses `--oe-blue-text` instead. */
-  --oe-blue: #dda479;
-  --oe-blue-hover: #e9c5a4;
-  --oe-blue-active: #c2723f;
-  --oe-blue-dark: #a15a2e;
-  --oe-blue-subtle: rgba(214, 138, 89, 0.15);
+  --oe-blue: #3b82f6;
+  --oe-blue-hover: #60a5fa;
+  --oe-blue-active: #2563eb;
+  --oe-blue-dark: #1e40af;
+  --oe-blue-subtle: rgba(59, 130, 246, 0.15);
   /* See light-mode comment. Dark-mode swaps to Tailwind blue-300 so
      `text-oe-blue-text` reads cleanly on lifted dark surfaces without
      touching `bg-oe-blue-dark` (used as hover/active button bg). */
-  --oe-blue-text: #e9c5a4;
+  --oe-blue-text: #93c5fd;
   /* Channel triplet - see the light-mode comment. Keep in sync. */
-  --oe-blue-ch: 214 138 89;
+  --oe-blue-ch: 59 130 246;
 
   /* Surfaces — deep blue-gray palette */
   --oe-bg: #0f1117;
@@ -524,7 +524,7 @@ h4 {
   --ag-row-border-color: var(--oe-border-light);
   --ag-selected-row-background-color: var(--oe-blue-subtle);
   --ag-range-selection-border-color: var(--oe-blue);
-  --ag-range-selection-background-color: rgba(214, 138, 89, 0.08);
+  --ag-range-selection-background-color: rgba(0, 113, 227, 0.08);
   --ag-cell-horizontal-padding: 8px;
 }
 
@@ -538,7 +538,7 @@ h4 {
   --ag-secondary-foreground-color: var(--oe-text-secondary);
   --ag-selected-row-background-color: var(--oe-blue-subtle);
   --ag-odd-row-background-color: var(--oe-bg-secondary);
-  --ag-range-selection-background-color: rgba(214, 138, 89, 0.1);
+  --ag-range-selection-background-color: rgba(59, 130, 246, 0.1);
 }
 
 /* ── BOQ header density — shrink header text when many columns ─────────
@@ -650,7 +650,7 @@ h4 {
 
 /* Highlight the drop target row */
 .ag-theme-quartz .ag-row-drag-over {
-  background-color: var(--ag-range-selection-background-color, rgba(214, 138, 89, 0.08));
+  background-color: var(--ag-range-selection-background-color, rgba(0, 113, 227, 0.08));
 }
 
 /* ── AG Grid full-width section group rows ────────────────────────── */
@@ -725,7 +725,7 @@ h4 {
    • boq-row-variant-default → amber  (auto-applied average — refine!) */
 
 .ag-theme-quartz .ag-row.boq-row-variant {
-  box-shadow: inset 4px 0 0 var(--color-oe-blue, #d68a59);
+  box-shadow: inset 4px 0 0 var(--color-oe-blue, #3b82f6);
 }
 
 .ag-theme-quartz .ag-row.boq-row-variant-default {
@@ -733,7 +733,7 @@ h4 {
 }
 
 .dark .ag-theme-quartz .ag-row.boq-row-variant {
-  box-shadow: inset 4px 0 0 var(--color-oe-blue, #dda479);
+  box-shadow: inset 4px 0 0 var(--color-oe-blue, #60a5fa);
 }
 
 .dark .ag-theme-quartz .ag-row.boq-row-variant-default {
@@ -897,10 +897,10 @@ tbody tr:nth-child(20) { animation-delay: 570ms; }
 @keyframes pulseGlow {
   0%,
   100% {
-    box-shadow: 0 0 0 0 rgba(214, 138, 89, 0.2);
+    box-shadow: 0 0 0 0 rgba(0, 113, 227, 0.2);
   }
   50% {
-    box-shadow: 0 0 0 8px rgba(214, 138, 89, 0);
+    box-shadow: 0 0 0 8px rgba(0, 113, 227, 0);
   }
 }
 
@@ -1567,8 +1567,8 @@ tbody tr:nth-child(20) { animation-delay: 570ms; }
    specific measurement (TakeoffViewerModule + MeasurementLedger). The
    animation auto-removes itself after ~1.6s so a re-select re-runs it. */
 @keyframes ledgerRowFlash {
-  0%   { background-color: rgba(214, 138, 89, 0.40); }
-  60%  { background-color: rgba(214, 138, 89, 0.18); }
+  0%   { background-color: rgba(59, 130, 246, 0.40); }
+  60%  { background-color: rgba(59, 130, 246, 0.18); }
   100% { background-color: transparent; }
 }
 .ledger-row-flash {

@@ -34,6 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.dependencies import CurrentUserId, RequirePermission, SessionDep
 from app.modules.bcf.bcf_xml import SUPPORTED_VERSIONS
 from app.modules.bcf.messages import translate
+from app.modules.bcf.repository import BCFRepository
 from app.modules.bcf.schemas import (
     BCFImportReport,
     CommentCreate,
@@ -76,36 +77,23 @@ async def _require_project_access(
     project_id: uuid.UUID,
     user_id: str,
 ) -> str:
-    """‌⁠‍Verify the caller owns (or is admin on) ``project_id``.
+    """‌⁠‍Verify the caller may access ``project_id``.
 
     Returns the project name (needed for the BCF project.bcfp on export).
-    Raises 404 when the project is missing and 403 when access is denied.
+    Delegates to the canonical :func:`app.dependencies.verify_project_access`,
+    which grants access to the owner, admins, and team members, and raises
+    HTTP 404 (not 403) on both "missing" and "denied" so the endpoint never
+    leaks the existence of a project UUID the caller cannot see (IDOR
+    defence).
     """
+    from app.dependencies import verify_project_access
     from app.modules.projects.repository import ProjectRepository
-    from app.modules.users.repository import UserRepository
 
-    proj_repo = ProjectRepository(session)
-    project = await proj_repo.get_by_id(project_id)
-    if project is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Project {project_id} not found",
-        )
+    await verify_project_access(project_id, user_id, session)
 
-    try:
-        user_repo = UserRepository(session)
-        user = await user_repo.get_by_id(uuid.UUID(str(user_id)))
-        if user is not None and getattr(user, "role", "") == "admin":
-            return str(getattr(project, "name", ""))
-    except Exception:  # noqa: BLE001 - best-effort admin check
-        logger.exception("Admin-role lookup failed during BCF access check")
-
-    if str(getattr(project, "owner_id", "")) != str(user_id):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied: you do not own this project",
-        )
-    return str(getattr(project, "name", ""))
+    # Access granted - the project is guaranteed to exist; fetch its name.
+    project = await ProjectRepository(session).get_by_id(project_id)
+    return str(getattr(project, "name", "")) if project is not None else ""
 
 
 def _locale_of(payload_user_id: str) -> str:
@@ -192,11 +180,17 @@ async def list_topics(
     project_id: uuid.UUID,
     user_id: CurrentUserId,
     session: SessionDep,
+    offset: int = Query(0, ge=0),
+    limit: int = Query(BCFRepository.MAX_TOPICS_LIMIT, ge=1, le=BCFRepository.MAX_TOPICS_LIMIT),
     service: BCFService = Depends(_get_service),
 ) -> list[TopicResponse]:
-    """List every BCF topic for a project, newest first."""
+    """List BCF topics for a project, newest first.
+
+    Paginated via ``offset`` / ``limit``; the defaults return a full (but
+    bounded) page so existing clients are unaffected.
+    """
     await _require_project_access(session, project_id, user_id)
-    topics = await service.list_topics(project_id)
+    topics = await service.list_topics(project_id, offset=offset, limit=limit)
     return [_topic_response(t) for t in topics]
 
 

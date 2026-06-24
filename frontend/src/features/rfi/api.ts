@@ -4,7 +4,7 @@
  * All endpoints are prefixed with /v1/rfi/.
  */
 
-import { apiGet, apiPost } from '@/shared/lib/api';
+import { apiGet, apiPost, apiPatch } from '@/shared/lib/api';
 
 /* ── Types ─────────────────────────────────────────────────────────────── */
 
@@ -51,6 +51,13 @@ export interface RFI {
   date_required: string | null;
   response_due_date: string | null;
   linked_drawing_ids: string[];
+  /**
+   * Server-derived relative paths of reply attachments, under
+   * `uploads/rfi/attachments/`. Download an entry by its index via
+   * `GET /v1/rfi/{id}/attachments/{index}`. Always an array (never null)
+   * on the wire; empty when the RFI has no reply attachments.
+   */
+  attachments: string[];
   change_order_id: string | null;
   created_by: string | null;
   priority: RFIPriority | null;
@@ -102,8 +109,46 @@ export interface CreateRFIPayload {
   discipline?: string;
 }
 
+/**
+ * Partial update for an existing RFI. Mirrors the backend ``RFIUpdate``
+ * schema - every field is optional and only the keys present are patched
+ * (the backend merges, never wholesale-replaces). Re-routing
+ * ``assigned_to`` / ``ball_in_court`` is a manager+ action server-side and
+ * returns 403 for editors, so the UI should only offer it to that tier.
+ *
+ * The backend refuses any edit once an RFI is ``closed`` / ``void`` (400),
+ * so callers should gate the edit affordance on an actionable status.
+ */
+export interface UpdateRFIPayload {
+  subject?: string;
+  question?: string;
+  ball_in_court?: string | null;
+  assigned_to?: string | null;
+  response_due_date?: string | null;
+  date_required?: string | null;
+  cost_impact?: boolean;
+  cost_impact_value?: string | null;
+  schedule_impact?: boolean;
+  schedule_impact_days?: number | null;
+  linked_drawing_ids?: string[];
+  priority?: RFIPriority;
+  discipline?: string | null;
+}
+
 export interface RespondRFIPayload {
   official_response: string;
+}
+
+/**
+ * Response from `POST /v1/rfi/{id}/create-variation/`. Mirrors the backend
+ * `RFIVariationResponse`. Returned both when a new change order is minted
+ * (201) and, idempotently, when one is already linked to the RFI.
+ */
+export interface CreateVariationResponse {
+  change_order_id: string;
+  code: string;
+  rfi_id: string;
+  title: string;
 }
 
 /* ── API Functions ─────────────────────────────────────────────────────── */
@@ -134,10 +179,22 @@ export async function createRFI(data: CreateRFIPayload): Promise<RFI> {
   return apiPost<RFI>('/v1/rfi/', data);
 }
 
+export async function updateRFI(id: string, data: UpdateRFIPayload): Promise<RFI> {
+  // Route is PATCH /{rfi_id} with NO trailing slash (router.py); with
+  // redirect_slashes=False a trailing slash would 404.
+  return apiPatch<RFI, UpdateRFIPayload>(`/v1/rfi/${id}`, data);
+}
+
 export async function respondToRFI(id: string, data: RespondRFIPayload): Promise<RFI> {
   return apiPost<RFI>(`/v1/rfi/${id}/respond/`, data);
 }
 
 export async function closeRFI(id: string): Promise<RFI> {
   return apiPost<RFI>(`/v1/rfi/${id}/close/`);
+}
+
+export async function createVariationFromRFI(id: string): Promise<CreateVariationResponse> {
+  // Route is POST /{rfi_id}/create-variation/ WITH a trailing slash
+  // (router.py); with redirect_slashes=False the no-slash form 404s.
+  return apiPost<CreateVariationResponse>(`/v1/rfi/${id}/create-variation/`, {});
 }

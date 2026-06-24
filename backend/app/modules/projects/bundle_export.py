@@ -412,19 +412,37 @@ def _sha256_of(path: str) -> tuple[str, int]:
         return "", 0
 
 
+def _sha256_of_bytes(data: bytes) -> tuple[str, int]:
+    """Return (hex-digest, size) for an in-memory blob."""
+    return hashlib.sha256(data).hexdigest(), len(data)
+
+
+# An attachment is described by ``(path_in_zip, source, origin)`` where
+# ``source`` is either ``"fs"`` (``origin`` is an absolute filesystem path -
+# legacy document/photo/sheet/dwg uploads) or ``"key"`` (``origin`` is a
+# storage-backend key, e.g. ``bim/{p}/{m}/geometry.glb``). BIM geometry is
+# recorded as a storage KEY, never a filesystem path: on any deployment where
+# the process CWD differs from the data root - standalone / external-Postgres,
+# Docker, macOS - resolving it with ``os.path`` against CWD fails, and it can
+# never be a filesystem path at all under an S3 backend. Routing it through the
+# storage backend is the only correct option for both local and S3.
+_Attachment = tuple[str, str, str]
+
+
 async def _collect_attachment_paths(
     session: AsyncSession,
     project_id: str,
     opts: ExportOptions,
-) -> list[tuple[str, str]]:
-    """Return ``[(path_in_zip, absolute_path), ...]`` for every binary that
+) -> list[_Attachment]:
+    """Return ``[(path_in_zip, source, origin), ...]`` for every binary that
     ``opts`` says should be in the bundle.
 
-    Missing-on-disk paths are silently skipped so a half-cleaned-up project
-    still exports successfully - we'd rather lose a file than the whole
-    bundle.
+    ``source`` distinguishes a filesystem path (``"fs"``) from a storage-backend
+    key (``"key"``); see :data:`_Attachment`. Missing binaries are silently
+    skipped so a half-cleaned-up project still exports successfully - we'd
+    rather lose a file than the whole bundle.
     """
-    out: list[tuple[str, str]] = []
+    out: list[_Attachment] = []
 
     if opts.include_documents:
         Document = _import_class("app.modules.documents.models", "Document")
@@ -438,7 +456,7 @@ async def _collect_attachment_paths(
                 if not path or not os.path.exists(path):
                     continue
                 fname = name or Path(path).name
-                out.append((f"attachments/documents/{doc_id}/{fname}", path))
+                out.append((f"attachments/documents/{doc_id}/{fname}", "fs", path))
 
     if opts.include_photos:
         ProjectPhoto = _import_class(
@@ -458,10 +476,10 @@ async def _collect_attachment_paths(
             ).all()
             for pid, path, thumb, fname in rows:
                 if path and os.path.exists(path):
-                    out.append((f"attachments/photos/{pid}/{fname}", path))
+                    out.append((f"attachments/photos/{pid}/{fname}", "fs", path))
                 if thumb and os.path.exists(thumb):
                     out.append(
-                        (f"attachments/photos/thumbs/{pid}.jpg", thumb),
+                        (f"attachments/photos/thumbs/{pid}.jpg", "fs", thumb),
                     )
 
     if opts.include_sheets:
@@ -474,7 +492,7 @@ async def _collect_attachment_paths(
             ).all()
             for sid, thumb in rows:
                 if thumb and os.path.exists(thumb):
-                    out.append((f"attachments/sheets/thumbs/{sid}.png", thumb))
+                    out.append((f"attachments/sheets/thumbs/{sid}.png", "fs", thumb))
 
     if opts.include_bim_models and opts.include_bim_geometry:
         BIMModel = _import_class("app.modules.bim_hub.models", "BIMModel")
@@ -485,10 +503,17 @@ async def _collect_attachment_paths(
                 )
             ).all()
             for mid, canonical in rows:
-                if canonical and os.path.exists(canonical):
+                # ``canonical_file_path`` is a storage KEY (e.g.
+                # ``bim/{p}/{m}/geometry.glb``), not a filesystem path. Record it
+                # as such so the zip writer reads it through the storage backend
+                # (the only path that works under an S3 backend or when CWD !=
+                # data root). The original ``os.path.exists(canonical)`` probe
+                # ran against CWD and dropped present geometry as "missing" on
+                # every non-CWD deployment.
+                if canonical:
                     fname = Path(canonical).name
                     out.append(
-                        (f"attachments/bim/{mid}/{fname}", canonical),
+                        (f"attachments/bim/{mid}/{fname}", "key", canonical),
                     )
 
     if opts.include_dwg_drawings:
@@ -509,9 +534,33 @@ async def _collect_attachment_paths(
             for did, path, fname in rows:
                 if path and os.path.exists(path):
                     safe = fname or Path(path).name
-                    out.append((f"attachments/dwg/{did}/{safe}", path))
+                    out.append((f"attachments/dwg/{did}/{safe}", "fs", path))
 
     return out
+
+
+async def _read_storage_key(key: str) -> bytes | None:
+    """Return the bytes stored under a storage ``key``, or ``None`` if absent.
+
+    Lazily resolves the active storage backend (local or S3) per call so
+    ``OE_DATA_DIR`` / a test monkeypatch takes effect, mirroring how
+    ``bim_hub`` resolves the data dir at call time rather than import time. The
+    backend's own read fallback (``LocalStorageBackend._existing_path_for``)
+    means a blob written under a prior data-dir resolution is still found.
+    Path-traversal keys are rejected inside the backend (``_normalise_key``).
+    """
+    from app.core.storage import get_storage_backend
+
+    backend = get_storage_backend()
+    try:
+        return await backend.get(key)
+    except (FileNotFoundError, ValueError):
+        # Absent blob, or a key that fails normalisation/containment - skip it
+        # rather than abort the whole export.
+        return None
+    except Exception:  # pragma: no cover - defensive: never sink the bundle
+        logger.warning("bundle export: failed reading storage key %r", key, exc_info=True)
+        return None
 
 
 # ── Public API ────────────────────────────────────────────────────────────
@@ -577,26 +626,55 @@ async def export_bundle(
             payload = json.dumps(rows, indent=2, ensure_ascii=False, default=str)
             zf.writestr(f"tables/{key}.json", payload)
 
-        for arc, abs_path in attachments:
-            digest, size = _sha256_of(abs_path)
+        for arc, source, origin in attachments:
+            if source == "key":
+                # Storage-backed blob (BIM geometry): read the bytes through the
+                # backend and write them into the zip directly - correct for both
+                # the local backend (CWD-independent) and S3.
+                data = await _read_storage_key(origin)
+                if data is None:
+                    attachments_index.append(
+                        {
+                            "path": arc,
+                            "original_path": origin,
+                            "size_bytes": 0,
+                            "sha256": "",
+                            "missing": True,
+                        }
+                    )
+                    continue
+                digest, size = _sha256_of_bytes(data)
+                zf.writestr(arc, data)
+                total_bytes += size
+                attachments_index.append(
+                    {
+                        "path": arc,
+                        "original_path": origin,
+                        "size_bytes": size,
+                        "sha256": digest,
+                    }
+                )
+                continue
+
+            digest, size = _sha256_of(origin)
             if size == 0 and not digest:
                 # File vanished between scan and write; record the gap.
                 attachments_index.append(
                     {
                         "path": arc,
-                        "original_path": abs_path,
+                        "original_path": origin,
                         "size_bytes": 0,
                         "sha256": "",
                         "missing": True,
                     }
                 )
                 continue
-            zf.write(abs_path, arc)
+            zf.write(origin, arc)
             total_bytes += size
             attachments_index.append(
                 {
                     "path": arc,
-                    "original_path": abs_path,
+                    "original_path": origin,
                     "size_bytes": size,
                     "sha256": digest,
                 }
@@ -652,9 +730,23 @@ async def preview_bundle(
 
     paths = await _collect_attachment_paths(session, project_id, opts)
     attachment_size = 0
-    for _arc, abs_path in paths:
+    backend = None
+    for _arc, source, origin in paths:
+        if source == "key":
+            # Probe the storage backend for the blob's size; this is a cheap
+            # HEAD on S3 and a stat on the local backend. Resolve the backend
+            # lazily and reuse it across rows.
+            if backend is None:
+                from app.core.storage import get_storage_backend
+
+                backend = get_storage_backend()
+            try:
+                attachment_size += await backend.size(origin)
+            except (FileNotFoundError, ValueError):
+                continue
+            continue
         try:
-            attachment_size += os.path.getsize(abs_path)
+            attachment_size += os.path.getsize(origin)
         except OSError:
             continue
 

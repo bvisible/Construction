@@ -157,7 +157,7 @@ class DwgAnnotationCreate(BaseModel):
     annotation_type: str = Field(
         ...,
         max_length=50,
-        pattern=r"^(text_pin|arrow|rectangle|distance|area|circle|polyline|line)$",
+        pattern=r"^(text_pin|arrow|rectangle|distance|area|circle|polyline|line|count)$",
     )
     geometry: dict[str, Any] = Field(default_factory=dict)
     text: str | None = None
@@ -182,7 +182,7 @@ class DwgAnnotationUpdate(BaseModel):
     annotation_type: str | None = Field(
         default=None,
         max_length=50,
-        pattern=r"^(text_pin|arrow|rectangle|distance|area|circle|polyline|line)$",
+        pattern=r"^(text_pin|arrow|rectangle|distance|area|circle|polyline|line|count)$",
     )
     geometry: dict[str, Any] | None = None
     text: str | None = None

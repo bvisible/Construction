@@ -19,17 +19,40 @@ from app.modules.bcf.models import BCFComment, BCFTopic, BCFViewpoint
 class BCFRepository:
     """‌⁠‍Data access for BCF topics, comments and viewpoints."""
 
+    #: Hard upper bound on a single ``list_topics`` page. Mirrors the clamp
+    #: other repositories apply (e.g. the OpenCDE topic list caps ``$top`` at
+    #: 500) so a caller can never trigger an unbounded full-table scan that
+    #: also eager-loads every comment + viewpoint. Also the default page size,
+    #: chosen high enough that existing whole-project callers (list endpoint,
+    #: export) keep returning their full result set for any realistic project.
+    MAX_TOPICS_LIMIT = 1000
+
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
     # ── Topics ─────────────────────────────────────────────────────────
 
-    async def list_topics(self, project_id: uuid.UUID) -> list[BCFTopic]:
-        """‌⁠‍Return every topic for ``project_id``, newest first.
+    async def list_topics(
+        self,
+        project_id: uuid.UUID,
+        *,
+        offset: int = 0,
+        limit: int = MAX_TOPICS_LIMIT,
+    ) -> list[BCFTopic]:
+        """‌⁠‍Return topics for ``project_id``, newest first.
 
         Comments + viewpoints are eager-loaded so callers (list endpoint,
         export) can touch the collections after the request session closes.
+
+        Paginated with sane defaults: ``offset`` is floored at 0 and ``limit``
+        is clamped to ``[1, MAX_TOPICS_LIMIT]``. The default ``limit`` equals
+        the hard cap so existing whole-project callers keep their behaviour
+        while a misbehaving / huge project can no longer pull an unbounded
+        result set (each topic also drags its full comment + viewpoint
+        collections, so the bound matters).
         """
+        safe_offset = max(0, offset)
+        safe_limit = max(1, min(limit, self.MAX_TOPICS_LIMIT))
         stmt = (
             select(BCFTopic)
             .where(BCFTopic.project_id == project_id)
@@ -38,6 +61,8 @@ class BCFRepository:
                 selectinload(BCFTopic.viewpoints),
             )
             .order_by(BCFTopic.created_at.desc())
+            .offset(safe_offset)
+            .limit(safe_limit)
         )
         result = await self.session.execute(stmt)
         return list(result.scalars().all())

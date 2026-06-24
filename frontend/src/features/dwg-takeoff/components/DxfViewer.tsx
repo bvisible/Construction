@@ -135,6 +135,16 @@ interface Props {
     unitsPerPixel: number;
     unit: 'm' | 'mm' | 'ft' | 'in';
   } | null;
+  /**
+   * Find-text overlay. ``searchBoxes`` are the world-unit boxes of every TEXT
+   * match, drawn as a faint highlight; ``activeSearchBox`` is the current match,
+   * drawn emphasized. ``focusTarget`` pans/zooms to frame a box whenever its
+   * ``nonce`` changes (so Next/Previous re-centres even on the same match).
+   * All additive — null/undefined leaves the viewer untouched.
+   */
+  searchBoxes?: Extents[];
+  activeSearchBox?: Extents | null;
+  focusTarget?: { box: Extents; nonce: number } | null;
 }
 
 function computeExtents(entities: DxfEntity[]): Extents {
@@ -197,6 +207,9 @@ export function DxfViewer({
   onCalibrationPoint,
   calibrationOverlay,
   calibration,
+  searchBoxes,
+  activeSearchBox,
+  focusTarget,
 }: Props) {
   const drawingScaleRef = useRef(drawingScale);
   drawingScaleRef.current = drawingScale;
@@ -223,6 +236,10 @@ export function DxfViewer({
   hiddenEntityIdsRef.current = hiddenEntityIds;
   const selectedAnnotationIdRef = useRef(selectedAnnotationId);
   selectedAnnotationIdRef.current = selectedAnnotationId;
+  const searchBoxesRef = useRef(searchBoxes);
+  searchBoxesRef.current = searchBoxes;
+  const activeSearchBoxRef = useRef(activeSearchBox);
+  activeSearchBoxRef.current = activeSearchBox;
   /**
    * Last click position + candidate cycle index (RFC 11 §4.2).
    * Tracks the ranked hit-test candidates at the last click so that a
@@ -338,6 +355,33 @@ export function DxfViewer({
       }
     }
   }, [entities]);
+
+  // Find-text: pan/zoom to frame a match whenever the focus nonce changes. The
+  // match is framed at ~18% of the smaller viewport dimension so it lands with
+  // generous context, and the scale is clamped so a tiny label is not zoomed to
+  // an absurd magnification.
+  const focusNonce = focusTarget?.nonce ?? 0;
+  useEffect(() => {
+    const box = focusTarget?.box;
+    const container = containerRef.current;
+    if (!box || !container) return;
+    const rect = container.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+    const boxW = Math.max(box.maxX - box.minX, 1e-3);
+    const boxH = Math.max(box.maxY - box.minY, 1e-3);
+    const cx = (box.minX + box.maxX) / 2;
+    const cy = (box.minY + box.maxY) / 2;
+    const target = (Math.min(rect.width, rect.height) * 0.18) / Math.max(boxW, boxH);
+    const scale = Math.max(0.02, Math.min(target, 240));
+    vpRef.current = {
+      scale,
+      offsetX: rect.width / 2 - cx * scale,
+      offsetY: rect.height / 2 + cy * scale,
+    };
+    fittedRef.current = true; // keep the fit-on-load effect from overriding us
+    forceRender((n) => n + 1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusNonce]);
 
   // Handle canvas resize + initial sizing + re-fit on resize
   useEffect(() => {
@@ -480,6 +524,36 @@ export function DxfViewer({
         drawingScaleRef.current,
         calibrationRef.current ?? undefined,
       );
+
+      // Find-text highlights: faint box around every match, emphasized box for
+      // the active match. World boxes → screen via the live viewport (Y flips,
+      // so world maxY is the top edge on screen).
+      const sBoxes = searchBoxesRef.current;
+      if (sBoxes && sBoxes.length > 0) {
+        ctx.save();
+        const drawBox = (b: Extents, pad: number, fill: string | null, stroke: string, lw: number, glow: number) => {
+          const tl = worldToScreen(b.minX, b.maxY, vp);
+          const br = worldToScreen(b.maxX, b.minY, vp);
+          const x = tl.x - pad;
+          const y = tl.y - pad;
+          const w = br.x - tl.x + pad * 2;
+          const h = br.y - tl.y + pad * 2;
+          ctx.beginPath();
+          ctx.rect(x, y, w, h);
+          if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+          ctx.strokeStyle = stroke;
+          ctx.lineWidth = lw;
+          ctx.shadowColor = glow > 0 ? stroke : 'transparent';
+          ctx.shadowBlur = glow;
+          ctx.stroke();
+        };
+        for (const b of sBoxes) {
+          drawBox(b, 3, 'rgba(250, 204, 21, 0.20)', 'rgba(250, 204, 21, 0.70)', 1.5, 0);
+        }
+        const activeBox = activeSearchBoxRef.current;
+        if (activeBox) drawBox(activeBox, 4, null, 'rgba(249, 115, 22, 0.95)', 2.5, 8);
+        ctx.restore();
+      }
 
       // Draw polyline measurements overlay for the primary selected entity only
       if (primarySelId) {
@@ -873,6 +947,19 @@ export function DxfViewer({
         setTextPinPopup({ worldPt, screenPt: { x: sx, y: sy } });
         drawPointsRef.current = [];
       }
+
+      // Count: single click drops a numbered marker worth 1, no popup. Each
+      // click persists immediately so the running total updates live in the
+      // Summary tab (mirrors the PDF takeoff count tool).
+      if (activeTool === 'count' && pts.length === 1) {
+        onAnnotationCreated({
+          type: 'count',
+          points: [pts[0]!],
+          measurement_value: 1,
+          measurement_unit: 'nr',
+        });
+        drawPointsRef.current = [];
+      }
     },
     [activeTool, entities, visibleLayers, onSelectEntity, onSelectAnnotation, onAnnotationCreated, onCalibrationPoint],
   );
@@ -899,7 +986,10 @@ export function DxfViewer({
     const modes = snapModesRef.current;
     const curTool = activeToolRef.current;
     const drawTool =
-      curTool !== 'select' && curTool !== 'pan' && curTool !== 'text_pin';
+      curTool !== 'select' &&
+      curTool !== 'pan' &&
+      curTool !== 'text_pin' &&
+      curTool !== 'count';
     if (modes && drawTool && (modes.endpoint || modes.midpoint)) {
       const tolWorld = 10 / Math.max(vpRef.current.scale, 1e-9);
       activeSnapRef.current = closestSnapCandidate(

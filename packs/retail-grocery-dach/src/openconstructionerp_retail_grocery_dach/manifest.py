@@ -31,6 +31,7 @@ MANIFEST = PartnerPackManifest(
     cwicr_regions=["cwicr-de-berlin"],
     default_currency="EUR",
     default_tax_template="de_vat_19",
+    default_methodology="germany",
     validation_rule_packs=[
         "din_276",
         "gaeb_x83_x86",

@@ -26,6 +26,7 @@ import io
 import logging
 import uuid
 import xml.etree.ElementTree as ET  # noqa: S405 - types + output tree building only; parsing routed through defusedxml below
+from decimal import Decimal
 
 import defusedxml.ElementTree as safe_ET
 from defusedxml.common import DefusedXmlException
@@ -34,6 +35,7 @@ from fastapi.responses import StreamingResponse
 
 logger = logging.getLogger(__name__)
 
+from app.core.csv_safety import neutralise_formula
 from app.core.http_headers import content_disposition_attachment
 from app.core.i18n import get_locale
 from app.core.validation.messages import translate
@@ -49,6 +51,7 @@ from app.modules.schedule.schemas import (
     ClearActivitiesResponse,
     CPMCalculateRequest,
     CriticalPathResponse,
+    EvmSummaryResponse,
     GanttData,
     GenerateFromBOQRequest,
     ImportResult,
@@ -504,6 +507,89 @@ async def get_risk_analysis(
     """
     await _verify_schedule_owner(service, session, schedule_id, _user_id, payload)
     return await service.get_risk_analysis(schedule_id)
+
+
+@router.get(
+    "/schedules/{schedule_id}/evm-summary/",
+    response_model=EvmSummaryResponse,
+    summary="Get earned-value (EVM) summary",
+    description="Scalar earned-value metrics for a schedule at a data date: "
+    "PV/EV/AC, BAC, schedule/cost variance, SPI/CPI and the CPI-based forecast "
+    "(EAC/ETC/VAC). Reuses the same time-phased computation as the 4D dashboard.",
+    dependencies=[Depends(RequirePermission("schedule.read"))],
+)
+async def get_evm_summary(
+    schedule_id: uuid.UUID,
+    _user_id: CurrentUserId,
+    payload: CurrentUserPayload,
+    session: SessionDep,
+    service: ScheduleService = Depends(_get_service),
+    as_of_date: str | None = Query(
+        default=None,
+        description="Data date (ISO YYYY-MM-DD). Defaults to today when omitted.",
+    ),
+) -> EvmSummaryResponse:
+    """Return scalar earned-value metrics for a schedule.
+
+    Read-only rollup over the schedule's cost-loaded activities. Verifies the
+    caller owns the parent project (admins bypass) and returns HTTP 404 on a
+    missing/foreign schedule, matching the platform existence-oracle-safe
+    convention. ``spi`` / ``cpi`` and the EAC/ETC/VAC forecast are ``null``
+    when the schedule has no cost data or a denominator is zero.
+    """
+    from datetime import date as _date
+
+    from app.modules.schedule.evm_math import EvmCostRow, compute_evm_summary
+
+    await _verify_schedule_owner(service, session, schedule_id, _user_id, payload)
+
+    # Parse the data date defensively (mirror the 4D router contract).
+    if as_of_date:
+        try:
+            target = _date.fromisoformat(as_of_date[:10])
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"as_of_date must be ISO YYYY-MM-DD, got {as_of_date!r}",
+            ) from exc
+    else:
+        target = _date.today()
+
+    activities, _ = await service.list_activities_for_schedule(schedule_id, limit=5000)
+    rows = [
+        EvmCostRow(
+            start_date=a.start_date,
+            end_date=a.end_date,
+            cost_planned=a.cost_planned,
+            cost_actual=a.cost_actual,
+            progress_pct=a.progress_pct,
+        )
+        for a in activities
+    ]
+    summary = compute_evm_summary(rows, target)
+    data = summary.to_json()
+    return EvmSummaryResponse(
+        schedule_id=schedule_id,
+        as_of_date=target.isoformat(),
+        planned_value=Decimal(str(data["planned_value"])),
+        earned_value=Decimal(str(data["earned_value"])),
+        actual_cost=Decimal(str(data["actual_cost"])),
+        budget_at_completion=Decimal(str(data["budget_at_completion"])),
+        schedule_variance=Decimal(str(data["schedule_variance"])),
+        cost_variance=Decimal(str(data["cost_variance"])),
+        estimate_at_completion=(
+            Decimal(str(data["estimate_at_completion"])) if data["estimate_at_completion"] is not None else None
+        ),
+        estimate_to_complete=(
+            Decimal(str(data["estimate_to_complete"])) if data["estimate_to_complete"] is not None else None
+        ),
+        variance_at_completion=(
+            Decimal(str(data["variance_at_completion"])) if data["variance_at_completion"] is not None else None
+        ),
+        spi=data["spi"],
+        cpi=data["cpi"],
+        has_cost_data=data["has_cost_data"],
+    )
 
 
 @router.patch(
@@ -1982,18 +2068,23 @@ async def export_schedule_csv(
         # Deduplicate predecessors
         preds = list(dict.fromkeys(preds))
 
+        # Neutralise every string-bearing cell so a value a user controls
+        # (activity name/code/WBS, or a derived predecessor label built from
+        # them) that starts with =, +, -, @, tab or CR cannot be interpreted as
+        # a formula when the CSV is opened in Excel / Sheets / LibreOffice
+        # (CSV/formula injection - OWASP). Numeric cells pass through unchanged.
         writer.writerow(
             [
-                act.activity_code or "",
-                act.name,
-                act.wbs_code,
-                act.start_date,
-                act.end_date,
+                neutralise_formula(act.activity_code or ""),
+                neutralise_formula(act.name),
+                neutralise_formula(act.wbs_code),
+                neutralise_formula(act.start_date),
+                neutralise_formula(act.end_date),
                 act.duration_days,
                 _str_to_float(act.progress_pct),
                 act.total_float if act.total_float is not None else "",
                 "Yes" if act.is_critical else "No",
-                "; ".join(preds),
+                neutralise_formula("; ".join(preds)),
             ]
         )
 

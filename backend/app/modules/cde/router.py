@@ -240,10 +240,25 @@ async def create_container(
     except HTTPException:
         raise
     except Exception as exc:
-        logger.exception("CDE create_container failed for project=%s", data.project_id)
+        # Never echo the exception class/message to the client - it can leak
+        # ORM/DB internals (constraint names, column types, SQL fragments).
+        # logger.exception keeps the full stack trace server-side (tagged with
+        # the request-id via RequestIDLogFilter); the caller gets only a
+        # generic message plus the same correlation id to quote in support.
+        from app.middleware.request_id import get_request_id
+
+        request_id = get_request_id()
+        logger.exception(
+            "CDE create_container failed for project=%s (request_id=%s)",
+            data.project_id,
+            request_id or "-",
+        )
+        detail = "Failed to create container"
+        if request_id:
+            detail = f"{detail} (request_id: {request_id})"
         raise HTTPException(
             status_code=_status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Create failed: {exc.__class__.__name__}: {exc}",
+            detail=detail,
         ) from exc
     return _container_to_response(container)
 

@@ -54,11 +54,22 @@ export interface LastBOQRef {
   grand_total: string;
 }
 
+/** Per-currency money subtotal in a cross-project rollup. */
+export interface CurrencySubtotal {
+  currency: string;
+  total_value: string;
+}
+
 export interface BOQSummaryPayload {
   total_boqs: number;
   /** BOQs whose status is NOT archived / closed / cancelled / rejected. */
   active_boqs: number;
   total_value_eur: string;
+  /** FX-correct per-currency subtotals of BOQ value (preferred over the
+      legacy blended ``total_value_eur`` scalar). */
+  by_currency?: CurrencySubtotal[];
+  /** True when projects span more than one ISO currency. */
+  multi_currency?: boolean;
   position_count: number;
   positions_missing_quantity: number;
   positions_zero_price: number;
@@ -187,10 +198,20 @@ export interface ChangeOrderItem {
   currency: string;
 }
 
+/** Per-currency open change-order impact subtotal. */
+export interface ChangeOrderCurrencySubtotal {
+  currency: string;
+  total_impact: string;
+}
+
 export interface ChangeOrdersPayload {
   open_count: number;
   total_impact: string;
   currency: string;
+  /** FX-correct per-currency subtotals of open change-order impact. */
+  by_currency?: ChangeOrderCurrencySubtotal[];
+  /** True when open change orders span more than one ISO currency. */
+  multi_currency?: boolean;
   top_pending: ChangeOrderItem[];
 }
 

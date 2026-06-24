@@ -642,6 +642,12 @@ class SubmissionAnalyticsResponse(BaseModel):
     completeness_avg: Decimal | None = None
     valid_count: int = 0
     late_count: int = 0
+    # Price stats (min/max/average) are computed in a single reporting currency -
+    # the dominant one across the package's bids. Bids submitted in any other
+    # currency are excluded from those stats and counted here (FX never blends).
+    currency: str = ""
+    excluded_off_currency: int = 0
+    mixed_currency: bool = False
 
 
 # ── Bid leveling matrix (line-level) ────────────────────────────────────

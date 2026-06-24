@@ -27,6 +27,14 @@ be opened in the current process (e.g. a unit test instantiating a tool
 directly) the tool returns an explicit ``{"error": "unavailable", ...}``
 observation so the LLM can never invent positions, rates, or findings. Money is
 carried with its ISO 4217 currency code and is never blended across currencies.
+
+Access control (IDOR defence): each BOQ is resolved to its owning project and
+the run's invoking user - threaded in via the trusted ``__agent_context__``
+(the runner strips any LLM-forged context and re-injects the real one) - must
+own or belong to that project. On denial, or when no user is in scope, the tool
+returns the ``not_found`` / ``unavailable`` observation, so the LLM never reads
+another tenant's BOQ and a cross-tenant id is indistinguishable from a missing
+one (existence is never leaked).
 """
 
 from __future__ import annotations
@@ -34,6 +42,10 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from app.modules.ai_agents.agents._access import (
+    assert_user_can_access_project,
+    coerce_user_id,
+)
 from app.modules.ai_agents.base import (
     Agent,
     FunctionTool,
@@ -110,7 +122,24 @@ def _position_currency(metadata: Any, fallback: str) -> str:
 # ── Tool implementations ────────────────────────────────────────────────────
 
 
-async def _tool_read_boq(boq_id: str) -> dict[str, Any]:
+def _boq_not_found(raw_id: str) -> dict[str, Any]:
+    """The canonical ``not_found`` observation for a BOQ tool.
+
+    Used for BOTH a genuinely missing BOQ and an access-denied one so a
+    cross-tenant id is indistinguishable from a non-existent one (IDOR
+    defence - never reveal existence).
+    """
+    return {
+        "boq_id": raw_id,
+        "error": "not_found",
+        "detail": ("No BOQ with that id exists. Tell the user the id could not be found and ask them to check it."),
+    }
+
+
+async def _tool_read_boq(
+    boq_id: str,
+    __agent_context__: dict | None = None,  # noqa: N803 - runner-injected key
+) -> dict[str, Any]:
     """Load a BOQ and its positions as a compact, token-bounded summary.
 
     Reads the real BOQ via ``boq.service.BOQService.get_boq_with_positions``
@@ -118,22 +147,41 @@ async def _tool_read_boq(boq_id: str) -> dict[str, Any]:
     already includes active markups) and resolves the project currency via
     ``BOQService._resolve_project_currency``.
 
+    Access control: the BOQ is resolved to its owning project and the invoking
+    user (from the trusted ``__agent_context__``) must own or belong to that
+    project. A denied or unknown user yields the same ``not_found`` observation
+    as a missing BOQ, so cross-tenant existence is never revealed.
+
     Args:
         boq_id: The UUID of the BOQ to read (string form, as the user pasted it).
+        __agent_context__: Runner-injected trusted context carrying ``user_id``.
 
     Returns:
         A summary dict with ``position_count``, ``grand_total`` (Decimal as
         string), ``currency`` (ISO 4217), and up to ~60 ``line_items`` (each with
         ordinal, description, unit, quantity, unit_rate, total, currency). If the
-        BOQ id is malformed, the BOQ does not exist, or no DB session can be
-        opened, returns ``{"error": "unavailable" | "not_found" | "bad_id", ...}``
-        so the LLM never fabricates positions or rates.
+        BOQ id is malformed, the BOQ does not exist, the user has no access, or no
+        DB session can be opened, returns
+        ``{"error": "unavailable" | "not_found" | "bad_id", ...}`` so the LLM
+        never fabricates positions or rates.
     """
     raw_id = (boq_id or "").strip()
     if not raw_id:
         return {
             "error": "bad_id",
             "detail": "No boq_id was provided. Ask the user for the BOQ id.",
+        }
+
+    # Fail closed: without a trusted user we cannot authorize a cross-tenant
+    # read, so report the BOQ as unreadable rather than serving its data.
+    user_uuid = coerce_user_id(__agent_context__)
+    if user_uuid is None:
+        return {
+            "boq_id": raw_id,
+            "error": "unavailable",
+            "detail": (
+                "No authenticated user in scope - the BOQ could not be read. Do not invent positions or totals."
+            ),
         }
 
     import uuid
@@ -152,19 +200,19 @@ async def _tool_read_boq(boq_id: str) -> dict[str, Any]:
 
         async with async_session_factory() as session:
             service = BOQService(session)
-            currency = (await service._resolve_project_currency(boq_uuid)) or ""  # noqa: SLF001
             boq = await service.get_boq_with_positions(boq_uuid)
+            # IDOR guard: resolve the BOQ's owning project, then verify access
+            # BEFORE returning any positions/rates. Denied access maps to the
+            # not_found shape so a cross-tenant BOQ is indistinguishable from a
+            # missing one.
+            if not await assert_user_can_access_project(session, boq.project_id, user_uuid):
+                return _boq_not_found(raw_id)
+            currency = (await service._resolve_project_currency(boq_uuid)) or ""  # noqa: SLF001
     except Exception as exc:  # pragma: no cover - DB unavailable / not found
         # get_boq_with_positions raises HTTPException(404) for a missing BOQ.
         status_code = getattr(exc, "status_code", None)
         if status_code == 404:
-            return {
-                "boq_id": raw_id,
-                "error": "not_found",
-                "detail": (
-                    "No BOQ with that id exists. Tell the user the id could not be found and ask them to check it."
-                ),
-            }
+            return _boq_not_found(raw_id)
         logger.debug("read_boq unavailable for %s: %s", raw_id, exc)
         return {
             "boq_id": raw_id,
@@ -216,7 +264,10 @@ async def _tool_read_boq(boq_id: str) -> dict[str, Any]:
     return summary
 
 
-async def _tool_check_boq_quality(boq_id: str) -> dict[str, Any]:
+async def _tool_check_boq_quality(
+    boq_id: str,
+    __agent_context__: dict | None = None,  # noqa: N803 - runner-injected key
+) -> dict[str, Any]:
     """Run the real ``boq_quality`` validation rules over a BOQ's positions.
 
     Reuses the platform's :data:`app.core.validation.engine.validation_engine`
@@ -228,20 +279,37 @@ async def _tool_check_boq_quality(boq_id: str) -> dict[str, Any]:
     so rule behaviour is identical. This is real analysis of real data, not a
     re-implemented stub.
 
+    Access control: the BOQ is resolved to its owning project and the invoking
+    user (from the trusted ``__agent_context__``) must own or belong to that
+    project; a denied or unknown user yields the ``not_found`` observation, so
+    cross-tenant existence is never revealed.
+
     Args:
         boq_id: The UUID of the BOQ to check (string form).
+        __agent_context__: Runner-injected trusted context carrying ``user_id``.
 
     Returns:
         A dict with a ``summary`` count block and an ``issues`` list, each issue
         being ``{issue_type, position_ordinal, message, severity}`` (only failing
-        findings are returned). On a malformed id / missing BOQ / unreachable DB,
-        returns ``{"error": ...}`` so the LLM never fabricates findings.
+        findings are returned). On a malformed id / missing BOQ / no access /
+        unreachable DB, returns ``{"error": ...}`` so the LLM never fabricates
+        findings.
     """
     raw_id = (boq_id or "").strip()
     if not raw_id:
         return {
             "error": "bad_id",
             "detail": "No boq_id was provided. Ask the user for the BOQ id.",
+        }
+
+    # Fail closed: without a trusted user we cannot authorize a cross-tenant
+    # read, so report quality as uncheckable rather than analysing the BOQ.
+    user_uuid = coerce_user_id(__agent_context__)
+    if user_uuid is None:
+        return {
+            "boq_id": raw_id,
+            "error": "unavailable",
+            "detail": ("No authenticated user in scope - BOQ quality could not be checked. Do not invent findings."),
         }
 
     import uuid
@@ -262,6 +330,12 @@ async def _tool_check_boq_quality(boq_id: str) -> dict[str, Any]:
         async with async_session_factory() as session:
             service = BOQService(session)
             boq = await service.get_boq_with_positions(boq_uuid)
+            # IDOR guard: verify the invoking user can access the BOQ's owning
+            # project BEFORE running any analysis. Denied access maps to the
+            # not_found shape so a cross-tenant BOQ is indistinguishable from a
+            # missing one.
+            if not await assert_user_can_access_project(session, boq.project_id, user_uuid):
+                return _boq_not_found(raw_id)
 
             # Project positions into the shape the boq_quality rules read. A
             # row's "type" is derived so section headers are skipped by the
@@ -297,11 +371,9 @@ async def _tool_check_boq_quality(boq_id: str) -> dict[str, Any]:
     except Exception as exc:  # pragma: no cover - DB unavailable / not found
         status_code = getattr(exc, "status_code", None)
         if status_code == 404:
-            return {
-                "boq_id": raw_id,
-                "error": "not_found",
-                "detail": "No BOQ with that id exists - nothing to check.",
-            }
+            # Identical shape to the access-denied path so a cross-tenant BOQ
+            # cannot be told apart from a genuinely missing one.
+            return _boq_not_found(raw_id)
         logger.debug("check_boq_quality unavailable for %s: %s", raw_id, exc)
         return {
             "boq_id": raw_id,

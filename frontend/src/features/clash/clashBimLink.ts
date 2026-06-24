@@ -42,6 +42,44 @@ export function buildClashBimLink(input: ClashLinkInput): string {
   return `${base}?${q.toString()}`;
 }
 
+export interface SelectionSetLinkInput {
+  projectId: string;
+  modelId: string;
+  /** Every element id to isolate in the viewer (already de-duplicated). */
+  elementIds: readonly string[];
+  /** Optional camera focus target in canonical Z-up, or null to skip it. */
+  focus?: { x: number; y: number; z: number } | null;
+}
+
+/**
+ * Build the BIM-viewer deep-link for a selection set assembled from several
+ * findings. Reuses the exact `isolate` / `clash` / `focus` query contract the
+ * single-clash link uses (so the viewer / `parseClashDeepLink` handle both),
+ * but isolates the WHOLE element union and flags `clash=1` so the unresolved-
+ * element warning fires when a stale reference can't be located in the model.
+ *
+ * Returns a bare model link when no element id survives, so the user still
+ * lands in the right model rather than on a dead URL.
+ */
+export function buildSelectionSetBimLink(input: SelectionSetLinkInput): string {
+  const ids = input.elementIds.filter((id) => !!id && id.length > 0);
+  const base = `/projects/${input.projectId}/bim/${input.modelId}`;
+  if (ids.length === 0) return base;
+  const q = new URLSearchParams();
+  q.set('isolate', ids.join(','));
+  q.set('clash', '1');
+  const f = input.focus;
+  if (
+    f &&
+    Number.isFinite(f.x) &&
+    Number.isFinite(f.y) &&
+    Number.isFinite(f.z)
+  ) {
+    q.set('focus', `${f.x},${f.y},${f.z}`);
+  }
+  return `${base}?${q.toString()}`;
+}
+
 export interface ParsedClashDeepLink {
   /** Element ids requested for isolation (order preserved). */
   ids: string[];

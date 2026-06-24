@@ -243,3 +243,77 @@ class TestAttachmentUploadEndpoint:
             files={"file": ("empty.pdf", b"", "application/pdf")},
         )
         assert resp.status_code == 400, resp.text
+
+
+# ── 5 + 6. Download round-trip + bounds (completeness: the read path) ─────
+
+
+class TestAttachmentDownloadEndpoint:
+    """The upload handler wrote files that previously had no read path.
+
+    These tests prove ``GET /{rfi_id}/attachments/{index}`` rounds the
+    bytes back out (so the feature is actually usable end-to-end) and that
+    an out-of-range index is a clean 404 rather than an IndexError 500.
+    """
+
+    @pytest.mark.asyncio
+    async def test_uploaded_attachment_downloads_back(self, db_session, tmp_path, monkeypatch) -> None:
+        from app.modules.rfi import router as rfi_router_mod
+
+        # Coherent tmp tree: stored path is ``rfi/attachments/<name>`` and the
+        # download handler resolves it against ``_UPLOADS_BASE``. Point the
+        # upload dir and the download base at the same root so the bytes match.
+        monkeypatch.setattr(rfi_router_mod, "_UPLOADS_BASE", tmp_path)
+        monkeypatch.setattr(rfi_router_mod, "ATTACHMENTS_DIR", tmp_path / "rfi" / "attachments")
+
+        owner_id = await _make_user(db_session)
+        owner = str(owner_id)
+        project_id = await _make_project(db_session, owner_id)
+        service = RFIService(db_session)
+        rfi = await service.create_rfi(
+            RFICreate(project_id=project_id, subject="x", question="y"),
+            user_id=owner,
+        )
+        await db_session.commit()
+
+        app = _build_app(db_session, caller_id=owner)
+        client = TestClient(app)
+
+        pdf_body = b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\nround-trip-me"
+        up = client.post(
+            f"/v1/rfi/{rfi.id}/attachments/",
+            files={"file": ("reply.pdf", pdf_body, "application/pdf")},
+        )
+        assert up.status_code == 200, up.text
+
+        down = client.get(f"/v1/rfi/{rfi.id}/attachments/0")
+        assert down.status_code == 200, down.text
+        assert down.content == pdf_body
+        assert down.headers["content-type"].startswith("application/pdf")
+        # Served as an attachment, never inline, so a stray HTML payload can
+        # never be rendered by the browser.
+        assert "attachment" in down.headers.get("content-disposition", "")
+
+    @pytest.mark.asyncio
+    async def test_out_of_range_index_returns_404(self, db_session, tmp_path, monkeypatch) -> None:
+        from app.modules.rfi import router as rfi_router_mod
+
+        monkeypatch.setattr(rfi_router_mod, "_UPLOADS_BASE", tmp_path)
+        monkeypatch.setattr(rfi_router_mod, "ATTACHMENTS_DIR", tmp_path / "rfi" / "attachments")
+
+        owner_id = await _make_user(db_session)
+        owner = str(owner_id)
+        project_id = await _make_project(db_session, owner_id)
+        service = RFIService(db_session)
+        rfi = await service.create_rfi(
+            RFICreate(project_id=project_id, subject="x", question="y"),
+            user_id=owner,
+        )
+        await db_session.commit()
+
+        app = _build_app(db_session, caller_id=owner)
+        client = TestClient(app)
+
+        # No attachments uploaded - index 0 is already out of range.
+        resp = client.get(f"/v1/rfi/{rfi.id}/attachments/0")
+        assert resp.status_code == 404, resp.text

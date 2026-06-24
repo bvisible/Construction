@@ -476,6 +476,7 @@ async def risk_similar(
     from sqlalchemy import select
 
     from app.core.vector_index import find_similar
+    from app.dependencies import allowed_project_ids_for_similar
     from app.modules.risk.models import RiskItem
     from app.modules.risk.vector_adapter import risk_vector_adapter
 
@@ -488,12 +489,16 @@ async def risk_similar(
         await verify_project_access(row.project_id, str(_user_id), session)
 
     project_id = str(row.project_id) if row.project_id is not None else None
+    # Cross-tenant guard: restrict cross-project hits to projects the caller
+    # may access (None == admin/unrestricted, mirroring verify_project_access).
+    allowed = await allowed_project_ids_for_similar(session, str(_user_id), project_id, cross_project)
     hits = await find_similar(
         risk_vector_adapter,
         row,
         project_id=project_id,
         cross_project=cross_project,
         limit=limit,
+        allowed_project_ids=allowed,
     )
     return {
         "source_id": str(risk_id),

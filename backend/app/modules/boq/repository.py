@@ -19,6 +19,19 @@ from app.modules.boq.models import (
     QuantityLink,
 )
 
+# ``Position`` declares its self-referential ``children`` and ``parent``
+# relationships as ``lazy="selectin"`` so a single position fetch eagerly
+# hydrates its tree neighbours. That is wasted work for every BOQ-wide read:
+# the service layer NEVER navigates those relationships - it rebuilds the
+# hierarchy in-memory from the ``parent_id`` column (see
+# ``service.get_boq_structured`` / ``_subtree_height``). Without suppressing
+# them, ``list_all_for_boq`` on a 6 k-position BOQ fires the main SELECT plus
+# two extra ``selectin`` round trips (one ``parent_id IN (...)`` and one
+# ``id IN (...)``) and materialises the full neighbour graph. Suppressing the
+# eager load is behaviour-preserving (no caller reads ``.children``/``.parent``)
+# and cuts those reads to a single query.
+_POSITION_NOLOAD_TREE = (noload(Position.children), noload(Position.parent))
+
 
 class BOQRepository:
     """‌⁠‍Data access for BOQ model."""
@@ -214,13 +227,18 @@ class PositionRepository:
         """
         if not position_ids:
             return []
-        stmt = select(Position).where(Position.id.in_(position_ids))
+        stmt = select(Position).where(Position.id.in_(position_ids)).options(*_POSITION_NOLOAD_TREE)
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
     async def list_children(self, parent_id: uuid.UUID) -> list[Position]:
         """List direct children of a position (one level only)."""
-        stmt = select(Position).where(Position.parent_id == parent_id).order_by(Position.sort_order)
+        stmt = (
+            select(Position)
+            .where(Position.parent_id == parent_id)
+            .order_by(Position.sort_order)
+            .options(*_POSITION_NOLOAD_TREE)
+        )
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
@@ -238,8 +256,15 @@ class PositionRepository:
         count_stmt = select(func.count()).select_from(base.subquery())
         total = (await self.session.execute(count_stmt)).scalar_one()
 
-        # Fetch ordered by sort_order, then ordinal
-        stmt = base.order_by(Position.sort_order, Position.ordinal).offset(offset).limit(limit)
+        # Fetch ordered by sort_order, then ordinal. Suppress the
+        # children/parent selectin eager loads (callers navigate the tree via
+        # the parent_id column, never the relationships).
+        stmt = (
+            base.order_by(Position.sort_order, Position.ordinal)
+            .offset(offset)
+            .limit(limit)
+            .options(*_POSITION_NOLOAD_TREE)
+        )
         result = await self.session.execute(stmt)
         positions = list(result.scalars().all())
 
@@ -254,10 +279,54 @@ class PositionRepository:
         duplicate) MUST sum all positions - a 1500-position BOQ was silently
         dropping positions 1001+ from every total. Aggregation callers use
         this method so the count limit can never under-state a tender.
+
+        Suppresses the ``children``/``parent`` selectin eager loads
+        (``_POSITION_NOLOAD_TREE``): this is the hottest BOQ read and every
+        caller rebuilds the tree from ``parent_id`` in memory, so the two
+        extra relationship round trips are pure overhead.
         """
-        stmt = select(Position).where(Position.boq_id == boq_id).order_by(Position.sort_order, Position.ordinal)
+        stmt = (
+            select(Position)
+            .where(Position.boq_id == boq_id)
+            .order_by(Position.sort_order, Position.ordinal)
+            .options(*_POSITION_NOLOAD_TREE)
+        )
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
+
+    async def list_all_for_boqs(
+        self,
+        boq_ids: list[uuid.UUID],
+    ) -> dict[uuid.UUID, list[Position]]:
+        """Return EVERY position for a SET of BOQs grouped by ``boq_id``.
+
+        Batched sibling of :meth:`list_all_for_boq`: where the list endpoint
+        previously fired one unbounded ``list_all_for_boq`` per BOQ (an N+1 on
+        a hot read path - a 100-BOQ page = 100 full-table position loads), this
+        pulls every position for the whole page in a SINGLE
+        ``... WHERE boq_id IN (:ids)`` query and groups in Python.
+
+        Same money-rollup contract as the single-BOQ method: no ``limit`` (a
+        large BOQ must never silently drop positions 1001+) and the same
+        ``_POSITION_NOLOAD_TREE`` suppression of the children/parent selectin
+        loads. Rows are ordered by ``(boq_id, sort_order, ordinal)`` so each
+        BOQ's group lands in exactly the order ``list_all_for_boq`` returns.
+        BOQs with no positions are absent from the dict (callers default to
+        an empty list).
+        """
+        if not boq_ids:
+            return {}
+        stmt = (
+            select(Position)
+            .where(Position.boq_id.in_(boq_ids))
+            .order_by(Position.boq_id, Position.sort_order, Position.ordinal)
+            .options(*_POSITION_NOLOAD_TREE)
+        )
+        result = await self.session.execute(stmt)
+        grouped: dict[uuid.UUID, list[Position]] = {}
+        for pos in result.scalars().all():
+            grouped.setdefault(pos.boq_id, []).append(pos)
+        return grouped
 
     async def create(self, position: Position) -> Position:
         """Insert a new position."""
@@ -352,6 +421,25 @@ class PositionRepository:
         stmt = select(BOQ.project_id).where(BOQ.id == boq_id)
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
+    async def project_ids_for_boqs(
+        self,
+        boq_ids: list[uuid.UUID],
+    ) -> dict[uuid.UUID, uuid.UUID]:
+        """Resolve ``{boq_id: project_id}`` for a SET of BOQs in one query.
+
+        Batched sibling of :meth:`project_id_for_boq`. The list endpoint's
+        currency-aware rollup needs each BOQ's project (to look up the project
+        FX table) but every BOQ on a page typically shares ONE project, so a
+        per-BOQ ``project_id_for_boq`` would be a needless N+1. This resolves
+        them all in a single ``SELECT id, project_id WHERE id IN (:ids)`` and
+        lets the caller resolve FX once per distinct project.
+        """
+        if not boq_ids:
+            return {}
+        stmt = select(BOQ.id, BOQ.project_id).where(BOQ.id.in_(boq_ids))
+        rows = (await self.session.execute(stmt)).all()
+        return {row[0]: row[1] for row in rows if row[1] is not None}
+
     async def find_master_by_reference_code(
         self,
         project_id: uuid.UUID,
@@ -375,6 +463,7 @@ class PositionRepository:
             select(Position)
             .join(BOQ, BOQ.id == Position.boq_id)
             .where(BOQ.project_id == project_id, Position.reference_code == rc)
+            .options(*_POSITION_NOLOAD_TREE)
         )
         # 1. explicit master wins
         master_stmt = base.where(Position.link_role == "master").order_by(Position.created_at)
@@ -395,6 +484,7 @@ class PositionRepository:
             select(Position)
             .where(Position.link_group_id == link_group_id)
             .order_by(Position.created_at, Position.sort_order)
+            .options(*_POSITION_NOLOAD_TREE)
         )
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
@@ -412,6 +502,7 @@ class PositionRepository:
             .join(BOQ, BOQ.id == Position.boq_id)
             .where(BOQ.project_id == project_id)
             .order_by(Position.created_at, Position.sort_order)
+            .options(*_POSITION_NOLOAD_TREE)
         )
         result = await self.session.execute(stmt)
         return list(result.scalars().all())

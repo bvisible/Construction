@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import uuid
+from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any
 
@@ -61,6 +62,46 @@ def _spawn_dwg_conversion(drawing_id: uuid.UUID, file_path: str) -> "asyncio.Tas
     _BACKGROUND_CONVERSION_TASKS.add(task)
     task.add_done_callback(_BACKGROUND_CONVERSION_TASKS.discard)
     return task
+
+
+# ── Orphaned-conversion (stale) detection ───────────────────────────────────
+# A live DWG conversion self-fails at OE_DWG_CONVERT_TIMEOUT_S (default 300s):
+# subprocess.run(timeout=...) hard-kills the converter at that bound. So a
+# drawing still sitting at "processing"/"uploaded" with NO parsed entities long
+# past that bound is orphaned - its detached background task died with the
+# process (a server restart / reinstall / crash), and asyncio tasks never
+# survive a restart, so nothing will ever complete or fail it. Left alone the
+# frontend polls "processing" forever - the "Converting... 2547m" infinite
+# spinner a real user hit after reinstalling. Treat anything older than the
+# convert timeout plus a generous margin as dead and surface an actionable error.
+
+
+def _stale_conversion_cutoff_seconds() -> int:
+    """Seconds after which a still-``processing`` drawing is deemed orphaned."""
+    convert_timeout = int(os.getenv("OE_DWG_CONVERT_TIMEOUT_S", "300"))
+    # Twice the convert timeout, floored at 10 minutes - comfortably past any
+    # real run (which is force-killed at the timeout) without false positives.
+    return max(convert_timeout * 2, 600)
+
+
+_STALE_CONVERSION_MESSAGE = (
+    "Conversion did not finish - it was most likely interrupted by a server "
+    "restart or update while processing. Please remove this drawing and upload "
+    "it again."
+)
+
+
+def _seconds_since(ts: datetime | None) -> float | None:
+    """Age in seconds of a timestamp, or ``None`` if unset.
+
+    Naive timestamps are treated as UTC (the app persists UTC).
+    """
+    if ts is None:
+        return None
+    now = datetime.now(UTC)
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=UTC)
+    return (now - ts).total_seconds()
 
 
 # ── DWG version sniff & gating (Indian-user stability ticket 2026-05-13) ────
@@ -306,15 +347,75 @@ def _normalize_entity(raw: dict[str, Any], index: int) -> dict[str, Any]:
 
 
 def _dwg_data_base() -> str:
-    """Base directory for DWG blobs.
+    """Base directory for DWG blobs (the ACTIVE writable root).
 
-    The desktop and CLI runtimes export ``OE_CLI_DATA_DIR`` (a writable
-    per-user directory such as ``~/.openestimate``); honour it first so a
-    per-machine install under a read-only location like Program Files still
-    has somewhere to write. ``DATA_DIR`` is respected next for custom
-    deployments, then ``<cwd>/data`` for a source checkout.
+    Defers to :func:`app.core.storage.resolve_data_dir` (lazy import) so this
+    module can never disagree with where the platform actually writes blobs.
+    That resolver honours ``OE_DATA_DIR`` > ``DATA_DIR`` > ``OE_CLI_DATA_DIR``
+    before its persistent per-user / repo-relative default.
+
+    Crucially this is the single root that :func:`safe_data_roots` always
+    contains, so a DWG written here passes the download route's safe-root gate
+    instead of being rejected and served as a placeholder. The old body
+    defaulted to ``<cwd>/data`` - never a member of ``safe_data_roots()`` and
+    sensitive to the process CWD - which is exactly what broke "ready" drawings
+    on standalone / Docker / macOS deployments.
+
+    Resolved PER CALL (not cached at import) so ``OE_DATA_DIR`` and test
+    monkeypatching take effect. WRITES always target this root; READS may fall
+    back across :func:`safe_data_roots` via :func:`_dwg_existing_path`.
     """
-    return os.environ.get("OE_CLI_DATA_DIR") or os.environ.get("DATA_DIR") or os.path.join(os.getcwd(), "data")
+    from app.core.storage import resolve_data_dir
+
+    return str(resolve_data_dir())
+
+
+def _dwg_existing_path(base_subdir: str, key: str) -> str | None:
+    """Resolve ``<base>/<base_subdir>/<key>`` to an existing file, READ-ONLY.
+
+    Tries the ACTIVE data root first (``_dwg_data_base()``); if the blob is not
+    there, probes every OTHER platform-owned data root from
+    :func:`app.core.storage.safe_data_roots` for the same relative location.
+    This lets a blob written under a prior data-dir resolution (e.g. before
+    ``OE_DATA_DIR`` was honoured, the package-relative default a ``pip -U``
+    replaced, or a different CWD) still be served instead of going missing.
+
+    Reads fall back; WRITES never do. Containment is re-checked against each
+    candidate root with ``relative_to`` so a crafted ``key`` can never escape a
+    data root. Returns ``None`` when the file exists nowhere.
+    """
+    from app.core.storage import safe_data_roots
+
+    # Reject path-traversal in the key before touching the filesystem.
+    parts = [p for p in str(key).replace("\\", "/").split("/") if p and p != "."]
+    if any(p == ".." for p in parts) or os.path.isabs(key):
+        return None
+
+    seen: set[str] = set()
+    active = os.path.realpath(_dwg_data_base())
+    roots = [active]
+    for root in safe_data_roots():
+        roots.append(os.path.realpath(str(root)))
+
+    for root in roots:
+        if root in seen:
+            continue
+        seen.add(root)
+        candidate = os.path.realpath(os.path.join(root, base_subdir, *parts))
+        # Containment: candidate must stay under this root.
+        if os.path.commonpath([candidate, root]) != root:
+            continue
+        if os.path.isfile(candidate):
+            if root != active:
+                logger.info(
+                    "dwg: %s/%s absent under active root %s; served from back-compat data root %s",
+                    base_subdir,
+                    key,
+                    active,
+                    root,
+                )
+            return candidate
+    return None
 
 
 def _get_upload_dir() -> str:
@@ -329,6 +430,47 @@ def _get_entities_dir() -> str:
     entities_dir = os.path.join(_dwg_data_base(), "dwg_entities")
     os.makedirs(entities_dir, exist_ok=True)
     return entities_dir
+
+
+def resolve_source_drawing_path(stored_file_path: str | None) -> str | None:
+    """Resolve a drawing's source-blob path for READ, with back-compat fallback.
+
+    The stored ``file_path`` is the absolute path captured at upload time under
+    whatever data root was active then. If the data-dir resolution has since
+    changed (e.g. the old ``<cwd>/data`` default, or before ``OE_DATA_DIR`` was
+    honoured) that absolute path may no longer point at the file. We:
+
+    1. return the stored path verbatim when it still exists as a regular file
+       AND lives inside a platform-owned safe root (preserves the existing
+       symlink / safe-root guarantees the download route relies on);
+    2. otherwise recover the blob by its basename under ``dwg_uploads/`` across
+       every :func:`safe_data_roots` (READ-ONLY fallback).
+
+    Returns ``None`` when nothing resolves, so the caller keeps its existing
+    placeholder / 404 behaviour. This never writes and never escapes a data
+    root (``_dwg_existing_path`` re-checks containment per candidate).
+    """
+    from pathlib import Path
+
+    from app.core.storage import is_within_safe_root
+
+    if stored_file_path:
+        try:
+            resolved = os.path.realpath(stored_file_path)
+        except OSError:
+            resolved = ""
+        if (
+            resolved
+            and os.path.isfile(resolved)
+            and not os.path.islink(stored_file_path)
+            and is_within_safe_root(Path(resolved))
+        ):
+            return resolved
+        # Recover by basename across the back-compat read roots.
+        basename = os.path.basename(stored_file_path)
+        if basename:
+            return _dwg_existing_path("dwg_uploads", basename)
+    return None
 
 
 def _extents_from_raw_entities(entities: list[dict[str, Any]]) -> dict[str, float] | None:
@@ -1107,6 +1249,11 @@ class DwgTakeoffService:
         # cause that previously surfaced as "CAD conversion failed for
         # .rvt" in the CAD/BIM Data Explorer. Once DDC ships a v18
         # DwgExporter this code keeps working without any further patch.
+        # DWG conversion can legitimately take minutes on large drawings, so
+        # match the 300s the CAD/BIM Data Explorer (boq.cad_import) already
+        # allows. The old 120s cap timed out files the explorer converts fine.
+        # Overridable via env for very large sets or slow boxes.
+        convert_timeout_s = int(os.getenv("OE_DWG_CONVERT_TIMEOUT_S", "300"))
         xlsx_path = file_path.rsplit(".", 1)[0] + "_dwg.xlsx"
         try:
             caps = detect_converter_capabilities("dwg")
@@ -1143,7 +1290,7 @@ class DwgTakeoffService:
                     cwd=str(converter.parent),
                     env=_converter_subprocess_env(converter),
                     input=b"\n",
-                    timeout=120,
+                    timeout=convert_timeout_s,
                 )
             )
             if not os.path.exists(xlsx_path) or os.path.getsize(xlsx_path) < 100:
@@ -1195,7 +1342,7 @@ class DwgTakeoffService:
             await self.drawing_repo.update_fields(
                 drawing_id,
                 status="error",
-                error_message="DWG conversion timed out (120s limit)",
+                error_message=f"DWG conversion timed out ({convert_timeout_s}s limit)",
             )
             return
         except Exception as exc:
@@ -1282,12 +1429,25 @@ class DwgTakeoffService:
         return item
 
     @staticmethod
+    def conversion_age_seconds(drawing: object) -> float | None:
+        """Seconds since a drawing was last touched (updated_at, else created_at).
+
+        Used to detect an orphaned conversion - a drawing left at
+        ``processing``/``uploaded`` long past the convert timeout because its
+        background task died with a server restart.
+        """
+        return _seconds_since(getattr(drawing, "updated_at", None)) or _seconds_since(
+            getattr(drawing, "created_at", None)
+        )
+
+    @staticmethod
     def resolve_view_status(
         *,
         status_value: str | None,
         file_format: str | None,
         has_entities: bool,
         converter_present: bool | None = None,
+        age_seconds: float | None = None,
     ) -> str:
         """Resolve a definitive viewer status for a drawing.
 
@@ -1319,6 +1479,15 @@ class DwgTakeoffService:
             return "ready"
 
         normalized = (status_value or "").lower()
+        # An orphaned conversion (processing/uploaded, no entities, untouched well
+        # past the convert timeout) is dead - report a terminal error so the
+        # viewer stops spinning forever instead of passing "processing" through.
+        if (
+            normalized in ("processing", "uploaded")
+            and age_seconds is not None
+            and age_seconds > _stale_conversion_cutoff_seconds()
+        ):
+            return "error"
         if normalized in ("ready", "empty", "error", "processing", "needs_conversion"):
             return normalized
 
@@ -1348,11 +1517,40 @@ class DwgTakeoffService:
         drawing = await self.get_drawing(drawing_id)
         version = await self.get_latest_version(drawing_id)
         has_entities = version is not None and (version.entity_count or 0) > 0 and version.entities_key is not None
+        age_seconds = self.conversion_age_seconds(drawing)
         view_status = self.resolve_view_status(
             status_value=drawing.status,
             file_format=drawing.file_format,
             has_entities=has_entities,
+            age_seconds=age_seconds,
         )
+        # Self-heal an orphaned conversion: persist the terminal error (with an
+        # actionable message) so the DB stops reporting "processing" forever and
+        # every later poll/list is fast and correct. Re-fetch the version AFTER
+        # the write - update_fields() calls session.expire_all(), which would make
+        # the already-loaded version emit an illegal lazy SELECT (MissingGreenlet)
+        # when the router serialises it.
+        if (
+            view_status == "error"
+            and (drawing.status or "").lower() in ("processing", "uploaded")
+            and not drawing.error_message
+        ):
+            try:
+                await self.drawing_repo.update_fields(
+                    drawing_id,
+                    status="error",
+                    error_message=_STALE_CONVERSION_MESSAGE,
+                )
+                await self.session.commit()
+                await self.session.refresh(drawing)
+                version = await self.get_latest_version(drawing_id)
+            except Exception:  # noqa: BLE001 - heal is best-effort; never fail the read
+                logger.warning(
+                    "Could not persist stale-conversion heal for drawing %s",
+                    drawing_id,
+                    exc_info=True,
+                )
+                await self.session.rollback()
         return drawing, version, view_status
 
     async def list_drawings(
@@ -1518,8 +1716,11 @@ class DwgTakeoffService:
         """
         if version.entities_key is None:
             return []
-        entities_path = os.path.join(_get_entities_dir(), version.entities_key)
-        if not os.path.exists(entities_path):
+        # Mirror get_entities: resolve through the multi-root read fallback so a
+        # blob written under a prior data-dir resolution is still found (the
+        # units/extents backfill must not silently no-op on back-compat roots).
+        entities_path = _dwg_existing_path("dwg_entities", version.entities_key)
+        if entities_path is None:
             return []
         with open(entities_path, encoding="utf-8") as f:
             data = json.load(f)
@@ -1879,8 +2080,8 @@ class DwgTakeoffService:
         if version is None or version.entities_key is None:
             return []
 
-        entities_path = os.path.join(_get_entities_dir(), version.entities_key)
-        if not os.path.exists(entities_path):
+        entities_path = _dwg_existing_path("dwg_entities", version.entities_key)
+        if entities_path is None:
             return []
 
         try:
@@ -1916,9 +2117,8 @@ class DwgTakeoffService:
         if not drawing.thumbnail_key:
             return None
 
-        thumb_dir = os.path.join(_dwg_data_base(), "dwg_thumbnails")
-        thumb_path = os.path.join(thumb_dir, drawing.thumbnail_key)
-        if not os.path.exists(thumb_path):
+        thumb_path = _dwg_existing_path("dwg_thumbnails", drawing.thumbnail_key)
+        if thumb_path is None:
             return None
 
         try:

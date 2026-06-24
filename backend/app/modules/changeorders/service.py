@@ -17,6 +17,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.events import event_bus
+from app.core.json_merge import merge_metadata
 from app.modules.changeorders.models import (
     ChangeOrder,
     ChangeOrderApproval,
@@ -858,7 +859,9 @@ class ChangeOrderService:
         if "metadata" in fields:
             _incoming = fields.pop("metadata")
             fields["metadata_"] = (
-                {**(getattr(order, "metadata_", None) or {}), **_incoming} if isinstance(_incoming, dict) else _incoming
+                merge_metadata(getattr(order, "metadata_", None), _incoming)
+                if isinstance(_incoming, dict)
+                else _incoming
             )
         # T3: coerce UUID lists to plain str lists so the JSON column
         # stores stable hex strings on both Postgres and SQLite (which
@@ -1059,13 +1062,43 @@ class ChangeOrderService:
                 await self.session.execute(select(Project).where(Project.id == project_id_uuid))
             ).scalar_one_or_none()
             if project is not None:
-                try:
-                    current = Decimal(str(project.budget_estimate)) if project.budget_estimate else Decimal("0")
-                except (InvalidOperation, ValueError):
-                    current = Decimal("0")
-                project.budget_estimate = str(current + delta)
-                project_updated = True
-                await self.session.flush()
+                # The CO's cost_impact is in the CO's own currency; budget_estimate
+                # is a single scalar in the project's BASE currency. Convert before
+                # adding so a foreign-currency CO is never blended into the base
+                # figure (mirrors simulate_impact / get_summary). When the CO is in
+                # a different currency with no configured FX rate, skip the scalar
+                # writeback rather than blend - the currency-tagged ProjectBudget
+                # delta row below still records the change in its own currency.
+                from app.modules.finance.service import _convert_to_base, _project_fx_map
+
+                base_ccy = (getattr(project, "currency", "") or "").strip().upper()
+                co_ccy = (currency_s or "").strip().upper()
+                delta_base: Decimal | None = delta
+                if co_ccy and base_ccy and co_ccy != base_ccy:
+                    converted, missing = _convert_to_base(
+                        {co_ccy: delta},
+                        base_currency=base_ccy,
+                        fx_rates_map=_project_fx_map(project),
+                    )
+                    if co_ccy in missing:
+                        delta_base = None  # no rate -> do not blend into the base scalar
+                        logger.warning(
+                            "CO %s approved in %s with no FX rate to project base %s; "
+                            "budget_estimate left unchanged (ProjectBudget delta row still recorded)",
+                            code_s,
+                            co_ccy,
+                            base_ccy,
+                        )
+                    else:
+                        delta_base = Decimal(str(converted))
+                if delta_base is not None:
+                    try:
+                        current = Decimal(str(project.budget_estimate)) if project.budget_estimate else Decimal("0")
+                    except (InvalidOperation, ValueError):
+                        current = Decimal("0")
+                    project.budget_estimate = str(current + delta_base)
+                    project_updated = True
+                    await self.session.flush()
 
         # v2.6.45: Push CO items into the project's primary BOQ as a
         # dedicated section. Construction PMs expect approved scope to
@@ -1617,7 +1650,9 @@ class ChangeOrderService:
         if "metadata" in fields:
             _incoming = fields.pop("metadata")
             fields["metadata_"] = (
-                {**(getattr(item, "metadata_", None) or {}), **_incoming} if isinstance(_incoming, dict) else _incoming
+                merge_metadata(getattr(item, "metadata_", None), _incoming)
+                if isinstance(_incoming, dict)
+                else _incoming
             )
 
         # Recalculate cost_delta if quantities or rates changed. Decimal

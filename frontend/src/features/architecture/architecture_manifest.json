@@ -90709,7 +90709,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "Register a new reality-capture scan.\n\nThis mints a ``ScanDataset`` row in ``status='uploading'`` with a\ntenant-namespaced upload key. The bytes are uploaded presigned-direct-to-\nMinIO afterwards; the backend never proxies the cloud. ``original_format``\nis validated against the accepted allow-list (E57/LAS/LAZ/COPC/PLY/PCD/\nPTS/XYZ); proprietary ReCap ``rcp`` / ``rcs`` are rejected with an\nexplanatory error.",
+          "docstring": "Register a new reality-capture scan.\n\nThis mints a ``ScanDataset`` row in ``status='uploading'`` with a\ntenant-namespaced upload key. The bytes are uploaded presigned-direct-to-\nMinIO afterwards; the backend never proxies the cloud. ``original_format``\nis validated against the accepted allow-list (E57/LAS/LAZ/COPC/PLY/PCD/\nPTS/XYZ); proprietary ``rcp`` / ``rcs`` scan containers are rejected with an\nexplanatory error.",
           "fields": [
             {
               "name": "project_id",
@@ -90728,7 +90728,7 @@
             {
               "name": "original_format",
               "type": "ScanFormat",
-              "description": "Uploaded container format. One of E57/LAS/LAZ/COPC/PLY/PCD/PTS/XYZ. Autodesk ReCap RCP/RCS is proprietary and not accepted - export E57 or LAS instead."
+              "description": "Uploaded container format. One of E57/LAS/LAZ/COPC/PLY/PCD/PTS/XYZ. The proprietary .rcp/.rcs scan container is not accepted - export E57 or LAS instead."
             },
             {
               "name": "accuracy_tier",
@@ -90934,7 +90934,7 @@
             {
               "name": "original_format",
               "type": "ScanFormat",
-              "description": "Uploaded container format. One of E57/LAS/LAZ/COPC/PLY/PCD/PTS/XYZ. Autodesk ReCap RCP/RCS is proprietary and not accepted - export E57 or LAS instead."
+              "description": "Uploaded container format. One of E57/LAS/LAZ/COPC/PLY/PCD/PTS/XYZ. The proprietary .rcp/.rcs scan container is not accepted - export E57 or LAS instead."
             },
             {
               "name": "accuracy_tier",

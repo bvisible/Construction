@@ -29,6 +29,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 
 from app.core.i18n import get_locale
+from app.core.json_merge import merge_metadata
 from app.core.validation.messages import translate
 from app.dependencies import (
     CurrentUserId,
@@ -947,7 +948,7 @@ async def update_progress_claim(
     if "metadata" in fields:
         _incoming = fields.pop("metadata")
         fields["metadata_"] = (
-            {**(getattr(obj, "metadata_", None) or {}), **_incoming} if isinstance(_incoming, dict) else _incoming
+            merge_metadata(getattr(obj, "metadata_", None), _incoming) if isinstance(_incoming, dict) else _incoming
         )
     # Status changes must go through the lifecycle transition endpoints
     # (submit / approve / certify / reject / mark-paid). They enforce the
@@ -1174,7 +1175,13 @@ async def create_claim_line(
     user_id: CurrentUserId,
     _perm: None = Depends(RequirePermission("contracts.update")),
 ) -> ProgressClaimLineResponse:
-    await _verify_claim_access(session, data.progress_claim_id, user_id)
+    claim = await _verify_claim_access(session, data.progress_claim_id, user_id)
+    # The line breakdown is part of the immutable audit trail once the claim
+    # leaves draft / submitted. Mirror the PATCH / auto-generate guard so a raw
+    # POST cannot append (and thereby alter) lines on a billed claim
+    # (approved / certified / paid / rejected).
+    service = ContractsService(session)
+    service._assert_claim_editable(claim)
     repo = ProgressClaimLineRepository(session)
     obj = ProgressClaimLine(**data.model_dump())
     obj = await repo.create(obj)
@@ -1205,6 +1212,19 @@ async def update_claim_line(
     service._assert_claim_editable(claim)
     fields = {k: v for k, v in data.model_dump(exclude_unset=True).items() if v is not None}
     if fields:
+        # cumulative_completed_value is cumulative-to-date, never client-authored:
+        # accepting it lets the inline editor clobber the running total and corrupt
+        # earned-value + the AIA 'previous' column. Recompute it server-side with
+        # the same semantics as commit_preview_to_claim: prior non-rejected period
+        # values on this SoV line (excluding this claim) + this period's value.
+        fields.pop("cumulative_completed_value", None)
+        period_value = fields.get("period_completed_value", obj.period_completed_value)
+        prior_by_line = await repo.prior_period_value_by_line(
+            claim.contract_id,
+            exclude_claim_id=obj.progress_claim_id,
+        )
+        prior = prior_by_line.get(obj.contract_line_id, Decimal("0"))
+        fields["cumulative_completed_value"] = (prior + Decimal(str(period_value or 0))).quantize(Decimal("0.0001"))
         await repo.update_fields(line_id, **fields)
         await session.refresh(obj)
     return ProgressClaimLineResponse.model_validate(obj)

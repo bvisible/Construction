@@ -932,6 +932,7 @@ async def tasks_similar(
     from sqlalchemy import select
 
     from app.core.vector_index import find_similar
+    from app.dependencies import allowed_project_ids_for_similar
     from app.modules.tasks.models import Task
     from app.modules.tasks.vector_adapter import task_vector_adapter
 
@@ -940,13 +941,22 @@ async def tasks_similar(
     if row is None:
         raise HTTPException(status_code=404, detail="Task not found")
 
+    # Cross-tenant guard: you may only seed a similarity search from a task
+    # whose project you can access (404 on denial, never leaking existence).
+    if row.project_id is not None:
+        await verify_project_access(row.project_id, str(_user_id), session)
+
     project_id = str(row.project_id) if row.project_id is not None else None
+    # Restrict cross-project hits to projects the caller may access
+    # (None == admin/unrestricted, mirroring verify_project_access).
+    allowed = await allowed_project_ids_for_similar(session, str(_user_id), project_id, cross_project)
     hits = await find_similar(
         task_vector_adapter,
         row,
         project_id=project_id,
         cross_project=cross_project,
         limit=limit,
+        allowed_project_ids=allowed,
     )
     return {
         "source_id": str(task_id),

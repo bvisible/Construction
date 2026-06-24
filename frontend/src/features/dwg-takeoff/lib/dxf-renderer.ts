@@ -382,18 +382,20 @@ export function renderText(
   if (!entity.start || !entity.text) return;
   const pos = worldToScreen(entity.start.x, entity.start.y, vp);
   const fontSize = Math.max(8, Math.min(72, (entity.height ?? 2.5) * vp.scale));
+  // MTEXT keeps its newlines (the backend maps MTEXT -> TEXT but preserves the
+  // string), and canvas fillText ignores "\n", so render each line stacked.
+  const lines = entity.text.split('\n');
+  const lineH = fontSize * 1.25;
 
   ctx.save();
+  ctx.font = `${fontSize}px monospace`;
+  ctx.textBaseline = 'bottom';
   if (entity.rotation) {
     ctx.translate(pos.x, pos.y);
     ctx.rotate(-entity.rotation); // negate for screen Y-flip
-    ctx.font = `${fontSize}px monospace`;
-    ctx.textBaseline = 'bottom';
-    ctx.fillText(entity.text, 0, 0);
+    lines.forEach((ln, i) => ctx.fillText(ln, 0, i * lineH));
   } else {
-    ctx.font = `${fontSize}px monospace`;
-    ctx.textBaseline = 'bottom';
-    ctx.fillText(entity.text, pos.x, pos.y);
+    lines.forEach((ln, i) => ctx.fillText(ln, pos.x, pos.y + i * lineH));
   }
   ctx.restore();
 }

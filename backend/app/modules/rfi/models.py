@@ -6,7 +6,7 @@ Tables:
 
 import uuid
 
-from sqlalchemy import JSON, Boolean, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import GUID, Base
@@ -21,7 +21,22 @@ class RFI(Base):
     # a clean :class:`IntegrityError` the service can retry, rather than
     # quietly writing two RFI-007 rows in the same project. Mirrors the
     # changeorders ``uq_changeorders_project_code`` pattern.
-    __table_args__ = (UniqueConstraint("project_id", "rfi_number", name="uq_rfi_project_number"),)
+    #
+    # PERF: ``(project_id, created_at)`` composite index. Every list page
+    # (``list_for_project``) and the stats panel (``get_stats``) run
+    # ``WHERE project_id = ? ... ORDER BY created_at DESC`` with a LIMIT.
+    # The standalone ``project_id`` index below filters but cannot satisfy
+    # the sort, so on PostgreSQL the planner adds a separate (heap-spilling
+    # for large projects) sort step on every load. With the leading
+    # ``project_id`` equality + trailing ``created_at`` ordering column the
+    # planner returns rows pre-ordered and applies the LIMIT as an index
+    # range scan - the standard hot-list index pattern. ``project_id``
+    # keeps its own single-column index for the FK / equality-only lookups
+    # (e.g. ``next_rfi_number``'s MAX aggregate).
+    __table_args__ = (
+        UniqueConstraint("project_id", "rfi_number", name="uq_rfi_project_number"),
+        Index("ix_rfi_project_created", "project_id", "created_at"),
+    )
 
     project_id: Mapped[uuid.UUID] = mapped_column(
         GUID(),

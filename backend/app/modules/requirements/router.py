@@ -682,10 +682,15 @@ async def bulk_add_requirements(
     set_id: uuid.UUID,
     data: list[RequirementCreate],
     user_id: CurrentUserId,
+    session: SessionDep,
     _perm: None = Depends(RequirePermission("requirements.create")),
     service: RequirementsService = Depends(_get_service),
 ) -> list[RequirementResponse]:
     """Bulk add requirements to a set."""
+    # IDOR guard: requirements.create is a global role; gate on the target set's
+    # project before bulk-inserting into it (cross-tenant write otherwise).
+    req_set = await service.get_set(set_id)
+    await verify_project_access(req_set.project_id, str(user_id), session)
     try:
         items = await service.bulk_add_requirements(set_id, data, user_id=user_id)
         return [_req_to_response(i) for i in items]
@@ -756,10 +761,16 @@ async def run_gate(
     set_id: uuid.UUID,
     gate_number: int,
     user_id: CurrentUserId,
+    session: SessionDep,
     _perm: None = Depends(RequirePermission("requirements.update")),
     service: RequirementsService = Depends(_get_service),
 ) -> GateResultResponse:
     """Execute a quality gate on a requirement set."""
+    # IDOR guard: requirements.update is a global role; gate on the set's owning
+    # project before running the gate (which writes a GateResult row and
+    # overwrites the set's gate_status). Cross-tenant write otherwise.
+    req_set = await service.get_set(set_id)
+    await verify_project_access(req_set.project_id, str(user_id), session)
     try:
         result = await service.run_gate(set_id, gate_number, user_id=user_id)
         return _gate_to_response(result)
@@ -779,10 +790,17 @@ async def run_gate(
 @router.get("/{set_id}/gates/", response_model=list[GateResultResponse])
 async def list_gates(
     set_id: uuid.UUID,
+    session: SessionDep,
     user_id: CurrentUserId = None,  # type: ignore[assignment]
+    _perm: None = Depends(RequirePermission("requirements.read")),
     service: RequirementsService = Depends(_get_service),
 ) -> list[GateResultResponse]:
     """List all gate results for a requirement set."""
+    # IDOR guard: requirements.read is a global role; gate on the set's owning
+    # project before returning its gate findings (constraint values, BOQ
+    # position_ids). Cross-tenant read otherwise; also adds the missing RBAC.
+    req_set = await service.get_set(set_id)
+    await verify_project_access(req_set.project_id, str(user_id), session)
     results = await service.list_gate_results(set_id)
     return [_gate_to_response(r) for r in results]
 
@@ -862,7 +880,8 @@ async def link_requirement_to_bim(
     set_id: uuid.UUID,
     req_id: uuid.UUID,
     body: BIMLinkBody,
-    _user_id: CurrentUserId,
+    user_id: CurrentUserId,
+    session: SessionDep,
     _perm: None = Depends(RequirePermission("requirements.update")),
     service: RequirementsService = Depends(_get_service),
 ) -> RequirementResponse:
@@ -877,6 +896,12 @@ async def link_requirement_to_bim(
     standardized ``requirements.requirement.linked_bim`` event so the
     vector indexer refreshes the embedding to reflect the new links.
     """
+    # IDOR guard: requirements.update is a global role and the service resolves
+    # by req_id (ignoring set_id), so gate on the requirement's real project
+    # BEFORE mutating its links (replace=true can wipe them). The trailing
+    # set-membership check runs post-write and does not authorize the project.
+    project_id = await service.get_requirement_project_id(req_id)
+    await verify_project_access(project_id, str(user_id), session)
     item = await service.link_to_bim_elements(req_id, body.bim_element_ids, replace=body.replace)
     if item.requirement_set_id != set_id:
         raise HTTPException(
@@ -1014,6 +1039,7 @@ async def requirement_similar(
     from sqlalchemy.orm import selectinload
 
     from app.core.vector_index import find_similar
+    from app.dependencies import allowed_project_ids_for_similar
     from app.modules.requirements.models import Requirement
     from app.modules.requirements.vector_adapter import requirement_vector_adapter
 
@@ -1032,12 +1058,20 @@ async def requirement_similar(
         if row.requirement_set is not None and row.requirement_set.project_id
         else None
     )
+    # Cross-tenant guard: you may only seed a similarity search from a
+    # requirement whose project you can access (404 on denial), and the
+    # cross-project results are restricted to projects the caller may reach
+    # (None == admin/unrestricted, mirroring verify_project_access).
+    if row.requirement_set is not None and row.requirement_set.project_id is not None:
+        await verify_project_access(row.requirement_set.project_id, str(_user_id), session)
+    allowed = await allowed_project_ids_for_similar(session, str(_user_id), project_id, cross_project)
     hits = await find_similar(
         requirement_vector_adapter,
         row,
         project_id=project_id,
         cross_project=cross_project,
         limit=limit,
+        allowed_project_ids=allowed,
     )
     return {
         "source_id": str(req_id),
@@ -1106,11 +1140,17 @@ async def list_requirement_deliverables(
 async def create_requirement_deliverable(
     requirement_id: uuid.UUID,
     data: DeliverableCreate,
-    _user_id: CurrentUserId,
+    user_id: CurrentUserId,
+    session: SessionDep,
     _perm: None = Depends(RequirePermission("requirements.update")),
     service: RequirementsService = Depends(_get_service),
 ) -> DeliverableResponse:
     """Attach a new EIR deliverable to a requirement."""
+    # IDOR guard: gate on the requirement's real project before attaching a
+    # deliverable (requirements.update is a global role; cross-tenant write
+    # otherwise).
+    project_id = await service.get_requirement_project_id(requirement_id)
+    await verify_project_access(project_id, str(user_id), session)
     try:
         item = await service.add_deliverable(requirement_id, data)
         return _deliverable_to_response(item)
@@ -1132,11 +1172,17 @@ async def update_requirement_deliverable(
     requirement_id: uuid.UUID,
     deliverable_id: uuid.UUID,
     data: DeliverableUpdate,
-    _user_id: CurrentUserId,
+    user_id: CurrentUserId,
+    session: SessionDep,
     _perm: None = Depends(RequirePermission("requirements.update")),
     service: RequirementsService = Depends(_get_service),
 ) -> DeliverableResponse:
     """Patch fields on an EIR deliverable row."""
+    # IDOR guard: gate on the requirement's real project before patching a
+    # deliverable (requirements.update is a global role; cross-tenant write
+    # otherwise).
+    project_id = await service.get_requirement_project_id(requirement_id)
+    await verify_project_access(project_id, str(user_id), session)
     item = await service.update_deliverable(requirement_id, deliverable_id, data)
     return _deliverable_to_response(item)
 
@@ -1148,11 +1194,17 @@ async def update_requirement_deliverable(
 async def delete_requirement_deliverable(
     requirement_id: uuid.UUID,
     deliverable_id: uuid.UUID,
-    _user_id: CurrentUserId,
+    user_id: CurrentUserId,
+    session: SessionDep,
     _perm: None = Depends(RequirePermission("requirements.delete")),
     service: RequirementsService = Depends(_get_service),
 ) -> None:
     """Hard delete an EIR deliverable row."""
+    # IDOR guard: gate on the requirement's real project before hard-deleting a
+    # deliverable (requirements.delete is a global role; cross-tenant destructive
+    # write otherwise).
+    project_id = await service.get_requirement_project_id(requirement_id)
+    await verify_project_access(project_id, str(user_id), session)
     await service.delete_deliverable(requirement_id, deliverable_id)
 
 

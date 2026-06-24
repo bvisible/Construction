@@ -792,3 +792,51 @@ class LaborCostByPhaseResponse(BaseModel):
     # (Project.currency). A blank fallback signals "unknown" rather than
     # silently mislabelling BRL/GBP/USD amounts as EUR.
     currency: str = ""
+
+
+# ── EVM summary (Section 6 - earned-value rollup) ───────────────────────────
+
+
+class EvmSummaryResponse(BaseModel):
+    """Scalar earned-value metrics for a schedule at a data date.
+
+    Mirrors :class:`app.modules.schedule.service_4d.EvmSummary`. Money fields
+    are emitted as Decimal-as-string (the platform money wire contract the
+    frontend ``shared/lib/money.ts`` decodes); the dimensionless performance
+    indices (``spi`` / ``cpi``) and the forecast block (``estimate_at_*`` /
+    ``variance_at_completion``) are ``float | None`` - ``None`` when the
+    schedule is not cost-loaded or a denominator is zero (division by zero is
+    undefined, surfaced to the UI as "not available" rather than a bogus 0).
+    """
+
+    schedule_id: UUID
+    as_of_date: str
+    # ── Cost-loaded money fields (Decimal-as-string) ──────────────────────
+    planned_value: Decimal = Decimal("0")  # PV / BCWS, time-phased to as_of
+    earned_value: Decimal = Decimal("0")  # EV / BCWP
+    actual_cost: Decimal = Decimal("0")  # AC / ACWP
+    budget_at_completion: Decimal = Decimal("0")  # BAC = sum of cost_planned
+    schedule_variance: Decimal = Decimal("0")  # SV = EV - PV
+    cost_variance: Decimal = Decimal("0")  # CV = EV - AC
+    estimate_at_completion: Decimal | None = None  # EAC = BAC / CPI
+    estimate_to_complete: Decimal | None = None  # ETC = EAC - AC
+    variance_at_completion: Decimal | None = None  # VAC = BAC - EAC
+    # ── Dimensionless performance indices ─────────────────────────────────
+    spi: float | None = None  # SPI = EV / PV
+    cpi: float | None = None  # CPI = EV / AC
+    has_cost_data: bool = False
+
+    @field_serializer(
+        "planned_value",
+        "earned_value",
+        "actual_cost",
+        "budget_at_completion",
+        "schedule_variance",
+        "cost_variance",
+        "estimate_at_completion",
+        "estimate_to_complete",
+        "variance_at_completion",
+        when_used="json",
+    )
+    def _ser_money(self, v: Decimal | None) -> str | None:
+        return _serialise_money(v)

@@ -564,6 +564,7 @@ async def find_similar(
     project_id: str | None = None,
     cross_project: bool = False,
     limit: int = 5,
+    allowed_project_ids: set[str] | None = None,
 ) -> list[VectorHit]:
     """Return rows most semantically similar to ``row``.
 
@@ -571,11 +572,40 @@ async def find_similar(
     True, the project filter is dropped so callers can find similar items
     across the whole tenant - invaluable for risk lessons-learned reuse
     and BOQ template suggestion.
+
+    SECURITY - cross-project access scoping
+    ---------------------------------------
+    A cross-project search would otherwise surface row text from EVERY
+    project (and tenant) in the deployment, leaking data the caller has no
+    right to see.  ``allowed_project_ids`` constrains the results to the
+    set of project UUIDs the caller may access (compute it in the router
+    via :func:`app.dependencies.accessible_project_ids`, the set-level
+    companion to :func:`app.dependencies.verify_project_access`):
+
+    * ``None``  -> no restriction (unrestricted / admin caller, mirroring
+      the ``None`` sentinel returned by ``accessible_project_ids`` for
+      admins).  This is the default purely for backwards compatibility;
+      every HTTP caller MUST pass an explicit set so a non-admin can never
+      reach another tenant's rows.
+    * a ``set`` -> only hits whose ``project_id`` is in the set are
+      returned.  An empty set therefore returns nothing, which is the safe
+      default for a caller with no accessible projects.
+
+    The filter is only meaningful for ``cross_project`` searches - a
+    same-project search is already constrained to ``project_id`` (which the
+    router has authorised via ``verify_project_access``), so the source
+    project always survives the filter when callers add it to the set.
     """
     row_id = _coerce_id(getattr(row, "id", None))
     text = _safe_text(adapter.to_text(row))
     if not text or not row_id:
         return []
+
+    # When we have to post-filter cross-project hits down to the caller's
+    # accessible projects, over-fetch candidates so the filtered result set
+    # still has a useful number of rows (mirrors the chat-message endpoint).
+    restrict = cross_project and allowed_project_ids is not None
+    fetch_limit = max(limit * 5, limit) + 1 if restrict else limit + 1
 
     project_filter = None if cross_project else (project_id or _coerce_id(adapter.project_id_of(row)) or None)
     hits = await search_collection(
@@ -583,9 +613,14 @@ async def find_similar(
         text,
         project_id=project_filter,
         tenant_id=tenant_id,
-        limit=limit + 1,  # +1 because the source row will probably show up
+        limit=fetch_limit,  # +1 because the source row will probably show up
     )
-    return [h for h in hits if h.id != row_id][:limit]
+    out = [h for h in hits if h.id != row_id]
+    if restrict:
+        # allowed_project_ids is not None here (guarded by ``restrict``).
+        allowed = {str(p) for p in allowed_project_ids}  # type: ignore[union-attr]
+        out = [h for h in out if str(h.project_id) in allowed]
+    return out[:limit]
 
 
 # ── Reciprocal Rank Fusion (used by unified search) ──────────────────────

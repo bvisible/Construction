@@ -213,3 +213,38 @@ class RFIStatsResponse(BaseModel):
     )
     cost_impact_count: int = 0
     schedule_impact_count: int = 0
+
+
+class RFIVariationResponse(BaseModel):
+    """Result of minting (or returning an existing) change order from an RFI.
+
+    The ``POST /{rfi_id}/create-variation/`` endpoint previously returned an
+    untyped ``dict``, so the wire contract was undocumented in the OpenAPI
+    schema and the frontend had to hand-type it. This locks the exact shape
+    the handler already emits (idempotent re-mints return the same fields).
+    """
+
+    change_order_id: str = Field(description="UUID of the linked change order.")
+    code: str = Field(description="Human-readable change-order code, e.g. CO-007.")
+    rfi_id: str = Field(description="UUID of the source RFI.")
+    title: str = Field(description="Change-order title (pre-filled from the RFI subject).")
+
+
+class RFIBatchDeleteResponse(BaseModel):
+    """Outcome of a bulk RFI delete.
+
+    ``deleted`` can be less than ``requested`` when some ids fall outside the
+    caller's accessible projects or no longer exist - the contract never
+    raises for partial matches.
+    """
+
+    requested: int = Field(ge=0, description="Number of ids supplied in the request.")
+    deleted: int = Field(ge=0, description="Number of RFIs actually deleted.")
+
+
+class RFIBatchStatusResponse(BaseModel):
+    """Outcome of a bulk RFI status update."""
+
+    requested: int = Field(ge=0, description="Number of ids supplied in the request.")
+    updated: int = Field(ge=0, description="Number of RFIs whose status changed.")
+    status: str = Field(description="The status value that was applied.")

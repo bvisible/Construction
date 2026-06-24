@@ -36,6 +36,7 @@ MANIFEST = PartnerPackManifest(
     ],
     default_currency="INR",
     default_tax_template="in_gst_18",
+    default_methodology="india",
     validation_rule_packs=[
         # Specifications & rates
         "cpwd_specs_2019",          # CPWD Specs 2019 + Works Manual 2019 + DSR 2023

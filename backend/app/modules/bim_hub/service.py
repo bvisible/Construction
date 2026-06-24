@@ -671,11 +671,16 @@ async def _strip_orphaned_bim_links(
 
 
 # On-disk directory for BIM geometry files (original.{ext}, geometry.dae,
-# dataframe.xlsx, …). Matches the layout used by ``bim_hub.router`` which
-# writes to ``<repo>/data/bim/{project_id}/{model_id}/``.
-#
-# ``service.py`` → ``app/modules/bim_hub/service.py`` → parents[4] == repo root
-_BIM_DATA_DIR = Path(__file__).resolve().parents[4] / "data" / "bim"
+# dataframe.xlsx, …). The ACTIVE blob root follows the unified resolver
+# (:func:`app.core.storage.resolve_data_dir`, which honours OE_DATA_DIR /
+# DATA_DIR / OE_CLI_DATA_DIR before the package-relative default) so this can
+# never disagree with where the storage backend actually writes. Computed at
+# call time, not import time, so a destructive cleanup always reflects the
+# live environment.
+def _bim_data_dir() -> Path:
+    from app.core.storage import resolve_data_dir
+
+    return resolve_data_dir() / "bim"
 
 
 class BIMHubService:
@@ -819,7 +824,11 @@ class BIMHubService:
         reclaimed. Called from the admin-only
         ``POST /api/v1/bim_hub/cleanup-orphans/`` endpoint.
         """
-        if not _BIM_DATA_DIR.is_dir():
+        # ONLY ever scan the active data root - never the back-compat read
+        # fallbacks (:func:`safe_data_roots`), since this method DELETES and a
+        # blob found under a fallback root may still belong to a live model.
+        bim_root = _bim_data_dir()
+        if not bim_root.is_dir():
             return {"scanned": 0, "removed_models": 0, "removed_projects": 0, "bytes_freed": 0}
 
         # Load all known model ids from the DB in a single query.
@@ -834,7 +843,7 @@ class BIMHubService:
         bytes_freed = 0
         removed_details: list[str] = []
 
-        for project_dir in _BIM_DATA_DIR.iterdir():
+        for project_dir in bim_root.iterdir():
             if not project_dir.is_dir():
                 continue
             for model_dir in project_dir.iterdir():
@@ -2119,11 +2128,18 @@ class BIMHubService:
     async def list_quantity_maps(
         self,
         *,
+        project_ids: set[uuid.UUID] | None,
         offset: int = 0,
         limit: int = 100,
     ) -> tuple[list[BIMQuantityMap], int]:
-        """List all quantity mapping rules."""
-        return await self.qmap_repo.list_all(offset=offset, limit=limit)
+        """List quantity mapping rules visible to the caller.
+
+        ``project_ids`` is the caller's accessible-project set (``None`` for
+        admins / unrestricted). Project-scoped rules belonging to other
+        tenants are excluded; ``project_id IS NULL`` rows (global templates)
+        remain visible to everyone.
+        """
+        return await self.qmap_repo.list_scoped(project_ids=project_ids, offset=offset, limit=limit)
 
     async def create_quantity_map(
         self,

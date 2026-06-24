@@ -36,6 +36,11 @@ def _serialise_money(v: Decimal | None) -> str | None:
 class AISettingsUpdate(BaseModel):
     """‌⁠‍Update per-user AI configuration (API keys, preferred model)."""
 
+    # NOTE: extra='forbid' deliberately NOT set - the onboarding wizard and the
+    # AI settings page both POST a ``provider`` field that this schema does not
+    # define (only ``preferred_model`` is read), so forbidding extras would 422
+    # those existing callers. Keyless-provider key vanishing (issue #244) is
+    # fixed on the frontend by not sending ``<provider>_api_key`` for them.
     model_config = ConfigDict(str_strip_whitespace=True)
 
     anthropic_api_key: str | None = None

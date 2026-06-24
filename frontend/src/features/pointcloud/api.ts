@@ -18,20 +18,19 @@
  * real backend error to the caller, exactly like the BIM / DWG flows.
  */
 
-import { apiGet, apiPost, API_BASE, getAuthToken } from '@/shared/lib/api';
+import { apiGet, apiPost, apiDelete, API_BASE, getAuthToken } from '@/shared/lib/api';
 
 /** Accepted upload containers, mirrored from the backend allow-list
  *  (backend/app/modules/pointcloud/models.py ACCEPTED_SCAN_FORMATS).
- *  Proprietary ReCap RCP/RCS is deliberately absent - export E57 or LAS. */
+ *  These are exactly the formats the server can decode: the open LAS/LAZ/COPC
+ *  family (built in) and E57 (needs the 'pointcloud' extra on the server).
+ *  The proprietary .rcp/.rcs scan container is deliberately absent - export
+ *  E57 or LAS. */
 export const ACCEPTED_SCAN_FORMATS = [
-  'e57',
   'las',
   'laz',
   'copc',
-  'ply',
-  'pcd',
-  'pts',
-  'xyz',
+  'e57',
 ] as const;
 
 export type ScanSourceType = 'laser_scan' | 'photogrammetry' | 'lidar' | 'other';
@@ -137,6 +136,18 @@ export async function listScans(projectId: string): Promise<ScanDatasetList> {
   return apiGet<ScanDatasetList>(`/v1/pointcloud/scans?project_id=${projectId}`);
 }
 
+/**
+ * Delete a scan, its registrations and its object-storage artifacts.
+ *
+ * Hits ``DELETE /v1/pointcloud/scans/{scan_id}`` (gated by ``pointcloud.delete``
+ * / MANAGER+ on the server). The backend sweeps the scan's storage prefix before
+ * removing the row and answers 204 on success; a cross-tenant or unknown id
+ * collapses to 404. Throws on any non-2xx so the caller surfaces the real error.
+ */
+export async function deleteScan(scanId: string): Promise<void> {
+  await apiDelete<void>(`/v1/pointcloud/scans/${scanId}`);
+}
+
 /** Scan lifecycle states the points endpoint can serve (see service.get_points). */
 export const VIEWABLE_SCAN_STATUSES: readonly string[] = ['uploaded', 'converting', 'ready'];
 
@@ -232,9 +243,14 @@ export async function fetchScanPoints(
 /** Derive the accepted upload format from a file name, lower-cased without the
  *  leading dot, or null when the extension is not on the allow-list. */
 export function formatFromFileName(name: string): string | null {
-  const dot = name.lastIndexOf('.');
+  const lower = name.toLowerCase();
+  // COPC ships by convention as 'scan.copc.laz' (or rarely 'scan.copc'); both
+  // must register as the COPC format, not the plain 'laz' the last-dot fallback
+  // would return.
+  if (lower.endsWith('.copc.laz') || lower.endsWith('.copc')) return 'copc';
+  const dot = lower.lastIndexOf('.');
   if (dot < 0) return null;
-  const ext = name.slice(dot + 1).toLowerCase();
+  const ext = lower.slice(dot + 1);
   return (ACCEPTED_SCAN_FORMATS as readonly string[]).includes(ext) ? ext : null;
 }
 

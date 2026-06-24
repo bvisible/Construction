@@ -30,7 +30,6 @@ import {
 } from 'lucide-react';
 
 import { Button, Card, Badge, Input, Skeleton, DismissibleInfo, IntroRichText, Breadcrumb, ModuleGuideButton } from '@/shared/ui';
-import { PageHeader } from '@/shared/ui/PageHeader';
 import { PdfCompareDrawer } from './PdfCompareDrawer';
 import { takeoffGuide } from './takeoffGuide';
 import { apiGet, apiPost, API_BASE } from '@/shared/lib/api';
@@ -1443,15 +1442,19 @@ export function TakeoffPage() {
         headers['Authorization'] = `Bearer ${token}`;
       }
 
-      // //// NEOFFICE PATCH — route the upload through the unified base URL.
-      // This is the only takeoff call that used a hardcoded /api/v1/ (direct
-      // OCE) instead of the shared client. Since the move to the Frappe proxy
-      // the direct /api/v1/ path is no longer routed (404), so this upload
-      // hung forever on "Uploading…". API_BASE resolves to /neoconstruction/api
-      // when embedded (cookie-authenticated via the proxy, no CSRF needed —
-      // verified) and /api otherwise. credentials:'include' sends the Frappe
-      // session cookie.
-      const response = await fetch(`${API_BASE}/v1/takeoff/documents/upload/`, {
+      // Attach the active project so the document is stored under it (#242):
+      // without it the row saved with project_id=NULL and the project-filtered
+      // reload dropped it (PDF vanished on refresh). The backend verifies
+      // access to the project before any write.
+      // //// NEOFFICE PATCH — route through API_BASE (unified Frappe proxy base).
+      // The direct /api/v1/ path isn't routed when embedded (404, upload hung on
+      // "Uploading…"); API_BASE = /neoconstruction/api when embedded (cookie auth
+      // via the proxy) and /api otherwise. credentials:'include' sends the cookie.
+      const uploadUrl = selectedProjectId
+        ? `${API_BASE}/v1/takeoff/documents/upload/?project_id=${encodeURIComponent(selectedProjectId)}`
+        : `${API_BASE}/v1/takeoff/documents/upload/`;
+      // //// END NEOFFICE PATCH
+      const response = await fetch(uploadUrl, {
         method: 'POST',
         headers,
         body: formData,
@@ -1972,32 +1975,30 @@ export function TakeoffPage() {
           so the canonical breadcrumb > header > info > tabs block carries its
           own space-y-5 rhythm here (style guide §1 viewer exception). */}
       <div className="space-y-5">
-      <Breadcrumb
-        items={[
-          ...(() => {
-            const sel = projects?.find((p) => p.id === selectedProjectId);
-            return sel ? [{ label: sel.name, to: `/projects/${sel.id}` }] : [];
-          })(),
-          { label: t('nav.pdf_measurements', 'PDF Measurements') },
-        ]}
-      />
-      {/* Canonical top block — the module name + icon are shown by the global
-          top app bar, so no visible in-page title. The PageHeader carries a
-          subtitle (what the page does) so the header row is never a blank
-          midline before the info card. */}
-      <PageHeader
-        srTitle={t('nav.pdf_measurements', 'PDF Measurements')}
-        subtitle={t('takeoff.subtitle', {
-          defaultValue:
-            'Measure areas, lengths and counts on PDF drawings and send them to a BOQ',
-        })}
-        actions={
+      {/* Breadcrumb and the "How it works" guide button share one row so the
+          guide action sits level with the project / page trail and the blocks
+          below move up (founder layout request). The module name + icon still
+          come from the global top app bar; the sr-only h1 keeps the accessible
+          page heading, and the "what this page does" copy lives in the
+          dismissible info card just below. */}
+      <div className="flex min-h-7 flex-wrap items-center gap-x-4 gap-y-2">
+        <Breadcrumb
+          items={[
+            ...(() => {
+              const sel = projects?.find((p) => p.id === selectedProjectId);
+              return sel ? [{ label: sel.name, to: `/projects/${sel.id}` }] : [];
+            })(),
+            { label: t('nav.pdf_measurements', 'PDF Measurements') },
+          ]}
+        />
+        <h1 className="sr-only">{t('nav.pdf_measurements', 'PDF Measurements')}</h1>
+        <div className="ml-auto flex shrink-0 items-center gap-2">
           <ModuleGuideButton
             content={takeoffGuide}
             onCta={() => setActiveTab('documents')}
           />
-        }
-      />
+        </div>
+      </div>
 
       <DismissibleInfo
         storageKey="takeoff"

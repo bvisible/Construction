@@ -68,7 +68,11 @@ export function ClashKpiPanel({ projectId, runId }: ClashKpiPanelProps) {
   });
 
   if (isLoading) {
-    return <div className="p-6 text-content-tertiary">Loading…</div>;
+    return (
+      <div className="p-6 text-content-tertiary" data-testid="clash-kpi-loading">
+        {t('common.loading', { defaultValue: 'Loading...' })}
+      </div>
+    );
   }
   if (!data) return null;
 

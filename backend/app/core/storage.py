@@ -294,7 +294,12 @@ class StorageBackend(ABC):
         Raises :class:`FileNotFoundError` if ``key`` does not exist.
         """
 
-    async def list_prefix(self, prefix: str) -> list[tuple[str, int]]:
+    async def list_prefix(
+        self,
+        prefix: str,
+        *,
+        include_backcompat_roots: bool = False,
+    ) -> list[tuple[str, int]]:
         """Return ``(key, size_bytes)`` for every blob under ``prefix``.
 
         This is a **bulk** probe: one round-trip to the storage backend
@@ -303,6 +308,16 @@ class StorageBackend(ABC):
         ``exists()`` / ``size()`` calls - e.g. list endpoints that need
         to summarise per-row storage usage across a paginated set.
 
+        ``include_backcompat_roots`` is a read-only, opt-in flag honoured by
+        backends that own multiple data roots (the local filesystem backend):
+        when ``True`` the same prefix is ALSO listed under every other
+        platform-owned data root in :func:`safe_data_roots`, de-duplicated by
+        key (active root wins). This mirrors how
+        :meth:`LocalStorageBackend._existing_path_for` rescues an exact-case
+        ``exists()`` probe across back-compat roots, so a bulk listing covers
+        the same blobs a single ``exists()`` would have found. Backends with a
+        single namespace (S3) ignore the flag.
+
         The default implementation raises :class:`NotImplementedError`.
         :class:`LocalStorageBackend` walks the directory tree once;
         :class:`S3StorageBackend` paginates ``list_objects_v2`` until
@@ -310,7 +325,7 @@ class StorageBackend(ABC):
         (POSIX path) - callers slice them by the model_id segment when
         grouping results.
         """
-        _ = prefix
+        _ = (prefix, include_backcompat_roots)
         raise NotImplementedError(
             f"{type(self).__name__} does not implement list_prefix(). "
             "Callers must fall back to per-object exists()/size() probes."
@@ -516,6 +531,44 @@ class LocalStorageBackend(StorageBackend):
             raise ValueError(f"Storage key {key!r} escapes base_dir {self.base_dir}") from exc
         return resolved
 
+    def _existing_path_for(self, key: str) -> Path | None:
+        """Resolve ``key`` to an existing file, with a read-only back-compat fallback.
+
+        The active ``base_dir`` is tried first. If the blob is not there we
+        probe every OTHER platform-owned data root (see :func:`safe_data_roots`)
+        for the same key. This is what lets a model whose geometry was written
+        under a DIFFERENT data-dir resolution - e.g. before ``OE_DATA_DIR`` was
+        honoured here, or under the package-relative default that a later
+        ``pip install -U`` replaced - still be served instead of 404'ing.
+
+        Reads fall back; WRITES never do (``put``/``delete``/``cleanup`` stay on
+        ``base_dir``). Containment is re-checked against each candidate root with
+        ``relative_to`` so a crafted key can never escape a data root. Returns
+        ``None`` when the blob exists nowhere.
+        """
+        primary = self._path_for(key)  # raises ValueError on key escape
+        if primary.is_file():
+            return primary
+        parts = _normalise_key(key).split("/")
+        for base in safe_data_roots():
+            base = base.resolve()
+            if base == self.base_dir:
+                continue
+            try:
+                candidate = base.joinpath(*parts).resolve()
+                candidate.relative_to(base)
+            except (OSError, ValueError):
+                continue
+            if candidate.is_file():
+                logger.info(
+                    "storage: key %r absent under active base %s; served from back-compat data root %s",
+                    key,
+                    self.base_dir,
+                    base,
+                )
+                return candidate
+        return None
+
     # -- public API -----------------------------------------------------
 
     async def put(self, key: str, content: bytes) -> None:
@@ -554,18 +607,16 @@ class LocalStorageBackend(StorageBackend):
         await asyncio.to_thread(_move)
 
     async def get(self, key: str) -> bytes:
-        path = self._path_for(key)
-
         def _read() -> bytes:
-            if not path.is_file():
+            path = self._existing_path_for(key)
+            if path is None:
                 raise FileNotFoundError(f"No blob at key: {key}")
             return path.read_bytes()
 
         return await asyncio.to_thread(_read)
 
     async def exists(self, key: str) -> bool:
-        path = self._path_for(key)
-        return await asyncio.to_thread(path.is_file)
+        return await asyncio.to_thread(lambda: self._existing_path_for(key) is not None)
 
     async def delete(self, key: str) -> None:
         path = self._path_for(key)
@@ -599,31 +650,51 @@ class LocalStorageBackend(StorageBackend):
         return await asyncio.to_thread(_sweep)
 
     async def size(self, key: str) -> int:
-        path = self._path_for(key)
-
         def _size() -> int:
-            if not path.is_file():
+            path = self._existing_path_for(key)
+            if path is None:
                 raise FileNotFoundError(f"No blob at key: {key}")
             return path.stat().st_size
 
         return await asyncio.to_thread(_size)
 
-    async def list_prefix(self, prefix: str) -> list[tuple[str, int]]:
+    async def list_prefix(
+        self,
+        prefix: str,
+        *,
+        include_backcompat_roots: bool = False,
+    ) -> list[tuple[str, int]]:
         """Walk the directory tree under ``prefix`` once and return every
         ``(key, size_bytes)`` pair.
 
         Replaces N parallel ``exists()`` + ``size()`` probes with one
         ``rglob`` sweep - important for the BIM list endpoint where a
         50-row page would otherwise issue 150+ individual file stats.
+
+        When ``include_backcompat_roots`` is True the same prefix is ALSO
+        walked under every OTHER platform-owned data root (see
+        :func:`safe_data_roots`), read-only, de-duplicated by key with the
+        active ``base_dir`` winning. This makes a bulk listing cover the same
+        blobs a single :meth:`_existing_path_for` (and therefore
+        :meth:`exists`) probe already rescues - e.g. an uppercase
+        ``geometry.GLB`` stranded under a pre-8.6.1 default root - so the BIM
+        case-insensitive geometry fallback and size/summary scans never
+        under-report. Containment is re-checked against each candidate root so
+        a crafted key can never escape a data root.
         """
         normalised = _normalise_key(prefix) if prefix else ""
-        root = self.base_dir if not normalised else self.base_dir.joinpath(*normalised.split("/"))
+        key_parts = normalised.split("/") if normalised else []
 
-        def _walk() -> list[tuple[str, int]]:
+        def _walk_root(base: Path) -> list[tuple[str, int]]:
+            base = base.resolve()
+            root = base if not key_parts else base.joinpath(*key_parts)
+            try:
+                root.relative_to(base)
+            except ValueError:
+                return []
             if not root.is_dir():
                 return []
             out: list[tuple[str, int]] = []
-            base = self.base_dir
             for child in root.rglob("*"):
                 if not child.is_file():
                     continue
@@ -635,17 +706,28 @@ class LocalStorageBackend(StorageBackend):
                     rel = child.resolve().relative_to(base)
                 except ValueError:
                     continue
-                key = rel.as_posix()
-                out.append((key, size_bytes))
+                out.append((rel.as_posix(), size_bytes))
             return out
+
+        def _walk() -> list[tuple[str, int]]:
+            # Active base first so its keys win the de-dup below.
+            seen: dict[str, int] = {}
+            for key, size_bytes in _walk_root(self.base_dir):
+                seen.setdefault(key, size_bytes)
+            if include_backcompat_roots:
+                for base in safe_data_roots():
+                    if base.resolve() == self.base_dir:
+                        continue
+                    for key, size_bytes in _walk_root(base):
+                        seen.setdefault(key, size_bytes)
+            return list(seen.items())
 
         return await asyncio.to_thread(_walk)
 
     async def open_stream(self, key: str) -> AsyncIterator[bytes]:
-        path = self._path_for(key)
-
         def _open() -> object:
-            if not path.is_file():
+            path = self._existing_path_for(key)
+            if path is None:
                 raise FileNotFoundError(f"No blob at key: {key}")
             return path.open("rb")
 
@@ -1057,7 +1139,12 @@ class S3StorageBackend(StorageBackend):
                 raise
             return int(resp["ContentLength"])
 
-    async def list_prefix(self, prefix: str) -> list[tuple[str, int]]:
+    async def list_prefix(
+        self,
+        prefix: str,
+        *,
+        include_backcompat_roots: bool = False,
+    ) -> list[tuple[str, int]]:
         """Paginated ``list_objects_v2`` sweep under ``prefix``.
 
         Returns every ``(key, size_bytes)`` pair the bucket exposes for
@@ -1066,7 +1153,12 @@ class S3StorageBackend(StorageBackend):
         probes, so the BIM list endpoint can sub a single sweep in for
         what was previously a fan-out of artifact-size + has-original +
         find-geometry HEAD requests per row.
+
+        ``include_backcompat_roots`` is accepted for API parity with
+        :class:`LocalStorageBackend` but ignored: an S3 bucket is a single
+        flat namespace with no sibling "back-compat" roots to consult.
         """
+        _ = include_backcompat_roots
         normalised = _normalise_key(prefix) if prefix else ""
         out: list[tuple[str, int]] = []
         async with self._client_ctx() as client:  # type: ignore[attr-defined]
@@ -1347,21 +1439,65 @@ def _is_not_found(exc: BaseException) -> bool:
 # ──────────────────────────────────────────────────────────────────────────
 
 
-def _default_local_base_dir() -> Path:
-    """Where local blobs live by default.
+def resolve_data_dir() -> Path:
+    """Canonical writable data directory - the single source of truth.
 
-    The desktop and CLI runtimes export ``OE_CLI_DATA_DIR`` (a writable
-    per-user directory such as ``~/.openestimate``); honour it first so a
-    per-machine install under a read-only location like Program Files still
-    has somewhere to write its blobs. ``DATA_DIR`` is respected next for
-    custom deployments. Otherwise resolve to ``<repo>/data/`` - the same
-    layout as v1.3.x so upgrading installs don't need to touch disk.
-    ``app/core/storage.py`` -> ``parents[3]`` == repo root.
+    Every blob WRITE lands under this directory, and the BIM hub, the clash
+    cache and the orphan-cleanup scan all defer to it, so they can never
+    disagree about where a model's files live.
+
+    Precedence (highest first)::
+
+        OE_DATA_DIR  >  DATA_DIR  >  OE_CLI_DATA_DIR  >  default
+
+    where ``default`` is the package-relative ``<package>/data`` for a
+    source/git checkout, but a PERSISTENT per-user ``~/.openestimate`` when the
+    package is installed under ``site-packages`` (see below).
+
+    ``OE_DATA_DIR`` is honoured FIRST so an operator who points the platform
+    at a persistent disk via that variable actually gets blobs written there.
+
+    Two failure modes this fixes, both surfacing as a model marked ``ready``
+    whose geometry endpoint 404s with "marked ready but its 3D geometry file is
+    no longer on the server":
+
+    1. **Standalone wheel install** - when no env var is set, the old default
+       was always ``<package>/data``. Inside ``site-packages`` that directory
+       is EPHEMERAL: a later ``pip install -U`` replaces the package tree and
+       the BIM blobs vanish, while the DB row still says ``ready``. We now
+       default such installs to ``~/.openestimate`` (the same persistent dir
+       the CLI/desktop already use) so geometry survives upgrades. A source or
+       git checkout (e.g. the demo VPS, which runs from a working tree) keeps
+       ``<repo>/data`` because that is genuinely persistent.
+    2. **OE_DATA_DIR ignored** - this resolution previously ignored
+       ``OE_DATA_DIR`` while the download allow-list (:func:`safe_data_roots`),
+       the demo seeder and the CLI all honoured it, so a deployment that set it
+       wrote/read inconsistently across restarts. The precedence here now
+       matches the rest of the platform.
+
+    Either way, the OTHER location stays a back-compat READ root via
+    :func:`safe_data_roots`, so blobs written under any prior resolution are
+    still served by :meth:`LocalStorageBackend._existing_path_for` and never
+    silently lost.
+
+    ``app/core/storage.py`` -> ``parents[3]`` == repo/package root.
     """
-    override = os.environ.get("OE_CLI_DATA_DIR") or os.environ.get("DATA_DIR")
+    override = os.environ.get("OE_DATA_DIR") or os.environ.get("DATA_DIR") or os.environ.get("OE_CLI_DATA_DIR")
     if override:
         return Path(override)
-    return Path(__file__).resolve().parents[3] / "data"
+    here = Path(__file__).resolve()
+    lowered_parts = {part.lower() for part in here.parts}
+    if {"site-packages", "dist-packages"} & lowered_parts:
+        # Installed wheel: package dir is wiped on upgrade -> use a persistent
+        # per-user location instead. Works identically on Windows, macOS, Linux
+        # (``Path.home()`` is cross-platform).
+        return Path.home() / ".openestimate"
+    return here.parents[3] / "data"
+
+
+def _default_local_base_dir() -> Path:
+    """Backwards-compatible alias for :func:`resolve_data_dir`."""
+    return resolve_data_dir()
 
 
 # //// NEOFFICE PATCH — Honour `storage_local_root` (env: `OE_STORAGE_LOCAL_ROOT`)
@@ -1384,11 +1520,18 @@ def safe_data_roots() -> list[Path]:
 
     The roots returned here are every place the platform itself writes blobs:
 
-    * the active storage base dir (``OE_CLI_DATA_DIR`` / ``DATA_DIR`` / repo
-      ``data/``) - this is where dwg uploads and bim artifacts land,
+    * the active storage base dir (``OE_DATA_DIR`` / ``DATA_DIR`` /
+      ``OE_CLI_DATA_DIR`` / repo ``data/``) - this is where dwg uploads and
+      bim artifacts land,
+    * the package-relative ``<package>/data`` historical default - ALWAYS
+      included as a read-only back-compat root even when it is not the active
+      dir, because pre-8.6.1 standalone deployments (and any process that did
+      not set the env vars) physically wrote blobs there. Without this a model
+      written under the old default and then read under a newly-honoured
+      ``OE_DATA_DIR`` would 404,
     * both brand-namespace home dirs ``~/.openestimate`` and
       ``~/.openestimator`` - takeoff PDFs and document uploads land here,
-    * any operator-supplied ``OE_DATA_DIR``.
+    * any operator-supplied ``OE_DATA_DIR`` / ``DATA_DIR`` / ``OE_CLI_DATA_DIR``.
 
     Callers use :func:`is_within_safe_root` to gate a resolved path before
     streaming it. This never widens access beyond directories the platform
@@ -1407,6 +1550,8 @@ def safe_data_roots() -> list[Path]:
             roots.append(resolved)
 
     _add(_default_local_base_dir())
+    # Historical package-relative default, always a back-compat READ root.
+    _add(Path(__file__).resolve().parents[3] / "data")
     # //// NEOFFICE PATCH — also trust the operator-configured `storage_local_root`
     # (osiris: /mnt/neoffice/private/files/oce). Without it the v7.5 download gate
     # (`is_within_safe_root`) rejects every blob stored under the custom mount.

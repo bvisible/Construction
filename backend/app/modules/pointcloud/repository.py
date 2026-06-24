@@ -172,6 +172,39 @@ class ScanRegistrationRepository(_BaseRepo):
         res = await self.session.execute(stmt)
         return list(res.scalars().all())
 
+    async def list_for_target(
+        self,
+        target_ref: str,
+        *,
+        project_id: uuid.UUID,
+        tenant_id: uuid.UUID,
+        offset: int = 0,
+        limit: int = 50,
+    ) -> list[tuple[ScanRegistration, ScanDataset]]:
+        """List deviation registrations whose target is ``target_ref``.
+
+        A deviation registration's ``target_ref`` is the design it was aligned
+        to (a BIM model id), so this is "every as-built deviation result for
+        this model". The scan that produced each registration is joined in so
+        the caller can read its ``accuracy_tier`` (the tolerance bound) and
+        scope the query: BOTH ``project_id`` AND ``tenant_id`` are part of the
+        WHERE clause via the owning :class:`ScanDataset`, so a registration
+        owned by another tenant can never leak even if a model id were shared.
+        Returns ``(registration, scan)`` pairs newest-first.
+        """
+        stmt = (
+            select(ScanRegistration, ScanDataset)
+            .join(ScanDataset, ScanRegistration.scan_id == ScanDataset.id)
+            .where(ScanRegistration.target_ref == target_ref)
+            .where(ScanDataset.project_id == project_id)
+            .where(ScanDataset.tenant_id == tenant_id)
+            .order_by(ScanRegistration.created_at.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+        res = await self.session.execute(stmt)
+        return [(reg, scan) for reg, scan in res.all()]
+
 
 __all__ = [
     "ScanDatasetRepository",

@@ -1,6 +1,6 @@
 [project]
 name = "openconstructionerp"
-version = "8.4.0"
+version = "8.8.4"
 description = "Open-source construction cost estimation, multi-currency BOQ, AI vector matching, CAD/BIM takeoff without IfcOpenShell, resource-based cost DB import with example templates, 48 regional catalogues, 27 languages. AGPL-3.0. After install, run: openconstructionerp"
 license = "AGPL-3.0-or-later"
 requires-python = ">=3.12"
@@ -61,6 +61,13 @@ dependencies = [
     "openpyxl>=3.1.0",
     "reportlab>=4.0.0",
     "pdfplumber>=0.11.0",
+    # PDF page-overlay / merge: the approval stamp-burn (app/core/pdf_stamp.py,
+    # used by file_approvals) merges a reportlab-drawn overlay onto every page
+    # of the source PDF, and property_dev counts pages off generated PDFs.
+    # pypdf was imported but never declared, so a clean install only had it by
+    # accident (transitively present in some environments, absent in others) -
+    # which silently degraded the PDF stamp to the JSON sidecar fallback.
+    "pypdf>=4.0.0",
     # PDF takeoff works out of the box. PyMuPDF reads a page's vector drawings
     # (page.get_drawings) for the deterministic vector detector, and
     # opencv-python-headless powers the room/wall detector on scanned/raster
@@ -91,6 +98,16 @@ dependencies = [
     # DAE. Required so the GLB path actually runs.
     "pycollada>=0.8",
     "ezdxf>=0.18.0",
+    # Point-cloud viewing works out of the box for the open LAS/LAZ/COPC family:
+    # laspy reads LAS, the lazrs backend decompresses LAZ/COPC, and both feed the
+    # server-side decimator (app/modules/pointcloud/decode.py) that hands the
+    # browser a compact THREE.Points buffer. These used to sit in the optional
+    # 'pointcloud' extra, which left a fresh install unable to display any scan
+    # (upload succeeded, then the viewer answered 501). numpy (the readers' array
+    # path) is already a base dep transitively via pandas/pyarrow. Only E57
+    # (pye57, a heavier native libE57 wheel) stays in the optional extra.
+    "laspy>=2.5.0",
+    "lazrs>=0.6.0",
     "duckdb>=1.2.0,<2",
     "rapidfuzz>=3.0.0",
     # Imported at module load by the smart_views (signed share links) and eac
@@ -165,6 +182,17 @@ cv = [
     "paddleocr>=2.9.0",
     "Pillow>=12.1.1",
 ]
+# E57 reader for the Point Cloud module (app/modules/pointcloud). The open
+# LAS/LAZ/COPC family is decoded out of the box (laspy + lazrs are base deps),
+# so this extra is now just E57: pye57 is a heavier native libE57 wheel that not
+# every deployment wants and that cannot be frozen into the desktop build, so it
+# stays opt-in. Without it the header sniff records "metadata pending" for E57
+# and the viewer answers a clear 501 for E57 only - the import guards in
+# sniff.py / decode.py degrade gracefully rather than crash. Install with
+# ``pip install openconstructionerp[pointcloud]`` to add E57 support.
+pointcloud = [
+    "pye57>=0.4.0",
+]
 # Deprecated alias since v2.5.0 — `duckdb` is in base deps now.
 # Kept so existing `pip install openconstructionerp[analytics]` commands
 # continue to work without failing.
@@ -177,7 +205,7 @@ s3 = [
 ]
 # Everything
 all = [
-    "openconstructionerp[server,vector,semantic,cv,s3,analytics]",
+    "openconstructionerp[server,vector,semantic,cv,s3,pointcloud,analytics]",
 ]
 # Development tools
 dev = [

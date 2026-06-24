@@ -19,6 +19,11 @@ _CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 # enforce in practice today (compared with .upper() everywhere).
 _CURRENCY_CODE_RE = re.compile(r"^[A-Z]{3}$")
 
+# Upper bound for money fields - far above any realistic bid yet within
+# Decimal's precision so a future aggregate / quantize over a stored bid_amount
+# can never raise InvalidOperation. Mirrors changeorders/schemas.py:_MONEY_MAX.
+_MONEY_MAX = Decimal("1e15")
+
 
 def _reject_unsafe_string(value: str | None, field: str) -> str | None:
     if value is None:
@@ -65,6 +70,8 @@ def _validate_money_amount(value: str | None, field: str) -> str | None:
         raise ValueError(f"{field} must be finite, got {value!r}")
     if d < 0:
         raise ValueError(f"{field} must be >= 0, got {value!r}")
+    if d >= _MONEY_MAX:
+        raise ValueError(f"{field} is outside the supported range, got {value!r}")
     # Cap fractional precision at 6 places - enough for FX-converted amounts
     # but rejects pathological inputs like "1.0000000000000000000001".
     sign, _digits, exponent = d.as_tuple()

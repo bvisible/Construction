@@ -14,6 +14,25 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+# Upper bound for money fields - far above any realistic NCR cost yet within
+# Decimal's precision and the Numeric(18,2) column, so one absurd value cannot
+# overflow the column (500 on write) or poison the project-wide COPQ rollup.
+# Mirrors changeorders/schemas.py:_MONEY_MAX.
+_MONEY_MAX = Decimal("1e15")
+
+
+def _bound_money(v: Decimal | None) -> Decimal | None:
+    """Reject non-finite / absurd-magnitude money. Pydantic already blocks
+    NaN/Infinity for a ``Decimal`` field; this adds the missing magnitude bound
+    so a finite-but-absurd value can't overflow the column or inflate COPQ."""
+    if v is None:
+        return v
+    if not v.is_finite():
+        raise ValueError("amount must be a finite number (no NaN/Infinity)")
+    if abs(v) >= _MONEY_MAX:
+        raise ValueError("amount is outside the supported range")
+    return v
+
 
 def _validate_https_url(value: str | None) -> str | None:
     """‌⁠‍Reject URLs that aren't http(s).
@@ -382,6 +401,11 @@ class NCRCreate(BaseModel):
     cost_impact_amount: Decimal | None = Field(default=None, ge=0)
     linked_inspection_id: UUID | None = None
 
+    @field_validator("cost_impact_amount")
+    @classmethod
+    def _bound_cost_impact(cls, v: Decimal | None) -> Decimal | None:
+        return _bound_money(v)
+
 
 class NCRUpdate(BaseModel):
     """Partial update for an NCR."""
@@ -403,6 +427,11 @@ class NCRUpdate(BaseModel):
     cost_impact_amount: Decimal | None = Field(default=None, ge=0)
     linked_variation_id: UUID | None = None
     linked_inspection_id: UUID | None = None
+
+    @field_validator("cost_impact_amount")
+    @classmethod
+    def _bound_cost_impact(cls, v: Decimal | None) -> Decimal | None:
+        return _bound_money(v)
 
 
 class NCRRead(BaseModel):

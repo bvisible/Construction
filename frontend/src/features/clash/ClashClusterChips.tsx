@@ -94,6 +94,7 @@ export function ClashClusterChips({
       <button
         type="button"
         onClick={() => onSelect(null)}
+        aria-pressed={selectedClusterId === null}
         className={clsx(
           'inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium',
           'ring-1 transition-colors',
@@ -114,7 +115,15 @@ export function ClashClusterChips({
             type="button"
             key={c.cluster_id}
             onClick={() => onSelect(active ? null : c.cluster_id)}
-            title={c.storey != null ? `Level ${c.storey}` : undefined}
+            aria-pressed={active}
+            title={
+              c.storey != null
+                ? t('clash.clusters.level', {
+                    defaultValue: 'Level {{level}}',
+                    level: c.storey,
+                  })
+                : undefined
+            }
             className={clsx(
               'inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium',
               'ring-1 transition-colors',
@@ -124,7 +133,13 @@ export function ClashClusterChips({
             )}
             data-testid={`cluster-chip-${c.cluster_id}`}
           >
-            <span className="truncate max-w-[18ch]">{c.label || `Cluster ${c.cluster_id}`}</span>
+            <span className="truncate max-w-[18ch]">
+              {c.label ||
+                t('clash.clusters.fallback_label', {
+                  defaultValue: 'Cluster {{id}}',
+                  id: c.cluster_id,
+                })}
+            </span>
             <span className="rounded-full bg-black/10 px-1.5 text-2xs">{c.size}</span>
           </button>
         );

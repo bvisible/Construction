@@ -18,6 +18,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.pdf_stamp import burn_pdf_stamp as _burn_pdf_stamp
+from app.core.pdf_stamp import expand_svg_placeholders as _expand_svg_placeholders
 from app.modules.file_approvals.models import (
     FileApprovalStep,
     FileApprovalWorkflow,
@@ -35,104 +37,13 @@ _STAMP_KEY_PREFIX = "approvals"
 
 
 # ── Stamp burning ─────────────────────────────────────────────────────────
-
-
-def _expand_svg_placeholders(svg: str, *, text: str, approver: str, decision_date: str) -> str:
-    """Expand the canonical ``{{text}}``/``{{date}}``/``{{approver}}``
-    placeholders inside the SVG template.
-
-    Unknown placeholders are left untouched so future template authors
-    can use raw curly-braces in their SVG content.
-    """
-    out = svg
-    out = out.replace("{{text}}", text)
-    out = out.replace("{{date}}", decision_date)
-    out = out.replace("{{approver}}", approver)
-    return out
-
-
-def _burn_pdf_stamp(
-    pdf_bytes: bytes,
-    *,
-    template_text: str,
-    template_color: str,
-    approver: str,
-    decision_date: str,
-) -> bytes | None:
-    """Overlay a stamp page onto a PDF via ``pypdf`` + ``reportlab``.
-
-    Returns the stamped bytes, or ``None`` when the dependency stack is
-    not importable / a failure occurs (callers then fall back to a
-    JSON sidecar).
-    """
-    try:
-        from io import BytesIO
-
-        from pypdf import PdfReader, PdfWriter
-        from reportlab.lib.colors import HexColor
-        from reportlab.lib.pagesizes import LETTER
-        from reportlab.pdfgen import canvas
-
-        from app.core.pdf_fonts import BODY_FONT, BOLD_FONT, register_pdf_fonts
-    except Exception:  # noqa: BLE001 - optional deps
-        logger.debug(
-            "pypdf / reportlab unavailable; sidecar fallback for stamp",
-            exc_info=True,
-        )
-        return None
-
-    register_pdf_fonts()
-
-    try:
-        reader = PdfReader(BytesIO(pdf_bytes))
-        # Build a single-page overlay sized to the first page so the
-        # stamp lands consistently regardless of orientation.
-        if reader.pages:
-            mb = reader.pages[0].mediabox
-            try:
-                page_w = float(mb.width)
-                page_h = float(mb.height)
-            except Exception:  # noqa: BLE001
-                page_w, page_h = LETTER
-        else:
-            page_w, page_h = LETTER
-
-        overlay_buf = BytesIO()
-        c = canvas.Canvas(overlay_buf, pagesize=(page_w, page_h))
-        try:
-            stroke = HexColor(template_color)
-        except Exception:  # noqa: BLE001 - invalid hex → fall back
-            stroke = HexColor("#16a34a")
-        c.setStrokeColor(stroke)
-        c.setFillColor(stroke)
-        c.setLineWidth(3)
-        # Stamp box: top-right corner with margin.
-        stamp_w = 220
-        stamp_h = 80
-        x0 = max(page_w - stamp_w - 36, 24)
-        y0 = max(page_h - stamp_h - 36, 24)
-        c.rect(x0, y0, stamp_w, stamp_h, stroke=1, fill=0)
-        c.setFont(BOLD_FONT, 14)
-        c.drawString(x0 + 12, y0 + stamp_h - 22, template_text[:40])
-        c.setFont(BODY_FONT, 9)
-        c.drawString(x0 + 12, y0 + stamp_h - 42, f"Approved by {approver[:32]}")
-        c.drawString(x0 + 12, y0 + stamp_h - 58, decision_date)
-        c.showPage()
-        c.save()
-
-        overlay_reader = PdfReader(BytesIO(overlay_buf.getvalue()))
-        overlay_page = overlay_reader.pages[0]
-
-        writer = PdfWriter()
-        for page in reader.pages:
-            page.merge_page(overlay_page)
-            writer.add_page(page)
-        out = BytesIO()
-        writer.write(out)
-        return out.getvalue()
-    except Exception:  # noqa: BLE001 - never let stamp-burn crash final approve
-        logger.exception("PDF stamp overlay failed; sidecar fallback")
-        return None
+#
+# The pure stamp primitives - ``_expand_svg_placeholders`` (SVG token fill)
+# and ``_burn_pdf_stamp`` (pypdf/reportlab overlay) - now live in the shared
+# core module ``app.core.pdf_stamp`` and are imported above under the same
+# private names this service has always used, so the lifecycle code below is
+# unchanged. The sidecar builder stays here because it is coupled to this
+# module's ORM models.
 
 
 def _build_sidecar_json(

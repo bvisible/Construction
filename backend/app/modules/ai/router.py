@@ -499,9 +499,11 @@ async def photo_estimate(
 )
 async def photo_category_suggest(
     user_id: CurrentUserId,
+    response: Response,
     file: UploadFile = File(..., description="Construction-site photo to classify"),
     caption: str = Form(default="", description="Optional caption text to help the heuristic"),
     tags: str = Form(default="", description="Optional comma-separated tags"),
+    _remaining: int = Depends(check_ai_rate_limit),
     service: AIService = Depends(_get_service),
 ) -> dict[str, Any]:
     """Suggest a photo category (e.g. ``defect``) for the uploaded image.
@@ -512,6 +514,10 @@ async def photo_category_suggest(
     ``{suggested_category, confidence, source}`` or ``{suggested_category: null}``
     when no signal is found.
     """
+    # Per-user AI budget: this endpoint issues a vision call_ai() request, so it
+    # must carry the same per-user limiter as quick_estimate / photo_estimate /
+    # file_estimate / advisor_chat (otherwise it is an uncapped cost-abuse hole).
+    response.headers["X-RateLimit-Remaining"] = str(_remaining)
     content_type = file.content_type or ""
     if content_type not in ALLOWED_IMAGE_TYPES:
         raise HTTPException(
@@ -920,7 +926,13 @@ async def advisor_chat(
         4. Return structured answer with source references
     """
     response.headers["X-RateLimit-Remaining"] = str(_remaining)
-    message = body.get("message", "").strip()
+    # Audit AI1: funnel all free-form user text through the module sanitiser
+    # (strips C0/C1/ANSI/bidi smuggling bytes) before it reaches the LLM, and
+    # fence the live message as data in the final prompt - same convention as
+    # quick_estimate / photo_estimate / smart_import.
+    from app.modules.ai.prompts import fence_user_content, sanitize_user_text
+
+    message = sanitize_user_text(body.get("message", "")).strip()
     if not message:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Message is required")
 
@@ -1078,7 +1090,7 @@ async def advisor_chat(
         HISTORY_CHAR_BUDGET = 4000
         for h in history[-10:]:  # Last 10 messages max
             role = h.get("role", "user")
-            content = h.get("content", "")[:500]  # Truncate long messages
+            content = sanitize_user_text(h.get("content", ""))[:500]  # sanitise + truncate
             prefix = "User" if role == "user" else "Assistant"
             line = f"{prefix}: {content}"
             if running_chars + len(line) > HISTORY_CHAR_BUDGET:
@@ -1091,7 +1103,7 @@ async def advisor_chat(
     user_prompt = (
         f"{context}{project_context}\n\n"
         f"{history_text}"
-        f"User message: {message}\n\n"
+        f"User message:\n{fence_user_content(message)}\n\n"
         f"Respond in {lang_name}. This is a continuing conversation - use the history above "
         f"for context. The user may be answering your previous question or selecting an option "
         f"you offered. If the user selected an option, answer that specific topic directly "

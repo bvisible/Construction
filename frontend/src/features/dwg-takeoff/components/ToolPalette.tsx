@@ -20,6 +20,7 @@ import {
   Spline,
   Minus,
   Crosshair,
+  Hash,
 } from 'lucide-react';
 
 export type DwgTool =
@@ -33,6 +34,7 @@ export type DwgTool =
   | 'circle'
   | 'polyline'
   | 'line'
+  | 'count'
   | 'calibrate';
 
 interface ToolDef {
@@ -56,6 +58,7 @@ const TOOLS: ToolDef[] = [
   { id: 'area', icon: PenTool, labelKey: 'dwg_takeoff.tool_area', labelFallback: 'Area', shortcut: 'A' },
   { id: 'rectangle', icon: Square, labelKey: 'dwg_takeoff.tool_rectangle', labelFallback: 'Rectangle', shortcut: 'R' },
   { id: 'circle', icon: Circle, labelKey: 'dwg_takeoff.tool_circle', labelFallback: 'Circle', shortcut: 'C' },
+  { id: 'count', icon: Hash, labelKey: 'dwg_takeoff.tool_count', labelFallback: 'Count', shortcut: 'N' },
   { id: 'arrow', icon: ArrowRight, labelKey: 'dwg_takeoff.tool_arrow', labelFallback: 'Arrow' },
   { id: 'text_pin', icon: Type, labelKey: 'dwg_takeoff.tool_text_pin', labelFallback: 'Text pin', shortcut: 'T' },
   { id: 'calibrate', icon: Crosshair, labelKey: 'dwg_takeoff.tool_calibrate', labelFallback: 'Calibrate', shortcut: 'K' },

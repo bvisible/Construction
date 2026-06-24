@@ -108,6 +108,54 @@ export interface RiskAnalysisResponse {
   }>;
 }
 
+/**
+ * Scalar earned-value (EVM) metrics for a schedule at a data date.
+ *
+ * Mirrors the backend ``EvmSummaryResponse``. Money fields arrive as the
+ * platform Decimal-as-string wire contract (decode via `shared/lib/money.ts`);
+ * the dimensionless indices and the CPI-method forecast are `number | null`
+ * (`null` when the schedule is not cost-loaded or a denominator is zero).
+ */
+export interface EvmSummary {
+  schedule_id: string;
+  as_of_date: string;
+  /** Planned value (BCWS), time-phased to the data date. Decimal string. */
+  planned_value: string;
+  /** Earned value (BCWP). Decimal string. */
+  earned_value: string;
+  /** Actual cost (ACWP). Decimal string. */
+  actual_cost: string;
+  /** Budget at completion (Σ planned cost). Decimal string. */
+  budget_at_completion: string;
+  /** Schedule variance = EV - PV. Decimal string. */
+  schedule_variance: string;
+  /** Cost variance = EV - AC. Decimal string. */
+  cost_variance: string;
+  /** Estimate at completion = BAC / CPI. Decimal string or null. */
+  estimate_at_completion: string | null;
+  /** Estimate to complete = EAC - AC. Decimal string or null. */
+  estimate_to_complete: string | null;
+  /** Variance at completion = BAC - EAC. Decimal string or null. */
+  variance_at_completion: string | null;
+  /** Schedule performance index = EV / PV. */
+  spi: number | null;
+  /** Cost performance index = EV / AC. */
+  cpi: number | null;
+  has_cost_data: boolean;
+}
+
+/**
+ * 4D snapshot: per-BIM-element status on a given as-of date. ``elements`` maps
+ * each resolved element id to its derived status
+ * (not_started / in_progress / completed / delayed / ahead_of_schedule).
+ */
+export interface ScheduleSnapshot {
+  schedule_id: string;
+  as_of_date: string;
+  model_version_id: string | null;
+  elements: Record<string, string>;
+}
+
 /** Defensive unwrap: handle both plain array and paginated {items, total} responses. */
 function unwrapList<T>(res: T[] | { items: T[] }): T[] {
   return Array.isArray(res) ? res : res.items ?? [];
@@ -151,6 +199,23 @@ export const scheduleApi = {
     apiPost<CriticalPathResponse>(`/v1/schedule/schedules/${scheduleId}/calculate-cpm/`),
   getRiskAnalysis: (scheduleId: string) =>
     apiGet<RiskAnalysisResponse>(`/v1/schedule/schedules/${scheduleId}/risk-analysis/`),
+
+  // EVM (earned value) + 4D snapshot
+  /** Scalar EVM rollup (PV/EV/AC, SPI/CPI, EAC) for a schedule at a data date. */
+  getEvmSummary: (scheduleId: string, asOfDate?: string) =>
+    apiGet<EvmSummary>(
+      `/v1/schedule/schedules/${scheduleId}/evm-summary/${
+        asOfDate ? `?as_of_date=${encodeURIComponent(asOfDate)}` : ''
+      }`,
+    ),
+  /** 4D element-status snapshot for a schedule at a data date (v2 surface). */
+  getSnapshot: (scheduleId: string, params?: { asOfDate?: string; modelVersionId?: string }) => {
+    const qs = new URLSearchParams();
+    if (params?.asOfDate) qs.set('as_of_date', params.asOfDate);
+    if (params?.modelVersionId) qs.set('model_version_id', params.modelVersionId);
+    const suffix = qs.toString() ? `?${qs.toString()}` : '';
+    return apiGet<ScheduleSnapshot>(`/v2/schedules/${scheduleId}/snapshot${suffix}`);
+  },
 
   // Work Orders
   // The backend /work-orders/ endpoint requires schedule_id and has no

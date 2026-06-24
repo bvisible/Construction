@@ -147,6 +147,7 @@ class _StubRFIRepo:
         limit: int = 50,
         status: str | None = None,
         search: str | None = None,
+        with_total: bool = True,  # signature-compatible with the real repo (count skipped in unit fakes)
     ) -> tuple[list[Any], int]:
         rows = [r for r in self.rows.values() if r.project_id == project_id]
         if status is not None:
@@ -586,3 +587,81 @@ class TestRFIAttachmentOLE:
         attachments = resp.json().get("attachments", [])
         assert len(attachments) == 1
         assert attachments[0].endswith(".doc")
+
+
+# ── 6. RFI Excel export — CSV/formula-injection neutralisation ────────────────
+
+
+class TestRFIExportFormulaInjection:
+    """BUG-RFI-CSV-INJECTION: the RFI log Excel export wrote user-controlled
+    free text (``subject`` / ``official_response`` / ``cost_impact_value``)
+    straight into cells. The schema's HTML sanitiser leaves a spreadsheet
+    formula payload such as ``=cmd|'/c calc'!A0`` intact (it has no HTML),
+    so opening the downloaded ``.xlsx`` would execute the payload in Excel.
+    The fix routes every user-controlled string cell through
+    ``neutralise_formula`` (OWASP CSV-injection defence), mirroring the BOQ
+    exporter. Uses a real PostgreSQL DB + the mounted router.
+    """
+
+    # Canonical OWASP CSV-injection payloads (no HTML, so they survive the
+    # input sanitiser unchanged - the only defence is output neutralisation).
+    _EQ = "=cmd|'/c calc'!A0"
+    _PLUS = "+1+1+cmd|' /c calc'!A0"
+    _AT = "@SUM(1+1)*cmd|' /c calc'!A0"
+    _SAFE = "Concrete C30/37 foundation clarification"
+
+    @pytest.mark.asyncio
+    async def test_export_neutralises_formula_payloads(self, db_session) -> None:
+        import io
+
+        from openpyxl import load_workbook
+
+        owner_id = await _make_user(db_session)
+        owner = str(owner_id)
+        project_id = await _make_project(db_session, owner_id)
+        service = RFIService(db_session)
+
+        # RFI 1: formula payload in the subject.
+        await service.create_rfi(
+            RFICreate(project_id=project_id, subject=self._EQ, question="?"),
+            user_id=owner,
+        )
+        # RFI 2: formula payload smuggled into the official response. Created
+        # open, then answered so the response cell is populated on export.
+        r2 = await service.create_rfi(
+            RFICreate(
+                project_id=project_id,
+                subject=self._PLUS,
+                question="?",
+                status="open",
+            ),
+            user_id=owner,
+        )
+        await service.respond_to_rfi(r2.id, self._AT, responded_by=owner, actor_role="admin")
+        # RFI 3: benign subject - must round-trip untouched.
+        await service.create_rfi(
+            RFICreate(project_id=project_id, subject=self._SAFE, question="?"),
+            user_id=owner,
+        )
+        await db_session.commit()
+
+        app = _build_app(db_session, caller_id=owner)
+        client = TestClient(app)
+
+        resp = client.get(f"/v1/rfi/export/?project_id={project_id}")
+        assert resp.status_code == 200, f"Export failed: {resp.text}"
+        assert "spreadsheetml" in resp.headers.get("content-type", "")
+
+        wb = load_workbook(io.BytesIO(resp.content), data_only=True)
+        ws = wb.active
+        cells = [v for row in ws.iter_rows(values_only=True) for v in row if isinstance(v, str)]
+
+        for payload in (self._EQ, self._PLUS, self._AT):
+            neutralised = "'" + payload
+            assert neutralised in cells, f"Expected neutralised {neutralised!r} in export cells; got {cells!r}"
+            # The bare payload must NEVER appear - that is the vulnerability.
+            assert payload not in cells, f"Bare formula payload {payload!r} leaked into export: {cells!r}"
+
+        # Benign text round-trips with no spurious apostrophe.
+        assert self._SAFE in cells
+        assert ("'" + self._SAFE) not in cells

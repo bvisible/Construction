@@ -75,6 +75,18 @@ class QMSRepository:
     async def get_itp_item(self, item_id: uuid.UUID) -> ITPItem | None:
         return await self.session.get(ITPItem, item_id)
 
+    async def list_itp_items_by_ids(self, item_ids: list[uuid.UUID]) -> list[ITPItem]:
+        """Bulk-fetch ITP items by id set in one query.
+
+        Lets a whole-plan export resolve every control point's spec linkage
+        without one ``get_itp_item`` round-trip per inspection. Order is
+        unspecified (callers index by id); empty input short-circuits.
+        """
+        if not item_ids:
+            return []
+        result = await self.session.execute(select(ITPItem).where(ITPItem.id.in_(item_ids)))
+        return list(result.scalars().all())
+
     async def list_itp_items(self, plan_id: uuid.UUID) -> list[ITPItem]:
         result = await self.session.execute(
             select(ITPItem).where(ITPItem.itp_plan_id == plan_id).order_by(ITPItem.sequence.asc())
@@ -100,6 +112,31 @@ class QMSRepository:
             select(QMSInspection)
             .where(QMSInspection.itp_item_id == itp_item_id)
             .order_by(QMSInspection.created_at.asc())
+        )
+        return list(result.scalars().all())
+
+    async def list_inspections_for_itp_items(
+        self,
+        itp_item_ids: list[uuid.UUID],
+    ) -> list[QMSInspection]:
+        """Batch variant of :meth:`list_inspections_for_itp_item`.
+
+        Loads every inspection for the supplied item ids in one query so a
+        whole-plan export does not fan out into one query per control point
+        (N+1). Ordered by ``(itp_item_id, created_at)`` so a caller can group
+        in memory and preserve the oldest-first ordering each item would have
+        had on its own. The empty input case short-circuits so SQLAlchemy
+        never emits a degenerate ``WHERE ... IN ()`` statement.
+        """
+        if not itp_item_ids:
+            return []
+        result = await self.session.execute(
+            select(QMSInspection)
+            .where(QMSInspection.itp_item_id.in_(itp_item_ids))
+            .order_by(
+                QMSInspection.itp_item_id.asc(),
+                QMSInspection.created_at.asc(),
+            )
         )
         return list(result.scalars().all())
 
@@ -148,6 +185,28 @@ class QMSRepository:
         )
         return list(result.scalars().all())
 
+    async def list_signatures_for_inspections(
+        self,
+        inspection_ids: list[uuid.UUID],
+    ) -> list[QMSInspectionSignature]:
+        """Batch variant of :meth:`list_signatures` for a whole-plan export.
+
+        Ordered by ``(inspection_id, created_at)`` so a caller can group the
+        rows in memory and keep the oldest-first ordering each inspection
+        would have had on its own. Empty input short-circuits.
+        """
+        if not inspection_ids:
+            return []
+        result = await self.session.execute(
+            select(QMSInspectionSignature)
+            .where(QMSInspectionSignature.inspection_id.in_(inspection_ids))
+            .order_by(
+                QMSInspectionSignature.inspection_id.asc(),
+                QMSInspectionSignature.created_at.asc(),
+            )
+        )
+        return list(result.scalars().all())
+
     async def add_signature(
         self,
         sig: QMSInspectionSignature,
@@ -183,6 +242,28 @@ class QMSRepository:
         )
         return list(result.scalars().all())
 
+    async def list_inspection_attachments_for_inspections(
+        self,
+        inspection_ids: list[uuid.UUID],
+    ) -> list[QMSInspectionAttachment]:
+        """Batch variant of :meth:`list_inspection_attachments`.
+
+        Ordered by ``(inspection_id, created_at)`` so a caller can group the
+        rows in memory and keep the oldest-first ordering each inspection
+        would have had on its own. Empty input short-circuits.
+        """
+        if not inspection_ids:
+            return []
+        result = await self.session.execute(
+            select(QMSInspectionAttachment)
+            .where(QMSInspectionAttachment.inspection_id.in_(inspection_ids))
+            .order_by(
+                QMSInspectionAttachment.inspection_id.asc(),
+                QMSInspectionAttachment.created_at.asc(),
+            )
+        )
+        return list(result.scalars().all())
+
     # ── Hold-point release (item 12) ────────────────────────────────────
 
     async def create_hold_point_release(
@@ -203,6 +284,25 @@ class QMSRepository:
             )
         )
         return result.scalar_one_or_none()
+
+    async def list_hold_point_releases_for_inspections(
+        self,
+        inspection_ids: list[uuid.UUID],
+    ) -> list[QMSHoldPointRelease]:
+        """Batch variant of :meth:`get_hold_point_release`.
+
+        At most one release exists per inspection (the column is unique), so
+        a caller can build an ``inspection_id -> release`` map directly.
+        Empty input short-circuits.
+        """
+        if not inspection_ids:
+            return []
+        result = await self.session.execute(
+            select(QMSHoldPointRelease).where(
+                QMSHoldPointRelease.inspection_id.in_(inspection_ids),
+            )
+        )
+        return list(result.scalars().all())
 
     # ── NCR ────────────────────────────────────────────────────────────
 

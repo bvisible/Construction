@@ -33,6 +33,7 @@ MANIFEST = PartnerPackManifest(
     ],
     default_currency="AUD",
     default_tax_template="au_gst_10",
+    default_methodology="australia",
     validation_rule_packs=[
         "ncc_2022",
         "as_1684_timber",

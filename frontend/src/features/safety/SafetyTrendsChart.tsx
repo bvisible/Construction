@@ -224,7 +224,7 @@ export function SafetyTrendsChart({ projectId, period: initialPeriod = 'monthly'
                   yAxisId="count"
                   dataKey="incident_count"
                   name={t('safety.incidents', { defaultValue: 'Incidents' })}
-                  fill="#d68a59"
+                  fill="#3b82f6"
                   radius={[3, 3, 0, 0]}
                   maxBarSize={36}
                 />

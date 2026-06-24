@@ -37,6 +37,15 @@ case "${DATABASE_URL:-}" in
     ;;
 esac
 
+# Pin the unified data-dir resolver (app.core.storage.resolve_data_dir) at
+# the mounted /data volume. Without an explicit OE_DATA_DIR the resolver's
+# wheel/site-packages branch defaults to ~/.openestimate INSIDE the
+# container - the ephemeral container layer - so BIM geometry is written
+# there, the DB row stays "ready", and a container recreate/redeploy makes
+# the geometry endpoint 404. Idempotent and operator-overridable: this only
+# fills in the default when OE_DATA_DIR was not already supplied.
+export OE_DATA_DIR="${OE_DATA_DIR:-/data}"
+
 exec python -m uvicorn app.main:create_app \
   --factory --host 0.0.0.0 --port 8080 \
   --app-dir /app/backend

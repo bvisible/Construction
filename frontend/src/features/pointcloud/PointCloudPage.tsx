@@ -3,7 +3,7 @@
  *
  * Mirrors the upload-and-explain UX of the BIM Hub and DWG Takeoff pages:
  *  - a drag-and-drop upload dropzone + file picker for laser-scan / reality-
- *    capture containers (.las/.laz/.e57/.ply/.pts/.xyz/.pcd), wired to the
+ *    capture containers (.las/.laz/.copc/.e57), wired to the
  *    REAL presigned-direct ingest endpoint (see ./api.ts). No faked success -
  *    backend failures surface as a real error.
  *  - a project picker (mirrors DWG Takeoff) so the scan is registered against
@@ -39,6 +39,7 @@ import {
   Globe2,
   Move3d,
   Hourglass,
+  Trash2,
 } from 'lucide-react';
 import { Badge, Breadcrumb, Card, DismissibleInfo, EmptyState, ModuleGuideButton } from '@/shared/ui';
 import type { ScanDataset, ScanMetadata } from './api';
@@ -51,6 +52,7 @@ import {
   formatFromFileName,
   listScans,
   uploadScan,
+  deleteScan,
   type AccuracyTier,
   type ScanSourceType,
   type UploadProgress,
@@ -60,10 +62,20 @@ import { PointCloudViewer } from './PointCloudViewer';
 import { pointcloudGuide } from './pointcloudGuide';
 
 /* The accepted upload containers, mirrored from the backend allow-list
-   (backend/app/modules/pointcloud/models.py ACCEPTED_SCAN_FORMATS). Proprietary
-   ReCap RCP/RCS is deliberately absent - export E57 or LAS instead. */
+   (backend/app/modules/pointcloud/models.py ACCEPTED_SCAN_FORMATS). The
+   proprietary .rcp/.rcs scan container is deliberately absent - export E57 or
+   LAS instead. */
 const SUPPORTED_FORMATS = ACCEPTED_SCAN_FORMATS.map((f) => f.toUpperCase());
 const ACCEPT_ATTR = ACCEPTED_SCAN_FORMATS.map((f) => `.${f}`).join(',');
+
+/* Frosted-glass styling for this page's cards: the blocks sit ~90% transparent
+   with a backdrop blur so the animated point-cloud background reads richly
+   through them. The surface-* tokens are CSS-var colours whose /alpha Tailwind
+   silently drops, so we use literal white with alpha + `!` to beat the Card's
+   own opaque `bg-surface-elevated`, plus a backdrop blur for the glass look. */
+const GLASS_CARD =
+  '!bg-white/10 dark:!bg-white/[0.06] !border-white/25 dark:!border-white/10 '
+  + 'backdrop-blur-xl !shadow-lg';
 
 type BadgeVariant = 'neutral' | 'blue' | 'success' | 'warning' | 'error';
 
@@ -329,6 +341,7 @@ export function PointCloudPage() {
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState<UploadProgress | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handlePickProject = useCallback(
@@ -427,6 +440,45 @@ export function PointCloudPage() {
     t,
   ]);
 
+  const handleDelete = useCallback(
+    async (scan: ScanDataset) => {
+      const label = SOURCE_LABEL[scan.source_type] ?? scan.source_type;
+      const confirmed = window.confirm(
+        t('pointcloud.delete_confirm', {
+          defaultValue:
+            'Delete this scan and its uploaded data? This frees its storage and cannot be undone.',
+        }),
+      );
+      if (!confirmed) return;
+
+      setDeletingId(scan.id);
+      try {
+        await deleteScan(scan.id);
+        // Drop the viewer selection if it pointed at the scan we just removed.
+        setSelectedScanId((current) => (current === scan.id ? null : current));
+        addToast({
+          type: 'success',
+          title: t('pointcloud.delete_done_title', { defaultValue: 'Scan deleted' }),
+          message: t('pointcloud.delete_done_msg', {
+            defaultValue: '{{name}} and its data were removed.',
+            name: label,
+          }),
+        });
+        void queryClient.invalidateQueries({ queryKey: ['pointcloud-scans', projectId] });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        addToast({
+          type: 'error',
+          title: t('pointcloud.delete_failed_title', { defaultValue: 'Could not delete scan' }),
+          message: msg,
+        });
+      } finally {
+        setDeletingId(null);
+      }
+    },
+    [addToast, projectId, queryClient, t],
+  );
+
   // Translate a backend scan-status enum for display. Falls back to the
   // raw value for any status not in the label map.
   const statusLabel = useCallback(
@@ -496,7 +548,7 @@ export function PointCloudPage() {
 
       {/* ── Upload window ──────────────────────────────────────────────── */}
       {!noProjects && (
-        <Card>
+        <Card className={GLASS_CARD}>
           <div className="space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
@@ -721,7 +773,7 @@ export function PointCloudPage() {
 
       {/* ── Scan registry ──────────────────────────────────────────────── */}
       {noProjects ? (
-        <Card>
+        <Card className={GLASS_CARD}>
           <EmptyState
             icon={<FolderOpen size={28} />}
             title={t('pointcloud.no_project_title', 'Open a project first')}
@@ -736,14 +788,14 @@ export function PointCloudPage() {
           />
         </Card>
       ) : isLoading ? (
-        <Card>
+        <Card className={GLASS_CARD}>
           <div className="flex items-center justify-center gap-2 py-10 text-content-tertiary">
             <Loader2 size={18} className="animate-spin" />
             <span className="text-sm">{t('common.loading', 'Loading...')}</span>
           </div>
         </Card>
       ) : isError ? (
-        <Card>
+        <Card className={GLASS_CARD}>
           <div className="flex items-start gap-3 py-6 text-content-secondary">
             <AlertCircle size={20} className="mt-0.5 shrink-0 text-danger" />
             <div>
@@ -760,7 +812,7 @@ export function PointCloudPage() {
           </div>
         </Card>
       ) : scans.length === 0 ? (
-        <Card>
+        <Card className={GLASS_CARD}>
           <EmptyState
             icon={<ScanLine size={28} />}
             title={t('pointcloud.empty_title', 'No scans in this project yet')}
@@ -781,7 +833,7 @@ export function PointCloudPage() {
           </div>
         </Card>
       ) : (
-        <Card padding="none">
+        <Card padding="none" className={GLASS_CARD}>
           <div className="border-b border-border-light px-4 py-2.5">
             <span className="text-sm font-semibold text-content-primary">
               {t('pointcloud.scans_title', 'Scans')}
@@ -838,6 +890,21 @@ export function PointCloudPage() {
                         : t('pointcloud.view_scan', { defaultValue: 'View' })}
                     </button>
                   )}
+                  <button
+                    type="button"
+                    onClick={() => handleDelete(scan)}
+                    disabled={deletingId === scan.id}
+                    data-testid={`pointcloud-delete-${scan.id}`}
+                    aria-label={t('pointcloud.delete_scan_aria', { defaultValue: 'Delete scan' })}
+                    title={t('pointcloud.delete_scan', { defaultValue: 'Delete scan' })}
+                    className="inline-flex items-center justify-center rounded-lg border border-border-light bg-surface-secondary px-2 py-1.5 text-content-tertiary transition-colors hover:border-danger/40 hover:bg-danger/10 hover:text-danger disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    {deletingId === scan.id ? (
+                      <Loader2 size={13} className="animate-spin" />
+                    ) : (
+                      <Trash2 size={13} />
+                    )}
+                  </button>
                 </li>
               );
             })}
@@ -847,7 +914,7 @@ export function PointCloudPage() {
 
       {/* ── Viewer ─────────────────────────────────────────────────────── */}
       {activeScan && (
-        <Card>
+        <Card className={GLASS_CARD}>
           <div className="space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
@@ -877,7 +944,7 @@ export function PointCloudPage() {
         {CAPABILITY_CARDS.map((cap, i) => {
           const Icon = cap.icon;
           return (
-            <Card key={i} className="space-y-2">
+            <Card key={i} className={`space-y-2 ${GLASS_CARD}`}>
               <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-surface-secondary text-content-secondary">
                 <Icon size={16} />
               </div>

@@ -89,6 +89,7 @@ import { useAuthStore } from '@/stores/useAuthStore';
 import { useModuleStore } from '@/stores/useModuleStore';
 import { apiGet } from '@/shared/lib/api';
 import { UpdateNotification } from '@/shared/ui/UpdateChecker';
+import { VideoNewsCard } from '@/shared/ui/VideoNewsCard';
 import { useViewModeStore } from '@/stores/useViewModeStore';
 import { useNavPendingStore } from '@/shared/lib/navigationProgress';
 import { useRecentStore } from '@/stores/useRecentStore';
@@ -232,6 +233,7 @@ const navGroups: NavGroup[] = [
       { labelKey: 'nav.ai_estimate', to: '/ai-estimate', icon: Sparkles, badge: 'BETA' },
       { labelKey: 'nav.match_elements', to: '/match-elements', icon: Link2, badge: 'BETA' },
       { labelKey: 'nav.estimation_dashboard', to: '/project-intelligence', icon: BrainCircuit },
+      { labelKey: 'nav.methodologies', to: '/methodologies', icon: SlidersHorizontal },
     ],
   },
   // ── 4. COST DATA ───────────────────────────────────────────────────
@@ -267,7 +269,7 @@ const navGroups: NavGroup[] = [
     dynamicGroupKey: 'reality',
     defaultOpen: true,
     items: [
-      { labelKey: 'sidebar.geo_hub', to: '/geo', icon: Globe },
+      { labelKey: 'sidebar.geo_hub', to: '/geo', icon: Globe, badge: 'BETA' },
       { labelKey: 'nav.point_cloud', to: '/pointcloud', icon: ScanLine, badge: 'BETA' },
       { labelKey: 'nav.cad_bim_explorer', to: '/data-explorer', icon: TableProperties, advancedOnly: true },
     ],
@@ -1791,6 +1793,16 @@ export function Sidebar({ onClose }: { onClose?: () => void }) {
         {!iconified && (
           <div className="mt-3">
             <UpdateNotification />
+          </div>
+        )}
+
+        {/* Featured video card - links to the YouTube video on the
+            uberization of construction and the idea behind the platform.
+            Hidden in icon-only mode (image + text need width); dismissible
+            and remembered per-video in localStorage. */}
+        {!iconified && (
+          <div className="mt-2">
+            <VideoNewsCard />
           </div>
         )}
 

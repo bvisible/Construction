@@ -373,3 +373,91 @@ async def test_bulk_suppress_rollback_undoes_every_change(
     )
     assert len(issues_after) == 2
     assert {i.status for i in issues_after}.isdisjoint({"ignored"})
+
+
+# ── 6. Result-level wrapper (``bulk_suppress_results``) ──────────────────
+
+
+async def _result_id_for_issue(session: AsyncSession, issue_id: uuid.UUID) -> uuid.UUID:
+    """The id of a ``ClashResult`` belonging to a smart issue."""
+    stmt = select(ClashResult).where(ClashResult.issue_id == issue_id)
+    return (await session.execute(stmt)).scalars().first().id
+
+
+@pytest.mark.asyncio
+async def test_bulk_suppress_results_maps_result_ids_to_issues(
+    session: AsyncSession,
+) -> None:
+    """Selected result ids are mapped to their issues + suppressed.
+
+    The review table is keyed by ``ClashResult`` id; the wrapper resolves
+    each to its underlying issue and reports the outcome back in result-id
+    terms. Run-scoped: a result from another run is dropped + reported in
+    ``skipped_ids``.
+    """
+    project_id = session.info["project_a"]
+    issue1, _ = await _seed_issue(session, project_id, a="A1", b="B1", name="r-1")
+    issue2, _ = await _seed_issue(session, project_id, a="A2", b="B2", name="r-2")
+    r1 = await _result_id_for_issue(session, issue1.id)
+    r2 = await _result_id_for_issue(session, issue2.id)
+    bogus_result = uuid.uuid4()
+    svc = ClashService(session)
+
+    run_id = (await svc.repo.get_issue(project_id, issue1.id)).first_seen_run_id
+    out = await svc.bulk_suppress_results(
+        project_id,
+        run_id,
+        [r1, bogus_result],
+        reason="superseded by RFI",
+        user_id=session.info["owner_id"],
+    )
+
+    # Only r1 is in run ``run_id`` (r2 belongs to a different run); the
+    # bogus id resolves to nothing. So r1 is suppressed, the rest skipped.
+    assert out["suppressed_ids"] == [r1]
+    assert set(out["skipped_ids"]) == {bogus_result}
+    assert out["suppressed_count"] == 1
+    assert out["skipped_count"] == 1
+
+    # The mapped issue actually flipped; the untouched issue did not.
+    assert (await svc.repo.get_issue(project_id, issue1.id)).status == "ignored"
+    assert (await svc.repo.get_issue(project_id, issue2.id)).status in ("new", "persisted")
+    # ``r2`` was never passed, so it is not reported at all.
+    assert r2 not in out["suppressed_ids"]
+    assert r2 not in out["skipped_ids"]
+
+
+@pytest.mark.asyncio
+async def test_bulk_suppress_results_empty_list_is_noop(
+    session: AsyncSession,
+) -> None:
+    """Empty ``result_ids`` → zero-counts envelope, no DB write."""
+    project_id = session.info["project_a"]
+    issue, _ = await _seed_issue(session, project_id, a="A", b="B")
+    svc = ClashService(session)
+    run_id = (await svc.repo.get_issue(project_id, issue.id)).first_seen_run_id
+
+    out = await svc.bulk_suppress_results(project_id, run_id, [], "reason", None)
+    assert out == {
+        "suppressed_ids": [],
+        "skipped_ids": [],
+        "suppressed_count": 0,
+        "skipped_count": 0,
+    }
+    assert (await session.execute(select(ClashSuppression))).scalars().all() == []
+
+
+@pytest.mark.asyncio
+async def test_bulk_suppress_results_rejects_empty_reason(
+    session: AsyncSession,
+) -> None:
+    """Whitespace-only reason raises 422 even though the schema min_length passes."""
+    project_id = session.info["project_a"]
+    issue, _ = await _seed_issue(session, project_id, a="A", b="B")
+    r1 = await _result_id_for_issue(session, issue.id)
+    svc = ClashService(session)
+    run_id = (await svc.repo.get_issue(project_id, issue.id)).first_seen_run_id
+
+    with pytest.raises(HTTPException) as exc:
+        await svc.bulk_suppress_results(project_id, run_id, [r1], "  ", None)
+    assert exc.value.status_code == 422

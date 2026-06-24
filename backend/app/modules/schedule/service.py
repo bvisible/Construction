@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import noload
 
 from app.core.events import event_bus
+from app.core.json_merge import merge_metadata
 
 _logger_ev = __import__("logging").getLogger(__name__ + ".events")
 
@@ -612,7 +613,7 @@ class ScheduleService:
         if "metadata" in fields:
             _incoming = fields.pop("metadata")
             fields["metadata_"] = (
-                {**(getattr(schedule, "metadata_", None) or {}), **_incoming}
+                merge_metadata(getattr(schedule, "metadata_", None), _incoming)
                 if isinstance(_incoming, dict)
                 else _incoming
             )
@@ -1124,7 +1125,7 @@ class ScheduleService:
         if "metadata" in fields:
             _incoming = fields.pop("metadata")
             fields["metadata_"] = (
-                {**(getattr(activity, "metadata_", None) or {}), **_incoming}
+                merge_metadata(getattr(activity, "metadata_", None), _incoming)
                 if isinstance(_incoming, dict)
                 else _incoming
             )
@@ -1173,12 +1174,41 @@ class ScheduleService:
     async def delete_activity(self, activity_id: uuid.UUID) -> None:
         """Delete an activity.
 
+        The activity's inbound/outbound canonical :class:`ScheduleRelationship`
+        rows are removed by the ON DELETE CASCADE FKs, but the derived
+        ``dependencies`` JSON mirror on *surviving successor* activities would
+        otherwise keep listing the deleted predecessor - a dangling pointer that
+        ``get_gantt_data`` returns verbatim (drawing a dependency arrow to a node
+        that no longer exists). Strip the deleted activity from every successor's
+        JSON mirror so the two stores stay consistent without waiting for a later
+        ``reconcile_dependency_sources`` pass.
+
         Raises HTTPException 404 if not found.
         """
         activity = await self.get_activity(activity_id)
-        schedule_id = str(activity.schedule_id)
+        schedule_uuid = activity.schedule_id
+        schedule_id = str(schedule_uuid)
+        deleted_str = str(activity_id)
+
+        # Collect the successors that reference this activity in their JSON
+        # mirror *before* the delete, while the rows are still readable.
+        siblings, _ = await self.activity_repo.list_for_schedule(schedule_uuid, limit=10_000)
+        successors_to_clean: list[tuple[uuid.UUID, list[dict]]] = []
+        for sib in siblings:
+            if sib.id == activity_id:
+                continue
+            deps = sib.dependencies or []
+            pruned = [dep for dep in deps if not (isinstance(dep, dict) and str(dep.get("activity_id")) == deleted_str)]
+            if len(pruned) != len(deps):
+                successors_to_clean.append((sib.id, pruned))
 
         await self.activity_repo.delete(activity_id)
+
+        # Rebuild the JSON mirror on each affected successor. The canonical edge
+        # is already gone via the relationship CASCADE; here we keep the derived
+        # copy in lockstep.
+        for succ_id, pruned in successors_to_clean:
+            await self.activity_repo.update_fields(succ_id, dependencies=pruned)
 
         await _safe_publish(
             "schedule.activity.deleted",
@@ -2398,6 +2428,15 @@ class ScheduleService:
         # --- Compute float and identify critical path ---
         all_results: list[CPMActivityResult] = []
         critical_results: list[CPMActivityResult] = []
+        # Accumulate per-activity persistence payloads and flush them in a
+        # single bulk UPDATE after the loop. The previous implementation issued
+        # one UPDATE *and* one session.expire_all() per activity (the latter via
+        # ActivityRepository.update_fields), which on a few-hundred-activity
+        # schedule meant hundreds of round trips plus repeated full-identity-map
+        # invalidation - the dominant cost of the /calculate-cpm/ button. The
+        # values persisted are byte-identical to before.
+        calculated_at = datetime.now(UTC).isoformat()
+        cpm_updates: list[dict[str, object]] = []
 
         for ad in act_data:
             act_id = ad["id"]
@@ -2428,7 +2467,7 @@ class ScheduleService:
                 "lf": lf[act_id],
                 "total_float": total_float,
                 "is_critical": is_critical,
-                "calculated_at": datetime.now(UTC).isoformat(),
+                "calculated_at": calculated_at,
             }
             new_color = "#ef4444" if is_critical else "#0071e3"
             # Merge cpm into existing metadata_ so we don't clobber user-set keys
@@ -2439,11 +2478,21 @@ class ScheduleService:
                 if isinstance(raw_meta, dict):
                     existing_meta = dict(raw_meta)
             existing_meta["cpm"] = cpm_meta
-            await self.activity_repo.update_fields(
-                uuid.UUID(act_id),
-                color=new_color,
-                metadata_=existing_meta,
+            cpm_updates.append(
+                {
+                    "id": uuid.UUID(act_id),
+                    "color": new_color,
+                    "metadata_": existing_meta,
+                }
             )
+
+        # Single bulk UPDATE by primary key (one statement, executemany under
+        # the hood) instead of N per-row update_fields() calls. The repository
+        # runs expire_all() exactly once afterwards so a subsequent get_by_id
+        # re-reads fresh state - matching the per-call contract the old loop
+        # relied on.
+        if cpm_updates:
+            await self.activity_repo.bulk_update_fields(cpm_updates)
 
         await _safe_publish(
             "schedule.cpm.calculated",

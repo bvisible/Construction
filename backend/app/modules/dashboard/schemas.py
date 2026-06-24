@@ -372,6 +372,59 @@ class ProjectBudgetBurnPayload(_Widget):
     series: list[dict] = Field(default_factory=list)
 
 
+# ── Unified approvals/alerts inbox ───────────────────────────────────────────
+#
+# The inbox aggregates two existing per-module streams into one list:
+#   * pending approvals assigned to the caller (file-approval steps,
+#     change-order approval steps), and
+#   * the caller's unread in-app notifications (alerts).
+# It reads existing stores only - no new persistence. IDOR-scoped to the
+# caller's accessible projects by the router. ``extra="allow"`` keeps the
+# per-source extras (role_label, notification_type, body_key) addressable
+# without re-shipping the schema.
+
+
+class InboxItem(_Widget):
+    """One actionable row in the unified inbox."""
+
+    id: str = Field(description="Stable per-source id, e.g. 'notification:<uuid>'.")
+    kind: str = Field(description="'approval' or 'alert'.")
+    source: str = Field(description="Module of origin, e.g. 'file_approval'.")
+    title: str | None = Field(
+        default=None,
+        description="Resolved English text OR an i18n key (see title_key).",
+    )
+    title_key: str | None = Field(
+        default=None,
+        description="i18n key the frontend should render with body_context.",
+    )
+    body_context: dict[str, Any] = Field(default_factory=dict)
+    project_id: str | None = None
+    project_name: str | None = None
+    entity_type: str | None = None
+    entity_id: str | None = None
+    action_url: str | None = Field(
+        default=None,
+        description="Relative app route the row links to.",
+    )
+    severity: str = Field(default="info", description="'info' | 'warning' | 'critical'.")
+    created_at: str | None = Field(default=None, description="ISO-8601; drives sort.")
+
+
+class InboxResponse(BaseModel):
+    """Unified approvals/alerts inbox payload.
+
+    ``items`` is capped (newest first); the counts reflect the full scoped
+    totals across both streams before the cap.
+    """
+
+    items: list[InboxItem]
+    total: int = Field(description="Scoped count across both streams (pre-cap).")
+    approvals_count: int = Field(description="Scoped pending-approval count.")
+    alerts_count: int = Field(description="Scoped alert count.")
+    generated_at: str = Field(description="ISO-8601 timestamp.")
+
+
 class RollupResponse(BaseModel):
     """Top-level rollup response.
 
@@ -544,6 +597,8 @@ __all__ = [
     "CurrencySubtotal",
     "HSEByProject",
     "HSEScorecardPayload",
+    "InboxItem",
+    "InboxResponse",
     "LastBOQRef",
     "ProcurementPipelinePayload",
     "ProjectBudgetBurnPayload",
