@@ -310,6 +310,13 @@ interface ElementMetreResponse {
     salient_angles: number;
     reentrant_angles: number;
   } | null;
+  geometry?: {
+    page_width_pt: number;
+    page_height_pt: number;
+    slab_outline: Array<[number, number]>;
+    walls: Record<string, Array<[number, number]>>;
+    angles: Array<{ x: number; y: number; kind: string }>;
+  };
   rooms_by_category: Record<string, { count: number; net_area_m2: number }>;
   todo: string[];
 }
@@ -2833,6 +2840,35 @@ export default function TakeoffViewerModule({
         { document_id: visionDocumentId, page: currentPage, storey_height_m: 2.7 },
       );
       setMetreResult(res);
+
+      // Pre-draw the measured slab outline as a reviewable area measurement so
+      // the user sees where the slab m² comes from (the wall axes are 1000s of
+      // segments — a dedicated render layer, not measurements — so we draw only
+      // the slab footprint here). Replaces any prior métré slab on this page.
+      const outline = res.geometry?.slab_outline;
+      if (outline && outline.length >= 3) {
+        const GROUP = 'Métré — Dalle';
+        const slabArea = res.elements?.dalle?.surface_m2 ?? 0;
+        const slabM: Measurement = {
+          id: `metre-slab-${currentPage}`,
+          type: 'area',
+          points: outline.map(([x, y]) => ({ x, y })),
+          value: slabArea,
+          unit: 'm²',
+          label: formatMeasurement(slabArea, 'm²'),
+          annotation: t('takeoff_viewer.metre_slab_annot', { defaultValue: 'Dalle (métré par calque)' }),
+          page: currentPage,
+          group: GROUP,
+          color: '#22C55E',
+          suggested: true,
+          reviewStatus: 'proposed',
+        };
+        setMeasurements((prev) => [
+          ...prev.filter((m) => !(m.group === GROUP && m.page === currentPage)),
+          slabM,
+        ]);
+      }
+
       addToast({
         type: 'success',
         title: t('takeoff_viewer.metre_done_title', { defaultValue: 'Métré calculé' }),
@@ -7540,8 +7576,9 @@ export default function TakeoffViewerModule({
                 </tr>
               </thead>
               <tbody>
-                {NEOFFICE_METRE_LABELS.filter((l) => metreResult.elements[l.key]).map((l) => {
+                {NEOFFICE_METRE_LABELS.map((l) => {
                   const el = metreResult.elements[l.key];
+                  if (!el) return null;
                   return (
                     <tr
                       key={l.key}

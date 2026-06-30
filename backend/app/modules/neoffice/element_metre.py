@@ -257,12 +257,15 @@ def _room_label_areas(page, mpp: float) -> dict[str, dict[str, float]]:
     return out
 
 
-def _envelope_angles(footprint) -> dict[str, int] | None:
+def _envelope_angles(footprint) -> dict[str, Any] | None:
     """Count salient (convex) vs reentrant (concave) corners of the building
     envelope — the outer ring of the slab footprint. These drive corner formwork
     pricing (coffrage d'angle): a salient corner is an outside angle, a reentrant
     one is an inside notch. We walk the simplified ring and classify each vertex
     by the sign of the turn (cross product) relative to the ring orientation.
+
+    Also returns ``points`` (PDF-point coords + kind) so the front-end can draw
+    the corner markers on the plan, and ``ring`` (the simplified outline).
     """
     if footprint is None or footprint.is_empty:
         return None
@@ -277,6 +280,7 @@ def _envelope_angles(footprint) -> dict[str, int] | None:
                  for i in range(n))
     ccw = signed > 0
     salient = reentrant = 0
+    points: list[dict[str, Any]] = []
     for i in range(n):
         p0, p1, p2 = ring[(i - 1) % n], ring[i], ring[(i + 1) % n]
         e1 = (p1[0] - p0[0], p1[1] - p0[1])
@@ -285,11 +289,19 @@ def _envelope_angles(footprint) -> dict[str, int] | None:
         dot = e1[0] * e2[0] + e1[1] * e2[1]
         if abs(math.degrees(math.atan2(cross, dot))) < _CORNER_MIN_DEG:
             continue  # near-straight: not a real corner
-        if (cross > 0) == ccw:
+        kind = "salient" if (cross > 0) == ccw else "reentrant"
+        if kind == "salient":
             salient += 1
         else:
             reentrant += 1
-    return {"salient": salient, "reentrant": reentrant, "total": salient + reentrant}
+        points.append({"x": round(p1[0], 2), "y": round(p1[1], 2), "kind": kind})
+    return {
+        "salient": salient,
+        "reentrant": reentrant,
+        "total": salient + reentrant,
+        "points": points,
+        "ring": [[round(x, 2), round(y, 2)] for x, y in ring],
+    }
 
 
 def compute_element_metre(
@@ -327,6 +339,11 @@ def compute_element_metre(
     buckets = _element_segments(page)
     elements: dict[str, Any] = {}
     envelope: dict[str, Any] | None = None
+    # Geometry for the front-end overlay (all coords in PDF points, same space
+    # as room_detection proposals): slab outline, wall centre-lines, corners.
+    geo_walls: dict[str, list] = {}
+    geo_slab: list[list[float]] = []
+    geo_angles: list[dict[str, Any]] = []
     for key, segs in buckets.items():
         if key == "dalle":
             # Slab: area from polygonised outline; "linear" = edge formwork.
@@ -347,6 +364,8 @@ def compute_element_metre(
                     "salient_angles": angles["salient"],
                     "reentrant_angles": angles["reentrant"],
                 }
+                geo_slab = angles["ring"]
+                geo_angles = angles["points"]
             continue
         # Wall-type element: pair the two faces into a centre-line.
         mids = _centerlines(segs)
@@ -358,6 +377,11 @@ def compute_element_metre(
             "faces": len(segs),
             "measure": "wall_centerline",
         }
+        geo_walls[key] = [
+            [round(c[0], 2), round(c[1], 2)]
+            for m in mids
+            for c in (m.coords[0], m.coords[-1])
+        ]
 
     return {
         "page": page_index,
@@ -367,6 +391,13 @@ def compute_element_metre(
         "storey_height_is_assumption": True,
         "elements": elements,
         "envelope": envelope,
+        "geometry": {
+            "page_width_pt": round(page.rect.width, 2),
+            "page_height_pt": round(page.rect.height, 2),
+            "slab_outline": geo_slab,
+            "walls": geo_walls,
+            "angles": geo_angles,
+        },
         "rooms_by_category": _room_label_areas(page, mpp),
         "todo": [
             "door counts (gap detection — no door/window layer in ArchiCAD export)",
