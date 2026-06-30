@@ -289,6 +289,50 @@ interface Measurement {
 
 /* ── Annotation Colors ───────────────────────────────────────────── */
 
+// //// NEOFFICE PATCH — deterministic element take-off ("métré par calque")
+// Shape returned by POST /v1/neoffice/takeoff/element-metre/ (element_metre.py).
+interface ElementMetreElement {
+  ebkp: string;
+  linear_m: number | null;
+  surface_m2: number | null;
+  faces: number;
+  measure?: string;
+}
+interface ElementMetreResponse {
+  page: number;
+  scale_ratio: number;
+  storey_height_m: number;
+  storey_height_is_assumption: boolean;
+  elements: Record<string, ElementMetreElement>;
+  envelope: {
+    area_m2: number;
+    perimeter_m: number;
+    salient_angles: number;
+    reentrant_angles: number;
+  } | null;
+  rooms_by_category: Record<string, { count: number; net_area_m2: number }>;
+  todo: string[];
+}
+// French labels (vouvoiement, Swiss glossary) for the element keys. Order =
+// display order in the results panel; keys missing from the response are skipped.
+const NEOFFICE_METRE_LABELS: Array<{ key: string; label: string; muted?: boolean }> = [
+  { key: 'dalle', label: 'Dalle béton' },
+  { key: 'beton_porteur', label: 'Murs béton porteurs (int.)' },
+  { key: 'beton_exterieur', label: 'Murs béton extérieurs' },
+  { key: 'cloison', label: 'Cloisons (1 face)' },
+  { key: 'escalier', label: 'Escalier' },
+  { key: 'mur_autre', label: 'Autres murs' },
+  { key: 'structure_overlay', label: 'Structure ingénieur (contrôle)', muted: true },
+];
+const NEOFFICE_ROOM_LABELS: Record<string, string> = {
+  sdb: 'Dalle SDB (net)',
+  escalier: 'Dalle cage escalier (net)',
+  sejour: 'Séjour / cuisine (net)',
+  chambre: 'Chambres (net)',
+  reduit: 'Réduits / locaux (net)',
+};
+// //// END NEOFFICE PATCH
+
 interface AnnotationColor {
   name: string;
   value: string;
@@ -503,6 +547,10 @@ export default function TakeoffViewerModule({
 
   // //// NEOFFICE PATCH — vector room detection in-flight flag
   const [roomsLoading, setRoomsLoading] = useState(false);
+  // //// NEOFFICE PATCH — deterministic element take-off ("métré par calque")
+  const [metreLoading, setMetreLoading] = useState(false);
+  const [metreResult, setMetreResult] = useState<ElementMetreResponse | null>(null);
+  // //// END NEOFFICE PATCH
 
   // Sidebar right-panel tab: "Properties" (existing) or "Ledger" (new).
   // Persisted to localStorage so the choice survives reloads.
@@ -2762,6 +2810,51 @@ export default function TakeoffViewerModule({
       setRoomsLoading(false);
     }
   }, [visionDocumentId, currentPage, scale, proposalToMeasurement, addToast, t]);
+
+  // //// NEOFFICE PATCH — deterministic element take-off ("métré par calque").
+  // Reads the architect's CAD layers server-side → aggregate quantities
+  // (concrete walls ml+m², slabs m², envelope corners, per-use room split).
+  // These are totals (not per-shape measurements), so they go in a results
+  // panel rather than being pre-drawn on the canvas.
+  const handleElementMetre = useCallback(async () => {
+    if (!visionDocumentId) {
+      addToast({
+        type: 'info',
+        title: t('takeoff_viewer.metre_need_doc', {
+          defaultValue: 'Veuillez d’abord ouvrir un document enregistré.',
+        }),
+      });
+      return;
+    }
+    setMetreLoading(true);
+    try {
+      const res = await apiPost<ElementMetreResponse>(
+        '/v1/neoffice/takeoff/element-metre/',
+        { document_id: visionDocumentId, page: currentPage, storey_height_m: 2.7 },
+      );
+      setMetreResult(res);
+      addToast({
+        type: 'success',
+        title: t('takeoff_viewer.metre_done_title', { defaultValue: 'Métré calculé' }),
+        message: t('takeoff_viewer.metre_done_msg', {
+          defaultValue: '{{count}} type(s) d’élément mesuré(s) à l’échelle 1:{{scale}}.',
+          count: Object.keys(res.elements).length,
+          scale: Math.round(res.scale_ratio),
+        }),
+      });
+    } catch (err) {
+      addToast({
+        type: 'error',
+        title: t('takeoff_viewer.metre_failed', {
+          defaultValue: 'Le métré par calque a échoué.',
+        }),
+        message: getErrorMessage(err),
+      });
+    } finally {
+      setMetreLoading(false);
+    }
+  }, [visionDocumentId, currentPage, addToast, t]);
+  // //// END NEOFFICE PATCH
 
   /* ── Calibration (two-click → unit picker) ───────────────────────── */
 
@@ -5699,6 +5792,29 @@ export default function TakeoffViewerModule({
               </button>
               {/* //// END NEOFFICE PATCH */}
 
+              {/* //// NEOFFICE PATCH — deterministic element take-off by layer
+                  (béton / cloisons / dalles / angles). Sibling of "Pièces". */}
+              <button
+                onClick={handleElementMetre}
+                disabled={metreLoading || !visionDocumentId}
+                className={`flex items-center gap-1 px-2 py-1.5 rounded text-xs transition-colors disabled:opacity-40 ${
+                  metreLoading ? 'bg-amber-500 text-white' : 'hover:bg-surface-secondary text-content-secondary'
+                }`}
+                title={t('takeoff_viewer.element_metre', {
+                  defaultValue: 'Métré par calque (béton, cloisons, dalles, angles — déterministe)',
+                })}
+                aria-label={t('takeoff_viewer.element_metre', { defaultValue: 'Métré par calque' })}
+                data-testid="element-metre-button"
+              >
+                {metreLoading ? <Loader2 size={14} className="animate-spin" /> : <Layers size={14} />}
+                <span className="hidden sm:inline">
+                  {metreLoading
+                    ? t('takeoff_viewer.metre_loading', { defaultValue: 'Métré…' })
+                    : t('takeoff_viewer.metre_short', { defaultValue: 'Métré' })}
+                </span>
+              </button>
+              {/* //// END NEOFFICE PATCH */}
+
               {/* Calibration status chip - ratio + length when calibrated, an
                   amber "Not calibrated" warning otherwise. Click to (re)calibrate.
                   Reuses the scale purple so it reads as part of the scale group. */}
@@ -7378,6 +7494,127 @@ export default function TakeoffViewerModule({
           onCancel={handleCalibrationCancel}
         />
       )}
+
+      {/* //// NEOFFICE PATCH — element take-off ("métré par calque") results panel */}
+      {metreResult && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+          onClick={() => setMetreResult(null)}
+        >
+          <div
+            className="w-[440px] max-h-[85vh] overflow-y-auto rounded-xl border border-border bg-surface-elevated p-5 shadow-lg"
+            onClick={(e) => e.stopPropagation()}
+            data-testid="element-metre-panel"
+          >
+            <div className="flex items-start justify-between mb-1">
+              <h3 className="text-sm font-semibold text-content-primary flex items-center gap-1.5">
+                <Layers size={15} />
+                {t('takeoff_viewer.metre_title', { defaultValue: 'Métré par calque' })}
+              </h3>
+              <button
+                onClick={() => setMetreResult(null)}
+                className="px-2 py-0.5 rounded text-sm text-content-secondary hover:bg-surface-secondary"
+                aria-label={t('common.close', { defaultValue: 'Fermer' })}
+              >
+                ✕
+              </button>
+            </div>
+            <p className="text-[11px] text-content-tertiary mb-3">
+              {t('takeoff_viewer.metre_subtitle', {
+                defaultValue: 'Page {{page}} · échelle 1:{{scale}} · déterministe (calques CAO, sans IA)',
+                page: metreResult.page + 1,
+                scale: Math.round(metreResult.scale_ratio),
+              })}
+            </p>
+
+            {/* Elements measured by layer */}
+            <table className="w-full text-xs mb-3">
+              <thead>
+                <tr className="text-content-tertiary text-left border-b border-border">
+                  <th className="py-1 font-medium">
+                    {t('takeoff_viewer.metre_element', { defaultValue: 'Élément' })}
+                  </th>
+                  <th className="py-1 font-medium text-right">ml</th>
+                  <th className="py-1 font-medium text-right">m²</th>
+                  <th className="py-1 font-medium text-right">eBKP</th>
+                </tr>
+              </thead>
+              <tbody>
+                {NEOFFICE_METRE_LABELS.filter((l) => metreResult.elements[l.key]).map((l) => {
+                  const el = metreResult.elements[l.key];
+                  return (
+                    <tr
+                      key={l.key}
+                      className={`border-b border-border/40 ${
+                        l.muted ? 'text-content-tertiary italic' : 'text-content-secondary'
+                      }`}
+                    >
+                      <td className="py-1">{l.label}</td>
+                      <td className="py-1 text-right tabular-nums">
+                        {el.linear_m != null ? el.linear_m.toFixed(1) : '—'}
+                      </td>
+                      <td className="py-1 text-right tabular-nums">
+                        {el.surface_m2 != null ? el.surface_m2.toFixed(1) : '—'}
+                      </td>
+                      <td className="py-1 text-right text-content-tertiary">{el.ebkp || '—'}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+
+            {/* Per-use room split (from the architect's printed net areas) */}
+            {Object.keys(metreResult.rooms_by_category).length > 0 && (
+              <div className="mb-3">
+                <h4 className="text-[11px] font-semibold text-content-secondary mb-1">
+                  {t('takeoff_viewer.metre_by_use', {
+                    defaultValue: 'Surfaces par usage (m² nets imprimés)',
+                  })}
+                </h4>
+                <table className="w-full text-xs">
+                  <tbody>
+                    {Object.entries(metreResult.rooms_by_category).map(([k, v]) => (
+                      <tr key={k} className="border-b border-border/40 text-content-secondary">
+                        <td className="py-1">
+                          {NEOFFICE_ROOM_LABELS[k] || k}{' '}
+                          <span className="text-content-tertiary">({v.count})</span>
+                        </td>
+                        <td className="py-1 text-right tabular-nums">{v.net_area_m2.toFixed(2)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* Envelope corners (corner formwork) */}
+            {metreResult.envelope && (
+              <div className="mb-3 rounded-lg bg-surface-secondary px-3 py-2 text-xs text-content-secondary">
+                <div className="font-semibold mb-0.5">
+                  {t('takeoff_viewer.metre_envelope', { defaultValue: 'Enveloppe (coffrage d’angle)' })}
+                </div>
+                {t('takeoff_viewer.metre_angles', {
+                  defaultValue: '{{sal}} angles saillants · {{re}} rentrants · périmètre {{per}} m',
+                  sal: metreResult.envelope.salient_angles,
+                  re: metreResult.envelope.reentrant_angles,
+                  per: metreResult.envelope.perimeter_m.toFixed(1),
+                })}
+              </div>
+            )}
+
+            {metreResult.storey_height_is_assumption && (
+              <p className="text-[11px] text-content-tertiary">
+                {t('takeoff_viewer.metre_height_note', {
+                  defaultValue:
+                    '⚠ Surfaces murs = ml × hauteur d’étage {{h}} m (hypothèse — à confirmer sur la coupe). Béton compté en 1 face.',
+                  h: metreResult.storey_height_m,
+                })}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+      {/* //// END NEOFFICE PATCH */}
 
       {/* Scale dialog */}
       {showScaleDialog && (

@@ -465,13 +465,18 @@ async def element_metre(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Stored PDF file not found on server",
         )
+    pdf_bytes = pdf_path.read_bytes()
     try:
-        result = compute_element_metre(
-            pdf_path.read_bytes(),
+        # CPU-bound geometry (polygonise + centre-lines) — run off the event loop.
+        result = await asyncio.to_thread(
+            compute_element_metre,
+            pdf_bytes,
             request.page - 1,
-            scale_ratio=request.scale_ratio,
-            storey_height_m=request.storey_height_m,
+            request.scale_ratio,
+            request.storey_height_m,
         )
+    except IndexError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
     except Exception as exc:
         logger.exception("Element métré failed for %s", request.document_id)
         raise HTTPException(
