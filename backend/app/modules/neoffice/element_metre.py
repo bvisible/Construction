@@ -31,7 +31,7 @@ except ImportError:  # pragma: no cover
     import fitz as pymupdf  # type: ignore
 
 from shapely.geometry import LineString
-from shapely.ops import unary_union
+from shapely.ops import polygonize, unary_union
 from shapely.strtree import STRtree
 
 # ── Element taxonomy: layer-name regex → (element key, eBKP-H code) ───────────
@@ -161,6 +161,42 @@ def _ml(mids: list[LineString], mpp: float) -> float:
     return float(unary_union(mids).length * mpp)
 
 
+# Snap grid (PDF points) to close hairline gaps before polygonising slab edges.
+_SLAB_SNAP_PT = 1.0
+# Discard polygonised faces smaller than this (m²): hatch artefacts, dimension
+# boxes, text outlines that leak into the slab layer.
+_SLAB_MIN_FACE_M2 = 1.0
+
+
+def _slab_metrics(segs, mpp: float) -> tuple[float, float, int]:
+    """Slab take-off from outline strokes: (area_m², edge_perimeter_m, n_faces).
+
+    The slab layer is drawn as an outline (no fill), so we node the strokes and
+    polygonise the planar graph. Summing the faces gives the poured-concrete
+    footprint (sub-division lines per zone don't double-count — polygonise
+    yields a planar partition). The perimeter of the dissolved footprint is the
+    edge formwork (coffrage de rive). Tiny faces are dropped as artefacts.
+    """
+    if not segs:
+        return 0.0, 0.0, 0
+
+    def _snap(p):
+        return (round(p[0] / _SLAB_SNAP_PT) * _SLAB_SNAP_PT,
+                round(p[1] / _SLAB_SNAP_PT) * _SLAB_SNAP_PT)
+
+    lines = [LineString([_snap(a), _snap(b)]) for a, b in segs if _snap(a) != _snap(b)]
+    if not lines:
+        return 0.0, 0.0, 0
+    min_face_pt2 = _SLAB_MIN_FACE_M2 / (mpp * mpp)
+    faces = [p for p in polygonize(unary_union(lines)) if p.area >= min_face_pt2]
+    if not faces:
+        return 0.0, 0.0, 0
+    footprint = unary_union(faces)
+    area_m2 = sum(p.area for p in faces) * mpp * mpp
+    perimeter_m = footprint.length * mpp
+    return float(area_m2), float(perimeter_m), len(faces)
+
+
 def compute_element_metre(
     pdf_bytes: bytes,
     page_index: int,
@@ -188,24 +224,35 @@ def compute_element_metre(
         scale_ratio = 50.0
     mpp = _M_PER_INCH / _PT_PER_INCH * scale_ratio  # metres per PDF point
 
+    # eBKP code per element key (first matching rule wins).
+    ebkp_by_key: dict[str, str] = {}
+    for _pat, k, e in _LAYER_RULES:
+        ebkp_by_key.setdefault(k, e)
+
     buckets = _element_segments(page)
     elements: dict[str, Any] = {}
     for key, segs in buckets.items():
+        if key == "dalle":
+            # Slab: area from polygonised outline; "linear" = edge formwork.
+            area_m2, perimeter_m, n_faces = _slab_metrics(segs, mpp)
+            elements[key] = {
+                "ebkp": ebkp_by_key.get(key, ""),
+                "linear_m": round(perimeter_m, 1),
+                "surface_m2": round(area_m2, 1),
+                "faces": len(segs),
+                "measure": "slab_footprint",
+            }
+            continue
+        # Wall-type element: pair the two faces into a centre-line.
         mids = _centerlines(segs)
         ml = _ml(mids, mpp)
-        is_wall = key != "dalle"
         elements[key] = {
-            "ebkp": dict((k, e) for _, k, e in [(r, k, e) for r, k, e in _LAYER_RULES]).get(key, ""),
-            "linear_m": round(ml, 1) if is_wall else None,
-            "surface_m2": round(ml * storey_height_m, 1) if is_wall else None,
+            "ebkp": ebkp_by_key.get(key, ""),
+            "linear_m": round(ml, 1),
+            "surface_m2": round(ml * storey_height_m, 1),
             "faces": len(segs),
+            "measure": "wall_centerline",
         }
-    # eBKP code per element (recompute cleanly from rules)
-    ebkp_by_key = {}
-    for _pat, k, e in _LAYER_RULES:
-        ebkp_by_key.setdefault(k, e)
-    for k, v in elements.items():
-        v["ebkp"] = ebkp_by_key.get(k, "")
 
     return {
         "page": page_index,
