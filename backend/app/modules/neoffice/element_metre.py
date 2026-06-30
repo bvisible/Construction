@@ -166,10 +166,17 @@ _SLAB_SNAP_PT = 1.0
 # Discard polygonised faces smaller than this (m²): hatch artefacts, dimension
 # boxes, text outlines that leak into the slab layer.
 _SLAB_MIN_FACE_M2 = 1.0
+# Envelope-corner detection: simplify tolerance (pt) removes drawing noise, and
+# a vertex turning less than this is treated as "straight", not a real corner.
+_ENVELOPE_SIMPLIFY_PT = 3.0
+_CORNER_MIN_DEG = 20.0
 
 
-def _slab_metrics(segs, mpp: float) -> tuple[float, float, int]:
-    """Slab take-off from outline strokes: (area_m², edge_perimeter_m, n_faces).
+def _slab_metrics(segs, mpp: float):
+    """Slab take-off from outline strokes.
+
+    Returns ``(area_m², edge_perimeter_m, n_faces, footprint)`` where
+    ``footprint`` is the dissolved shapely geometry (or None).
 
     The slab layer is drawn as an outline (no fill), so we node the strokes and
     polygonise the planar graph. Summing the faces gives the poured-concrete
@@ -178,7 +185,7 @@ def _slab_metrics(segs, mpp: float) -> tuple[float, float, int]:
     edge formwork (coffrage de rive). Tiny faces are dropped as artefacts.
     """
     if not segs:
-        return 0.0, 0.0, 0
+        return 0.0, 0.0, 0, None
 
     def _snap(p):
         return (round(p[0] / _SLAB_SNAP_PT) * _SLAB_SNAP_PT,
@@ -186,15 +193,103 @@ def _slab_metrics(segs, mpp: float) -> tuple[float, float, int]:
 
     lines = [LineString([_snap(a), _snap(b)]) for a, b in segs if _snap(a) != _snap(b)]
     if not lines:
-        return 0.0, 0.0, 0
+        return 0.0, 0.0, 0, None
     min_face_pt2 = _SLAB_MIN_FACE_M2 / (mpp * mpp)
     faces = [p for p in polygonize(unary_union(lines)) if p.area >= min_face_pt2]
     if not faces:
-        return 0.0, 0.0, 0
+        return 0.0, 0.0, 0, None
     footprint = unary_union(faces)
     area_m2 = sum(p.area for p in faces) * mpp * mpp
     perimeter_m = footprint.length * mpp
-    return float(area_m2), float(perimeter_m), len(faces)
+    return float(area_m2), float(perimeter_m), len(faces), footprint
+
+
+# Room-label categories (regex on the room name word). Used to split slab/floor
+# quantities the way the architect asks (e.g. slab under bathrooms, stairwell).
+_ROOM_CATEGORIES: list[tuple[str, str]] = [
+    ("sdb", r"bain|douche|\bwc\b|sanitaire"),
+    ("escalier", r"escalier|treppe|cage"),
+    ("reduit", r"r[ée]duit|local|buand|technique|cave"),
+    ("sejour", r"salon|s[ée]jour|cuisine|manger"),
+    ("chambre", r"chambre|dressing"),
+]
+# Max distance (PDF points) from a printed area value to its room-name word.
+_LABEL_LINK_PT = 70.0
+
+
+def _room_label_areas(page, mpp: float) -> dict[str, dict[str, float]]:
+    """Split the architect's *printed* room areas by category.
+
+    Vector PDFs carry the room labels as text ("Salle de bain" + "4.75 m2").
+    We pair every "<number> m²" token with the nearest room-name word and bucket
+    it. This yields the per-use slab/floor split (slab under bathrooms, under the
+    stairwell, …) straight from the architect's own figures — more reliable than
+    polygonising open-plan rooms. ``mpp`` is unused for the values (they are
+    already in m²) but kept for signature symmetry / future polygon fallbacks.
+    """
+    words = page.get_text("words")  # (x0, y0, x1, y1, word, block, line, wno)
+    area_tokens: list[tuple[float, float, float]] = []
+    for i, w in enumerate(words):
+        if re.fullmatch(r"\d{1,3}[.,]\d{2}", w[4]):
+            nxt = words[i + 1][4] if i + 1 < len(words) else ""
+            if re.fullmatch(r"m[²2]", nxt):
+                area_tokens.append(((w[0] + w[2]) / 2, (w[1] + w[3]) / 2,
+                                    float(w[4].replace(",", "."))))
+    name_pts: list[tuple[float, float, str]] = []
+    for w in words:
+        low = w[4].lower()
+        for cat, pat in _ROOM_CATEGORIES:
+            if re.search(pat, low):
+                name_pts.append(((w[0] + w[2]) / 2, (w[1] + w[3]) / 2, cat))
+                break
+    out: dict[str, dict[str, float]] = {}
+    for ax, ay, val in area_tokens:
+        best, best_d = None, _LABEL_LINK_PT
+        for nx, ny, cat in name_pts:
+            d = math.hypot(ax - nx, ay - ny)
+            if d < best_d:
+                best_d, best = d, cat
+        if best is None:
+            continue
+        b = out.setdefault(best, {"count": 0, "net_area_m2": 0.0})
+        b["count"] += 1
+        b["net_area_m2"] = round(b["net_area_m2"] + val, 2)
+    return out
+
+
+def _envelope_angles(footprint) -> dict[str, int] | None:
+    """Count salient (convex) vs reentrant (concave) corners of the building
+    envelope — the outer ring of the slab footprint. These drive corner formwork
+    pricing (coffrage d'angle): a salient corner is an outside angle, a reentrant
+    one is an inside notch. We walk the simplified ring and classify each vertex
+    by the sign of the turn (cross product) relative to the ring orientation.
+    """
+    if footprint is None or footprint.is_empty:
+        return None
+    poly = footprint
+    if poly.geom_type == "MultiPolygon":
+        poly = max(poly.geoms, key=lambda g: g.area)
+    ring = list(poly.simplify(_ENVELOPE_SIMPLIFY_PT).exterior.coords)[:-1]
+    n = len(ring)
+    if n < 4:
+        return None
+    signed = sum(ring[i][0] * ring[(i + 1) % n][1] - ring[(i + 1) % n][0] * ring[i][1]
+                 for i in range(n))
+    ccw = signed > 0
+    salient = reentrant = 0
+    for i in range(n):
+        p0, p1, p2 = ring[(i - 1) % n], ring[i], ring[(i + 1) % n]
+        e1 = (p1[0] - p0[0], p1[1] - p0[1])
+        e2 = (p2[0] - p1[0], p2[1] - p1[1])
+        cross = e1[0] * e2[1] - e1[1] * e2[0]
+        dot = e1[0] * e2[0] + e1[1] * e2[1]
+        if abs(math.degrees(math.atan2(cross, dot))) < _CORNER_MIN_DEG:
+            continue  # near-straight: not a real corner
+        if (cross > 0) == ccw:
+            salient += 1
+        else:
+            reentrant += 1
+    return {"salient": salient, "reentrant": reentrant, "total": salient + reentrant}
 
 
 def compute_element_metre(
@@ -231,10 +326,11 @@ def compute_element_metre(
 
     buckets = _element_segments(page)
     elements: dict[str, Any] = {}
+    envelope: dict[str, Any] | None = None
     for key, segs in buckets.items():
         if key == "dalle":
             # Slab: area from polygonised outline; "linear" = edge formwork.
-            area_m2, perimeter_m, n_faces = _slab_metrics(segs, mpp)
+            area_m2, perimeter_m, n_faces, footprint = _slab_metrics(segs, mpp)
             elements[key] = {
                 "ebkp": ebkp_by_key.get(key, ""),
                 "linear_m": round(perimeter_m, 1),
@@ -242,6 +338,15 @@ def compute_element_metre(
                 "faces": len(segs),
                 "measure": "slab_footprint",
             }
+            # Building-envelope corner count (formwork) derives from the slab.
+            angles = _envelope_angles(footprint)
+            if angles:
+                envelope = {
+                    "area_m2": round(area_m2, 1),
+                    "perimeter_m": round(perimeter_m, 1),
+                    "salient_angles": angles["salient"],
+                    "reentrant_angles": angles["reentrant"],
+                }
             continue
         # Wall-type element: pair the two faces into a centre-line.
         mids = _centerlines(segs)
@@ -261,11 +366,13 @@ def compute_element_metre(
         "storey_height_m": storey_height_m,
         "storey_height_is_assumption": True,
         "elements": elements,
+        "envelope": envelope,
+        "rooms_by_category": _room_label_areas(page, mpp),
         "todo": [
-            "door counts (gap detection in partition layer)",
-            "salient/reentrant angles (shapely cross-product on outlines)",
-            "window reveals (opening perimeter from wall thickness)",
-            "crawl-space lining + junction linear metres",
+            "door counts (gap detection — no door/window layer in ArchiCAD export)",
+            "window reveals (depends on door/window detection)",
+            "crawl-space lining + junction linear metres (needs basement sheet)",
             "slab classification (bathroom/stairwell) via room labels",
+            "interior glazing (no glazing layer — needs architect input)",
         ],
     }
