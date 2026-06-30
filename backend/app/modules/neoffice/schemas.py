@@ -239,3 +239,18 @@ class RoomDetectionProposalResponse(BaseModel):
     scale_pixels_per_unit: float | None = None
     proposal_count: int
     stats: dict[str, int | float | str] = Field(default_factory=dict)
+
+
+class ElementMetreRequest(BaseModel):
+    """Body for POST /api/v1/neoffice/takeoff/element-metre/.
+
+    Deterministic element take-off (concrete walls/slabs, partitions) from the
+    PDF's CAD layers. ``scale_ratio`` sets the drawing scale (e.g. 50 for 1:50);
+    when omitted it is read from the plan dimensions. ``storey_height_m`` drives
+    wall surfaces (not on the floor plan — defaults to a flagged assumption).
+    """
+
+    document_id: str = Field(..., description="Takeoff document UUID")
+    page: int = Field(1, ge=1, description="1-based page number")
+    scale_ratio: float | None = Field(None, description="Drawing scale denominator, e.g. 50")
+    storey_height_m: float = Field(2.70, gt=0, description="Storey height for wall m² (assumption)")

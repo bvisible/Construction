@@ -32,6 +32,7 @@ from app.modules.neoffice.roomplan_glb_builder import build_glb_bytes
 from app.modules.neoffice.roomplan_importer import parse_roomplan_scan
 from app.modules.neoffice.schemas import (
     DetectedRoom,
+    ElementMetreRequest,
     FieldReportFromActivitiesRequest,
     PlanVisionRequest,
     PlanVisionResponse,
@@ -432,6 +433,51 @@ async def detect_takeoff_rooms(
     return RoomDetectionResponse(
         document_id=request.document_id, page=request.page, **result
     )
+
+
+@router.post("/takeoff/element-metre/")
+async def element_metre(
+    request: ElementMetreRequest,
+    session: SessionDep,
+    user_id: str = Depends(get_current_user_id),
+) -> dict[str, Any]:
+    """Deterministic element take-off (métré) from a vector PDF's CAD layers.
+
+    Measures concrete walls (interior/exterior), partitions and slabs by reading
+    the architect's preserved OCG layers — no ML. Returns linear metres + m²
+    (walls) and m² (slabs) with eBKP-H codes. Companion to /takeoff/detect-rooms/
+    (rooms) — this measures structural & finish *elements*.
+    """
+    from app.modules.neoffice.element_metre import compute_element_metre
+    from app.modules.takeoff.service import TakeoffService
+
+    takeoff = TakeoffService(session)
+    doc = await takeoff.get_document(request.document_id)
+    if doc is None or not doc.file_path:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Takeoff document not found"
+        )
+    if doc.project_id is not None:
+        await _verify_project_access(session, doc.project_id, user_id)
+    pdf_path = Path(doc.file_path)
+    if not pdf_path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Stored PDF file not found on server",
+        )
+    try:
+        result = compute_element_metre(
+            pdf_path.read_bytes(),
+            request.page - 1,
+            scale_ratio=request.scale_ratio,
+            storey_height_m=request.storey_height_m,
+        )
+    except Exception as exc:
+        logger.exception("Element métré failed for %s", request.document_id)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail="Element métré failed"
+        ) from exc
+    return {"document_id": request.document_id, **result}
 
 
 def _room_detection_confidence(room: DetectedRoom) -> float:
