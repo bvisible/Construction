@@ -1884,10 +1884,10 @@ function ShellWrapper({
               defaultValue: 'Questions? Email',
             })}{' '}
             <a
-              href="mailto:info@datadrivenconstruction.io"
+              href="mailto:info@neoffice.ch"
               className="text-oe-blue hover:underline"
             >
-              info@datadrivenconstruction.io
+              info@neoffice.ch
             </a>
           </span>
           <a

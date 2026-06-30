@@ -381,7 +381,7 @@ acme-co = "openconstructionerp_acme_co:MANIFEST"`}
             <p className="mt-2 text-xs text-content-tertiary">
               {t('modules.dev_pack_contact_us', {
                 defaultValue:
-                  'To list your pack or get featured, contact info@datadrivenconstruction.io.',
+                  'To list your pack or get featured, contact info@neoffice.ch.',
               })}
             </p>
           </div>

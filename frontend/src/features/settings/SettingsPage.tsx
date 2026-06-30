@@ -1405,16 +1405,9 @@ export function SettingsPage() {
             })}
           </nav>
 
-          {/* About link */}
-          <div className="hidden lg:block mt-4 px-3 text-center">
-            <Link
-              to="/about"
-              className="inline-flex items-center gap-1 text-xs text-content-tertiary hover:text-oe-blue transition-colors"
-            >
-              {t('settings.about_link', { defaultValue: 'About OpenConstructionERP' })}
-              <ChevronRight size={11} />
-            </Link>
-          </div>
+          {/* //// NEOFFICE PATCH — white-label: upstream "About" link removed; no
+              visible attribution line (AGPL-3.0 notices live in the source headers
+              + LICENSE; Corresponding Source provided on request). */}
         </aside>
 
         {/* ── Tab content ──────────────────────────────────────────── */}
@@ -1833,16 +1826,7 @@ export function SettingsPage() {
           )}
           </div>{/* End cards grid */}
 
-          {/* About link — mobile only (desktop has it in sidebar) */}
-          <div className="lg:hidden mt-8 text-center">
-            <Link
-              to="/about"
-              className="inline-flex items-center gap-1 text-sm text-content-tertiary hover:text-oe-blue transition-colors"
-            >
-              {t('settings.about_link', { defaultValue: 'About OpenConstructionERP' })}
-              <ChevronRight size={12} />
-            </Link>
-          </div>
+          {/* //// NEOFFICE PATCH — white-label: "About" link removed (mobile); no visible attribution */}
         </div>
       </div>
     </div>

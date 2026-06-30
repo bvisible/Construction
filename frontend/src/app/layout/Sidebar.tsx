@@ -19,7 +19,6 @@ import {
   FileBarChart,
   Package,
   Settings,
-  Info,
   TrendingUp,
   Phone,
   ChevronDown,
@@ -660,7 +659,7 @@ const adminGridItems: NavItem[] = [
     icon: ScrollText,
     roleGate: ['admin', 'manager'],
   },
-  { labelKey: 'sidebar.admin_grid.about', to: '/about', icon: Info },
+  // //// NEOFFICE PATCH — "About" entry removed (white-label, page deleted)
 ];
 
 /** Flat lookup of every NavItem in the sidebar, keyed by `to`. The

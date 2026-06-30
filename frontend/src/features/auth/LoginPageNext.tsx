@@ -552,7 +552,7 @@ export function LoginPageNext() {
               Artem Boiko
             </a>{' '}
             · OpenConstructionERP
-            · <a href="mailto:info@datadrivenconstruction.io" className="hover:text-content-secondary transition-colors">info@datadrivenconstruction.io</a>
+            · <a href="mailto:info@neoffice.ch" className="hover:text-content-secondary transition-colors">info@neoffice.ch</a>
           </div>
         </div>
 

@@ -3831,7 +3831,8 @@ export function BIMQuantityRulesPage() {
               <span>·</span>
               <button
                 type="button"
-                onClick={() => navigate('/about')}
+                // //// NEOFFICE PATCH — was '/about' (page removed); point to in-app help
+                onClick={() => navigate('/how-it-works')}
                 className="flex items-center gap-1 hover:text-content-secondary"
               >
                 <BookOpen size={12} />

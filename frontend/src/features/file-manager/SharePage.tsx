@@ -306,7 +306,7 @@ export function SharePage() {
         </div>
 
         <p className="mt-4 text-center text-2xs text-content-quaternary">
-          OpenConstructionERP · datadrivenconstruction.io
+          Neoconstruction · neoffice.ch
         </p>
       </div>
     </div>

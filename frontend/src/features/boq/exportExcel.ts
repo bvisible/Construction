@@ -108,6 +108,35 @@ function getResources(pos: Position): Resource[] {
 }
 
 /**
+ * NEOFFICE — "métré" provenance for a position: how the quantity was obtained —
+ * an annotated pré-métré formula kept on the cell, or a measurement taken on a
+ * plan via the Takeoff — so the exported devis reads like Cédric's "devis avec
+ * métrés". Returns null for a hand-typed quantity (nothing to justify).
+ */
+function metreLineForExport(pos: Position): string | null {
+  const meta = (pos.metadata ?? (pos as unknown as Record<string, unknown>).metadata_) as
+    | Record<string, unknown>
+    | undefined;
+  if (!meta) return null;
+  const formula = (meta.formula ?? meta.quantity_formula) as string | undefined;
+  if (typeof formula === 'string' && formula.trim()) {
+    return `Pré-métré : ${formula.trim()} = ${pos.quantity} ${pos.unit}`;
+  }
+  const measured = (meta.measured_value ?? meta.takeoff_value) as number | string | undefined;
+  if (pos.source === 'takeoff' || measured != null) {
+    const plan = (meta.takeoff_document ?? meta.document) as string | undefined;
+    const page = (meta.takeoff_page ?? meta.page) as number | string | undefined;
+    const unit = (meta.measured_unit as string | undefined) ?? pos.unit;
+    const where = [`plan${plan ? ` ${plan}` : ''}`, page != null ? `p.${page}` : '']
+      .filter(Boolean)
+      .join(', ');
+    const val = measured != null ? ` : ${measured} ${unit}` : '';
+    return `Métré sur ${where}${val}`;
+  }
+  return null;
+}
+
+/**
  * Issue #150 — per-position Total, converted into the project base currency
  * when FX context is present. Mirrors the editor grid's Total column
  * (``columnDefs.ts`` valueGetter → ``resourceAwareTotalInBase``) so the
@@ -285,6 +314,11 @@ export function buildBOQSheetData(options: ExportOptions): {
         null,
         null,
       ]);
+      // NEOFFICE — métré provenance sub-row (how the quantity was obtained).
+      const metreChild = metreLineForExport(child);
+      if (metreChild) {
+        rows.push([null, neutraliseFormula(`    → ${metreChild}`), null, null, null, null, null, null, null]);
+      }
       for (const r of getResources(child)) {
         const rTotal = r.total ?? r.quantity * r.unit_rate;
         rows.push([
@@ -336,6 +370,11 @@ export function buildBOQSheetData(options: ExportOptions): {
       null,
       null,
     ]);
+    // NEOFFICE — métré provenance sub-row (how the quantity was obtained).
+    const metrePos = metreLineForExport(pos);
+    if (metrePos) {
+      rows.push([null, neutraliseFormula(`    → ${metrePos}`), null, null, null, null, null, null, null]);
+    }
     for (const r of getResources(pos)) {
       const rTotal = r.total ?? r.quantity * r.unit_rate;
       rows.push([

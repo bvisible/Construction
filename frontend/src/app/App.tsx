@@ -531,9 +531,10 @@ const QuantitiesPage = lazy(() =>
 const IntegrationsPage = lazy(() =>
   import('@/features/integrations').then((m) => ({ default: m.IntegrationsPage }))
 );
-const AboutPage = lazy(() =>
-  import('@/features/about/AboutPage').then((m) => ({ default: m.AboutPage }))
-);
+// //// NEOFFICE PATCH — white-label: the upstream "About" marketing page
+// (founder note, vendor ecosystem links, newsletter) is removed. AGPL-3.0 only
+// requires the source-level licence/copyright notices, which we keep; a discreet
+// attribution line lives in Settings instead.
 const HowItWorksPage = lazy(() => import('@/features/help/HowItWorksPage'));
 
 // CPMView is keyed by the schedule it analyses, so the route reads :id and
@@ -1118,7 +1119,7 @@ export default function App() {
         <Route path="/settings" element={<Navigate to="/ai-estimate" replace />} />
         {/* //// END NEOFFICE PATCH */}
         <Route path="/integrations" element={<P title="Integrations"><IntegrationsPage /></P>} />
-        <Route path="/about" element={<P title="About"><AboutPage /></P>} />
+        {/* //// NEOFFICE PATCH — /about route removed (white-label, see lazy-import note) */}
         <Route path="/how-it-works" element={<P title="How it works"><HowItWorksPage /></P>} />
         <Route path="/project-intelligence" element={<P title="Project Intelligence"><ProjectIntelligencePage /></P>} />
         {/* Architecture Map — internal tool, admin-only. Surfaces module

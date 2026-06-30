@@ -123,6 +123,11 @@ export function buildSectionGroups(
   };
 }
 
+// NEOFFICE — jsPDF's core Helvetica is WinAnsi (CP1252); the narrow/no-break
+// spaces locales like fr-CH use as a thousands separator are not in CP1252 and
+// render as a stray glyph ("2 025" → "2 /025"). Fold them to a plain space.
+const asciiSep = (s: string): string => s.replace(/[     ]/g, ' ');
+
 /** Format a number with currency symbol and locale-aware separators. */
 function formatCurrency(value: number, currency: string, locale: string): string {
   try {
@@ -130,7 +135,7 @@ function formatCurrency(value: number, currency: string, locale: string): string
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
     }).format(value);
-    return `${currency}${formatted}`;
+    return asciiSep(`${currency}${formatted}`);
   } catch {
     return `${currency}${value.toFixed(2)}`;
   }
@@ -139,10 +144,10 @@ function formatCurrency(value: number, currency: string, locale: string): string
 /** Format a plain number (for quantities). */
 function formatNumber(value: number, locale: string): string {
   try {
-    return new Intl.NumberFormat(locale, {
+    return asciiSep(new Intl.NumberFormat(locale, {
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
-    }).format(value);
+    }).format(value));
   } catch {
     return value.toFixed(2);
   }
@@ -157,6 +162,76 @@ function formatDate(dateInput: string | undefined, locale: string): string {
   } catch {
     return d.toISOString().split('T')[0] ?? '';
   }
+}
+
+// //// NEOFFICE PATCH — the priced-devis PDF was emitted with hard-coded English
+// labels ("Bill of Quantities", "Qty", "Gross Total"…). The export only carries a
+// `locale`, not the i18n `t()`, so localise the headings here: French for the CH
+// instance (Cédric), English fallback for every other locale (no regression).
+function reportLabels(locale: string) {
+  const fr = (locale ?? '').toLowerCase().startsWith('fr');
+  return fr
+    ? {
+        title: 'Devis', summaryTitle: 'Récapitulatif des coûts',
+        no: 'N°', description: 'Désignation', unit: 'Unité', qty: 'Quantité',
+        unitRate: 'Prix unit.', total: 'Total',
+        ungrouped: 'Postes sans chapitre', sectionSubtotal: 'Sous-total',
+        date: 'Date', sections: 'Chapitres', positions: 'Postes', resources: 'Ressources',
+        directCost: 'Coût direct', markups: 'Majorations', none: 'Aucune',
+        netTotal: 'Total HT', vat: 'TVA', grossTotal: 'Total TTC',
+        preparedBy: 'Établi par :', approvedBy: 'Approuvé par :',
+        signatureLine: 'Nom / Signature / Date',
+        section: 'Chapitre', subtotal: 'Sous-total', item: 'Poste', amount: 'Montant',
+      }
+    : {
+        title: 'Bill of Quantities', summaryTitle: 'Cost Summary',
+        no: 'No.', description: 'Description', unit: 'Unit', qty: 'Qty',
+        unitRate: 'Unit Rate', total: 'Total',
+        ungrouped: 'Ungrouped Items', sectionSubtotal: 'Section Subtotal',
+        date: 'Date', sections: 'Sections', positions: 'Positions', resources: 'Resources',
+        directCost: 'Direct Cost', markups: 'Markups', none: 'None',
+        netTotal: 'Net Total', vat: 'VAT', grossTotal: 'Gross Total',
+        preparedBy: 'Prepared by:', approvedBy: 'Approved by:',
+        signatureLine: 'Name / Signature / Date',
+        section: 'Section', subtotal: 'Subtotal', item: 'Item', amount: 'Amount',
+      };
+}
+
+/**
+ * NEOFFICE — "métré" provenance line for a costed position: shows HOW the
+ * quantity was obtained — an annotated pré-métré formula kept on the cell, or a
+ * measurement taken on a plan via the Takeoff — so the priced devis reads like
+ * Cédric's "devis avec métrés". Returns null for a hand-typed quantity (nothing
+ * to justify). Pure; consumes the same metadata the editor grid + takeoff stamp.
+ */
+function metreLineForPosition(
+  p: Position,
+  measurementSystem: 'metric' | 'imperial',
+  locale: string,
+): string | null {
+  const meta = (p.metadata ?? (p as unknown as Record<string, unknown>).metadata_) as
+    | Record<string, unknown>
+    | undefined;
+  if (!meta) return null;
+  // 1) Pré-métré — an annotated quantity formula kept on the cell (ƒx badge).
+  const formula = (meta.formula ?? meta.quantity_formula) as string | undefined;
+  if (typeof formula === 'string' && formula.trim()) {
+    const dq = toDisplayQuantity(Number(p.quantity), p.unit, measurementSystem);
+    return `Pré-métré : ${formula.trim()} = ${formatNumber(dq.value, locale)} ${dq.unit}`;
+  }
+  // 2) Takeoff — quantity measured on a plan (provenance stamped on push).
+  const measured = (meta.measured_value ?? meta.takeoff_value) as number | string | undefined;
+  if (p.source === 'takeoff' || measured != null) {
+    const plan = (meta.takeoff_document ?? meta.document) as string | undefined;
+    const page = (meta.takeoff_page ?? meta.page) as number | string | undefined;
+    const unit = (meta.measured_unit as string | undefined) ?? p.unit;
+    const where = [`plan${plan ? ` ${plan}` : ''}`, page != null ? `p.${page}` : '']
+      .filter(Boolean)
+      .join(', ');
+    const val = measured != null ? ` : ${formatNumber(Number(measured), locale)} ${unit}` : '';
+    return `Métré sur ${where}${val}`;
+  }
+  return null;
 }
 
 /* ── Brand colours ──────────────────────────────────────────────────────── */
@@ -226,15 +301,16 @@ function renderCoverPage(
   doc.setLineWidth(0.4);
   doc.line(labelX, metaY - 4, pageW - 20, metaY - 4);
 
+  const L = reportLabels(locale);
   const metaItems: Array<[string, string]> = [
-    ['Date', formatDate(options.date, locale)],
-    ['Sections', String(sectionCount)],
-    ['Positions', String(itemCount)],
-    ...(resourceCount > 0 ? [['Resources', String(resourceCount)] as [string, string]] : []),
-    ['Direct Cost', formatCurrency(options.directCost, options.currency, locale)],
-    ['Markups', options.markupTotals.map((m) => `${m.name} ${m.percentage}%`).join(', ') || 'None'],
-    ['Net Total', formatCurrency(options.netTotal, options.currency, locale)],
-    ['VAT', `${(options.vatRate * 100).toFixed(0)}% (${formatCurrency(options.vatAmount, options.currency, locale)})`],
+    [L.date, formatDate(options.date, locale)],
+    [L.sections, String(sectionCount)],
+    [L.positions, String(itemCount)],
+    ...(resourceCount > 0 ? [[L.resources, String(resourceCount)] as [string, string]] : []),
+    [L.directCost, formatCurrency(options.directCost, options.currency, locale)],
+    [L.markups, options.markupTotals.map((m) => `${m.name} ${m.percentage}%`).join(', ') || L.none],
+    [L.netTotal, formatCurrency(options.netTotal, options.currency, locale)],
+    [L.vat, `${(options.vatRate * 100).toFixed(0)}% (${formatCurrency(options.vatAmount, options.currency, locale)})`],
   ];
 
   doc.setFontSize(9);
@@ -256,7 +332,7 @@ function renderCoverPage(
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(12);
   doc.setTextColor(...BRAND_ACCENT);
-  doc.text('Gross Total', labelX, grossY + 2);
+  doc.text(L.grossTotal, labelX, grossY + 2);
   doc.text(formatCurrency(options.grossTotal, options.currency, locale), valueX, grossY + 2);
 
   // ── Signature block ─────────────────────────────────────────────────
@@ -268,12 +344,12 @@ function renderCoverPage(
   doc.setFontSize(8);
   doc.setTextColor(...BRAND_MID);
   doc.setFont('helvetica', 'normal');
-  doc.text('Prepared by:', labelX, sigY + 10);
-  doc.text('Approved by:', pageW / 2, sigY + 10);
+  doc.text(L.preparedBy, labelX, sigY + 10);
+  doc.text(L.approvedBy, pageW / 2, sigY + 10);
   doc.line(labelX, sigY + 28, labelX + 60, sigY + 28);
   doc.line(pageW / 2, sigY + 28, pageW / 2 + 60, sigY + 28);
-  doc.text('Name / Signature / Date', labelX, sigY + 33);
-  doc.text('Name / Signature / Date', pageW / 2, sigY + 33);
+  doc.text(L.signatureLine, labelX, sigY + 33);
+  doc.text(L.signatureLine, pageW / 2, sigY + 33);
 
   // Footer attribution
   doc.setFontSize(7);
@@ -364,6 +440,7 @@ function renderBOQTables(
   // the user's measurement system at this print boundary only. Money columns
   // (Unit Rate / Total) stay verbatim. Default 'metric' = pass-through.
   const measurementSystem = options.measurementSystem ?? 'metric';
+  const L = reportLabels(locale);
 
   // Section heading bar
   doc.setFillColor(...BRAND_DARK);
@@ -371,7 +448,7 @@ function renderBOQTables(
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(13);
   doc.setTextColor(...WHITE);
-  doc.text('Bill of Quantities', 20, 12);
+  doc.text(L.title, 20, 12);
   doc.setTextColor(...BRAND_DARK);
 
   let currentY = 26;
@@ -414,6 +491,17 @@ function renderBOQTables(
         // Issue #150 — Total converted to base currency (mirrors grid).
         formatCurrency(positionTotalForPdf(p, fxOpts), options.currency, locale),
       ]);
+      // //// NEOFFICE PATCH — métré provenance sub-row: show HOW the quantity
+      // was obtained (an annotated pré-métré formula, or a measurement taken on
+      // a plan via the Takeoff) so the priced devis reads like Cédric's "devis
+      // avec métrés". Nothing is printed for a hand-typed quantity.
+      const metreLine = metreLineForPosition(p, measurementSystem, locale);
+      if (metreLine) {
+        // NEOFFICE — use a CP1252-renderable marker (»); jsPDF's core Helvetica
+        // can't draw "→" (U+2192) and prints a stray glyph instead.
+        body.push(['', `  » ${metreLine}`, '', '', '', '']);
+      }
+      // //// END NEOFFICE PATCH
       // Add resource sub-rows
       const meta = p.metadata ?? (p as unknown as Record<string, unknown>).metadata_;
       const resources = (meta && Array.isArray((meta as Record<string, unknown>).resources))
@@ -424,7 +512,7 @@ function renderBOQTables(
         const rDq = toDisplayQuantity(Number(r.quantity), r.unit, measurementSystem);
         body.push([
           '',
-          `  \u2514 ${r.name}`,
+          `  \u00b7 ${r.name}`, // NEOFFICE \u2014 middle dot; "\u2514" (U+2514) is not in CP1252 (jsPDF Helvetica)
           rDq.unit,
           formatNumber(rDq.value, locale),
           // Reciprocal rate so the resource sub-row reconciles too (see above).
@@ -436,7 +524,7 @@ function renderBOQTables(
 
     autoTable(doc, {
       startY: currentY,
-      head: [['No.', 'Description', 'Unit', 'Qty', 'Unit Rate', 'Total']],
+      head: [[L.no, L.description, L.unit, L.qty, L.unitRate, L.total]],
       body,
       headStyles: headerStyles,
       bodyStyles: { fontSize: 8, textColor: BRAND_DARK },
@@ -465,7 +553,7 @@ function renderBOQTables(
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(8.5);
     doc.setTextColor(...BRAND_MID);
-    const subtotalText = `Section Subtotal: ${formatCurrency(subtotal, options.currency, locale)}`;
+    const subtotalText = `${L.sectionSubtotal}: ${formatCurrency(subtotal, options.currency, locale)}`;
     doc.text(subtotalText, pageW - 15, subtotalY, { align: 'right' });
     doc.setDrawColor(...BRAND_ACCENT);
     doc.setLineWidth(0.4);
@@ -491,7 +579,7 @@ function renderBOQTables(
   // Ungrouped positions (if any)
   if (ungrouped.length > 0) {
     const ungroupedSubtotal = ungrouped.reduce((sum, p) => sum + positionTotalForPdf(p, fxOpts), 0);
-    renderSection('', 'Ungrouped Items', ungrouped, ungroupedSubtotal);
+    renderSection('', L.ungrouped, ungrouped, ungroupedSubtotal);
   }
 }
 
@@ -504,6 +592,7 @@ function renderSummary(
 ): void {
   doc.addPage();
   const pageW = doc.internal.pageSize.getWidth();
+  const L = reportLabels(locale);
 
   // Heading
   doc.setFillColor(...BRAND_DARK);
@@ -511,7 +600,7 @@ function renderSummary(
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(13);
   doc.setTextColor(...WHITE);
-  doc.text('Cost Summary', 20, 12);
+  doc.text(L.summaryTitle, 20, 12);
 
   // Section subtotals table
   const fxOpts: PdfFxOpts = { baseCurrency: options.baseCurrency, fxRates: options.fxRates };
@@ -522,13 +611,13 @@ function renderSummary(
   ]);
   if (ungrouped.length > 0) {
     const ungroupedTotal = ungrouped.reduce((sum, p) => sum + positionTotalForPdf(p, fxOpts), 0);
-    sectionRows.push(['Ungrouped Items', formatCurrency(ungroupedTotal, options.currency, locale)]);
+    sectionRows.push([L.ungrouped, formatCurrency(ungroupedTotal, options.currency, locale)]);
   }
 
   if (sectionRows.length > 0) {
     autoTable(doc, {
       startY: 24,
-      head: [['Section', 'Subtotal']],
+      head: [[L.section, L.subtotal]],
       body: sectionRows,
       headStyles: { fillColor: BRAND_MID, textColor: WHITE, fontSize: 8.5 },
       bodyStyles: { fontSize: 8.5, textColor: BRAND_DARK },
@@ -548,7 +637,7 @@ function renderSummary(
 
   // Financial summary table
   const summaryRows: [string, string][] = [
-    ['Direct Cost', formatCurrency(options.directCost, options.currency, locale)],
+    [L.directCost, formatCurrency(options.directCost, options.currency, locale)],
   ];
 
   for (const m of options.markupTotals) {
@@ -558,14 +647,14 @@ function renderSummary(
     ]);
   }
 
-  const vatLabel = `VAT (${(options.vatRate * 100).toFixed(0)}%)`;
+  const vatLabel = `${L.vat} (${(options.vatRate * 100).toFixed(0)}%)`;
 
   autoTable(doc, {
     startY: afterSectionsY + 10,
-    head: [['Item', 'Amount']],
+    head: [[L.item, L.amount]],
     body: [
       ...summaryRows,
-      ['Net Total', formatCurrency(options.netTotal, options.currency, locale)],
+      [L.netTotal, formatCurrency(options.netTotal, options.currency, locale)],
       [vatLabel, formatCurrency(options.vatAmount, options.currency, locale)],
     ],
     headStyles: { fillColor: BRAND_MID, textColor: WHITE, fontSize: 8.5 },
@@ -591,7 +680,7 @@ function renderSummary(
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(11);
   doc.setTextColor(...WHITE);
-  doc.text('GROSS TOTAL', 22, boxY + 10);
+  doc.text(L.grossTotal.toUpperCase(), 22, boxY + 10);
   doc.text(formatCurrency(options.grossTotal, options.currency, locale), pageW - 22, boxY + 10, { align: 'right' });
 }
 
@@ -616,9 +705,10 @@ export function generateBOQPdf(options: PdfReportOptions): void {
   });
 
   // PDF metadata — embedded identity markers
+  const docLabels = reportLabels(locale);
   doc.setProperties({
-    title: options.projectName || 'BOQ Report',
-    subject: 'Bill of Quantities',
+    title: options.projectName || docLabels.title,
+    subject: docLabels.title,
     author: 'Neoconstruction',
     creator: 'Neoconstruction',
     keywords: 'Devis, Neoconstruction',

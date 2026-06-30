@@ -773,6 +773,33 @@ const frCHOverrides: Record<string, string> = {
   "whatsnew.v820.takeoff.title": "Le prémétré signale les pages numérisées",
 };
 
+// //// NEOFFICE PATCH — white-label safety net. The explicit overrides above
+// rebrand the keys we know about, but the base `fr.ts` bundle keeps mentioning
+// the upstream vendor in strings we did not list (and a future OCE merge can add
+// new ones). After the overrides land, sweep the LIVE French bundle for the three
+// vendor brand tokens. NB: the book title "Data-Driven Construction" (hyphen +
+// space) is intentionally NOT matched, so the AGPL/founder story keeps its name.
+const BRAND_SWEEP: ReadonlyArray<readonly [RegExp, string]> = [
+  [/datadrivenconstruction\.io/gi, 'neoffice.ch'],
+  [/datadrivenconstruction\.com/gi, 'neoffice.ch'],
+  [/DataDrivenConstruction/g, 'Neoffice'],
+  [/OpenConstructionERP/g, 'Neoconstruction'],
+];
+function sweepBrand(value: unknown): unknown {
+  if (typeof value === 'string') {
+    let s = value;
+    for (const [re, to] of BRAND_SWEEP) s = s.replace(re, to);
+    return s;
+  }
+  if (Array.isArray(value)) return value.map(sweepBrand);
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) out[k] = sweepBrand(v);
+    return out;
+  }
+  return value;
+}
+
 function applyFrCH(lng?: string): void {
   // Languages resolve to the base `fr` (region subtags are stripped upstream),
   // but accept `fr-CH` defensively.
@@ -780,6 +807,11 @@ function applyFrCH(lng?: string): void {
   // deep=true, overwrite=true — runs AFTER the lazy fr.ts merge that emits
   // languageChanged, so these Swiss terms win on every load.
   i18n.addResourceBundle('fr', 'translation', frCHOverrides, true, true);
+  // Then sweep whatever the merged bundle still says about the upstream vendor.
+  const bundle = i18n.getResourceBundle('fr', 'translation') as Record<string, unknown> | undefined;
+  if (bundle) {
+    i18n.addResourceBundle('fr', 'translation', sweepBrand(bundle) as Record<string, unknown>, true, true);
+  }
 }
 
 // Re-apply on every language change (fires right after each fr.ts merge).

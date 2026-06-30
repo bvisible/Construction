@@ -1967,7 +1967,7 @@ function DataPackagesTab() {
               </p>
               <div className="flex flex-wrap gap-3">
                 <a
-                  href="mailto:info@datadrivenconstruction.io?subject=OpenConstructionERP%20Module%20Proposal"
+                  href="mailto:info@neoffice.ch?subject=OpenConstructionERP%20Module%20Proposal"
                   className="inline-flex items-center gap-2 rounded-lg bg-purple-600 px-4 py-2 text-sm font-medium text-white hover:bg-purple-700 transition-colors"
                 >
                   <Package size={16} />

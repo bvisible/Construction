@@ -20,7 +20,7 @@ import clsx from 'clsx';
 import { copyToClipboard } from '@/shared/lib/browser';
 
 const REPO_URL = 'https://github.com/datadrivenconstruction/OpenConstructionERP';
-const CASE_STUDY_EMAIL = 'info@datadrivenconstruction.io';
+const CASE_STUDY_EMAIL = 'info@neoffice.ch';
 const CASE_STUDY_MAILTO = `mailto:${CASE_STUDY_EMAIL}?subject=${encodeURIComponent(
   'Case study / article - OpenConstructionERP',
 )}&body=${encodeURIComponent(
