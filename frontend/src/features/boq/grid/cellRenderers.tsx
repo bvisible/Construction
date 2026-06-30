@@ -47,6 +47,7 @@ import { MiniGeometryPreview } from '@/shared/ui/MiniGeometryPreview';
 import { fetchBIMElementsByIds, fetchBIMElementProperties } from '@/features/bim/api';
 import type { BIMElementData } from '@/shared/ui/BIMViewer/ElementManager';
 import { getIntlLocale } from '@/shared/lib/formatters';
+import type { DisplayQuantityApi } from '@/shared/hooks/useDisplayQuantity';
 import { useFxRatesStore, getFxRate } from '@/stores/useFxRatesStore';
 import { isFormula, evaluateFormula } from './cellEditors';
 import { VariantPicker } from '@/features/costs/VariantPicker';
@@ -592,6 +593,20 @@ export type FullGridContext = ActionsContext & ResourceGridContext & SectionGrou
   /** Custom column definitions — used to map ``custom_*`` colIds back to
    *  the stored ``custom_fields`` key. Optional. */
   customColumns?: { name: string; display_name?: string }[];
+  /**
+   * ── Imperial-units display seam (Issue #285).
+   * Measurement-system-aware quantity API (built once by BOQGrid via
+   * ``useDisplayQuantity``). Renderers convert a metric-canonical
+   * quantity for DISPLAY (``convert`` / ``unitFor``) and re-express the
+   * paired per-unit rate reciprocally (``convertRate``) so the line
+   * reconciles (2.31 m @ 50/m -> 7.58 ft @ 15.24/ft, total unchanged).
+   * Inline editors on full-width resource / variant rows convert the
+   * typed value back to metric storage (``toMetric`` / ``toMetricRate``)
+   * before committing. Undefined ⇒ metric pass-through (helpers are
+   * identity for metric / unmapped units, so callers use them
+   * unconditionally once present). The money TOTAL is never converted.
+   */
+  displayQuantity?: DisplayQuantityApi;
 };
 
 /* ── Actions Cell Renderer ────────────────────────────────────────── */
@@ -1389,6 +1404,7 @@ export function BimLinkCellRenderer(params: ICellRendererParams) {
                 navigate(pdfDeepLink);
               }}
               onApplyQuantity={ctx?.onUpdatePosition}
+              displayQuantity={ctx?.displayQuantity}
             />
           </>,
           document.body,
@@ -1416,6 +1432,7 @@ export function BimLinkCellRenderer(params: ICellRendererParams) {
                 navigate(dwgDeepLink);
               }}
               onApplyQuantity={ctx?.onUpdatePosition}
+              displayQuantity={ctx?.displayQuantity}
             />
           </>,
           document.body,
@@ -2198,6 +2215,13 @@ interface PdfDwgSourcePopoverProps {
   onClose: () => void;
   onNavigate: () => void;
   onApplyQuantity?: (id: string, data: Record<string, unknown>, oldData: Record<string, unknown>) => void;
+  /**
+   * Issue #285: measurement-system-aware quantity API. When present the
+   * source measurement value + unit are SHOWN converted into the user's
+   * system; the value APPLIED via "Set as quantity" stays metric-canonical
+   * (it is written straight into the position's quantity field).
+   */
+  displayQuantity?: DisplayQuantityApi;
 }
 
 function PdfDwgSourcePopover(props: PdfDwgSourcePopoverProps) {
@@ -2213,6 +2237,7 @@ function PdfDwgSourcePopover(props: PdfDwgSourcePopoverProps) {
     onClose,
     onNavigate,
     onApplyQuantity,
+    displayQuantity,
   } = props;
   const { t } = useTranslation();
   const popRef = useRef<HTMLDivElement>(null);
@@ -2238,6 +2263,18 @@ function PdfDwgSourcePopover(props: PdfDwgSourcePopoverProps) {
     ?? (meta[kind === 'pdf' ? 'pdf_unit' : 'dwg_unit'] as string | undefined)
     ?? '';
   const measurementType = (meta[kind === 'pdf' ? 'pdf_measurement_type' : 'dwg_annotation_type'] as string | undefined) ?? null;
+
+  // Issue #285: DISPLAY the source measurement in the user's measurement
+  // system. The stored value + the value APPLIED as the quantity stay
+  // metric-canonical (see ``applyQuantity`` below). Identity for metric /
+  // unmapped units, so this is a no-op outside imperial.
+  const displayMeasurementValue =
+    measurementValue !== null && displayQuantity
+      ? displayQuantity.convert(measurementValue, measurementUnit).value
+      : measurementValue;
+  const displayMeasurementUnit = displayQuantity
+    ? displayQuantity.unitFor(measurementUnit)
+    : measurementUnit;
 
   useEffect(() => {
     const onDown = (e: MouseEvent) => {
@@ -2359,10 +2396,10 @@ function PdfDwgSourcePopover(props: PdfDwgSourcePopoverProps) {
           {measurementValue !== null ? (
             <div className="flex items-baseline gap-1.5">
               <span className="text-[20px] font-semibold tabular-nums text-content-primary leading-none">
-                {measurementValue.toLocaleString(getIntlLocale(), { minimumFractionDigits: 2, maximumFractionDigits: 4 })}
+                {(displayMeasurementValue ?? measurementValue).toLocaleString(getIntlLocale(), { minimumFractionDigits: 2, maximumFractionDigits: 4 })}
               </span>
-              {measurementUnit && (
-                <span className="text-[11px] text-content-secondary font-medium">{measurementUnit}</span>
+              {displayMeasurementUnit && (
+                <span className="text-[11px] text-content-secondary font-medium">{displayMeasurementUnit}</span>
               )}
               {measurementType && (
                 <span className="ml-auto text-[9px] uppercase tracking-wide text-content-tertiary bg-surface-secondary/60 px-1.5 py-0.5 rounded">
@@ -2668,10 +2705,19 @@ function InlineUnitInput({
   value,
   onCommit,
   className,
+  displayValue,
 }: {
   value: string;
   onCommit: (v: string) => void;
   className?: string;
+  /**
+   * Issue #285: optional at-rest label shown WHEN NOT editing (e.g. the
+   * imperial form "sq ft"). The edit lifecycle still seeds from and
+   * commits the canonical ``value`` (metric token), so storage never
+   * receives an imperial unit string. Omit ⇒ display the canonical
+   * ``value`` (unchanged behaviour for every non-imperial caller).
+   */
+  displayValue?: string;
 }) {
   const { t, i18n } = useTranslation();
   const [editing, setEditing] = useState(false);
@@ -2919,7 +2965,7 @@ function InlineUnitInput({
       className={`cursor-text hover:bg-oe-blue-subtle/50 rounded px-1 transition-colors truncate ${className ?? ''}`}
       title={t('boq.double_click_to_edit', { defaultValue: 'Double-click to edit' })}
     >
-      {value}
+      {displayValue ?? value}
     </span>
   );
 }
@@ -3499,7 +3545,23 @@ export function EditableResourceRow({ data, ctx, slots, leftPad }: { data: Recor
   const resourceType = (data._resourceType as string) || 'other';
   const qty = (data._resourceQty as number) ?? 0;
   const rate = (data._resourceRate as number) ?? 0;
+  // ``total`` stays computed from the metric-canonical qty * rate so it is
+  // invariant across measurement systems (Issue #285). Only the qty / rate
+  // INPUTS below are shown converted; the displayed pair still multiplies
+  // to this same total because the rate is re-expressed reciprocally.
   const total = qty * rate;
+  // Issue #285: resources carry their own unit (``_resourceUnit``). Show qty
+  // converted into the user's system and the rate reciprocally so the row
+  // reconciles; the inline editors reverse the edit back to metric before
+  // committing (see handleQtyChange / handleRateChange). Identity for
+  // metric / unmapped units, so these are safe to compute unconditionally.
+  const resourceUnitForDisplay = (data._resourceUnit as string | undefined) ?? '';
+  const displayQty = ctx.displayQuantity
+    ? ctx.displayQuantity.convert(qty, resourceUnitForDisplay).value
+    : qty;
+  const displayRate = ctx.displayQuantity
+    ? ctx.displayQuantity.convertRate(rate, resourceUnitForDisplay)
+    : rate;
   const baseCurrency = ctx.currencyCode ?? 'EUR';
   const resourceCurrency = (data._resourceCurrency as string | undefined) || baseCurrency;
   const isForeign = resourceCurrency !== baseCurrency;
@@ -3784,13 +3846,27 @@ export function EditableResourceRow({ data, ctx, slots, leftPad }: { data: Recor
     : (storedName || composedVariantName);
   const resourceCode = (data._resourceCode as string | undefined) || '';
 
+  // Issue #285: the inline qty / rate inputs render DISPLAY values (qty
+  // converted, rate reciprocal). Convert the typed value back to the
+  // metric-canonical number before storing so we never persist an imperial
+  // figure into a metric field. Identity for metric / unmapped units.
   const handleQtyChange = useCallback(
-    (v: number) => ctx.onUpdateResource?.(posId, resIdx, 'quantity', v),
-    [ctx, posId, resIdx],
+    (v: number) => {
+      const metric = ctx.displayQuantity
+        ? ctx.displayQuantity.toMetric(v, resourceUnitForDisplay)
+        : v;
+      ctx.onUpdateResource?.(posId, resIdx, 'quantity', metric);
+    },
+    [ctx, posId, resIdx, resourceUnitForDisplay],
   );
   const handleRateChange = useCallback(
-    (v: number) => ctx.onUpdateResource?.(posId, resIdx, 'unit_rate', v),
-    [ctx, posId, resIdx],
+    (v: number) => {
+      const metric = ctx.displayQuantity
+        ? ctx.displayQuantity.toMetricRate(v, resourceUnitForDisplay)
+        : v;
+      ctx.onUpdateResource?.(posId, resIdx, 'unit_rate', metric);
+    },
+    [ctx, posId, resIdx, resourceUnitForDisplay],
   );
 
   // When the user edits the resource name, treat it as a customisation:
@@ -3980,6 +4056,7 @@ export function EditableResourceRow({ data, ctx, slots, leftPad }: { data: Recor
     >
       <InlineUnitInput
         value={data._resourceUnit as string}
+        displayValue={ctx.displayQuantity ? ctx.displayQuantity.unitFor(resourceUnitForDisplay) : undefined}
         onCommit={(v: string) => ctx.onUpdateResource?.(posId, resIdx, 'unit', v)}
         className="w-full text-xs text-center"
       />
@@ -4001,7 +4078,7 @@ export function EditableResourceRow({ data, ctx, slots, leftPad }: { data: Recor
     >
       <span className="absolute inset-y-0 left-2 right-2 flex items-center justify-end text-right tabular-nums text-content-secondary text-xs">
         <InlineNumberInput
-          value={qty}
+          value={displayQty}
           onCommit={handleQtyChange}
           fmt={ctx.fmt}
           className="text-right tabular-nums text-xs !px-0"
@@ -4064,7 +4141,7 @@ export function EditableResourceRow({ data, ctx, slots, leftPad }: { data: Recor
             Always sits at slot.right - 8px, independent of how wide
             the combobox / pill on the left render. */}
         <InlineNumberInput
-          value={rate}
+          value={displayRate}
           onCommit={handleRateChange}
           fmt={ctx.fmt}
           className="ml-auto text-right tabular-nums text-content-secondary text-xs !px-0"
@@ -4335,7 +4412,22 @@ function VariantHeaderResourceRow({
   }, [ctx, positionId]);
 
   const rate = chosenPrice ?? 0;
+  // ``total`` stays metric (qty * rate) so it is invariant across systems
+  // (Issue #285). The displayed qty / rate pair still reconciles to it
+  // because the rate is shown reciprocally.
   const total = qty * rate;
+  // Issue #285: show qty converted + rate reciprocal against the variant
+  // resource's unit; commits convert back to metric. Identity for metric /
+  // unmapped units.
+  const displayQty = ctx.displayQuantity
+    ? ctx.displayQuantity.convert(qty, unitLabel).value
+    : qty;
+  const displayRate = ctx.displayQuantity
+    ? ctx.displayQuantity.convertRate(rate, unitLabel)
+    : rate;
+  const displayUnitLabel = ctx.displayQuantity
+    ? ctx.displayQuantity.unitFor(unitLabel)
+    : unitLabel;
   const fmtNum = (n: number) => ctx.fmt.format(n);
   // Display name = ``price_abstract_resource_common_start`` as the base
   // + the chosen ``price_abstract_resource_variable_parts`` token (the
@@ -4371,17 +4463,22 @@ function VariantHeaderResourceRow({
   // qty / rate edit handlers. The variant row is a SYNTHETIC view of the
   // parent position, so commits flow into ``onUpdateVariantHeader`` which
   // patches ``position.quantity`` / ``position.unit_rate`` upstream.
+  // Issue #285: the qty / rate inputs render DISPLAY values, so convert the
+  // typed value back to metric storage before patching the position.
+  // Identity for metric / unmapped units.
   const handleQtyCommit = useCallback(
     (v: number) => {
-      ctx.onUpdateVariantHeader?.(positionId, { quantity: v });
+      const metric = ctx.displayQuantity ? ctx.displayQuantity.toMetric(v, unitLabel) : v;
+      ctx.onUpdateVariantHeader?.(positionId, { quantity: metric });
     },
-    [ctx, positionId],
+    [ctx, positionId, unitLabel],
   );
   const handleRateCommit = useCallback(
     (v: number) => {
-      ctx.onUpdateVariantHeader?.(positionId, { unit_rate: v });
+      const metric = ctx.displayQuantity ? ctx.displayQuantity.toMetricRate(v, unitLabel) : v;
+      ctx.onUpdateVariantHeader?.(positionId, { unit_rate: metric });
     },
-    [ctx, positionId],
+    [ctx, positionId, unitLabel],
   );
 
   // When qty is unset / 0 we hide qty / rate / total entirely — the user's
@@ -4463,7 +4560,7 @@ function VariantHeaderResourceRow({
       className="shrink-0 text-center text-content-secondary font-mono uppercase self-center px-2 text-[11px]"
       style={{ width: `${width}px` }}
     >
-      {unitLabel || '—'}
+      {displayUnitLabel || '—'}
     </span>
   );
 
@@ -4479,7 +4576,7 @@ function VariantHeaderResourceRow({
     >
       {showNumbers ? (
         <InlineNumberInput
-          value={qty}
+          value={displayQty}
           onCommit={handleQtyCommit}
           fmt={ctx.fmt}
           className="w-full text-xs !px-0"
@@ -4525,7 +4622,7 @@ function VariantHeaderResourceRow({
           </span>
           <span className="flex-1 min-w-0 text-right tabular-nums text-content-primary text-xs font-semibold">
             <InlineNumberInput
-              value={rate}
+              value={displayRate}
               onCommit={handleRateCommit}
               fmt={ctx.fmt}
               className="w-full text-xs !px-0"
@@ -4809,7 +4906,15 @@ export function QuantityCellRenderer(params: ICellRendererParams) {
   // Smart formatting: >=1 → 2 decimals; <1 → up to 4; <0.01 → show all significant digits
   let formatted = '';
   if (value != null) {
-    const num = typeof value === 'number' ? value : parseFloat(String(value));
+    const rawNum = typeof value === 'number' ? value : parseFloat(String(value));
+    // Issue #285: DISPLAY the quantity in the user's measurement system.
+    // Storage is metric-canonical; only the rendered number is converted
+    // (identity for metric / unmapped units). The matching reciprocal
+    // rate is rendered by ``UnitRateCellRenderer`` so the line reconciles.
+    const unit = (data.unit as string | undefined) ?? '';
+    const num = !isNaN(rawNum) && ctx?.displayQuantity
+      ? ctx.displayQuantity.convert(rawNum, unit).value
+      : rawNum;
     if (!isNaN(num)) {
       const absVal = Math.abs(num);
       let maxFrac = 2;
@@ -4960,12 +5065,20 @@ export function UnitRateCellRenderer(params: ICellRendererParams) {
   const isResourceDriven = Array.isArray(resources) && resources.length > 0;
 
   const numericVal = typeof value === 'number' ? value : parseFloat(String(value ?? 0));
+  // Issue #285: when the paired quantity is shown converted (e.g. m -> ft)
+  // the per-unit rate MUST be re-expressed reciprocally (50/m -> 15.24/ft)
+  // so displayed_qty * displayed_rate still equals the (invariant) stored
+  // total. ``convertRate`` is identity for metric / unmapped units. Storage
+  // stays metric; the value-parser in columnDefs reverses an edit.
+  const displayRate = !isNaN(numericVal) && ctx?.displayQuantity
+    ? ctx.displayQuantity.convertRate(numericVal, unit ?? '')
+    : numericVal;
   const formatted = (() => {
     try {
       return new Intl.NumberFormat(getIntlLocale(), {
         minimumFractionDigits: 2,
         maximumFractionDigits: 2,
-      }).format(isNaN(numericVal) ? 0 : numericVal);
+      }).format(isNaN(displayRate) ? 0 : displayRate);
     } catch {
       return String(value ?? '');
     }
@@ -5174,12 +5287,21 @@ export function UnitRateCellRenderer(params: ICellRendererParams) {
 /* ── Unit Cell — shows unit + BIM param name if sourced from model ── */
 
 export function UnitCellRenderer(params: ICellRendererParams) {
-  const { data, value } = params;
+  const { data, value, context } = params;
   // Bug 9: render the raw unit code (e.g. "m2") with NO casing transform — must match
   // the agSelectCellEditor dropdown which lists lowercase values.
   if (!data || data._isSection || data._isFooter) {
     return <span className="text-center text-2xs font-mono">{value ?? ''}</span>;
   }
+
+  const ctx = context as FullGridContext | undefined;
+  // Issue #285: DISPLAY the unit in the user's measurement system
+  // (m2 -> sq ft) while STORAGE stays canonical metric - the unit cell
+  // editor / valueSetter keep writing the metric token, never 'ft'.
+  // ``unitFor`` is identity for metric and for any unit with no imperial
+  // mapping (pcs, %, hr ...), so a plain code passes straight through.
+  const rawUnit = value == null ? '' : String(value);
+  const displayUnit = ctx?.displayQuantity ? ctx.displayQuantity.unitFor(rawUnit) : rawUnit;
 
   const meta = (data.metadata ?? {}) as Record<string, unknown>;
   const bimSource = meta.bim_qty_source as string | undefined;
@@ -5188,7 +5310,7 @@ export function UnitCellRenderer(params: ICellRendererParams) {
 
   // No source indicator needed
   if (!bimSource && !pdfSource && !dwgSource) {
-    return <span className="text-center text-2xs font-mono w-full block">{value ?? ''}</span>;
+    return <span className="text-center text-2xs font-mono w-full block">{displayUnit}</span>;
   }
 
   if (pdfSource) {
@@ -5197,7 +5319,7 @@ export function UnitCellRenderer(params: ICellRendererParams) {
     const shortLabel = (parts[parts.length - 1] ?? pdfSource).trim();
     return (
       <div className="flex flex-col items-center justify-center h-full w-full gap-0">
-        <span className="text-2xs font-mono leading-tight">{value ?? ''}</span>
+        <span className="text-2xs font-mono leading-tight">{displayUnit}</span>
         <span
           className="text-[7px] leading-none font-medium text-rose-600 dark:text-rose-400 truncate max-w-full"
           title={pdfSource}
@@ -5214,7 +5336,7 @@ export function UnitCellRenderer(params: ICellRendererParams) {
     const shortLabel = (parts[parts.length - 1] ?? dwgSource).trim();
     return (
       <div className="flex flex-col items-center justify-center h-full w-full gap-0">
-        <span className="text-2xs font-mono leading-tight">{value ?? ''}</span>
+        <span className="text-2xs font-mono leading-tight">{displayUnit}</span>
         <span
           className="text-[7px] leading-none font-medium text-amber-600 dark:text-amber-400 truncate max-w-full"
           title={dwgSource}
@@ -5232,7 +5354,7 @@ export function UnitCellRenderer(params: ICellRendererParams) {
 
   return (
     <div className="flex flex-col items-center justify-center h-full w-full gap-0">
-      <span className="text-2xs font-mono leading-tight">{value ?? ''}</span>
+      <span className="text-2xs font-mono leading-tight">{displayUnit}</span>
       <span
         className="text-[7px] leading-none font-medium text-emerald-600 dark:text-emerald-400 truncate max-w-full"
         title={bimSource}
@@ -5296,6 +5418,7 @@ export function BimQtyPickerCellRenderer(params: ICellRendererParams) {
           currentQuantity={data.quantity ?? 0}
           currentUnit={data.unit ?? ''}
           anchorRect={anchorRect}
+          displayQuantity={ctx?.displayQuantity}
           onSelectQuantity={(val, source) => {
             ctx?.onUpdatePosition?.(
               data.id,

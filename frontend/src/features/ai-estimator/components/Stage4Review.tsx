@@ -22,7 +22,7 @@ import {
   FileSpreadsheet,
   Info,
 } from 'lucide-react';
-import { Button, Card, AIDisclaimerBanner } from '@/shared/ui';
+import { Button, Card, AIDisclaimerBanner, AITrustNote } from '@/shared/ui';
 import { ResourceBreakdown } from './ResourceBreakdown';
 import {
   fmtMoneyStr,
@@ -156,11 +156,16 @@ export interface Stage4ReviewProps {
   appliedBoqId: string | null;
   applyPending: boolean;
   onApply: () => void;
+  // Identity for the trust-feedback verdict (so a "helpful / not right" verdict
+  // can be lined up later with the run + project that produced this estimate).
+  runId?: string | null;
+  projectId?: string | null;
 }
 
 export function Stage4Review(props: Stage4ReviewProps) {
   const { t } = useTranslation();
-  const { preview, loading, locale, applied, appliedBoqId, applyPending, onApply } = props;
+  const { preview, loading, locale, applied, appliedBoqId, applyPending, onApply, runId, projectId } =
+    props;
   const thresholds = useScoreThresholds();
   const [openRow, setOpenRow] = useState<string | null>(null);
   const [reviewed, setReviewed] = useState(false);
@@ -363,6 +368,19 @@ export function Stage4Review(props: Stage4ReviewProps) {
           </tbody>
         </table>
       </div>
+
+      {/* Trust signal + feedback: the estimate is grounded in catalogue rates,
+          its scope-completeness is the honest confidence, and the user can tell
+          us whether it turned out right. */}
+      <AITrustNote
+        surface="ai_estimator"
+        refId={runId}
+        projectId={projectId}
+        confidence={preview.completeness_score}
+        producedBy={t('aiest.review.trust_produced', {
+          defaultValue: 'Quantities grouped by AI; every rate comes from your cost database, never invented.',
+        })}
+      />
 
       {/* Apply */}
       {applied && appliedBoqId ? (

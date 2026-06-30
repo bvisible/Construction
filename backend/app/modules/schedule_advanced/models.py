@@ -762,3 +762,173 @@ class TaktActivity(Base):
 
     def __repr__(self) -> str:  # pragma: no cover - debug only
         return f"<TaktActivity {self.name} ({self.status})>"
+
+
+# ── Forensic delay analysis (T2.2) ───────────────────────────────────────────
+# A wizard-driven, exhibit-producing delay analysis. The compute is the pure
+# ``delay_engine`` / ``delay_report``; these tables are the persistent spine.
+# Child rows reference the parent by plain GUID FK (DB-level CASCADE); the
+# service loads them by ``analysis_id`` (no ORM relationship, matching the
+# module convention). Time-only model: Integer day counts + String ISO dates.
+
+
+class DelayAnalysis(Base):
+    """‌⁠‍One forensic delay-analysis run (frozen on issue).
+
+    ``method`` is the forensic method (``tia | windows | as_planned_vs_as_built
+    | impacted_as_planned | collapsed_as_built``); ``oos_mode`` records the
+    out-of-sequence rule used (defensibility); ``result_json`` caches the full
+    exhibit payload from :func:`delay_report.run_analysis`.
+    """
+
+    __tablename__ = "oe_schedule_advanced_delay_analysis"
+
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(),
+        ForeignKey("oe_projects_project.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    schedule_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), nullable=True, index=True)
+    method: Mapped[str] = mapped_column(String(40), nullable=False, default="tia", server_default="tia")
+    name: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    as_planned_baseline_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), nullable=True)
+    as_built_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), nullable=True)
+    oos_mode: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="retained_logic", server_default="retained_logic"
+    )
+    data_date: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    apportionment_method: Mapped[str] = mapped_column(
+        String(40), nullable=False, default="malmaison", server_default="malmaison"
+    )
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="draft", server_default="draft", index=True)
+    window_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    total_entitlement_days: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    concurrent_days: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    result_json: Mapped[dict] = mapped_column(  # type: ignore[assignment]
+        JSON, nullable=False, default=dict, server_default="{}"
+    )
+    issued_at: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    issued_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    signature_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    signature_snapshot: Mapped[dict] = mapped_column(  # type: ignore[assignment]
+        JSON, nullable=False, default=dict, server_default="{}"
+    )
+    eot_claim_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    metadata_: Mapped[dict] = mapped_column(  # type: ignore[assignment]
+        "metadata", JSON, nullable=False, default=dict, server_default="{}"
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debug only
+        return f"<DelayAnalysis {self.name} {self.method} ({self.status})>"
+
+
+class DelayEvent(Base):
+    """‌⁠‍A discrete causative delay event within an analysis.
+
+    ``start_workday`` / ``end_workday`` are the engine-facing work-day offsets
+    (used for concurrency overlap); ``event_start`` / ``event_end`` are the
+    human ISO dates for display.
+    """
+
+    __tablename__ = "oe_schedule_advanced_delay_event"
+
+    analysis_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(),
+        ForeignKey("oe_schedule_advanced_delay_analysis.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    code: Mapped[str] = mapped_column(String(40), nullable=False, default="", server_default="")
+    title: Mapped[str] = mapped_column(String(500), nullable=False, default="", server_default="")
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    root_cause: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    responsibility: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="employer", server_default="employer"
+    )
+    risk_event_category: Mapped[str] = mapped_column(String(120), nullable=False, default="", server_default="")
+    is_concurrent: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
+    concurrency_group: Mapped[str] = mapped_column(String(80), nullable=False, default="", server_default="")
+    is_pacing: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
+    source_ref_type: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    source_ref_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), nullable=True)
+    insert_at_activity_ref: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
+    event_start: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    event_end: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    start_workday: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    end_workday: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    metadata_: Mapped[dict] = mapped_column(  # type: ignore[assignment]
+        "metadata", JSON, nullable=False, default=dict, server_default="{}"
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debug only
+        return f"<DelayEvent {self.title} ({self.responsibility})>"
+
+
+class Fragnet(Base):
+    """‌⁠‍The schedule fragment representing one event's network impact.
+
+    ``fragnet_activities`` are activity dicts in the exact ``cpm.Activity``
+    shape; ``rewires`` record the edge redirections so removal (Collapsed
+    As-Built) is exact.
+    """
+
+    __tablename__ = "oe_schedule_advanced_fragnet"
+
+    delay_event_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(),
+        ForeignKey("oe_schedule_advanced_delay_event.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    insert_mode: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="lengthen_activity", server_default="lengthen_activity"
+    )
+    insert_at_activity_ref: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
+    added_duration_days: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    fragnet_activities: Mapped[list] = mapped_column(  # type: ignore[assignment]
+        JSON, nullable=False, default=list, server_default="[]"
+    )
+    rewires: Mapped[list] = mapped_column(  # type: ignore[assignment]
+        JSON, nullable=False, default=list, server_default="[]"
+    )
+    applies_in_window: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    metadata_: Mapped[dict] = mapped_column(  # type: ignore[assignment]
+        "metadata", JSON, nullable=False, default=dict, server_default="{}"
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debug only
+        return f"<Fragnet {self.insert_mode} @{self.insert_at_activity_ref} +{self.added_duration_days}d>"
+
+
+class DelayWindow(Base):
+    """‌⁠‍One analysis window in a Windows / Watershed run (computed result)."""
+
+    __tablename__ = "oe_schedule_advanced_delay_window"
+
+    analysis_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(),
+        ForeignKey("oe_schedule_advanced_delay_analysis.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    sequence_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    window_start: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    window_end: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    finish_at_open: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    finish_at_close: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    gross_slip_days: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    employer_days: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    contractor_days: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    neutral_days: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    concurrent_days: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    net_entitlement_days: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    narrative: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    metadata_: Mapped[dict] = mapped_column(  # type: ignore[assignment]
+        "metadata", JSON, nullable=False, default=dict, server_default="{}"
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debug only
+        return f"<DelayWindow #{self.sequence_order} slip={self.gross_slip_days}d>"

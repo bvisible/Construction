@@ -43,6 +43,7 @@ canonical reference implementation used by the new persisted
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date, timedelta
 from typing import Any, Literal
 
 # Dependency type codes - all four PDM link types are honoured in both
@@ -408,6 +409,28 @@ def compute_cpm(network: TaskNetwork) -> dict[Any, CPMResult]:
 # ── Convenience helpers ────────────────────────────────────────────────────
 
 
+def es_ef_durations(
+    network: TaskNetwork,
+    results: dict[Any, CPMResult],
+) -> tuple[dict[Any, int], dict[Any, int], dict[Any, int]]:
+    """Project a CPM ``results`` dict back into ``(es, ef, durations)`` maps.
+
+    The claims-grade post-processors below take ``es`` / ``ef`` / ``durations``
+    as plain dicts so they never depend on a particular result container. This
+    helper extracts them from a :func:`compute_cpm` (or
+    :func:`out_of_sequence_cpm`) run plus the network, so callers do not repeat
+    the forward-pass bookkeeping. ``durations`` is the network's clamped
+    ``max(0, int(duration))`` per activity.
+    """
+    es = {aid: r.es for aid, r in results.items()}
+    ef = {aid: r.ef for aid, r in results.items()}
+    durations: dict[Any, int] = {}
+    for aid in results:
+        a = network.get(aid)
+        durations[aid] = max(0, int(a.duration)) if a is not None else (ef[aid] - es[aid])
+    return es, ef, durations
+
+
 def critical_path(
     network: TaskNetwork,
     results: dict[Any, CPMResult] | None = None,
@@ -443,3 +466,1026 @@ def critical_path(
                         break
                 cur = next_cur
     return path
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Claims-grade CPM extensions (T1.2)
+# ────────────────────────────────────────────────────────────────────────────
+# Everything below is ADDITIVE and pure. It post-processes the output of
+# ``compute_cpm`` (plus the network adjacency) to produce forensic-grade
+# scheduling artefacts that survive expert scrutiny in delay-claim review:
+#
+#   * Longest Path (the date-driving chain, independent of the float rule)
+#   * Multiple float paths (the driving chain + secondary near-driving chains)
+#   * Driving-predecessor identification (which logic link actually set ES)
+#   * Out-of-sequence forward passes (Retained Logic / Progress Override /
+#     Actual Dates) keyed off a data date + per-activity progress
+#   * A scheduling-quality findings log (open ends, hard constraints, out of
+#     sequence, large / negative lags)
+#   * Human-readable explain strings derived strictly from the numbers
+#
+# All thresholds live in module-level constants so the behaviour is auditable
+# and tunable in exactly one place.
+# ════════════════════════════════════════════════════════════════════════════
+
+
+# ── Tunable constants (single source of truth for QA thresholds) ─────────────
+
+#: A lag whose absolute value exceeds this many working days is flagged
+#: LARGE_LAG by :func:`scheduling_qa_log`. Long lags are a classic way to
+#: hide sequencing logic and are a standard forensic review target.
+LARGE_LAG_THRESHOLD_DAYS: int = 10
+
+#: Default total-float threshold (working days) for ``"total_float"`` critical
+#: marking via :func:`select_critical`. Matches ``compute_cpm``'s ``<= 0`` rule.
+DEFAULT_CRITICAL_FLOAT_THRESHOLD: int = 0
+
+#: Default caps for :func:`multiple_float_paths`.
+DEFAULT_MAX_FLOAT_PATHS: int = 10
+DEFAULT_MIN_FLOAT_PATH_LEN: int = 1
+
+#: QA finding severities. Higher sorts first (more urgent). Used both as the
+#: ``severity`` field on a finding and as the primary sort key.
+SEVERITY_HIGH: int = 3
+SEVERITY_MEDIUM: int = 2
+SEVERITY_LOW: int = 1
+
+#: Critical-path selection modes for :func:`select_critical`.
+CriticalMode = Literal["total_float", "longest_path"]
+
+
+# ── Topological rank (deterministic ordering helper) ─────────────────────────
+
+
+def _topo_rank(network: TaskNetwork) -> dict[Any, int]:
+    """Map each activity id to its position in the topological order.
+
+    Lower rank == earlier in the schedule logic. Used as the primary,
+    fully-deterministic tie-break when several edges or activities are
+    otherwise equal. Activities not reachable by Kahn's algorithm (only
+    possible for cyclic networks, which the callers reject first) are
+    appended in stable insertion order with ranks after every ordered node.
+    """
+    order = _topological_order(network)
+    rank: dict[Any, int] = {aid: i for i, aid in enumerate(order)}
+    if len(rank) != len(network.ids()):
+        nxt = len(rank)
+        for aid in network.ids():
+            if aid not in rank:
+                rank[aid] = nxt
+                nxt += 1
+    return rank
+
+
+def _forward_bound(
+    dep_type: DepType,
+    p_es: int,
+    p_ef: int,
+    lag: int,
+    dur: int,
+) -> int:
+    """Lower bound this link places on the successor's ES.
+
+    Mirrors the forward-pass arithmetic in :func:`compute_cpm` EXACTLY so
+    that "the predecessor whose bound equals ES" is well defined. FF / SF
+    naturally bound the finish, so they are converted to an ES bound by
+    subtracting the successor's own duration (EF = ES + dur).
+    """
+    if dep_type == "SS":
+        return p_es + lag
+    if dep_type == "FF":
+        return p_ef + lag - dur
+    if dep_type == "SF":
+        return p_es + lag - dur
+    return p_ef + lag  # FS (default)
+
+
+def driving_predecessor(
+    network: TaskNetwork,
+    es: dict[Any, int],
+    ef: dict[Any, int],
+    durations: dict[Any, int],
+    s: Any,
+    *,
+    topo_rank: dict[Any, int] | None = None,
+) -> tuple[Any, DepType, int] | None:
+    """Return the single predecessor edge that DROVE ``s``'s early start.
+
+    The driving edge is the ``(predecessor_id, dep_type, lag)`` triple whose
+    forward-pass bound equals ``es[s]`` - i.e. the logic link that actually
+    set this activity's early start. When several edges tie on the bound the
+    tie is broken deterministically:
+
+        1. lowest predecessor topological rank (earliest logic wins), then
+        2. lowest predecessor id rendered as a string.
+
+    Returns ``None`` for an "open start": an activity with no scheduled
+    predecessor that produced its ES (it floats to its component start, t=0,
+    or to its actual start in an out-of-sequence pass). Edges whose
+    predecessor lacks an ES entry (dropped / out-of-component) are ignored.
+    """
+    if topo_rank is None:
+        topo_rank = _topo_rank(network)
+    target = es.get(s)
+    if target is None:
+        return None
+    dur = durations.get(s, 0)
+    best: tuple[Any, DepType, int] | None = None
+    best_key: tuple[int, str] | None = None
+    for p_id, dep_type, lag in network.predecessors(s):
+        if p_id not in es or p_id not in ef:
+            continue
+        bound = _forward_bound(dep_type, es[p_id], ef[p_id], int(lag), dur)
+        if bound != target:
+            continue
+        key = (topo_rank.get(p_id, len(topo_rank)), str(p_id))
+        if best_key is None or key < best_key:
+            best_key = key
+            best = (p_id, dep_type, int(lag))
+    return best
+
+
+def driving_chain(
+    network: TaskNetwork,
+    es: dict[Any, int],
+    ef: dict[Any, int],
+    durations: dict[Any, int],
+    start: Any,
+    *,
+    topo_rank: dict[Any, int] | None = None,
+    allowed: set[Any] | None = None,
+) -> list[Any]:
+    """Walk backward from ``start`` over driving edges; return forward order.
+
+    Follows :func:`driving_predecessor` from ``start`` until an open start
+    (no driving predecessor) is reached, a node repeats (defensive - the
+    driving relation is acyclic for an acyclic network), or the driving
+    predecessor falls outside ``allowed`` (when given). The returned list is
+    in forward (topological) order: chain head first, ``start`` last.
+    """
+    if topo_rank is None:
+        topo_rank = _topo_rank(network)
+    chain: list[Any] = []
+    seen: set[Any] = set()
+    cur: Any = start
+    while cur is not None and cur not in seen:
+        chain.append(cur)
+        seen.add(cur)
+        edge = driving_predecessor(network, es, ef, durations, cur, topo_rank=topo_rank)
+        if edge is None:
+            break
+        p_id = edge[0]
+        if allowed is not None and p_id not in allowed:
+            break
+        cur = p_id
+    chain.reverse()
+    return chain
+
+
+def longest_path(
+    network: TaskNetwork,
+    results: dict[Any, CPMResult],
+    durations: dict[Any, int],
+    es: dict[Any, int],
+    ef: dict[Any, int],
+) -> list[Any]:
+    """Return the Longest Path (date-driving chain) in forward order.
+
+    The Longest Path is the chain of activities that controls the project
+    finish date, found purely from the forward pass and therefore correct
+    even when calendars, constraints or multiple float values would make the
+    float-based critical set disagree. The seed is the activity (or, on ties,
+    the lowest-(topo-rank, id) activity) whose EF equals the maximum EF in the
+    network; the chain is then traced back over driving edges.
+
+    ``results`` is accepted for signature symmetry with the other helpers and
+    to let callers pass the exact CPM run the chain belongs to; the chain
+    itself is derived from ``es`` / ``ef`` / ``durations``.
+    """
+    if not ef:
+        return []
+    topo_rank = _topo_rank(network)
+    max_ef = max(ef.values())
+    seeds = sorted(
+        (aid for aid, v in ef.items() if v == max_ef),
+        key=lambda a: (topo_rank.get(a, len(topo_rank)), str(a)),
+    )
+    seed = seeds[0]
+    return driving_chain(network, es, ef, durations, seed, topo_rank=topo_rank)
+
+
+@dataclass(frozen=True)
+class FloatPath:
+    """One float path: the driving chain (index 0) or a near-driving chain.
+
+    Attributes:
+        index: 0-based rank. Path 0 is the Longest Path.
+        activity_ids: Activities on the path in forward (topological) order.
+        length_days: Summed working-day duration of the path's activities.
+        relative_float: ``min`` total float over the path's activities. Path 0
+            (the driving chain) is always ``0``; later paths are
+            non-decreasing - the float you would buy back by driving that
+            path's logic to zero. This is the standard "float path" reading
+            used in forensic schedule review.
+    """
+
+    index: int
+    activity_ids: list[Any]
+    length_days: int
+    relative_float: int
+
+
+def multiple_float_paths(
+    network: TaskNetwork,
+    results: dict[Any, CPMResult],
+    durations: dict[Any, int],
+    es: dict[Any, int],
+    ef: dict[Any, int],
+    *,
+    max_paths: int = DEFAULT_MAX_FLOAT_PATHS,
+    min_len: int = DEFAULT_MIN_FLOAT_PATH_LEN,
+) -> list[FloatPath]:
+    """Decompose the network into ranked float paths (driving + secondary).
+
+    Float path 1 (index 0) is the Longest Path. Each subsequent path is the
+    longest remaining driving chain among activities not yet claimed by an
+    earlier path, peeled off in descending summed-duration order. This is the
+    "float path" decomposition used to rank near-critical work: lower-index
+    paths threaten the finish date sooner.
+
+    Args:
+        max_paths: hard cap on the number of paths returned.
+        min_len: drop any path with fewer than this many activities.
+
+    Returns:
+        A list of :class:`FloatPath`, index 0 first. ``relative_float`` is 0
+        for index 0 and non-decreasing thereafter.
+    """
+    if not ef or max_paths <= 0:
+        return []
+    topo_rank = _topo_rank(network)
+
+    def _length(ids: list[Any]) -> int:
+        return sum(durations.get(a, 0) for a in ids)
+
+    def _rel_float(ids: list[Any]) -> int:
+        floats = [results[a].total_float for a in ids if a in results]
+        return min(floats) if floats else 0
+
+    paths: list[FloatPath] = []
+    claimed: set[Any] = set()
+
+    # Path 1 = the Longest Path (over the full, unclaimed network).
+    lp = longest_path(network, results, durations, es, ef)
+    if lp:
+        paths.append(FloatPath(index=0, activity_ids=lp, length_days=_length(lp), relative_float=0))
+        claimed.update(lp)
+
+    # Subsequent paths: among unclaimed activities, take the one with the
+    # greatest EF as a seed, trace its driving chain restricted to unclaimed
+    # nodes, and keep the longest such chain. Repeat until caps are hit.
+    while len(paths) < max_paths:
+        remaining = [aid for aid in network.ids() if aid not in claimed and aid in ef]
+        if not remaining:
+            break
+        # Seed candidates ordered by EF desc, then (topo-rank, id) for ties so
+        # the peel is deterministic regardless of input ordering.
+        remaining.sort(key=lambda a: (-ef[a], topo_rank.get(a, len(topo_rank)), str(a)))
+        best_chain: list[Any] = []
+        best_key: tuple[int, int, str] | None = None
+        for seed in remaining:
+            chain = driving_chain(network, es, ef, durations, seed, topo_rank=topo_rank, allowed=set(remaining))
+            length = _length(chain)
+            # Longest by days, then most activities, then lowest head rank.
+            head_rank = topo_rank.get(chain[0], len(topo_rank)) if chain else len(topo_rank)
+            key = (length, len(chain), -head_rank)
+            cmp_key = (-key[0], -key[1], -key[2])
+            if best_key is None or cmp_key < best_key:
+                best_key = cmp_key
+                best_chain = chain
+        if not best_chain:
+            break
+        if len(best_chain) >= min_len:
+            paths.append(
+                FloatPath(
+                    index=len(paths),
+                    activity_ids=best_chain,
+                    length_days=_length(best_chain),
+                    relative_float=_rel_float(best_chain),
+                )
+            )
+        claimed.update(best_chain)
+
+    # Drop the seed path too if it failed the min_len gate (keeps the contract
+    # that every returned path has >= min_len activities).
+    return [p for p in paths if len(p.activity_ids) >= min_len]
+
+
+# ── Out-of-sequence forward passes ───────────────────────────────────────────
+# When a schedule is updated, work often progresses out of the planned logical
+# order ("out of sequence"). Different schedulers resolve this differently;
+# the three industry-standard retained-logic options are implemented below as
+# pure forward passes that produce ES/EF. They all reduce EXACTLY to the
+# planning forward pass of :func:`compute_cpm` when ``data_date`` is ``None``
+# and no activity carries actuals, so the unchanged backward pass can run on
+# top of any of them.
+
+
+@dataclass(frozen=True)
+class Progress:
+    """Per-activity status as of the data date (all values optional).
+
+    Attributes:
+        actual_start: Work-day index the activity actually started, or None.
+        actual_finish: Work-day index the activity actually finished, or None.
+        progress_pct: Percent complete in ``[0, 100]`` (used to derive
+            remaining duration when ``remaining_duration`` is not given).
+        remaining_duration: Explicit remaining working days. Takes precedence
+            over ``progress_pct`` when provided.
+    """
+
+    actual_start: int | None = None
+    actual_finish: int | None = None
+    progress_pct: float = 0.0
+    remaining_duration: int | None = None
+
+
+OutOfSeqMode = Literal["retained_logic", "progress_override", "actual_dates"]
+
+
+def _is_started(p: Progress | None) -> bool:
+    """True iff the activity has begun (actual start or any progress)."""
+    if p is None:
+        return False
+    if p.actual_start is not None:
+        return True
+    if p.actual_finish is not None:
+        return True
+    return p.progress_pct > 0
+
+
+def _is_finished(p: Progress | None) -> bool:
+    """True iff the activity is complete (actual finish or 100%)."""
+    if p is None:
+        return False
+    if p.actual_finish is not None:
+        return True
+    return p.progress_pct >= 100
+
+
+def _remaining_days(p: Progress | None, dur: int) -> int:
+    """Remaining working days for an activity.
+
+    ``remaining_duration`` wins when supplied; otherwise derive it from
+    percent complete: ``round(dur * (1 - pct/100))``. Always clamped to
+    ``[0, dur]`` so a finished or over-reported activity never has negative
+    remaining work.
+    """
+    if p is not None and p.remaining_duration is not None:
+        return max(0, min(dur, int(p.remaining_duration)))
+    pct = 0.0 if p is None else max(0.0, min(100.0, float(p.progress_pct)))
+    rem = round(dur * (1.0 - pct / 100.0))
+    return max(0, min(dur, int(rem)))
+
+
+def _oos_forward_pass(
+    network: TaskNetwork,
+    mode: OutOfSeqMode,
+    data_date: int | None,
+    progress: dict[Any, Progress],
+) -> tuple[dict[Any, int], dict[Any, int], dict[Any, int]]:
+    """Forward pass honouring actuals + a data date under ``mode``.
+
+    Returns ``(durations, es, ef)``. ``durations`` is the planned duration
+    (unchanged) - the *remaining* work is folded into ES/EF only.
+
+    Two parallel timelines are tracked per activity:
+
+    * a **logic timeline** (``logic_es`` / ``logic_ef``) that ALWAYS uses the
+      full planned duration from the later of the data date and predecessor
+      logic (a finished activity contributes its actual finish). Successors
+      are bound by this timeline in every mode, which is the precise meaning
+      of "successors stay bound by full logic".
+    * the **displayed** ``es`` / ``ef`` the activity itself reports, which is
+      where the three modes diverge.
+
+    Semantics (DD = ``data_date``; defaults to 0 when None so the pass
+    reduces to planning - and with no actuals all three modes are identical
+    to :func:`compute_cpm`):
+
+    * **retained_logic** - finished activities pin to actuals; a started but
+      unfinished activity shows its actual ES while its remaining work still
+      waits for the later of DD and predecessor logic (``rem_start + rem``).
+      Predecessor logic is fully retained, so this is the latest finish.
+    * **progress_override** - a started activity's remaining work runs straight
+      from DD (``DD + rem``), ignoring incomplete predecessor logic for its own
+      finish. This is the earliest finish.
+    * **actual_dates** - actual start / finish are honoured where present; an
+      in-progress activity keeps its actual ES and runs its remaining work from
+      DD (so it finishes no later than retained logic and no earlier than
+      progress override). Successors stay bound by full logic.
+    """
+    cycle = network.detect_cycle()
+    if cycle is not None:
+        raise CycleError(cycle)
+    order = _topological_order(network)
+    dd = 0 if data_date is None else int(data_date)
+    has_dd = data_date is not None
+
+    durations: dict[Any, int] = {}
+    es: dict[Any, int] = {}
+    ef: dict[Any, int] = {}
+    # Logic timeline - drives successors uniformly across all three modes.
+    logic_es_map: dict[Any, int] = {}
+    logic_ef_map: dict[Any, int] = {}
+
+    for aid in order:
+        a = network.get(aid)
+        assert a is not None
+        dur = max(0, int(a.duration))
+        durations[aid] = dur
+        p = progress.get(aid)
+
+        # Lower bound from predecessor LOGIC dates (full-duration timeline).
+        # Identical arithmetic to the planning forward pass, but reading the
+        # logic timeline so overridden actuals never leak into successor logic.
+        logic_candidates: list[int] = []
+        for p_id, dep_type, lag in network.predecessors(aid):
+            if p_id not in logic_es_map:
+                continue
+            logic_candidates.append(_forward_bound(dep_type, logic_es_map[p_id], logic_ef_map[p_id], int(lag), dur))
+        pred_logic_es = max(logic_candidates) if logic_candidates else 0
+
+        # Finished: pin to actuals in every mode; the logic timeline takes the
+        # actual finish so downstream logic keys off when work really ended.
+        if _is_finished(p):
+            assert p is not None
+            a_finish = p.actual_finish if p.actual_finish is not None else max(dd, pred_logic_es + dur)
+            a_start = p.actual_start if p.actual_start is not None else (a_finish - dur)
+            es[aid] = a_start
+            ef[aid] = a_finish
+            logic_es_map[aid] = a_start
+            logic_ef_map[aid] = a_finish
+            continue
+
+        rem = _remaining_days(p, dur)
+        started = _is_started(p)
+
+        # Logic timeline for an unfinished activity: full duration from the
+        # later of DD and predecessor logic (planning when no DD).
+        logic_start = max(dd, pred_logic_es) if has_dd else pred_logic_es
+        logic_es_map[aid] = logic_start
+        logic_ef_map[aid] = logic_start + dur
+
+        if not started:
+            # Not started in any mode = planning placement on the logic timeline.
+            es[aid] = logic_start
+            ef[aid] = logic_start + dur
+            continue
+
+        a_start = p.actual_start if (p is not None and p.actual_start is not None) else dd
+
+        if mode == "progress_override":
+            # Own remaining work runs straight from the data date.
+            es[aid] = a_start
+            ef[aid] = (dd + rem) if has_dd else (a_start + dur)
+        elif mode == "actual_dates":
+            es[aid] = a_start
+            if p is not None and p.actual_finish is not None:
+                ef[aid] = p.actual_finish
+            else:
+                # Remaining from DD (between override and retained); successors
+                # are unaffected because they read the logic timeline above.
+                ef[aid] = (dd + rem) if has_dd else (a_start + dur)
+        else:  # retained_logic (default)
+            es[aid] = a_start
+            # Remaining work waits for the later of DD and predecessor logic.
+            ef[aid] = (logic_start + rem) if has_dd else (a_start + dur)
+
+    return durations, es, ef
+
+
+def _predecessor_should_block(dep_type: DepType) -> bool:
+    """True iff an incomplete predecessor on this link blocks the successor's start.
+
+    Start-controlling links (FS, SF) require the predecessor to finish before
+    the successor may start, so an unfinished predecessor on such a link while
+    the successor already has progress is genuinely out of sequence. SS / FF
+    only relate starts / finishes and are not treated as start-blocking here.
+    """
+    return dep_type in ("FS", "SF")
+
+
+def detect_out_of_sequence(
+    network: TaskNetwork,
+    data_date: int | None,
+    progress: dict[Any, Progress],
+) -> set[Any]:
+    """Return the set of activities progressing out of sequence at the data date.
+
+    An activity is out of sequence when it has progress (started or finished)
+    while a predecessor that should block its start (FS / SF link) is not
+    complete as of the data date. Pure - reads only ``progress`` + adjacency.
+    """
+    oos: set[Any] = set()
+    for aid in network.ids():
+        p = progress.get(aid)
+        if not _is_started(p):
+            continue
+        for p_id, dep_type, _lag in network.predecessors(aid):
+            if not _predecessor_should_block(dep_type):
+                continue
+            if not _is_finished(progress.get(p_id)):
+                oos.add(aid)
+                break
+    return oos
+
+
+def out_of_sequence_cpm(
+    network: TaskNetwork,
+    *,
+    mode: OutOfSeqMode = "retained_logic",
+    data_date: int | None = None,
+    progress: dict[Any, Progress] | None = None,
+) -> dict[Any, CPMResult]:
+    """Full CPM (forward + backward + float) under an out-of-sequence ``mode``.
+
+    Runs the mode-specific forward pass, then the UNCHANGED backward-pass and
+    float arithmetic from :func:`compute_cpm` on top of it, so the four modes
+    differ only in how progress + the data date reshape early dates. With
+    ``data_date is None`` and empty ``progress`` the result is identical to
+    :func:`compute_cpm`.
+    """
+    progress = progress or {}
+    durations, es, ef = _oos_forward_pass(network, mode, data_date, progress)
+    order = _topological_order(network)
+    if not order:
+        return {}
+
+    # ── Per-island finish via union-find (mirrors compute_cpm) ──
+    component_root: dict[Any, Any] = {aid: aid for aid in order}
+
+    def _find(x: Any) -> Any:
+        while component_root[x] != x:
+            component_root[x] = component_root[component_root[x]]
+            x = component_root[x]
+        return x
+
+    def _union(x: Any, y: Any) -> None:
+        rx, ry = _find(x), _find(y)
+        if rx != ry:
+            component_root[rx] = ry
+
+    for aid in order:
+        for s_id, _dep, _lag in network.successors(aid):
+            _union(aid, s_id)
+
+    component_finish: dict[Any, int] = {}
+    for aid in order:
+        root = _find(aid)
+        if ef[aid] > component_finish.get(root, -1):
+            component_finish[root] = ef[aid]
+
+    # ── Backward pass (identical arithmetic to compute_cpm) ──
+    lf: dict[Any, int] = {}
+    ls: dict[Any, int] = {}
+    for aid in reversed(order):
+        dur = durations[aid]
+        succ_candidates: list[int] = []
+        for s_id, dep_type, lag in network.successors(aid):
+            if s_id not in ls:
+                continue
+            lag = int(lag)
+            if dep_type == "SS":
+                succ_candidates.append(ls[s_id] - lag + dur)
+            elif dep_type == "FF":
+                succ_candidates.append(lf[s_id] - lag)
+            elif dep_type == "SF":
+                succ_candidates.append(lf[s_id] - lag + dur)
+            else:  # FS (default)
+                succ_candidates.append(ls[s_id] - lag)
+        lf[aid] = min(succ_candidates) if succ_candidates else component_finish[_find(aid)]
+        ls[aid] = lf[aid] - dur
+
+    # ── Float + critical marking (identical arithmetic to compute_cpm) ──
+    results: dict[Any, CPMResult] = {}
+    for aid in order:
+        total_float = ls[aid] - es[aid]
+        dur_aid = durations[aid]
+        slack_bounds: list[int] = []
+        for s_id, dep_type, lag in network.successors(aid):
+            if s_id not in es:
+                continue
+            lag = int(lag)
+            if dep_type == "SS":
+                slack_bounds.append((es[s_id] - lag + dur_aid) - ef[aid])
+            elif dep_type == "FF":
+                slack_bounds.append((ef[s_id] - lag) - ef[aid])
+            elif dep_type == "SF":
+                slack_bounds.append((ef[s_id] - lag + dur_aid) - ef[aid])
+            else:  # FS (default)
+                slack_bounds.append((es[s_id] - lag) - ef[aid])
+        free_float = min(slack_bounds) if slack_bounds else component_finish[_find(aid)] - ef[aid]
+        results[aid] = CPMResult(
+            es=es[aid],
+            ef=ef[aid],
+            ls=ls[aid],
+            lf=lf[aid],
+            total_float=max(0, total_float),
+            free_float=max(0, free_float),
+            is_critical=(total_float <= 0),
+        )
+    return results
+
+
+# ── Scheduling-quality findings log ──────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class QAFinding:
+    """One scheduling-quality finding (a row in the QA log).
+
+    Attributes:
+        code: Machine-readable finding code (e.g. ``"OPEN_START"``).
+        severity: One of :data:`SEVERITY_HIGH` / ``_MEDIUM`` / ``_LOW``.
+        activity_id: The activity the finding is about.
+        message: Human-readable one-line description.
+    """
+
+    code: str
+    severity: int
+    activity_id: Any
+    message: str
+
+
+@dataclass(frozen=True)
+class QAOptions:
+    """Inputs to :func:`scheduling_qa_log` beyond the network + results.
+
+    Attributes:
+        start_milestones: Activity ids that are legitimately open at the start
+            (project start milestones) - suppresses OPEN_START.
+        finish_milestones: Activity ids legitimately open at the finish -
+            suppresses OPEN_FINISH.
+        hard_constrained: Activity ids carrying a hard date constraint
+            (e.g. Must-Finish-On). Reported HARD_CONSTRAINT for visibility.
+        data_date: Data date for out-of-sequence detection (optional).
+        progress: Per-activity progress for out-of-sequence detection.
+        large_lag_threshold: Override for :data:`LARGE_LAG_THRESHOLD_DAYS`.
+    """
+
+    start_milestones: set[Any] = field(default_factory=set)
+    finish_milestones: set[Any] = field(default_factory=set)
+    hard_constrained: set[Any] = field(default_factory=set)
+    data_date: int | None = None
+    progress: dict[Any, Progress] = field(default_factory=dict)
+    large_lag_threshold: int = LARGE_LAG_THRESHOLD_DAYS
+
+
+def scheduling_qa_log(
+    network: TaskNetwork,
+    results: dict[Any, CPMResult],
+    options: QAOptions | None = None,
+) -> list[QAFinding]:
+    """Return scheduling-quality findings, sorted by (severity desc, id).
+
+    Pure analysis of the network logic + ``options`` - never mutates either.
+    Findings raised:
+
+    * **OPEN_START** (medium) - no predecessors and not a start milestone.
+    * **OPEN_FINISH** (medium) - no successors and not a finish milestone.
+    * **HARD_CONSTRAINT** (low) - activity flagged hard-constrained.
+    * **OUT_OF_SEQUENCE** (high) - progressed ahead of a blocking predecessor.
+    * **LARGE_LAG** (low) - a link lag whose magnitude exceeds the threshold.
+    * **NEGATIVE_LAG** (medium) - a negative lag (lead) on any link.
+
+    The sort is ``(-severity, str(activity_id), code)`` so the log is stable
+    and deterministic regardless of input activity / edge ordering.
+    """
+    opts = options or QAOptions()
+    findings: list[QAFinding] = []
+
+    oos = detect_out_of_sequence(network, opts.data_date, opts.progress)
+
+    for aid in network.ids():
+        preds = network.predecessors(aid)
+        succs = network.successors(aid)
+
+        if not preds and aid not in opts.start_milestones:
+            findings.append(
+                QAFinding(
+                    code="OPEN_START",
+                    severity=SEVERITY_MEDIUM,
+                    activity_id=aid,
+                    message=f"Activity {aid} has no predecessors and is not a start milestone (open start).",
+                )
+            )
+        if not succs and aid not in opts.finish_milestones:
+            findings.append(
+                QAFinding(
+                    code="OPEN_FINISH",
+                    severity=SEVERITY_MEDIUM,
+                    activity_id=aid,
+                    message=f"Activity {aid} has no successors and is not a finish milestone (open finish).",
+                )
+            )
+        if aid in opts.hard_constrained:
+            findings.append(
+                QAFinding(
+                    code="HARD_CONSTRAINT",
+                    severity=SEVERITY_LOW,
+                    activity_id=aid,
+                    message=f"Activity {aid} carries a hard date constraint that overrides network logic.",
+                )
+            )
+        if aid in oos:
+            findings.append(
+                QAFinding(
+                    code="OUT_OF_SEQUENCE",
+                    severity=SEVERITY_HIGH,
+                    activity_id=aid,
+                    message=f"Activity {aid} has progress while a blocking predecessor is incomplete (out of sequence).",
+                )
+            )
+
+        # Lag findings are attributed to the SUCCESSOR (the activity the link
+        # constrains), one per offending incoming edge.
+        for p_id, dep_type, lag in preds:
+            lag = int(lag)
+            if lag < 0:
+                findings.append(
+                    QAFinding(
+                        code="NEGATIVE_LAG",
+                        severity=SEVERITY_MEDIUM,
+                        activity_id=aid,
+                        message=f"Link {p_id} -> {aid} ({dep_type}) has a negative lag of {lag} days (lead).",
+                    )
+                )
+            elif abs(lag) > opts.large_lag_threshold:
+                findings.append(
+                    QAFinding(
+                        code="LARGE_LAG",
+                        severity=SEVERITY_LOW,
+                        activity_id=aid,
+                        message=(
+                            f"Link {p_id} -> {aid} ({dep_type}) has a large lag of {lag} days "
+                            f"(threshold {opts.large_lag_threshold})."
+                        ),
+                    )
+                )
+
+    findings.sort(key=lambda f: (-f.severity, str(f.activity_id), f.code))
+    return findings
+
+
+# ── Critical-set selection (mode switch) ─────────────────────────────────────
+
+
+def select_critical(
+    results: dict[Any, CPMResult],
+    mode: CriticalMode = "total_float",
+    *,
+    threshold: int = DEFAULT_CRITICAL_FLOAT_THRESHOLD,
+    longest_path_ids: list[Any] | set[Any] | None = None,
+) -> set[Any]:
+    """Return the set of critical activity ids under ``mode``.
+
+    * ``"total_float"`` - every activity with ``total_float <= threshold``.
+      With the default ``threshold == 0`` this exactly reproduces
+      :func:`compute_cpm`'s ``is_critical`` set.
+    * ``"longest_path"`` - the activities on the Longest Path. ``longest_path_ids``
+      must be supplied (compute it once via :func:`longest_path` and pass it
+      in) so this helper stays a pure, network-free selector.
+    """
+    if mode == "longest_path":
+        return set(longest_path_ids or ())
+    return {aid for aid, r in results.items() if r.total_float <= threshold}
+
+
+# ── Generated explain strings ────────────────────────────────────────────────
+
+
+def why_critical(
+    network: TaskNetwork,
+    results: dict[Any, CPMResult],
+    durations: dict[Any, int],
+    es: dict[Any, int],
+    ef: dict[Any, int],
+    activity_id: Any,
+) -> str:
+    """One-line, numbers-faithful explanation of an activity's criticality.
+
+    Derived strictly from the float value and the driving edge, so the text
+    can never contradict the computed schedule. Non-critical activities get a
+    float statement; critical activities additionally name the driving logic
+    link (or "project start" for an open start).
+    """
+    r = results.get(activity_id)
+    if r is None:
+        return f"Activity {activity_id} is not in the schedule."
+    if not r.is_critical:
+        return (
+            f"Activity {activity_id} is not critical: it has {r.total_float} day(s) of total float "
+            f"(early start day {r.es}, late start day {r.ls})."
+        )
+    edge = driving_predecessor(network, es, ef, durations, activity_id)
+    if edge is None:
+        return (
+            f"Activity {activity_id} is critical (total float {r.total_float}): it is driven from "
+            f"project start with no float, finishing on day {r.ef}."
+        )
+    p_id, dep_type, lag = edge
+    lag_txt = "" if lag == 0 else f" with a {lag}-day lag"
+    return (
+        f"Activity {activity_id} is critical (total float {r.total_float}): its early start (day {r.es}) "
+        f"is driven by {p_id} through a {dep_type} link{lag_txt}."
+    )
+
+
+def float_explanation(
+    network: TaskNetwork,
+    results: dict[Any, CPMResult],
+    durations: dict[Any, int],
+    es: dict[Any, int],
+    ef: dict[Any, int],
+    activity_id: Any,
+) -> str:
+    """One-line explanation of an activity's total + free float.
+
+    States total float, free float, and (when the activity has any total
+    float) which successor logic the float is measured against, all read from
+    the computed numbers so the prose tracks the schedule exactly.
+    """
+    r = results.get(activity_id)
+    if r is None:
+        return f"Activity {activity_id} is not in the schedule."
+    if r.total_float <= 0:
+        return (
+            f"Activity {activity_id} has no total float: any slip from its early start (day {r.es}) "
+            f"delays the project finish."
+        )
+    return (
+        f"Activity {activity_id} can slip up to {r.total_float} day(s) in total "
+        f"(free float {r.free_float} day(s)) from its early start (day {r.es}) "
+        f"before affecting the project finish; late finish is day {r.lf}."
+    )
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Working-day (calendar-aware) offset arithmetic - additive helper
+# ────────────────────────────────────────────────────────────────────────────
+# The CPM passes above run entirely in plain calendar-day offsets: a duration of
+# ``d`` always advances an offset by exactly ``d`` (``ef = es + dur``). That is
+# correct when every day is a working day, but a follow-up was noted to let the
+# engine honour per-activity working calendars (skip weekends / holidays).
+#
+# Retrofitting that into ``compute_cpm`` is NOT a small change: the forward pass,
+# backward pass, ``_forward_bound``, the free-float math, all three
+# out-of-sequence forward passes and every claims-grade post-processor that
+# reconstructs dates rely on the exact ``ef == es + dur`` / ``es == ef - dur``
+# identity (and on ``+ lag - dur`` / ``- lag + dur`` link conversions). Honouring
+# calendars means replacing every one of those with a calendar-aware inverse,
+# which would destabilise the green claims-grade engine and its tests.
+#
+# So the calendar support starts here as a small, fully-tested, behaviour-neutral
+# PRIMITIVE keyed by the same integer day-offsets the engine speaks. Nothing
+# above calls it yet; a future integration can adopt it to translate a
+# working-day ``duration`` into an elapsed-day finish offset and back. With the
+# trivial seven-working-day calendar it reproduces plain offset arithmetic
+# exactly, so adopting it is a no-op for projects without a real calendar.
+#
+# The inclusivity convention is identical to ``app/core/cpm.py`` and
+# ``app/modules/schedule/progress_math.py`` so all three agree:
+# ``working_days_between`` counts working days strictly AFTER ``start`` up to and
+# INCLUDING ``end`` (exclusive start, inclusive end).
+# ════════════════════════════════════════════════════════════════════════════
+
+
+#: Weekday indices that are working days under the default calendar (Mon-Fri).
+#: ``0 == Monday`` .. ``6 == Sunday`` (matches :meth:`datetime.date.weekday`).
+DEFAULT_WORK_WEEKDAYS: frozenset[int] = frozenset({0, 1, 2, 3, 4})
+
+
+@dataclass(frozen=True)
+class OffsetCalendar:
+    """A pure working-day calendar that speaks the engine's integer day offsets.
+
+    The claims-grade CPM passes carry every date as an integer offset (in
+    elapsed days) from a single project epoch. This helper maps a working-day
+    *duration* onto those offsets so non-working days (weekends + holidays) are
+    skipped, without changing how the passes store or compare offsets.
+
+    It is intentionally NOT the ISO-string ``WorkCalendar`` in
+    ``app/modules/schedule/progress_math.py``: that one is keyed by
+    ``YYYY-MM-DD`` strings, whereas the CPM engine never materialises calendar
+    dates - it works in offsets relative to ``epoch``. The two share the same
+    inclusivity convention so a value computed by one can be reasoned about with
+    the other once an epoch is fixed.
+
+    Attributes:
+        epoch: The calendar date that offset ``0`` maps to. Offsets are elapsed
+            days from this date; ``epoch`` itself need not be a working day.
+        work_weekdays: Weekday indices (``0=Mon`` .. ``6=Sun``) that are working
+            days. Defaults to Monday-Friday.
+        holidays: ``YYYY-MM-DD`` strings that are NOT working days even when they
+            fall on a working weekday.
+
+    A calendar whose ``work_weekdays`` covers all seven days and that has no
+    holidays makes every method reduce to plain integer arithmetic
+    (``working_finish_offset(es, d) == es + d`` and so on), so an adopter can
+    opt out of calendar effects simply by handing it such a calendar - the
+    engine's current behaviour is recovered byte for byte. :data:`ALL_DAYS_CALENDAR`
+    is exactly that calendar, pre-built.
+    """
+
+    epoch: date = date(2000, 1, 3)  # a Monday, so default offset 0 is a working day
+    work_weekdays: frozenset[int] = DEFAULT_WORK_WEEKDAYS
+    holidays: frozenset[str] = frozenset()
+
+    def _date_at(self, offset: int) -> date:
+        """Calendar date for an integer day ``offset`` from :attr:`epoch`."""
+        return self.epoch + timedelta(days=int(offset))
+
+    def _is_working_date(self, d: date) -> bool:
+        return d.weekday() in self.work_weekdays and d.isoformat() not in self.holidays
+
+    def is_working_offset(self, offset: int) -> bool:
+        """Return ``True`` when the day at ``offset`` is a working day."""
+        return self._is_working_date(self._date_at(offset))
+
+    def working_finish_offset(self, start_offset: int, duration: int) -> int:
+        """Finish offset that is ``duration`` working days after ``start_offset``.
+
+        The calendar-aware replacement for ``start_offset + duration`` (the
+        ``EF = ES + dur`` identity the plain passes use). Counting begins the day
+        AFTER ``start_offset`` - consistent with the exclusive-start convention -
+        so a ``duration`` of ``0`` returns ``start_offset`` unchanged (a
+        milestone keeps its offset). For ``duration > 0`` the returned offset is
+        always a working day. ``duration`` is clamped to ``max(0, int(...))`` so
+        a negative duration behaves like a milestone, matching the engine's
+        ``max(0, int(a.duration))`` clamp.
+        """
+        dur = max(0, int(duration))
+        if dur == 0:
+            return int(start_offset)
+        current = int(start_offset)
+        added = 0
+        while added < dur:
+            current += 1
+            if self.is_working_offset(current):
+                added += 1
+        return current
+
+    def working_start_offset(self, finish_offset: int, duration: int) -> int:
+        """Start offset that is ``duration`` working days before ``finish_offset``.
+
+        The calendar-aware replacement for ``finish_offset - duration`` (the
+        ``LS = LF - dur`` identity the backward pass uses) and the exact inverse
+        of :meth:`working_finish_offset`: for any working ``finish_offset``,
+        ``working_finish_offset(working_start_offset(f, d), d) == f``. Counting
+        steps backward from the day BEFORE ``finish_offset``; ``duration <= 0``
+        returns ``finish_offset`` unchanged.
+        """
+        dur = max(0, int(duration))
+        if dur == 0:
+            return int(finish_offset)
+        current = int(finish_offset)
+        removed = 0
+        while removed < dur:
+            current -= 1
+            if self.is_working_offset(current):
+                removed += 1
+        return current
+
+    def working_days_between(self, start_offset: int, end_offset: int) -> int:
+        """Count working days in ``(start_offset, end_offset]``.
+
+        Exclusive of ``start_offset``, inclusive of ``end_offset`` - the same
+        convention as ``app/core/cpm.py`` and ``progress_math.WorkCalendar``.
+        Returns ``0`` when ``end_offset <= start_offset`` (an empty or inverted
+        span contributes nothing). This is the working-day analogue of the raw
+        offset gap ``end_offset - start_offset`` and round-trips a finish offset:
+        ``working_finish_offset(s, working_days_between(s, f)) == f`` whenever
+        ``f`` is a working offset on or after ``s``.
+        """
+        start = int(start_offset)
+        end = int(end_offset)
+        if end <= start:
+            return 0
+        count = 0
+        current = start
+        while current < end:
+            current += 1
+            if self.is_working_offset(current):
+                count += 1
+        return count
+
+
+#: A calendar where every day is a working day and there are no holidays. Every
+#: :class:`OffsetCalendar` method on it equals the plain offset arithmetic the
+#: CPM passes already use, so it is the explicit "no calendar effects" calendar
+#: an adopter can pass to recover today's behaviour exactly.
+ALL_DAYS_CALENDAR = OffsetCalendar(work_weekdays=frozenset(range(7)))
+
+#: Default working-day calendar: Monday-Friday, no holidays, offset 0 on a Monday.
+DEFAULT_OFFSET_CALENDAR = OffsetCalendar()

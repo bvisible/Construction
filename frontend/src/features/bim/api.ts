@@ -16,6 +16,7 @@ import {
   extractErrorMessageFromBody,
   triggerDownload,
   getAuthToken,
+  API_BASE,
 } from '@/shared/lib/api';
 import { isModuleLoaded } from '@/shared/lib/moduleProbe';
 import { useAuthStore } from '@/stores/useAuthStore';
@@ -579,6 +580,36 @@ export async function retryBIMModelProcessing(
     `/v1/bim_hub/${encodeURIComponent(modelId)}/retry/`,
     {},
   );
+}
+
+/** Create (or fetch) the BIM model for a file already uploaded to Project
+ *  Documents. The Documents hub stores BIM files without converting them, so
+ *  opening one in the viewer used to find no model and ask for a second upload
+ *  (issue #273). This converts the stored document on demand, reusing the same
+ *  pipeline as a direct CAD upload. Idempotent: a document already linked to a
+ *  model returns that model instead of converting it again. */
+export async function createBimModelFromDocument(
+  documentId: string,
+  opts?: {
+    name?: string;
+    discipline?: string;
+    conversionDepth?: 'standard' | 'medium' | 'complete';
+  },
+): Promise<{
+  model_id: string;
+  name: string;
+  format: string | null;
+  status: string;
+  element_count: number;
+  error_message: string | null;
+  already_existed: boolean;
+}> {
+  return apiPost(`/v1/bim_hub/models/from-document/`, {
+    document_id: documentId,
+    ...(opts?.name ? { name: opts.name } : {}),
+    ...(opts?.discipline ? { discipline: opts.discipline } : {}),
+    ...(opts?.conversionDepth ? { conversion_depth: opts.conversionDepth } : {}),
+  });
 }
 
 /** Fetch elements for a specific BIM model.
@@ -1935,4 +1966,92 @@ export async function computeBIMModelDiff(
 /** Fetch a previously-computed diff by its id. */
 export async function fetchBIMModelDiff(diffId: string): Promise<BIMModelDiff> {
   return apiGet<BIMModelDiff>(`/v1/bim_hub/diffs/${encodeURIComponent(diffId)}`);
+}
+
+/* ── BOQ export (IFC/RVT quantities -> a single Excel Bill of Quantities) ── */
+
+/** How the BOQ summary sheet rolls quantities up. */
+export type BoqGroupBy = 'element_type' | 'storey' | 'discipline' | 'element_type_storey';
+
+/** Which elements to export. ``all`` exports the whole model, ``selected``
+ *  exports exactly the picked element ids, ``filter`` exports everything that
+ *  matches the viewer's current storey / type filter. */
+export type BoqExportScope = 'all' | 'selected' | 'filter';
+
+export interface BoqExportContext {
+  /** Element ids currently selected in the viewer (for scope ``selected``). */
+  selectedIds: string[];
+  /** The viewer's active storey / type filter mapped to backend fields
+   *  (for scope ``filter``); null when no filter is applied. */
+  filters: { storey?: string[]; element_type?: string[]; discipline?: string[] } | null;
+}
+
+export interface BoqExportRequestBody {
+  element_ids?: string[];
+  filters?: { storey?: string[]; element_type?: string[]; discipline?: string[] };
+  group_by: BoqGroupBy;
+  title?: string;
+}
+
+/** Pure builder for the POST body, given a scope + grouping + the live viewer
+ *  context. Exported so the mapping (scope -> element_ids / filters) is unit
+ *  tested without a DOM or network. */
+export function buildBoqExportBody(
+  scope: BoqExportScope,
+  groupBy: BoqGroupBy,
+  ctx: BoqExportContext,
+  title?: string,
+): BoqExportRequestBody {
+  const body: BoqExportRequestBody = { group_by: groupBy };
+  if (title && title.trim()) body.title = title.trim();
+  if (scope === 'selected' && ctx.selectedIds.length > 0) {
+    body.element_ids = ctx.selectedIds;
+  } else if (scope === 'filter' && ctx.filters) {
+    body.filters = ctx.filters;
+  }
+  return body;
+}
+
+/** Parse a download filename out of a Content-Disposition header value,
+ *  falling back to ``fallback`` when the header is absent or unparseable.
+ *  Handles the RFC 5987 ``filename*=UTF-8''...`` form the backend emits for
+ *  non-Latin model names (e.g. Cyrillic), which the older Response-based
+ *  helper above does not. */
+export function parseAttachmentFilename(header: string | null, fallback: string): string {
+  if (!header) return fallback;
+  // Prefer RFC 5987 filename*=UTF-8''... then plain filename="...".
+  const star = /filename\*=(?:UTF-8'')?([^;]+)/i.exec(header);
+  if (star && star[1]) {
+    try {
+      return decodeURIComponent(star[1].replace(/^"|"$/g, '').trim());
+    } catch {
+      /* fall through */
+    }
+  }
+  const plain = /filename="?([^";]+)"?/i.exec(header);
+  if (plain && plain[1]) return plain[1].trim();
+  return fallback;
+}
+
+/** Export the model's quantities as an Excel BOQ via an authenticated POST.
+ *  The endpoint is JWT-guarded, so a plain anchor click 401s; we fetch the
+ *  blob with the bearer token and trigger a synthetic download. Throws on
+ *  HTTP error so callers can toast it. */
+export async function exportBoqXlsx(modelId: string, body: BoqExportRequestBody): Promise<void> {
+  const token = getAuthToken();
+  const headers: Record<string, string> = {
+    Accept: '*/*',
+    'Content-Type': 'application/json',
+  };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  const resp = await fetch(
+    `${API_BASE}/v1/bim_hub/models/${encodeURIComponent(modelId)}/export/boq.xlsx`,
+    { method: 'POST', headers, body: JSON.stringify(body) },
+  );
+  if (!resp.ok) {
+    throw new Error(`BOQ export failed (HTTP ${resp.status})`);
+  }
+  const blob = await resp.blob();
+  const filename = parseAttachmentFilename(resp.headers.get('Content-Disposition'), 'BOQ.xlsx');
+  triggerDownload(blob, filename);
 }

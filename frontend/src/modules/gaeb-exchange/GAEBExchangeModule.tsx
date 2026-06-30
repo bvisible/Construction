@@ -94,6 +94,8 @@ function ImportPreview({
             </tr>
           </thead>
           <tbody className="divide-y divide-border-light">
+            {/* GAEB is an interchange format: quantities/units stay metric-
+                canonical here (no measurement-system conversion). (#270) */}
             {displayed.map((pos, idx) => (
               <tr key={pos.ordinal || `pos-${idx}`} className={`hover:bg-surface-secondary/30 ${idx % 2 === 0 ? 'bg-surface-primary/50' : ''}`}>
                 <td className="px-3 py-1.5 font-mono text-content-tertiary">{pos.ordinal}</td>
@@ -692,6 +694,8 @@ export default function GAEBExchangeModule() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-border-light">
+                      {/* GAEB export preview stays metric-canonical (interchange
+                          round-trip): no measurement-system conversion. (#270) */}
                       {exportablePositions.filter((p) => !p.isSection).slice(0, 30).map((pos) => (
                         <tr key={pos.id} className="hover:bg-surface-secondary/30">
                           <td className="px-3 py-1.5 font-mono text-content-tertiary">{pos.ordinal}</td>

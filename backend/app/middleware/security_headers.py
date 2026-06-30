@@ -1,7 +1,7 @@
 """‌⁠‍Security response headers middleware.
 
 Adds the standard set of defensive HTTP response headers:
-  - X-Frame-Options: DENY            (clickjacking)
+  - X-Frame-Options: SAMEORIGIN      (clickjacking; allows same-origin PDF preview)
   - X-Content-Type-Options: nosniff  (MIME sniffing)
   - Referrer-Policy: same-origin     (referrer leakage)
   - Strict-Transport-Security        (HSTS - production only)
@@ -50,6 +50,21 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         # is blocked ("Connecting to ... violates ... connect-src") and the
         # globe renders solid black, i.e. "shows only space". The legacy
         # ``a/b/c.`` subdomains are covered by the wildcard.
+        # PDF previews (Property Development documents, document/sheet preview)
+        # render the generated PDF in an iframe via a ``data:application/pdf``
+        # (or ``blob:``) URL. Two CSP rules govern that:
+        #   * ``frame-src`` must allow ``data:`` / ``blob:`` - it was previously
+        #     unset, so the browser fell back to ``default-src 'self'`` and the
+        #     preview iframe rendered blank.
+        #   * ``frame-ancestors`` is INHERITED by the framed ``data:``/``blob:``
+        #     document, so ``'none'`` made that document refuse to be embedded by
+        #     its own (same-origin) parent. ``'self'`` still blocks cross-origin
+        #     clickjacking while letting the app frame its own previews.
+        #
+        # The font hosts also appear on ``connect-src``: the service worker
+        # (Workbox) precaches the Google Fonts files with ``fetch()``, which is
+        # governed by ``connect-src`` - NOT ``font-src`` - so without the hosts
+        # there the SW install rejected with an uncaught "no-response" error.
         self._csp = csp or (
             "default-src 'self'; "
             "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: "
@@ -61,13 +76,15 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "style-src-elem 'self' 'unsafe-inline' https://fonts.googleapis.com; "
             "img-src 'self' data: blob: https:; "
             "font-src 'self' data: https://fonts.gstatic.com; "
+            "frame-src 'self' blob: data:; "
             "connect-src 'self' https://www.google-analytics.com "
             "https://*.google-analytics.com https://*.analytics.google.com "
             "https://api.github.com "
+            "https://fonts.googleapis.com https://fonts.gstatic.com "
             "https://tiles.openfreemap.org https://*.openfreemap.org "
             "https://nominatim.openstreetmap.org "
             "https://tile.openstreetmap.org https://*.tile.openstreetmap.org; "
-            "frame-ancestors 'none'; "
+            "frame-ancestors 'self'; "
             "base-uri 'self'; "
             "form-action 'self'"
         )
@@ -76,8 +93,10 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next) -> Response:
         response = await call_next(request)
 
-        # Always-on hardening
-        response.headers.setdefault("X-Frame-Options", "DENY")
+        # Always-on hardening. X-Frame-Options is SAMEORIGIN (not DENY) so the
+        # app can frame its own PDF previews (see the frame-ancestors note on
+        # the CSP above); cross-origin framing is still refused.
+        response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("Referrer-Policy", "same-origin")
         response.headers.setdefault("Permissions-Policy", "geolocation=(), microphone=(), camera=()")

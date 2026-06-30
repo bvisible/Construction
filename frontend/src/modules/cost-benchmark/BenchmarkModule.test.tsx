@@ -57,8 +57,10 @@ describe('BenchmarkModule', () => {
 
   it('should show cost per m2 result', () => {
     renderModule();
-    // 13250000 / 5000 = 2650 EUR/m2
-    expect(screen.getByText('Your Cost / m2')).toBeInTheDocument();
+    // 13250000 / 5000 = 2650 EUR/m2. Issue #270: the per-unit suffix now
+    // follows the measurement-system preference (metric default -> "m²",
+    // imperial -> "ft²"), so match the metric-default label here.
+    expect(screen.getByText('Your Cost / m²')).toBeInTheDocument();
   });
 
   it('should show percentile position', () => {

@@ -45,6 +45,57 @@ export interface CanonicalRelation {
   value: string;
 }
 
+/** Translated base names (no unit) for the six derived geometry rows. The
+ *  unit suffix is appended by {@link geometryDisplayRows} from the active
+ *  measurement system so the label tracks the value (m -> ft, m2 -> ft2). */
+export interface GeometryLabels {
+  width: string;
+  depth: string;
+  height: string;
+  footprint: string;
+  bboxVolume: string;
+  diagonal: string;
+}
+
+/** Minimal shape of the display-quantity converter (see
+ *  `useDisplayQuantity`): scales a metric-canonical value into the user's
+ *  system and returns the value paired with its display unit. */
+type ConvertFn = (value: number, metricUnit: string) => { value: number; unit: string };
+
+/**
+ * Turn derived box geometry into the `{ "Label (unit)": value }` rows the
+ * properties-panel QuantitiesTable renders, converting both the value and the
+ * unit suffix into the user's measurement system.
+ *
+ * The bbox spans are metric-canonical (m / m² / m³). `convert` is the only
+ * place the metric/imperial decision is made: for a metric user every value
+ * passes through unchanged and the suffix stays "m"/"m²"/"m³" (byte-identical
+ * to before this was unit-aware); for an imperial user the value is scaled and
+ * the suffix becomes "ft"/"ft²"/"ft³". Pure so it is unit-tested without React.
+ */
+export function geometryDisplayRows(
+  geom: CanonicalGeometry,
+  labels: GeometryLabels,
+  convert: ConvertFn,
+): Record<string, number> {
+  const row = (
+    base: string,
+    value: number,
+    metricUnit: string,
+  ): [string, number] => {
+    const d = convert(value, metricUnit);
+    return [`${base} (${d.unit})`, d.value];
+  };
+  return Object.fromEntries([
+    row(labels.width, geom.width, 'm'),
+    row(labels.depth, geom.depth, 'm'),
+    row(labels.height, geom.height, 'm'),
+    row(labels.footprint, geom.footprint, 'm²'),
+    row(labels.bboxVolume, geom.bboxVolume, 'm³'),
+    row(labels.diagonal, geom.diagonal, 'm'),
+  ]);
+}
+
 const round = (v: number, dp = 3): number => {
   const f = 10 ** dp;
   return Math.round(v * f) / f;

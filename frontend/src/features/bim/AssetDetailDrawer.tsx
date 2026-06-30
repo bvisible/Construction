@@ -34,6 +34,7 @@ import {
 } from 'lucide-react';
 
 import { Badge, Button, KvList, Kv, QtyTile } from '@/shared/ui';
+import { useDisplayQuantity } from '@/shared/hooks/useDisplayQuantity';
 
 import { useToastStore } from '@/stores/useToastStore';
 
@@ -123,6 +124,9 @@ export function AssetDetailDrawer({ asset, onClose }: AssetDetailDrawerProps) {
   });
   const element = elementQuery.data?.items?.[0] ?? null;
   const quantities = (element?.quantities ?? {}) as Record<string, number>;
+  // Quantities are stored metric-canonical; convert at the display boundary
+  // so an imperial user sees ft / ft2 / ft3 here too (issue #270).
+  const q = useDisplayQuantity();
   const storey = element?.storey ?? null;
 
   // Full Parquet row — same endpoint the BIM viewer uses for parity.
@@ -308,22 +312,22 @@ export function AssetDetailDrawer({ asset, onClose }: AssetDetailDrawerProps) {
             >
               <div className="grid grid-cols-2 gap-2">
                 {quantities.area != null && (
-                  <QtyTile label="Area" value={quantities.area} unit="m²" />
+                  <QtyTile label="Area" {...q.convert(quantities.area, 'm²')} />
                 )}
                 {quantities.volume != null && (
-                  <QtyTile label="Volume" value={quantities.volume} unit="m³" />
+                  <QtyTile label="Volume" {...q.convert(quantities.volume, 'm³')} />
                 )}
                 {quantities.length != null && (
-                  <QtyTile label="Length" value={quantities.length} unit="m" />
+                  <QtyTile label="Length" {...q.convert(quantities.length, 'm')} />
                 )}
                 {quantities.height != null && (
-                  <QtyTile label="Height" value={quantities.height} unit="m" />
+                  <QtyTile label="Height" {...q.convert(quantities.height, 'm')} />
                 )}
                 {quantities.width != null && (
-                  <QtyTile label="Width" value={quantities.width} unit="m" />
+                  <QtyTile label="Width" {...q.convert(quantities.width, 'm')} />
                 )}
                 {quantities.thickness != null && (
-                  <QtyTile label="Thickness" value={quantities.thickness} unit="m" />
+                  <QtyTile label="Thickness" {...q.convert(quantities.thickness, 'm')} />
                 )}
               </div>
             </Section>

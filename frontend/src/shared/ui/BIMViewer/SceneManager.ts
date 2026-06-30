@@ -1046,6 +1046,15 @@ export class SceneManager {
     return box;
   }
 
+  /** Public union bounding box of all loaded content meshes (grid / axes /
+   *  lights / cameras excluded). Returns null when nothing is loaded yet.
+   *  Walk mode uses this to drop the camera to a standing eye-height inside
+   *  the model so first-person navigation starts from a human viewpoint. */
+  getContentBounds(): THREE.Box3 | null {
+    const box = this._computeContentBoundingBox();
+    return box.isEmpty() ? null : box;
+  }
+
   /** Dispose all Three.js resources. */
   dispose(): void {
     if (this.animationId !== null) {

@@ -26,7 +26,7 @@
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Ban } from 'lucide-react';
+import { Ban, UserCog } from 'lucide-react';
 
 import { Badge, Button, SideDrawer, Skeleton } from '@/shared/ui';
 import { apiGet } from '@/shared/lib/api';
@@ -44,6 +44,7 @@ import {
   StepRow,
 } from './ApprovalInstanceCard';
 import { kindLabel } from './labels';
+import { ReassignDialog } from './ReassignDialog';
 import type { StepDecision } from './types';
 
 interface MeResponse {
@@ -71,6 +72,7 @@ export function ApprovalInstanceDetailDrawer({
   const qc = useQueryClient();
   const addToast = useToastStore((s) => s.addToast);
   const [comments, setComments] = useState<Record<string, string>>({});
+  const [reassignOpen, setReassignOpen] = useState(false);
 
   const open = instanceId != null;
 
@@ -228,6 +230,14 @@ export function ApprovalInstanceDetailDrawer({
                   })}
                 </Badge>
               )}
+              {instance.status === 'pending' &&
+                instance.current_assignee_user_id && (
+                  <Badge variant="warning" size="sm">
+                    {t('approvalRoutes.reassigned_badge', {
+                      defaultValue: 'Reassigned',
+                    })}
+                  </Badge>
+                )}
               <span className="text-2xs text-content-tertiary ml-auto">
                 {t('approvalRoutes.started_on', {
                   defaultValue: 'Started {{date}}',
@@ -274,7 +284,19 @@ export function ApprovalInstanceDetailDrawer({
             </div>
 
             {instance.status === 'pending' && (
-              <div className="flex items-center justify-end pt-1 border-t border-border-light">
+              <div className="flex items-center justify-end gap-2 pt-1 border-t border-border-light">
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => setReassignOpen(true)}
+                  disabled={busy}
+                  icon={<UserCog size={13} />}
+                  data-testid="instance-reassign-button"
+                >
+                  {t('approvalRoutes.reassign', {
+                    defaultValue: 'Reassign',
+                  })}
+                </Button>
                 <Button
                   size="sm"
                   variant="ghost"
@@ -292,6 +314,14 @@ export function ApprovalInstanceDetailDrawer({
           </>
         )}
       </div>
+
+      {instance && instance.status === 'pending' && (
+        <ReassignDialog
+          open={reassignOpen}
+          onClose={() => setReassignOpen(false)}
+          instance={instance}
+        />
+      )}
     </SideDrawer>
   );
 }

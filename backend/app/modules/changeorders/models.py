@@ -75,6 +75,9 @@ class ChangeOrder(Base):
     approved_amount: Mapped[Decimal | None] = mapped_column(MoneyType(), nullable=True)
     time_impact_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
     approved_time_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Change intelligence: who owes the next action and by when.
+    ball_in_court: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    response_due_date: Mapped[str | None] = mapped_column(String(40), nullable=True)
 
     metadata_: Mapped[dict] = mapped_column(  # type: ignore[assignment]
         "metadata",

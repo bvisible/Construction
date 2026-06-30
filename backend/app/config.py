@@ -13,7 +13,12 @@ from pathlib import Path
 from typing import Literal
 
 from pydantic import Field, computed_field, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import (
+    BaseSettings,
+    EnvSettingsSource,
+    PydanticBaseSettingsSource,
+    SettingsConfigDict,
+)
 
 _logger = logging.getLogger("openestimate.config")
 
@@ -184,6 +189,45 @@ class Settings(BaseSettings):
         case_sensitive=False,
         extra="ignore",
     )
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        """Accept the documented ``OE_``-prefixed env vars as well as bare names.
+
+        Historically the settings model declared no ``env_prefix``, so each
+        field bound only to its bare upper-cased name (``REGISTRATION_MODE``,
+        ``DATABASE_URL``, ...). But the docstrings, deployment guides and
+        examples throughout the project use the brand-namespaced ``OE_``
+        prefix (``OE_REGISTRATION_MODE``, ``OE_SLOW_QUERY_MS``, ...). An
+        operator who followed the docs and set ``OE_REGISTRATION_MODE=closed``
+        got the prefixed variable silently ignored and the default applied -
+        a confusing, hard-to-diagnose footgun reported from production.
+
+        We add a second environment source that strips an ``OE_`` prefix so
+        both spellings populate the same field. The bare-name source keeps
+        priority, so existing deployments that already set the unprefixed
+        variables are completely unaffected; the prefixed source only fills a
+        field the bare name did not already provide.
+        """
+        oe_prefixed_env = EnvSettingsSource(
+            settings_cls,
+            case_sensitive=False,
+            env_prefix="OE_",
+        )
+        return (
+            init_settings,
+            env_settings,
+            oe_prefixed_env,
+            dotenv_settings,
+            file_secret_settings,
+        )
 
     # ── App ──────────────────────────────────────────────────────────────
     # //// NEOFFICE PATCH — Public-facing product name.

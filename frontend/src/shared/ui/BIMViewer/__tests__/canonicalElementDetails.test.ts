@@ -2,7 +2,9 @@ import { describe, it, expect } from 'vitest';
 import {
   deriveGeometry,
   deriveRelations,
+  geometryDisplayRows,
 } from '../canonicalElementDetails';
+import { toDisplayQuantity } from '@/shared/lib/unitConversion';
 
 describe('canonicalElementDetails.deriveGeometry', () => {
   it('returns null when bbox is missing', () => {
@@ -105,5 +107,70 @@ describe('canonicalElementDetails.deriveRelations', () => {
       key: 'Workset',
       value: 'Shared Levels and Grids',
     });
+  });
+});
+
+describe('canonicalElementDetails.geometryDisplayRows', () => {
+  const geom = {
+    width: 2,
+    depth: 3,
+    height: 4,
+    footprint: 6,
+    bboxVolume: 24,
+    diagonal: 5,
+    center: { x: 0, y: 0, z: 0 },
+  };
+  const labels = {
+    width: 'Width',
+    depth: 'Depth',
+    height: 'Height',
+    footprint: 'Footprint',
+    bboxVolume: 'Bounding volume',
+    diagonal: 'Diagonal',
+  };
+
+  it('keeps metric values byte-identical and labels the metric unit', () => {
+    const rows = geometryDisplayRows(geom, labels, (v, u) =>
+      toDisplayQuantity(v, u, 'metric'),
+    );
+    // Values pass through unchanged; the unit suffix follows the label.
+    expect(rows).toEqual({
+      'Width (m)': 2,
+      'Depth (m)': 3,
+      'Height (m)': 4,
+      'Footprint (m²)': 6,
+      'Bounding volume (m³)': 24,
+      'Diagonal (m)': 5,
+    });
+  });
+
+  it('scales values and relabels the unit for an imperial user', () => {
+    const rows = geometryDisplayRows(geom, labels, (v, u) =>
+      toDisplayQuantity(v, u, 'imperial'),
+    );
+    const keys = Object.keys(rows);
+    // Linear dimensions -> feet.
+    expect(keys).toContain('Width (ft)');
+    expect(keys).toContain('Height (ft)');
+    expect(keys).toContain('Diagonal (ft)');
+    // Area -> ft², volume -> ft³.
+    expect(keys).toContain('Footprint (ft²)');
+    expect(keys).toContain('Bounding volume (ft³)');
+    // 2 m = 6.5617 ft (factor 3.2808399).
+    expect(rows['Width (ft)']).toBeCloseTo(2 * 3.2808399, 4);
+    // 6 m² = 64.583 ft² (factor 10.7639).
+    expect(rows['Footprint (ft²)']).toBeCloseTo(6 * 10.7639, 3);
+    // 24 m³ = 847.55 ft³ (factor 35.3147).
+    expect(rows['Bounding volume (ft³)']).toBeCloseTo(24 * 35.3147, 2);
+  });
+
+  it('uses the provided translated base names', () => {
+    const rows = geometryDisplayRows(
+      geom,
+      { ...labels, width: 'Largeur', height: 'Hauteur' },
+      (v, u) => toDisplayQuantity(v, u, 'metric'),
+    );
+    expect(rows).toHaveProperty('Largeur (m)', 2);
+    expect(rows).toHaveProperty('Hauteur (m)', 4);
   });
 });

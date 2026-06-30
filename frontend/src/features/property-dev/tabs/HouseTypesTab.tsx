@@ -1,5 +1,5 @@
 /**
- * House Types tab — grid view of reusable house templates (semi /
+ * House Types tab - grid view of reusable house templates (semi /
  * detached / terrace) with their variants summarised as inline
  * chips. Extracted from the monolithic ``PropertyDevPage.tsx`` to
  * keep the orchestrator under 800 lines.
@@ -10,6 +10,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Home } from 'lucide-react';
 import { Card, Badge, EmptyState } from '@/shared/ui';
 import { MoneyDisplay } from '@/shared/ui/MoneyDisplay';
+import { useDisplayQuantity } from '@/shared/hooks/useDisplayQuantity';
 import { listVariants, type HouseType } from '../api';
 import { toNumber } from './_shared';
 
@@ -49,6 +50,8 @@ export function HouseTypesTab({
 
 function HouseTypeCard({ ht }: { ht: HouseType }) {
   const { t } = useTranslation();
+  const q = useDisplayQuantity();
+  const area = q.convert(toNumber(ht.total_area_m2), 'm²');
   const variantsQ = useQuery({
     queryKey: ['propdev', 'variants', ht.id],
     queryFn: () => listVariants(ht.id),
@@ -68,7 +71,7 @@ function HouseTypeCard({ ht }: { ht: HouseType }) {
       <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
         <div>
           <p className="text-content-tertiary">{t('propdev.area', { defaultValue: 'Area' })}</p>
-          <p className="font-medium">{toNumber(ht.total_area_m2).toFixed(1)} m²</p>
+          <p className="font-medium">{area.value.toFixed(1)} {area.unit}</p>
         </div>
         <div>
           <p className="text-content-tertiary">{t('propdev.levels', { defaultValue: 'Levels' })}</p>

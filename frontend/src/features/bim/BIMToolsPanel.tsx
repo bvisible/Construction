@@ -1,19 +1,19 @@
 /**
- * BIMToolsPanel — Tools tab of the BIM right panel (RFC 19).
+ * BIMToolsPanel - Tools tab of the BIM right panel (RFC 19).
  *
  * Hosts three tool families:
- *   1. Measure distance — on/off toggle. The active flag is held in
+ *   1. Measure distance - on/off toggle. The active flag is held in
  *      `useBIMViewerStore`, the BIMViewer wires it to the MeasureManager.
  *      The completed-measurements list mirrors `useBIMMeasurementsStore`
  *      so users can rename / hide / focus / delete past measurements
  *      after they leave measure mode (RFC 19 §UX-9, §UX-10).
- *   2. Saved views / camera bookmarks — backed by SavedViewsStore
+ *   2. Saved views / camera bookmarks - backed by SavedViewsStore
  *      (localStorage, 100-viewpoints-per-model cap). Supports rename
  *      (pencil) and delete (trash) (§UX-6).
  */
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Ruler, Camera, Trash2, Play, Pencil, Check, X, Eye, EyeOff, Crosshair, Image as ImageIcon } from 'lucide-react';
+import { Ruler, Camera, Trash2, Play, Pencil, Check, X, Eye, EyeOff, Crosshair, Image as ImageIcon, FileSpreadsheet, FileBarChart } from 'lucide-react';
 import {
   listViewpoints,
   removeViewpoint,
@@ -25,10 +25,19 @@ import {
 } from '@/shared/ui/BIMViewer';
 import { useBIMViewerStore } from '@/stores/useBIMViewerStore';
 import { useBIMMeasurementsStore, type StoredMeasurement } from '@/stores/useBIMMeasurementsStore';
+import { useToastStore } from '@/stores/useToastStore';
+import { useDisplayQuantity } from '@/shared/hooks/useDisplayQuantity';
+import {
+  exportBoqXlsx,
+  buildBoqExportBody,
+  type BoqExportContext,
+  type BoqExportScope,
+  type BoqGroupBy,
+} from './api';
 
 interface BIMToolsPanelProps {
   modelId: string;
-  /** Current camera snapshot — provided by the parent so we don't need a
+  /** Current camera snapshot - provided by the parent so we don't need a
    *  direct handle on the SceneManager. */
   getCurrentViewpoint: () => {
     position: { x: number; y: number; z: number };
@@ -45,6 +54,13 @@ interface BIMToolsPanelProps {
   /** Move the camera to a stored viewpoint (and apply its filter / clip if
    *  the viewpoint carries them). */
   onApplyViewpoint: (vp: Viewpoint) => void;
+  /** Resolve the live export context (current selection + active filter) at
+   *  click time so the BOQ export reflects what the user has on screen.
+   *  Optional - when absent the Export section exports the whole model. */
+  getExportContext?: () => BoqExportContext;
+  /** Open the on-screen quantity report for the chosen scope. Optional -
+   *  the button is only shown when the parent wires this. */
+  onOpenReport?: (scope: BoqExportScope, groupBy: BoqGroupBy) => void;
 }
 
 export default function BIMToolsPanel({
@@ -54,8 +70,13 @@ export default function BIMToolsPanel({
   getCurrentClipState,
   getCurrentScreenshot,
   onApplyViewpoint,
+  getExportContext,
+  onOpenReport,
 }: BIMToolsPanelProps) {
   const { t } = useTranslation();
+  // Display-only metric->imperial conversion for saved measurement distances
+  // (#270). The stored measurement distance stays metric-canonical (metres).
+  const q = useDisplayQuantity();
   const measureActive = useBIMViewerStore((s) => s.measureActive);
   const setMeasureActive = useBIMViewerStore((s) => s.setMeasureActive);
   const measurements = useBIMMeasurementsStore((s) => s.measurements);
@@ -66,6 +87,9 @@ export default function BIMToolsPanel({
 
   const [views, setViews] = useState<Viewpoint[]>([]);
   const [name, setName] = useState('');
+  const [exportScope, setExportScope] = useState<BoqExportScope>('all');
+  const [exportGroupBy, setExportGroupBy] = useState<BoqGroupBy>('element_type');
+  const [exporting, setExporting] = useState(false);
   const [quotaWarning, setQuotaWarning] = useState(false);
   const [editingViewId, setEditingViewId] = useState<string | null>(null);
   const [editingViewDraft, setEditingViewDraft] = useState('');
@@ -88,7 +112,7 @@ export default function BIMToolsPanel({
     const snapshot = getCurrentViewpoint();
     if (!snapshot) return;
     const fallback = new Date().toLocaleString();
-    // Capture the rest of the viewer state at the moment of save — filter
+    // Capture the rest of the viewer state at the moment of save - filter
     // panel selections, section box / clipping plane, and an optional
     // thumbnail. Each is best-effort: if the bridge isn't installed (e.g.
     // unit-test harness mounts the panel standalone) we just store the
@@ -97,7 +121,7 @@ export default function BIMToolsPanel({
     const clipState = getCurrentClipState?.() ?? undefined;
     let screenshotDataUrl: string | undefined;
     if (includeScreenshot && getCurrentScreenshot) {
-      // 320×180 keeps each PNG roughly 30–60 KB — 100 views ≈ 6 MB per
+      // 320×180 keeps each PNG roughly 30-60 KB - 100 views ≈ 6 MB per
       // model, well under the typical localStorage cap. Failures fall
       // back to a camera-only save (the user still gets the bookmark).
       try {
@@ -197,6 +221,51 @@ export default function BIMToolsPanel({
     bridge()?.focusMeasurement?.(id);
   }, []);
 
+  const handleExportBoq = useCallback(async () => {
+    const ctx = getExportContext?.() ?? { selectedIds: [], filters: null };
+    // Guard the two scoped modes so the user never silently gets a whole-model
+    // export when they meant "just what I selected / filtered".
+    if (exportScope === 'selected' && ctx.selectedIds.length === 0) {
+      useToastStore.getState().addToast({
+        type: 'warning',
+        title: t('bim.boq_export_no_selection', { defaultValue: 'Nothing selected' }),
+        message: t('bim.boq_export_no_selection_msg', {
+          defaultValue: 'Select one or more elements in the model, or switch the scope to the whole model.',
+        }),
+      });
+      return;
+    }
+    if (exportScope === 'filter' && !ctx.filters) {
+      useToastStore.getState().addToast({
+        type: 'warning',
+        title: t('bim.boq_export_no_filter', { defaultValue: 'No filter applied' }),
+        message: t('bim.boq_export_no_filter_msg', {
+          defaultValue: 'Apply a storey or type filter first, or switch the scope to the whole model.',
+        }),
+      });
+      return;
+    }
+    setExporting(true);
+    try {
+      await exportBoqXlsx(modelId, buildBoqExportBody(exportScope, exportGroupBy, ctx));
+      useToastStore.getState().addToast({
+        type: 'success',
+        title: t('bim.boq_export_done', { defaultValue: 'BOQ exported' }),
+        message: t('bim.boq_export_done_msg', {
+          defaultValue: 'The Bill of Quantities spreadsheet has been downloaded.',
+        }),
+      });
+    } catch (e) {
+      useToastStore.getState().addToast({
+        type: 'error',
+        title: t('bim.boq_export_failed', { defaultValue: 'BOQ export failed' }),
+        message: e instanceof Error ? e.message : String(e),
+      });
+    } finally {
+      setExporting(false);
+    }
+  }, [getExportContext, exportScope, exportGroupBy, modelId, t]);
+
   return (
     <div className="flex flex-col gap-4 p-3">
       {/* Measure */}
@@ -226,7 +295,7 @@ export default function BIMToolsPanel({
           })}
         </p>
 
-        {/* Measurement list — completed measurements survive Stop and live
+        {/* Measurement list - completed measurements survive Stop and live
             here until the user deletes them. RFC 19 §UX-9 / §UX-10. */}
         {measurements.length > 0 && (
           <div className="mt-1 flex items-center justify-between">
@@ -307,7 +376,10 @@ export default function BIMToolsPanel({
                       <Crosshair size={10} className="text-oe-blue shrink-0" />
                       <span className="truncate text-[11px] text-content-primary">{m.label}</span>
                       <span className="text-[10px] tabular-nums text-content-tertiary shrink-0">
-                        {m.distance.toFixed(2)} m
+                        {(() => {
+                          const d = q.convert(m.distance, 'm');
+                          return `${d.value.toFixed(2)} ${d.unit}`;
+                        })()}
                       </span>
                     </button>
                     <button
@@ -385,7 +457,7 @@ export default function BIMToolsPanel({
             {t('bim.tools_views_save', { defaultValue: 'Save' })}
           </button>
         </div>
-        {/* Thumbnail toggle — small inline checkbox so the user can opt out
+        {/* Thumbnail toggle - small inline checkbox so the user can opt out
             of the ~50 KB PNG attachment when bookmarking a hundred angles. */}
         <label className="flex items-center gap-1.5 text-[10px] text-content-tertiary select-none cursor-pointer">
           <input
@@ -468,7 +540,7 @@ export default function BIMToolsPanel({
                       title={new Date(v.createdAt).toLocaleString()}
                     >
                       {v.screenshotDataUrl ? (
-                        // Thumbnail preview — keeps the row to ~24px tall by
+                        // Thumbnail preview - keeps the row to ~24px tall by
                         // forcing a 32×20 aspect window. Image alt is the
                         // view name so screen readers still announce the row.
                         <img
@@ -536,6 +608,79 @@ export default function BIMToolsPanel({
             );
           })}
         </ul>
+      </section>
+
+      {/* Export - IFC/RVT quantities to a single Excel Bill of Quantities */}
+      <section className="flex flex-col gap-2">
+        <h3 className="text-xs font-semibold text-content-primary uppercase tracking-wide">
+          {t('bim.tools_export_title', { defaultValue: 'Export' })}
+        </h3>
+        <p className="text-[10px] text-content-tertiary">
+          {t('bim.boq_export_hint', {
+            defaultValue:
+              'Roll the model quantities (area, volume, length, weight) into one Excel Bill of Quantities.',
+          })}
+        </p>
+        <label className="flex flex-col gap-1 text-[10px] text-content-tertiary">
+          {t('bim.boq_export_scope', { defaultValue: 'Elements' })}
+          <select
+            value={exportScope}
+            onChange={(e) => setExportScope(e.target.value as BoqExportScope)}
+            data-testid="boq-export-scope"
+            className="rounded-md border border-border-light bg-surface-primary px-2 py-1 text-[11px] text-content-primary"
+          >
+            <option value="all">{t('bim.boq_export_scope_all', { defaultValue: 'Whole model' })}</option>
+            <option value="filter">
+              {t('bim.boq_export_scope_filter', { defaultValue: 'Current filter' })}
+            </option>
+            <option value="selected">
+              {t('bim.boq_export_scope_selected', { defaultValue: 'Selected only' })}
+            </option>
+          </select>
+        </label>
+        <label className="flex flex-col gap-1 text-[10px] text-content-tertiary">
+          {t('bim.boq_export_group_by', { defaultValue: 'Group by' })}
+          <select
+            value={exportGroupBy}
+            onChange={(e) => setExportGroupBy(e.target.value as BoqGroupBy)}
+            data-testid="boq-export-group-by"
+            className="rounded-md border border-border-light bg-surface-primary px-2 py-1 text-[11px] text-content-primary"
+          >
+            <option value="element_type">
+              {t('bim.boq_export_by_type', { defaultValue: 'Element type' })}
+            </option>
+            <option value="storey">{t('bim.boq_export_by_storey', { defaultValue: 'Storey' })}</option>
+            <option value="discipline">
+              {t('bim.boq_export_by_discipline', { defaultValue: 'Discipline' })}
+            </option>
+            <option value="element_type_storey">
+              {t('bim.boq_export_by_type_storey', { defaultValue: 'Type and storey' })}
+            </option>
+          </select>
+        </label>
+        <button
+          type="button"
+          onClick={handleExportBoq}
+          disabled={exporting}
+          data-testid="boq-export-button"
+          className="flex items-center justify-center gap-2 px-3 py-1.5 rounded-md text-[11px] font-medium bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60"
+        >
+          <FileSpreadsheet size={12} />
+          {exporting
+            ? t('bim.boq_export_running', { defaultValue: 'Exporting…' })
+            : t('bim.boq_export_button', { defaultValue: 'Export BOQ (Excel)' })}
+        </button>
+        {onOpenReport && (
+          <button
+            type="button"
+            onClick={() => onOpenReport(exportScope, exportGroupBy)}
+            data-testid="boq-report-button"
+            className="flex items-center justify-center gap-2 px-3 py-1.5 rounded-md text-[11px] font-medium border border-border-light bg-surface-secondary text-content-secondary hover:bg-surface-tertiary"
+          >
+            <FileBarChart size={12} />
+            {t('bim.boq_report_button', { defaultValue: 'View summary report' })}
+          </button>
+        )}
       </section>
     </div>
   );

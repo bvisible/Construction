@@ -9,6 +9,8 @@
 
 import type { Measurement, MeasurementType } from './takeoff-types';
 import { ANNOTATION_TYPES } from './takeoff-groups';
+import type { MeasurementSystem } from '@/stores/usePreferencesStore';
+import { convertQuantity } from './takeoff-display-units';
 
 /** Sortable column keys exposed by the ledger table. */
 export type LedgerSortColumn =
@@ -191,8 +193,16 @@ export function typeGrandTotals(measurements: Measurement[]): TypeGrandTotal[] {
  * Build a CSV string from a filtered + sorted ledger, including
  * subtotal rows per group and grand-total rows per type.  Output is
  * RFC-4180-ish: comma separator, quoted strings, doubled quotes inside.
+ *
+ * `system` converts the canonical-metric values + unit labels to the
+ * user's preferred measurement system at the export boundary (D-TKC-016
+ * keeps storage metric). Defaults to `'metric'`, which is a pass-through
+ * so the emitted numbers + units are identical to before this seam.
  */
-export function ledgerToCsv(measurements: Measurement[]): string {
+export function ledgerToCsv(
+  measurements: Measurement[],
+  system: MeasurementSystem = 'metric',
+): string {
   const header = '#,Type,Annotation,Group,Value,Unit,Page';
   const rows: string[] = [header];
 
@@ -216,14 +226,15 @@ export function ledgerToCsv(measurements: Measurement[]): string {
       const typeLabel = measurement.isDeduction
         ? `${measurement.type} (deduction)`
         : measurement.type;
+      const disp = convertQuantity(signedValue, measurement.unit || '', system);
       rows.push(
         [
           String(ordinal),
           escapeCsv(typeLabel),
           escapeCsv(measurement.annotation || ''),
           escapeCsv(group),
-          formatNumber(signedValue),
-          escapeCsv(measurement.unit || ''),
+          formatNumber(disp.value),
+          escapeCsv(disp.unit),
           String(measurement.page),
         ].join(','),
       );
@@ -232,14 +243,15 @@ export function ledgerToCsv(measurements: Measurement[]): string {
     const subs = groupSubtotals(groupRows.map((r) => r.measurement))[0];
     if (subs) {
       for (const [unit, total] of Object.entries(subs.totals)) {
+        const disp = convertQuantity(total, unit, system);
         rows.push(
           [
             '',
             'subtotal',
             escapeCsv(`${group} subtotal`),
             escapeCsv(group),
-            formatNumber(total),
-            escapeCsv(unit),
+            formatNumber(disp.value),
+            escapeCsv(disp.unit),
             '',
           ].join(','),
         );
@@ -248,14 +260,15 @@ export function ledgerToCsv(measurements: Measurement[]): string {
   }
 
   for (const gt of typeGrandTotals(measurements)) {
+    const disp = convertQuantity(gt.total, gt.unit, system);
     rows.push(
       [
         '',
         'grand_total',
         escapeCsv(`Total ${gt.type}`),
         '',
-        formatNumber(gt.total),
-        escapeCsv(gt.unit),
+        formatNumber(disp.value),
+        escapeCsv(disp.unit),
         '',
       ].join(','),
     );

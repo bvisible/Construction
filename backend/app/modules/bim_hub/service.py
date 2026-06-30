@@ -683,6 +683,24 @@ def _bim_data_dir() -> Path:
     return resolve_data_dir() / "bim"
 
 
+def _element_matches_filters(element: Any, filters: dict) -> bool:
+    """Return True if ``element`` passes every set filter. Each filter value
+    may be a single string or a list; an empty / missing filter is ignored.
+    Used by the BOQ export to mirror the viewer's storey / type / discipline
+    filtering server-side."""
+    for field in ("storey", "element_type", "discipline"):
+        want = filters.get(field)
+        if not want:
+            continue
+        value = getattr(element, field, None)
+        if isinstance(want, (list, tuple, set)):
+            if value not in want:
+                return False
+        elif value != want:
+            return False
+    return True
+
+
 class BIMHubService:
     """Business logic for BIM Hub operations."""
 
@@ -1492,6 +1510,66 @@ class BIMHubService:
         xlsx = build_cobie_workbook(model, elements)
         safe_name = (model.name or "model").replace(" ", "_").replace("/", "_")
         filename = f"COBie_{safe_name}.xlsx"
+        return xlsx, filename
+
+    async def export_boq(
+        self,
+        model_id: uuid.UUID,
+        *,
+        element_ids: list[str] | None = None,
+        group_id: uuid.UUID | None = None,
+        filters: dict | None = None,
+        group_by: str = "element_type",
+        title: str | None = None,
+    ) -> tuple[bytes, str]:
+        """Build a single-file Excel Bill of Quantities for a BIM model.
+
+        Selection precedence (most specific wins): ``element_ids`` (what the
+        user has visible / selected) -> ``group_id`` (a saved Smart View /
+        element group) -> ``filters`` (storey / element_type / discipline) ->
+        the whole model. Returns ``(xlsx_bytes, suggested_filename)``; 404 if
+        the model is missing.
+        """
+        from app.modules.bim_hub.exporters import BoqExportOptions, build_boq_workbook
+
+        model = await self.model_repo.get(model_id)
+        if model is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="BIM model not found",
+            )
+
+        if group_id is not None:
+            # A saved group already resolves to a concrete element list
+            # (dynamic groups evaluate their rule tree here). Keep only
+            # members that belong to this model so a project-scoped group
+            # exported from one model's viewer cannot leak another's rows.
+            members = await self.resolve_element_group_members(group_id)
+            elements = [e for e in members if e.model_id == model_id]
+        else:
+            # Load the model's elements once, then narrow by the supplied
+            # selector. COBie does the same full load - a BOQ is a snapshot,
+            # not an interactive view, so pagination buys nothing.
+            elements = []
+            offset = 0
+            page_size = 5000
+            while True:
+                batch, total = await self.element_repo.list_for_model(model_id, offset=offset, limit=page_size)
+                elements.extend(batch)
+                if offset + page_size >= total or not batch:
+                    break
+                offset += page_size
+
+            if element_ids:
+                wanted = {str(x) for x in element_ids}
+                elements = [e for e in elements if str(e.id) in wanted or (e.stable_id and str(e.stable_id) in wanted)]
+            elif filters:
+                elements = [e for e in elements if _element_matches_filters(e, filters)]
+
+        opts = BoqExportOptions(group_by=group_by, title=title)
+        xlsx = build_boq_workbook(model, elements, opts)
+        safe_name = (model.name or "model").replace(" ", "_").replace("/", "_")
+        filename = f"BOQ_{safe_name}.xlsx"
         return xlsx, filename
 
     async def ensure_element(
@@ -3059,6 +3137,7 @@ class BIMHubService:
             model_id=payload.model_id,
             name=payload.name,
             description=payload.description,
+            folder=((payload.folder or "").strip() or None),
             is_dynamic=payload.is_dynamic,
             filter_criteria=payload.filter_criteria or {},
             element_ids=[str(eid) for eid in (payload.element_ids or [])],
@@ -3113,6 +3192,11 @@ class BIMHubService:
             fields["metadata_"] = (
                 {**(getattr(group, "metadata_", None) or {}), **_incoming} if isinstance(_incoming, dict) else _incoming
             )
+
+        # Blank folder ("") means "move to ungrouped" - normalise to NULL.
+        if "folder" in fields:
+            _folder = fields["folder"]
+            fields["folder"] = (_folder.strip() or None) if isinstance(_folder, str) else _folder
 
         # Normalise UUID list to str for JSON storage.
         if "element_ids" in fields and fields["element_ids"] is not None:

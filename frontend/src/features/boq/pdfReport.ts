@@ -6,6 +6,7 @@ import {
   type Position,
 } from './api';
 import { resourceAwareTotalInBase } from './boqHelpers';
+import { toDisplayQuantity, toDisplayRate } from '@/shared/lib/unitConversion';
 
 /* ── Types ──────────────────────────────────────────────────────────────── */
 
@@ -50,6 +51,15 @@ export interface PdfReportOptions {
    */
   baseCurrency?: string;
   fxRates?: Array<{ currency: string; rate: number }>;
+  /**
+   * Issue #270 - the user's measurement-system preference. When 'imperial'
+   * the physical quantity numbers and their unit labels are converted at the
+   * print boundary (m -> ft, m2 -> ft2, kg -> lb ...); money (unit rate /
+   * total) is per-unit and is NEVER converted. Defaults to 'metric', which
+   * passes values through unchanged with tidy unit labels, so stored data is
+   * untouched and metric users see identical output to before.
+   */
+  measurementSystem?: 'metric' | 'imperial';
 }
 
 /** FX context shared between {@link buildSectionGroups} and the renderers. */
@@ -350,6 +360,10 @@ function renderBOQTables(
   const fxOpts: PdfFxOpts = { baseCurrency: options.baseCurrency, fxRates: options.fxRates };
   const { sections, ungrouped } = buildSectionGroups(options.positions, fxOpts);
   const pageW = doc.internal.pageSize.getWidth();
+  // Issue #270 - convert the physical quantity column + its unit label into
+  // the user's measurement system at this print boundary only. Money columns
+  // (Unit Rate / Total) stay verbatim. Default 'metric' = pass-through.
+  const measurementSystem = options.measurementSystem ?? 'metric';
 
   // Section heading bar
   doc.setFillColor(...BRAND_DARK);
@@ -387,12 +401,16 @@ function renderBOQTables(
 
     const body: string[][] = [];
     for (const p of children) {
+      const pDq = toDisplayQuantity(Number(p.quantity), p.unit, measurementSystem);
       body.push([
         p.ordinal,
         p.description,
-        p.unit,
-        formatNumber(p.quantity, locale),
-        formatCurrency(p.unit_rate, options.currency, locale),
+        pDq.unit,
+        formatNumber(pDq.value, locale),
+        // Issue #270 - when the quantity is shown converted, the per-unit rate
+        // must be restated against the SAME displayed unit so the line still
+        // reconciles (qty * rate == Total). The money Total is invariant.
+        formatCurrency(toDisplayRate(p.unit_rate, p.unit, measurementSystem), options.currency, locale),
         // Issue #150 — Total converted to base currency (mirrors grid).
         formatCurrency(positionTotalForPdf(p, fxOpts), options.currency, locale),
       ]);
@@ -403,12 +421,14 @@ function renderBOQTables(
         : [];
       for (const r of resources) {
         const rTotal = r.total ?? r.quantity * r.unit_rate;
+        const rDq = toDisplayQuantity(Number(r.quantity), r.unit, measurementSystem);
         body.push([
           '',
           `  \u2514 ${r.name}`,
-          r.unit,
-          formatNumber(r.quantity, locale),
-          formatCurrency(r.unit_rate, options.currency, locale),
+          rDq.unit,
+          formatNumber(rDq.value, locale),
+          // Reciprocal rate so the resource sub-row reconciles too (see above).
+          formatCurrency(toDisplayRate(r.unit_rate, r.unit, measurementSystem), options.currency, locale),
           formatCurrency(rTotal, options.currency, locale),
         ]);
       }

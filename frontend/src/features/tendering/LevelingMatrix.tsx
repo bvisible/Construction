@@ -29,6 +29,7 @@ import {
   SkeletonTable,
 } from '@/shared/ui';
 import { useToastStore } from '@/stores/useToastStore';
+import { useDisplayQuantity } from '@/shared/hooks/useDisplayQuantity';
 import { getIntlLocale } from '@/shared/lib/formatters';
 import { getLevelingMatrix, levelBids } from './api';
 
@@ -107,6 +108,10 @@ export function LevelingMatrix({ packageId, currency }: Props) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const addToast = useToastStore((s) => s.addToast);
+  // Issue #270: the reference quantity beside each line is a physical quantity;
+  // show it in the user's measurement system. The leveled money totals are
+  // invariant and are never converted.
+  const q = useDisplayQuantity();
 
   const {
     data: matrix,
@@ -335,7 +340,10 @@ export function LevelingMatrix({ packageId, currency }: Props) {
                           {row.description || '-'}
                         </span>
                         <span className="ml-2 text-xs text-content-tertiary">
-                          {formatNumber(row.reference_quantity)} {row.unit}
+                          {(() => {
+                            const d = q.convert(row.reference_quantity, row.unit || '');
+                            return `${formatNumber(d.value)} ${row.unit ? d.unit : ''}`.trim();
+                          })()}
                         </span>
                       </td>
                       <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums text-content-secondary">

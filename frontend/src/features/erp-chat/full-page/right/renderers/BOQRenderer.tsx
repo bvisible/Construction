@@ -1,4 +1,5 @@
 import { useNavigate } from 'react-router-dom';
+import { useDisplayQuantity } from '@/shared/hooks/useDisplayQuantity';
 import { unwrapList } from './normalize';
 import { boqPath, readString } from './deepLink';
 import DeepLinkBar, { useOpenLabels } from './DeepLinkBar';
@@ -16,6 +17,10 @@ interface BOQItem {
 export default function BOQRenderer({ data }: { data: unknown }) {
   const navigate = useNavigate();
   const labels = useOpenLabels();
+  // Display-only measurement-system conversion. The chat BOQ table is a
+  // read-out, so metric-canonical quantities are converted to the user's
+  // preference at render time; the underlying payload is never mutated.
+  const q = useDisplayQuantity();
   // Backend `get_boq_items` returns `{ positions: [...], grand_total, ... }`.
   const items = unwrapList(data, ['positions', 'items']) as BOQItem[];
   // The top-level `boq_id` is on the envelope (not the row list), so read it
@@ -69,6 +74,17 @@ export default function BOQRenderer({ data }: { data: unknown }) {
             const total = item.total ?? (item.quantity ?? 0) * (item.unit_rate ?? 0);
             const isZeroPrice = (item.unit_rate ?? 0) === 0 && (item.quantity ?? 0) > 0;
             const rowPath = boqPath(boqId, item.id);
+            // Quantity is an absolute measure (multiply); the unit_rate is a
+            // per-unit price (reciprocal: divide by the quantity scale so
+            // rate x qty still equals the unchanged-currency total).
+            const dispQty =
+              item.quantity != null ? q.convert(item.quantity, item.unit ?? '') : null;
+            const qtyScale = item.unit ? q.convert(1, item.unit).value : 1;
+            const dispRate =
+              item.unit_rate != null && qtyScale
+                ? item.unit_rate / qtyScale
+                : item.unit_rate;
+            const dispUnit = item.unit ? q.unitFor(item.unit) : item.unit;
             return (
               <tr
                 key={item.id ?? item.ordinal ?? i}
@@ -82,10 +98,10 @@ export default function BOQRenderer({ data }: { data: unknown }) {
               >
                 <td style={{ ...cellBase, color: 'var(--chat-text-tertiary)' }}>{item.ordinal ?? i + 1}</td>
                 <td style={cellBase}>{item.description ?? '-'}</td>
-                <td style={{ ...cellBase, textAlign: 'center', color: 'var(--chat-text-secondary)' }}>{item.unit ?? '-'}</td>
-                <td style={numCell}>{item.quantity != null ? item.quantity.toLocaleString() : '-'}</td>
+                <td style={{ ...cellBase, textAlign: 'center', color: 'var(--chat-text-secondary)' }}>{dispUnit ?? '-'}</td>
+                <td style={numCell}>{dispQty != null ? dispQty.value.toLocaleString() : '-'}</td>
                 <td style={{ ...numCell, color: isZeroPrice ? 'var(--chat-tool-error)' : undefined }}>
-                  {item.unit_rate != null ? item.unit_rate.toLocaleString(undefined, { minimumFractionDigits: 2 }) : '-'}
+                  {dispRate != null ? dispRate.toLocaleString(undefined, { minimumFractionDigits: 2 }) : '-'}
                 </td>
                 <td style={numCell}>{total.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
               </tr>

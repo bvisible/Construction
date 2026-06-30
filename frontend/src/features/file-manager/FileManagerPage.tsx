@@ -54,7 +54,8 @@ import {
 } from './components/RecentlyViewedStrip';
 import { ShortcutsCheatsheet } from './components/ShortcutsCheatsheet';
 import { useFileShortcuts } from './useFileShortcuts';
-import { primaryModule } from './kindModule';
+import { primaryModule, isInlinePreviewRow } from './kindModule';
+import { InlinePdfPreviewModal } from '@/features/file-references/InlinePdfPreviewModal';
 import type { FileFilters, FileKind, FileRow } from './types';
 
 const VIEW_MODE_KEY = 'file-manager:view-mode';
@@ -139,6 +140,10 @@ export function FileManagerPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [showFavoritesOnly, setShowFavoritesOnly] = useState(false);
   const [previewRow, setPreviewRow] = useState<FileRow | null>(null);
+  // #284: a PDF document opens in a focused inline reader overlay by default
+  // instead of jumping to PDF Takeoff. This holds the row whose bytes the
+  // InlinePdfPreviewModal is showing (null = closed).
+  const [inlinePdfRow, setInlinePdfRow] = useState<FileRow | null>(null);
   const [showExport, setShowExport] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [emailRow, setEmailRow] = useState<FileRow | null>(null);
@@ -418,8 +423,16 @@ export function FileManagerPage() {
 
   function handleOpen(row: FileRow) {
     // Opening a file means "take me to the tool that processes it" —
-    // PDFs jump to PDF Takeoff, IFC/RVT to BIM 3D Viewer, DWG to DWG
-    // Takeoff. Plain download stays available from the preview pane.
+    // IFC/RVT to BIM 3D Viewer, DWG to DWG Takeoff. A PDF document is the
+    // exception (#284): it opens in a focused inline reader here, because
+    // most project PDFs are contracts / specs / letters the user just wants
+    // to read. PDF Takeoff stays one explicit click away in the preview
+    // pane and the context menu. Plain download stays available too.
+    if (isInlinePreviewRow(row)) {
+      recordRecentlyViewed(row);
+      setInlinePdfRow(row);
+      return;
+    }
     const target = primaryModule(row.kind, row.extension);
     // Destinations that resolve the project from the global context
     // store (Clash, BI Explorer) need it bound first or they land on
@@ -434,10 +447,46 @@ export function FileManagerPage() {
       ctx.setActiveProject(row.project_id, name);
     }
     recordRecentlyViewed(row);
-    navigate(target.route(row.project_id, row.id));
+    navigate(target.route(row.project_id, row.id, row.extra));
   }
 
   function handleOpenRecent(item: RecentItem) {
+    // A recent PDF document opens in the same inline reader as a fresh open.
+    // Prefer the live FileRow when the file is in the loaded list; otherwise
+    // reconstruct the minimal row from the recents entry. We only do this for
+    // the ``document`` kind, whose id IS a Document id the download route
+    // resolves - a ``sheet`` id is a Sheet PK and must keep its takeoff route.
+    const recentRow: FileRow | undefined = list?.items.find((r) => r.id === item.id);
+    if (recentRow && isInlinePreviewRow(recentRow)) {
+      setInlinePdfRow(recentRow);
+      return;
+    }
+    const ext = (item.extension ?? '').toLowerCase().replace(/^\./, '');
+    const isPdfDoc = ext === 'pdf' && item.kind === 'document';
+    if (isPdfDoc) {
+      // Synthesize the minimal FileRow the inline modal needs. The download
+      // route mirrors what _collect_documents serialises for a document row.
+      setInlinePdfRow({
+        id: item.id,
+        kind: item.kind,
+        name: item.name,
+        project_id: item.project_id,
+        size_bytes: 0,
+        mime_type: 'application/pdf',
+        extension: item.extension ?? '.pdf',
+        modified_at: null,
+        physical_path: '',
+        relative_path: '',
+        storage_backend: 'local',
+        download_url: `/api/v1/documents/${item.id}/download/`,
+        preview_url: null,
+        thumbnail_url: null,
+        discipline: null,
+        category: null,
+        extra: {},
+      });
+      return;
+    }
     const target = primaryModule(item.kind, item.extension);
     if (target.setsActiveProject) {
       const ctx = useProjectContextStore.getState();
@@ -758,6 +807,15 @@ export function FileManagerPage() {
       <ShortcutsCheatsheet
         open={showCheatsheet}
         onClose={() => setShowCheatsheet(false)}
+      />
+      {/* #284 - focused inline PDF reader. Opened by handleOpen for a PDF
+          document so reading a contract / spec no longer drops the user
+          into the takeoff tool. */}
+      <InlinePdfPreviewModal
+        open={inlinePdfRow !== null}
+        downloadUrl={inlinePdfRow?.download_url ?? null}
+        title={inlinePdfRow?.name ?? ''}
+        onClose={() => setInlinePdfRow(null)}
       />
     </div>
   );

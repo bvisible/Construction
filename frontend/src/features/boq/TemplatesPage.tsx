@@ -20,6 +20,7 @@ import { PageHeader } from '@/shared/ui/PageHeader';
 import { useToastStore } from '@/stores/useToastStore';
 import { apiGet, apiPost, ApiError } from '@/shared/lib/api';
 import { getIntlLocale } from '@/shared/lib/formatters';
+import { useDisplayQuantity } from '@/shared/hooks/useDisplayQuantity';
 import { projectsApi, type Project } from '@/features/projects/api';
 import { useActiveProjectId } from '@/shared/hooks/useActiveProjectId';
 import type { BOQ } from './api';
@@ -220,6 +221,15 @@ export function TemplatesPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const addToast = useToastStore((s) => s.addToast);
+  // Display-only measurement-system conversion for the benchmark cost-per-area
+  // badge. The area INPUT below stays metric-canonical (it is editable and is
+  // sent to the backend as `area_m2`), so its label and the generated BOQ-name
+  // string deliberately remain in m².
+  const q = useDisplayQuantity();
+  // "cost per m²" is a reciprocal rate: divide by how many display units one
+  // m² becomes so the per-unit figure rescales correctly (e.g. EUR/m² -> EUR/ft²).
+  const areaUnitScale = q.convert(1, 'm²').value || 1;
+  const areaRateUnit = q.unitFor('m²');
 
   /* ── State ───────────────────────────────────────────────────────── */
 
@@ -344,7 +354,7 @@ export function TemplatesPage() {
   return (
     <div className="space-y-5 animate-fade-in pb-12">
       <Breadcrumb items={[{ label: t('boq.templates', { defaultValue: 'BOQ Templates' }) }]} />
-      {/* Canonical top block — module name + icon come from the global top
+      {/* Canonical top block - module name + icon come from the global top
           bar; the page renders only its subtitle. */}
       <PageHeader
         srTitle={t('boq.templates', { defaultValue: 'BOQ Templates' })}
@@ -419,9 +429,9 @@ export function TemplatesPage() {
                 </p>
               </div>
 
-              {/* Cost indicator */}
+              {/* Cost indicator - benchmark rate per unit area (reciprocal). */}
               <Badge variant={isSelected ? 'blue' : 'neutral'} size="sm">
-                ~{fmt.format(tpl.avg_cost_per_m2)} EUR/m&sup2;
+                ~{fmt.format(tpl.avg_cost_per_m2 / areaUnitScale)} EUR/{areaRateUnit}
               </Badge>
             </button>
           );
@@ -470,6 +480,8 @@ export function TemplatesPage() {
 
               {/* Area input */}
               <div>
+                {/* Editable metric input (sent as area_m2) \u2014 label stays
+                    canonical m\u00B2 so the user types the value that is stored. */}
                 <label className="block text-sm font-medium text-content-primary mb-1.5">
                   {t('boq.area_m2', { defaultValue: 'Area (m\u00B2)' })}
                 </label>

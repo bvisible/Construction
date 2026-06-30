@@ -1,5 +1,5 @@
 /**
- * Inventory Heatmap (task #140) — groups Plots by Phase → Block.
+ * Inventory Heatmap (task #140) - groups Plots by Phase → Block.
  *
  * Each cell is one Plot, coloured by status. Layout follows
  * ``Phase.sequence`` then ``Block.code``. Legacy plots (no block_id)
@@ -8,6 +8,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useDisplayQuantity } from '@/shared/hooks/useDisplayQuantity';
 import type {
   HeatmapBlock,
   HeatmapPhase,
@@ -282,15 +283,18 @@ function UnitCell({
   onClick?: (unit: HeatmapUnit) => void;
 }) {
   const { t } = useTranslation();
+  const dq = useDisplayQuantity();
   const fill = PLOT_STATUS_FILL[unit.status] ?? '#94a3b8';
   const stroke = PLOT_STATUS_STROKE[unit.status] ?? '#64748b';
-  const label = t('propdev.dashboards.heatmap.cell_label', {
-    defaultValue: 'Plot {{number}} - {{status}} - {{area}} m²',
+  const area = dq.convert(num(unit.area_m2), 'm²');
+  const label = t('propdev.dashboards.heatmap.cell_label_u', {
+    defaultValue: 'Plot {{number}}, {{status}}, {{area}} {{unit}}',
     number: unit.plot_number,
     status: t(`propdev.status.${unit.status}`, {
       defaultValue: unit.status.replace(/_/g, ' '),
     }),
-    area: num(unit.area_m2).toFixed(0),
+    area: area.value.toFixed(0),
+    unit: area.unit,
   });
   return (
     <button

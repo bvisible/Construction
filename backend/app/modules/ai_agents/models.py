@@ -14,7 +14,7 @@ ARE editable/deletable by their creator through the dedicated endpoints.
 
 import uuid
 
-from sqlalchemy import JSON, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, Boolean, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import GUID, Base
@@ -52,6 +52,10 @@ class AgentRun(Base):
     total_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     started_at: Mapped[str | None] = mapped_column(String(40), nullable=True)
     finished_at: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    # Trust envelope (confidence + rationale + sources) parsed off the final
+    # answer when a trust-enabled agent emitted one. JSON so it can be surfaced
+    # in the run view and later scored against actuals.
+    trust: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # type: ignore[assignment]
 
     def __repr__(self) -> str:
         return f"<AgentRun {self.id} agent={self.agent_name} status={self.status}>"
@@ -86,6 +90,44 @@ class AgentStep(Base):
 
     def __repr__(self) -> str:
         return f"<AgentStep run={self.run_id} idx={self.step_idx} role={self.role}>"
+
+
+class AIFeedback(Base):
+    """A user's correct / incorrect verdict on any AI output in the app.
+
+    The accuracy scoreboard scores agent runs, but most AI the user actually
+    sees lives outside the agent runner: the AI Estimator result, the
+    match-elements suggestions, the cost advisor's answers. Those surfaces have
+    no run row to attach a verdict to, so the trust loop used to dead-end there.
+
+    This is the generic sink for that loop. ``surface`` names where the feedback
+    came from (e.g. ``ai_estimator`` / ``match_elements`` / ``advisor``) and
+    ``ref`` is an optional opaque pointer to the specific output (a run id, a
+    match session id, a message id) so a later review can line a verdict up with
+    what produced it. Nothing here is money or PII - it is a thumbs-up / down
+    plus an optional free-text note, scoped to the caller (and, when relevant,
+    one of their projects).
+    """
+
+    __tablename__ = "oe_ai_feedback"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(GUID(), nullable=False, index=True)
+    # Optional project scope. Verified against the caller's access at write time
+    # so a verdict can never be attributed to a project they cannot see.
+    project_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), nullable=True, index=True)
+    # Which AI surface the verdict is about (short slug, e.g. "ai_estimator").
+    surface: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    # Opaque pointer to the specific output the verdict is about (a run id, a
+    # session id, a message id, ...). Free-form so each surface picks what it
+    # can line up later; never dereferenced server-side.
+    ref: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    # The verdict: did this AI output turn out correct?
+    correct: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    # Optional short correction / context note (what the right answer was, etc.).
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    def __repr__(self) -> str:
+        return f"<AIFeedback {self.id} user={self.user_id} surface={self.surface} correct={self.correct}>"
 
 
 # Custom-agent run names are prefixed with this slug so the run path can tell

@@ -245,6 +245,39 @@ const INVOICE_STATUS_COLORS: Record<
   cancelled: 'neutral',
 };
 
+// Editor-safe invoice status transitions offered by the edit-modal status
+// dropdown (#284). This is a DELIBERATE SUBSET of the backend FSM
+// (finance.service._INVOICE_STATUS_TRANSITIONS): the privileged steps
+// 'approved' (-> sent) and 'paid' are intentionally EXCLUDED here because the
+// backend pins them to manager-only endpoints (finance.approve / finance.pay)
+// and 'pay' also writes a binding ledger entry. Driving them through a plain
+// PATCH would both bypass that gate and skip the payment side effects, so they
+// stay on the dedicated Approve / Mark Paid row buttons. The dropdown only
+// covers the early, reversible lifecycle a draft invoice was previously stuck
+// in (draft <-> pending, and cancel / re-open).
+export const INVOICE_SELF_SERVICE_TRANSITIONS: Record<string, string[]> = {
+  draft: ['pending', 'cancelled'],
+  pending: ['draft', 'cancelled'],
+  approved: [],
+  paid: [],
+  cancelled: ['draft'],
+};
+
+// Display order for the status options so the dropdown reads predictably.
+export const INVOICE_STATUS_ORDER = ['draft', 'pending', 'approved', 'paid', 'cancelled'];
+
+/**
+ * Options shown in the invoice edit-modal status dropdown: the current status
+ * plus only the editor-safe next states. Exported (and pure) so the security
+ * invariant - approve / pay are NEVER reachable via the plain PATCH dropdown,
+ * only via their manager-gated endpoints - is unit-testable (#284).
+ */
+export function invoiceStatusOptions(current: string): string[] {
+  return INVOICE_STATUS_ORDER.filter(
+    (s) => s === current || (INVOICE_SELF_SERVICE_TRANSITIONS[current] ?? []).includes(s),
+  );
+}
+
 /* ── Export / Import helpers ──────────────────────────────────────────── */
 
 async function fetchBlobWithAuth(url: string, fallbackFilename: string): Promise<void> {
@@ -1665,6 +1698,11 @@ function InvoicesTab({ projectId }: { projectId: string }) {
     amount: '',
     currency: '',
     description: '',
+    // Lifecycle status of the invoice. Only meaningful in edit mode (a new
+    // invoice is always created as 'draft'); surfaced as a dropdown so opening
+    // an invoice lets a user advance its status, which is otherwise only
+    // reachable via the row Approve / Mark Paid actions (#284).
+    status: 'draft',
   });
   const [invoiceErrors, setInvoiceErrors] = useState<Record<string, string>>({});
   // Tracks whether the user has hand-entered the Total (overriding the
@@ -1714,6 +1752,9 @@ function InvoicesTab({ projectId }: { projectId: string }) {
       // an editor on a BRL/USD/etc. project keeps that currency (task #217).
       currency: inv.currency_code || inv.currency || projectCurrency || '',
       description: inv.notes ?? inv.description ?? '',
+      // The backend serialises the canonical 'sent' node; normalise it to the
+      // 'approved' label the UI uses so the dropdown shows the right option.
+      status: inv.status === 'sent' ? 'approved' : inv.status || 'draft',
     });
     // If the stored total differs from subtotal+tax, the invoice was saved
     // with a deliberate manual total - preserve that intent so editing the
@@ -1793,7 +1834,7 @@ function InvoicesTab({ projectId }: { projectId: string }) {
       queryClient.invalidateQueries({ queryKey: ['finance-invoices', projectId] });
       queryClient.invalidateQueries({ queryKey: ['finance', 'dashboard', projectId] });
       setShowCreate(false);
-      setInvoiceForm({ direction: 'payable', counterparty: '', contact_id: '', invoice_date: todayStr, due_date: '', subtotal: '', tax: '', amount: '', currency: projectCurrency, description: '' });
+      setInvoiceForm({ direction: 'payable', counterparty: '', contact_id: '', invoice_date: todayStr, due_date: '', subtotal: '', tax: '', amount: '', currency: projectCurrency, description: '', status: 'draft' });
       setAmountEditedManually(false);
       addToast({ type: 'success', title: t('finance.invoice_created', { defaultValue: 'Invoice created successfully' }) });
     },
@@ -1803,14 +1844,21 @@ function InvoicesTab({ projectId }: { projectId: string }) {
 
   // PATCH /v1/finance/{id} — the invoice API has no DELETE endpoint, so
   // editing is the only mutating control we expose on an existing row.
-  // `status` is intentionally NOT sent: status transitions stay in the
-  // Approve / Mark Paid workflow actions (the backend rejects illegal
-  // status changes anyway).
+  // `status` is sent only when the user changed it in the edit modal's status
+  // dropdown (#284): a freshly created invoice lands in 'draft' with no row
+  // action to advance it, so the dropdown is the way to move draft -> pending
+  // -> approved. The backend validates the transition against its FSM and
+  // rejects an illegal jump, and the dropdown only offers legal next states.
   const updateInvoiceMut = useMutation({
-    mutationFn: (data: { id: string; form: typeof invoiceForm }) => {
+    mutationFn: (data: { id: string; form: typeof invoiceForm; prevStatus: string }) => {
       const sub = parseFloat(data.form.subtotal || '0');
       const tax = parseFloat(data.form.tax || '0');
       const total = data.form.amount ? parseFloat(data.form.amount) : sub + tax;
+      // Normalise the backend's canonical 'sent' to the 'approved' label the
+      // UI uses, so re-saving an approved invoice without touching the status
+      // doesn't look like a no-op transition (approved -> sent).
+      const prev = data.prevStatus === 'sent' ? 'approved' : data.prevStatus;
+      const statusChanged = data.form.status !== prev;
       return apiPatch(`/v1/finance/${data.id}`, {
         contact_id: data.form.contact_id || null,
         invoice_direction: data.form.direction,
@@ -1821,6 +1869,7 @@ function InvoicesTab({ projectId }: { projectId: string }) {
         amount_total: String(total),
         currency_code: data.form.currency || projectCurrency || '',
         notes: data.form.description || null,
+        ...(statusChanged ? { status: data.form.status } : {}),
       });
     },
     onSuccess: () => {
@@ -1903,6 +1952,28 @@ function InvoicesTab({ projectId }: { projectId: string }) {
       }));
     return { totalAmount, totalPaid };
   }, [filtered, projectCurrency]);
+
+  // draft -> pending. A non-privileged transition (finance.update) so it is
+  // available to anyone who can edit invoices, not just managers. Gives a draft
+  // invoice a one-click path forward instead of forcing the user into the edit
+  // modal just to flip the status (#284).
+  const sendForApprovalMutation = useMutation({
+    mutationFn: (invoiceId: string) =>
+      apiPatch(`/v1/finance/${invoiceId}`, { status: 'pending' }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ['finance-invoices', projectId],
+      });
+      addToast({
+        type: 'success',
+        title: t('finance.invoice_sent_for_approval', {
+          defaultValue: 'Invoice sent for approval',
+        }),
+      });
+    },
+    onError: (e: Error) =>
+      addToast({ type: 'error', title: t('finance.send_for_approval_failed', { defaultValue: 'Failed to send invoice for approval' }), message: e.message }),
+  });
 
   const approveMutation = useMutation({
     mutationFn: (invoiceId: string) =>
@@ -1992,7 +2063,7 @@ function InvoicesTab({ projectId }: { projectId: string }) {
             size="sm"
             icon={<Plus size={14} />}
             onClick={() => {
-              setInvoiceForm({ direction: subTab, counterparty: '', contact_id: '', invoice_date: todayStr, due_date: '', subtotal: '', tax: '', amount: '', currency: projectCurrency, description: '' });
+              setInvoiceForm({ direction: subTab, counterparty: '', contact_id: '', invoice_date: todayStr, due_date: '', subtotal: '', tax: '', amount: '', currency: projectCurrency, description: '', status: 'draft' });
               setInvoiceErrors({});
               setAmountEditedManually(false);
               setShowCreate(true);
@@ -2066,7 +2137,7 @@ function InvoicesTab({ projectId }: { projectId: string }) {
                   ? {
                       label: t('finance.new_invoice', { defaultValue: 'New Invoice' }),
                       onClick: () => {
-                        setInvoiceForm({ direction: subTab, counterparty: '', contact_id: '', invoice_date: todayStr, due_date: '', subtotal: '', tax: '', amount: '', currency: projectCurrency, description: '' });
+                        setInvoiceForm({ direction: subTab, counterparty: '', contact_id: '', invoice_date: todayStr, due_date: '', subtotal: '', tax: '', amount: '', currency: projectCurrency, description: '', status: 'draft' });
                         setInvoiceErrors({});
                         setAmountEditedManually(false);
                         setShowCreate(true);
@@ -2209,6 +2280,19 @@ function InvoicesTab({ projectId }: { projectId: string }) {
                           >
                             <Pencil size={14} />
                           </button>
+                          {inv.status === 'draft' && (
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              onClick={() => sendForApprovalMutation.mutate(inv.id)}
+                              loading={sendForApprovalMutation.isPending}
+                              title={t('finance.send_for_approval_hint', {
+                                defaultValue: 'Move this draft invoice to pending so a manager can approve it.',
+                              })}
+                            >
+                              {t('finance.send_for_approval', { defaultValue: 'Send for approval' })}
+                            </Button>
+                          )}
                           {inv.status === 'pending' && isManager && (
                             <Button
                               variant="secondary"
@@ -2308,6 +2392,64 @@ function InvoicesTab({ projectId }: { projectId: string }) {
                       {t('finance.due_date', { defaultValue: 'Due' })}: <DateDisplay value={inv.due_date} />
                     </div>
                   )}
+                  {/* Status actions mirror the desktop row so a draft invoice
+                      can be advanced on mobile too (#284 - the card previously
+                      exposed only Edit, leaving status unreachable on phones). */}
+                  {(inv.status === 'draft' ||
+                    (inv.status === 'pending' && isManager) ||
+                    (inv.status === 'approved' && isManager)) && (
+                    <div className="mt-3 flex flex-wrap justify-end gap-2">
+                      {inv.status === 'draft' && (
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => sendForApprovalMutation.mutate(inv.id)}
+                          loading={sendForApprovalMutation.isPending}
+                        >
+                          {t('finance.send_for_approval', { defaultValue: 'Send for approval' })}
+                        </Button>
+                      )}
+                      {inv.status === 'pending' && isManager && (
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={async () => {
+                            const ok = await confirm({
+                              title: t('finance.confirm_approve_title', { defaultValue: 'Approve invoice?' }),
+                              message: t('finance.confirm_approve_msg', { defaultValue: 'This invoice will be approved for payment.' }),
+                              confirmLabel: t('finance.approve', { defaultValue: 'Approve' }),
+                              variant: 'warning',
+                            });
+                            if (ok) approveMutation.mutate(inv.id);
+                          }}
+                          loading={approveMutation.isPending}
+                        >
+                          {t('finance.approve', { defaultValue: 'Approve' })}
+                        </Button>
+                      )}
+                      {inv.status === 'approved' && isManager && (
+                        <Button
+                          variant="primary"
+                          size="sm"
+                          onClick={async () => {
+                            const ok = await confirm({
+                              title: t('finance.confirm_pay_title', { defaultValue: 'Mark as paid?' }),
+                              message: t('finance.confirm_pay_msg_immutable', {
+                                defaultValue:
+                                  'This records the payment as an immutable ledger entry and closes the invoice. It cannot be undone.',
+                              }),
+                              confirmLabel: t('finance.mark_paid', { defaultValue: 'Mark Paid' }),
+                              variant: 'danger',
+                            });
+                            if (ok) markPaidMutation.mutate(inv.id);
+                          }}
+                          loading={markPaidMutation.isPending}
+                        >
+                          {t('finance.mark_paid', { defaultValue: 'Mark Paid' })}
+                        </Button>
+                      )}
+                    </div>
+                  )}
                 </Card>
               ))}
             </div>
@@ -2352,7 +2494,11 @@ function InvoicesTab({ projectId }: { projectId: string }) {
                 onClick={() => {
                   if (!validateInvoice()) return;
                   if (isEditingInvoice && editingInvoice) {
-                    updateInvoiceMut.mutate({ id: editingInvoice.id, form: invoiceForm });
+                    updateInvoiceMut.mutate({
+                      id: editingInvoice.id,
+                      form: invoiceForm,
+                      prevStatus: editingInvoice.status,
+                    });
                   } else {
                     createInvoiceMut.mutate(invoiceForm);
                   }
@@ -2482,6 +2628,55 @@ function InvoicesTab({ projectId }: { projectId: string }) {
                 className={clsx(inputCls, invoiceErrors.invoice_date && 'border-semantic-error focus:ring-red-300 focus:border-semantic-error')}
               />
             </WideModalField>
+
+            {/* Status - edit mode only. A new invoice is always created as
+                'draft', and before #284 a draft had no control to move forward
+                (the row Approve / Mark Paid buttons only appear from 'pending'
+                / 'approved'). This dropdown covers the early, reversible steps
+                (draft <-> pending, cancel / re-open). Approving and marking
+                paid stay on the manager-gated row buttons, so those options are
+                intentionally absent here. */}
+            {isEditingInvoice && (
+              <WideModalField
+                label={t('finance.status_label', { defaultValue: 'Status' })}
+                span={2}
+                hint={t('finance.status_edit_hint', {
+                  defaultValue:
+                    'Move the invoice between draft, pending and cancelled. Approving an invoice and marking it paid are done from the Approve and Mark Paid buttons on the invoice row.',
+                })}
+              >
+                {(() => {
+                  const options = invoiceStatusOptions(invoiceForm.status);
+                  // No reversible next step from here (e.g. approved / paid) -
+                  // show the current status read-only rather than a one-option
+                  // dropdown that looks editable but isn't.
+                  if (options.length <= 1) {
+                    return (
+                      <div className="flex h-10 items-center rounded-lg border border-border bg-surface-secondary/40 px-3 text-sm text-content-secondary">
+                        {t(`finance.status_${invoiceForm.status}`, { defaultValue: invoiceForm.status })}
+                      </div>
+                    );
+                  }
+                  return (
+                    <select
+                      value={invoiceForm.status}
+                      onChange={(e) => setInvoiceForm((f) => ({ ...f, status: e.target.value }))}
+                      className={inputCls}
+                      aria-label={t('finance.status_label', { defaultValue: 'Status' })}
+                    >
+                      {options.map((s) => (
+                        <option key={s} value={s}>
+                          {t(`finance.status_${s}`, { defaultValue: s })}
+                          {s === invoiceForm.status
+                            ? ` (${t('finance.status_current', { defaultValue: 'current' })})`
+                            : ''}
+                        </option>
+                      ))}
+                    </select>
+                  );
+                })()}
+              </WideModalField>
+            )}
           </WideModalSection>
 
           <WideModalSection

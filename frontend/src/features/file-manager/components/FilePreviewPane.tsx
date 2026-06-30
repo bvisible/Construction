@@ -14,6 +14,7 @@ import type { FileRow, FileKind } from '../types';
 import { downloadProtectedFile, fetchProtectedObjectUrl } from '../api';
 import { isTauri, openInOSFinder, copyToClipboard } from '../lib/tauri';
 import { modulesForKind, primaryModule } from '../kindModule';
+import { InlinePdfPreviewModal } from '@/features/file-references/InlinePdfPreviewModal';
 import { useSetDocumentCdeState } from '../hooks';
 import type { CdeState } from '../api';
 import { CDE_BADGE } from './CDEBadge';
@@ -122,6 +123,9 @@ export function FilePreviewPane({ row, onClose, onEmail, onShare, onManageAccess
   const [submitApprovalOpen, setSubmitApprovalOpen] = useState(false);
   const [approvalDrawerOpen, setApprovalDrawerOpen] = useState(false);
   const [linkOpen, setLinkOpen] = useState(false);
+  // #284 - the primary "Open" action for a PDF document opens a focused
+  // inline reader overlay instead of routing to PDF Takeoff.
+  const [inlinePdfOpen, setInlinePdfOpen] = useState(false);
 
   // Find any active approval workflow for the current file so the
   // "Approval status" entry shows up only when relevant.
@@ -176,6 +180,12 @@ export function FilePreviewPane({ row, onClose, onEmail, onShare, onManageAccess
   }
 
   function navigateToModule(target: typeof primary) {
+    // #284 - an inline-preview target (PDF document) is not a route: open the
+    // focused reader overlay on this screen instead of navigating away.
+    if (target.inlinePreview) {
+      setInlinePdfOpen(true);
+      return;
+    }
     // Clash Detection / CAD-BIM BI Explorer read the project from the
     // global context store, not a path param — bind it to this file's
     // project first so the destination opens populated instead of on the
@@ -190,7 +200,7 @@ export function FilePreviewPane({ row, onClose, onEmail, onShare, onManageAccess
           : projects.find((p) => p.id === file.project_id)?.name ?? ctxProjectName;
       setActiveProject(file.project_id, resolved);
     }
-    navigate(target.route(file.project_id, file.id));
+    navigate(target.route(file.project_id, file.id, file.extra));
   }
 
   async function handleCopyPath() {
@@ -285,10 +295,10 @@ export function FilePreviewPane({ row, onClose, onEmail, onShare, onManageAccess
         </div>
 
         <div className="flex flex-col gap-1.5">
-          {/* Primary action — opens this file in its native module. PDFs
-              go to PDF Takeoff or Documents Viewer; IFC/RVT to BIM
-              Viewer; DWG to DWG Takeoff. Falls back to download below
-              when the user just wants the bytes. */}
+          {/* Primary action - a PDF document reads inline here (#284); other
+              kinds open in their native module (IFC/RVT to BIM Viewer, DWG to
+              DWG Takeoff). Plain download stays available below, and PDF
+              Takeoff is offered as a secondary chip for PDFs. */}
           <button
             type="button"
             onClick={() => navigateToModule(primary)}
@@ -296,11 +306,15 @@ export function FilePreviewPane({ row, onClose, onEmail, onShare, onManageAccess
             title={t(primary.descriptionI18nKey, { defaultValue: primary.description })}
           >
             <PrimaryIcon size={13} strokeWidth={2.25} />
-            {t('files.actions.open_in', {
-              defaultValue: 'Open in {{module}}',
-              module: t(primary.i18nKey, { defaultValue: primary.label }),
-            })}
-            <ExternalLink size={11} className="opacity-80" />
+            {primary.inlinePreview
+              ? t('files.actions.view_file', { defaultValue: 'View' })
+              : t('files.actions.open_in', {
+                  defaultValue: 'Open in {{module}}',
+                  module: t(primary.i18nKey, { defaultValue: primary.label }),
+                })}
+            {!primary.inlinePreview && (
+              <ExternalLink size={11} className="opacity-80" />
+            )}
           </button>
 
           {/* Secondary modules — same file, different tool (e.g. a PDF
@@ -541,6 +555,8 @@ export function FilePreviewPane({ row, onClose, onEmail, onShare, onManageAccess
               field_report: '/field-reports',
               submittal: '/submittals',
               meeting: '/meetings',
+              inspection: '/inspections',
+              ncr: '/ncr',
             };
             const base = targetRoute[ref.target_type] ?? `/${ref.target_type}`;
             navigate(`${base}/${ref.target_id}`);
@@ -613,6 +629,16 @@ export function FilePreviewPane({ row, onClose, onEmail, onShare, onManageAccess
         fileKind={row.kind}
         fileId={row.id}
         onClose={() => setLinkOpen(false)}
+      />
+
+      {/* #284 - focused inline PDF reader, opened by the primary "View"
+          action for a PDF document. PDF Takeoff remains a separate, explicit
+          choice in the secondary module chips above. */}
+      <InlinePdfPreviewModal
+        open={inlinePdfOpen}
+        downloadUrl={row.download_url}
+        title={row.name}
+        onClose={() => setInlinePdfOpen(false)}
       />
     </aside>
   );

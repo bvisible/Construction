@@ -38,6 +38,15 @@ import { scheduleApi } from './api';
 import { PlanningCrossLinks } from './PlanningCrossLinks';
 import { EvmPanel } from './EvmPanel';
 import { Snapshot4DView } from './Snapshot4DView';
+import { ScheduleQualityPanel } from './ScheduleQualityPanel';
+import { ScheduleRiskPanel } from './ScheduleRiskPanel';
+import { ScheduleComparePanel } from './ScheduleComparePanel';
+import { ScheduleInterchangePanel } from './ScheduleInterchangePanel';
+import { ProgressRigorPanel } from './ProgressRigorPanel';
+import { ScheduleDelayPanel } from './ScheduleDelayPanel';
+import { ScheduleCodesPanel } from './ScheduleCodesPanel';
+import { ScheduleResourcePanel } from './ScheduleResourcePanel';
+import { ScheduleRealtimePanel } from './ScheduleRealtimePanel';
 import { scheduleGuide } from './scheduleGuide';
 import { fetchBIMModels } from '@/features/bim/api';
 import type {
@@ -1082,7 +1091,9 @@ function ScheduleDetail({
   const addToast = useToastStore((s) => s.addToast);
   const { confirm, ...confirmProps } = useConfirm();
   const [zoomLevel, setZoomLevel] = useState<ZoomLevel>('week');
-  const [viewMode, setViewMode] = useState<'table' | 'gantt' | 'evm' | '4d'>('gantt');
+  const [viewMode, setViewMode] = useState<
+    'table' | 'gantt' | 'evm' | '4d' | 'quality' | 'risk' | 'compare' | 'progress' | 'delay' | 'codes' | 'resources' | 'realtime' | 'interchange'
+  >('gantt');
   const [showAddActivity, setShowAddActivity] = useState(false);
   const [showGenerateBOQ, setShowGenerateBOQ] = useState(false);
   const [selectedBOQId, setSelectedBOQId] = useState('');
@@ -1329,6 +1340,15 @@ function ScheduleDetail({
 
   const hasActivities = (ganttData?.summary.total_activities ?? 0) > 0;
 
+  // id -> name map so the Quality / Risk / Compare panels render readable
+  // activity labels instead of raw UUIDs. Derived from the Gantt rows the
+  // page already holds, so no extra fetch is needed.
+  const activitiesById = useMemo<Record<string, string>>(() => {
+    const map: Record<string, string> = {};
+    for (const a of ganttData?.activities ?? []) map[a.id] = a.name;
+    return map;
+  }, [ganttData]);
+
   // Filtered activities for the Gantt chart (Improvement #5)
   const filteredActivities = useMemo(() => {
     const activities = ganttData?.activities ?? [];
@@ -1425,6 +1445,15 @@ function ScheduleDetail({
                   { key: 'gantt' as const, label: t('schedule.view_gantt', 'Gantt') },
                   { key: 'evm' as const, label: t('schedule.view_evm', { defaultValue: 'EVM' }) },
                   { key: '4d' as const, label: t('schedule.view_4d', { defaultValue: '4D' }) },
+                  { key: 'quality' as const, label: t('schedule.view_quality', { defaultValue: 'Quality' }) },
+                  { key: 'risk' as const, label: t('schedule.view_risk', { defaultValue: 'Risk' }) },
+                  { key: 'compare' as const, label: t('schedule.view_compare', { defaultValue: 'Compare' }) },
+                  { key: 'progress' as const, label: t('schedule.view_progress', { defaultValue: 'Progress' }) },
+                  { key: 'delay' as const, label: t('schedule.view_delay', { defaultValue: 'Delay' }) },
+                  { key: 'codes' as const, label: t('schedule.view_codes', { defaultValue: 'Codes' }) },
+                  { key: 'resources' as const, label: t('schedule.view_resources', { defaultValue: 'Resources' }) },
+                  { key: 'realtime' as const, label: t('schedule.view_realtime', { defaultValue: 'Live' }) },
+                  { key: 'interchange' as const, label: t('schedule.view_interchange', { defaultValue: 'Interchange' }) },
                 ]).map((v) => (
                   <button
                     key={v.key}
@@ -1444,7 +1473,7 @@ function ScheduleDetail({
               {/* Zoom only applies to the timeline views (table / gantt). */}
               <div
                 className={`flex items-center gap-1 rounded-lg border border-border-light p-0.5 ${
-                  viewMode === 'evm' || viewMode === '4d' ? 'hidden' : ''
+                  viewMode !== 'table' && viewMode !== 'gantt' ? 'hidden' : ''
                 }`}
               >
                 {(['day', 'week', 'month', 'quarter', 'year'] as const).map((level) => (
@@ -1654,7 +1683,8 @@ function ScheduleDetail({
             </div>
           )}
 
-          {/* Main content: timeline (Gantt / Table), EVM panel, or 4D snapshot */}
+          {/* Main content: timeline (Gantt / Table), EVM, 4D snapshot,
+              schedule quality, Monte-Carlo risk, or baseline comparison */}
           <div className="mt-6">
             {viewMode === 'evm' ? (
               <EvmPanel scheduleId={schedule.id} currency={projectCurrency} />
@@ -1664,6 +1694,51 @@ function ScheduleDetail({
                 projectId={projectId}
                 scheduleStart={schedule.start_date}
                 scheduleEnd={schedule.end_date}
+              />
+            ) : viewMode === 'quality' ? (
+              <ScheduleQualityPanel scheduleId={schedule.id} activitiesById={activitiesById} />
+            ) : viewMode === 'risk' ? (
+              <ScheduleRiskPanel scheduleId={schedule.id} activitiesById={activitiesById} />
+            ) : viewMode === 'compare' ? (
+              <ScheduleComparePanel
+                scheduleId={schedule.id}
+                projectId={projectId}
+                currency={projectCurrency}
+                activitiesById={activitiesById}
+              />
+            ) : viewMode === 'interchange' ? (
+              <ScheduleInterchangePanel scheduleId={schedule.id} projectId={projectId} />
+            ) : viewMode === 'progress' ? (
+              <ProgressRigorPanel
+                scheduleId={schedule.id}
+                activities={(ganttData?.activities ?? []).map((a) => ({
+                  id: a.id,
+                  name: a.name,
+                  progress_pct: a.progress_pct,
+                  status: a.status,
+                }))}
+                currency={projectCurrency}
+                dataDate={schedule.start_date}
+              />
+            ) : viewMode === 'delay' ? (
+              <ScheduleDelayPanel
+                scheduleId={schedule.id}
+                projectId={projectId}
+                activitiesById={activitiesById}
+              />
+            ) : viewMode === 'codes' ? (
+              <ScheduleCodesPanel scheduleId={schedule.id} projectId={projectId} />
+            ) : viewMode === 'resources' ? (
+              <ScheduleResourcePanel
+                scheduleId={schedule.id}
+                projectId={projectId}
+                activitiesById={activitiesById}
+              />
+            ) : viewMode === 'realtime' ? (
+              <ScheduleRealtimePanel
+                scheduleId={schedule.id}
+                projectId={projectId}
+                activitiesById={activitiesById}
               />
             ) : isLoading ? (
               <SkeletonTable rows={4} columns={4} />
@@ -2423,7 +2498,7 @@ export function SchedulePage() {
                   )}
                 </div>
                 <Badge variant="blue" size="sm">
-                  {project.classification_standard === 'din276' ? 'DIN 276' : project.classification_standard?.toUpperCase() || '—'}
+                  {project.classification_standard === 'din276' ? 'DIN 276' : project.classification_standard?.toUpperCase() || '-'}
                 </Badge>
                 <ChevronRight size={16} className="shrink-0 text-content-tertiary" />
               </div>

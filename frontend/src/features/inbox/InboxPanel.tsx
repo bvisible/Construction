@@ -27,7 +27,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import clsx from 'clsx';
-import { Badge, Card, CardContent, CardHeader } from '@/shared/ui';
+import { Badge, Card, CardHeader } from '@/shared/ui';
 import { fetchInbox, type InboxItem, type InboxSeverity } from './api';
 import {
   countApprovals,
@@ -220,9 +220,62 @@ export function InboxPanel({ limit = 8, showHeader = true, compact = false }: In
     );
   }
 
+  // ── Dashboard widget mode ──────────────────────────────────────────────
+  //    A two-pane card so a sparse inbox never leaves the row mostly empty
+  //    (the common case is a handful of items). The list takes the left
+  //    side; a compact summary rail - approvals vs alerts + a one-line hint
+  //    - fills the right on desktop and folds to a top strip on mobile. The
+  //    rail only appears when there are items; the loading, error and
+  //    "all caught up" states already center across the full width.
+  const hasItems = !isLoading && !isError && items.length > 0;
+
+  const summaryRail = (
+    <div className="flex shrink-0 flex-row items-stretch gap-3 border-b border-border-light px-4 py-3 lg:w-56 lg:flex-col lg:gap-3 lg:border-b-0 lg:border-l lg:py-4">
+      <button
+        type="button"
+        onClick={() => navigate('/inbox')}
+        className="group flex flex-1 items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-surface-secondary lg:flex-none"
+      >
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-amber-50 dark:bg-amber-900/20">
+          <ClipboardCheck size={15} className="text-amber-500" />
+        </span>
+        <span className="min-w-0">
+          <span className="block text-lg font-bold leading-none tabular-nums text-content-primary">
+            {approvalsCount}
+          </span>
+          <span className="mt-0.5 block text-2xs text-content-tertiary">
+            {t('inbox.approvals_label', { defaultValue: 'approvals' })}
+          </span>
+        </span>
+      </button>
+      <button
+        type="button"
+        onClick={() => navigate('/inbox')}
+        className="group flex flex-1 items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-surface-secondary lg:flex-none"
+      >
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-oe-blue-subtle">
+          <Bell size={15} className="text-oe-blue" />
+        </span>
+        <span className="min-w-0">
+          <span className="block text-lg font-bold leading-none tabular-nums text-content-primary">
+            {alertsCount}
+          </span>
+          <span className="mt-0.5 block text-2xs text-content-tertiary">
+            {t('inbox.alerts_label', { defaultValue: 'alerts' })}
+          </span>
+        </span>
+      </button>
+      <p className="hidden text-2xs leading-relaxed text-content-tertiary lg:mt-auto lg:block">
+        {t('inbox.rail_hint', {
+          defaultValue: 'Approvals and alerts that need you, newest first.',
+        })}
+      </p>
+    </div>
+  );
+
   return (
-    <Card className="h-full" padding="none">
-      <div className="px-4 pt-4">
+    <Card padding="none">
+      <div className="px-4 pb-2 pt-4">
         <CardHeader
           title={
             <span className="inline-flex items-center gap-2">
@@ -247,24 +300,10 @@ export function InboxPanel({ limit = 8, showHeader = true, compact = false }: In
           }
         />
       </div>
-      {/* Summary chips - approvals vs alerts at a glance. */}
-      {!isLoading && !isError && items.length > 0 && (
-        <div className="flex items-center gap-2 px-4 pb-2 text-2xs text-content-tertiary">
-          <span className="inline-flex items-center gap-1">
-            <ClipboardCheck size={12} className="text-amber-500" />
-            {t('inbox.approvals_count', {
-              defaultValue: '{{count}} approvals',
-              count: approvalsCount,
-            })}
-          </span>
-          <span aria-hidden>·</span>
-          <span className="inline-flex items-center gap-1">
-            <Bell size={12} className="text-oe-blue" />
-            {t('inbox.alerts_count', { defaultValue: '{{count}} alerts', count: alertsCount })}
-          </span>
-        </div>
-      )}
-      <CardContent className="!mt-0 !p-0">{body}</CardContent>
+      <div className="flex flex-col lg:flex-row lg:items-stretch">
+        <div className="order-2 min-w-0 flex-1 lg:order-1">{body}</div>
+        {hasItems && <div className="order-1 lg:order-2">{summaryRail}</div>}
+      </div>
     </Card>
   );
 }

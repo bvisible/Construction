@@ -21,6 +21,7 @@ import {
   Sparkles,
   Palette,
   Bookmark,
+  ListTree,
 } from 'lucide-react';
 import type {
   BIMElementData,
@@ -44,13 +45,15 @@ import BIMLinkedBOQPanel from './BIMLinkedBOQPanel';
 import BIMGroupsPanel from './BIMGroupsPanel';
 import BIMLayersPanel from './BIMLayersPanel';
 import BIMToolsPanel from './BIMToolsPanel';
+import BIMSpatialTreePanel from './BIMSpatialTreePanel';
+import BIMFilterReportModal from './BIMFilterReportModal';
 import ColorByPropertyPanel from './ColorByPropertyPanel';
 import SelectionSetsPanel from './SelectionSetsPanel';
 import { MatchSuggestionsPanel, useAcceptMatch } from '@/features/match';
 import type { MatchCandidate } from '@/features/match';
 import { boqApi, type BOQ } from '@/features/boq/api';
 import { useToastStore } from '@/stores/useToastStore';
-import type { BIMElementGroup } from './api';
+import type { BIMElementGroup, BoqExportScope, BoqGroupBy } from './api';
 
 interface BIMRightPanelTabsProps {
   modelId: string;
@@ -88,6 +91,13 @@ export default function BIMRightPanelTabs({
   const { t } = useTranslation();
   const activeTab = useBIMViewerStore((s) => s.rightPanelTab);
   const setRightPanelTab = useBIMViewerStore((s) => s.setRightPanelTab);
+
+  // Filter-report modal (B5). Holds the scoped element subset + a label so the
+  // report opens against exactly the scope the user picked in the Tools panel.
+  const [reportState, setReportState] = useState<{
+    elements: BIMElementData[];
+    scopeLabel: string;
+  } | null>(null);
 
   const handleTabClick = useCallback(
     (tab: BIMRightPanelTab) => setRightPanelTab(tab),
@@ -252,7 +262,7 @@ export default function BIMRightPanelTabs({
   // The list comes from the static `tabs` declaration below; we need it
   // here for the hook, so the ids list is extracted into a stable const.
   const TAB_IDS: BIMRightPanelTab[] = [
-    'properties', 'layers', 'tools', 'trait-lens', 'bundles', 'groups', 'match',
+    'properties', 'structure', 'layers', 'tools', 'trait-lens', 'bundles', 'groups', 'match',
   ];
   const onTabKeyDown = useTabKeyboardNav<BIMRightPanelTab>({
     ids: TAB_IDS,
@@ -270,6 +280,11 @@ export default function BIMRightPanelTabs({
       id: 'properties',
       label: t('bim.tab_properties', { defaultValue: 'Properties' }),
       icon: ClipboardList,
+    },
+    {
+      id: 'structure',
+      label: t('bim.tab_structure', { defaultValue: 'Structure' }),
+      icon: ListTree,
     },
     {
       id: 'layers',
@@ -364,6 +379,21 @@ export default function BIMRightPanelTabs({
             onClose={onClose}
           />
         )}
+        {activeTab === 'structure' && (
+          <BIMSpatialTreePanel
+            elements={elements}
+            selectedElementId={selectedElementId ?? null}
+            onSelectElement={(id) => {
+              // Prefer a real viewer selection (clears others, updates the
+              // Properties tab via onElementSelect); fall back to a highlight
+              // before the scene has mounted its managers.
+              const sm = bridgeManagers.selectionManager;
+              if (sm) sm.selectByIds([id]);
+              else onHighlightBOQElements([id]);
+            }}
+            onHighlightElements={onHighlightBOQElements}
+          />
+        )}
         {activeTab === 'layers' && <BIMLayersPanel elements={elements} />}
         {activeTab === 'tools' && (
           <BIMToolsPanel
@@ -373,6 +403,56 @@ export default function BIMRightPanelTabs({
             getCurrentClipState={getCurrentClipState}
             getCurrentScreenshot={getCurrentScreenshot}
             onApplyViewpoint={onApplyViewpoint}
+            getExportContext={() => {
+              // Resolve the live selection + active storey/type filter so the
+              // BOQ export can scope to exactly what the user sees. Both come
+              // off the same window bridges the rest of this panel uses.
+              const snap = getFilterBridge()?.get();
+              const filters =
+                snap && (snap.storeys.length > 0 || snap.types.length > 0)
+                  ? {
+                      ...(snap.storeys.length > 0 ? { storey: snap.storeys } : {}),
+                      ...(snap.types.length > 0 ? { element_type: snap.types } : {}),
+                    }
+                  : null;
+              return {
+                selectedIds: bridgeManagers.selectionManager?.getSelectedIds() ?? [],
+                filters,
+              };
+            }}
+            onOpenReport={(scope: BoqExportScope, _groupBy: BoqGroupBy) => {
+              // Resolve the scope to a concrete element subset, mirroring the
+              // export's scope semantics, then open the on-screen report.
+              let scoped = elements;
+              let scopeLabel = t('bim.report.scope_all', { defaultValue: 'Whole model' });
+              if (scope === 'selected') {
+                const ids = new Set(bridgeManagers.selectionManager?.getSelectedIds() ?? []);
+                scoped = elements.filter((e) => ids.has(e.id));
+                scopeLabel = t('bim.report.scope_selected', {
+                  defaultValue: 'Selected elements',
+                });
+              } else if (scope === 'filter') {
+                const f = getFilterBridge()?.get();
+                if (f) {
+                  const search = (f.search || '').toLowerCase();
+                  const storeys = new Set(f.storeys);
+                  const types = new Set(f.types);
+                  scoped = elements.filter((e) => {
+                    if (storeys.size > 0 && !(e.storey && storeys.has(e.storey))) return false;
+                    if (types.size > 0 && !(e.element_type && types.has(e.element_type)))
+                      return false;
+                    if (search) {
+                      const hay =
+                        `${e.name ?? ''} ${e.element_type ?? ''} ${e.storey ?? ''}`.toLowerCase();
+                      if (!hay.includes(search)) return false;
+                    }
+                    return true;
+                  });
+                  scopeLabel = t('bim.report.scope_filter', { defaultValue: 'Current filter' });
+                }
+              }
+              setReportState({ elements: scoped, scopeLabel });
+            }}
           />
         )}
         {activeTab === 'trait-lens' && (
@@ -438,6 +518,16 @@ export default function BIMRightPanelTabs({
           />
         )}
       </div>
+
+      {reportState && (
+        <BIMFilterReportModal
+          open
+          onClose={() => setReportState(null)}
+          modelId={modelId}
+          scopeLabel={reportState.scopeLabel}
+          elements={reportState.elements}
+        />
+      )}
     </div>
   );
 }

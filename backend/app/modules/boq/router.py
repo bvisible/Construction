@@ -4057,6 +4057,19 @@ async def export_boq_pdf(
     payload: CurrentUserPayload,
     session: SessionDep,
     service: BOQService = Depends(_get_service),
+    measurement_system: Literal["metric", "imperial"] = Query(
+        "metric",
+        description=(
+            "Measurement system for the PRINTED quantity column. ``metric`` "
+            "(default) keeps canonical units; ``imperial`` converts each "
+            "position's physical quantity + unit label (m -> ft, m² -> ft² "
+            "...) and restates the paired per-unit rate reciprocally (50 / m "
+            "-> 15.24 / ft) so a converted line still reconciles. Line and "
+            "project totals are never converted or recomputed. This is a "
+            "human-facing report option only; the CSV / Excel / GAEB exports "
+            "stay canonical metric and ignore this parameter."
+        ),
+    ),
 ) -> StreamingResponse:
     """Export BOQ as a professional PDF cost estimate report.
 
@@ -4067,6 +4080,12 @@ async def export_boq_pdf(
 
     For large BOQs (> 500 positions), a simplified summary report is generated
     to avoid memory issues and connection resets on Windows.
+
+    Passing ``?measurement_system=imperial`` converts the printed quantity
+    column to imperial (GitHub #270) and restates each line's per-unit rate
+    reciprocally so a converted line reconciles; line and project totals are
+    left invariant in the project currency, and the data-interchange exports
+    are unaffected.
     """
     from app.modules.boq.pdf_export import (
         LARGE_BOQ_THRESHOLD,
@@ -4116,6 +4135,7 @@ async def export_boq_pdf(
                 project_name=project.name,
                 currency=(project.currency or "").strip(),
                 prepared_by=prepared_by,
+                measurement_system=measurement_system,
             )
         else:
             pdf_bytes = generate_boq_pdf(
@@ -4123,6 +4143,7 @@ async def export_boq_pdf(
                 project_name=project.name,
                 currency=(project.currency or "").strip(),
                 prepared_by=prepared_by,
+                measurement_system=measurement_system,
             )
     except Exception:
         _log.exception("PDF generation failed for BOQ %s", boq_id)

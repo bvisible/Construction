@@ -848,3 +848,666 @@ export function getLOB(taktId: string): Promise<LineOfBalance> {
     )}/line-of-balance`,
   );
 }
+
+/* ── Claims-grade schedule quality (T1.2) ─────────────────────────────────
+ *
+ * Read-only forensic analysis of a base ``schedule`` (its Activity +
+ * ScheduleRelationship rows) - NOT a Last Planner master schedule. The
+ * ``scheduleId`` is therefore a /v1/schedule schedule id. One CPM pass over
+ * the four PDM link types yields the Longest Path, the ranked float-path
+ * decomposition, the scheduling QA log and per-activity explain strings.
+ * Backend: POST /v1/schedule-advanced/{schedule_id}/schedule-quality
+ * (schemas: ScheduleQualityResponse, FloatPathSchema, QAFindingSchema,
+ * ActivityExplanationSchema).
+ */
+
+/** One ranked float path. Index 0 is the Longest (driving) path. */
+export interface FloatPath {
+  index: number;
+  activity_ids: string[];
+  length_days: number;
+  relative_float: number;
+}
+
+/** One scheduling-quality finding (a row in the QA log). */
+export interface QAFinding {
+  code: string;
+  /** Numeric severity: higher is worse. 3 = error, 2 = warning, 1 = info. */
+  severity: number;
+  activity_id: string;
+  message: string;
+}
+
+/** Generated, numbers-faithful explain strings for one activity. */
+export interface ActivityExplanation {
+  activity_id: string;
+  why_critical: string;
+  float_explanation: string;
+}
+
+export interface ScheduleQuality {
+  schedule_id: string;
+  project_finish_workday: number;
+  num_activities: number;
+  num_critical: number;
+  longest_path: string[];
+  longest_path_length_days: number;
+  critical_activity_ids: string[];
+  float_paths: FloatPath[];
+  qa_log: QAFinding[];
+  explanations: ActivityExplanation[];
+}
+
+/**
+ * Run the claims-grade schedule-quality analysis for a base schedule.
+ * The endpoint takes no request body; the schedule is read server-side.
+ */
+export function scheduleQuality(scheduleId: string): Promise<ScheduleQuality> {
+  return apiPost<ScheduleQuality>(
+    `/v1/schedule-advanced/${encodeURIComponent(scheduleId)}/schedule-quality`,
+    {},
+  );
+}
+
+/* ── Monte-Carlo schedule risk + Joint Confidence Level (T2.1) ────────────
+ *
+ * Correlated Monte-Carlo schedule-risk simulation for a base ``schedule``.
+ * Activity durations are sampled (Latin Hypercube by default) around their
+ * stored value, returning finish-date percentiles, an S-curve, a histogram,
+ * the per-activity criticality index, a duration tornado and - when
+ * ``cost_inputs`` is supplied - the Joint Confidence Level.
+ * Backend: POST /v1/schedule-advanced/{schedule_id}/schedule-risk
+ * (schemas: ScheduleRiskRequest, ScheduleRiskResponse).
+ */
+
+export type RiskDistribution =
+  | 'pert'
+  | 'triangular'
+  | 'uniform'
+  | 'normal'
+  | 'lognormal';
+
+/** Optional cost side of a run - enables the Joint Confidence Level. */
+export interface CostRiskInput {
+  base_cost: number;
+  cost_low?: number | null;
+  cost_mode?: number | null;
+  cost_high?: number | null;
+  cost_target?: number | null;
+  distribution?: RiskDistribution;
+}
+
+/** Optional per-activity three-point duration override for a risk run. */
+export interface ActivityRiskInput {
+  activity_id: string;
+  low?: number | null;
+  mode?: number | null;
+  high?: number | null;
+  distribution?: RiskDistribution;
+}
+
+export interface ScheduleRiskRequestBody {
+  iterations?: number;
+  correlation?: number;
+  seed?: number | null;
+  sampling?: 'lhs' | 'mc';
+  target_confidence?: number;
+  optimistic_pct?: number;
+  pessimistic_pct?: number;
+  activity_risks?: ActivityRiskInput[];
+  cost_inputs?: CostRiskInput | null;
+}
+
+/** How often an activity drives the schedule, and how strongly. */
+export interface CriticalityStat {
+  activity_id: string;
+  criticality_index: number;
+  cruciality: number;
+  duration_sensitivity: number;
+  mean_duration: number;
+}
+
+/** A tornado entry: an activity's rank correlation to the finish. */
+export interface ScheduleDriver {
+  activity_id: string;
+  rank_correlation: number;
+  swing_low: number;
+  swing_high: number;
+}
+
+/** One histogram bar over the simulated finish-day distribution. */
+export interface HistBin {
+  bin_start: number;
+  bin_end: number;
+  count: number;
+}
+
+/** One point on the cumulative S-curve (``x`` = finish work-day). */
+export interface CdfPoint {
+  x: number;
+  cumulative_prob: number;
+}
+
+/** One sampled (finish, cost) draw for the JCL scatter cloud. */
+export interface ScatterPoint {
+  finish: number;
+  cost: number;
+}
+
+export interface JointConfidence {
+  target_finish: number;
+  target_cost: number;
+  jcl: number;
+  prob_on_time: number;
+  prob_on_budget: number;
+  cost_mean: number;
+  cost_percentiles: Record<string, number>;
+  correlation: number;
+  scatter: ScatterPoint[];
+}
+
+export interface ScheduleRisk {
+  schedule_id: string;
+  iterations: number;
+  deterministic_finish: number;
+  mean: number;
+  std_dev: number;
+  cv_pct: number;
+  percentiles: Record<string, number>;
+  contingency: number;
+  contingency_pct: number;
+  recommended_finish: number;
+  target_confidence: number;
+  prob_within_deterministic: number;
+  correlation: number;
+  seed: number;
+  convergence_status: string;
+  convergence_margin_pct: number;
+  histogram: HistBin[];
+  cdf: CdfPoint[];
+  criticality: CriticalityStat[];
+  drivers: ScheduleDriver[];
+  joint_confidence: JointConfidence | null;
+}
+
+/** Run a Monte-Carlo schedule-risk simulation for a base schedule. */
+export function scheduleRisk(
+  scheduleId: string,
+  body: ScheduleRiskRequestBody = {},
+): Promise<ScheduleRisk> {
+  return apiPost<ScheduleRisk, ScheduleRiskRequestBody>(
+    `/v1/schedule-advanced/${encodeURIComponent(scheduleId)}/schedule-risk`,
+    body,
+  );
+}
+
+/* ── Guided forensic delay analysis (T2.2) ────────────────────────────────
+ *
+ * Persisted, exhibit-producing delay-analysis flow over a base ``schedule``
+ * (its Activity + ScheduleRelationship rows). An analysis carries a method
+ * (TIA, windows, as-planned-vs-as-built, impacted-as-planned, collapsed-as-
+ * built), a set of causative delay events (with optional fragnets), and -
+ * once computed - per-window attribution + the total entitlement (excusable /
+ * compensable) days. The full contract derived from the backend
+ * (backend/app/modules/schedule_advanced/router.py + schemas.py + delay_service.py):
+ *
+ *   POST   /v1/schedule-advanced/delay-analyses?project_id=<uuid>
+ *            body DelayAnalysisCreate -> DelayAnalysisResponse (201)
+ *            (project_id is a QUERY param; the body must NOT include it)
+ *   GET    /v1/schedule-advanced/delay-analyses?project_id=<uuid>
+ *            -> DelayAnalysisListItem[]
+ *   GET    /v1/schedule-advanced/delay-analyses/{id} -> DelayAnalysisResponse
+ *   PATCH  /v1/schedule-advanced/delay-analyses/{id}  (draft only)
+ *   DELETE /v1/schedule-advanced/delay-analyses/{id}  (not issued) -> 204
+ *   POST   /v1/schedule-advanced/delay-analyses/{id}/events
+ *            body DelayEventCreate -> DelayEventResponse (201, draft only)
+ *   PATCH  /v1/schedule-advanced/delay-analyses/{id}/events/{eventId}
+ *   DELETE /v1/schedule-advanced/delay-analyses/{id}/events/{eventId} -> 204
+ *   PUT    /v1/schedule-advanced/delay-analyses/{id}/events/{eventId}/fragnet
+ *   POST   /v1/schedule-advanced/delay-analyses/{id}/auto-fragnet
+ *            body AutoFragnetRequest -> FragnetResponse
+ *   POST   /v1/schedule-advanced/delay-analyses/{id}/compute
+ *            body DelayComputeRequest (optional apportionment override)
+ *            -> DelayAnalysisResponse (status -> "computed", fills windows + totals)
+ *   POST   /v1/schedule-advanced/delay-analyses/{id}/issue
+ *            -> DelayAnalysisResponse (e-sign; computed -> "issued", immutable)
+ *   POST   /v1/schedule-advanced/delay-analyses/{id}/raise-eot-claim
+ *            -> RaiseEotClaimResponse (computed|issued only)
+ *
+ * The headline numbers (total_entitlement_days, concurrent_days, window_count,
+ * status) live as first-class fields on DelayAnalysisResponse; per-window
+ * attribution lives in ``windows`` (DelayWindowResponse). ``result_json`` is a
+ * method-dependent exhibit blob (loosely typed here as a record).
+ */
+
+export type DelayMethod =
+  | 'tia'
+  | 'windows'
+  | 'as_planned_vs_as_built'
+  | 'impacted_as_planned'
+  | 'collapsed_as_built';
+export type DelayResponsibility = 'employer' | 'contractor' | 'neutral' | 'shared';
+export type DelayApportionment = 'none' | 'dominant_cause' | 'time_but_for' | 'malmaison';
+export type DelayOosMode = 'retained_logic' | 'progress_override';
+export type DelayStatus = 'draft' | 'computed' | 'issued';
+export type FragnetInsertMode =
+  | 'lengthen_activity'
+  | 'insert_after'
+  | 'insert_parallel'
+  | 'suspend_resume';
+
+export interface DelayFragnet {
+  id: string;
+  delay_event_id: string;
+  insert_mode: string;
+  insert_at_activity_ref: string;
+  added_duration_days: number;
+  fragnet_activities: Array<Record<string, unknown>>;
+  rewires: Array<Record<string, unknown>>;
+  applies_in_window?: number | null;
+}
+
+export interface DelayEvent {
+  id: string;
+  analysis_id: string;
+  code: string;
+  title: string;
+  description: string;
+  root_cause: string;
+  responsibility: DelayResponsibility;
+  risk_event_category: string;
+  is_concurrent: boolean;
+  concurrency_group: string;
+  is_pacing: boolean;
+  source_ref_type?: string | null;
+  source_ref_id?: string | null;
+  insert_at_activity_ref: string;
+  event_start?: string | null;
+  event_end?: string | null;
+  start_workday?: number | null;
+  end_workday?: number | null;
+  fragnets: DelayFragnet[];
+}
+
+/** One analysis window: gross slip decomposed into responsibility buckets. */
+export interface DelayWindow {
+  id: string;
+  sequence_order: number;
+  window_start?: string | null;
+  window_end?: string | null;
+  finish_at_open: number;
+  finish_at_close: number;
+  gross_slip_days: number;
+  employer_days: number;
+  contractor_days: number;
+  neutral_days: number;
+  concurrent_days: number;
+  net_entitlement_days: number;
+  narrative: string;
+}
+
+/** A row in the analyses list. */
+export interface DelayAnalysisListItem {
+  id: string;
+  project_id: string;
+  schedule_id?: string | null;
+  method: DelayMethod;
+  name: string;
+  status: DelayStatus;
+  total_entitlement_days: number;
+  window_count: number;
+  issued_at?: string | null;
+}
+
+/** A full analysis with its events, windows and exhibit result. */
+export interface DelayAnalysis {
+  id: string;
+  project_id: string;
+  schedule_id?: string | null;
+  method: DelayMethod;
+  name: string;
+  description: string;
+  as_planned_baseline_id?: string | null;
+  as_built_snapshot_id?: string | null;
+  oos_mode: DelayOosMode;
+  data_date?: string | null;
+  apportionment_method: DelayApportionment;
+  status: DelayStatus;
+  window_count: number;
+  total_entitlement_days: number;
+  concurrent_days: number;
+  result_json: Record<string, unknown>;
+  issued_at?: string | null;
+  issued_by?: string | null;
+  signature_sha256?: string | null;
+  eot_claim_id?: string | null;
+  events: DelayEvent[];
+  windows: DelayWindow[];
+}
+
+export interface DelayAnalysisCreateBody {
+  name: string;
+  method?: DelayMethod;
+  schedule_id?: string | null;
+  description?: string;
+  apportionment_method?: DelayApportionment;
+  oos_mode?: DelayOosMode;
+  data_date?: string | null;
+}
+
+export interface DelayEventCreateBody {
+  title: string;
+  code?: string;
+  description?: string;
+  root_cause?: string;
+  responsibility?: DelayResponsibility;
+  risk_event_category?: string;
+  is_concurrent?: boolean;
+  is_pacing?: boolean;
+  insert_at_activity_ref?: string;
+  event_start?: string | null;
+  event_end?: string | null;
+  start_workday?: number | null;
+  end_workday?: number | null;
+}
+
+export interface AutoFragnetBody {
+  delay_event_id: string;
+  insert_mode?: FragnetInsertMode;
+  insert_at_activity_ref: string;
+  added_days: number;
+}
+
+export interface RaiseEotClaimResult {
+  eot_claim_id: string;
+  delay_analysis_id: string;
+  requested_days: number;
+}
+
+/** List the forensic delay analyses for a project. */
+export function listDelayAnalyses(
+  projectId: string,
+): Promise<DelayAnalysisListItem[]> {
+  return apiGet<DelayAnalysisListItem[]>(
+    `/v1/schedule-advanced/delay-analyses?project_id=${encodeURIComponent(projectId)}`,
+  );
+}
+
+/** Fetch one analysis with its events, windows and exhibit result. */
+export function getDelayAnalysis(analysisId: string): Promise<DelayAnalysis> {
+  return apiGet<DelayAnalysis>(
+    `/v1/schedule-advanced/delay-analyses/${encodeURIComponent(analysisId)}`,
+  );
+}
+
+/**
+ * Create a draft analysis under a project. ``project_id`` is a query param on
+ * the backend (the body schema does not carry it), so it is passed separately.
+ */
+export function createDelayAnalysis(
+  projectId: string,
+  body: DelayAnalysisCreateBody,
+): Promise<DelayAnalysis> {
+  return apiPost<DelayAnalysis, DelayAnalysisCreateBody>(
+    `/v1/schedule-advanced/delay-analyses?project_id=${encodeURIComponent(projectId)}`,
+    body,
+  );
+}
+
+/** Add a causative delay event to a draft analysis. */
+export function addDelayEvent(
+  analysisId: string,
+  body: DelayEventCreateBody,
+): Promise<DelayEvent> {
+  return apiPost<DelayEvent, DelayEventCreateBody>(
+    `/v1/schedule-advanced/delay-analyses/${encodeURIComponent(analysisId)}/events`,
+    body,
+  );
+}
+
+/** Wizard helper: synthesise + attach a default fragnet for an event. */
+export function autoDelayFragnet(
+  analysisId: string,
+  body: AutoFragnetBody,
+): Promise<DelayFragnet> {
+  return apiPost<DelayFragnet, AutoFragnetBody>(
+    `/v1/schedule-advanced/delay-analyses/${encodeURIComponent(analysisId)}/auto-fragnet`,
+    body,
+  );
+}
+
+/**
+ * Run the analysis method, persisting windows + totals + the exhibit result.
+ * The body only carries an optional apportionment override; the schedule and
+ * events are read server-side.
+ */
+export function computeDelayAnalysis(
+  analysisId: string,
+  apportionmentMethod?: DelayApportionment,
+): Promise<DelayAnalysis> {
+  return apiPost<DelayAnalysis, { apportionment_method?: DelayApportionment }>(
+    `/v1/schedule-advanced/delay-analyses/${encodeURIComponent(analysisId)}/compute`,
+    apportionmentMethod ? { apportionment_method: apportionmentMethod } : {},
+  );
+}
+
+/** Freeze + e-sign a computed analysis (issued analyses are immutable). */
+export function issueDelayAnalysis(analysisId: string): Promise<DelayAnalysis> {
+  return apiPost<DelayAnalysis>(
+    `/v1/schedule-advanced/delay-analyses/${encodeURIComponent(analysisId)}/issue`,
+    {},
+  );
+}
+
+/** Create an Extension-of-Time claim pre-filled from a computed analysis. */
+export function raiseEotClaim(analysisId: string): Promise<RaiseEotClaimResult> {
+  return apiPost<RaiseEotClaimResult>(
+    `/v1/schedule-advanced/delay-analyses/${encodeURIComponent(analysisId)}/raise-eot-claim`,
+    {},
+  );
+}
+
+/* ----- T3.1 resource depth ------------------------------------------------
+ *
+ * Two distinct backends, two distinct id-spaces - kept honest in the UI:
+ *
+ *   1. Time-phased histogram lives on the Resources module, NOT
+ *      schedule-advanced. It is keyed by a *Resource entity* UUID (a row in the
+ *      resources table), and reads that resource's bookings/assignments, rates
+ *      and availability windows:
+ *        GET  /v1/resources/                         -> ResourceListItem[]
+ *               (tenant-wide; filterable by ?type / ?status only - there is no
+ *                project_id filter on the backend list endpoint)
+ *        GET  /v1/resources/{resource_id}/histogram  -> ResourceHistogram
+ *               query: start, end (ISO datetimes, required), bucket=week|month,
+ *               rate_type=cost|billing|overtime, hours_per_day (>0, <=24)
+ *      Backend: resources/resource_depth_router.py + resource_depth_schemas.py.
+ *      ``demand_cost`` is money (Decimal-as-string, v3 §10).
+ *
+ *   2. Leveling lives on schedule-advanced and is keyed by the *schedule* id.
+ *      Its resource "limits" are keyed by the resource *name string* embedded in
+ *      each activity's resources JSON (e.g. "Crew A" -> 3) - a separate id-space
+ *      from the Resource entities above:
+ *        POST /v1/schedule-advanced/{schedule_id}/level-preview -> LevelPreview
+ *        POST /v1/schedule-advanced/{schedule_id}/level-apply   -> LevelApply
+ *      Body (both): { resource_limits: {name: max}, splittable: activityId[] }.
+ *      Backend: schedule_advanced/router.py + resource_leveling_schemas.py.
+ */
+
+/** A resource row from the tenant-wide resources list (histogram picker). */
+export interface ResourceListItem {
+  id: string;
+  code: string;
+  name: string;
+  resource_type: string;
+  home_project_id?: string | null;
+  default_cost_rate: string | number;
+  currency: string;
+  capacity_percent?: number | null;
+  status: string;
+}
+
+/** One assignment's contribution to a histogram bucket. */
+export interface ResourceHistogramBooking {
+  assignment_id: string;
+  project_id?: string | null;
+  units: number;
+  unit_kind: string;
+}
+
+/** One time bucket of a resource's histogram (a calendar window, not a bin). */
+export interface ResourceHistogramCell {
+  bucket_index: number;
+  start: string;
+  end: string;
+  label: string;
+  demand_units: number;
+  /** Money: Decimal-as-string (cents-faithful), v3 §10. */
+  demand_cost: string | number;
+  /** Availability units for the bucket; null when capacity is unknown. */
+  available: number | null;
+  capacity_unknown: boolean;
+  over_allocated: boolean;
+  bookings: ResourceHistogramBooking[];
+}
+
+export interface ResourceHistogram {
+  resource_id: string;
+  bucket: string;
+  capacity_units: number | null;
+  peak_demand: number;
+  over_allocated_buckets: number;
+  cells: ResourceHistogramCell[];
+}
+
+export type HistogramBucket = 'week' | 'month';
+export type HistogramRateType = 'cost' | 'billing' | 'overtime';
+
+export interface ResourceHistogramParams {
+  start: string;
+  end: string;
+  bucket?: HistogramBucket;
+  rate_type?: HistogramRateType;
+  hours_per_day?: number;
+}
+
+/** List the tenant's resources (for the histogram resource picker). */
+export function listResources(params?: {
+  type?: string;
+  status?: string;
+  limit?: number;
+}): Promise<ResourceListItem[]> {
+  const qs = new URLSearchParams();
+  if (params?.type) qs.set('type', params.type);
+  if (params?.status) qs.set('status', params.status);
+  if (params?.limit !== undefined) qs.set('limit', String(params.limit));
+  const suffix = qs.toString() ? `?${qs.toString()}` : '';
+  return apiGet<ResourceListItem[]>(`/v1/resources/${suffix}`);
+}
+
+/** Time-phased demand / availability / cost histogram for one resource. */
+export function resourceHistogram(
+  resourceId: string,
+  params: ResourceHistogramParams,
+): Promise<ResourceHistogram> {
+  const qs = new URLSearchParams();
+  qs.set('start', params.start);
+  qs.set('end', params.end);
+  qs.set('bucket', params.bucket ?? 'week');
+  qs.set('rate_type', params.rate_type ?? 'cost');
+  qs.set('hours_per_day', String(params.hours_per_day ?? 8));
+  return apiGet<ResourceHistogram>(
+    `/v1/resources/${encodeURIComponent(resourceId)}/histogram?${qs.toString()}`,
+  );
+}
+
+/** One activity whose early start moved under a leveling preview. */
+export interface LevelPreviewShift {
+  activity_id: string;
+  base_es: number;
+  new_es: number;
+  delta: number;
+}
+
+/** One placed day-run of a split activity (work-day indices). */
+export interface LevelPreviewSegmentRun {
+  start: number;
+  finish: number;
+}
+
+/** A splittable activity placed across multiple day-runs. */
+export interface LevelPreviewSegment {
+  activity_id: string;
+  runs: LevelPreviewSegmentRun[];
+}
+
+/** A single-activity self-overload leveling cannot clear by shifting. */
+export interface LevelPreviewUnresolvable {
+  activity_id: string;
+  resource: string;
+  required: number;
+  limit: number;
+}
+
+export interface LevelPreviewResult {
+  schedule_id: string;
+  num_shifted: number;
+  finish_delta_days: number;
+  base_finish_workday: number;
+  leveled_finish_workday: number;
+  shifts: LevelPreviewShift[];
+  segments: LevelPreviewSegment[];
+  unresolvable: LevelPreviewUnresolvable[];
+  /** Per-resource peak concurrent demand before leveling (name -> units). */
+  peak_before: Record<string, number>;
+  /** Per-resource peak concurrent demand after leveling (name -> units). */
+  peak_after: Record<string, number>;
+}
+
+export interface LevelApplyResult {
+  schedule_id: string;
+  num_shifted: number;
+  num_applied: number;
+  num_skipped: number;
+  finish_delta_days: number;
+  base_finish_workday: number;
+  leveled_finish_workday: number;
+}
+
+/** Request body shared by level-preview and level-apply. */
+export interface LevelPreviewBody {
+  /** Resource name -> max concurrent units; resources absent are unconstrained. */
+  resource_limits: Record<string, number>;
+  /** Activity ids that may be split into multiple day-runs to fit a ceiling. */
+  splittable: string[];
+}
+
+/**
+ * Read-only resource-leveling preview. Honours all four PDM link types,
+ * splittable activities and fractional units, and returns the honest
+ * finish-date impact computed from a copy of the network. Nothing is written.
+ */
+export function levelPreview(
+  scheduleId: string,
+  body: LevelPreviewBody,
+): Promise<LevelPreviewResult> {
+  return apiPost<LevelPreviewResult, LevelPreviewBody>(
+    `/v1/schedule-advanced/${encodeURIComponent(scheduleId)}/level-preview`,
+    body,
+  );
+}
+
+/**
+ * Commit a leveling run: persist each shifted activity's start / end dates
+ * (moved by its leveling delta in calendar days, span preserved). Same pure
+ * arithmetic as the preview; this one writes.
+ */
+export function levelApply(
+  scheduleId: string,
+  body: LevelPreviewBody,
+): Promise<LevelApplyResult> {
+  return apiPost<LevelApplyResult, LevelPreviewBody>(
+    `/v1/schedule-advanced/${encodeURIComponent(scheduleId)}/level-apply`,
+    body,
+  );
+}

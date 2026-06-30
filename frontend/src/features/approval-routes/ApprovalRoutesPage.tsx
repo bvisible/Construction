@@ -11,7 +11,7 @@
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Edit3, Plus, ShieldCheck, Trash2, Workflow } from 'lucide-react';
+import { Edit3, Plus, ShieldCheck, Trash2, UserCheck, Workflow } from 'lucide-react';
 
 import {
   Badge,
@@ -35,6 +35,7 @@ import {
 } from './api';
 import { ApprovalInstancesList } from './ApprovalInstancesList';
 import { approvalRoutesGuide } from './approvalRoutesGuide';
+import { DelegationManager } from './DelegationManager';
 import { kindLabel } from './labels';
 import { RouteEditor } from './RouteEditor';
 import type { ApprovalRoute } from './types';
@@ -51,6 +52,7 @@ export function ApprovalRoutesPage() {
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingRoute, setEditingRoute] = useState<ApprovalRoute | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<ApprovalRoute | null>(null);
+  const [delegationOpen, setDelegationOpen] = useState(false);
 
   // Admin surface — show archived routes too (includeInactive defaults
   // to true on the backend; we keep it explicit for clarity).
@@ -153,6 +155,15 @@ export function ApprovalRoutesPage() {
               setEditorOpen(true);
             }}
           />
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => setDelegationOpen(true)}
+            icon={<UserCheck size={14} />}
+            data-testid="open-delegation-manager"
+          >
+            {t('approvalRoutes.out_of_office', { defaultValue: 'Out of office' })}
+          </Button>
           <Button
             variant="primary"
             size="sm"
@@ -380,6 +391,11 @@ export function ApprovalRoutesPage() {
         open={editorOpen}
         onClose={() => setEditorOpen(false)}
         route={editingRoute}
+      />
+
+      <DelegationManager
+        open={delegationOpen}
+        onClose={() => setDelegationOpen(false)}
       />
 
       <ConfirmDialog

@@ -363,6 +363,81 @@ async def test_folder_access_for_restricted_folder_no_grant_returns_none() -> No
     assert role is None
 
 
+# ── 8b. folder_access_for — global admin bypasses the ACL ─────────────────
+
+
+@pytest.mark.asyncio
+async def test_folder_access_for_global_admin_returns_owner() -> None:
+    """A global admin (users.role == 'admin') gets 'owner' on any project,
+    even when not the project owner and not a member - matching the admin
+    bypass on the document download path that surfaced as a broken "open"
+    action when the metadata endpoint 404'd for a non-owner admin."""
+    project_id = _project_id()
+    admin_id = _user_id()
+    session = AsyncMock()
+
+    admin_repo = AsyncMock()
+    admin_repo.get_by_id = AsyncMock(return_value=SimpleNamespace(role="admin"))
+
+    with (
+        patch(
+            "app.modules.users.repository.UserRepository",
+            return_value=admin_repo,
+        ),
+        patch(
+            "app.modules.documents.folder_permissions_service.is_project_owner",
+            new=AsyncMock(return_value=False),
+        ),
+        patch(
+            "app.modules.documents.folder_permissions_service.is_project_member",
+            new=AsyncMock(return_value=False),
+        ),
+    ):
+        role = await folder_access_for(
+            session,
+            project_id=project_id,
+            user_id=admin_id,
+            scope_kind="document",
+            scope_path="drawing",
+        )
+    assert role == "owner"
+
+
+@pytest.mark.asyncio
+async def test_folder_access_for_non_admin_member_role_does_not_bypass() -> None:
+    """A regular member (role != 'admin') must NOT get the admin bypass: a
+    non-owner / non-member regular user still resolves to None (→ 404)."""
+    project_id = _project_id()
+    member_id = _user_id()
+    session = AsyncMock()
+
+    repo = AsyncMock()
+    repo.get_by_id = AsyncMock(return_value=SimpleNamespace(role="member"))
+
+    with (
+        patch(
+            "app.modules.users.repository.UserRepository",
+            return_value=repo,
+        ),
+        patch(
+            "app.modules.documents.folder_permissions_service.is_project_owner",
+            new=AsyncMock(return_value=False),
+        ),
+        patch(
+            "app.modules.documents.folder_permissions_service.is_project_member",
+            new=AsyncMock(return_value=False),
+        ),
+    ):
+        role = await folder_access_for(
+            session,
+            project_id=project_id,
+            user_id=member_id,
+            scope_kind="document",
+            scope_path=None,
+        )
+    assert role is None
+
+
 # ── 9. Wrong-tenant IDOR: grant from project-A is invisible in project-B ─
 
 

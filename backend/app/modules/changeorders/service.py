@@ -845,8 +845,14 @@ class ChangeOrderService:
         self,
         order_id: uuid.UUID,
         data: ChangeOrderUpdate,
+        user_id: str | None = None,
     ) -> ChangeOrder:
-        """Update change order fields. Only draft orders can be edited."""
+        """Update change order fields. Only draft orders can be edited.
+
+        ``user_id`` is recorded as the actor on the ownership hand-off row when
+        the ball-in-court changes; it falls back to the request-scoped audit
+        context when omitted.
+        """
         order = await self.get_order(order_id)
 
         if order.status != "draft":
@@ -873,8 +879,29 @@ class ChangeOrderService:
         if not fields:
             return order
 
+        # Snapshot the prior ball-in-court before update_fields() expires the
+        # in-memory order, so a custody change can be recorded for the
+        # ownership-chain reconstruction. Only an explicit, actual change is
+        # logged (the field is in ``fields`` only when the client sent it).
+        ball_changed = "ball_in_court" in fields and fields["ball_in_court"] != order.ball_in_court
+        old_ball = order.ball_in_court
+        code_snapshot = order.code
+
         await self.repo.update_fields(order_id, **fields)
         await self.session.refresh(order)
+
+        if ball_changed:
+            from app.core.audit_log import log_ownership_handoff
+
+            await log_ownership_handoff(
+                self.session,
+                entity_type="change_order",
+                entity_id=order_id,
+                from_party=old_ball,
+                to_party=fields["ball_in_court"],
+                actor_id=user_id,
+                metadata={"code": code_snapshot},
+            )
 
         logger.info("Change order updated: %s (fields=%s)", order_id, list(fields.keys()))
         return order

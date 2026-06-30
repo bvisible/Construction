@@ -1,15 +1,15 @@
 /**
- * AddToBOQModal — link a BIM element (or a filtered subset) to a BOQ
+ * AddToBOQModal - link a BIM element (or a filtered subset) to a BOQ
  * position.  Two tabs:
  *
- *   1. "Link to existing position" — searchable list of BOQ positions
+ *   1. "Link to existing position" - searchable list of BOQ positions
  *      from the active project.  Click a row to create a link via
  *      `createLink`.
- *   2. "Create new position" — a small form pre-filled from the selected
+ *   2. "Create new position" - a small form pre-filled from the selected
  *      element's quantities, classification and type.  Submitting
  *      creates a new position AND a link in one shot.
  *
- * Also supports "bulk mode" — when `elements.length > 1` the modal shows
+ * Also supports "bulk mode" - when `elements.length > 1` the modal shows
  * the aggregated totals (sum of area_m2 / volume_m3 / length_m / count)
  * and on submit creates a single BOQ position + a link per element.
  */
@@ -23,6 +23,7 @@ import { boqApi, type BOQ, type BOQWithPositions, type Position } from '@/featur
 import { createLink, resolveElementUUID } from './api';
 import type { BIMElementData } from '@/shared/ui/BIMViewer';
 import { useToastStore } from '@/stores/useToastStore';
+import { useDisplayQuantity } from '@/shared/hooks/useDisplayQuantity';
 import {
   suggestQuantityFromBIM,
   formatSuggestionBadge,
@@ -43,7 +44,7 @@ interface CostSuggestion {
 
 interface AddToBOQModalProps {
   projectId: string;
-  /** Active BIM model — required so stubs (`_unmatched_N` ids) can be
+  /** Active BIM model - required so stubs (`_unmatched_N` ids) can be
    *  resolved to real BIMElement UUIDs via the ensure-element endpoint
    *  before the link is created. */
   modelId: string;
@@ -58,7 +59,7 @@ interface AddToBOQModalProps {
 type Tab = 'existing' | 'new';
 
 /** Pick the most appropriate quantity/unit pair for a set of elements.
- *  Thin wrapper over `suggestQuantityFromBIM` — used for the *initial*
+ *  Thin wrapper over `suggestQuantityFromBIM` - used for the *initial*
  *  default before the user picks a unit.  Once the unit changes the
  *  modal re-runs the suggester directly. */
 function pickInitialQuantity(elements: BIMElementData[]): {
@@ -109,6 +110,11 @@ export default function AddToBOQModal({
   const { t } = useTranslation();
   const qc = useQueryClient();
   const addToast = useToastStore((s) => s.addToast);
+  // Display-only metric->imperial conversion for the existing-position picker
+  // list (#270). This converts ONLY what the list renders; the value written
+  // to the BOQ on link/create stays canonical metric (the link path passes no
+  // quantity; the create path uses the canonical `quantity` state untouched).
+  const displayQty = useDisplayQuantity();
 
   const [tab, setTab] = useState<Tab>(elements.length > 1 ? 'new' : 'existing');
   const [search, setSearch] = useState('');
@@ -116,7 +122,7 @@ export default function AddToBOQModal({
   // list once it loads).  We derive the effective id via useMemo below so
   // the positions query never fires with a stale/dangling id.
   const [userSelectedBOQId, setUserSelectedBOQId] = useState<string | null>(null);
-  // Ref to auto-focus the "Target BOQ" select on modal open — it's the
+  // Ref to auto-focus the "Target BOQ" select on modal open - it's the
   // first decision the user has to make before picking link-vs-create.
   const targetBoqRef = useRef<HTMLSelectElement>(null);
 
@@ -128,14 +134,14 @@ export default function AddToBOQModal({
   const [unitRate, setUnitRate] = useState('0');
   const [ordinal, setOrdinal] = useState('');
   // Tracks whether the user has manually edited the quantity field; if so
-  // we DON'T overwrite it when the unit changes — they typed it for a reason.
+  // we DON'T overwrite it when the unit changes - they typed it for a reason.
   const [userEditedQty, setUserEditedQty] = useState(false);
 
   // Re-run the suggester whenever the unit changes so the badge + auto-fill
   // stay in sync with the BOQ position the user is targetting.  The
   // suggestion drives:
   //   1. the value pre-filled into the Quantity input (unless the user
-  //      has manually edited it — `userEditedQty` blocks the overwrite),
+  //      has manually edited it - `userEditedQty` blocks the overwrite),
   //   2. the badge under the Quantity input,
   //   3. the low-confidence warning icon.
   const quantitySuggestion = useMemo<QuantitySuggestion>(
@@ -154,7 +160,7 @@ export default function AddToBOQModal({
   // Re-seed when the elements list changes (opening the modal from a new
   // element).  This also clears any transient UI state that would
   // otherwise "leak" across reopens if the parent kept the component
-  // mounted between sessions — tab, search box, ordinal override, and
+  // mounted between sessions - tab, search box, ordinal override, and
   // unit-rate field all reset to the defaults for the new element(s).
   useEffect(() => {
     const d = pickInitialQuantity(elements);
@@ -169,7 +175,7 @@ export default function AddToBOQModal({
     setUserEditedQty(false);
   }, [elements]);
 
-  // Focus the Target BOQ select as soon as the modal mounts — it's Step 1
+  // Focus the Target BOQ select as soon as the modal mounts - it's Step 1
   // of the flow ("which BOQ are we linking into?") and should be the first
   // thing users interact with.
   useEffect(() => {
@@ -231,7 +237,7 @@ export default function AddToBOQModal({
   //   - if the user picked one AND it still exists in the current list, use it
   //   - otherwise fall back to the first BOQ in the list (if any)
   // Deriving via useMemo avoids the old race where `selectedBOQId` was
-  // initialised lazily via a useEffect AFTER first render — the positions
+  // initialised lazily via a useEffect AFTER first render - the positions
   // query could fire with a stale/null id during that window.
   const selectedBOQId = useMemo<string | null>(() => {
     if (userSelectedBOQId && boqs.some((b) => b.id === userSelectedBOQId)) {
@@ -250,7 +256,7 @@ export default function AddToBOQModal({
   });
   const positions: Position[] = positionsQuery.data?.positions ?? [];
 
-  // Filter out sections (pure headers) from the pickable list — you link
+  // Filter out sections (pure headers) from the pickable list - you link
   // to real cost-bearing positions, not to their parent headers. A row is
   // a section if EITHER the unit field is blank/dash OR the row is the
   // parent of any other position (sections always have children, leaves
@@ -289,7 +295,7 @@ export default function AddToBOQModal({
           });
           createdCount++;
         } catch (e: unknown) {
-          // Duplicate links will 409 — swallow so bulk linking is idempotent
+          // Duplicate links will 409 - swallow so bulk linking is idempotent
           const err = e as { message?: string };
           if (!err?.message?.includes('already')) throw e;
         }
@@ -417,7 +423,7 @@ export default function AddToBOQModal({
           </button>
         </div>
 
-        {/* Step 1 — Target BOQ picker.  Placed above the tabs because the
+        {/* Step 1 - Target BOQ picker.  Placed above the tabs because the
             flow starts here: pick a BOQ first, THEN choose link-vs-create.
             Highlighted with an oe-blue ring so it reads as the primary
             active field on modal open. */}
@@ -457,7 +463,7 @@ export default function AddToBOQModal({
           )}
         </div>
 
-        {/* Step 2 — choose link-vs-create. */}
+        {/* Step 2 - choose link-vs-create. */}
         <div className="flex px-5 border-b border-border-light shrink-0">
           <TabButton
             active={tab === 'existing'}
@@ -519,7 +525,11 @@ export default function AddToBOQModal({
                               {p.ordinal}
                             </span>
                             <span className="text-[10px] text-content-tertiary">
-                              {p.quantity.toLocaleString()} {p.unit}
+                              {(() => {
+                                // Display-only conversion; unmapped units pass through.
+                                const dq = displayQty.convert(p.quantity, p.unit ?? '');
+                                return `${dq.value.toLocaleString()}${dq.unit ? ` ${dq.unit}` : ''}`;
+                              })()}
                             </span>
                           </div>
                           <div className="text-xs text-content-secondary truncate">
@@ -579,7 +589,7 @@ export default function AddToBOQModal({
                 </div>
               </div>
 
-              {/* BIM-quantity suggestion badge — shows the source of the
+              {/* BIM-quantity suggestion badge - shows the source of the
                   pre-filled Quantity value (Σ volume / area / length / count
                   / mass), the inferred unit, and the share of contributing
                   elements.  Low-confidence suggestions (computed mass from
@@ -613,7 +623,7 @@ export default function AddToBOQModal({
                   className="w-full px-2 py-1.5 text-sm rounded border border-border-light bg-surface-primary focus:outline-none focus:ring-1 focus:ring-oe-blue tabular-nums"
                 />
 
-                {/* Cost suggestion chips — top-N CWICR matches for this
+                {/* Cost suggestion chips - top-N CWICR matches for this
                     element.  Click any chip to populate description /
                     unit / unit_rate from the matching cost item. */}
                 {suggestions.length > 0 && (
@@ -795,7 +805,7 @@ function TabButton({
  *
  *   - high confidence    → emerald icon + emerald-tinted border
  *   - medium confidence  → blue icon + blue-tinted border (some elements
- *                          missing the field — partial sum)
+ *                          missing the field - partial sum)
  *   - low confidence     → amber AlertTriangle + amber-tinted border + tooltip
  *
  *  When the user has manually edited the Quantity input the badge fades
@@ -811,6 +821,10 @@ function BIMQuantitySuggestionBadge({
   onResetToSuggestion: () => void;
   t: (k: string, opts?: Record<string, unknown>) => string;
 }) {
+  // Display-only: the badge text converts to the user's system (#270). The
+  // suggestion's numeric `value` (which seeds the canonical BOQ quantity) is
+  // never converted here.
+  const { system } = useDisplayQuantity();
   if (suggestion.source === 'no_elements') return null;
 
   const isLow = suggestion.confidence === 'low';
@@ -827,7 +841,7 @@ function BIMQuantitySuggestionBadge({
     <Sigma size={11} className="shrink-0" />
   );
 
-  const label = formatSuggestionBadge(suggestion);
+  const label = formatSuggestionBadge(suggestion, system);
 
   // Low-confidence tooltip explains *why* it's low so the estimator
   // knows what to verify before accepting.
@@ -883,6 +897,6 @@ function BIMQuantitySuggestionBadge({
   );
 }
 
-// unused import marker — keep ESLint happy when apiGet isn't directly used
+// unused import marker - keep ESLint happy when apiGet isn't directly used
 // (it is indirectly via the boqApi module import above)
 void apiGet;

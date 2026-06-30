@@ -11,9 +11,27 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_serializer
 
 # ── Common patterns ────────────────────────────────────────────────────────
+
+
+# Money fields are accepted as ``Decimal`` and emitted as plain decimal
+# *strings* in JSON (v3 §10): floats lose precision past ~15 sig figs and force
+# every consumer to parse a locale-coloured number. Canonical helper mirrored
+# from ``boq.schemas._serialise_money`` - keep the siblings in sync.
+def _serialise_money(v: Decimal | None) -> str | None:
+    if v is None:
+        return None
+    if not isinstance(v, Decimal):
+        try:
+            v = Decimal(str(v))
+        except (ArithmeticError, ValueError):
+            return "0"
+    if not v.is_finite():
+        return "0"
+    return format(v, "f")
+
 
 _PHASE_STATUS = r"^(in_planning|pulled|active|completed)$"
 _LOOK_AHEAD_STATUS = r"^(draft|reviewed|published)$"
@@ -940,3 +958,419 @@ class LineOfBalanceResponse(BaseModel):
     total_locations: int = 0
     total_activities: int = 0
     average_cycle_days: float = 0.0
+
+
+# ── Claims-grade schedule quality (T1.2) ─────────────────────────────────────
+
+
+class FloatPathSchema(BaseModel):
+    """One ranked float path. Index 0 is the Longest (driving) path."""
+
+    index: int = 0
+    activity_ids: list[str] = Field(default_factory=list)
+    length_days: int = 0
+    relative_float: int = 0
+
+
+class QAFindingSchema(BaseModel):
+    """One scheduling-quality finding (a row in the QA log)."""
+
+    code: str
+    severity: int = 0
+    activity_id: str
+    message: str = ""
+
+
+class ActivityExplanationSchema(BaseModel):
+    """Generated, numbers-faithful explain strings for one activity."""
+
+    activity_id: str
+    why_critical: str = ""
+    float_explanation: str = ""
+
+
+class ScheduleQualityResponse(BaseModel):
+    """Response for ``POST /schedule-advanced/{schedule_id}/schedule-quality``.
+
+    Read-only forensic view: Longest Path, ranked float paths, the scheduling
+    QA log and per-activity explain strings, all derived from a single CPM pass.
+    Nothing is written back to the schedule.
+    """
+
+    schedule_id: UUID
+    project_finish_workday: int = 0
+    num_activities: int = 0
+    num_critical: int = 0
+    longest_path: list[str] = Field(default_factory=list)
+    longest_path_length_days: int = 0
+    critical_activity_ids: list[str] = Field(default_factory=list)
+    float_paths: list[FloatPathSchema] = Field(default_factory=list)
+    qa_log: list[QAFindingSchema] = Field(default_factory=list)
+    explanations: list[ActivityExplanationSchema] = Field(default_factory=list)
+
+
+# ── Monte-Carlo schedule risk + Joint Confidence Level (T2.1) ────────────────
+
+
+class ActivityRiskInputSchema(BaseModel):
+    """Optional per-activity three-point duration override for a risk run.
+
+    Activities without an entry fall back to a band derived from their stored
+    duration and the run's optimistic / pessimistic percentages.
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    activity_id: UUID
+    low: float | None = Field(default=None, ge=0)
+    mode: float | None = Field(default=None, ge=0)
+    high: float | None = Field(default=None, ge=0)
+    distribution: str = Field(default="pert", pattern=r"^(pert|triangular|uniform|normal|lognormal)$")
+
+
+class CostRiskInputSchema(BaseModel):
+    """Optional cost side of a run - enables the Joint Confidence Level.
+
+    The three-point cost estimate is real project money, so it is Decimal-in /
+    Decimal-as-string out (v3 §10); Pydantic coerces int/float/str on input.
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    base_cost: Decimal = Field(..., ge=0)
+    cost_low: Decimal | None = Field(default=None, ge=0)
+    cost_mode: Decimal | None = Field(default=None, ge=0)
+    cost_high: Decimal | None = Field(default=None, ge=0)
+    cost_target: Decimal | None = Field(default=None, ge=0)
+    distribution: str = Field(default="pert", pattern=r"^(pert|triangular|uniform|normal|lognormal)$")
+
+    @field_serializer("base_cost", "cost_low", "cost_mode", "cost_high", "cost_target", when_used="json")
+    def _ser_money(self, v: Decimal | None) -> str | None:
+        return _serialise_money(v)
+
+
+class ScheduleRiskRequest(BaseModel):
+    """Body for ``POST /schedule-advanced/{schedule_id}/schedule-risk``."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    iterations: int = Field(default=2000, ge=100, le=100000)
+    correlation: float = Field(default=0.0, ge=0.0, le=0.95)
+    seed: int | None = None
+    sampling: str = Field(default="lhs", pattern=r"^(lhs|mc)$")
+    target_confidence: int = Field(default=80, ge=50, le=99)
+    optimistic_pct: float = Field(default=15.0, ge=0, le=100)
+    pessimistic_pct: float = Field(default=25.0, ge=0, le=300)
+    activity_risks: list[ActivityRiskInputSchema] = Field(default_factory=list)
+    cost_inputs: CostRiskInputSchema | None = None
+
+
+class CriticalityStatSchema(BaseModel):
+    """How often an activity drives the schedule, and how strongly."""
+
+    activity_id: str
+    criticality_index: float = 0.0
+    cruciality: float = 0.0
+    duration_sensitivity: float = 0.0
+    mean_duration: float = 0.0
+
+
+class ScheduleDriverSchema(BaseModel):
+    """A tornado entry: an activity's rank correlation to the finish."""
+
+    activity_id: str
+    rank_correlation: float = 0.0
+    swing_low: float = 0.0
+    swing_high: float = 0.0
+
+
+class HistBinSchema(BaseModel):
+    """One histogram bar over the simulated finish-day distribution."""
+
+    bin_start: float = 0.0
+    bin_end: float = 0.0
+    count: int = 0
+
+
+class CdfPointSchema(BaseModel):
+    """One point on the cumulative S-curve (``x`` = finish work-day)."""
+
+    x: float = 0.0
+    cumulative_prob: float = 0.0
+
+
+class ScatterPointSchema(BaseModel):
+    """One sampled (finish, cost) draw for the JCL scatter cloud."""
+
+    finish: float = 0.0
+    cost: float = 0.0
+
+
+class JointConfidenceSchema(BaseModel):
+    """Joint cost / schedule confidence summary.
+
+    ``target_cost`` (the cost target) and ``cost_mean`` (the simulated expected
+    cost) are headline money figures - Decimal-as-string (v3 §10), mirroring the
+    BOQ cost-risk response. ``prob_*`` are probabilities (0..1) and the scatter
+    cloud carries plotted stochastic coordinates, so both stay float.
+    """
+
+    target_finish: float = 0.0
+    target_cost: Decimal = Decimal("0")
+    jcl: float = 0.0
+    prob_on_time: float = 0.0
+    prob_on_budget: float = 0.0
+    cost_mean: Decimal = Decimal("0")
+    cost_percentiles: dict[str, float] = Field(default_factory=dict)
+    correlation: float = 0.0
+    scatter: list[ScatterPointSchema] = Field(default_factory=list)
+
+    @field_serializer("target_cost", "cost_mean", when_used="json")
+    def _ser_money(self, v: Decimal | None) -> str | None:
+        return _serialise_money(v)
+
+
+class ScheduleRiskResponse(BaseModel):
+    """Response for ``POST /schedule-advanced/{schedule_id}/schedule-risk``."""
+
+    schedule_id: UUID
+    iterations: int = 0
+    deterministic_finish: float = 0.0
+    mean: float = 0.0
+    std_dev: float = 0.0
+    cv_pct: float = 0.0
+    percentiles: dict[str, float] = Field(default_factory=dict)
+    contingency: float = 0.0
+    contingency_pct: float = 0.0
+    recommended_finish: float = 0.0
+    target_confidence: int = 0
+    prob_within_deterministic: float = 0.0
+    correlation: float = 0.0
+    seed: int = 0
+    convergence_status: str = ""
+    convergence_margin_pct: float = 0.0
+    histogram: list[HistBinSchema] = Field(default_factory=list)
+    cdf: list[CdfPointSchema] = Field(default_factory=list)
+    criticality: list[CriticalityStatSchema] = Field(default_factory=list)
+    drivers: list[ScheduleDriverSchema] = Field(default_factory=list)
+    joint_confidence: JointConfidenceSchema | None = None
+
+
+# ── Forensic delay analysis (T2.2) ───────────────────────────────────────────
+
+_DELAY_METHOD = r"^(tia|windows|as_planned_vs_as_built|impacted_as_planned|collapsed_as_built)$"
+_OOS_MODE = r"^(retained_logic|progress_override)$"
+_APPORTIONMENT = r"^(none|dominant_cause|time_but_for|malmaison)$"
+_RESPONSIBILITY = r"^(employer|contractor|neutral|shared)$"
+_INSERT_MODE = r"^(lengthen_activity|insert_after|insert_parallel|suspend_resume)$"
+
+
+class DelayAnalysisCreate(BaseModel):
+    """Create a draft forensic delay analysis."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    name: str = Field(..., min_length=1, max_length=255)
+    method: str = Field(default="tia", pattern=_DELAY_METHOD)
+    schedule_id: UUID | None = None
+    description: str = Field(default="", max_length=8000)
+    as_planned_baseline_id: UUID | None = None
+    as_built_snapshot_id: UUID | None = None
+    oos_mode: str = Field(default="retained_logic", pattern=_OOS_MODE)
+    apportionment_method: str = Field(default="malmaison", pattern=_APPORTIONMENT)
+    data_date: str | None = Field(default=None, max_length=40)
+
+
+class DelayAnalysisPatch(BaseModel):
+    """Edit a draft analysis (status-guarded: only ``draft`` is mutable)."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    method: str | None = Field(default=None, pattern=_DELAY_METHOD)
+    description: str | None = Field(default=None, max_length=8000)
+    as_planned_baseline_id: UUID | None = None
+    as_built_snapshot_id: UUID | None = None
+    oos_mode: str | None = Field(default=None, pattern=_OOS_MODE)
+    apportionment_method: str | None = Field(default=None, pattern=_APPORTIONMENT)
+    data_date: str | None = Field(default=None, max_length=40)
+
+
+class DelayEventCreate(BaseModel):
+    """Add a causative event to an analysis."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    title: str = Field(..., min_length=1, max_length=500)
+    code: str = Field(default="", max_length=40)
+    description: str = Field(default="", max_length=8000)
+    root_cause: str = Field(default="", max_length=8000)
+    responsibility: str = Field(default="employer", pattern=_RESPONSIBILITY)
+    risk_event_category: str = Field(default="", max_length=120)
+    is_concurrent: bool = False
+    concurrency_group: str = Field(default="", max_length=80)
+    is_pacing: bool = False
+    source_ref_type: str | None = Field(default=None, max_length=40)
+    source_ref_id: UUID | None = None
+    insert_at_activity_ref: str = Field(default="", max_length=255)
+    event_start: str | None = Field(default=None, max_length=40)
+    event_end: str | None = Field(default=None, max_length=40)
+    start_workday: int | None = None
+    end_workday: int | None = None
+
+
+class DelayEventPatch(BaseModel):
+    """Edit a draft event."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    title: str | None = Field(default=None, min_length=1, max_length=500)
+    code: str | None = Field(default=None, max_length=40)
+    description: str | None = Field(default=None, max_length=8000)
+    root_cause: str | None = Field(default=None, max_length=8000)
+    responsibility: str | None = Field(default=None, pattern=_RESPONSIBILITY)
+    risk_event_category: str | None = Field(default=None, max_length=120)
+    is_concurrent: bool | None = None
+    concurrency_group: str | None = Field(default=None, max_length=80)
+    is_pacing: bool | None = None
+    insert_at_activity_ref: str | None = Field(default=None, max_length=255)
+    event_start: str | None = Field(default=None, max_length=40)
+    event_end: str | None = Field(default=None, max_length=40)
+    start_workday: int | None = None
+    end_workday: int | None = None
+
+
+class FragnetUpsert(BaseModel):
+    """Define (or replace) the fragnet for an event."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    insert_mode: str = Field(default="lengthen_activity", pattern=_INSERT_MODE)
+    insert_at_activity_ref: str = Field(..., min_length=1, max_length=255)
+    added_duration_days: int = Field(default=0, ge=0, le=100000)
+    fragnet_activities: list[dict] = Field(default_factory=list)
+    rewires: list[dict] = Field(default_factory=list)
+    applies_in_window: int | None = None
+
+
+class AutoFragnetRequest(BaseModel):
+    """Wizard helper: synthesise a default fragnet from a target + delay length."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    delay_event_id: UUID
+    insert_mode: str = Field(default="lengthen_activity", pattern=_INSERT_MODE)
+    insert_at_activity_ref: str = Field(..., min_length=1, max_length=255)
+    added_days: int = Field(..., ge=0, le=100000)
+
+
+class DelayComputeRequest(BaseModel):
+    """Optional overrides for a compute run (defaults to the stored settings)."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    apportionment_method: str | None = Field(default=None, pattern=_APPORTIONMENT)
+
+
+class FragnetResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    delay_event_id: UUID
+    insert_mode: str
+    insert_at_activity_ref: str
+    added_duration_days: int
+    fragnet_activities: list = Field(default_factory=list)
+    rewires: list = Field(default_factory=list)
+    applies_in_window: int | None = None
+
+
+class DelayEventResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    analysis_id: UUID
+    code: str = ""
+    title: str = ""
+    description: str = ""
+    root_cause: str = ""
+    responsibility: str = "employer"
+    risk_event_category: str = ""
+    is_concurrent: bool = False
+    concurrency_group: str = ""
+    is_pacing: bool = False
+    source_ref_type: str | None = None
+    source_ref_id: UUID | None = None
+    insert_at_activity_ref: str = ""
+    event_start: str | None = None
+    event_end: str | None = None
+    start_workday: int | None = None
+    end_workday: int | None = None
+    fragnets: list[FragnetResponse] = Field(default_factory=list)
+
+
+class DelayWindowResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    sequence_order: int
+    window_start: str | None = None
+    window_end: str | None = None
+    finish_at_open: int = 0
+    finish_at_close: int = 0
+    gross_slip_days: int = 0
+    employer_days: int = 0
+    contractor_days: int = 0
+    neutral_days: int = 0
+    concurrent_days: int = 0
+    net_entitlement_days: int = 0
+    narrative: str = ""
+
+
+class DelayAnalysisListItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    project_id: UUID
+    schedule_id: UUID | None = None
+    method: str
+    name: str
+    status: str
+    total_entitlement_days: int = 0
+    window_count: int = 0
+    issued_at: str | None = None
+
+
+class DelayAnalysisResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    project_id: UUID
+    schedule_id: UUID | None = None
+    method: str
+    name: str
+    description: str = ""
+    as_planned_baseline_id: UUID | None = None
+    as_built_snapshot_id: UUID | None = None
+    oos_mode: str = "retained_logic"
+    data_date: str | None = None
+    apportionment_method: str = "malmaison"
+    status: str = "draft"
+    window_count: int = 0
+    total_entitlement_days: int = 0
+    concurrent_days: int = 0
+    result_json: dict = Field(default_factory=dict)
+    issued_at: str | None = None
+    issued_by: str | None = None
+    signature_sha256: str | None = None
+    eot_claim_id: UUID | None = None
+    events: list[DelayEventResponse] = Field(default_factory=list)
+    windows: list[DelayWindowResponse] = Field(default_factory=list)
+
+
+class RaiseEotClaimResponse(BaseModel):
+    """Result of raising an Extension-of-Time claim from an analysis."""
+
+    eot_claim_id: UUID
+    delay_analysis_id: UUID
+    requested_days: int

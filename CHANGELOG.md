@@ -7,6 +7,173 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [9.4.0] - 2026-06-30
+
+An end-to-end Imperial release. The measurement-system preference now follows the whole estimating workflow, including the editable Bill of Quantities grid, and a display rule that earlier releases applied unevenly is now applied everywhere: when a quantity is shown converted to Imperial, the paired per-unit rate is restated against the same unit so the line reconciles. Line and project totals stay invariant, and the machine-readable exports stay canonical metric so no stored figure is ever changed by a display unit.
+
+### Added
+
+- The editable Bill of Quantities grid is now Imperial-aware. The quantity, unit and unit rate, and the per-resource quantity and rate, display in the selected measurement system, while editing a converted cell converts the value back to metric before it is stored. Storage and the Excel, CSV and GAEB exports stay canonical metric.
+- The unit map now also covers square millimetres, square centimetres, square decimetres, hectares and litres, alongside the existing metre, square and cubic metre, kilogram, millimetre, centimetre and tonne coverage. The frontend and backend conversion tables are kept identical.
+
+### Changed
+
+- Whenever a quantity is displayed in Imperial next to a per-unit rate, the rate is now restated reciprocally (for example 50 per metre is shown as 15.24 per foot) so the displayed line reconciles. Line and project totals are invariant and are never recomputed from converted figures.
+- The Imperial preference is now honoured on the surfaces the previous release did not reach: the DWG takeoff summary cards, selection chips, quantify totals, annotation list and built-in summary and CSV; the BIM quantity-rule apply and sample tables, saved-rule labels and filter report (the on-screen modal and its printable); and the bid-management scope and pricing, the assembly-library component preview, the match-elements apply preview, the tendering leveling reference and the AI quick-estimate result.
+
+### Fixed
+
+- The priced Bill of Quantities PDF now reconciles in Imperial. Previously the quantity was converted to feet while the rate was printed unchanged, so quantity times rate no longer matched the line total; the rate is now restated against the displayed unit on both the server-rendered and client-rendered PDF.
+
+## [9.3.0] - 2026-06-29
+
+A measurement-system and portal-polish release. The Imperial preference now follows you out of the Takeoff canvas into every read-only display and printed report, while machine-readable exports stay canonical so no stored figure is ever changed by a display unit. A run of community-reported rough edges across Project Files, Finance, GeoHub and the project list are smoothed out.
+
+### Added
+
+- The Imperial measurement-system preference is now honoured wherever a quantity is read, not only in Takeoff. The BIM element inspector and its geometry read-outs (width, height, depth, diagonal, footprint and bounding volume), read-only quantity displays and the printed Bill of Quantities report convert metres and square or cubic metres into feet when Imperial is selected. Money is never converted, and the Excel, CSV and GAEB exports stay in canonical metric so a figure can never be silently changed by a display unit.
+- A PDF in Project Files opens in an inline reader by default, so contracts, specifications and letters can be read in place; opening it in PDF Takeoff is offered as an explicit, separate choice for the plans that need measuring.
+- Finance gains lightweight invoice status control. A draft invoice can be sent for approval in one click, and an invoice can be moved between its safe, reversible states from the edit dialog. Approving an invoice and recording payment still go through their existing controlled actions.
+
+### Changed
+
+- The project overview photo strip now includes image documents, not only geo-tagged site photos, so a project's pictures all show up in one place.
+- The new strings introduced across these screens are translated across all 26 languages.
+
+### Fixed
+
+- The project list toolbar no longer disappears on an empty Archived view, which previously left no way back to the active projects; the Archived empty state now offers a direct way back to active projects.
+- The Cancelled project status is recognised and shown with its own label and colour.
+- GeoHub places a project on the map without a detour: the map auto-anchors from the address set in project settings, and choosing to place the pin manually drops a draggable marker in place instead of redirecting to settings.
+- The change-order and field-report confirmation dialogs show wording that matches the action. Submit, approve, reject and execute no longer share a prompt worded for deletion.
+
+## [9.2.0] - 2026-06-29
+
+A BIM viewer, scheduling interoperability and localization release, built largely on community reports. The model viewer grows from a single-model preview into a full federated workspace, schedules can now be moved in and out as Microsoft Project XML, and the change, reconciliation and approval screens speak every language the rest of the app does.
+
+### Added
+
+- The BIM viewer becomes a full federated workspace. Open several models together in one coordinated 3D scene, select elements and read their properties, measure point-to-point distances, and go full screen. A spatial structure tree (project, site, building, storey) lets you navigate and isolate elements by where they sit in the model, and a discoverable Walk mode drops you in at eye level with first-person mouse-look.
+- Filter the model and turn the result into a report. Build a smart filter in the model view to get an on-screen, printable quantity report of the matching elements, or export those quantities straight to a single Bill of Quantities Excel workbook.
+- Saved smart views and selection sets can be organised into named folders, so a large model's saved cuts and groups stay tidy.
+- Schedules export to Microsoft Project XML, and the schedule screen now has import buttons for Microsoft Project XML and XER (.xer) files. The importers already existed under the hood; this gives them a home in the interface, alongside a one-click CSV export, and surfaces any approximation warnings the import reports.
+- A referenced PDF opens inline where you are working. A file attached to a transmittal, inspection or NCR can now be previewed in place using the same viewer as the File Manager, instead of forcing you to leave the screen, and files can now be linked to inspections and NCRs as well.
+- Procurement gets its own menu area. The three procurement flows (quick vendor quotes, formal bid management, and tendering from a bill of quantities) are grouped under one Procurement heading, each labelled for when to use it with a short note, and the change-tracking modules move into a clearer Change and Records group.
+
+### Changed
+
+- The Change Intelligence, event reconciliation and approval-route screens are now fully translated across all 26 languages. These newer screens had been falling back to English in every non-English locale; that gap is closed, with 305 strings per language covering the change tabs and back-charge recovery forms, reconciliation, and approval-route delegation and escalation.
+
+### Fixed
+
+- The BIM rules and checks screen works as expected: the rule template downloads instead of hitting an authentication wall, and the Save button no longer looks dead when there is nothing to save.
+- Opening a drawing sheet from Project Files now opens its parent document in the PDF takeoff tool rather than failing to find it, and an administrator can open files in any folder.
+- Quantity takeoff edits sync reliably. Deleting a measurement or changing a non-geometry field is now saved, and measurements no longer carry over between different documents.
+
+## [9.1.0] - 2026-06-29
+
+A coordination, projects and notifications release built on community reports. It makes project status a first-class, auditable thing, turns notification settings into a real routing matrix that also drives connected chat tools, and completes the PDF takeoff reload fixes.
+
+### Added
+
+- Projects gain a working status beyond active and archived: set a project to waiting, on hold or finished from the project page, see it as a coloured badge across the project list, and review a status history that records who changed the status from one value to the next and when. Archived projects now have their own view, so they no longer just disappear: filter the list by active, archived or all, and restore an archived project with one action.
+- Notification settings are now a complete, reachable routing matrix: choose, per event and per channel, what you are notified about and at what cadence (real time, hourly or daily digest). Connected chat integrations (Telegram, Slack, Teams, Discord, WhatsApp) now actually receive those notifications, each filtered by the events you choose for it, so a chat bot can be pointed at exactly the events you care about. Posting a comment in a project discussion now notifies the other participants and the project owner with a link back to the thread.
+
+### Fixed
+
+- Quantity takeoff measurements saved to a project reappear after you reload the page. The viewer loads them from the server in the background, but a re-render that happened while that load was still in flight could cancel it and leave the sheet blank even though the work was safely stored. The background load no longer cancels itself, so the measurements are restored every time.
+- A drawing page that was never calibrated no longer shows a "calibrated" scale badge after a reload. Each measurement now records whether its page was actually calibrated, so a page left on the default scale comes back reading "not calibrated" while a genuinely calibrated sheet keeps its scale.
+- A drafted RFI can be opened from the RFI page. The transition from draft to open already existed on the server but had no button, so a drafted RFI could not be published from the interface.
+- Project discussions show each author's name instead of a raw identifier, and the discussion is now reachable directly from the project page next to Documents.
+- The Client and Partner Portal invite dialog shows the complete sign-in link to send rather than the bare token, and the notification raised when a portal user is invited now opens the portal user list instead of a page that did not exist.
+
+### Changed
+
+- The project list can be filtered by status, including archived and an all view that spans every state, with archived projects fetched only when they are asked for.
+
+## [9.0.1] - 2026-06-27
+
+A fix release for opening BIM files that were uploaded through Project Files.
+
+### Fixed
+
+- Opening a BIM file (IFC or RVT) uploaded through Project Files now builds the 3D model on the fly instead of reporting "model not found". The File Manager was opening such a file by treating its document id as a model id, so the viewer looked for a model that did not exist yet and never started the conversion. It now hands the document to the same on-demand converter the rest of the app uses, so the model is created and shown the first time the file is opened, and a model reached by a stale link is recovered the same way.
+
+## [9.0.0] - 2026-06-26
+
+A stability and self-hosting release. It hardens the production deployment path reported by the community (environment configuration, file storage, in-app preview and external-database upgrades) and completes the desktop build, so the platform behaves the same across Docker, an external PostgreSQL, the embedded database and the desktop app.
+
+### Fixed
+
+- Environment variables documented with the OE_ prefix are now read. Each setting was bound only to its bare name before, so a value such as OE_REGISTRATION_MODE or OE_JWT_SECRET was silently ignored and the default applied. The prefixed name and the bare name both work now, with the bare name kept for back-compatibility.
+- Uploaded documents, photos and drawings now follow the configured data directory. In a container the files were written under the home directory and lost when the container was recreated, while the mounted data volume stayed empty. When a data directory is configured, uploads, photos, thumbnails and sheet previews all land there and survive a restart.
+- The in-app PDF preview renders again and self-hosted web fonts are cached by the service worker, instead of being blocked by the content security policy. The app may frame its own previews while cross-origin framing stays refused.
+- An externally managed PostgreSQL database now self-heals on startup the same way the embedded database does, adding any columns and indexes a newer release expects. An external database first created under an older release no longer returns errors for the columns it is missing, which is what produced the 500 on the AI insights endpoint after an upgrade.
+- The desktop build now includes the PDF, computer-vision and point-cloud libraries it had been missing, so PDF takeoff, raster room detection, point-cloud reads and PDF stamping work in the installed app as they do from the package, and the data libraries are pinned to their supported line.
+
+### Changed
+
+- File serving now accepts a document, photo or shared file saved under an earlier release's data directory, so existing files keep opening after the storage location is made consistent, while the path-containment and symlink protection is unchanged.
+- Field diary offline sync no longer discards a whole batch of synced work when one duplicate operation arrives twice; only the duplicate is skipped and the rest of the batch is kept.
+- The database self-heal is safe to run against a live shared database: only one worker heals at a time, it never blocks live queries while it runs, and each step is isolated so one failure cannot stop the rest.
+
+## [8.11.0] - 2026-06-25
+
+A change intelligence and value release. It builds the layer introduced in 8.10.0 into a full set of tools that make change accountable, prove the value of acting early, and bring scattered project records into one searchable place. It also makes the AI trust signals visible everywhere the assistant speaks.
+
+### Added
+
+- The AI trust envelope is now shown wherever the assistant gives an answer: a calibrated confidence level, the real sources it cited, and what would raise that confidence. Marking an answer correct or incorrect, with an optional correction, feeds an accuracy scoreboard that scores stated confidence against the recorded outcome, so the assistant's track record is shown rather than asserted. A new Data and Security panel in Settings makes data residency and self-hosting legible.
+- A Value Realized dashboard that turns change-and-AI activity into a value case built on your own ledger: time saved, a recovery performance index, an adoption-versus-non-adoption comparison, regional overrun and recovery benchmarks, and a guided checklist that walks a project to its first value with a one-click value report.
+- Deeper change accountability across the change family: an ownership hand-off log that records who held each change and for how long, a provability score that grades how reconstructable a change is, a dispute exposure radar, a decision-time impact preview, a change watch for stalled or incomplete items, pre-construction scope-ambiguity grading over the bill of quantities, and predictive delay and overrun risk.
+- A claims and dispute workflow that reconstructs a single change as a scoped, exportable evidence pack, and cost recovery that apportions a back-charge across several responsible parties by share.
+- Approval escalation that moves a breached approval up the route chain instead of leaving it to age, and inbound capture that records reply-to email and chat with construction delay detection and cross-channel reconciliation.
+- A Phone Log that captures calls and verbal instructions as a first-class project record, with the parties, direction, duration and any instructions pulled out of the note.
+- Document Connectors that bring files from a watched server folder onto the project record as searchable documents, skipping anything already imported and detecting duplicate content so nothing is brought in twice.
+- Find Records, one faceted and ranked search across documents, correspondence and change orders, where every result carries its source, record and date so a claim or a dispute can be reconstructed from the evidence.
+- A seeded AI sandbox on the demo so you can see the assistant working against sample data, with its confidence and accuracy already populated.
+
+### Fixed
+
+- Takeoff now honours the Imperial measurement preference in both the on-screen display and the export, instead of always showing metric.
+- A shared, non-admin project member can now open the project's BIM models instead of being refused access.
+
+## [8.10.0] - 2026-06-24
+
+A change intelligence release. It turns the change-adjacent modules - change orders, variations, management of change, correspondence and approvals - into one place that answers what to act on first, who owes the next action and by when, and what the approved changes have committed in cost and schedule.
+
+### Added
+
+- A Change Intelligence page for each project, reached from the Procurement and Change menu, with six views. Act first ranks the open change items by urgency and names the next action. Waiting on whom ages every open change record by the party that holds it. Correspondence groups letters and emails into threads and flags who owes the reply. Impact totals the committed cost and schedule of approved changes, by kind and by currency. Cost recovery rolls up back-charges per responsible party and currency. The clarifier turns a rough change note into a structured draft with a classification, the gaps still to fill and the likely governing contract clauses.
+- The change-intelligence layer underneath the page: a unified project timeline built on the activity log, an approval breach monitor that raises one reminder per overdue step, approval delegation and one-tap reassignment, ball-in-court and response-due dates across the whole change family, change records in unified search, change cycle-time telemetry, a committed-impact projection, an AI accuracy scoreboard that scores a stated confidence against the recorded outcome, a claims and dispute evidence pack with a content digest, a cost recovery ledger, and inbound email capture with construction delay detection.
+
+## [8.9.1] - 2026-06-23
+
+A correctness and hardening release.
+
+### Fixed
+
+- The 4D schedule earned-value dashboard now carries every money value (planned value, earned value, actual cost, budget at completion and the variances) as an exact decimal string on the wire, matching the rest of the platform and removing binary-float rounding drift. Ratios (SPI, CPI) and percentages remain numbers.
+
+### Changed
+
+- Creating a cross-project schedule link now rejects, with a clear error, an activity that does not belong to the schedule it is filed under, instead of accepting it and then silently dropping the link during portfolio critical-path analysis.
+
+## [8.9.0] - 2026-06-23
+
+A major release for construction quality assurance and advanced scheduling.
+
+### Added
+
+- A new Construction Control module brings quality assurance and control into one place per project, across five linked areas. Acceptance criteria and inspections record what good looks like and whether it was met. Material records carry EN 10204 certificate types, full traceability and a digital passport, and lab tests are recorded against ISO/IEC 17025 accreditation. As-built records capture metrology tolerance, an e-signed validity attestation and import from a survey or scan. Hold and witness points gate work behind a party-role hierarchy with a can-proceed check. The handover acceptance package auto-assembles an evidence manifest, is blocked by open non-conformances and unreleased holds, and is issued under e-signature for a FIDIC, US or UK regime.
+- A full advanced scheduling suite. Lossless interchange imports and exports an industry-standard plan without dropping data and cleans it on the way in. A claims-grade critical-path engine computes the longest path, multiple float values and out-of-sequence progress. You can compare two schedule snapshots, run Monte-Carlo schedule risk with a joint confidence level on time and cost, and follow a guided forensic delay analysis. Activities support hierarchical codes, user-defined fields and saved layouts, and the server-side grouped grid can now group by a user-defined field. Resource histograms show time-phased demand against availability with serial leveling. Progress rigor adds several percent-complete types, step lists, suspend and resume and per-activity calendars. A multi-project portfolio, a schedule of schedules, gives a project tree, cross-project links and a portfolio critical-path analysis. A live collaboration view shows who is editing, with optimistic-concurrency guarded edits and field progress capture.
+- Persisted earned-value snapshots. As a schedule data date advances, the planned value, earned value, budget at completion and schedule performance index are frozen at that date so the performance trend can be charted over time.
+- A calendar-aware working-day offset primitive in the critical-path engine, so date math can skip weekends and holidays while leaving existing results unchanged.
+
+### Notes
+
+- The new modules ship with English interface text and fall back to English in other languages; full localisation follows in the regular translation pass.
+
 ## [8.8.4] - 2026-06-22
 
 A security and data-integrity hardening release from a deep internal audit.

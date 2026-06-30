@@ -4,7 +4,7 @@
  * All endpoints are prefixed with /v1/requirements/.
  */
 
-import { apiGet, apiPost, apiPatch, apiDelete } from '@/shared/lib/api';
+import { apiGet, apiPost, apiPatch, apiDelete, getAuthToken, triggerDownload } from '@/shared/lib/api';
 import { useAuthStore } from '@/stores/useAuthStore';
 
 /* ── Types ─────────────────────────────────────────────────────────────── */
@@ -314,9 +314,27 @@ export async function exportRequirementsExcel(
 
 /* \u2500\u2500 Excel template, file import, and BIM validation \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */
 
-/** URL to download the Excel template (headers + sample row + legend). */
+/** URL of the Excel template (headers + sample row + legend).
+ *  @deprecated A bare `<a href>` to this GET endpoint sends no Authorization
+ *  header and 401s. Use {@link downloadRequirementsTemplate} instead. */
 export function requirementsTemplateUrl(): string {
   return '/api/v1/requirements/template.xlsx';
+}
+
+/** Download the requirements Excel template via an authenticated fetch.
+ *  The endpoint is JWT-guarded, so a plain anchor click (no Bearer token)
+ *  401s and nothing downloads. We fetch the blob with the token and trigger
+ *  a synthetic download. Throws on HTTP error so callers can toast it. */
+export async function downloadRequirementsTemplate(): Promise<void> {
+  const token = getAuthToken();
+  const headers: Record<string, string> = { Accept: '*/*' };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  const resp = await fetch(requirementsTemplateUrl(), { headers });
+  if (!resp.ok) {
+    throw new Error(`Template download failed (HTTP ${resp.status})`);
+  }
+  const blob = await resp.blob();
+  triggerDownload(blob, 'requirements_template.xlsx');
 }
 
 export interface ImportFromFileResponse {

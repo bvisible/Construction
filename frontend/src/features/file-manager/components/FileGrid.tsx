@@ -92,6 +92,15 @@ export function FileGrid({
         const isSelected = selectedIds.has(row.id);
         const target = primaryModule(row.kind, row.extension);
         const moduleLabel = t(target.i18nKey, { defaultValue: target.label });
+        // #284 - a PDF document's primary action reads it inline rather than
+        // routing to a module, so the tile shows a plain "View" affordance
+        // instead of "Open in <module>".
+        const openLabel = target.inlinePreview
+          ? t('files.actions.view_file', { defaultValue: 'View' })
+          : t('files.actions.open_in_short', {
+              defaultValue: 'Open in {{module}}',
+              module: moduleLabel,
+            });
         const isFavorite = favoriteKeys?.has(favoriteKey(row.kind, row.id)) ?? false;
         return (
           <div
@@ -103,11 +112,18 @@ export function FileGrid({
                 ? 'border-oe-blue ring-2 ring-oe-blue/30 shadow-md'
                 : 'border-border-light hover:border-border hover:shadow-sm',
             )}
-            title={t('files.tile.tooltip', {
-              defaultValue: '{{name}} - double-click to open in {{module}}',
-              name: row.name,
-              module: moduleLabel,
-            })}
+            title={
+              target.inlinePreview
+                ? t('files.tile.tooltip_view', {
+                    defaultValue: '{{name}} - double-click to view',
+                    name: row.name,
+                  })
+                : t('files.tile.tooltip', {
+                    defaultValue: '{{name}} - double-click to open in {{module}}',
+                    name: row.name,
+                    module: moduleLabel,
+                  })
+            }
           >
             <button
               type="button"
@@ -184,12 +200,7 @@ export function FileGrid({
               )}
               title={t(target.descriptionI18nKey, { defaultValue: target.description })}
             >
-              <span className="truncate max-w-[120px]">
-                {t('files.actions.open_in_short', {
-                  defaultValue: 'Open in {{module}}',
-                  module: moduleLabel,
-                })}
-              </span>
+              <span className="truncate max-w-[120px]">{openLabel}</span>
               <ExternalLink size={9} className="shrink-0 opacity-70" />
             </button>
 

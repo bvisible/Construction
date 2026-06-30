@@ -1692,8 +1692,34 @@ def _patch_real_project_access(monkeypatch, *, owner_id: str, project_id) -> Non
     monkeypatch.setattr("app.modules.teams.access.is_project_member", _not_member)
 
 
+@pytest.fixture
+def _no_event_dispatch(monkeypatch):
+    """Swallow ``publish_detached`` so leaked real-I/O subscribers never fire.
+
+    These IDOR tests seed many entities (vendor, item, warehouse, PO, GR,
+    invoice) WITHOUT the ``captured_events`` spy, so each ``create_*`` falls
+    through to the conftest publish-detached shim. pytest-split shards at the
+    test level, so when an earlier test in the same worker has registered real
+    subscribers (the module's own ``register_subscribers`` or the wave-4
+    notification subscribers, both identity-deduplicated and never reset on the
+    process-global bus), the shim drives their asyncpg I/O - half-stepped or as
+    a detached task running ``greenlet_spawn`` concurrently with this test's own
+    session - which corrupts the connection and surfaces as a ``GeneratorExit``
+    deep in asyncpg on the next DB op. These tests assert only on cross-project
+    access control, never on event side effects, so suppress dispatch entirely.
+    """
+    import asyncio
+
+    def _swallow(name, data=None, source_module=None):  # noqa: ARG001
+        fut: asyncio.Future = asyncio.Future()
+        fut.set_result(None)
+        return fut
+
+    monkeypatch.setattr(event_bus, "publish_detached", _swallow)
+
+
 @pytest.mark.asyncio
-async def test_cross_project_idor_pr_approve(session, monkeypatch):
+async def test_cross_project_idor_pr_approve(session, monkeypatch, _no_event_dispatch):
     """A foreign user cannot approve another project's PR (404)."""
     svc = SupplierCatalogsService(session)
     owner = str(uuid.uuid4())
@@ -1733,7 +1759,7 @@ async def test_cross_project_idor_pr_approve(session, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_cross_project_idor_po_send(session, monkeypatch):
+async def test_cross_project_idor_po_send(session, monkeypatch, _no_event_dispatch):
     """A foreign user cannot send another project's PO (404)."""
     svc = SupplierCatalogsService(session)
     owner = str(uuid.uuid4())
@@ -1769,7 +1795,7 @@ async def test_cross_project_idor_po_send(session, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_cross_project_idor_invoice_match(session, monkeypatch):
+async def test_cross_project_idor_invoice_match(session, monkeypatch, _no_event_dispatch):
     """A foreign user cannot 3-way-match another project's invoice (404)."""
     svc = SupplierCatalogsService(session)
     owner = str(uuid.uuid4())

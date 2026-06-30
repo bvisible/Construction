@@ -140,7 +140,11 @@ export function FileList({
               const isSelected = selectedIds.has(row.id);
               const target = primaryModule(row.kind, row.extension);
               const TargetIcon = target.icon;
-              const moduleLabel = t(target.i18nKey, { defaultValue: target.label });
+              // #284 - a PDF document reads inline; show "View" in the Open-in
+              // column rather than "Open in <module>".
+              const moduleLabel = target.inlinePreview
+                ? t('files.actions.view_file', { defaultValue: 'View' })
+                : t(target.i18nKey, { defaultValue: target.label });
               const isFavorite = favoriteKeys?.has(favoriteKey(row.kind, row.id)) ?? false;
               return (
                 <tr

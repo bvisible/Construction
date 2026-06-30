@@ -1356,8 +1356,18 @@ export function TakeoffPage() {
         });
         setActiveTab('measurements');
       } catch {
-        // Documents-module fetch failed; leave viewer untouched so the
-        // user sees the empty state instead of a broken pdf.js attempt.
+        if (cancelled) return;
+        // The documents-module metadata fetch failed (e.g. the id belongs to
+        // another table, or access was denied). Surface it instead of leaving
+        // a silently empty page.
+        useToastStore.getState().addToast({
+          type: 'error',
+          title: t('takeoff.open_failed_title', { defaultValue: 'Could not open file' }),
+          message: t('takeoff.open_failed_msg', {
+            defaultValue:
+              'This file could not be opened in the takeoff viewer. It may have been moved, or you may not have access to it.',
+          }),
+        });
       }
     })();
     return () => {
@@ -2339,6 +2349,13 @@ export function TakeoffPage() {
                 }
               >
                 <TakeoffViewerModule
+                  // Key by the open document id so switching documents via the
+                  // filmstrip REMOUNTS the viewer (issue #281). Without this the
+                  // component instance is reused and the previous document's
+                  // in-memory measurements bleed onto the newly opened one. The
+                  // unmount runs the persistence hook's teardown flush, so the
+                  // document being left is saved before the new one loads.
+                  key={viewerDoc?.id ?? 'no-doc'}
                   initialPdfUrl={viewerDoc?.url}
                   initialPdfName={viewerDoc?.name}
                   projectId={viewerDoc?.projectId ?? selectedProjectId}

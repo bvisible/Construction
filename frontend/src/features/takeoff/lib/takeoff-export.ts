@@ -32,9 +32,14 @@ import type { ScaleConfig } from '../../../modules/pdf-takeoff/data/scale-helper
 import {
   pixelDistance,
   toRealDistance,
-  formatMeasurement,
 } from '../../../modules/pdf-takeoff/data/scale-helpers';
 import { ANNOTATION_TYPES } from './takeoff-groups';
+import type { MeasurementSystem } from '@/stores/usePreferencesStore';
+import {
+  convertQuantity,
+  formatQuantity,
+  measurementLabel,
+} from './takeoff-display-units';
 
 /* ── Public types ────────────────────────────────────────────────── */
 
@@ -43,6 +48,12 @@ export interface ExportContext {
   projectName: string;
   /** Today's date (override-able for tests). Defaults to current day. */
   exportDate?: Date;
+  /** User's measurement system. Stored quantities are metric-canonical
+   *  (D-TKC-016); when `imperial`, values + units are converted (m -> ft,
+   *  m² -> ft², m³ -> ft³) at the export boundary. Defaults to `metric`
+   *  (pass-through), so omitting it leaves the export byte-for-byte as
+   *  before this seam existed. */
+  measurementSystem?: MeasurementSystem;
 }
 
 export interface PdfExportContext extends ExportContext {
@@ -196,9 +207,13 @@ export function renderMeasurementsOnCanvas(
     scale: ScaleConfig;
     groupColorMap: Readonly<Record<string, string>>;
     hiddenGroups: ReadonlySet<string>;
+    /** Measurement system for the baked value labels. Defaults to metric
+     *  (uses the stored metric labels verbatim). */
+    measurementSystem?: MeasurementSystem;
   },
 ): void {
   const { pageNumber, dpr, zoom, scale, groupColorMap, hiddenGroups } = options;
+  const system: MeasurementSystem = options.measurementSystem ?? 'metric';
   ctx.lineWidth = 2 * dpr;
   ctx.font = `${12 * dpr}px sans-serif`;
 
@@ -246,7 +261,7 @@ export function renderMeasurementsOnCanvas(
       const mx = ((p0.x + p1.x) / 2) * dpr * zoom;
       const my = ((p0.y + p1.y) / 2) * dpr * zoom - 8 * dpr;
       ctx.font = `${12 * dpr}px sans-serif`;
-      ctx.fillText(m.label, mx, my);
+      ctx.fillText(measurementLabel(m, scale, system), mx, my);
       drawLabel(m.annotation, mx, my - 14 * dpr, color);
       continue;
     }
@@ -268,7 +283,7 @@ export function renderMeasurementsOnCanvas(
         const smx = ((pa.x + pb.x) / 2) * dpr * zoom;
         const smy = ((pa.y + pb.y) / 2) * dpr * zoom - 6 * dpr;
         ctx.font = `${10 * dpr}px sans-serif`;
-        ctx.fillText(formatMeasurement(segReal, scale.unitLabel), smx, smy);
+        ctx.fillText(formatQuantity(segReal, 'm', system), smx, smy);
       }
       for (const p of m.points) {
         ctx.beginPath();
@@ -279,7 +294,7 @@ export function renderMeasurementsOnCanvas(
       const totalLx = fp.x * dpr * zoom;
       const totalLy = fp.y * dpr * zoom - 12 * dpr;
       ctx.font = `${12 * dpr}px sans-serif`;
-      ctx.fillText(m.label, totalLx, totalLy);
+      ctx.fillText(measurementLabel(m, scale, system), totalLx, totalLy);
       drawLabel(m.annotation, totalLx, totalLy - 14 * dpr, color);
       continue;
     }
@@ -302,7 +317,7 @@ export function renderMeasurementsOnCanvas(
       const cy =
         (m.points.reduce((s, p) => s + p.y, 0) / m.points.length) * dpr * zoom;
       ctx.font = `${12 * dpr}px sans-serif`;
-      ctx.fillText(m.label, cx, cy);
+      ctx.fillText(measurementLabel(m, scale, system), cx, cy);
       drawLabel(m.annotation, cx, cy - 14 * dpr, color);
       continue;
     }
@@ -543,6 +558,7 @@ export async function buildTakeoffPdf(ctx: PdfExportContext): Promise<JsPDF> {
       scale: ctx.scale,
       groupColorMap: ctx.groupColorMap,
       hiddenGroups: ctx.hiddenGroups,
+      measurementSystem: ctx.measurementSystem,
     });
 
     const imageData = canvas.toDataURL('image/jpeg', jpegQuality);
@@ -613,6 +629,7 @@ function renderPdfSummary(pdf: JsPDF, ctx: PdfExportContext): void {
   pdf.line(margin, y, margin + 480, y);
   y += 14;
 
+  const system: MeasurementSystem = ctx.measurementSystem ?? 'metric';
   pdf.setFont('helvetica', 'normal');
   pdf.setFontSize(10);
   for (const r of rows) {
@@ -624,15 +641,17 @@ function renderPdfSummary(pdf: JsPDF, ctx: PdfExportContext): void {
     const rgb = hexToRgb(r.color);
     pdf.setFillColor(rgb.r, rgb.g, rgb.b);
     pdf.rect(margin - 14, y - 9, 8, 8, 'F');
+    // Convert the canonical-metric total + unit to the export system.
+    const disp = convertQuantity(r.total, r.unit, system);
     pdf.text(r.group, margin, y);
     pdf.text(r.type, margin + 130, y);
     pdf.text(String(r.count), margin + 240, y);
     pdf.text(
-      isAnnotationType(r.type) ? '—' : formatNumberShort(r.total),
+      isAnnotationType(r.type) ? '—' : formatNumberShort(disp.value),
       margin + 300,
       y,
     );
-    pdf.text(r.unit || '—', margin + 400, y);
+    pdf.text(disp.unit || '—', margin + 400, y);
     y += 16;
   }
 }
@@ -683,6 +702,10 @@ export async function buildTakeoffWorkbook(
   const wb = new ExcelJsCtor();
   wb.creator = 'OpenConstructionERP';
   wb.created = ctx.exportDate ?? new Date();
+  // Stored quantities are metric-canonical (D-TKC-016); convert values +
+  // units to the user's system at the export boundary. Metric is a
+  // pass-through, so the sheet is unchanged when no/`metric` system is set.
+  const system: MeasurementSystem = ctx.measurementSystem ?? 'metric';
 
   /* ── Measurements sheet ────────────────────────────────────── */
   const ws = wb.addWorksheet('Measurements');
@@ -734,18 +757,17 @@ export async function buildTakeoffWorkbook(
     // Data rows. A deduction (opening / void) prints its value negative and
     // flags the type so the sheet reconciles with the net subtotal below.
     for (const m of groupMs) {
-      const cellValue = isAnnotationType(m.type)
-        ? ''
-        : m.isDeduction
-          ? -m.value
-          : m.value;
+      const isAnno = isAnnotationType(m.type);
+      const signed = m.isDeduction ? -m.value : m.value;
+      const disp = convertQuantity(signed, m.unit || '', system);
+      const cellValue = isAnno ? '' : disp.value;
       ws.addRow({
         group: groupName,
         type: m.isDeduction ? `${m.type} (deduction)` : m.type,
         annotation: m.annotation,
         page: m.page,
         value: cellValue,
-        unit: m.unit,
+        unit: isAnno ? m.unit : disp.unit,
         linkedBoq: m.linkedPositionOrdinal ?? '',
       });
     }
@@ -763,14 +785,17 @@ export async function buildTakeoffWorkbook(
       if (subset.length === 0) continue;
       // Net out deductions so the area subtotal is gross - openings.
       const total = subset.reduce((s, m) => s + (m.isDeduction ? -m.value : m.value), 0);
-      const unit = subset[0]!.unit;
+      const metricUnit = subset[0]!.unit;
+      // Counts are unitless tallies (kept as pcs, integer); length / area /
+      // volume subtotals convert to the export measurement system.
+      const disp = convertQuantity(total, metricUnit, system);
       const subtotalRow = ws.addRow({
         group: `${groupName} - Subtotal`,
         type: t,
         annotation: `Total ${t}`,
         page: '',
-        value: t === 'count' ? Math.round(total) : Number(total.toFixed(3)),
-        unit: t === 'count' ? 'pcs' : unit,
+        value: t === 'count' ? Math.round(total) : Number(disp.value.toFixed(3)),
+        unit: t === 'count' ? 'pcs' : disp.unit,
         linkedBoq: '',
       });
       subtotalRow.font = { bold: true };
@@ -804,12 +829,13 @@ export async function buildTakeoffWorkbook(
 
   const aggregated = summariseByGroupType(ctx.measurements, ctx.groupColorMap);
   for (const r of aggregated) {
+    const disp = convertQuantity(r.total, r.unit, system);
     const row = summary.addRow({
       group: r.group,
       type: r.type,
       count: r.count,
-      total: isAnnotationType(r.type) ? null : Number(r.total.toFixed(3)),
-      unit: r.unit || '—',
+      total: isAnnotationType(r.type) ? null : Number(disp.value.toFixed(3)),
+      unit: (isAnnotationType(r.type) ? r.unit : disp.unit) || '—',
     });
     const color = r.color.replace('#', 'FF');
     row.getCell('group').fill = {

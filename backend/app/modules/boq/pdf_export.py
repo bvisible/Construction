@@ -47,6 +47,8 @@ from reportlab.platypus import (
 )
 
 from app.core.pdf_fonts import BODY_FONT, BOLD_FONT, register_pdf_fonts
+from app.core.unit_conversion import convert as convert_units
+from app.core.unit_conversion import display_rate
 
 # Register the bundled Unicode (DejaVu) faces with reportlab. Idempotent and
 # safe at import time because reportlab is imported at module level here.
@@ -526,6 +528,7 @@ def _build_boq_table(
     boq_data: Any,
     currency: str,
     styles: dict[str, ParagraphStyle],
+    measurement_system: str = "metric",
 ) -> list[Any]:
     """Build the BOQ table flowables (sections, positions, totals).
 
@@ -533,6 +536,15 @@ def _build_boq_table(
     - Locale-aware currency formatting for all monetary values
     - Conditional page break before each major section (60mm threshold)
     - Grand total block wrapped in KeepTogether
+
+    ``measurement_system`` controls the physical quantity column: when
+    ``"imperial"`` each ``pos.quantity`` is scaled and its unit relabelled
+    (m -> ft, m² -> ft² ...). The paired per-unit RATE is then restated
+    reciprocally against the same displayed unit (50 / m -> 15.24 / ft) so a
+    converted line still reconciles (qty_shown * rate_shown == line total).
+    Line / project totals (total / subtotals / markups / VAT) are NEVER
+    converted or recomputed - they are invariant amounts in the project
+    currency, not measurements.
     """
     elements: list[Any] = []
 
@@ -542,6 +554,31 @@ def _build_boq_table(
 
     def _fc(value: float) -> str:
         return _fmt_currency(value, currency)
+
+    def _qty_cell(pos: Any) -> tuple[str, str]:
+        """Return (quantity_text, unit_label) for a position row.
+
+        Honours ``measurement_system``: the quantity is converted and the unit
+        relabelled for imperial; metric tidies the label only. The numeric
+        value is formatted with the same locale-aware helper as before so
+        thousands / decimal separators stay consistent.
+        """
+        result = convert_units(pos.quantity, pos.unit, measurement_system)
+        return _fv(result.value), result.display_unit
+
+    def _rate_cell(pos: Any) -> str:
+        """Return the per-unit rate text for a position row.
+
+        The rate is money per ONE metric unit. When ``_qty_cell`` shows the
+        quantity converted (m -> ft ...) the rate is restated reciprocally
+        against the SAME displayed unit (50 / m -> 15.24 / ft) via
+        :func:`display_rate`, so ``qty_shown * rate_shown`` reconciles to the
+        invariant line total. Metric and unmapped units return the rate
+        unchanged. The line total is never recomputed from this - only the
+        printed per-unit basis is restated.
+        """
+        rate = display_rate(pos.unit_rate, pos.unit, measurement_system)
+        return _fv(rate)
 
     # Table header row
     header_row = [
@@ -576,13 +613,14 @@ def _build_boq_table(
 
         # Position rows within section
         for pos in section.positions:
+            qty_text, unit_label = _qty_cell(pos)
             table_data.append(
                 [
                     _safe_para(pos.ordinal, styles["cell"]),
                     _safe_para(pos.description, styles["cell"]),
-                    _safe_para(pos.unit, styles["cell"]),
-                    Paragraph(_fv(pos.quantity), styles["cell_right"]),
-                    Paragraph(_fv(pos.unit_rate), styles["cell_right"]),
+                    _safe_para(unit_label, styles["cell"]),
+                    Paragraph(qty_text, styles["cell_right"]),
+                    Paragraph(_rate_cell(pos), styles["cell_right"]),
                     Paragraph(_fv(pos.total), styles["cell_right"]),
                 ]
             )
@@ -620,13 +658,14 @@ def _build_boq_table(
 
         ungrouped_total = 0.0
         for pos in boq_data.positions:
+            qty_text, unit_label = _qty_cell(pos)
             table_data.append(
                 [
                     _safe_para(pos.ordinal, styles["cell"]),
                     _safe_para(pos.description, styles["cell"]),
-                    _safe_para(pos.unit, styles["cell"]),
-                    Paragraph(_fv(pos.quantity), styles["cell_right"]),
-                    Paragraph(_fv(pos.unit_rate), styles["cell_right"]),
+                    _safe_para(unit_label, styles["cell"]),
+                    Paragraph(qty_text, styles["cell_right"]),
+                    Paragraph(_rate_cell(pos), styles["cell_right"]),
                     Paragraph(_fv(pos.total), styles["cell_right"]),
                 ]
             )
@@ -793,6 +832,7 @@ def generate_boq_pdf(
     project_name: str,
     currency: str = "",
     prepared_by: str = "",
+    measurement_system: str = "metric",
 ) -> bytes:
     """Generate a professional PDF cost estimate report.
 
@@ -802,6 +842,11 @@ def generate_boq_pdf(
         project_name: Name of the parent project (for the cover page).
         currency: Currency code (e.g. "EUR", "GBP", "USD").
         prepared_by: Full name of the person who prepared the estimate.
+        measurement_system: ``"metric"`` (default) renders quantities
+            canonical; ``"imperial"`` converts the physical quantity column +
+            its unit label (m -> ft, m² -> ft² ...) and restates the paired
+            per-unit rate reciprocally so each converted line still reconciles.
+            Line / project totals are never converted or recomputed.
 
     Returns:
         PDF file contents as bytes.
@@ -871,7 +916,7 @@ def generate_boq_pdf(
     flowables.append(PageBreak())
 
     # BOQ table pages
-    flowables.extend(_build_boq_table(boq_data, currency, styles))
+    flowables.extend(_build_boq_table(boq_data, currency, styles, measurement_system))
 
     # Two-pass build: first pass counts pages, second pass renders with totals
     doc.build(flowables)
@@ -904,7 +949,7 @@ def generate_boq_pdf(
     flowables2.extend(_build_cover_page(boq_data, project_name, currency, prepared_by, styles))
     flowables2.append(NextPageTemplate("table"))
     flowables2.append(PageBreak())
-    flowables2.extend(_build_boq_table(boq_data, currency, styles))
+    flowables2.extend(_build_boq_table(boq_data, currency, styles, measurement_system))
 
     doc2.build(flowables2)
 
@@ -942,6 +987,7 @@ def generate_boq_pdf_simple(
     project_name: str,
     currency: str = "",
     prepared_by: str = "",
+    measurement_system: str = "metric",
 ) -> bytes:
     """Generate a simplified PDF for large BOQs (> 500 positions).
 
@@ -958,6 +1004,11 @@ def generate_boq_pdf_simple(
         project_name: Name of the parent project.
         currency: Currency code (e.g. "EUR").
         prepared_by: Full name of the person who prepared the estimate.
+        measurement_system: Accepted for signature parity with
+            :func:`generate_boq_pdf` so the router can call either uniformly.
+            The summary report carries no physical-quantity column (only item
+            counts and money subtotals), so there is nothing to convert and
+            the value is otherwise unused.
 
     Returns:
         PDF file contents as bytes.

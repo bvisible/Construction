@@ -14,6 +14,8 @@ import { useCallback, useEffect, useRef, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { X, Link2, Cuboid, PenLine, Ruler } from 'lucide-react';
+import { useDisplayQuantity } from '@/shared/hooks/useDisplayQuantity';
+import type { DisplayQuantity } from '@/shared/lib/unitConversion';
 
 /* ── Source-specific payload shapes ──────────────────────────────────── */
 
@@ -78,9 +80,16 @@ function isNumeric(v: unknown): v is number {
   return typeof v === 'number' && Number.isFinite(v);
 }
 
-/** Extract a flat list of { label, value, unit? } rows from the element. */
+/** Extract a flat list of { label, value, unit? } rows from the element.
+ *
+ *  Stored quantities/measurements are metric-canonical; `convert` turns each
+ *  dimensional value + unit into the user's measurement system for display
+ *  only. Unitless numeric *properties* are left as-is (generic counts/ratios
+ *  with no dimension to convert), and units the converter does not recognise
+ *  pass through unchanged. */
 function extractRows(
   el: ElementPayload,
+  convert: (value: number, metricUnit: string) => DisplayQuantity,
 ): Array<{ label: string; value: string; unit?: string }> {
   const rows: Array<{ label: string; value: string; unit?: string }> = [];
 
@@ -89,7 +98,7 @@ function extractRows(
     if (el.quantities) {
       for (const [k, v] of Object.entries(el.quantities)) {
         if (isNumeric(v)) {
-          const unit = k.includes('m2')
+          const metricUnit = k.includes('m2')
             ? 'm\u00B2'
             : k.includes('m3')
               ? 'm\u00B3'
@@ -98,11 +107,12 @@ function extractRows(
                 : k.includes('length') || k.includes('_m')
                   ? 'm'
                   : '';
-          rows.push({ label: k, value: v.toFixed(3), unit });
+          const d = convert(v, metricUnit);
+          rows.push({ label: k, value: d.value.toFixed(3), unit: d.unit });
         }
       }
     }
-    // Numeric properties
+    // Numeric properties \u2014 unitless, displayed verbatim.
     if (el.properties) {
       for (const [k, v] of Object.entries(el.properties)) {
         if (isNumeric(v)) {
@@ -113,7 +123,8 @@ function extractRows(
   } else if (el.source === 'dwg') {
     if (el.measurements) {
       for (const [k, m] of Object.entries(el.measurements)) {
-        rows.push({ label: k, value: m.value.toFixed(3), unit: m.unit });
+        const d = convert(m.value, m.unit);
+        rows.push({ label: k, value: d.value.toFixed(3), unit: d.unit });
       }
     }
     if (el.properties) {
@@ -126,7 +137,8 @@ function extractRows(
       }
     }
   } else if (el.source === 'pdf') {
-    rows.push({ label: el.measurementType, value: el.value.toFixed(3), unit: el.unit });
+    const d = convert(el.value, el.unit);
+    rows.push({ label: el.measurementType, value: d.value.toFixed(3), unit: d.unit });
     if (el.properties) {
       for (const [k, v] of Object.entries(el.properties)) {
         if (isNumeric(v)) {
@@ -196,6 +208,7 @@ export function ElementInfoPopover({
   portal = false,
 }: ElementInfoPopoverProps) {
   const { t } = useTranslation();
+  const q = useDisplayQuantity();
   const ref = useRef<HTMLDivElement>(null);
 
   // Close on Escape
@@ -222,7 +235,7 @@ export function ElementInfoPopover({
     onLinkToBOQ?.(element.id, element.source);
   }, [element.id, element.source, onLinkToBOQ]);
 
-  const rows = extractRows(element);
+  const rows = extractRows(element, q.convert);
   const title = elementTitle(element);
   const subtitle = elementSubtitle(element);
 

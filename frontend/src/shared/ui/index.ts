@@ -75,6 +75,12 @@ export type { ConfidenceBadgeProps, ConfidenceLevel } from './ConfidenceBadge';
 export { SuggestionCard } from './SuggestionCard';
 export type { SuggestionCardProps } from './SuggestionCard';
 
+// One consistent trust + feedback strip under any AI output (AI Estimator,
+// match suggestions, the cost advisor). Surfaces the trust moat everywhere the
+// assistant speaks, not just the agents page.
+export { AITrustNote } from './AITrustNote';
+export type { AITrustNoteProps } from './AITrustNote';
+
 export { ErrorState } from './ErrorState';
 export type { ErrorStateProps } from './ErrorState';
 

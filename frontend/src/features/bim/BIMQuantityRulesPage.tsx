@@ -1,5 +1,5 @@
 /**
- * BIMQuantityRulesPage — rule-based bulk linking of BIM elements to BOQ positions.
+ * BIMQuantityRulesPage - rule-based bulk linking of BIM elements to BOQ positions.
  *
  * Route: /bim/rules
  *
@@ -63,6 +63,7 @@ import clsx from 'clsx';
 import { Badge, Breadcrumb, ConfirmDialog, DismissibleInfo, IntroRichText, EmptyState, SkeletonTable } from '@/shared/ui';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { apiGet } from '@/shared/lib/api';
+import { useDisplayQuantity } from '@/shared/hooks/useDisplayQuantity';
 import { FolderOpen } from 'lucide-react';
 import BIMRequirementsImport from './BIMRequirementsImport';
 import { RulePackLibrary } from '@/features/bim_requirements/RulePackLibrary';
@@ -113,7 +114,7 @@ import {
   deleteRequirement,
   importRequirementsFromFile,
   validateRequirementSetAgainstModel,
-  requirementsTemplateUrl,
+  downloadRequirementsTemplate,
   type Requirement,
   type RequirementSet,
   type AddRequirementPayload,
@@ -396,6 +397,15 @@ function SandboxResultView({ result, unit }: { result: SandboxRunResult; unit: s
   const { t } = useTranslation();
   const { confidence, ratio } = draftConfidence(result);
   const sample = result.matches.slice(0, 25);
+  // Display-only metric->imperial conversion for the preview (#270). The
+  // rule's declared `unit` (m²/m³/m/kg for the standard sources, or a free
+  // unit otherwise) drives the conversion; unmapped units (pcs / property:*
+  // custom units) pass through unchanged. Nothing here is persisted: the
+  // sandbox is a preview and the authoritative apply runs server-side on the
+  // canonical metric quantities.
+  const q = useDisplayQuantity();
+  const displayUnit = q.unitFor(unit);
+  const conv = (v: number) => q.convert(v, unit).value;
 
   if (result.matches.length === 0 && result.skips.length === 0) {
     return (
@@ -429,10 +439,10 @@ function SandboxResultView({ result, unit }: { result: SandboxRunResult; unit: s
         <span className="rounded-md bg-surface-tertiary px-2 py-0.5 font-medium tabular-nums text-content-secondary">
           {t('bim_rules.sandbox_total', {
             defaultValue: 'Σ {{total}} {{unit}}',
-            total: result.totalAdjusted.toLocaleString(undefined, {
+            total: conv(result.totalAdjusted).toLocaleString(undefined, {
               maximumFractionDigits: 3,
             }),
-            unit: unit || '',
+            unit: displayUnit || '',
           })}
         </span>
         <span
@@ -465,9 +475,11 @@ function SandboxResultView({ result, unit }: { result: SandboxRunResult; unit: s
               </th>
               <th className="px-2 py-1 text-right font-medium">
                 {t('bim_rules.col_raw', { defaultValue: 'Raw' })}
+                {displayUnit ? ` (${displayUnit})` : ''}
               </th>
               <th className="px-2 py-1 text-right font-medium">
                 {t('bim_rules.col_adjusted', { defaultValue: 'Adjusted' })}
+                {displayUnit ? ` (${displayUnit})` : ''}
               </th>
             </tr>
           </thead>
@@ -481,9 +493,9 @@ function SandboxResultView({ result, unit }: { result: SandboxRunResult; unit: s
                 <td className="max-w-[160px] truncate px-2 py-1 text-content-tertiary">
                   {m.name || m.stable_id || m.element_id}
                 </td>
-                <td className="px-2 py-1 text-right tabular-nums">{m.raw_quantity.toFixed(3)}</td>
+                <td className="px-2 py-1 text-right tabular-nums">{conv(m.raw_quantity).toFixed(3)}</td>
                 <td className="px-2 py-1 text-right tabular-nums">
-                  {m.adjusted_quantity.toFixed(3)}
+                  {conv(m.adjusted_quantity).toFixed(3)}
                 </td>
               </tr>
             ))}
@@ -509,7 +521,7 @@ interface RuleEditorModalProps {
   initial: RuleFormState;
   mode: 'create' | 'edit' | 'duplicate';
   projectId: string | null;
-  /** Currently-selected BIM model — drives the live test sandbox. */
+  /** Currently-selected BIM model - drives the live test sandbox. */
   modelId: string;
   modelName?: string;
   /** Formula of the rule before this edit, used to version on save. */
@@ -579,7 +591,7 @@ function RuleEditorModal({
     setSandboxError(null);
     try {
       // Skeleton fetch carries element_type + quantities + properties, which
-      // is everything the rule engine reads — no geometry round-trip needed.
+      // is everything the rule engine reads - no geometry round-trip needed.
       const resp = await fetchBIMElements(modelId, { skeleton: true });
       const elements = resp.items as unknown as SandboxElement[];
       setSandboxResult(runSandbox(formula, elements));
@@ -935,7 +947,7 @@ function RuleEditorModal({
               </div>
             </div>
 
-            {/* Unit-safety guard — warns when the declared unit's dimension
+            {/* Unit-safety guard - warns when the declared unit's dimension
                 disagrees with the quantity source (e.g. an area_m2 rule that
                 declares an m³ unit). Silent when either side is unknown. */}
             {unitSafety.mismatch && (
@@ -957,7 +969,7 @@ function RuleEditorModal({
               </div>
             )}
 
-            {/* Live test sandbox — run the draft rule against the picked model
+            {/* Live test sandbox - run the draft rule against the picked model
                 and show matched elements + computed quantities before saving. */}
             <div className="rounded-lg border border-border-light bg-surface-secondary/40 p-3">
               <div className="flex items-center justify-between gap-2">
@@ -999,7 +1011,7 @@ function RuleEditorModal({
               )}
             </div>
 
-            {/* Version history — restore an earlier formula. Stored in the
+            {/* Version history - restore an earlier formula. Stored in the
                 rule's metadata.versions, so no migration is needed. */}
             {mode === 'edit' && versions.length > 0 && (
               <div className="rounded-lg border border-border-light bg-surface-secondary/40 p-3">
@@ -1173,7 +1185,7 @@ function RuleEditorModal({
                         "On apply, a new BOQ position will be created using this rule's name as the description. Quantities will be computed at apply time.",
                     })}
                   </p>
-                  {/* Unit-rate prefill — calls the cost suggestion endpoint
+                  {/* Unit-rate prefill - calls the cost suggestion endpoint
                       with the rule's filter context to get the top CWICR
                       match.  When set, the apply path uses this rate so
                       the new position lands fully priced. */}
@@ -1234,7 +1246,7 @@ function RuleEditorModal({
                             updateField('target_unit_rate', rateStr);
                           }
                         } catch (err) {
-                          // Soft-fail — the cost endpoint is optional and
+                          // Soft-fail - the cost endpoint is optional and
                           // shouldn't block rule editing if it errors.
                           if (import.meta.env.DEV) console.warn('Cost suggestion failed', err);
                         }
@@ -1278,9 +1290,14 @@ function RuleEditorModal({
             >
               {t('common.cancel', { defaultValue: 'Cancel' })}
             </button>
+            {/* Enabled whenever not mid-save: a disabled Save button reads as
+                "the button does nothing". The name input is `required`, so a
+                click with an empty name triggers native field validation that
+                points the user at what is missing instead of silently doing
+                nothing. handleSubmit still guards the empty-name case. */}
             <button
               type="submit"
-              disabled={submitting || !form.name.trim()}
+              disabled={submitting}
               className="flex items-center gap-1.5 rounded-lg bg-oe-blue px-4 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-oe-blue-dark disabled:cursor-not-allowed disabled:opacity-60"
             >
               {submitting && <Loader2 size={12} className="animate-spin" />}
@@ -1304,6 +1321,12 @@ interface PreviewModalProps {
 
 function PreviewModal({ open, onClose, result, loading }: PreviewModalProps) {
   const { t } = useTranslation();
+  // Display-only metric->imperial conversion for the dry-run sample (#285).
+  // Each row carries its own declared unit, so quantity + unit are converted
+  // per row; unmapped units (pcs / custom property units) pass through
+  // unchanged. Nothing here is persisted - the canonical apply ran server-side
+  // on the metric quantities; this only restates what the user sees.
+  const q = useDisplayQuantity();
   if (!open) return null;
   const sample = result?.results.slice(0, 20) ?? [];
   return (
@@ -1409,12 +1432,12 @@ function PreviewModal({ open, onClose, result, loading }: PreviewModalProps) {
                           {item.quantity_source}
                         </td>
                         <td className="px-2 py-1 text-right tabular-nums">
-                          {item.raw_quantity.toFixed(3)}
+                          {q.convert(item.raw_quantity, item.unit).value.toFixed(3)}
                         </td>
                         <td className="px-2 py-1 text-right tabular-nums">
-                          {item.adjusted_quantity.toFixed(3)}
+                          {q.convert(item.adjusted_quantity, item.unit).value.toFixed(3)}
                         </td>
-                        <td className="px-2 py-1">{item.unit}</td>
+                        <td className="px-2 py-1">{q.unitFor(item.unit)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -1482,13 +1505,13 @@ const REQ_CATEGORIES = [
 
 const REQ_PRIORITIES = ['must', 'should', 'may'] as const;
 
-/* ── ConstraintValueInput — picks the right widget per operator ─────── */
+/* ── ConstraintValueInput - picks the right widget per operator ─────── */
 
 const NUMERIC_OPERATORS = new Set<ConstraintType>(['min', 'max', 'range']);
 const PRESENCE_OPERATORS = new Set<ConstraintType>(['exists', 'not_exists']);
 
 function parseRange(text: string): { from: string; to: string } {
-  // Split on '..', '-', ',', or ';' — same operators the backend accepts.
+  // Split on '..', '-', ',', or ';' - same operators the backend accepts.
   const m = text.split(/\s*(?:\.\.|;|,|-)\s*/).filter((s) => s.length > 0);
   return { from: m[0] ?? '', to: m[1] ?? '' };
 }
@@ -2007,7 +2030,7 @@ interface RequirementPack {
 
 // All ten operators (equals | not_equals | min | max | range | contains |
 // not_contains | regex | exists | not_exists) are accepted by the backend
-// schema as of the v2.8.8 unified contract — preset packs use the operator
+// schema as of the v2.8.8 unified contract - preset packs use the operator
 // that fits the rule semantically.
 const REQUIREMENTS_PRESET_PACKS: RequirementPack[] = [
   {
@@ -2266,7 +2289,7 @@ function RequirementsTabContent({
     onError: (e: Error) => addToast({ type: 'error', title: t('common.error', { defaultValue: 'Error' }), message: e.message }),
   });
 
-  // BIM models for the current project — needed for the
+  // BIM models for the current project - needed for the
   // "Validate against BIM model" CTA. We fetch them lazily so the
   // Requirements tab opens fast even when the project has many models.
   const { data: bimModelsData } = useQuery({
@@ -2334,7 +2357,7 @@ function RequirementsTabContent({
       addToast({ type: 'error', title: t('common.error', { defaultValue: 'Error' }), message: e.message }),
   });
 
-  // One-click pack installer — creates the set if missing, then bulk-adds
+  // One-click pack installer - creates the set if missing, then bulk-adds
   // every rule in the pack so the user lands on a populated table without
   // hand-authoring each row.
   const installPackMut = useMutation({
@@ -2512,9 +2535,20 @@ function RequirementsTabContent({
             />
           </label>
 
-          {/* Excel template download */}
-          <a
-            href={requirementsTemplateUrl()}
+          {/* Excel template download. Uses an authenticated fetch: the
+              endpoint is JWT-guarded and a bare anchor click sends no Bearer
+              token, so it 401s and nothing downloads. */}
+          <button
+            type="button"
+            onClick={() => {
+              downloadRequirementsTemplate().catch((e) =>
+                addToast({
+                  type: 'error',
+                  title: t('common.error', { defaultValue: 'Error' }),
+                  message: e instanceof Error ? e.message : String(e),
+                }),
+              );
+            }}
             className="flex items-center gap-1.5 rounded-lg border border-border-light bg-surface-primary px-2.5 py-1.5 text-[11px] font-medium text-content-secondary hover:border-oe-blue hover:text-oe-blue"
             title={t('bim_rules.req_template_btn_title', {
               defaultValue: 'Download Excel template',
@@ -2522,7 +2556,7 @@ function RequirementsTabContent({
           >
             <Download size={12} />
             {t('bim_rules.req_template_btn', { defaultValue: 'Template' })}
-          </a>
+          </button>
 
           {/* Export current set */}
           {currentSetId && requirements.length > 0 && (
@@ -2536,7 +2570,7 @@ function RequirementsTabContent({
             </a>
           )}
 
-          {/* Validate against BIM model — the headline action */}
+          {/* Validate against BIM model - the headline action */}
           {currentSetId && requirements.length > 0 && bimModels.length > 0 && (
             <button
               type="button"
@@ -2893,7 +2927,7 @@ interface ProjectOption { id: string; name: string }
  * project list lazily on focus so the cold paint of /bim/rules does
  * NOT pay the projects round-trip when a project is already active.
  * After the user picks one, ``setActiveProject`` is fired against the
- * shared store — every page reads from the same source so no manual
+ * shared store - every page reads from the same source so no manual
  * navigation is needed.
  */
 function NoProjectPicker() {
@@ -3109,6 +3143,10 @@ export function BIMQuantityRulesPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const addToast = useToastStore((s) => s.addToast);
+  // Display-only metric->imperial unit relabel for the saved-rules table (#285).
+  // The rule's `unit` is stored metric-canonical; the apply still runs on the
+  // canonical value server-side. Unmapped / free units pass through unchanged.
+  const q = useDisplayQuantity();
 
   const activeProjectId = useProjectContextStore((s) => s.activeProjectId);
   const activeProjectName = useProjectContextStore((s) => s.activeProjectName);
@@ -3164,7 +3202,7 @@ export function BIMQuantityRulesPage() {
             map.set(p.id, b.id);
           }
         } catch {
-          // skip — worst case the edit form just won't pre-select the BOQ
+          // skip - worst case the edit form just won't pre-select the BOQ
         }
       }
       return map;
@@ -3250,7 +3288,7 @@ export function BIMQuantityRulesPage() {
 
   const createMutation = useMutation({
     // Explicit key so the global MutationCache handler in main.tsx also
-    // invalidates the list — guards against a forgotten refetch if the
+    // invalidates the list - guards against a forgotten refetch if the
     // local onSuccess below is ever skipped (e.g. component unmount mid-flight).
     mutationKey: ['bim-quantity-maps', 'create'],
     mutationFn: createQuantityMap,
@@ -3437,7 +3475,7 @@ export function BIMQuantityRulesPage() {
   );
 
   // Pre-fill a new rule whose element-type filter targets one uncovered
-  // category — the "fix this gap" affordance on the coverage report.
+  // category - the "fix this gap" affordance on the coverage report.
   const openCreateForCategory = useCallback((category: string) => {
     setEditorMode('create');
     setEditingRuleId(null);
@@ -3581,7 +3619,7 @@ export function BIMQuantityRulesPage() {
           })}
         </DismissibleInfo>
 
-        {/* Tabs — hidden when the URL locks the page to a single mode so
+        {/* Tabs - hidden when the URL locks the page to a single mode so
             the Takeoff "BIM Rules" and Estimation "Quantity Rules" sidebar
             entries read as dedicated pages, not as two tabs on the same
             screen. */}
@@ -3630,7 +3668,7 @@ export function BIMQuantityRulesPage() {
           </div>
         )}
 
-        {/* Toolbar — model picker for both tabs (Requirements uses it to
+        {/* Toolbar - model picker for both tabs (Requirements uses it to
             populate the "From BIM Model" auto-fill); Preview/Apply only
             apply to Quantity Rules. */}
         <div className="mt-4 flex flex-wrap items-center gap-3 rounded-lg border border-border-light bg-surface-secondary px-3 py-2">
@@ -3707,7 +3745,7 @@ export function BIMQuantityRulesPage() {
       {/* Content */}
       <div className="flex-1 overflow-auto p-6">
         {activeTab === 'rule_library' ? (
-          /* Rule Library tab — works without an active project too
+          /* Rule Library tab - works without an active project too
              because the seed packs are inlined; install button stays
              disabled until a project is selected. */
           <RulePackLibrary projectId={activeProjectId} />
@@ -3803,7 +3841,7 @@ export function BIMQuantityRulesPage() {
           </div>
         ) : (
           <div className="space-y-4">
-            {/* Coverage / missing-scope report — which element types in the
+            {/* Coverage / missing-scope report - which element types in the
                 active model no active rule yet selects. */}
             {coverageReport && (
               <CoverageReportPanel
@@ -3858,7 +3896,7 @@ export function BIMQuantityRulesPage() {
                           )}
                       </td>
                       <td className="px-4 py-2 font-mono text-[11px]">{rule.quantity_source}</td>
-                      <td className="px-4 py-2">{rule.unit}</td>
+                      <td className="px-4 py-2">{q.unitFor(rule.unit)}</td>
                       <td className="px-4 py-2">
                         {rule.boq_target?.position_id ? (
                           <Badge variant="neutral">
@@ -3955,7 +3993,7 @@ export function BIMQuantityRulesPage() {
         submitting={createMutation.isPending || patchMutation.isPending}
       />
 
-      {/* BIM Requirements Import — only shown on the Requirements tab (or
+      {/* BIM Requirements Import - only shown on the Requirements tab (or
           requirements-locked page), since it has no relevance to Quantity
           Rules. */}
       {activeTab === 'requirements' && (

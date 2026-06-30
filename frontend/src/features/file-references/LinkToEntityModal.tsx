@@ -32,6 +32,8 @@ const TARGET_TYPES: ReadonlyArray<{ value: TargetType; label: string }> = [
   { value: 'bid', label: 'Bid' },
   { value: 'contract', label: 'Contract' },
   { value: 'transmittal', label: 'Transmittal' },
+  { value: 'inspection', label: 'Inspection' },
+  { value: 'ncr', label: 'NCR' },
   { value: 'bcf_topic', label: 'BCF topic' },
   { value: 'boq_position', label: 'BOQ position' },
   { value: 'project', label: 'Project' },

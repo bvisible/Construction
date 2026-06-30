@@ -292,7 +292,7 @@ async def update_change_order(
     """Update a change order (draft only)."""
     existing = await service.get_order(order_id)
     await verify_project_access(existing.project_id, str(user_id), session)
-    order = await service.update_order(order_id, data)
+    order = await service.update_order(order_id, data, user_id=str(user_id) if user_id else None)
     return _order_to_response(order)
 
 

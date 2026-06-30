@@ -66,9 +66,12 @@ from app.modules.schedule.schemas import (
     RelationshipResponse,
     RiskAnalysisResponse,
     ScheduleCreate,
+    ScheduleDiffRequest,
+    ScheduleDiffResponse,
     ScheduleResponse,
     ScheduleStatsResponse,
     ScheduleUpdate,
+    SnapshotEnvelopeResponse,
     WorkCalendarResponse,
     WorkOrderCreate,
     WorkOrderResponse,
@@ -2101,6 +2104,120 @@ async def export_schedule_csv(
     )
 
 
+@router.get(
+    "/schedule/export/msp-xml/",
+    dependencies=[Depends(RequirePermission("schedule.read"))],
+)
+async def export_schedule_msp_xml(
+    _user_id: CurrentUserId,
+    payload: CurrentUserPayload,
+    schedule_id: uuid.UUID = Query(..., description="Schedule to export"),
+    service: ScheduleService = Depends(_get_service),
+    session: SessionDep = None,
+) -> StreamingResponse:
+    """Export a schedule as a Microsoft Project XML (MSPDI) file.
+
+    Round-trips with ``import_msp_xml``: tasks become ``<Task>`` rows (UID,
+    dates, 8h-day duration, percent complete, milestone/summary flags,
+    constraints) and both the relationship table and inline dependencies
+    become ``<PredecessorLink>`` entries. Verifies the caller owns the parent
+    project (admins bypass).
+    """
+    from sqlalchemy import select
+
+    from app.modules.schedule.models import ScheduleRelationship
+    from app.modules.schedule.mspdi_export import (
+        MspdiActivity,
+        MspdiPredecessor,
+        MspdiProject,
+        build_mspdi_xml,
+    )
+
+    await _verify_schedule_owner(service, session, schedule_id, _user_id, payload)
+    schedule = await service.get_schedule(schedule_id)
+    activities, _ = await service.list_activities_for_schedule(schedule_id, limit=5000)
+
+    # Stable 1..N UID per activity, preserving the listed order.
+    uid_by_act: dict[str, int] = {}
+    mspdi_acts: list[MspdiActivity] = []
+    for idx, act in enumerate(activities, start=1):
+        uid_by_act[str(act.id)] = idx
+        mspdi_acts.append(
+            MspdiActivity(
+                uid=idx,
+                name=act.name or "",
+                start_date=act.start_date or "",
+                end_date=act.end_date or "",
+                duration_days=act.duration_days or 0,
+                progress_pct=_str_to_float(act.progress_pct),
+                activity_type=act.activity_type or "task",
+                wbs_code=act.wbs_code or "",
+                constraint_type=act.constraint_type,
+                constraint_date=act.constraint_date,
+            )
+        )
+
+    # Predecessor links: relationship rows first, then inline dependencies.
+    # Dedupe by (predecessor UID, relationship type) so a link recorded both
+    # ways is only emitted once.
+    preds_by_uid: dict[int, list[MspdiPredecessor]] = {}
+    seen: set[tuple[int, int, str]] = set()
+
+    def _add_link(succ_uid: int, pred_uid: int, rel_type: str, lag_days: int) -> None:
+        key = (succ_uid, pred_uid, rel_type)
+        if pred_uid == succ_uid or key in seen:
+            return
+        seen.add(key)
+        preds_by_uid.setdefault(succ_uid, []).append(
+            MspdiPredecessor(
+                predecessor_uid=pred_uid,
+                relationship_type=rel_type,
+                lag_days=lag_days,
+            )
+        )
+
+    rel_stmt = select(ScheduleRelationship).where(ScheduleRelationship.schedule_id == schedule_id)
+    rel_result = await session.execute(rel_stmt)
+    for rel in rel_result.scalars().all():
+        succ = uid_by_act.get(str(rel.successor_id))
+        pred = uid_by_act.get(str(rel.predecessor_id))
+        if succ is None or pred is None:
+            continue
+        _add_link(succ, pred, rel.relationship_type or "FS", rel.lag_days or 0)
+
+    for act in activities:
+        succ = uid_by_act.get(str(act.id))
+        if succ is None:
+            continue
+        for dep in act.dependencies or []:
+            if not isinstance(dep, dict):
+                continue
+            pred = uid_by_act.get(str(dep.get("activity_id", "")))
+            if pred is None:
+                continue
+            try:
+                lag = int(dep.get("lag_days", 0) or 0)
+            except (TypeError, ValueError):
+                lag = 0
+            _add_link(succ, pred, str(dep.get("type", "FS")), lag)
+
+    xml_str = build_mspdi_xml(
+        MspdiProject(
+            name=schedule.name or "Schedule",
+            activities=mspdi_acts,
+            predecessors_by_uid=preds_by_uid,
+        )
+    )
+
+    schedule_name = schedule.name.replace(" ", "_")[:40]
+    filename = f"schedule_{schedule_name}.xml"
+    return StreamingResponse(
+        io.BytesIO(xml_str.encode("utf-8")),
+        media_type="application/xml",
+        headers={"Content-Disposition": content_disposition_attachment(filename)},
+    )
+
+
 # ── Schedule Stats & Critical Path ──────────────────────────────────────────
 
 
@@ -2357,3 +2474,196 @@ async def get_labor_cost_by_phase(
     """Return labour cost per WBS phase for the Estimation Dashboard."""
     await verify_project_access(project_id, _user_id, session)
     return await service.get_labor_cost_by_phase(project_id)
+
+
+# ── Schedule comparison / diff (T1.3) ────────────────────────────────────────
+
+
+async def _load_activities_relationships(session: SessionDep, schedule_id: uuid.UUID) -> tuple[list, list]:
+    """Load all Activity + ScheduleRelationship rows for a schedule."""
+    from sqlalchemy import select
+
+    from app.modules.schedule.models import Activity, ScheduleRelationship
+
+    acts = (await session.execute(select(Activity).where(Activity.schedule_id == schedule_id))).scalars().all()
+    rels = (
+        (await session.execute(select(ScheduleRelationship).where(ScheduleRelationship.schedule_id == schedule_id)))
+        .scalars()
+        .all()
+    )
+    return list(acts), list(rels)
+
+
+async def _load_baseline_for_project(
+    session: SessionDep,
+    baseline_id: uuid.UUID,
+    project_id: uuid.UUID,
+) -> object:
+    """Load a baseline and confirm it belongs to ``project_id``.
+
+    Existence-oracle safe: a baseline from another project 404s exactly like a
+    missing one, so the id can't be enumerated across tenants.
+    """
+    from app.modules.schedule.models import ScheduleBaseline
+
+    baseline = await session.get(ScheduleBaseline, baseline_id)
+    if baseline is None or baseline.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Baseline not found")
+    return baseline
+
+
+def _diff_to_dict(result: object) -> dict:
+    """Map a pure ``DiffResult`` dataclass into a JSON-safe response dict."""
+    s = result.summary
+    return {
+        "activities": [
+            {
+                "key": c.key,
+                "change_type": c.change_type,
+                "categories": list(c.categories),
+                "fields": c.fields,
+                "finish_movement_days": c.finish_movement_days,
+                "critical_path": c.critical_path,
+                "name": c.name,
+                "wbs_code": c.wbs_code,
+            }
+            for c in result.activities
+        ],
+        "relationships": [
+            {
+                "key": list(c.key),
+                "change_type": c.change_type,
+                "categories": list(c.categories),
+                "fields": c.fields,
+            }
+            for c in result.relationships
+        ],
+        "calendars": [
+            {"key": c.key, "change_type": c.change_type, "categories": list(c.categories)} for c in result.calendars
+        ],
+        "summary": {
+            "net_finish_movement_days": s.net_finish_movement_days,
+            "count_by_category": s.count_by_category,
+            "activities_added": s.activities_added,
+            "activities_removed": s.activities_removed,
+            "activities_changed": s.activities_changed,
+            "relationships_added": s.relationships_added,
+            "relationships_removed": s.relationships_removed,
+            "relationships_retyped": s.relationships_retyped,
+            "relationships_relagged": s.relationships_relagged,
+            "critical_path_in": s.critical_path_in,
+            "critical_path_out": s.critical_path_out,
+            "cost_planned_delta": str(s.cost_planned_delta),
+            "cost_actual_delta": str(s.cost_actual_delta),
+            "largest_slips": s.largest_slips,
+        },
+    }
+
+
+@router.get(
+    "/schedules/{schedule_id}/snapshot-envelope",
+    response_model=SnapshotEnvelopeResponse,
+    summary="Capture the live schedule as a comparison envelope",
+    dependencies=[Depends(RequirePermission("schedule.read"))],
+)
+async def get_snapshot_envelope(
+    schedule_id: uuid.UUID,
+    session: SessionDep,
+    user_id: CurrentUserId,
+    service: ScheduleService = Depends(_get_service),
+) -> SnapshotEnvelopeResponse:
+    """Return the current schedule flattened into the canonical diff envelope."""
+    from app.modules.schedule.snapshot_envelope import live_envelope
+
+    await _verify_schedule_owner(service, session, schedule_id, user_id)
+    acts, rels = await _load_activities_relationships(session, schedule_id)
+    return SnapshotEnvelopeResponse(schedule_id=schedule_id, envelope=live_envelope(acts, rels))
+
+
+@router.post(
+    "/schedules/{schedule_id}/diff",
+    response_model=ScheduleDiffResponse,
+    summary="Compare two schedule snapshots (baseline vs live, or baseline vs baseline)",
+    dependencies=[Depends(RequirePermission("schedule.read"))],
+)
+async def diff_schedule(
+    schedule_id: uuid.UUID,
+    data: ScheduleDiffRequest,
+    session: SessionDep,
+    user_id: CurrentUserId,
+    service: ScheduleService = Depends(_get_service),
+) -> ScheduleDiffResponse:
+    """Categorized diff between a base and a target snapshot of this schedule.
+
+    Base is a captured baseline or an inline envelope; target defaults to the
+    live schedule or another baseline. Returns per-activity, per-relationship
+    and per-calendar changes plus roll-up metrics (net finish movement,
+    critical-path in/out, cost deltas, largest slips). Read-only.
+    """
+    from app.modules.schedule.diff_engine import diff_snapshots
+    from app.modules.schedule.snapshot_envelope import live_envelope, normalize_envelope
+
+    schedule = await _verify_schedule_owner(service, session, schedule_id, user_id)
+    project_id = schedule.project_id
+
+    if data.base_baseline_id is not None:
+        base_bl = await _load_baseline_for_project(session, data.base_baseline_id, project_id)
+        base_env = normalize_envelope(base_bl.snapshot_data)
+        base_label = base_bl.name
+    elif data.base_envelope is not None:
+        base_env = normalize_envelope(data.base_envelope)
+        base_label = "provided"
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Provide base_baseline_id or base_envelope.",
+        )
+
+    if data.target_baseline_id is not None:
+        target_bl = await _load_baseline_for_project(session, data.target_baseline_id, project_id)
+        target_env = normalize_envelope(target_bl.snapshot_data)
+        target_label = target_bl.name
+    else:
+        acts, rels = await _load_activities_relationships(session, schedule_id)
+        target_env = live_envelope(acts, rels)
+        target_label = "current"
+
+    result = diff_snapshots(base_env, target_env)
+    return ScheduleDiffResponse(
+        schedule_id=schedule_id,
+        base_label=base_label,
+        target_label=target_label,
+        **_diff_to_dict(result),
+    )
+
+
+# Activity codes, UDFs and saved layouts (T2.3) live on their own router file to
+# keep this module readable; they mount under the same /api/v1/schedule prefix.
+from app.modules.schedule.codes_router import codes_router as _codes_router  # noqa: E402
+
+router.include_router(_codes_router)
+
+# Progress rigor (T3.2): typed progress, weighted steps, suspend/resume,
+# per-activity calendar and time-phased planned-value preview. Same prefix.
+from app.modules.schedule.progress_router import progress_router as _progress_router  # noqa: E402
+
+router.include_router(_progress_router)
+
+# Real-time collaboration (T3.4): presence snapshot, optimistic-concurrency
+# guarded activity update, and the revision-token read. Same /api/v1/schedule
+# prefix. The live presence channel rides the collaboration-locks WebSocket.
+from app.modules.schedule.realtime_router import realtime_router as _realtime_router  # noqa: E402
+
+router.include_router(_realtime_router)
+
+# Lossless schedule interchange (T1.1): neutral export / import document plus a
+# normalise-on-import cleaner (DCMA-style hygiene). Same /api/v1/schedule prefix.
+from app.modules.schedule.interchange_router import interchange_router as _interchange_router  # noqa: E402
+
+router.include_router(_interchange_router)
+
+# Persisted EVM snapshots: a read-only trend of PV / EV / BAC / SPI captured as
+# the schedule data date advances. Same /api/v1/schedule prefix.
+from app.modules.schedule.evm_snapshot_router import evm_snapshot_router as _evm_snapshot_router  # noqa: E402
+
+router.include_router(_evm_snapshot_router)

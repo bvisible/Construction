@@ -84,6 +84,8 @@ export interface UpdateProjectData extends Partial<CreateProjectData> {
   fx_rates?: ProjectFxRate[];
   default_vat_rate?: string | null;
   custom_units?: string[];
+  /** Free-form lifecycle status (<=50 chars), e.g. active/waiting/on_hold/finished. */
+  status?: string;
 }
 
 /* ── Unified Project Dashboard types ─────────────────────────────────── */
@@ -226,8 +228,34 @@ export interface ProjectProfileResult {
   must_count: number;
 }
 
+/* ── Status history (#274) ───────────────────────────────────────────────
+ * One immutable audit row per project status change. The backend returns
+ * the list NEWEST-FIRST so the timeline reads top-to-bottom as "most
+ * recent change first". `from_status` is null for the very first row
+ * (project creation), `changed_by` is null for system/seed changes. */
+export interface ProjectStatusHistoryEntry {
+  id: string;
+  project_id: string;
+  from_status: string | null;
+  to_status: string;
+  changed_by: string | null;
+  note: string | null;
+  created_at: string;
+}
+
 export const projectsApi = {
+  // NOTE: kept as a zero-arg fn so it can be passed straight as a
+  // react-query `queryFn` (callers do `queryFn: projectsApi.list`). For a
+  // server-side status filter use `listByStatus` instead.
   list: () => apiGet<Project[]>('/v1/projects/'),
+  /**
+   * List projects filtered by status. Pass a concrete status (e.g.
+   * 'archived') to return only those, or 'all' to include every status
+   * (archived projects are excluded by the default `list`). The backend
+   * accepts the `status` query param added for #274.
+   */
+  listByStatus: (status: string) =>
+    apiGet<Project[]>(`/v1/projects/?status=${encodeURIComponent(status)}`),
   get: (id: string) => apiGet<Project>(`/v1/projects/${id}`),
   create: (data: CreateProjectData) => apiPost<Project>('/v1/projects/', data),
   update: (id: string, data: UpdateProjectData) =>
@@ -244,6 +272,10 @@ export const projectsApi = {
   duplicate: (id: string) =>
     apiPost<Project>(`/v1/projects/${id}/duplicate/`, {}),
   dashboard: (id: string) => apiGet<ProjectDashboard>(`/v1/projects/${id}/dashboard/`),
+
+  /** Status-change audit trail for a project (newest-first). */
+  statusHistory: (id: string) =>
+    apiGet<ProjectStatusHistoryEntry[]>(`/v1/projects/${id}/status-history`),
 
   /* ── setup wizard / profile ─────────────────────────────────────── */
   wizardPresets: () => apiGet<WizardPreset[]>('/v1/projects/wizard/presets'),

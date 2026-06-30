@@ -671,6 +671,37 @@ class ProjectResponse(BaseModel):
         return is_aia_eligible(self.country_code, self.address)
 
 
+# ── Status-history schemas ───────────────────────────────────────────────
+
+
+class ProjectStatusHistoryResponse(BaseModel):
+    """One project status transition returned from the API.
+
+    ``from_status`` is null for the initial status recorded at creation;
+    ``changed_by`` is null when the acting user is unknown or has since been
+    removed (the FK is ``ON DELETE SET NULL``). UUID columns are serialised
+    as strings so the frontend gets the plain ids the contract expects.
+    """
+
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    id: str
+    project_id: str
+    from_status: str | None = None
+    to_status: str
+    changed_by: str | None = None
+    note: str | None = None
+    created_at: datetime
+
+    @field_validator("id", "project_id", "changed_by", mode="before")
+    @classmethod
+    def _coerce_uuid_to_str(cls, v: Any) -> Any:
+        # ORM columns are GUID() (UUID instances). Stringify so the response
+        # matches the {id, project_id, changed_by} string contract regardless
+        # of whether the value arrives as a UUID or already as a string.
+        return str(v) if isinstance(v, UUID) else v
+
+
 # ── WBS schemas ──────────────────────────────────────────────────────────
 
 

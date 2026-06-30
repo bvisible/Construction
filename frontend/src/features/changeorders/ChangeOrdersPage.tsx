@@ -1462,6 +1462,7 @@ function DetailView({
                 const ok = await confirm({
                   title: t('changeorders.submit_confirm_title', { defaultValue: 'Submit change order?' }),
                   message: t('changeorders.submit_confirm', { defaultValue: 'Submit this change order for review? This cannot be undone.' }),
+                  confirmLabel: t('changeorders.submit', { defaultValue: 'Submit' }),
                   variant: 'warning',
                 });
                 if (ok) submitMut.mutate();
@@ -1484,6 +1485,7 @@ function DetailView({
                     const ok = await confirm({
                       title: t('changeorders.approve_confirm_title', { defaultValue: 'Approve change order?' }),
                       message: t('changeorders.approve_confirm', { defaultValue: 'Approve this change order? Cost impact will be applied to the project budget.' }),
+                      confirmLabel: t('changeorders.approve', { defaultValue: 'Approve' }),
                       variant: 'warning',
                     });
                     if (ok) approveMut.mutate();
@@ -1495,6 +1497,8 @@ function DetailView({
                     const ok = await confirm({
                       title: t('changeorders.reject_confirm_title', { defaultValue: 'Reject change order?' }),
                       message: t('changeorders.reject_confirm', { defaultValue: 'Reject this change order?' }),
+                      confirmLabel: t('changeorders.reject', { defaultValue: 'Reject' }),
+                      variant: 'warning',
                     });
                     if (ok) rejectMut.mutate();
                   }} disabled={rejectMut.isPending}>
@@ -1528,6 +1532,7 @@ function DetailView({
                 const ok = await confirm({
                   title: t('changeorders.execute_confirm_title', { defaultValue: 'Mark as executed?' }),
                   message: t('changeorders.execute_confirm', { defaultValue: 'Mark this change order as executed? This records that the scope change has been carried out on site. It cannot be undone.' }),
+                  confirmLabel: t('changeorders.mark_executed', { defaultValue: 'Mark as executed' }),
                   variant: 'warning',
                 });
                 if (ok) executeMut.mutate();

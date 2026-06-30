@@ -47,7 +47,7 @@ import {
   ArrowRight,
   Activity as ActivityIcon,
 } from 'lucide-react';
-import { Card, Skeleton, Badge } from '@/shared/ui';
+import { Card, Skeleton, Badge, AuthImage } from '@/shared/ui';
 import { apiGet, ApiError } from '@/shared/lib/api';
 import { getPhotoThumbUrl } from '@/features/documents/api';
 import { useProjectWidgetsRollup } from '../hooks/useProjectWidgetsRollup';
@@ -887,20 +887,95 @@ interface PhotoItem {
   id: string;
   url?: string;
   thumbnail_url?: string;
-  uploaded_at?: string;
+  // The photos endpoint (PhotoResponse) carries capture + row timestamps,
+  // not an ``uploaded_at`` field, so we sort on ``taken_at`` then
+  // ``created_at`` (newest first) to interleave correctly with documents.
+  taken_at?: string | null;
+  created_at?: string | null;
+}
+
+// A general project document, as serialised by GET /v1/documents/. We only
+// need enough to spot image uploads and address their thumbnail.
+interface DocImageItem {
+  id: string;
+  name: string;
+  mime_type?: string | null;
+  created_at?: string;
+}
+
+// One tile in the strip, regardless of whether it came from the dedicated
+// photo gallery or from an image uploaded into general project files (#284).
+interface StripImage {
+  /** Stable React key + dedupe key. */
+  key: string;
+  /** Authenticated thumbnail URL fetched via <AuthImage>. */
+  src: string;
+  /** ISO timestamp used to sort newest-first. */
+  at: string;
+  /** Where clicking the tile should land the user. */
+  href: string;
+}
+
+const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|bmp|tiff?|heic|heif|avif|svg)$/i;
+
+/** True when a general document is an image we can show in the strip. */
+function isImageDocument(doc: DocImageItem): boolean {
+  if (doc.mime_type && doc.mime_type.toLowerCase().startsWith('image/')) return true;
+  return IMAGE_EXT_RE.test(doc.name ?? '');
 }
 
 export function PhotoStripWidget({ projectId }: { projectId: string }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const { data, isLoading } = useGracefulQuery<PhotoItem[]>(
+  // Two sources feed the strip:
+  //  1. dedicated site photos (the Photos tab / daily-diary captures), and
+  //  2. image files uploaded straight into Project Files as documents.
+  // Tigercatman (#284) reported that images uploaded into project files never
+  // showed here because the widget only read the photos table. We now merge
+  // both so any uploaded image surfaces, newest-first.
+  const photos = useGracefulQuery<PhotoItem[]>(
     ['proj-widget-photos', projectId],
     `/v1/documents/photos/?project_id=${projectId}`,
   );
+  const docs = useGracefulQuery<DocImageItem[]>(
+    ['proj-widget-photo-docs', projectId],
+    `/v1/documents/?project_id=${projectId}`,
+  );
+
+  const images = useMemo<StripImage[]>(() => {
+    const out: StripImage[] = [];
+    for (const p of photos.data ?? []) {
+      out.push({
+        key: `photo:${p.id}`,
+        // Photo thumbnails are bearer-protected; <AuthImage> fetches them
+        // with the token (a bare <img src> would 401).
+        src: getPhotoThumbUrl(p.id),
+        at: p.taken_at ?? p.created_at ?? '',
+        href: `/projects/${projectId}?tab=photos`,
+      });
+    }
+    for (const d of docs.data ?? []) {
+      if (!isImageDocument(d)) continue;
+      out.push({
+        key: `doc:${d.id}`,
+        // The document download endpoint streams the original bytes with the
+        // right image mime type, so it doubles as a thumbnail source.
+        src: `/api/v1/documents/${d.id}/download/`,
+        at: d.created_at ?? '',
+        // Land on the image inside Project Files (preview pane via ?file=).
+        href: `/projects/${projectId}/files?kind=document&file=${encodeURIComponent(d.id)}`,
+      });
+    }
+    // Newest first; rows without a timestamp sort last but stay visible.
+    out.sort((a, b) => (b.at || '').localeCompare(a.at || ''));
+    return out;
+  }, [photos.data, docs.data, projectId]);
+
+  const isLoading = photos.isLoading || docs.isLoading;
 
   const title = t('project.widget.photo-strip.title', { defaultValue: 'Photo strip' });
   const subtitle = t('project.widget.photo-strip.card_subtitle', {
-    defaultValue: 'Last 6 photos uploaded',
+    defaultValue: 'Latest site photos and uploaded images',
   });
   const icon = <ImageIcon size={16} />;
   const cta = {
@@ -916,26 +991,35 @@ export function PhotoStripWidget({ projectId }: { projectId: string }) {
             <Skeleton key={i} height={56} className="w-full" rounded="md" />
           ))}
         </div>
-      ) : !data || data.length === 0 ? (
+      ) : images.length === 0 ? (
         <WidgetEmpty
           message={t('project.widget.photo-strip.empty', {
-            defaultValue: 'No photos yet - upload from the Photos tab.',
+            defaultValue:
+              'No photos yet - upload from the Photos tab or add an image in Project Files.',
           })}
         />
       ) : (
         <div className="grid grid-cols-6 gap-1.5">
-          {data.slice(0, 6).map((photo) => (
+          {images.slice(0, 6).map((img) => (
             <button
-              key={photo.id}
+              key={img.key}
               type="button"
-              onClick={() => navigate(`/projects/${projectId}?tab=photos`)}
+              onClick={() => navigate(img.href)}
               className="aspect-square overflow-hidden rounded-md border border-border-light bg-surface-secondary hover:border-oe-blue/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-oe-blue/40"
             >
-              <img
-                src={getPhotoThumbUrl(photo.id)}
+              <AuthImage
+                src={img.src}
                 alt=""
                 className="h-full w-full object-cover"
                 loading="lazy"
+                placeholder={
+                  <div className="h-full w-full animate-pulse bg-surface-secondary" />
+                }
+                fallback={
+                  <div className="flex h-full w-full items-center justify-center text-content-quaternary">
+                    <ImageIcon size={16} strokeWidth={1.5} />
+                  </div>
+                }
               />
             </button>
           ))}

@@ -763,6 +763,36 @@ def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
+async def _log_ownership_change(
+    session: AsyncSession,
+    *,
+    entity_type: str,
+    entity_id: uuid.UUID,
+    from_party: str | None,
+    to_party: str | None,
+    actor_id: str | None,
+    code: str | None = None,
+) -> None:
+    """Record a ball-in-court hand-off for a variation record (best-effort).
+
+    Feeds the change-intelligence ownership-chain reconstruction so the custody
+    history of a notice / request / order survives the single mutable
+    ``ball_in_court`` column. The shared helper already wraps the write in
+    try/except, so an audit failure never rolls back the field update.
+    """
+    from app.core.audit_log import log_ownership_handoff
+
+    await log_ownership_handoff(
+        session,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        from_party=from_party,
+        to_party=to_party,
+        actor_id=actor_id,
+        metadata={"code": code} if code else None,
+    )
+
+
 def is_high_value(amount: Decimal | float | int | str | None) -> bool:
     """R5 audit: True when ``amount`` exceeds the high-value approval bar.
 
@@ -898,15 +928,28 @@ class VariationsService:
             raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="Notice not found")
         return row
 
-    async def update_notice(self, notice_id: uuid.UUID, data: NoticeUpdate) -> Notice:
+    async def update_notice(self, notice_id: uuid.UUID, data: NoticeUpdate, user_id: str | None = None) -> Notice:
         notice = await self.get_notice(notice_id)
         fields = data.model_dump(exclude_unset=True)
         if "metadata" in fields:
             fields["metadata_"] = fields.pop("metadata")
         if not fields:
             return notice
+        ball_changed = "ball_in_court" in fields and fields["ball_in_court"] != notice.ball_in_court
+        old_ball = notice.ball_in_court
+        code_snapshot = notice.code
         await self.notice_repo.update_fields(notice_id, **fields)
         await self.session.refresh(notice)
+        if ball_changed:
+            await _log_ownership_change(
+                self.session,
+                entity_type="variation_notice",
+                entity_id=notice_id,
+                from_party=old_ball,
+                to_party=fields["ball_in_court"],
+                actor_id=user_id,
+                code=code_snapshot,
+            )
         return notice
 
     async def transition_notice(
@@ -1007,6 +1050,7 @@ class VariationsService:
         self,
         vr_id: uuid.UUID,
         data: VariationRequestUpdate,
+        user_id: str | None = None,
     ) -> VariationRequest:
         vr = await self.get_request(vr_id)
         # A decided / converted VR is a frozen commercial record - editing
@@ -1025,8 +1069,21 @@ class VariationsService:
             return vr
         if "estimated_cost_impact" in fields and fields["estimated_cost_impact"] is not None:
             fields["estimated_cost_impact"] = _to_decimal(fields["estimated_cost_impact"])
+        ball_changed = "ball_in_court" in fields and fields["ball_in_court"] != vr.ball_in_court
+        old_ball = vr.ball_in_court
+        code_snapshot = vr.code
         await self.vr_repo.update_fields(vr_id, **fields)
         await self.session.refresh(vr)
+        if ball_changed:
+            await _log_ownership_change(
+                self.session,
+                entity_type="variation_request",
+                entity_id=vr_id,
+                from_party=old_ball,
+                to_party=fields["ball_in_court"],
+                actor_id=user_id,
+                code=code_snapshot,
+            )
         return vr
 
     async def transition_variation_request(
@@ -1176,6 +1233,7 @@ class VariationsService:
         self,
         vo_id: uuid.UUID,
         data: VariationOrderUpdate,
+        user_id: str | None = None,
     ) -> VariationOrder:
         vo = await self.get_order(vo_id)
         # A completed VO has already adjusted the contract sum / final
@@ -1195,8 +1253,21 @@ class VariationsService:
             fields["final_cost_impact"] = _to_decimal(fields["final_cost_impact"])
         if not fields:
             return vo
+        ball_changed = "ball_in_court" in fields and fields["ball_in_court"] != vo.ball_in_court
+        old_ball = vo.ball_in_court
+        code_snapshot = vo.code
         await self.vo_repo.update_fields(vo_id, **fields)
         await self.session.refresh(vo)
+        if ball_changed:
+            await _log_ownership_change(
+                self.session,
+                entity_type="variation_order",
+                entity_id=vo_id,
+                from_party=old_ball,
+                to_party=fields["ball_in_court"],
+                actor_id=user_id,
+                code=code_snapshot,
+            )
         return vo
 
     async def transition_variation_order(

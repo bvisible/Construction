@@ -272,6 +272,40 @@ export class WalkMode {
     return this.flightSpeed;
   }
 
+  /** Switch between drag-to-look (`false`) and pointer-lock FPS (`true`)
+   *  mouse-look at runtime. When walk mode is already active the tool is
+   *  re-armed so the new look mode takes effect at once. Call this from a
+   *  user gesture (a click) so the browser permits the pointer-lock request
+   *  the FPS path makes. */
+  setLockCursor(enabled: boolean): void {
+    if (this.lockCursor === enabled) return;
+    const wasEnabled = this._enabled;
+    if (wasEnabled) this.disable();
+    this.lockCursor = enabled;
+    if (wasEnabled) this.enable();
+  }
+
+  /** Drop the camera to a standing viewpoint inside the model so a walk
+   *  starts from a human eye-level rather than the far-off orbit camera
+   *  position (which made walking feel like nothing was happening). Stands at
+   *  the model's horizontal centre, a little above the floor, looking level
+   *  toward the model. The height is a fraction of the model so it works
+   *  whatever unit the model was authored in (m / mm / ft). */
+  placeAtEyeLevel(bbox: THREE.Box3): void {
+    if (bbox.isEmpty()) return;
+    const center = bbox.getCenter(new THREE.Vector3());
+    const size = bbox.getSize(new THREE.Vector3());
+    const eyeY = bbox.min.y + Math.max(size.y * 0.1, 0);
+    this.camera.position.set(center.x, eyeY, center.z);
+    // Look horizontally toward the +X side so the initial gaze is level.
+    const aimX = center.x + (size.x || size.z || 1);
+    this.camera.lookAt(new THREE.Vector3(aimX, eyeY, center.z));
+    // Keep the drag-to-look euler in sync so the first drag continues
+    // smoothly from this orientation instead of snapping.
+    this._lookEuler.setFromQuaternion(this.camera.quaternion);
+    this.onChange?.();
+  }
+
   enable(): void {
     if (this._enabled) return;
     if (this.orbitControls && this.orbitControls.enabled) {

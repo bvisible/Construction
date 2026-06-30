@@ -4,19 +4,29 @@
 // Slide-out drawer showing a single transmittal: items + recipients +
 // ack timeline + "Download cover" button.
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Download, FileText, Mail, CheckCircle2, Clock, X } from 'lucide-react';
+import { Download, Eye, FileText, Mail, CheckCircle2, Clock, X } from 'lucide-react';
 import clsx from 'clsx';
 
 import { Badge } from '@/shared/ui/Badge';
 import { Button } from '@/shared/ui/Button';
 import { DateDisplay } from '@/shared/ui/DateDisplay';
 import { useToastStore } from '@/stores/useToastStore';
+import { InlinePdfPreviewModal } from '@/features/file-references/InlinePdfPreviewModal';
 
 import { downloadTransmittalCover } from './api';
 import { useTransmittal } from './hooks';
-import type { TransmittalRecipient } from './types';
+import type { TransmittalItem, TransmittalRecipient } from './types';
+
+/** A transmittal item is previewable inline when it is a document-kind PDF -
+ *  those resolve to the bearer-protected `/documents/{id}/download/` route the
+ *  inline viewer can fetch. Other kinds keep their plain text row (#246). */
+function pdfPreviewUrl(item: TransmittalItem): string | null {
+  if (item.file_kind !== 'document') return null;
+  if (!/\.pdf$/i.test(item.canonical_name_snapshot ?? '')) return null;
+  return `/api/v1/documents/${item.file_id}/download/`;
+}
 
 interface TransmittalDetailDrawerProps {
   open: boolean;
@@ -32,6 +42,11 @@ export function TransmittalDetailDrawer({
   const { t } = useTranslation();
   const { data, isLoading } = useTransmittal(transmittalId);
   const addToast = useToastStore((s) => s.addToast);
+  // Inline PDF preview (#246) - opens a referenced document without leaving
+  // the drawer. Holds the URL + title of the item being previewed, or null.
+  const [preview, setPreview] = useState<{ url: string; title: string } | null>(
+    null,
+  );
 
   useEffect(() => {
     if (!open) return;
@@ -144,25 +159,46 @@ export function TransmittalDetailDrawer({
                   </p>
                 ) : (
                   <ul className="space-y-1.5">
-                    {data.items.map((it) => (
-                      <li
-                        key={it.id}
-                        className="flex items-center gap-2 text-sm py-1"
-                      >
-                        <FileText size={14} className="text-content-tertiary shrink-0" />
-                        <span className="truncate flex-1">
-                          {it.canonical_name_snapshot}
-                          {it.file_version_snapshot && (
-                            <span className="text-xs text-content-tertiary ml-1">
-                              v{it.file_version_snapshot}
-                            </span>
+                    {data.items.map((it) => {
+                      const previewUrl = pdfPreviewUrl(it);
+                      return (
+                        <li
+                          key={it.id}
+                          className="flex items-center gap-2 text-sm py-1"
+                        >
+                          <FileText size={14} className="text-content-tertiary shrink-0" />
+                          <span className="truncate flex-1">
+                            {it.canonical_name_snapshot}
+                            {it.file_version_snapshot && (
+                              <span className="text-xs text-content-tertiary ml-1">
+                                v{it.file_version_snapshot}
+                              </span>
+                            )}
+                          </span>
+                          {previewUrl && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setPreview({
+                                  url: previewUrl,
+                                  title: it.canonical_name_snapshot,
+                                })
+                              }
+                              data-testid={`transmittal-item-preview-${it.id}`}
+                              title={t('files.preview.open_inline', {
+                                defaultValue: 'Preview here',
+                              })}
+                              className="inline-flex h-6 w-6 items-center justify-center rounded text-content-tertiary hover:bg-surface-secondary hover:text-oe-blue shrink-0"
+                            >
+                              <Eye size={14} />
+                            </button>
                           )}
-                        </span>
-                        <span className="text-xs text-content-tertiary">
-                          {it.file_kind}
-                        </span>
-                      </li>
-                    ))}
+                          <span className="text-xs text-content-tertiary">
+                            {it.file_kind}
+                          </span>
+                        </li>
+                      );
+                    })}
                   </ul>
                 )}
               </section>
@@ -260,6 +296,14 @@ export function TransmittalDetailDrawer({
           </Button>
         </footer>
       </aside>
+
+      {/* Inline PDF preview for document items (#246). */}
+      <InlinePdfPreviewModal
+        open={preview !== null}
+        downloadUrl={preview?.url ?? null}
+        title={preview?.title ?? ''}
+        onClose={() => setPreview(null)}
+      />
     </>
   );
 }

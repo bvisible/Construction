@@ -1,4 +1,4 @@
-import { BarChart3, Box, FileBarChart, FileText, Image as ImageIcon, MapPin, Package, Pencil, PenTool, Radar, Ruler, type LucideIcon } from 'lucide-react';
+import { BarChart3, Box, Eye, FileBarChart, FileText, Image as ImageIcon, MapPin, Package, Pencil, PenTool, Radar, Ruler, type LucideIcon } from 'lucide-react';
 import type { FileKind } from './types';
 
 // Single source of truth for per-kind accent colours. Both the landing
@@ -104,8 +104,10 @@ export interface ModuleTarget {
   description: string;
   descriptionI18nKey: string;
   icon: LucideIcon;
-  /** Path template — `{projectId}` is substituted in by the consumer. */
-  route: (projectId: string, fileId?: string) => string;
+  /** Path template — `{projectId}` is substituted in by the consumer.
+   *  `extra` carries the FileRow's `extra` bag so kind-specific routes can
+   *  read fields beyond the id (e.g. a sheet's parent `document_id`). */
+  route: (projectId: string, fileId?: string, extra?: Record<string, unknown>) => string;
   /**
    * Some destinations (Clash Detection, CAD-BIM BI Explorer) resolve the
    * project from the global project-context store rather than from a path
@@ -115,6 +117,21 @@ export interface ModuleTarget {
    * BEFORE navigating so the destination opens populated.
    */
   setsActiveProject?: boolean;
+  /**
+   * When set, this target is NOT a route to another module - it just opens
+   * the file in a focused inline viewer overlay (the shared
+   * ``InlinePdfPreviewModal``) on the current screen. Consumers must check
+   * this flag and open the modal instead of calling ``navigate(route(...))``.
+   * The ``route`` still returns a sensible fallback (keep the file selected
+   * in /files) so a consumer that hasn't been taught about the flag yet
+   * degrades to a harmless navigation rather than a dead click.
+   *
+   * Why this exists (issue #284): a PDF in Project Files used to ALWAYS open
+   * in PDF Takeoff, but most PDFs are contracts / specs / letters, not
+   * takeoff plans. The default is now "just read it" inline; PDF Takeoff is
+   * offered as an explicit, separate choice the user opts into.
+   */
+  inlinePreview?: boolean;
 }
 
 const PROJECT = (p: string, sub: string) => `/projects/${p}/${sub}`;
@@ -177,12 +194,22 @@ export const KIND_MODULES: Record<FileKind, ModuleTarget[]> = {
       description: 'Open the parent PDF in the takeoff viewer',
       descriptionI18nKey: 'files.module.pdf_takeoff_desc_sheet',
       icon: Ruler,
-      // TakeoffPage reads `doc`/`source`/`tab` (not `sheet`), so mirror the
-      // document-kind builder: open the source PDF with the measurements tab.
-      route: (_p, f) =>
-        f
-          ? `/takeoff?doc=${encodeURIComponent(f)}&source=document&tab=measurements`
-          : '/takeoff',
+      // A sheet row's id is the Sheet PK, but the takeoff viewer resolves
+      // `doc` against the DOCUMENTS table, so passing the sheet id 404s and
+      // leaves the viewer blank. Open the PARENT document the sheet was
+      // extracted from instead - the sheets collector carries that id in the
+      // FileRow `extra.document_id`. Fall back to the sheet id only if it is
+      // somehow absent (no worse than the old behaviour).
+      route: (_p, f, extra) => {
+        const parent =
+          extra && extra.document_id != null && extra.document_id !== ''
+            ? String(extra.document_id)
+            : null;
+        const doc = parent ?? f;
+        return doc
+          ? `/takeoff?doc=${encodeURIComponent(doc)}&source=document&tab=measurements`
+          : '/takeoff';
+      },
     },
     {
       label: 'File Manager',
@@ -312,17 +339,61 @@ const DOC_DWG_TAKEOFF: ModuleTarget = {
   route: (_p, f) => withParam('/dwg-takeoff', 'docId', f),
 };
 
+// BIM viewer target for a file of the *document* kind. A `document`-kind
+// FileRow carries the **Document** id (file_manager_service maps
+// ``id=str(Document.id)``), NOT a BIMModel id - so the bare ``bim_model``
+// target (which builds ``/bim/<id>`` and BIMPage reads as a *model* id)
+// would 404 with "model not found" and never convert the upload. That is
+// issue #273: opening a BIM file uploaded from Project Files did nothing
+// because no model exists yet. This passes ``?docId=`` instead, which
+// BIMPage turns into a model on demand via createBimModelFromDocument
+// (idempotent backend), exactly mirroring the DWG handling above.
+const DOC_BIM_VIEWER: ModuleTarget = {
+  ...KIND_MODULES.bim_model[0]!,
+  route: (p, f) => withParam(PROJECT(p, 'bim'), 'docId', f),
+};
+
+// Inline "just read it" viewer for a `document`-kind PDF. This is the new
+// DEFAULT open action for PDFs (issue #284): the overwhelming majority of
+// project PDFs are contracts, specs, RFI responses and letters that the user
+// only wants to read, not measure. It opens the shared InlinePdfPreviewModal
+// over the current screen (driven by the ``inlinePreview`` flag) rather than
+// navigating away. The ``route`` is a harmless fallback that keeps the file
+// selected in /files for any consumer that does not yet honour the flag.
+const DOC_PDF_INLINE_VIEW: ModuleTarget = {
+  label: 'View',
+  i18nKey: 'files.module.view_pdf',
+  description: 'Read this PDF here without leaving the page',
+  descriptionI18nKey: 'files.module.view_pdf_desc',
+  icon: Eye,
+  inlinePreview: true,
+  route: (p, f) => withParam(PROJECT(p, 'files'), 'file', f),
+};
+
+// The PDF Takeoff target for a `document`-kind PDF. No longer the primary
+// (see DOC_PDF_INLINE_VIEW) - offered as an explicit secondary so the user
+// chooses which PDFs are takeoff plans. Mirrors KIND_MODULES.document[0].
+const DOC_PDF_TAKEOFF: ModuleTarget = KIND_MODULES.document[0]!;
+
+// Extensions that live under the `document` kind but are really BIM source
+// files needing on-demand conversion when opened from the File Manager.
+const DOC_BIM_EXTS = new Set(['ifc', 'rvt', 'dgn', 'glb', 'gltf']);
+
 // Per-extension override for `document` since a PDF, IFC, RVT, DXF and
 // XLSX all live under the `document` kind but route to different
 // modules. Returns the *primary* target — the secondary list still
-// comes from KIND_MODULES so the user has the full menu.
+// comes from KIND_MODULES so the user has the full menu. These overrides
+// apply ONLY to the `document` kind (enforced in primaryModule): a real
+// bim_model / dwg_drawing row carries its own native id and must keep its
+// path-based route, so the kind guard stops a model/drawing id from being
+// mis-sent as a ``?docId=`` import.
 const EXT_PRIMARY_OVERRIDE: Record<string, ModuleTarget> = {
-  pdf: KIND_MODULES.document[0]!, // PDF Takeoff
-  ifc: KIND_MODULES.bim_model[0]!,
-  rvt: KIND_MODULES.bim_model[0]!,
-  dgn: KIND_MODULES.bim_model[0]!,
-  glb: KIND_MODULES.bim_model[0]!,
-  gltf: KIND_MODULES.bim_model[0]!,
+  pdf: DOC_PDF_INLINE_VIEW, // #284: read inline by default; Takeoff is opt-in
+  ifc: DOC_BIM_VIEWER,
+  rvt: DOC_BIM_VIEWER,
+  dgn: DOC_BIM_VIEWER,
+  glb: DOC_BIM_VIEWER,
+  gltf: DOC_BIM_VIEWER,
   dwg: DOC_DWG_TAKEOFF,
   dxf: DOC_DWG_TAKEOFF,
 };
@@ -334,8 +405,31 @@ const EXT_PRIMARY_OVERRIDE: Record<string, ModuleTarget> = {
 // surfaced for documents.)
 const DOC_DWG_MODULES: ModuleTarget[] = [DOC_DWG_TAKEOFF];
 
+// Module list for a `document`-kind BIM source file (IFC/RVT/...). Only the
+// docId-passing BIM viewer is offered: the BI Explorer and Clash targets
+// need a real BIMModel id, which this document does not have until the
+// viewer converts it on demand, so surfacing them here would hand those
+// pages a document id they cannot resolve.
+const DOC_BIM_MODULES: ModuleTarget[] = [DOC_BIM_VIEWER];
+
+// Module list for a `document`-kind PDF. Primary is the inline reader; PDF
+// Takeoff and the File Manager document target follow as explicit choices,
+// so the user decides which PDFs are takeoff plans vs which are just read
+// (issue #284). The bare KIND_MODULES.document list still puts PDF Takeoff
+// first, so we order this one explicitly here.
+const DOC_PDF_MODULES: ModuleTarget[] = [
+  DOC_PDF_INLINE_VIEW,
+  DOC_PDF_TAKEOFF,
+  KIND_MODULES.document[1]!, // File Manager (keep file selected in /files)
+];
+
 export function primaryModule(kind: FileKind, extension?: string | null): ModuleTarget {
-  if (extension) {
+  // The per-extension overrides import a document on demand via ``?docId=``,
+  // so they apply ONLY to the `document` kind (whose id is a Document id).
+  // bim_model / dwg_drawing rows carry their own native id and keep their
+  // path-based route - guarding on kind stops a real model/drawing id from
+  // being mis-routed as a document import (issue #273).
+  if (kind === 'document' && extension) {
     const override = EXT_PRIMARY_OVERRIDE[extension.toLowerCase().replace(/^\./, '')];
     if (override) return override;
   }
@@ -343,12 +437,67 @@ export function primaryModule(kind: FileKind, extension?: string | null): Module
 }
 
 export function modulesForKind(kind: FileKind, extension?: string | null): ModuleTarget[] {
-  // A `document`-kind DWG/DXF carries the Document id, so its module list
-  // must use the docId-passing variants (see DOC_DWG_MODULES) instead of the
-  // raw drawingId-based dwg_drawing targets that would blank the viewer.
+  // A `document`-kind DWG/DXF or BIM source file carries the Document id, so
+  // its module list must use the docId-passing variants (DOC_DWG_MODULES /
+  // DOC_BIM_MODULES) that import on demand, instead of the raw id-based
+  // dwg_drawing / bim_model targets that would blank the viewer or 404.
   if (kind === 'document' && extension) {
     const ext = extension.toLowerCase().replace(/^\./, '');
     if (ext === 'dwg' || ext === 'dxf') return DOC_DWG_MODULES;
+    if (DOC_BIM_EXTS.has(ext)) return DOC_BIM_MODULES;
+    if (ext === 'pdf') return DOC_PDF_MODULES;
   }
   return KIND_MODULES[kind] ?? [];
+}
+
+// Normalise a raw extension ("PDF", ".pdf", "pdf") to a bare lower-case token.
+function _normExt(extension?: string | null): string {
+  return (extension ?? '').toLowerCase().replace(/^\./, '');
+}
+
+/**
+ * True when a FileRow should open in the inline PDF reader overlay rather
+ * than navigate to a module. Drives the open handlers across the File
+ * Manager surfaces (grid / list / context-menu / preview pane) and the
+ * project-overview recents so a PDF is read in place by default (#284).
+ *
+ * A row qualifies when its primary target carries the ``inlinePreview``
+ * flag AND it actually has a download URL to fetch the bytes from. We also
+ * sniff the mime type so a PDF stored without a .pdf extension still reads
+ * inline instead of falling through to a takeoff route it can't satisfy.
+ */
+export function isInlinePreviewRow(row: {
+  kind: FileKind;
+  extension?: string | null;
+  mime_type?: string | null;
+  download_url?: string | null;
+}): boolean {
+  if (!row.download_url) return false;
+  const isPdf =
+    _normExt(row.extension) === 'pdf' ||
+    (row.mime_type ?? '').toLowerCase() === 'application/pdf';
+  if (!isPdf) return false;
+  // Resolve the primary target as a PDF even when the row carries no .pdf
+  // extension - we sniffed the mime type above, so pass an explicit 'pdf' so
+  // primaryModule sees the document-PDF inline override instead of falling
+  // back to the non-inline default (which keys off the extension alone).
+  return Boolean(primaryModule(row.kind, 'pdf').inlinePreview);
+}
+
+/**
+ * The explicit "Open in PDF Takeoff" target for a `document`-kind PDF, or
+ * ``null`` for any other row. Surfaces (context menu, preview pane) use this
+ * to offer takeoff as a deliberate, separate action now that it is no longer
+ * the default open behaviour for PDFs (#284).
+ */
+export function pdfTakeoffTargetFor(row: {
+  kind: FileKind;
+  extension?: string | null;
+  mime_type?: string | null;
+}): ModuleTarget | null {
+  const isPdf =
+    _normExt(row.extension) === 'pdf' ||
+    (row.mime_type ?? '').toLowerCase() === 'application/pdf';
+  if (row.kind === 'document' && isPdf) return DOC_PDF_TAKEOFF;
+  return null;
 }

@@ -36,6 +36,7 @@ import {
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { carbonGuide } from './carbonGuide';
 import { useConfirm } from '@/shared/hooks/useConfirm';
+import { useDisplayQuantity } from '@/shared/hooks/useDisplayQuantity';
 import { DateDisplay } from '@/shared/ui/DateDisplay';
 import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
@@ -1372,7 +1373,7 @@ function InventoryDrawer({
                   )}
                 </div>
 
-                {/* Embodied entries — full management */}
+                {/* Embodied entries - full management */}
                 <div>
                   <div className="mb-2 flex items-center justify-between">
                     <h3 className="text-xs font-semibold uppercase tracking-wide text-content-tertiary">
@@ -1434,7 +1435,7 @@ function InventoryDrawer({
                   )}
                 </div>
 
-                {/* Scope 1 / 2 / 3 — full management */}
+                {/* Scope 1 / 2 / 3 - full management */}
                 <ScopeSection
                   title={t('carbon.scope1_entries', {
                     defaultValue: 'Scope 1 - direct fuel',
@@ -1583,7 +1584,7 @@ function ScopeSection({
 /**
  * One top-emitter row that, when expanded, fetches and shows lower-carbon
  * material alternatives for that embodied entry (uses the existing
- * /inventories/{id}/alternatives endpoint — previously a dead "coming soon").
+ * /inventories/{id}/alternatives endpoint - previously a dead "coming soon").
  */
 function TopEmitterRow({
   inventoryId,
@@ -2531,6 +2532,10 @@ function AssignBoqModal({
 }) {
   const { t } = useTranslation();
   const addToast = useToastStore((s) => s.addToast);
+  // Display-only: the picker rows show quantities in the user's measurement
+  // system. The value written to the carbon record (pickPosition ->
+  // setQuantity/setQuantityUnit) stays the canonical metric quantity + unit.
+  const displayQty = useDisplayQuantity();
 
   const [boqId, setBoqId] = useState('');
   const [search, setSearch] = useState('');
@@ -2722,7 +2727,10 @@ function AssignBoqModal({
                             {p.description}
                           </td>
                           <td className="px-3 py-2 text-right tabular-nums text-content-secondary whitespace-nowrap align-top">
-                            {toNum(p.quantity)} {p.unit}
+                            {(() => {
+                              const d = displayQty.convert(toNum(p.quantity), p.unit || '');
+                              return `${d.value.toLocaleString()} ${d.unit}`;
+                            })()}
                           </td>
                         </tr>
                       ))}

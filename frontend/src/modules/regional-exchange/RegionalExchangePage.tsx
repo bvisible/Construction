@@ -1,5 +1,5 @@
 /**
- * RegionalExchangePage — polymorphic BOQ exchange page (Wave 5 Epic I).
+ * RegionalExchangePage - polymorphic BOQ exchange page (Wave 5 Epic I).
  *
  * Replaces 20 near-identical country modules with one component driven
  * by a `RegionalTemplate` from `regionalRegistry.ts`. The country pack
@@ -302,7 +302,7 @@ export default function RegionalExchangePage({ template }: RegionalExchangePageP
         description: pos.description,
         unit: pos.unit,
         quantity: pos.quantity,
-        // Money fields travel as strings (Decimal-safe) — backend re-parses.
+        // Money fields travel as strings (Decimal-safe) - backend re-parses.
         unit_rate: String(pos.unitRate ?? 0),
         total: String(pos.total ?? pos.quantity * (pos.unitRate ?? 0)),
         section: pos.section || undefined,
@@ -353,6 +353,10 @@ export default function RegionalExchangePage({ template }: RegionalExchangePageP
 
   /* ── Export handlers ────────────────────────────────────────────── */
 
+  // NOTE: quantities/units here stay metric-canonical on purpose. The CSV
+  // export (exportToCSV) and the import parser share one column layout, so
+  // this is a round-trippable interchange format - converting to imperial
+  // would corrupt the data on re-import. Left canonical like GAEB. (#270)
   const exportablePositions: ExchangePosition[] = useMemo(
     () =>
       exportPositions.map((p) => ({
@@ -969,7 +973,7 @@ export default function RegionalExchangePage({ template }: RegionalExchangePageP
   );
 }
 
-/* Tiny inline icon — keeps lucide imports tight and saves a re-export. */
+/* Tiny inline icon - keeps lucide imports tight and saves a re-export. */
 function FileText32() {
   return (
     <svg

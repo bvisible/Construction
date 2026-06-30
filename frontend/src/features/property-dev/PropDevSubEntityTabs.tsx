@@ -53,6 +53,7 @@ import {
 import { DateDisplay } from '@/shared/ui/DateDisplay';
 import { MoneyDisplay } from '@/shared/ui/MoneyDisplay';
 import { useConfirm } from '@/shared/hooks/useConfirm';
+import { useDisplayQuantity } from '@/shared/hooks/useDisplayQuantity';
 import { useToastStore } from '@/stores/useToastStore';
 import { getErrorMessage } from '@/shared/lib/api';
 import {
@@ -1166,6 +1167,7 @@ function AssignPlotsToBlockModal({
   onSaved: () => void;
 }) {
   const { t } = useTranslation();
+  const dq = useDisplayQuantity();
   const addToast = useToastStore((s) => s.addToast);
   const candidates = useMemo(
     () => plots.filter((p) => !p.block_id || p.block_id === block.id),
@@ -1279,7 +1281,12 @@ function AssignPlotsToBlockModal({
                 <span className="font-mono">{p.plot_number}</span>
                 {p.area_m2 && (
                   <span className="text-content-tertiary text-xs ml-2">
-                    {toNumber(p.area_m2)} m²
+                    {(() => {
+                      const a = dq.convert(toNumber(p.area_m2), 'm²');
+                      const v =
+                        dq.system === 'imperial' ? a.value.toFixed(1) : a.value;
+                      return `${v} ${a.unit}`;
+                    })()}
                   </span>
                 )}
               </label>
@@ -2399,7 +2406,7 @@ function PriceMatrixFormModal({
                     if (obj && typeof obj === 'object')
                       updateRule(i, { condition: obj });
                   } catch {
-                    // ignore — partial JSON while typing
+                    // ignore - partial JSON while typing
                   }
                 }}
                 className={clsx(
@@ -2455,6 +2462,7 @@ function PriceMatrixPreviewModal({
   onClose: () => void;
 }) {
   const { t } = useTranslation();
+  const dq = useDisplayQuantity();
   const [plotId, setPlotId] = useState<string>(plots[0]?.id ?? '');
 
   const previewQ = useQuery({
@@ -2489,11 +2497,15 @@ function PriceMatrixPreviewModal({
             className={inputCls}
           >
             {plots.length === 0 && <option value="">- no plots -</option>}
-            {plots.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.plot_number} — {toNumber(p.area_m2)} m²
-              </option>
-            ))}
+            {plots.map((p) => {
+              const a = dq.convert(toNumber(p.area_m2), 'm²');
+              const v = dq.system === 'imperial' ? a.value.toFixed(1) : a.value;
+              return (
+                <option key={p.id} value={p.id}>
+                  {p.plot_number} — {v} {a.unit}
+                </option>
+              );
+            })}
           </select>
         </WideModalField>
       </WideModalSection>
@@ -2520,7 +2532,12 @@ function PriceMatrixPreviewModal({
                 {t('propdev.matrix.preview.area', { defaultValue: 'Area' })}
               </div>
               <div className="text-right tabular-nums">
-                {toNumber(previewQ.data.area_m2)} m²
+                {(() => {
+                  const a = dq.convert(toNumber(previewQ.data.area_m2), 'm²');
+                  const v =
+                    dq.system === 'imperial' ? a.value.toFixed(1) : a.value;
+                  return `${v} ${a.unit}`;
+                })()}
               </div>
               <div className="text-content-tertiary">
                 {t('propdev.matrix.preview.base_rate', {

@@ -17,6 +17,7 @@ from app.dependencies import (
     SessionDep,
     verify_project_access,
 )
+from app.modules.resources.resource_depth_router import resource_depth_router
 from app.modules.resources.schemas import (
     AssignmentCreate,
     AssignmentProposeRequest,
@@ -63,6 +64,10 @@ logger = logging.getLogger(__name__)
 
 def _get_service(session: SessionDep) -> ResourcesService:
     return ResourcesService(session)
+
+
+# T3.1 resource-depth endpoints (rates, curves, native units, histogram).
+router.include_router(resource_depth_router)
 
 
 # ── Resources ─────────────────────────────────────────────────────────────

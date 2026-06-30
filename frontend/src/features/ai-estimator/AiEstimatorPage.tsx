@@ -873,6 +873,8 @@ export function AiEstimatorPage() {
                     appliedBoqId={appliedBoqId}
                     applyPending={applyM.isPending}
                     onApply={() => applyM.mutate()}
+                    runId={runId}
+                    projectId={projectId}
                   />
                 ))}
             </div>

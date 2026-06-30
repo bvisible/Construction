@@ -1,9 +1,9 @@
 /**
- * ViewerToolbar — floating overlay surfacing the three BIM-coordination-tool-style
+ * ViewerToolbar - floating overlay surfacing the three BIM-coordination-tool-style
  * tools added by this slice: Section Box, Walk mode, Measure.
  *
  * Only one tool is active at a time (mutual exclusion is enforced at the
- * component level, not at the helper level — each helper is independent).
+ * component level, not at the helper level - each helper is independent).
  * The active tool's sub-panel renders directly below the button row.
  *
  * The toolbar is intentionally additive: it lives in its own React tree,
@@ -21,6 +21,7 @@ import type { SectionBox } from './SectionBox';
 import type { WalkMode } from './WalkMode';
 import type { MeasureTool, Measurement } from './MeasureTool';
 import { copyToClipboard } from '@/shared/lib/browser';
+import { useDisplayQuantity } from '@/shared/hooks/useDisplayQuantity';
 
 export type ActiveViewerTool = 'section' | 'walk' | 'measure' | null;
 
@@ -31,7 +32,7 @@ export interface ViewerToolbarProps {
   /** Notified whenever the active tool changes (including to null). */
   onToolChange?: (tool: ActiveViewerTool) => void;
   /** Hook called when the user clicks "Fit to selection" / "Fit to all" /
-   *  "Reset" — the host component knows the current selection / model
+   *  "Reset" - the host component knows the current selection / model
    *  bounds and should drive `sectionBox.setBoundsToBox(...)` from here.
    *  Return `false` from a `fit_*` action when there is no usable geometry
    *  to clip (empty selection / degenerate bounds) so the toolbar can show
@@ -50,7 +51,7 @@ export interface ViewerToolbarProps {
   onAfterToolDisable?: (prev: Exclude<ActiveViewerTool, null>) => void;
   /** Floating overlay position. */
   position?: 'top-right' | 'bottom-center' | 'bottom-left';
-  /** Extra horizontal offset (px) when `position === 'bottom-left'` — used
+  /** Extra horizontal offset (px) when `position === 'bottom-left'` - used
    *  to anchor the toolbar next to a bottom-left ViewCube. Ignored for
    *  the other positions. */
   leftOffset?: number;
@@ -74,6 +75,7 @@ export function ViewerToolbar({
   flightSpeedRange,
 }: ViewerToolbarProps): JSX.Element {
   const { t } = useTranslation();
+  const q = useDisplayQuantity();
   const [active, setActive] = useState<ActiveViewerTool>(null);
   const [measurementCount, setMeasurementCount] = useState(0);
   const [lastMeasurement, setLastMeasurement] = useState<Measurement | null>(null);
@@ -179,18 +181,32 @@ export function ViewerToolbar({
     setLastMeasurement(null);
   }, [measureTool]);
 
+  // Format a metric-canonical distance (metres) for display in the user's
+  // measurement system. Storage is untouched: `distMetres` always stays the
+  // canonical value; only this human-facing string is converted. We keep the
+  // existing large-unit / small-unit UX: metres or millimetres for metric,
+  // feet or inches for imperial (sub-1 metre falls back to the small unit).
+  const formatDistance = useCallback(
+    (distMetres: number): string => {
+      if (distMetres >= 1) {
+        const big = q.convert(distMetres, 'm'); // m -> ft for imperial
+        return `${big.value.toFixed(3)} ${big.unit}`;
+      }
+      const small = q.convert(distMetres * 1000, 'mm'); // mm -> in for imperial
+      return `${small.value.toFixed(0)} ${small.unit}`;
+    },
+    [q],
+  );
+
   const handleCopyMeasurement = useCallback(async () => {
     if (!lastMeasurement) return;
-    const value =
-      lastMeasurement.distance >= 1
-        ? `${lastMeasurement.distance.toFixed(3)} m`
-        : `${(lastMeasurement.distance * 1000).toFixed(0)} mm`;
-    await copyToClipboard(value);
+    // The copied text is human-facing, so convert it to the display system.
+    await copyToClipboard(formatDistance(lastMeasurement.distance));
     setCopiedFlash(true);
     window.setTimeout(() => setCopiedFlash(false), 1200);
-  }, [lastMeasurement]);
+  }, [lastMeasurement, formatDistance]);
 
-  // Listen for Escape to exit the active tool — feels native because the
+  // Listen for Escape to exit the active tool - feels native because the
   // hint label tells the user Esc works. PointerLock's own Escape is
   // browser-driven and only unlocks the cursor; WalkMode then needs to
   // be fully disabled here so OrbitControls comes back.
@@ -212,7 +228,7 @@ export function ViewerToolbar({
   const positionStyle =
     position === 'bottom-left' ? { left: leftOffset ?? 12 } : undefined;
   // Anchor the active tool's sub-panel (and on-screen hint) so it grows
-  // upward from a bottom-left toolbar — otherwise the hint would clip
+  // upward from a bottom-left toolbar - otherwise the hint would clip
   // off the bottom of the viewport.
   const flexDirectionClass =
     position === 'bottom-left' ? 'flex-col-reverse' : 'flex-col';
@@ -374,9 +390,7 @@ export function ViewerToolbar({
               data-testid="viewer-measure-last"
             >
               <span className="font-mono tabular-nums text-content-primary">
-                {lastMeasurement.distance >= 1
-                  ? `${lastMeasurement.distance.toFixed(3)} m`
-                  : `${(lastMeasurement.distance * 1000).toFixed(0)} mm`}
+                {formatDistance(lastMeasurement.distance)}
               </span>
               <button
                 type="button"
@@ -459,7 +473,7 @@ function ToolButton({
 }
 
 /** Read-only display of the current section AABB. The host can switch
- *  between metric / imperial later — for now, metres with 3 decimals. */
+ *  between metric / imperial later - for now, metres with 3 decimals. */
 function SectionOffsetsReadout({
   sectionBox,
 }: {

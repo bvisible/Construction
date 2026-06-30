@@ -1,5 +1,5 @@
 /**
- * CAD Data Explorer — Pandas-like DataFrame interface for BIM element data.
+ * CAD Data Explorer - Pandas-like DataFrame interface for BIM element data.
  *
  * 4 tabs: Data Table | Pivot | Charts | Describe
  * Reads session_id from URL query parameter.
@@ -36,6 +36,7 @@ import {
   type AggregateGroup,
 } from './api';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
+import { useDisplayQuantity } from '@/shared/hooks/useDisplayQuantity';
 import { MissingDataPanel } from './MissingDataPanel';
 import {
   useAnalysisStateStore,
@@ -75,7 +76,7 @@ import {
 import { ThresholdRulesModal } from './ThresholdRulesModal';
 import { cadExplorerGuide } from './cadExplorerGuide';
 
-/* ── Recharts — lazy-loaded so the initial Data Explorer bundle stays lean.
+/* ── Recharts - lazy-loaded so the initial Data Explorer bundle stays lean.
       Charts live in a ~38 kB gzipped chunk that only loads once the user
       opens the Charts tab. See RFC 16 §6. ────────────────────────────── */
 type RechartsApi = typeof import('recharts');
@@ -109,7 +110,7 @@ const TABS: { id: TabId; icon: React.ElementType; label: string; description: st
 // picker relaxes its numeric-only filter when the user selects one of them.
 const AGG_FUNCTIONS = SUPPORTED_AGG_FUNCTIONS;
 
-/** Human-readable label for each agg function — shown in the `<select>`
+/** Human-readable label for each agg function - shown in the `<select>`
  *  and in tooltips. Kept local to the component so i18n fallbacks stay
  *  close to the UI they describe. */
 const AGG_FUNCTION_LABELS: Record<(typeof AGG_FUNCTIONS)[number], string> = {
@@ -633,7 +634,7 @@ function DataTableTab({ sessionId, describe }: { sessionId: string; describe: De
           {t('explorer.heatmap_short', { defaultValue: 'Heatmap' })}
         </button>
 
-        {/* Export CSV — exports the full dataset, not just the visible page */}
+        {/* Export CSV - exports the full dataset, not just the visible page */}
         <button
           onClick={handleExportCSV}
           disabled={exporting}
@@ -824,7 +825,7 @@ interface PivotVizRendererProps {
 }
 
 /** Dispatch to the correct viz component. Keeping this thin on purpose
- *  — each viz owns its own layout and event handling. */
+ *  - each viz owns its own layout and event handling. */
 function PivotVizRenderer(props: PivotVizRendererProps) {
   const { mode, groups } = props;
   if (groups.length === 0) return null;
@@ -853,7 +854,7 @@ function PivotHeatmap({ groups, groupBy, aggCols, aggFn, maxByAgg, thresholdRule
   const heatBg = (value: number, max: number): string => {
     if (!Number.isFinite(max) || max <= 0) return 'rgba(214, 138, 89,0)';
     const ratio = Math.max(0, Math.min(1, Math.abs(value) / max));
-    // Blue gradient — low saturation at low values, darker at high.
+    // Blue gradient - low saturation at low values, darker at high.
     // Kept CSS-in-style so dark mode picks up the same hue.
     const alpha = 0.08 + ratio * 0.52;
     return `rgba(214, 138, 89,${alpha.toFixed(3)})`;
@@ -1019,7 +1020,7 @@ function PivotTreemap({ groups, groupBy, aggCols, aggFn, onGroupClick }: PivotVi
           nameKey="name"
           isAnimationActive={false}
           content={(p: unknown) => {
-            // Recharts hands us a payload per rectangle — we paint a
+            // Recharts hands us a payload per rectangle - we paint a
             // soft-coloured tile with the name + value.
             const d = p as {
               x: number; y: number; width: number; height: number;
@@ -1090,7 +1091,7 @@ function PivotMatrix({ groups, groupBy, aggCols, aggFn, thresholdRules }: PivotV
     cellMap.set(`${r}\u001F${c}`, (cellMap.get(`${r}\u001F${c}`) ?? 0) + (g.results[firstAgg] ?? 0));
   }
   // Recompute max for heat colour scaling (cells may be sums of
-  // multiple groups when groupBy has more than two columns — matches
+  // multiple groups when groupBy has more than two columns - matches
   // the pivot-table crosstab expectation).
   let max = 0;
   for (const v of cellMap.values()) if (Math.abs(v) > max) max = Math.abs(v);
@@ -1181,7 +1182,7 @@ function PivotTab({ sessionId, describe, thresholdRules, setThresholdRules }: Pi
       return scoreB - scoreA;
     }), [describe]);
 
-  // Numeric columns for aggregation — prioritize quantity keywords
+  // Numeric columns for aggregation - prioritize quantity keywords
   const QUANTITY_KEYWORDS = ['volume', 'area', 'length', 'count', 'width', 'height', 'depth', 'weight', 'mass', 'perimeter', 'thickness'];
   const numericCols = useMemo(() => {
     const all = describe.columns.filter((c) => c.dtype === 'number' && c.non_null > 0);
@@ -1219,7 +1220,7 @@ function PivotTab({ sessionId, describe, thresholdRules, setThresholdRules }: Pi
     }
     return stringCols.length > 0 ? [stringCols[0]!.name] : [];
   });
-  // Allow multiple aggregate columns — auto-select exact matches first
+  // Allow multiple aggregate columns - auto-select exact matches first
   const [aggCols, setAggCols] = useState<string[]>(() => {
     if (pivotSnapshot?.aggCols?.length) return pivotSnapshot.aggCols;
     const defaults: string[] = [];
@@ -1373,14 +1374,14 @@ function PivotTab({ sessionId, describe, thresholdRules, setThresholdRules }: Pi
       // Slicing honours the current sort direction.
       groups = topNDir === 'top' ? groups.slice(0, topN) : groups.slice(-topN).reverse();
     } else if (topN != null && topN > 0) {
-      // No active sort column — fall back to the first agg col.
+      // No active sort column - fall back to the first agg col.
       const k = aggCols[0];
       if (k) groups = applyTopN(groups, k, topN, topNDir, groupBy[0]);
     }
     return groups;
   }, [result, sortCol, sortDesc, slicers, topN, topNDir, aggCols, groupBy]);
 
-  // Max absolute value per aggregate column across visible rows — used for
+  // Max absolute value per aggregate column across visible rows - used for
   // Power-BI-style inline data bars behind each cell, so the eye can
   // compare magnitudes without switching to the Charts tab.
   const maxByAgg = useMemo(() => {
@@ -1573,7 +1574,7 @@ function PivotTab({ sessionId, describe, thresholdRules, setThresholdRules }: Pi
         />
       </Card>
 
-      {/* Sampling notice — categorical counts are computed client-side and
+      {/* Sampling notice - categorical counts are computed client-side and
           a very large model is clipped at the safety ceiling. Be honest
           about the partial figures rather than presenting them as totals. */}
       {sampled && (
@@ -1862,7 +1863,7 @@ function PivotTab({ sessionId, describe, thresholdRules, setThresholdRules }: Pi
         aggColumns={aggCols}
       />
 
-      {/* Threshold rules modal — conditional formatting editor */}
+      {/* Threshold rules modal - conditional formatting editor */}
       <ThresholdRulesModal
         open={showThresholdsModal}
         onClose={() => setShowThresholdsModal(false)}
@@ -1876,7 +1877,7 @@ function PivotTab({ sessionId, describe, thresholdRules, setThresholdRules }: Pi
 
 /* ── Charts Tab (Recharts, lazy-loaded) ───────────────────────────────── */
 
-/** Category palette — deliberately hardcoded for consistent data viz. */
+/** Category palette - deliberately hardcoded for consistent data viz. */
 const BAR_COLORS = [
   '#d68a59', '#22C55E', '#F97316', '#A855F7', '#EF4444',
   '#06B6D4', '#EC4899', '#84CC16', '#F59E0B', '#6366F1',
@@ -1887,7 +1888,7 @@ interface ChartSlice {
   value: number;
   count: number;
   colour: string;
-  /** Original aggregated group — used for the drill-down modal. */
+  /** Original aggregated group - used for the drill-down modal. */
   group: AggregateGroup;
 }
 
@@ -1906,7 +1907,7 @@ function ChartsTab({ sessionId, describe }: { sessionId: string; describe: Descr
   // Group-by ("Category") picker: ALL text columns, ordered by usefulness
   // (low-cardinality + many non-nulls first). Previously we hid anything
   // with >=100 unique values which silently excluded GUIDs, Type Names,
-  // Family names etc. — users couldn't chart them even when they wanted
+  // Family names etc. - users couldn't chart them even when they wanted
   // to. Now we surface everything; the UI flags extreme cardinality with
   // a pill rather than blocking the choice.
   const stringCols = useMemo(() => describe.columns
@@ -1921,7 +1922,7 @@ function ChartsTab({ sessionId, describe }: { sessionId: string; describe: Descr
     }), [describe]);
   const QTY_KEYS = ['volume', 'area', 'length', 'count', 'width', 'height', 'depth', 'weight', 'mass', 'perimeter'];
   // Numeric columns available for sum/avg/min/max. Ranked by
-  // quantity-keyword match, then by fill count. NO slice cap — the user
+  // quantity-keyword match, then by fill count. NO slice cap - the user
   // reported that valid columns disappeared past the 20-column wall.
   const numericCols = useMemo(() => describe.columns
     .filter((c) => c.dtype === 'number' && c.non_null > 0)
@@ -1930,7 +1931,7 @@ function ChartsTab({ sessionId, describe }: { sessionId: string; describe: Descr
       const bK = QTY_KEYS.some((k) => b.name.toLowerCase() === k) ? 10000 : QTY_KEYS.some((k) => b.name.toLowerCase().includes(k)) ? 5000 : 0;
       return (bK + b.non_null) - (aK + a.non_null);
     }), [describe]);
-  // All columns (any dtype) — used as the value-picker candidate set
+  // All columns (any dtype) - used as the value-picker candidate set
   // when the agg fn is count / count_unique (both accept any dtype).
   const allValueCols = useMemo(() =>
     describe.columns
@@ -1939,7 +1940,7 @@ function ChartsTab({ sessionId, describe }: { sessionId: string; describe: Descr
     [describe],
   );
 
-  // Initialise chart config on first mount (if empty) — leave user choices
+  // Initialise chart config on first mount (if empty) - leave user choices
   // intact on subsequent renders.
   useEffect(() => {
     if (chart.category && chart.value) return;
@@ -1973,7 +1974,7 @@ function ChartsTab({ sessionId, describe }: { sessionId: string; describe: Descr
     try {
       const fn = chart.aggFn || 'sum';
       if (isCategoricalAggFn(fn)) {
-        // count / count_unique — client-side (backend rejects
+        // count / count_unique - client-side (backend rejects
         // count_unique, and count returns the group size for every
         // column regardless of which one is asked). Mirrors the Pivot
         // tab's handling so both tabs agree on value semantics. Pages
@@ -1997,7 +1998,7 @@ function ChartsTab({ sessionId, describe }: { sessionId: string; describe: Descr
 
   useEffect(() => { loadChart(); }, [loadChart]);
 
-  // Active slicers do NOT re-run the backend query — we filter client-side
+  // Active slicers do NOT re-run the backend query - we filter client-side
   // so cross-filter is instant.
   const filteredGroups = useMemo(() => {
     if (!chartData) return [];
@@ -2021,7 +2022,7 @@ function ChartsTab({ sessionId, describe }: { sessionId: string; describe: Descr
     [slicedGroups, chart.category, chart.value],
   );
 
-  // Debounced cross-filter — RFC 16 §6: coalesce rapid clicks.
+  // Debounced cross-filter - RFC 16 §6: coalesce rapid clicks.
   const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const handleSliceClick = useCallback((slice: ChartSlice) => {
     if (clickTimerRef.current) clearTimeout(clickTimerRef.current);
@@ -2068,7 +2069,7 @@ function ChartsTab({ sessionId, describe }: { sessionId: string; describe: Descr
               ))}
             </select>
           </div>
-          {/* Value picker — scope depends on the agg fn. sum/avg/min/max
+          {/* Value picker - scope depends on the agg fn. sum/avg/min/max
               require numeric; count / count_unique work on any dtype. */}
           {(() => {
             const fn = chart.aggFn || 'sum';
@@ -2094,7 +2095,7 @@ function ChartsTab({ sessionId, describe }: { sessionId: string; describe: Descr
               </div>
             );
           })()}
-          {/* Aggregation function — defaults to SUM to match previous
+          {/* Aggregation function - defaults to SUM to match previous
               behaviour. Switching to COUNT / COUNT UNIQUE widens the
               value picker to include text columns. */}
           <div>
@@ -2302,7 +2303,7 @@ function LazyRechart({ slices, kind, formatAxis, onSliceClick, onSliceDoubleClic
     if (d?.index != null && slices[d.index]) onSliceDoubleClick(slices[d.index]!);
   }) as unknown as () => void;
 
-  // Category legend. Scatter and pie encode the category only by colour — the
+  // Category legend. Scatter and pie encode the category only by colour - the
   // axes carry count/value, so without a swatch→label key the user cannot tell
   // which point or wedge is which group. Each item is clickable to select the
   // matching slice, mirroring the on-chart click behaviour.
@@ -2852,6 +2853,10 @@ function CreateBOQFromPivotModal({ open, onClose, groups, groupByColumns, aggCol
   const { t } = useTranslation();
   const addToast = useToastStore((s) => s.addToast);
   const activeProjectId = useProjectContextStore((s) => s.activeProjectId);
+  // Display-only seam (#270): the positions preview shows the metric-canonical
+  // quantity in the user's measurement system. The value stored via handleCreate
+  // stays metric-canonical (unit: unitGuess) and is NOT converted.
+  const displayQty = useDisplayQuantity();
 
   const [projectId, setProjectId] = React.useState(activeProjectId ?? '');
   const [boqId, setBoqId] = React.useState('');
@@ -3027,10 +3032,12 @@ function CreateBOQFromPivotModal({ open, onClose, groups, groupByColumns, aggCol
               {groups.slice(0, 8).map((g, i) => {
                 const desc = groupByColumns.map((col) => g.key[col] || '').filter(Boolean).join(' - ');
                 const qty = g.results[quantityCol] ?? g.count;
+                // Convert the metric-canonical preview quantity for display only.
+                const previewQty = displayQty.convert(qty, unitGuess);
                 return (
                   <div key={Object.values(g.key).join('-') || `group-${i}`} className="flex items-center justify-between text-xs">
                     <span className="text-content-primary truncate flex-1 mr-2">{desc || `Group ${i + 1}`}</span>
-                    <span className="text-content-tertiary tabular-nums shrink-0">{Math.round(qty * 100) / 100} {unitGuess}</span>
+                    <span className="text-content-tertiary tabular-nums shrink-0">{Math.round(previewQty.value * 100) / 100} {previewQty.unit}</span>
                   </div>
                 );
               })}
@@ -3465,17 +3472,17 @@ function SaveToProjectDialog({
   );
 }
 
-/* ── KPI strip — BI-style dashboard tiles ─────────────────────────────── */
+/* ── KPI strip - BI-style dashboard tiles ─────────────────────────────── */
 /*
  * Always-visible row of big-number metric tiles, derived purely from the
  * DescribeResponse. Values are project-wide totals (not filtered by
- * slicers) — the slicer banner below makes the scope explicit.
+ * slicers) - the slicer banner below makes the scope explicit.
  *
  * Tiles are picked opportunistically: if the data source has a column
  * matching the keyword (volume / area / length / weight / count) we
  * surface its sum; if it has a "level" or "category" column we surface
  * the cardinality. Missing data = tile hidden. Never shows all 7 tiles
- * at once — most BIM exports expose 3–5 of these.
+ * at once - most BIM exports expose 3-5 of these.
  */
 interface KpiTile {
   icon: React.ElementType;
@@ -3628,7 +3635,7 @@ export function CadDataExplorerPage() {
 
   // Threshold (conditional-formatting) rules for pivot cells. Kept at the
   // page level so the URL writer effect below can serialise them alongside
-  // slicer / pivot / chart config — a shared link restores the rule set.
+  // slicer / pivot / chart config - a shared link restores the rule set.
   const [thresholdRules, setThresholdRules] = useState<ThresholdRule[]>(() =>
     parseThresholds(new URLSearchParams(window.location.search).get('tr')),
   );
@@ -3679,7 +3686,7 @@ export function CadDataExplorerPage() {
     });
   }, [sessionId, hydrateFromUrl]);
 
-  // Debounced URL writer (300ms) — keeps the query string in sync with
+  // Debounced URL writer (300ms) - keeps the query string in sync with
   // tab / slicer / pivot / chart changes. We compute the next URL by
   // merging existing params (so `session` & unrelated params survive)
   // with the serialised analysis state.
@@ -3803,7 +3810,7 @@ export function CadDataExplorerPage() {
     },
   });
 
-  // Resolving a BIM model into a session — show a spinner (or the
+  // Resolving a BIM model into a session - show a spinner (or the
   // failure) instead of the empty session picker so the deep-link feels
   // like it "opened the model directly".
   if (!sessionId && bimModelId) {
@@ -3867,12 +3874,12 @@ export function CadDataExplorerPage() {
           </DismissibleInfo>
         </div>
 
-        {/* Soft modern background — calm base gradient, muted blurred
+        {/* Soft modern background - calm base gradient, muted blurred
             colour blobs, plus a barely-visible decorative spreadsheet
             grid behind everything so the "data explorer" identity is
             legible the moment the page paints. */}
         <div className="relative flex-1 overflow-hidden bg-gradient-to-br from-slate-50 via-white to-blue-50/30 dark:from-gray-950 dark:via-gray-900 dark:to-slate-900">
-          {/* Decorative data table — SVG pattern at ~4-6% opacity.
+          {/* Decorative data table - SVG pattern at ~4-6% opacity.
               Header row + alternating row bands + fake column text
               blocks; all pointer-events:none so it never interferes. */}
           <svg
@@ -3906,7 +3913,7 @@ export function CadDataExplorerPage() {
               ].map((c, i) => (
                 <rect key={`h-${i}`} x={c.x} y="72" width={c.w} height="10" rx="2" fill="currentColor" fillOpacity="0.35" />
               ))}
-              {/* 18 data rows — alternating bands with text-block bars */}
+              {/* 18 data rows - alternating bands with text-block bars */}
               {Array.from({ length: 18 }).map((_, r) => {
                 const y = 110 + r * 40;
                 const rowBandOpacity = r % 2 === 0 ? 0 : 0.04;
@@ -3942,14 +3949,14 @@ export function CadDataExplorerPage() {
             {/* 2-column layout: Upload card (left) + Hero text (right) */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-stretch mb-8">
 
-              {/* LEFT — Upload card */}
+              {/* LEFT - Upload card */}
               <div className="flex flex-col">
                 <div className="rounded-2xl bg-white dark:bg-gray-800/60 border border-border-light shadow-lg shadow-black/5 dark:shadow-black/20 p-6 flex flex-col h-full">
                   <UploadConvertZone onSessionReady={handleSessionReady} />
                 </div>
               </div>
 
-              {/* RIGHT — Hero text + local-processing badge (chip
+              {/* RIGHT - Hero text + local-processing badge (chip
                   styled to match /bim and /dwg-takeoff). The
                   decorative animation was removed; the modern mesh
                   background carries the visual weight. */}
@@ -4035,7 +4042,7 @@ export function CadDataExplorerPage() {
                   key={s.session_id}
                   className="group relative shrink-0 w-64 rounded-xl border border-border-light bg-surface-secondary hover:bg-surface-tertiary hover:border-oe-blue/30 hover:shadow-lg transition-all duration-200 overflow-hidden"
                 >
-                  {/* Card body — single native button, opens the session */}
+                  {/* Card body - single native button, opens the session */}
                   <button
                     type="button"
                     onClick={() => setSearchParams({ session: s.session_id })}
@@ -4068,7 +4075,7 @@ export function CadDataExplorerPage() {
                       </div>
                     </div>
                   </button>
-                  {/* Delete — sibling button, not nested inside the card button */}
+                  {/* Delete - sibling button, not nested inside the card button */}
                   <button
                     type="button"
                     aria-label={t('explorer.delete_session', { defaultValue: 'Delete analysis' })}
@@ -4296,7 +4303,7 @@ export function CadDataExplorerPage() {
           })()
         ) : describe ? (
           <>
-            {/* KPI dashboard strip — project-wide totals */}
+            {/* KPI dashboard strip - project-wide totals */}
             <KpiStrip describe={describe} />
 
             {/* Tab selector */}
@@ -4326,11 +4333,11 @@ export function CadDataExplorerPage() {
               ))}
             </div>
 
-            {/* Shared slicer banner — cross-filter chips are visible to
+            {/* Shared slicer banner - cross-filter chips are visible to
                  Data / Pivot / Charts tabs. Hidden on Describe (stats). */}
             {activeTab !== 'describe' && <SlicerBanner />}
 
-            {/* Tab content — scrollable */}
+            {/* Tab content - scrollable */}
             <div className="flex-1 overflow-y-auto p-4">
               {activeTab === 'table' && <DataTableTab sessionId={sessionId} describe={describe} />}
               {activeTab === 'pivot' && (

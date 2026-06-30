@@ -5,7 +5,7 @@
  * Presets are listed read-only (no edit / delete) so the operator can see
  * the full inventory but can't accidentally wipe shipped defaults.
  *
- * The "New / Edit house type" modal is intentionally polished — it
+ * The "New / Edit house type" modal is intentionally polished - it
  * is the only path through which a tenant exposes their domain
  * vocabulary to the rest of the app, so a clean, dense, validated form
  * makes a disproportionate UX impact. See <HouseTypeEditModal>.
@@ -26,6 +26,7 @@ import {
   SkeletonTable,
 } from '@/shared/ui';
 import { PageHeader } from '@/shared/ui/PageHeader';
+import { useDisplayQuantity } from '@/shared/hooks/useDisplayQuantity';
 import { useToastStore } from '@/stores/useToastStore';
 import { getErrorMessage, apiGet } from '@/shared/lib/api';
 import { getCountry } from '@/shared/lib/countries';
@@ -52,7 +53,7 @@ function listProjectsLite(): Promise<ProjectStub[]> {
 }
 
 /** Short country list used only by the top-of-page filter (not the
- *  modal — the modal uses the full searchable picker). */
+ *  modal - the modal uses the full searchable picker). */
 const FILTER_COUNTRY_OPTIONS: Array<{ value: string; label: string }> = [
   { value: '', label: 'All / global' },
   { value: 'DE', label: 'Deutschland (DE)' },
@@ -71,6 +72,7 @@ const FILTER_COUNTRY_OPTIONS: Array<{ value: string; label: string }> = [
 
 export function HouseTypeSettingsPage() {
   const { t } = useTranslation();
+  const dq = useDisplayQuantity();
   const qc = useQueryClient();
   const addToast = useToastStore((s) => s.addToast);
 
@@ -343,8 +345,9 @@ export function HouseTypeSettingsPage() {
                     })}
                   </th>
                   <th className="px-3 py-2 text-left">
-                    {t('property_dev.house_type.area_typical_label', {
-                      defaultValue: 'Typical m²',
+                    {t('property_dev.house_type.area_typical_col', {
+                      defaultValue: 'Typical {{unit}}',
+                      unit: dq.unitFor('m²'),
                     })}
                   </th>
                 </tr>
@@ -360,7 +363,18 @@ export function HouseTypeSettingsPage() {
                       <CountryCell entry={entry} variant="neutral" />
                     </td>
                     <td className="px-3 py-2 text-content-secondary">
-                      {entry.area_typical_m2 ?? '—'}
+                      {entry.area_typical_m2 == null
+                        ? '—'
+                        : dq.system === 'imperial' &&
+                            Number.isFinite(Number(entry.area_typical_m2))
+                          ? (() => {
+                              const a = dq.convert(
+                                Number(entry.area_typical_m2),
+                                'm²',
+                              );
+                              return `${a.value.toFixed(1)} ${a.unit}`;
+                            })()
+                          : entry.area_typical_m2}
                     </td>
                   </tr>
                 ))}

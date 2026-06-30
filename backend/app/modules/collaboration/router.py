@@ -299,8 +299,21 @@ async def create_comment(
             str(user_id),
             session,
         )
+    # Resolve the owning project so the detached comment.created event carries
+    # it (the notifications subscriber fans out to project members). When the
+    # entity IS a project, its id is the project id; otherwise map through the
+    # same resolver the access check used. Resolution failure is non-fatal -
+    # the event simply omits the project_id.
+    project_id: uuid.UUID | None = None
     try:
-        comment = await service.create_comment(data, uuid.UUID(user_id))
+        if data.entity_type == "project":
+            project_id = uuid.UUID(data.entity_id)
+        else:
+            project_id = await _resolve_entity_project_id(data.entity_type, data.entity_id, session)
+    except (ValueError, TypeError):
+        project_id = None
+    try:
+        comment = await service.create_comment(data, uuid.UUID(user_id), project_id=project_id)
         return CommentResponse.model_validate(comment)
     except HTTPException:
         raise

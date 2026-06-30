@@ -95,6 +95,7 @@ import { CURRENCY_GROUPS } from '@/features/projects/CreateProjectPage';
 import { useToastStore } from '@/stores/useToastStore';
 import { useBoqDescDensityStore, BOQ_DESC_ROW_HEIGHT } from '@/stores/useBoqDescDensityStore';
 import { getIntlLocale } from '@/shared/lib/formatters';
+import { useDisplayQuantity } from '@/shared/hooks/useDisplayQuantity';
 import { VariantPicker } from '@/features/costs/VariantPicker';
 import type { CostVariant, VariantStats } from '@/features/costs/api';
 import { copyToClipboard, readClipboard } from '@/shared/lib/browser';
@@ -1090,6 +1091,15 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
     [locale],
   );
 
+  // Issue #285: the measurement-system-aware quantity API. Threaded onto the
+  // grid context + column defs so every Qty / Unit / Unit-rate cell DISPLAYS
+  // in the user's system (rate shown reciprocally so the line reconciles)
+  // while STORAGE stays metric-canonical (the value parsers / inline-editor
+  // commit handlers convert each edit back to metric). Memoised by the hook
+  // on the ``measurementSystem`` preference, so its identity only changes
+  // when the user flips metric <-> imperial.
+  const displayQuantity = useDisplayQuantity();
+
   /* ── Context for column formatters + section group + resources + actions */
   const gridContext = useMemo(
     () => ({
@@ -1160,6 +1170,9 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
       positions,
       customColumns,
       descDensity,
+      // Issue #285: imperial-units display seam consumed by the Qty / Unit /
+      // Unit-rate renderers and the inline resource / variant editors.
+      displayQuantity,
     }) as FullGridContext,
     [descDensity, currencySymbol, currencyCode, fxRates, onUpsertProjectFxRate, displayCurrency, onOpenFxRateSettings, locale, fmt, t, collapsedSections, onToggleSection, onAddPosition, onAddSubSection,
      expandedPositions, toggleResources, onRemoveResource, onUpdateResource, onUpdateResourceFields,
@@ -1168,12 +1181,12 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
      onDeletePosition, onSaveToDatabase, onAddComment,
      onDuplicatePosition, showContextMenu, anomalyMap, onApplyAnomalySuggestion, bimModelId,
      onUpdatePosition, onHighlightBIMElements, onDeleteSection, onReorderSections, onFormulaApplied,
-     positions, customColumns, showResourceSplit, renderInlineCopilot],
+     positions, customColumns, showResourceSplit, renderInlineCopilot, displayQuantity],
   );
 
   /* ── Column defs (standard + custom) ─────────────────────────────── */
   const columnDefs = useMemo(() => {
-    const defs = getColumnDefs({ currencySymbol, currencyCode, locale, fmt, t: tRef.current, displayCurrency: displayCurrency ?? null, showResourceSplit });
+    const defs = getColumnDefs({ currencySymbol, currencyCode, locale, fmt, t: tRef.current, displayCurrency: displayCurrency ?? null, showResourceSplit, displayQuantity });
     // Override ordinal column with custom renderer
     const ordinalCol = defs.find((c) => c.field === 'ordinal');
     if (ordinalCol) {
@@ -1210,7 +1223,7 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
       }
     }
     return defs;
-  }, [currencySymbol, currencyCode, locale, fmt, i18n.language, customColumns, positions, boqVariables, displayCurrency, showResourceSplit]);
+  }, [currencySymbol, currencyCode, locale, fmt, i18n.language, customColumns, positions, boqVariables, displayCurrency, showResourceSplit, displayQuantity]);
 
   /* ── Calculated-column refresh on positions change ──────────────────
    * AG Grid re-runs `valueGetter` on every refresh; for cross-position

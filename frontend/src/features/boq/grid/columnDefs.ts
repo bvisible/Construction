@@ -1,5 +1,6 @@
 import type { ColDef, ValueFormatterParams, ValueGetterParams, ValueSetterParams } from 'ag-grid-community';
 import { convertToBase, fmtWithCurrency, resourceAwareTotalInBase } from '../boqHelpers';
+import type { DisplayQuantityApi } from '@/shared/hooks/useDisplayQuantity';
 import { unitColumnValueSetter } from './cellEditors';
 import {
   buildFormulaContext,
@@ -51,6 +52,19 @@ export interface BOQColumnContext {
    * ``metadata.resource_breakdown[type].pct`` rollup.
    */
   showResourceSplit?: boolean;
+  /**
+   * ── Imperial-units display seam (Issue #285).
+   * Carries the measurement-system-aware quantity API (built once by
+   * BOQGrid via ``useDisplayQuantity``). The Qty / Unit-rate value
+   * PARSERS read this off ``params.context`` so that a value the user
+   * typed against the DISPLAYED unit (e.g. 7.58 ft, or 15.24 / ft) is
+   * converted back to metric-canonical storage BEFORE it lands on the
+   * row. Storage stays metric (m / m2 / kg ...); only the human-facing
+   * value is ever imperial. Undefined ⇒ metric pass-through (the
+   * helpers are identity for the metric system / unmapped units, so
+   * callers can use them unconditionally once present).
+   */
+  displayQuantity?: DisplayQuantityApi;
 }
 
 // Note: `currencyFormatter` was previously applied to the unit_rate column
@@ -398,9 +412,19 @@ export function getColumnDefs(context: BOQColumnContext): ColDef[] {
       cellEditorPopup: true,
       cellEditorPopupPosition: 'over',
       cellRenderer: 'quantityCellRenderer',
+      // Issue #285: the Qty cell DISPLAYS the value converted into the
+      // user's measurement system (see ``quantityCellRenderer``), so a
+      // value the user types here is in the displayed unit. Convert it
+      // back to metric-canonical storage BEFORE it lands on the row.
+      // ``toMetric`` is identity for the metric system and for any unit
+      // with no imperial mapping (pcs, %, hr ...), so this is a no-op
+      // unless the user is in imperial AND the unit is convertible.
       valueParser: (params) => {
         const val = parseFloat(params.newValue);
-        return isNaN(val) ? params.oldValue : val;
+        if (isNaN(val)) return params.oldValue;
+        const ctx = params.context as BOQColumnContext | undefined;
+        const unit = (params.data?.unit as string | undefined) ?? '';
+        return ctx?.displayQuantity ? ctx.displayQuantity.toMetric(val, unit) : val;
       },
       // Surface the source formula in the AG Grid tooltip — much easier to
       // see than a tiny badge alone (Issue #90 follow-up).
@@ -438,9 +462,17 @@ export function getColumnDefs(context: BOQColumnContext): ColDef[] {
       },
       cellEditor: 'agNumberCellEditor',
       cellEditorParams: { min: 0, precision: 2 },
+      // Issue #285: the rate cell DISPLAYS a reciprocal per-unit rate when
+      // the quantity is shown converted (50/m -> 15.24/ft) so the line
+      // reconciles. A value typed here is therefore against the displayed
+      // unit; convert it back to the metric-canonical per-unit rate before
+      // storing. ``toMetricRate`` is identity for metric / unmapped units.
       valueParser: (params) => {
         const val = parseFloat(params.newValue);
-        return isNaN(val) ? params.oldValue : val;
+        if (isNaN(val)) return params.oldValue;
+        const ctx = params.context as BOQColumnContext | undefined;
+        const unit = (params.data?.unit as string | undefined) ?? '';
+        return ctx?.displayQuantity ? ctx.displayQuantity.toMetricRate(val, unit) : val;
       },
       // Custom renderer surfaces the inline CWICR variant picker pill when
       // the position carries `metadata.cost_item_variants` (cached at apply

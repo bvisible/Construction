@@ -270,6 +270,10 @@ class Assignment(Base):
         default=100,
         server_default="100",
     )
+    # Native-units demand lane (T3.1): crew=3, excavator=1. NULL ⇒ the histogram
+    # falls back to ``allocation_percent`` so existing rows keep today's numbers.
+    units: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
+    unit_kind: Mapped[str] = mapped_column(String(16), nullable=False, default="labor", server_default="labor")
     status: Mapped[str] = mapped_column(
         String(16),
         nullable=False,
@@ -396,3 +400,11 @@ class ResourceLink(Base):
 
     def __repr__(self) -> str:  # pragma: no cover - debug repr
         return f"<ResourceLink {self.primary_resource_id}<->{self.secondary_resource_id} ({self.link_type})>"
+
+
+# Register the resource-depth tables (T3.1) so the auto-discovery loader picks
+# them up before ``create_all``.
+from app.modules.resources.resource_depth_models import (  # noqa: E402,F401
+    AssignmentCurve,
+    ResourceRate,
+)

@@ -49,6 +49,9 @@ class Notice(Base):
     status: Mapped[str] = mapped_column(String(40), nullable=False, default="issued", index=True)
     # Soft link to oe_changeorders_change_order.id (plain UUID, no DB FK)
     reference_change_order_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), nullable=True)
+    # Change intelligence: who owes the next action and by when.
+    ball_in_court: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    response_due_date: Mapped[str | None] = mapped_column(String(40), nullable=True)
     metadata_: Mapped[dict] = mapped_column(  # type: ignore[assignment]
         "metadata",
         JSON,
@@ -103,6 +106,9 @@ class VariationRequest(Base):
     # NEC4 Cl. 62.5 - Project Manager's assessment deadline (4 weeks
     # after quotation submitted).
     assessment_due_at: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    # Change intelligence: who owes the next action and by when.
+    ball_in_court: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    response_due_date: Mapped[str | None] = mapped_column(String(40), nullable=True)
     metadata_: Mapped[dict] = mapped_column(  # type: ignore[assignment]
         "metadata",
         JSON,
@@ -152,6 +158,9 @@ class VariationOrder(Base):
     contract_clause_ref: Mapped[str] = mapped_column(String(60), nullable=False, default="", server_default="")
     implementation_started_at: Mapped[str | None] = mapped_column(String(40), nullable=True)
     implementation_completed_at: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    # Change intelligence: who owes the next action and by when.
+    ball_in_court: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    response_due_date: Mapped[str | None] = mapped_column(String(40), nullable=True)
     metadata_: Mapped[dict] = mapped_column(  # type: ignore[assignment]
         "metadata",
         JSON,
@@ -420,6 +429,9 @@ class ExtensionOfTimeClaim(Base):
     # TIA result - days the project completion is forecast to slip.
     tia_delta_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
     tia_computed_at: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    # Soft back-link to the forensic delay analysis (schedule_advanced T2.2)
+    # this claim was raised from. Plain GUID (no FK across module boundary).
+    delay_analysis_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), nullable=True)
 
     def __repr__(self) -> str:
         return f"<EOTClaim {self.id} req={self.requested_days}d ({self.status})>"

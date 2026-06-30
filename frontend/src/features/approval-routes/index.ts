@@ -11,6 +11,10 @@ export type { ApprovalTargetBadgeProps } from './ApprovalTargetBadge';
 export { ApprovalInstancesList } from './ApprovalInstancesList';
 export { ApprovalInstanceDetailDrawer } from './ApprovalInstanceDetailDrawer';
 export type { ApprovalInstanceDetailDrawerProps } from './ApprovalInstanceDetailDrawer';
+export { ReassignDialog } from './ReassignDialog';
+export type { ReassignDialogProps } from './ReassignDialog';
+export { DelegationManager } from './DelegationManager';
+export type { DelegationManagerProps } from './DelegationManager';
 export { RouteEditor } from './RouteEditor';
 export * as approvalRoutesApi from './api';
 export type {
@@ -19,9 +23,13 @@ export type {
   ApprovalRouteUpdatePayload,
   ApprovalRoutesMeta,
   ApprovalInstance,
+  ApprovalDelegation,
+  DelegationCreatePayload,
+  DelegationRole,
   InstanceCreatePayload,
   InstanceDecidePayload,
   InstanceCancelPayload,
+  InstanceReassignPayload,
   InstanceStatus,
   RouteStep,
   RouteStepMode,

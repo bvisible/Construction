@@ -234,6 +234,47 @@ class Project(Base):
         return f"<Project {self.name} ({self.status})>"
 
 
+class ProjectStatusHistory(Base):
+    """Timestamped audit trail of a project's status transitions.
+
+    One row per change to ``Project.status`` (e.g. active -> on_hold,
+    active -> archived, archived -> active). ``from_status`` is null for the
+    initial status recorded at creation. ``changed_by`` references the acting
+    user and is nullable / ``SET NULL`` so deleting a user never erases the
+    history. Surfaced read-only by the projects router so the UI can show who
+    changed status from X to Y and when.
+    """
+
+    __tablename__ = "oe_project_status_history"
+    __table_args__ = (
+        Index("ix_project_status_history_project", "project_id"),
+        Index(
+            "ix_project_status_history_project_created",
+            "project_id",
+            "created_at",
+        ),
+    )
+
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(),
+        ForeignKey("oe_projects_project.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    # Null = the initial status recorded when the project was created.
+    from_status: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    to_status: Mapped[str] = mapped_column(String(50), nullable=False)
+    changed_by: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(),
+        ForeignKey("oe_users_user.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    note: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+    def __repr__(self) -> str:
+        return f"<ProjectStatusHistory project={self.project_id} {self.from_status}->{self.to_status}>"
+
+
 class ProjectWBS(Base):
     """‌⁠‍Work Breakdown Structure node for a project.
 

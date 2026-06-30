@@ -9,7 +9,13 @@ import uuid
 from sqlalchemy import and_, delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.approval_routes.models import Instance, Route, Step, StepState
+from app.modules.approval_routes.models import (
+    Delegation,
+    Instance,
+    Route,
+    Step,
+    StepState,
+)
 
 
 class ApprovalRouteRepository:
@@ -194,3 +200,40 @@ class ApprovalRouteRepository:
         self.session.add(state)
         await self.session.flush()
         return state
+
+    # ── Delegations ───────────────────────────────────────────────────
+
+    async def get_delegation(self, delegation_id: uuid.UUID) -> Delegation | None:
+        return await self.session.get(Delegation, delegation_id)
+
+    async def list_active_delegations(self) -> list[Delegation]:
+        """Every delegation with the active flag set.
+
+        The active *window* (starts_at / ends_at) and project scoping are
+        applied by the pure engine, not here - this only filters the cheap
+        boolean flag so a revoked hand-off is never considered.
+        """
+        stmt = select(Delegation).where(Delegation.is_active.is_(True))
+        return list((await self.session.execute(stmt)).scalars().all())
+
+    async def list_delegations(
+        self,
+        *,
+        delegator_user_id: uuid.UUID | None = None,
+        delegate_user_id: uuid.UUID | None = None,
+        include_inactive: bool = False,
+    ) -> list[Delegation]:
+        stmt = select(Delegation)
+        if delegator_user_id is not None:
+            stmt = stmt.where(Delegation.delegator_user_id == delegator_user_id)
+        if delegate_user_id is not None:
+            stmt = stmt.where(Delegation.delegate_user_id == delegate_user_id)
+        if not include_inactive:
+            stmt = stmt.where(Delegation.is_active.is_(True))
+        stmt = stmt.order_by(Delegation.created_at.desc())
+        return list((await self.session.execute(stmt)).scalars().all())
+
+    async def add_delegation(self, delegation: Delegation) -> Delegation:
+        self.session.add(delegation)
+        await self.session.flush()
+        return delegation

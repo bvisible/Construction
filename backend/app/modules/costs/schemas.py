@@ -796,17 +796,32 @@ class BenchmarkRequest(BaseModel):
         default=None,
         ge=0,
         description=(
-            "Optional user value to position against the portfolio. When "
-            "supplied, the response carries ``percentile_vs_own``."
+            "Optional value to position against the portfolio, read in the unit "
+            "of the selected metric (a cost per m2, an overrun fraction or a "
+            "recovery rate). When supplied, the response carries "
+            "``percentile_vs_own``."
+        ),
+    )
+    metric: Literal["cost_per_m2", "overrun_pct", "recovery_rate"] = Field(
+        default="cost_per_m2",
+        description=(
+            "Which figure to benchmark across the tenant's own projects. "
+            "``cost_per_m2`` (default) is the BOQ grand total over gross floor "
+            "area, currency-scoped. ``overrun_pct`` is each project's priced "
+            "scope over its approved budget, and ``recovery_rate`` its recovered "
+            "share of chargeable cost; both are dimensionless fractions compared "
+            "across currencies and reported with an empty currency."
         ),
     )
 
 
 class OwnPortfolio(BaseModel):
-    """The tenant's own cost-per-m2 distribution for the benchmark request.
+    """The tenant's own distribution of the requested benchmark metric.
 
-    All money figures are emitted as decimal strings per the money rule so
-    a JS client never rounds a precision-critical value through Number.
+    All figures are emitted as decimal strings per the money rule so a JS client
+    never rounds a precision-critical value through Number. For the ratio
+    metrics (overrun_pct / recovery_rate) the five points are dimensionless
+    fractions rather than money.
     """
 
     project_count: int = Field(..., ge=0, description="Projects with both a cost and an area in the filtered set.")
@@ -836,7 +851,14 @@ class BenchmarkResponse(BaseModel):
 
     currency: str = Field(
         default="",
-        description="Currency the portfolio distribution is denominated in. Empty when no portfolio.",
+        description=(
+            "Currency the portfolio distribution is denominated in. Empty when "
+            "no portfolio, and always empty for the dimensionless ratio metrics."
+        ),
+    )
+    metric: str = Field(
+        default="cost_per_m2",
+        description="The metric the distribution reports: cost_per_m2 / overrun_pct / recovery_rate.",
     )
     own_portfolio: OwnPortfolio | None = None
     percentile_vs_own: float | None = Field(

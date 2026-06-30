@@ -32,6 +32,8 @@ import {
   type LedgerSortColumn,
   type SortDirection,
 } from '../lib/takeoff-ledger';
+import { usePreferencesStore } from '@/stores/usePreferencesStore';
+import { convertQuantity } from '../lib/takeoff-display-units';
 
 export interface MeasurementLedgerProps {
   measurements: Measurement[];
@@ -93,6 +95,10 @@ export function MeasurementLedger({
   onAddAllToBoq,
 }: MeasurementLedgerProps) {
   const { t } = useTranslation();
+  // Display the canonical-metric quantities in the user's preferred system.
+  // Storage stays metric (D-TKC-016); this only converts at the view +
+  // CSV-export boundary, matching how QuantityDisplay reads the preference.
+  const measurementSystem = usePreferencesStore((s) => s.measurementSystem);
   const [sortCol, setSortCol] = useState<LedgerSortColumn>('ordinal');
   const [sortDir, setSortDir] = useState<SortDirection>('asc');
   const [filter, setFilter] = useState<LedgerFilter>(emptyFilter());
@@ -182,7 +188,7 @@ export function MeasurementLedger({
     filter.groups.size > 0 || filter.types.size > 0 || filter.pages.size > 0;
 
   const handleExport = () => {
-    const csv = ledgerToCsv(sorted);
+    const csv = ledgerToCsv(sorted, measurementSystem);
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -413,13 +419,16 @@ export function MeasurementLedger({
                     selectedId={selectedMeasurementId ?? null}
                     onRowClick={onRowClick}
                     onAddToBoq={onAddToBoq}
+                    measurementSystem={measurementSystem}
                   />
                 );
               })}
             </tbody>
             {footers.length > 0 && (
               <tfoot className="border-t-2 border-border bg-surface-secondary/40">
-                {footers.map((gt) => (
+                {footers.map((gt) => {
+                  const disp = convertQuantity(gt.total, gt.unit, measurementSystem);
+                  return (
                   <tr
                     key={gt.type}
                     data-testid="ledger-grand-total"
@@ -437,13 +446,14 @@ export function MeasurementLedger({
                     </td>
                     <td className="px-1.5 py-1" />
                     <td className="px-1.5 py-1 text-right font-semibold text-content-primary">
-                      {formatNum(gt.total)}
+                      {formatNum(disp.value)}
                     </td>
-                    <td className="px-1.5 py-1 text-content-secondary">{gt.unit}</td>
+                    <td className="px-1.5 py-1 text-content-secondary">{disp.unit}</td>
                     <td className="px-1.5 py-1" />
                     {hasActionColumn && <td className="px-1.5 py-1" />}
                   </tr>
-                ))}
+                  );
+                })}
               </tfoot>
             )}
           </table>
@@ -462,6 +472,7 @@ function GroupRows({
   selectedId,
   onRowClick,
   onAddToBoq,
+  measurementSystem,
 }: {
   group: string;
   groupRows: { ordinal: number; measurement: Measurement }[];
@@ -470,12 +481,17 @@ function GroupRows({
   selectedId: string | null;
   onRowClick?: (m: Measurement) => void;
   onAddToBoq?: (m: Measurement) => void;
+  measurementSystem: import('@/stores/usePreferencesStore').MeasurementSystem;
 }) {
   const { t } = useTranslation();
   return (
     <>
       {groupRows.map(({ ordinal, measurement }) => {
         const selected = selectedId === measurement.id;
+        const signed = measurement.isDeduction
+          ? -measurement.value
+          : measurement.value;
+        const disp = convertQuantity(signed, measurement.unit || '', measurementSystem);
         return (
           <tr
             key={measurement.id}
@@ -534,10 +550,11 @@ function GroupRows({
               )}
             >
               {/* Voids display as a negative so the column reconciles with the
-                  net subtotal below (gross - openings). */}
-              {formatNum(measurement.isDeduction ? -measurement.value : measurement.value)}
+                  net subtotal below (gross - openings). Value is shown in the
+                  user's measurement system (stored metric, D-TKC-016). */}
+              {formatNum(disp.value)}
             </td>
-            <td className="px-1.5 py-1 text-content-secondary">{measurement.unit || ''}</td>
+            <td className="px-1.5 py-1 text-content-secondary">{disp.unit}</td>
             <td className="px-1.5 py-1 text-right text-content-tertiary">{measurement.page}</td>
             {onAddToBoq && (
               <td className="px-1 py-1 text-right">
@@ -583,13 +600,15 @@ function GroupRows({
       })}
       {subtotal && Object.keys(subtotal.totals).length > 0 && (
         <>
-          {Object.entries(subtotal.totals).map(([unit, total]) => (
+          {Object.entries(subtotal.totals).map(([unit, total]) => {
+            const disp = convertQuantity(total, unit, measurementSystem);
+            return (
             <tr
               key={`${group}-subtotal-${unit}`}
               className="bg-surface-secondary/40 border-b border-border-light italic"
               data-testid="ledger-subtotal"
               data-group={group}
-              data-unit={unit}
+              data-unit={disp.unit}
             >
               <td />
               <td className="px-1.5 py-1 text-content-tertiary">
@@ -600,13 +619,14 @@ function GroupRows({
               </td>
               <td />
               <td className="px-1.5 py-1 text-right font-semibold text-content-primary">
-                {formatNum(total)}
+                {formatNum(disp.value)}
               </td>
-              <td className="px-1.5 py-1 text-content-secondary">{unit}</td>
+              <td className="px-1.5 py-1 text-content-secondary">{disp.unit}</td>
               <td />
               {onAddToBoq && <td />}
             </tr>
-          ))}
+            );
+          })}
         </>
       )}
     </>

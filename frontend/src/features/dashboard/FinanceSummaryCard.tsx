@@ -2,9 +2,12 @@
  * FinanceSummaryCard - at-a-glance money rollup for the dashboard.
  *
  * Surfaces figures the dashboard rollup ALREADY computes (no new fetch):
- *   - estimated BOQ value, per currency  (boq_summary.by_currency)
  *   - open change-order cost impact, per currency  (change_orders.by_currency)
  *   - budget-warning count + worst over-budget project  (budget_variance)
+ *
+ * The estimated BOQ value lives in the KPI ribbon (its "Total Value" tile);
+ * we deliberately do NOT repeat that per-currency row here so the dashboard
+ * shows each headline figure exactly once.
  *
  * Money is rendered through the shared decimal-safe helpers in
  * ``shared/lib/money.ts`` (the wire ships Decimals as strings; never call
@@ -15,7 +18,7 @@
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
-import { AlertTriangle, ArrowRight, FileEdit, TrendingUp, Wallet } from 'lucide-react';
+import { AlertTriangle, ArrowRight, FileEdit, Wallet } from 'lucide-react';
 import { Card, CardContent, CardHeader } from '@/shared/ui';
 import { formatCurrency, toNum } from '@/shared/lib/money';
 import { useDashboardRollupContext } from './context/DashboardRollupContext';
@@ -48,18 +51,8 @@ export function FinanceSummaryCard() {
   const navigate = useNavigate();
   const { byWidget, isLoading } = useDashboardRollupContext();
 
-  const boq = byWidget('boq_summary');
   const budget = byWidget('budget_variance');
   const changeOrders = byWidget('change_orders');
-
-  // Estimated BOQ value chips - prefer the FX-correct per-currency buckets.
-  const valueChips = useMemo<CurrencyChip[]>(() => {
-    const by = boq?.by_currency;
-    if (!by || by.length === 0) return [];
-    return by
-      .map((b) => ({ currency: b.currency || '', amount: toNum(b.total_value) }))
-      .filter((c) => c.amount !== 0 || c.currency);
-  }, [boq]);
 
   // Open change-order impact chips (same per-currency treatment).
   const coChips = useMemo<CurrencyChip[]>(() => {
@@ -80,13 +73,13 @@ export function FinanceSummaryCard() {
 
   // While the shared rollup is still loading, show a light skeleton so the
   // card doesn't flash zeros on a cold dashboard.
-  if (isLoading && !boq && !budget && !changeOrders) {
+  if (isLoading && !budget && !changeOrders) {
     return (
       <Card>
         <CardHeader title={t('dashboard.finance_summary', { defaultValue: 'Finance summary' })} />
         <CardContent>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3" aria-busy="true">
-            {[0, 1, 2].map((i) => (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3" aria-busy="true">
+            {[0, 1].map((i) => (
               <div
                 key={i}
                 className="rounded-xl border border-border-light bg-surface-elevated/90 p-3"
@@ -122,25 +115,7 @@ export function FinanceSummaryCard() {
         }
       />
       <CardContent>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          {/* Estimated value */}
-          <button
-            type="button"
-            onClick={() => navigate('/boq')}
-            className="group rounded-xl border border-border-light bg-surface-elevated/90 p-3 text-left shadow-xs transition-shadow duration-normal ease-oe hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-oe-blue/30"
-          >
-            <div className="flex items-center gap-1.5 text-2xs font-medium uppercase tracking-wider text-content-tertiary">
-              <TrendingUp size={12} className="text-oe-blue" />
-              {t('dashboard.finance_estimated_value', { defaultValue: 'Estimated value' })}
-            </div>
-            <div className="mt-1 text-base font-bold text-content-primary">
-              <MoneyChips
-                chips={valueChips}
-                emptyLabel={t('dashboard.finance_no_value', { defaultValue: 'No priced BOQ' })}
-              />
-            </div>
-          </button>
-
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           {/* Open change-order impact */}
           <button
             type="button"

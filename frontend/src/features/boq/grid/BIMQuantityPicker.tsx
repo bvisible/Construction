@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { X, Loader2, Cuboid, ArrowRight } from 'lucide-react';
 import { fetchBIMElementsByIds } from '@/features/bim/api';
 import type { BIMElementData } from '@/shared/ui/BIMViewer/ElementManager';
+import type { DisplayQuantityApi } from '@/shared/hooks/useDisplayQuantity';
 
 /* ── Unit inference from property/quantity key ─────────────────────── */
 
@@ -58,6 +59,14 @@ export interface BIMQuantityPickerProps {
   anchorRect?: DOMRect | null;
   onSelectQuantity: (value: number, source: string) => void;
   onClose: () => void;
+  /**
+   * Issue #285: measurement-system-aware quantity API. When present each
+   * BIM quantity + unit is SHOWN converted into the user's system; the
+   * value passed to ``onSelectQuantity`` (which becomes the position's
+   * canonical quantity) stays metric. Identity for metric / unmapped
+   * units, so values pass straight through when absent.
+   */
+  displayQuantity?: DisplayQuantityApi;
 }
 
 /* ── Extract all numeric values from a BIM element ─────────────────── */
@@ -153,6 +162,7 @@ export function BIMQuantityPicker({
   anchorRect,
   onSelectQuantity,
   onClose,
+  displayQuantity,
 }: BIMQuantityPickerProps) {
   const popoverRef = useRef<HTMLDivElement>(null);
 
@@ -324,6 +334,7 @@ export function BIMQuantityPicker({
                         value={entry.value}
                         unit={entry.unit}
                         isCurrent={entry.value === currentQuantity}
+                        displayQuantity={displayQuantity}
                         onUse={() =>
                           onSelectQuantity(
                             entry.value,
@@ -353,6 +364,7 @@ export function BIMQuantityPicker({
                     unit={s.unit}
                     isCurrent={s.sum === currentQuantity}
                     isSum
+                    displayQuantity={displayQuantity}
                     onUse={() => onSelectQuantity(s.sum, `BIM sum: ${s.label}`)}
                   />
                 ))}
@@ -376,6 +388,7 @@ function QuantityRow({
   isCurrent,
   isSum,
   onUse,
+  displayQuantity,
 }: {
   label: string;
   value: number;
@@ -383,7 +396,14 @@ function QuantityRow({
   isCurrent: boolean;
   isSum?: boolean;
   onUse: () => void;
+  displayQuantity?: DisplayQuantityApi;
 }) {
+  // Issue #285: convert the BIM quantity + unit for DISPLAY only. ``onUse``
+  // / ``isCurrent`` are computed in the parent against the raw metric value,
+  // so the value applied to the position stays metric-canonical. Identity
+  // for metric / unmapped units.
+  const shownValue = displayQuantity ? displayQuantity.convert(value, unit).value : value;
+  const shownUnit = displayQuantity ? displayQuantity.unitFor(unit) : unit;
   return (
     <div
       className={`flex items-center gap-1 px-3 py-1 group/row hover:bg-emerald-50/80 dark:hover:bg-emerald-950/30 transition-colors ${
@@ -392,10 +412,10 @@ function QuantityRow({
     >
       <span className="text-[11px] text-content-secondary flex-1 truncate pl-3">{label}</span>
       <span className="text-[11px] tabular-nums text-content-primary font-medium shrink-0">
-        {fmtNum(value)}
+        {fmtNum(shownValue)}
       </span>
-      {unit && (
-        <span className="text-[9px] text-content-quaternary font-mono shrink-0 w-5">{unit}</span>
+      {shownUnit && (
+        <span className="text-[9px] text-content-quaternary font-mono shrink-0 w-5">{shownUnit}</span>
       )}
       {isCurrent ? (
         <span className="text-[9px] text-emerald-600 font-medium shrink-0 w-9 text-center">

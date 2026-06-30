@@ -25,6 +25,13 @@ export interface OwnPortfolio {
 
 export interface BenchmarkResponse {
   currency: string;
+  /**
+   * Which metric the distribution reports. This page reads the default
+   * cost_per_m2; the dimensionless ratio metrics (overrun_pct / recovery_rate)
+   * are surfaced on the Value Dashboard, which has no industry-table pairing to
+   * confuse them with. Optional so older payloads stay valid.
+   */
+  metric?: 'cost_per_m2' | 'overrun_pct' | 'recovery_rate';
   own_portfolio: OwnPortfolio | null;
   percentile_vs_own: number | null;
   explanation: string;
@@ -39,6 +46,11 @@ export interface BenchmarkRequest {
   currency?: string;
   /** Optional user value to position against the portfolio (cost per m2). */
   cost_per_m2?: number;
+  /**
+   * Which figure to benchmark. Defaults server-side to cost_per_m2, the only
+   * metric this page renders; the ratio metrics live on the Value Dashboard.
+   */
+  metric?: 'cost_per_m2' | 'overrun_pct' | 'recovery_rate';
 }
 
 /**

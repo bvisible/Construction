@@ -101,6 +101,8 @@ from app.modules.bim_hub.schemas import (
     BOQElementLinkCreate,
     BOQElementLinkListResponse,
     BOQElementLinkResponse,
+    BoqExportRequest,
+    CreateModelFromDocumentRequest,
     FederationCreate,
     FederationDiffResponse,
     FederationFullResponse,
@@ -238,9 +240,18 @@ def _get_service(session: SessionDep) -> BIMHubService:
 #
 # This closes the IDOR from the v1.3.13 audit: previously any authenticated
 # user could read/modify/delete models belonging to projects they do not own
-# simply by guessing UUIDs. We now resolve the underlying project, verify
-# ownership (or admin bypass) and return a 404 - not a 403 - so we also don't
-# leak the existence of UUIDs the caller is not allowed to see.
+# simply by guessing UUIDs. We resolve the underlying project, verify access
+# (owner, admin, or team-member of a shared project) and return a 404 - not a
+# 403 - so we also don't leak the existence of UUIDs the caller cannot see.
+#
+# Access policy is kept identical to the central ``verify_project_access`` in
+# ``app.dependencies`` (owner OR admin OR team-member). Sharing a project with
+# a non-admin user - via ``add_project_member`` - therefore grants the same
+# read/write reach to its BIM models as it already grants to the project's
+# documents, BOQ, schedule, etc. An earlier copy here checked only owner/admin,
+# which wrongly denied legitimately-shared non-admin members the model-view
+# endpoint (issue #271: file visible in documents, but "model not found" in
+# the viewer until the member was made an admin).
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
@@ -249,13 +260,16 @@ async def _verify_project_access(
     project_id: uuid.UUID,
     user_id: str,
 ) -> None:
-    """‌⁠‍Raise 404 if the user is not the owner or an admin of the project.
+    """‌⁠‍Raise 404 unless the user owns, administers, or is a member of the project.
 
-    Mirrors the central helper in ``erp_chat.tools._require_project_access``
-    but returns an HTTPException suitable for router use. Emits 404 (not 403)
-    on both "project missing" and "access denied" to avoid UUID enumeration.
+    Applies the same rule as the central ``app.dependencies.verify_project_access``
+    helper - owner OR admin OR a ``TeamMembership`` on the project (shared
+    access via ``add_project_member``) - so BIM access stays consistent with the
+    documents / BOQ / schedule read paths. Emits 404 (not 403) on both "project
+    missing" and "access denied" to avoid UUID enumeration.
     """
     from app.modules.projects.repository import ProjectRepository
+    from app.modules.teams.access import is_project_member
     from app.modules.users.repository import UserRepository
 
     proj_repo = ProjectRepository(session)
@@ -277,11 +291,25 @@ async def _verify_project_access(
         # never silently bypass authorization.
         logger.exception("Admin-role lookup failed during BIM access check")
 
-    if str(project.owner_id) != str(user_id):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=translate("errors.project_not_found", locale=get_locale()),
-        )
+    # Owner has full access.
+    if str(project.owner_id) == str(user_id):
+        return
+
+    # Team-member check - any TeamMembership row for this project grants the
+    # same access as ownership (shared, non-admin project members). This is the
+    # branch that was missing before issue #271.
+    try:
+        if await is_project_member(session, project_id, uuid.UUID(str(user_id))):
+            return
+    except (ValueError, TypeError):
+        pass  # malformed user_id - fall through to 404
+    except Exception:
+        logger.exception("Team-membership lookup failed during BIM access check")
+
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail=translate("errors.project_not_found", locale=get_locale()),
+    )
 
 
 async def _verify_model_access(
@@ -289,10 +317,12 @@ async def _verify_model_access(
     model_id: uuid.UUID,
     user_id: str,
 ) -> Any:
-    """‌⁠‍Load a BIM model and verify the caller owns its project.
+    """‌⁠‍Load a BIM model and verify the caller may access its project.
 
-    Returns the model object so callers can reuse it without a second query.
-    Raises 404 if the model is missing or the user has no access.
+    Access is owner, admin, or team-member of the model's project (see
+    :func:`_verify_project_access`). Returns the model object so callers can
+    reuse it without a second query. Raises 404 if the model is missing or the
+    user has no access.
     """
     model = await service.get_model(model_id)
     if model is None:
@@ -2266,6 +2296,162 @@ async def upload_cad_file(
     }
 
 
+@router.post("/models/from-document/", status_code=201)
+async def create_model_from_document(
+    body: CreateModelFromDocumentRequest,
+    background_tasks: BackgroundTasks,
+    user_id: CurrentUserId = None,  # type: ignore[assignment]
+    _perm: None = Depends(RequirePermission("bim.create")),
+    service: BIMHubService = Depends(_get_service),
+) -> dict:
+    """Create a BIM model from a file already uploaded to Project Documents.
+
+    Files uploaded straight from the Documents hub are stored but never
+    converted, so opening one in the BIM viewer used to find no model and ask
+    the user to upload the file a second time (issue #273). This turns an
+    existing document into a BIM model on demand, reusing the same conversion
+    pipeline as a direct CAD upload.
+
+    Idempotent: a document that is already linked to a model returns that model
+    instead of converting the same file twice.
+    """
+    from pathlib import Path as _Path
+
+    from app.modules.bim_hub.schemas import BIMModelCreate
+    from app.modules.documents.repository import DocumentRepository
+
+    doc = await DocumentRepository(service.session).get_by_id(body.document_id)
+    if doc is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document not found",
+        )
+
+    # IDOR guard - same owner/admin/member rule as every other BIM route.
+    await _verify_project_access(service.session, doc.project_id, user_id or "")
+
+    # Idempotency - if this document already produced a BIM model, return it
+    # rather than converting the same file twice (e.g. a double-click, or a
+    # file that was uploaded through the BIM hub in the first place).
+    meta = dict(doc.metadata_ or {})
+    existing_id = meta.get("source_id") if meta.get("source_module") == "bim_hub" else None
+    if existing_id:
+        try:
+            existing = await service.get_model(uuid.UUID(str(existing_id)))
+        except Exception:  # noqa: BLE001 - stale link, fall through and recreate
+            existing = None
+        if existing is not None:
+            return {
+                "model_id": str(existing.id),
+                "name": existing.name,
+                "format": existing.model_format,
+                "status": existing.status,
+                "element_count": getattr(existing, "element_count", 0) or 0,
+                "error_message": existing.error_message,
+                "already_existed": True,
+            }
+
+    ext = _Path(doc.name or "").suffix.lower()
+    if ext not in _ALLOWED_CAD_EXTENSIONS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"'{doc.name}' is not a convertible BIM/CAD file. Accepted: "
+                f"{', '.join(sorted(_ALLOWED_CAD_EXTENSIONS))}"
+            ),
+        )
+
+    # Read the stored document. The Documents hub writes uploads to a local
+    # path and already buffers the whole file on upload, so reading it back
+    # here is consistent with that module's own memory model.
+    try:
+        content = _Path(doc.file_path).read_bytes()
+    except OSError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="The stored document file is no longer available.",
+        ) from exc
+    if not content:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The document file is empty.",
+        )
+
+    model_name = (body.name or _Path(doc.name).stem).strip() or doc.name
+    model_format = ext.lstrip(".")
+
+    model = await service.create_model(
+        BIMModelCreate(
+            project_id=doc.project_id,
+            name=model_name,
+            discipline=body.discipline,
+            model_format=model_format,
+            status="processing",
+        ),
+        user_id=user_id,
+    )
+
+    saved_cad_key = await bim_file_storage.save_original_cad(doc.project_id, model.id, ext, content)
+
+    # Link the document to the new model so a later "Open in BIM viewer"
+    # returns this model rather than converting again. Assigning a fresh dict
+    # (not mutating in place) so SQLAlchemy marks the JSON column dirty.
+    meta.update({"source_module": "bim_hub", "source_id": str(model.id)})
+    doc.metadata_ = meta
+    service.session.add(doc)
+
+    # Capture the scalars we return / log BEFORE committing - after commit the
+    # ORM attributes may be expired and a lazy refresh on an async session
+    # raises MissingGreenlet.
+    model_id = model.id
+    project_id_str = str(doc.project_id)
+    doc_id_for_log = doc.id
+
+    # Only IFC/RVT are processed inline by the background worker; the other
+    # accepted formats are stored and flagged for an external converter, the
+    # same way the direct CAD upload endpoint handles them.
+    processable = ext in (".ifc", ".rvt")
+    if processable:
+        final_status = "processing"
+        final_error: str | None = None
+    else:
+        final_status = "needs_converter"
+        final_error = (
+            f"{ext.upper().lstrip('.')} files require an external converter. Convert to IFC first, then re-upload."
+        )
+        model.status = final_status
+        model.error_message = final_error
+
+    # Commit before scheduling the background task: the worker opens its own
+    # session and looks the model up by id, so the row must be durably visible.
+    await service.session.commit()
+
+    if processable:
+        background_tasks.add_task(
+            _process_cad_in_background,
+            project_id=project_id_str,
+            model_id=str(model_id),
+            cad_storage_key=saved_cad_key,
+            ext=ext,
+            conversion_depth=body.conversion_depth,
+        )
+        logger.info(
+            "BIM model %s created from document %s, conversion scheduled",
+            model_id,
+            doc_id_for_log,
+        )
+
+    return {
+        "model_id": str(model_id),
+        "name": model_name,
+        "format": model_format,
+        "status": final_status,
+        "element_count": 0,
+        "error_message": final_error,
+        "already_existed": False,
+    }
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Optional post-upload: generate PDF sheets for an existing model
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -2669,7 +2855,8 @@ async def get_model_geometry(
             headers={"X-Request-Id": request_id},
         )
 
-    # IDOR guard: verify the caller owns the project this model belongs to.
+    # IDOR guard: verify the caller may access the project this model belongs to
+    # (owner, admin, or shared team-member).
     token_user_id = str(payload.get("sub") or "")
     await _verify_project_access(service.session, model.project_id, token_user_id)
 
@@ -3809,6 +3996,41 @@ async def export_cobie_xlsx(
         headers={
             # RFC 6266 - a model name with non-Latin-1 chars would otherwise make
             # the ASGI server 500 while encoding this header.
+            "Content-Disposition": content_disposition_attachment(filename),
+            "Content-Length": str(len(xlsx_bytes)),
+        },
+    )
+
+
+@router.post("/models/{model_id}/export/boq.xlsx")
+async def export_boq_xlsx(
+    model_id: uuid.UUID,
+    body: BoqExportRequest | None = None,
+    user_id: CurrentUserId = None,  # type: ignore[assignment]
+    _perm: None = Depends(RequirePermission("bim.read")),
+    service: BIMHubService = Depends(_get_service),
+) -> StreamingResponse:
+    """Export the model's measured quantities as a single Excel Bill of
+    Quantities (BOQ): a summary sheet grouping elements with summed areas /
+    volumes / lengths / weights plus a TOTAL row, and a detail sheet listing
+    every element. The body optionally narrows the export to the elements the
+    user has visible / selected (``element_ids``), a saved Smart View / group
+    (``group_id``), or simple ``filters`` - default is the whole model.
+    """
+    req = body or BoqExportRequest()
+    await _verify_model_access(service, model_id, user_id or "")
+    xlsx_bytes, filename = await service.export_boq(
+        model_id,
+        element_ids=req.element_ids,
+        group_id=req.group_id,
+        filters=(req.filters.model_dump(exclude_none=True) if req.filters else None),
+        group_by=req.group_by,
+        title=req.title,
+    )
+    return StreamingResponse(
+        io.BytesIO(xlsx_bytes),
+        media_type=("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+        headers={
             "Content-Disposition": content_disposition_attachment(filename),
             "Content-Length": str(len(xlsx_bytes)),
         },

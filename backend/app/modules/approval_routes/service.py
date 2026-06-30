@@ -37,10 +37,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.audit_log import log_activity
 from app.core.events import event_bus
 from app.core.permissions import ROLE_HIERARCHY, _resolve_role
+from app.modules.approval_routes import delegation_engine
+from app.modules.approval_routes.delegation_engine import DelegationView
 from app.modules.approval_routes.models import (
     INSTANCE_STATUSES,
     STEP_MODES,
     TARGET_KINDS,
+    Delegation,
     Instance,
     Route,
     Step,
@@ -55,6 +58,25 @@ from app.modules.approval_routes.schemas import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def delegation_views_from_rows(rows: list[Delegation]) -> list[DelegationView]:
+    """Map :class:`Delegation` ORM rows to the pure engine's view objects.
+
+    Shared with the SLA monitor so both the decision path and the breach
+    sweep resolve out-of-office stand-ins through the same pure logic.
+    """
+    return [
+        DelegationView(
+            delegator_id=d.delegator_user_id,
+            delegate_id=d.delegate_user_id,
+            is_active=d.is_active,
+            starts_at=d.starts_at,
+            ends_at=d.ends_at,
+            project_id=d.project_id,
+        )
+        for d in rows
+    ]
 
 
 def _validate_target_kind(kind: str) -> None:
@@ -503,30 +525,51 @@ class ApprovalRouteService:
                 detail=(f"Step ordinal {step.ordinal} is not the current step ({instance.current_step_ordinal})"),
             )
 
-        # User-pinned step: only the named user may decide.
-        if step.approver_user_id is not None and approver_id != step.approver_user_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not the named approver for this step",
-            )
+        now = datetime.now(UTC)
 
-        # Role-based step: the caller must actually hold the required role.
-        # Without this, anyone with the ``approval_routes.decide`` permission
-        # could clear a step pinned to a higher role (e.g. an editor signing
-        # off a "manager" gate). The caller role is translated through the
-        # permission hierarchy / aliases the same way other role-gated
-        # services resolve it.
-        if (
-            step.approver_user_id is None
-            and step.approver_role
-            and not _caller_role_satisfies(caller_role, step.approver_role)
-        ):
+        # Determine who may decide the current step.
+        override = instance.current_assignee_user_id
+        if override is not None:
+            # A one-tap reassignment pins a specific stand-in: they become the
+            # sole eligible decider for this instance's current step and the
+            # template's approver / role no longer applies here.
+            if approver_id != override:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Not the assigned approver for this step",
+                )
+        elif step.approver_user_id is not None:
+            # User-pinned step: the named approver, or their active
+            # out-of-office delegate, may decide. We resolve the delegation
+            # chain lazily so a hand-off created after the step became active
+            # still routes correctly, without storing a stale override.
+            eligible = {step.approver_user_id}
+            delegations = await self.repo.list_active_delegations()
+            if delegations:
+                route = await self.get_route(instance.route_id)
+                eligible = delegation_engine.eligible_deciders(
+                    step.approver_user_id,
+                    delegation_views_from_rows(delegations),
+                    now=now,
+                    project_id=route.project_id,
+                )
+            if approver_id not in eligible:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Not the named approver for this step",
+                )
+        elif step.approver_role and not _caller_role_satisfies(caller_role, step.approver_role):
+            # Role-based step: the caller must actually hold the required role.
+            # Without this, anyone with the ``approval_routes.decide`` permission
+            # could clear a step pinned to a higher role (e.g. an editor signing
+            # off a "manager" gate). The caller role is translated through the
+            # permission hierarchy / aliases the same way other role-gated
+            # services resolve it.
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Caller role does not satisfy the approver role for this step",
             )
 
-        now = datetime.now(UTC)
         state = StepState(
             instance_id=instance.id,
             step_id=step.id,
@@ -570,22 +613,29 @@ class ApprovalRouteService:
         if payload.decision == "rejected":
             instance.status = "rejected"
             instance.completed_at = now
+            # The assignee override is scoped to the step it was set on; the
+            # workflow is now terminal so clear it.
+            instance.current_assignee_user_id = None
             events_to_fire.append(("approval_routes.instance.rejected", {**base_event, "status": "rejected"}))
         else:
             advanced = await self._maybe_advance(instance, step)
             if advanced is None:
-                # Step still pending - need more approvals. No lifecycle event.
+                # Step still pending - need more approvals. The override (if
+                # any) still applies to this same step, so leave it in place.
                 pass
             elif advanced is True:
                 # All steps cleared - the clearing step both advanced the
                 # cursor and finished the chain, so both events fire.
                 instance.status = "approved"
                 instance.completed_at = now
+                instance.current_assignee_user_id = None
                 events_to_fire.append(("approval_routes.instance.advanced", {**base_event, "status": "pending"}))
                 events_to_fire.append(("approval_routes.instance.completed", {**base_event, "status": "approved"}))
             else:
-                # Move to next step.
+                # Move to next step - the next step starts with its own
+                # approver, so any per-step override is cleared.
                 instance.current_step_ordinal = step.ordinal + 1
+                instance.current_assignee_user_id = None
                 events_to_fire.append(("approval_routes.instance.advanced", {**base_event, "status": "pending"}))
 
         await self.session.flush()
@@ -661,7 +711,232 @@ class ApprovalRouteService:
         )
         return instance
 
+    # ── Reassignment / delegation ─────────────────────────────────────
+
+    async def reassign_current_step(
+        self,
+        instance_id: uuid.UUID,
+        *,
+        to_user_id: uuid.UUID,
+        actor_id: uuid.UUID | None,
+        reason: str | None = None,
+    ) -> Instance:
+        """One-tap reassignment of the current step to another user.
+
+        Pins ``current_assignee_user_id`` so the chosen stand-in becomes the
+        sole eligible decider for the instance's current step, without editing
+        the shared route template. Notifies the new assignee and records an
+        ``approval.reassigned`` timeline event.
+        """
+        instance = await self._lock_instance(instance_id)
+        if instance.status != "pending":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Instance is {instance.status}, cannot reassign",
+            )
+
+        # The chosen stand-in must actually belong to the route's project, or the
+        # hand-off would pin a decider who can never legitimately see the target.
+        # A project-agnostic route (no project_id) has no membership to enforce,
+        # so it is skipped. Mirrors the owner / team-member / admin rule that
+        # ``verify_project_access`` applies to the caller, but applied here to the
+        # reassignment TARGET so a step cannot be reassigned outside the project.
+        route = await self.get_route(instance.route_id)
+        if route.project_id is not None and not await self._user_can_access_project(route.project_id, to_user_id):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Assignee does not have access to this route's project",
+            )
+
+        previous = instance.current_assignee_user_id
+        instance.current_assignee_user_id = to_user_id
+        await self.session.flush()
+        await self.session.refresh(instance)
+
+        await log_activity(
+            self.session,
+            actor_id=actor_id,
+            entity_type="approval_instance",
+            entity_id=str(instance.id),
+            action="reassigned",
+            reason=reason,
+            module="approval_routes",
+            metadata={
+                "step_ordinal": instance.current_step_ordinal,
+                "from_assignee": str(previous) if previous else None,
+                "to_assignee": str(to_user_id),
+                "target_kind": instance.target_kind,
+                "target_id": str(instance.target_id),
+            },
+        )
+
+        # Notify the new assignee so the hand-off is actionable. Best-effort:
+        # a notification failure must never break the reassignment.
+        try:
+            from app.modules.notifications.service import NotificationService
+
+            await NotificationService(self.session).create(
+                user_id=to_user_id,
+                notification_type="approval_reassigned",
+                title_key="notifications.approval.reassigned.title",
+                entity_type="approval_instance",
+                entity_id=str(instance.id),
+                body_key="notifications.approval.reassigned.body",
+                body_context={
+                    "target_kind": instance.target_kind,
+                    "step_ordinal": instance.current_step_ordinal,
+                },
+                action_url=f"/approvals/{instance.id}",
+                metadata={"step_ordinal": instance.current_step_ordinal},
+            )
+        except Exception:  # pragma: no cover - defensive
+            logger.debug("approval reassignment notification skipped for %s", instance.id)
+
+        # Named ``approval.*`` with a project_id so the unified timeline records
+        # it (matches the SLA monitor's ``approval.overdue`` convention - the
+        # ``approval_routes.*`` lifecycle events are not on the timeline
+        # allowlist and carry no project id).
+        _safe_publish(
+            "approval.reassigned",
+            {
+                "id": str(instance.id),
+                "project_id": str(route.project_id) if route.project_id else None,
+                "target_kind": instance.target_kind,
+                "target_id": str(instance.target_id),
+                "step_ordinal": instance.current_step_ordinal,
+                "to_assignee": str(to_user_id),
+            },
+        )
+        return instance
+
+    async def get_delegation(self, delegation_id: uuid.UUID) -> Delegation:
+        row = await self.repo.get_delegation(delegation_id)
+        if row is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Delegation not found",
+            )
+        return row
+
+    async def create_delegation(
+        self,
+        *,
+        delegator_id: uuid.UUID,
+        delegate_id: uuid.UUID,
+        project_id: uuid.UUID | None,
+        starts_at: datetime | None,
+        ends_at: datetime | None,
+        reason: str | None,
+        created_by: uuid.UUID | None,
+    ) -> Delegation:
+        """Create an out-of-office hand-off of ``delegator_id``'s approvals."""
+        if delegator_id == delegate_id:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Cannot delegate approvals to yourself",
+            )
+        delegation = Delegation(
+            delegator_user_id=delegator_id,
+            delegate_user_id=delegate_id,
+            project_id=project_id,
+            starts_at=starts_at,
+            ends_at=ends_at,
+            is_active=True,
+            reason=reason,
+            created_by=created_by,
+        )
+        try:
+            await self.repo.add_delegation(delegation)
+        except IntegrityError as exc:
+            await self.session.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Unknown delegate user or project",
+            ) from exc
+        await log_activity(
+            self.session,
+            actor_id=created_by,
+            entity_type="approval_delegation",
+            entity_id=str(delegation.id),
+            action="created",
+            module="approval_routes",
+            metadata={
+                "delegator_user_id": str(delegator_id),
+                "delegate_user_id": str(delegate_id),
+                "project_id": str(project_id) if project_id else None,
+            },
+        )
+        return delegation
+
+    async def list_delegations(
+        self,
+        *,
+        delegator_user_id: uuid.UUID | None = None,
+        delegate_user_id: uuid.UUID | None = None,
+        include_inactive: bool = False,
+    ) -> list[Delegation]:
+        return await self.repo.list_delegations(
+            delegator_user_id=delegator_user_id,
+            delegate_user_id=delegate_user_id,
+            include_inactive=include_inactive,
+        )
+
+    async def revoke_delegation(
+        self,
+        delegation_id: uuid.UUID,
+        *,
+        actor_id: uuid.UUID | None,
+    ) -> Delegation:
+        """Soft-revoke a delegation (keeps the row as history)."""
+        delegation = await self.get_delegation(delegation_id)
+        if not delegation.is_active:
+            return delegation
+        delegation.is_active = False
+        await self.session.flush()
+        await self.session.refresh(delegation)
+        await log_activity(
+            self.session,
+            actor_id=actor_id,
+            entity_type="approval_delegation",
+            entity_id=str(delegation.id),
+            action="revoked",
+            module="approval_routes",
+        )
+        return delegation
+
     # ── Internal helpers ──────────────────────────────────────────────
+
+    async def _user_can_access_project(self, project_id: uuid.UUID, user_id: uuid.UUID) -> bool:
+        """Whether ``user_id`` may access ``project_id`` (owner / member / admin).
+
+        The boolean companion to :func:`app.dependencies.verify_project_access`,
+        applying the same access rule (an admin reaches any project; otherwise the
+        user must own it or be a team member) so the reassignment target is held
+        to the exact policy the caller's own guard uses. Any lookup failure fails
+        closed (returns ``False``) rather than widening access.
+        """
+        from app.modules.projects.repository import ProjectRepository
+        from app.modules.teams.access import is_project_member
+        from app.modules.users.repository import UserRepository
+
+        try:
+            project = await ProjectRepository(self.session).get_by_id(project_id)
+        except Exception:  # noqa: BLE001 - a lookup failure must not widen access
+            return False
+        if project is None:
+            return False
+
+        if str(getattr(project, "owner_id", "")) == str(user_id):
+            return True
+
+        try:
+            user = await UserRepository(self.session).get_by_id(user_id)
+            if user is not None and getattr(user, "role", "") == "admin":
+                return True
+        except Exception:  # noqa: BLE001 - admin lookup failure falls through
+            logger.debug("admin-role lookup failed during reassign target check")
+
+        return await is_project_member(self.session, project_id, user_id)
 
     async def _lock_instance(self, instance_id: uuid.UUID) -> Instance:
         """Re-fetch the instance with a row lock.

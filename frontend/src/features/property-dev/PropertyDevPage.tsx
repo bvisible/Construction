@@ -70,6 +70,7 @@ import { MoneyDisplay } from '@/shared/ui/MoneyDisplay';
 import { DateDisplay } from '@/shared/ui/DateDisplay';
 import { useConfirm } from '@/shared/hooks/useConfirm';
 import { useTabKeyboardNav } from '@/shared/hooks/useTabKeyboardNav';
+import { useDisplayQuantity } from '@/shared/hooks/useDisplayQuantity';
 import { useToastStore } from '@/stores/useToastStore';
 import { usePreferencesStore } from '@/stores/usePreferencesStore';
 import { useAuthStore } from '@/stores/useAuthStore';
@@ -175,7 +176,7 @@ import { DevelopmentsGrid } from './tabs/DevelopmentsTab';
 import { PlotsTab } from './tabs/PlotsTab';
 import { HouseTypesTab } from './tabs/HouseTypesTab';
 
-// Order matters — arrow-key navigation walks the list in this order.
+// Order matters - arrow-key navigation walks the list in this order.
 const PROPDEV_TAB_IDS = [
   'overview',
   'developments',
@@ -286,7 +287,7 @@ export function PropertyDevPage() {
   // card we open a dedicated modal at the page level (not inside the
   // drawer, because the user often wants to dismiss the drawer first).
   const [convertingLead, setConvertingLead] = useState<Lead | null>(null);
-  // Cross-tab filter preset — set by Overview KPI tiles so clicks land
+  // Cross-tab filter preset - set by Overview KPI tiles so clicks land
   // on a pre-narrowed Warranty view ("Open warranty (3)" → 3 rows).
   const [warrantyStatusPreset, setWarrantyStatusPreset] = useState<string>('');
 
@@ -354,7 +355,7 @@ export function PropertyDevPage() {
     // Handovers + Warranty tabs both need the plot list (HandoversTab filters
     // candidate plots; WarrantyTab joins claims to plot context). Without
     // 'handovers' / 'warranty' here those tabs rendered as if there were no
-    // plots at all — root cause of "Handovers вообще не работает".
+    // plots at all - root cause of "Handovers вообще не работает".
     // The Buyers tab also needs plots now (new ``Plot`` column resolves
     // ``buyer.plot_id`` against this list).
     enabled:
@@ -423,7 +424,7 @@ export function PropertyDevPage() {
     (tab === 'leads' && leadsQ.isLoading);
 
   // A failed list query must NOT fall through to the "nothing here yet"
-  // empty state — that hides real backend/permission failures behind a
+  // empty state - that hides real backend/permission failures behind a
   // success-looking screen. Surface it with a retry instead.
   const activeQuery =
     tab === 'plots'
@@ -464,7 +465,7 @@ export function PropertyDevPage() {
             data-testid="propdev-tour-new-button"
             onClick={() => {
               // From the overview tab, opening the primary CTA falls
-              // through to creating a development — the natural first
+              // through to creating a development - the natural first
               // step for a brand-new tenant. From every other tab the
               // CTA matches the entity that tab edits.
               if (tab === 'overview' || tab === 'handovers' || tab === 'warranty') {
@@ -474,7 +475,7 @@ export function PropertyDevPage() {
                 setTab('developments');
               }
               // SPA + Payment Schedule rows are always created
-              // downstream of a Reservation — the global CTA on those
+              // downstream of a Reservation - the global CTA on those
               // tabs bounces the user to the Reservations tab where
               // the real flow starts.
               if (tab === 'spa' || tab === 'payment_schedule') {
@@ -482,7 +483,7 @@ export function PropertyDevPage() {
                 return;
               }
               // Sub-entity tabs (phases/blocks/brokers/price-matrix/escrow/reservations)
-              // own their own create UI — the global CTA broadcasts via a
+              // own their own create UI - the global CTA broadcasts via a
               // window event picked up by the relevant tab.
               if (
                 tab === 'phases' ||
@@ -576,7 +577,7 @@ export function PropertyDevPage() {
         </DismissibleInfo>
       </div>
 
-      {/* Tabs — all 16 icon buttons in a single wrap row. Group boundaries
+      {/* Tabs - all 16 icon buttons in a single wrap row. Group boundaries
           shown via a thin vertical divider so the master-data → sales →
           operations lifecycle is still discoverable without consuming
           three separate rows on wide screens.
@@ -810,7 +811,7 @@ export function PropertyDevPage() {
           }}
           onJumpTo={(target, filter) => {
             setTab(target);
-            // Tile presets — for warranty/handovers we want the click
+            // Tile presets - for warranty/handovers we want the click
             // to land the user on the right tab AND pre-narrow the
             // filter so "Open warranty (3)" actually shows 3 rows.
             if (target === 'warranty' && filter?.warrantyStatus) {
@@ -978,17 +979,17 @@ export function PropertyDevPage() {
         />
       )}
 
-      {/* PropDev guided walkthrough — the global <ProductTour /> mounted
+      {/* PropDev guided walkthrough - the global <ProductTour /> mounted
        *  in App.tsx already listens for the `oe:start-tour` event with a
        *  `tourId: 'propdev'` detail. The Tour pill rendered by the
        *  ModuleHelpButton (next to the page title above) fires that event
        *  via `dispatchEvent`. Per-tour dismissal already persists via
        *  ``/api/v1/users/me/tour-state/`` so there is nothing to wire up
-       *  here — the 7-step PROPDEV_TOUR_STEPS playlist is auto-resolved
+       *  here - the 7-step PROPDEV_TOUR_STEPS playlist is auto-resolved
        *  from the TOUR_REGISTRY. The auto-start behaviour stays scoped to
        *  the dashboard route only; on /property-dev the tour is purely
        *  opt-in. Leaving this comment as a breadcrumb for the next
-       *  refactor — duplicating ProductTour here would double-render the
+       *  refactor - duplicating ProductTour here would double-render the
        *  spotlight overlay. */}
     </div>
   );
@@ -1006,7 +1007,7 @@ export function PropertyDevPage() {
  *  - A ``Plot`` column (plot_id resolved against the plots list)
  *  - Sticky header for long lists
  *  - Aria-sort affordance on the freeze-deadline column (sorted by
- *    deadline asc when present — overdue first)
+ *    deadline asc when present - overdue first)
  *  - Empty-filter fallback when a chip filter zeroes the result
  */
 function BuyersTab({
@@ -1072,7 +1073,7 @@ function BuyersTab({
 
   return (
     <div className="space-y-3">
-      {/* Stage funnel chipbar — clicking toggles the filter. */}
+      {/* Stage funnel chipbar - clicking toggles the filter. */}
       <div
         className="flex flex-wrap items-center gap-2"
         role="toolbar"
@@ -1273,7 +1274,7 @@ function BuyersTab({
 /* ─── Leads tab ─────────────────────────────────────────────────────────
  *
  * Top-of-funnel inbound contacts. A Lead is created BEFORE we know which
- * plot they want — once a plot is identified the user clicks "Convert"
+ * plot they want - once a plot is identified the user clicks "Convert"
  * which materialises a Reservation (+ optional Buyer shadow). The
  * conversion is the gate that turns the Lead pipeline into the Buyer
  * pipeline; until it happens the lead never appears on the Buyers tab.
@@ -1356,7 +1357,7 @@ function LeadsTab({
     let out = rows;
     if (statusFilter) out = out.filter((r) => r.status === statusFilter);
     if (sourceFilter) out = out.filter((r) => r.source === sourceFilter);
-    // Newest first — leads are inbound so chronological recency is the
+    // Newest first - leads are inbound so chronological recency is the
     // most useful default sort.
     return [...out].sort(
       (a, b) =>
@@ -1652,7 +1653,7 @@ function LeadDetailDrawer({
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   // Initialise the form whenever a different lead is opened. We
-  // intentionally don't reset on every props change — that would clobber
+  // intentionally don't reset on every props change - that would clobber
   // unsaved edits while the user is typing.
   useEffect(() => {
     if (lead) {
@@ -1946,7 +1947,7 @@ function LeadDetailDrawer({
  * ``contact_id`` is null we hide the card entirely (legacy rows or
  * portal-anonymous buyers).
  *
- * The contact data is fetched lazily — the drawer renders fine
+ * The contact data is fetched lazily - the drawer renders fine
  * without the bridge data; the card only lights up once the fetch
  * completes. A 404 (contact deleted) is treated as "no link" and the
  * card hides itself.
@@ -2378,7 +2379,7 @@ function ReservationsTab({
   const { confirm, ...confirmProps } = useConfirm();
 
   // The global header CTA broadcasts ``propdev:new-sub-entity`` when the
-  // user clicks "New Reservation" — pick it up and open the modal.
+  // user clicks "New Reservation" - pick it up and open the modal.
   useEffect(() => {
     const handler = (ev: Event) => {
       const detail = (ev as CustomEvent<{ tab?: string }>).detail;
@@ -2923,7 +2924,7 @@ function SpaTab({
   // Surface convertible reservations directly in the SPA tab so the user
   // is never stuck on a blank list with no actionable path. Previously the
   // empty state told them to "Start in the Reservations tab" but offered
-  // no way to get there — the source of "Sales Contracts не работает".
+  // no way to get there - the source of "Sales Contracts не работает".
   const reservationsQ = useQuery({
     queryKey: ['propdev', 'reservations', developmentId, 'active-for-spa'],
     queryFn: () =>
@@ -3850,7 +3851,7 @@ function PaymentScheduleTab({
   const schedules = schedulesQ.data ?? [];
   const spas = spasQ.data ?? [];
 
-  // SPAs that *could* have a schedule but don't yet — surfaces directly
+  // SPAs that *could* have a schedule but don't yet - surfaces directly
   // as a "Generate schedule" CTA so the user is never stuck looking at
   // a half-populated tab without any way to act.
   const scheduledSpaIds = useMemo(
@@ -3961,7 +3962,7 @@ function PaymentScheduleTab({
         </div>
       </div>
 
-      {/* SPAs missing a schedule — surfaced as quick-action chips so the
+      {/* SPAs missing a schedule - surfaced as quick-action chips so the
           user sees exactly what needs to be done next, without drilling
           into the SPA detail drawer. */}
       {spasWithoutSchedule.length > 0 && schedules.length > 0 && (
@@ -4393,7 +4394,7 @@ function HandoverPlotRow({ plot, buyer }: { plot: Plot; buyer: Buyer | undefined
           </Button>
         </div>
       )}
-      {/* Per-handover blocks: the digital closeout package (item #25 —
+      {/* Per-handover blocks: the digital closeout package (item #25 -
           warranty / manuals / key receipt + ZIP export) sits above the
           snags block. Snags drive the snag → warranty promote flow on
           completed handovers; on scheduled handovers we still allow
@@ -5216,7 +5217,7 @@ function CreateWarrantyClaimModal({
 /* ─── Plot detail drawer ─── */
 
 // Per-plot status transitions. Mirrors the backend
-// ``allowed_plot_transitions`` table — keep in sync if it changes.
+// ``allowed_plot_transitions`` table - keep in sync if it changes.
 const PLOT_STATUS_TRANSITIONS: Record<PlotStatus, PlotStatus[]> = {
   planned: ['reserved', 'under_construction', 'ready', 'held', 'blocked'],
   reserved: ['planned', 'sold', 'under_construction', 'ready', 'held'],
@@ -5254,6 +5255,7 @@ function PlotDetailDrawer({
     return ['admin', 'superuser', 'owner', 'manager'].includes(n);
   }, [userRole]);
 
+  const dq = useDisplayQuantity();
   const plot = plots.find((p) => p.id === plotId);
   const ht = plot?.house_type_id ? houseTypes.find((h) => h.id === plot.house_type_id) : null;
 
@@ -5402,11 +5404,21 @@ function PlotDetailDrawer({
             </div>
             <div className="grid grid-cols-2 gap-3 text-sm">
               <Field label={t('propdev.house_type', { defaultValue: 'House Type' })} value={ht?.name || ht?.code || plot.house_type_label || '—'} />
-              <Field label={t('propdev.area', { defaultValue: 'Area' })} value={`${toNumber(plot.area_m2).toFixed(1)} m²`} />
+              <Field
+                label={t('propdev.area', { defaultValue: 'Area' })}
+                value={(() => {
+                  const a = dq.convert(toNumber(plot.area_m2), 'm²');
+                  return `${a.value.toFixed(1)} ${a.unit}`;
+                })()}
+              />
               <Field label={t('propdev.orientation', { defaultValue: 'Orientation' })} value={plot.orientation || '—'} />
               <Field
                 label={t('propdev.garden', { defaultValue: 'Garden' })}
-                value={plot.garden_area_m2 != null ? `${toNumber(plot.garden_area_m2).toFixed(1)} m²` : '—'}
+                value={(() => {
+                  if (plot.garden_area_m2 == null) return '—';
+                  const g = dq.convert(toNumber(plot.garden_area_m2), 'm²');
+                  return `${g.value.toFixed(1)} ${g.unit}`;
+                })()}
               />
               <Field
                 label={t('propdev.base_price', { defaultValue: 'Base price' })}
@@ -5778,7 +5790,7 @@ function BuyerDetailDrawer({
   const qc = useQueryClient();
   const addToast = useToastStore((s) => s.addToast);
   // Role-gated edit affordance. The backend ``property_dev.update``
-  // permission resolves to EDITOR+ via the central permission registry —
+  // permission resolves to EDITOR+ via the central permission registry -
   // mirror that gate here so viewers don't even see the button.
   // Mirrors the check used in /admin/permissions and elsewhere; admins,
   // managers and editors get write access.
@@ -5836,7 +5848,7 @@ function BuyerDetailDrawer({
         type: 'success',
         title: t('propdev.buyer_cancelled', { defaultValue: 'Buyer cancelled' }),
         // The forfeiture summary is the most important piece of info
-        // after a cancel — surface it inline so the user does not have
+        // after a cancel - surface it inline so the user does not have
         // to click into Finance to find out what they just signed off.
         message: t('propdev.forfeiture_summary', {
           defaultValue: 'Forfeited {{f}} / refundable {{r}}',
@@ -6038,7 +6050,7 @@ function BuyerDetailDrawer({
             )}
           </div>
 
-          {/* Cross-module quick-links — the buyer record sits at the
+          {/* Cross-module quick-links - the buyer record sits at the
               centre of a small graph (plot ↔ contract ↔ finance ↔
               handover). Surface that graph as a stack of links so the
               user can jump across modules without leaving the drawer.
@@ -6347,17 +6359,17 @@ function CreateModal({
   const [busy, setBusy] = useState(false);
 
   // The active project comes from the global app-shell context (top of
-  // the page) — the user already picked one there. Reading it lets us
+  // the page) - the user already picked one there. Reading it lets us
   // drop the duplicate project picker from the development create form
   // entirely, which was the friction the user explicitly called out
-  // ("зачем выбирать проект — если он уже выбран в верхнем меню").
+  // ("зачем выбирать проект - если он уже выбран в верхнем меню").
   const activeProjectId = useProjectContextStore((s) => s.activeProjectId);
   const activeProjectName = useProjectContextStore((s) => s.activeProjectName);
 
   // Development create form. project_id is implicit (taken from the
   // app-shell context at submit time); only the fields we actually
   // surface in the modal live here. Everything is a string until submit
-  // so empty inputs map to "no value" rather than "explicit zero" — the
+  // so empty inputs map to "no value" rather than "explicit zero" - the
   // backend keeps its own defaults intact when fields are omitted.
   const [devForm, setDevForm] = useState({
     code: '',
@@ -6385,13 +6397,13 @@ function CreateModal({
     developer_name: '',
     architect_name: '',
     general_contractor_name: '',
-    // Marketing assets (URLs only — file uploads belong in the Documents module)
+    // Marketing assets (URLs only - file uploads belong in the Documents module)
     cover_image_url: '',
     brochure_url: '',
     website_url: '',
   });
   // Plot form. development_id is implicit (taken from the page's
-  // selected development at submit time) — the picker UI was removed
+  // selected development at submit time) - the picker UI was removed
   // because the user already chooses a development at the top of the
   // page, and forcing them to re-pick it inside every create form is a
   // friction the user explicitly called out.
@@ -6435,7 +6447,7 @@ function CreateModal({
     phone: '',
   });
   // Lead create form. development_id is implicit (from page picker) but
-  // optional — inbound web-form leads frequently arrive before the
+  // optional - inbound web-form leads frequently arrive before the
   // agent has picked which development they belong to.
   const [leadForm, setLeadForm] = useState({
     development_id: developmentId,
@@ -6599,7 +6611,7 @@ function CreateModal({
         );
         addToast({ type: 'success', title: t('propdev.buyer_created', { defaultValue: 'Buyer created' }) });
         qc.invalidateQueries({ queryKey: ['propdev', 'buyers'] });
-        // Invalidate the Contacts list too — the new mirror entry shows up
+        // Invalidate the Contacts list too - the new mirror entry shows up
         // in the directory immediately when sync_to_contacts is on.
         if (syncToContacts) qc.invalidateQueries({ queryKey: ['contacts'] });
       } else if (kind === 'leads') {
@@ -6657,7 +6669,7 @@ function CreateModal({
   // view / pricing). The developments form now has 6 sections
   // (Identification / Location / Scope / Timeline / Sales / People +
   // marketing) so it also wants xl. The remaining variant (buyers) is
-  // only 4 short fields — lg is plenty.
+  // only 4 short fields - lg is plenty.
   const size =
     kind === 'house_types' || kind === 'plots' || kind === 'developments'
       ? 'xl'
@@ -6945,7 +6957,7 @@ function SyncToContactsToggle({
 /* ─── Development create form body ─── */
 
 // Shape of the development create form. project_id is intentionally
-// absent — it comes from the global app-shell project context, so the
+// absent - it comes from the global app-shell project context, so the
 // user does not get re-asked to pick a project they already chose.
 // Every numeric/date input is a string until submit so empty values map
 // to "no value" rather than "explicit zero / today".
@@ -6990,7 +7002,7 @@ const DEV_TYPES: DevelopmentType[] = [
   'other',
 ];
 
-// Shared between this form and the Plot catalogue picker — keeping the
+// Shared between this form and the Plot catalogue picker - keeping the
 // list inline avoids a circular import vs the catalogue picker which
 // owns the more elaborate localised labels.
 const DEV_COUNTRY_OPTIONS: Array<{ value: string; label: string }> = [
@@ -7053,7 +7065,7 @@ function DevelopmentFormBody({
 
   return (
     <>
-      {/* Context banner — mirrors the plot form so the user knows which
+      {/* Context banner - mirrors the plot form so the user knows which
         project this development will be attached to. */}
       <div className="mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-border-light bg-surface-secondary px-3 py-2 text-xs">
         <span className="font-semibold uppercase tracking-wide text-content-tertiary">
@@ -7458,7 +7470,7 @@ function DevelopmentFormBody({
 /* ─── Plot create form body ─── */
 
 // Shape of the plot create form. Kept inline (instead of API-shape) so
-// every numeric/text input stays a string until submit — empty strings
+// every numeric/text input stays a string until submit - empty strings
 // matter for "no value" vs "explicit zero".
 interface PlotFormState {
   plot_number: string;
@@ -7525,7 +7537,7 @@ function PlotFormBody({
     value: PlotFormState[K],
   ) => setPlotForm((prev) => ({ ...prev, [key]: value }));
 
-  // House-type catalogue picker — country-scoped presets + tenant
+  // House-type catalogue picker - country-scoped presets + tenant
   // entries. The dropdown is populated by /property-dev/house-type-catalogue
   // and the catalogue entry name is mirrored into ``house_type_label`` so
   // the existing Plot.house_type_label column persists the choice
@@ -7598,7 +7610,7 @@ function PlotFormBody({
       await qc.invalidateQueries({
         queryKey: ['propdev', 'house-type-catalogue'],
       });
-      // Auto-select the new entry — mirror its name into the label
+      // Auto-select the new entry - mirror its name into the label
       // field which is what the backend persists for catalogue picks.
       set('house_type_label', created.name);
       setAddingNewType(false);

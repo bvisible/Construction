@@ -44,13 +44,14 @@ import { apiGet, getErrorMessage } from '@/shared/lib/api';
 import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { useTabKeyboardNav } from '@/shared/hooks/useTabKeyboardNav';
+import { useDisplayQuantity } from '@/shared/hooks/useDisplayQuantity';
 import {
   listPackages,
   getPackage,
   createPackage,
   publishPackage,
   // dead_button fix: openBids was exported but never wired into the page, so a
-  // published package could never advance to "open" — the only path that marks
+  // published package could never advance to "open" - the only path that marks
   // submissions is_valid=True. Without it leveling stayed empty and award blocked.
   openBids,
   closePackage,
@@ -449,7 +450,7 @@ export function BidManagementPage() {
         ]}
       />
 
-      {/* Header — project selection lives in the global top bar; no in-page
+      {/* Header - project selection lives in the global top bar; no in-page
           project picker. The page reads the shared project context. */}
       <PageHeader
         srTitle={t('nav.bid_management', { defaultValue: 'Bid Management' })}
@@ -853,7 +854,7 @@ function SubmissionsLevelingView({
 }) {
   const { t } = useTranslation();
   // Controlled selection that *defaults* to the first package even when
-  // `packages` arrives after first render — a bare useState(packages[0]?.id)
+  // `packages` arrives after first render - a bare useState(packages[0]?.id)
   // would freeze at '' and the dropdown would look broken.
   const [activePkg, setActivePkg] = useState<string>('');
   const pkg =
@@ -921,7 +922,7 @@ function SubmissionsLevelingView({
  *
  * The backend now stores a stable token ("leveling.top_rank") instead of
  * baking English into the DB (audit #6). Older rows may still hold raw
- * English — those are passed through verbatim so nothing breaks.
+ * English - those are passed through verbatim so nothing breaks.
  */
 function levelingReasonLabel(
   t: TFn,
@@ -952,8 +953,8 @@ function LevelingTable({
 
   // Server-side, valid-only, currency-safe matrix. The backend filters out
   // invalid (late / currency-mismatched / incomplete) submissions, marks
-  // the lowest competitive bid per line (is_low), and only valid bids — all
-  // necessarily in the package currency — appear as columns (audit #1, #2, #8).
+  // the lowest competitive bid per line (is_low), and only valid bids - all
+  // necessarily in the package currency - appear as columns (audit #1, #2, #8).
   const matrixQ = useQuery({
     queryKey: ['bid-management', 'leveling-matrix', packageId],
     queryFn: () => levelingMatrix(packageId),
@@ -967,7 +968,7 @@ function LevelingTable({
   const bidders = biddersQ.data ?? [];
 
   // Authoritative penalty-adjusted leveling (rank, normalized totals,
-  // commercial/technical scores, recommended bidder) — rendered when the
+  // commercial/technical scores, recommended bidder) - rendered when the
   // user has computed it (audit #4).
   const [leveling, setLeveling] = useState<LevelingTableData | null>(null);
 
@@ -1642,6 +1643,10 @@ function PackageDrawer({
   const { t } = useTranslation();
   const qc = useQueryClient();
   const addToast = useToastStore((s) => s.addToast);
+  // Display-only. Scope-line units are user-defined; toDisplayQuantity passes
+  // unrecognised unit strings through unchanged and only rescales true physical
+  // metric units (m/m²/m³/kg). Pricing math + payloads use raw li.quantity.
+  const q = useDisplayQuantity();
 
   // unwired fix (audit #1): there was no way to record a bidder's priced
   // submission, so leveling/award were inert for real packages. This holds the
@@ -1938,14 +1943,17 @@ function PackageDrawer({
                       </tr>
                     </thead>
                     <tbody>
-                      {(linesQ.data ?? []).map((li) => (
-                        <tr key={li.id} className="border-t border-border-light">
-                          <td className="py-1 font-mono">{li.code || '—'}</td>
-                          <td className="py-1 truncate max-w-[300px]">{li.description || '—'}</td>
-                          <td className="py-1 text-right tabular-nums">{Number(li.quantity)}</td>
-                          <td className="py-1 text-content-secondary">{li.unit || '—'}</td>
-                        </tr>
-                      ))}
+                      {(linesQ.data ?? []).map((li) => {
+                        const d = q.convert(Number(li.quantity), li.unit || '');
+                        return (
+                          <tr key={li.id} className="border-t border-border-light">
+                            <td className="py-1 font-mono">{li.code || '—'}</td>
+                            <td className="py-1 truncate max-w-[300px]">{li.description || '—'}</td>
+                            <td className="py-1 text-right tabular-nums">{d.value.toLocaleString()}</td>
+                            <td className="py-1 text-content-secondary">{li.unit ? d.unit : '—'}</td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 )}
@@ -2172,20 +2180,32 @@ function RecordBidModal({
   const { t } = useTranslation();
   const qc = useQueryClient();
   const addToast = useToastStore((s) => s.addToast);
+  // Display-only quantity in the scope-line column. Units are user-defined, so
+  // only true physical metric units rescale (others pass through). The priced
+  // line-total + the submitted payload keep using the raw li.quantity.
+  const q = useDisplayQuantity();
 
   // One editable unit-price per scope line. The submission total is derived
   // from the priced lines so leveling reads consistent figures (audit #1).
+  //
+  // Issue #270: the field holds the price AS TYPED in the displayed system
+  // (e.g. per ft2 for an imperial user against a converted ft2 qty), so the
+  // unit-price and the quantity column reconcile. Storage stays metric -
+  // every consumer (computedTotal, the line total, the submitted payload)
+  // converts the typed value back to the canonical per-metric-unit rate via
+  // q.toMetricRate before it is multiplied by the canonical li.quantity.
   const [prices, setPrices] = useState<Record<string, string>>({});
   const [notes, setNotes] = useState('');
   const [busy, setBusy] = useState(false);
 
   const computedTotal = useMemo(() => {
     return lineItems.reduce((acc, li) => {
-      const unitPrice = Number(prices[li.id] ?? '');
-      if (!Number.isFinite(unitPrice) || unitPrice <= 0) return acc;
+      const typed = Number(prices[li.id] ?? '');
+      if (!Number.isFinite(typed) || typed <= 0) return acc;
+      const unitPrice = q.toMetricRate(typed, li.unit || '');
       return acc + unitPrice * (Number(li.quantity) || 0);
     }, 0);
-  }, [lineItems, prices]);
+  }, [lineItems, prices, q]);
 
   const submit = async () => {
     if (!invitation.bidder_ref_id) {
@@ -2207,11 +2227,13 @@ function RecordBidModal({
         currency: currency || '',
         notes_to_owner: notes.trim(),
       });
-      // 2) Bulk-create one priced line per scope line that has a price.
+      // 2) Bulk-create one priced line per scope line that has a price. The
+      // typed price is in the displayed system; convert back to the canonical
+      // per-metric-unit rate so storage and leveling stay metric (#270).
       const items = lineItems
         .map((li) => ({
           line_item_id: li.id,
-          unit_price: Number(prices[li.id] ?? '') || 0,
+          unit_price: q.toMetricRate(Number(prices[li.id] ?? '') || 0, li.unit || ''),
           quantity_priced: Number(li.quantity) || 0,
           inclusion_status: 'included',
         }))
@@ -2299,11 +2321,15 @@ function RecordBidModal({
               </thead>
               <tbody>
                 {lineItems.map((li) => {
-                  const unitPrice = Number(prices[li.id] ?? '');
-                  const lineTotal =
-                    Number.isFinite(unitPrice) && unitPrice > 0
-                      ? unitPrice * (Number(li.quantity) || 0)
+                  const typedPrice = Number(prices[li.id] ?? '');
+                  // The line total is invariant money: convert the typed
+                  // (displayed-system) price back to the canonical per-metric-
+                  // unit rate, then multiply by the canonical quantity (#270).
+                  const unitPrice =
+                    Number.isFinite(typedPrice) && typedPrice > 0
+                      ? q.toMetricRate(typedPrice, li.unit || '')
                       : 0;
+                  const lineTotal = unitPrice > 0 ? unitPrice * (Number(li.quantity) || 0) : 0;
                   return (
                     <tr key={li.id} className="border-t border-border-light">
                       <td className="px-3 py-1.5">
@@ -2315,7 +2341,10 @@ function RecordBidModal({
                         </div>
                       </td>
                       <td className="px-3 py-1.5 text-right tabular-nums text-xs text-content-secondary">
-                        {Number(li.quantity)} {li.unit}
+                        {(() => {
+                          const d = q.convert(Number(li.quantity), li.unit || '');
+                          return `${d.value.toLocaleString()} ${li.unit ? d.unit : ''}`.trim();
+                        })()}
                       </td>
                       <td className="px-3 py-1.5 text-right">
                         <input

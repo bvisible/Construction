@@ -469,6 +469,8 @@ export function FieldReportsPage() {
           defaultValue:
             'Approving locks the report permanently. Once approved it can no longer be edited. Continue?',
         }),
+        confirmLabel: t('fieldreports.approve', { defaultValue: 'Approve' }),
+        variant: 'warning',
       });
       if (ok) {
         approveMut.mutate(id);

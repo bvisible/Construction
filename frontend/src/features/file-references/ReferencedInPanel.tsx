@@ -36,6 +36,8 @@ const TARGET_PLURAL: Record<TargetType, string> = {
   bid: 'bids',
   contract: 'contracts',
   transmittal: 'transmittals',
+  inspection: 'inspections',
+  ncr: 'NCRs',
   bcf_topic: 'BCF topics',
   boq_position: 'BOQ positions',
   project: 'projects',

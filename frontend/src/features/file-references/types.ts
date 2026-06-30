@@ -29,6 +29,8 @@ export type TargetType =
   | 'bid'
   | 'contract'
   | 'transmittal'
+  | 'inspection'
+  | 'ncr'
   | 'bcf_topic'
   | 'boq_position'
   | 'project'

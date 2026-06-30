@@ -41,7 +41,9 @@ def client() -> TestClient:
 def test_basic_defensive_headers_present(client: TestClient) -> None:
     r = client.get("/ping")
     assert r.status_code == 200
-    assert r.headers.get("X-Frame-Options") == "DENY"
+    # SAMEORIGIN (not DENY): the app frames its own PDF previews; cross-origin
+    # framing is still refused.
+    assert r.headers.get("X-Frame-Options") == "SAMEORIGIN"
     assert r.headers.get("X-Content-Type-Options") == "nosniff"
     assert r.headers.get("Referrer-Policy") == "same-origin"
     assert "geolocation=()" in r.headers.get("Permissions-Policy", "")
@@ -54,14 +56,30 @@ def test_csp_header_present_and_has_key_directives(client: TestClient) -> None:
 
     # Core directives we rely on for XSS / clickjacking protection.
     assert "default-src 'self'" in csp
-    assert "frame-ancestors 'none'" in csp
+    # SAMEORIGIN-equivalent: same-origin framing is allowed (in-app PDF
+    # previews), cross-origin framing is refused. A change back to 'none' would
+    # blank every data:/blob: PDF iframe, so it must be a deliberate edit here.
+    assert "frame-ancestors 'self'" in csp
     assert "base-uri 'self'" in csp
     assert "form-action 'self'" in csp
+
+    # In-app PDF previews render a data:/blob: URL in an iframe, so frame-src
+    # must allow those schemes (otherwise it falls back to default-src 'self').
+    assert "frame-src 'self' blob: data:" in csp
 
     # Confirm we still allow the analytics + fonts hosts the SPA uses.
     # If anyone tightens CSP they should update this test too.
     assert "https://www.googletagmanager.com" in csp
     assert "https://fonts.googleapis.com" in csp
+
+    # The service worker precaches Google Fonts via fetch(), which connect-src
+    # governs - both font hosts must be reachable there or the SW install fails.
+    connect_src = next(
+        (part for part in csp.split(";") if part.strip().startswith("connect-src")),
+        "",
+    )
+    assert "https://fonts.gstatic.com" in connect_src
+    assert "https://fonts.googleapis.com" in connect_src
 
 
 def test_csp_skipped_for_swagger_docs(client: TestClient) -> None:

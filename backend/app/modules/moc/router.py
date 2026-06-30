@@ -91,7 +91,7 @@ async def update_moc_entry(
     """Update a MoC entry (not allowed in terminal states)."""
     existing = await svc.get_entry(entry_id)
     await verify_project_access(existing.project_id, str(user_id), session)
-    entry = await svc.update_entry(entry_id, data)
+    entry = await svc.update_entry(entry_id, data, user_id=str(user_id) if user_id else None)
     return MoCEntryResponse.model_validate(entry)
 
 

@@ -69,7 +69,11 @@ import { ClipManager } from './ClipManager';
 import { SectionBox } from './SectionBox';
 import { WalkMode } from './WalkMode';
 import { MeasureTool } from './MeasureTool';
-import { deriveGeometry, deriveRelations } from './canonicalElementDetails';
+import {
+  deriveGeometry,
+  deriveRelations,
+  geometryDisplayRows,
+} from './canonicalElementDetails';
 import { BIMContextMenu } from './BIMContextMenu';
 import type { BIMContextMenuState } from './BIMContextMenu';
 import BIMViewCube from './BIMViewCube';
@@ -89,6 +93,7 @@ import { useBIMGeometryCache } from '@/stores/useBIMGeometryCache';
 import { useBIMMeasurementsStore } from '@/stores/useBIMMeasurementsStore';
 import { useToastStore } from '@/stores/useToastStore';
 import { copyToClipboard } from '@/shared/lib/browser';
+import { useDisplayQuantity } from '@/shared/hooks/useDisplayQuantity';
 
 /* ── Types ─────────────────────────────────────────────────────────────── */
 
@@ -693,6 +698,10 @@ export function BIMViewer({
    *  the only mode that hides the cursor. Gates the centred crosshair so the
    *  default drag-to-look (cursor visible) doesn't show a redundant reticle. */
   const [walkPointerLockMode, setWalkPointerLockMode] = useState(false);
+  /** True when the user has chosen pointer-lock FPS mouse-look (cursor
+   *  captured, hands-free look) over the default hold-and-drag look. Drives
+   *  the in-hint mode toggle and is applied to WalkMode on each walk enter. */
+  const [walkFps, setWalkFps] = useState(false);
   /** True while the WebGL context is lost and recovering (pdf11). Drives a
    *  non-fatal banner so a transient GPU reset no longer reads as a crash. */
   const [contextLost, setContextLost] = useState(false);
@@ -721,6 +730,14 @@ export function BIMViewer({
   const summaryPanelOpen = useBIMViewerStore((s) => s.summaryPanelOpen);
   const setSummaryPanelOpen = useBIMViewerStore((s) => s.setSummaryPanelOpen);
   const qualityMode = useBIMViewerStore((s) => s.qualityMode);
+  // BIM quantities are stored metric-canonical; convert at the display
+  // boundary so an imperial user sees ft / ft2 / ft3 in the model summary
+  // and selection rollups too (issue #270). Storage is never touched.
+  const displayQty = useDisplayQuantity();
+  const showQty = (value: number, metricUnit: string, maxFrac = 1) => {
+    const d = displayQty.convert(value, metricUnit);
+    return `${d.value.toLocaleString(undefined, { maximumFractionDigits: maxFrac })} ${d.unit}`;
+  };
   const [measureCount, setMeasureCount] = useState(0);
   /** Local mirror of the live section-box / plane state for the popover. */
   const [clipBox, setClipBox] = useState({
@@ -3570,7 +3587,10 @@ export function BIMViewer({
               } else {
                 if (ctrl) ctrl.enabled = false;
                 try {
+                  helper.setLockCursor(walkFps);
                   helper.enable();
+                  const bounds = sceneRef.current?.getContentBounds?.() ?? null;
+                  if (bounds) helper.placeAtEyeLevel(bounds);
                   setWalkActive(true);
                 } catch (err) {
                   // Defensive: restore controls if WalkMode's own
@@ -3614,18 +3634,39 @@ export function BIMViewer({
           user exits walk mode. */}
       {walkActive && (
         <div
-          className="absolute top-3 start-1/2 -translate-x-1/2 z-30 flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-900/85 backdrop-blur text-white text-[11px] font-medium shadow-lg pointer-events-none select-none"
+          className="absolute top-3 start-1/2 -translate-x-1/2 z-30 flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-900/85 backdrop-blur text-white text-[11px] font-medium shadow-lg select-none"
           data-testid="bim-walk-hint"
           role="status"
           aria-live="polite"
         >
           <Move3d size={12} className="text-sky-300 shrink-0" />
           <span>
-            {t('viewerTools.walk_hint_overlay', {
-              defaultValue:
-                'Drag to look · WASD/arrows move · Space/Shift up/down · Esc exit',
-            })}
+            {walkFps
+              ? t('viewerTools.walk_hint_fps', {
+                  defaultValue:
+                    'Move the mouse to look around · WASD/arrows move · Space/Shift up/down · Esc exit',
+                })
+              : t('viewerTools.walk_hint_overlay', {
+                  defaultValue:
+                    'Hold the left mouse button and drag to look · WASD/arrows move · Space/Shift up/down · Esc exit',
+                })}
           </span>
+          <button
+            type="button"
+            data-testid="bim-walk-fps-toggle"
+            onClick={() => {
+              const helper = walkModeRef.current;
+              if (!helper) return;
+              const next = !walkFps;
+              helper.setLockCursor(next);
+              setWalkFps(next);
+            }}
+            className="ml-1 rounded border border-white/30 px-1.5 py-0.5 text-[10px] font-medium hover:bg-white/15"
+          >
+            {walkFps
+              ? t('viewerTools.walk_mode_drag', { defaultValue: 'Drag to look' })
+              : t('viewerTools.walk_mode_fps', { defaultValue: 'Mouse-look (FPS)' })}
+          </button>
         </div>
       )}
 
@@ -4326,7 +4367,7 @@ export function BIMViewer({
                         {t('bim.qty_volume', { defaultValue: 'Volume' })}
                       </span>
                       <span className="text-xs font-semibold text-content-primary tabular-nums">
-                        {modelSummary.totalVolume.toLocaleString(undefined, { maximumFractionDigits: 1 })} m&sup3;
+                        {showQty(modelSummary.totalVolume, 'm³')}
                       </span>
                     </div>
                   )}
@@ -4336,7 +4377,7 @@ export function BIMViewer({
                         {t('bim.qty_area', { defaultValue: 'Area' })}
                       </span>
                       <span className="text-xs font-semibold text-content-primary tabular-nums">
-                        {modelSummary.totalArea.toLocaleString(undefined, { maximumFractionDigits: 1 })} m&sup2;
+                        {showQty(modelSummary.totalArea, 'm²')}
                       </span>
                     </div>
                   )}
@@ -4346,7 +4387,7 @@ export function BIMViewer({
                         {t('bim.qty_length', { defaultValue: 'Length' })}
                       </span>
                       <span className="text-xs font-semibold text-content-primary tabular-nums">
-                        {modelSummary.totalLength.toLocaleString(undefined, { maximumFractionDigits: 1 })} m
+                        {showQty(modelSummary.totalLength, 'm')}
                       </span>
                     </div>
                   )}
@@ -4381,6 +4422,12 @@ export function BIMViewer({
                             minimumFractionDigits: 2,
                             maximumFractionDigits: 4,
                           });
+                    // Convert metric-canonical rollups to the active system
+                    // for display only (issue #270). a.unit stays the metric
+                    // key; DISTINCT categoricals carry unit "" so they pass
+                    // through unchanged.
+                    const dispUnit = displayQty.unitFor(a.unit);
+                    const cv = (n: number) => displayQty.convert(n, a.unit).value;
                     if (a.mode === 'sum') {
                       return (
                         <div
@@ -4404,11 +4451,11 @@ export function BIMViewer({
                           </div>
                           <div className="flex items-baseline gap-1 shrink-0">
                             <span className="text-[12px] font-semibold text-content-primary tabular-nums">
-                              {fmtNum(a.sum)}
+                              {fmtNum(cv(a.sum))}
                             </span>
                             {a.unit && (
                               <span className="text-[9px] text-content-quaternary font-mono">
-                                {a.unit}
+                                {dispUnit}
                               </span>
                             )}
                           </div>
@@ -4441,11 +4488,11 @@ export function BIMViewer({
                             </div>
                             <div className="flex items-baseline gap-1 shrink-0">
                               <span className="text-[12px] font-semibold text-content-primary tabular-nums">
-                                {fmtNum(a.avg)}
+                                {fmtNum(cv(a.avg))}
                               </span>
                               {a.unit && (
                                 <span className="text-[9px] text-content-quaternary font-mono">
-                                  {a.unit}
+                                  {dispUnit}
                                 </span>
                               )}
                             </div>
@@ -4454,12 +4501,12 @@ export function BIMViewer({
                             <div className="flex items-center justify-end gap-2 mt-0.5 text-[9px] text-content-quaternary tabular-nums">
                               <span>
                                 {t('bim.agg_min', { defaultValue: 'min' })}{' '}
-                                {fmtNum(a.min)}
+                                {fmtNum(cv(a.min))}
                               </span>
                               <span>·</span>
                               <span>
                                 {t('bim.agg_max', { defaultValue: 'max' })}{' '}
-                                {fmtNum(a.max)}
+                                {fmtNum(cv(a.max))}
                               </span>
                               <span>·</span>
                               <span>
@@ -4507,10 +4554,10 @@ export function BIMViewer({
                               key={v}
                               className="inline-flex items-baseline gap-0.5 px-1.5 py-0.5 rounded border border-border-light bg-surface-secondary text-[10px] tabular-nums font-mono text-content-primary"
                             >
-                              {fmtNum(v)}
+                              {fmtNum(cv(v))}
                               {a.unit && (
                                 <span className="text-[8px] text-content-quaternary">
-                                  {a.unit}
+                                  {dispUnit}
                                 </span>
                               )}
                             </span>
@@ -4802,7 +4849,12 @@ export function BIMViewer({
                   </div>
                 )}
 
-                {/* Geometry — derived from the canonical bounding box. */}
+                {/* Geometry - derived from the canonical bounding box. The
+                    bbox spans are metric-canonical; geometryDisplayRows converts
+                    each value AND its unit suffix to the user's system so an
+                    imperial user reads "Width (ft)" with the foot value, not raw
+                    metres (issue #270). The unit is no longer baked into the
+                    i18n string so the suffix can follow the active system. */}
                 {elementGeometry && (
                   <div data-testid="bim-geometry-section">
                     <h4 className="text-sm font-semibold text-content-primary mb-1.5 flex items-center gap-1.5">
@@ -4810,23 +4862,24 @@ export function BIMViewer({
                       {t('bim.geometry', { defaultValue: 'Geometry' })}
                     </h4>
                     <QuantitiesTable
-                      quantities={{
-                        [t('bim.geo_width', { defaultValue: 'Width (m)' })]:
-                          elementGeometry.width,
-                        [t('bim.geo_depth', { defaultValue: 'Depth (m)' })]:
-                          elementGeometry.depth,
-                        [t('bim.geo_height', { defaultValue: 'Height (m)' })]:
-                          elementGeometry.height,
-                        [t('bim.geo_footprint', {
-                          defaultValue: 'Footprint (m²)',
-                        })]: elementGeometry.footprint,
-                        [t('bim.geo_bbox_volume', {
-                          defaultValue: 'Bounding volume (m³)',
-                        })]: elementGeometry.bboxVolume,
-                        [t('bim.geo_diagonal', {
-                          defaultValue: 'Diagonal (m)',
-                        })]: elementGeometry.diagonal,
-                      }}
+                      quantities={geometryDisplayRows(
+                        elementGeometry,
+                        {
+                          width: t('bim.geo_width_base', { defaultValue: 'Width' }),
+                          depth: t('bim.geo_depth_base', { defaultValue: 'Depth' }),
+                          height: t('bim.geo_height_base', { defaultValue: 'Height' }),
+                          footprint: t('bim.geo_footprint_base', {
+                            defaultValue: 'Footprint',
+                          }),
+                          bboxVolume: t('bim.geo_bbox_volume_base', {
+                            defaultValue: 'Bounding volume',
+                          }),
+                          diagonal: t('bim.geo_diagonal_base', {
+                            defaultValue: 'Diagonal',
+                          }),
+                        },
+                        displayQty.convert,
+                      )}
                     />
                   </div>
                 )}

@@ -185,7 +185,7 @@ class MoCService:
 
     # ── Update ────────────────────────────────────────────────────────────
 
-    async def update_entry(self, entry_id: uuid.UUID, data: MoCEntryUpdate) -> MoCEntry:
+    async def update_entry(self, entry_id: uuid.UUID, data: MoCEntryUpdate, user_id: str | None = None) -> MoCEntry:
         entry = await self.get_entry(entry_id)
         if entry.status in {"implemented", "declined"}:
             raise HTTPException(
@@ -204,8 +204,25 @@ class MoCService:
             fields["cost_impact"] = _to_decimal(fields["cost_impact"])
         if not fields:
             return entry
+        # Snapshot the prior holder before update_fields() expires the entry so a
+        # ball-in-court change is recorded for ownership-chain reconstruction.
+        ball_changed = "ball_in_court" in fields and fields["ball_in_court"] != entry.ball_in_court
+        old_ball = entry.ball_in_court
+        code_snapshot = entry.code
         await self.repo.update_fields(entry_id, **fields)
         await self.session.refresh(entry)
+        if ball_changed:
+            from app.core.audit_log import log_ownership_handoff
+
+            await log_ownership_handoff(
+                self.session,
+                entity_type="moc_entry",
+                entity_id=entry_id,
+                from_party=old_ball,
+                to_party=fields["ball_in_court"],
+                actor_id=user_id,
+                metadata={"code": code_snapshot},
+            )
         return entry
 
     # ── Delete ────────────────────────────────────────────────────────────

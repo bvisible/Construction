@@ -47,6 +47,7 @@ import { useGlobalSearchStore } from '@/stores/useGlobalSearchStore';
 import { FloatingQueuePanel } from './layout/FloatingQueuePanel';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useThemeStore } from '@/stores/useThemeStore';
+import { useBrandingStore } from '@/stores/useBrandingStore';
 import { ddcVerifyIntegrity, ddcInjectMeta, DDC_ORIGIN } from '@/shared/lib/ddc-integrity';
 import { NavigationProgress } from '@/shared/lib/navigationProgress';
 import { useKeyboardShortcuts } from '@/shared/hooks/useKeyboardShortcuts';
@@ -192,6 +193,12 @@ const NCRPage = lazy(() =>
 );
 const MoCPage = lazy(() =>
   import('@/features/moc/MoCPage').then((m) => ({ default: m.MoCPage }))
+);
+const ConstructionControlPage = lazy(() =>
+  import('@/features/construction_control').then((m) => ({ default: m.ConstructionControlPage }))
+);
+const PortfolioPage = lazy(() =>
+  import('@/features/portfolio').then((m) => ({ default: m.PortfolioPage }))
 );
 const ReportingPage = lazy(() =>
   import('@/features/reporting/ReportingPage').then((m) => ({ default: m.ReportingPage }))
@@ -429,6 +436,21 @@ const BIDashboardsPage = lazy(() =>
 const ProjectControlsPage = lazy(() =>
   import('@/features/project-controls').then((m) => ({ default: m.ProjectControlsPage }))
 );
+const ChangeIntelligencePage = lazy(() =>
+  import('@/features/change-intelligence').then((m) => ({ default: m.ChangeIntelligencePage }))
+);
+const ValueDashboardPage = lazy(() =>
+  import('@/features/value').then((m) => ({ default: m.ValueDashboardPage }))
+);
+const PhoneLogPage = lazy(() => import('@/features/phonelog').then((m) => ({ default: m.PhoneLogPage })));
+const ConnectorsPage = lazy(() => import('@/features/connectors').then((m) => ({ default: m.ConnectorsPage })));
+const ReconciliationPage = lazy(() =>
+  import('@/features/reconciliation').then((m) => ({ default: m.ReconciliationPage })),
+);
+const InboundCapturePage = lazy(() =>
+  import('@/features/inbound').then((m) => ({ default: m.InboundCapturePage })),
+);
+const RetrievalPage = lazy(() => import('@/features/retrieval').then((m) => ({ default: m.RetrievalPage })));
 // v4.1 — three additional P1 Slice-1 features land behind dedicated routes
 // (Assembly Library was already eagerly imported by the assemblies feature
 // index in its Slice-1 PR). Pages are net-new so they pile on the end of
@@ -779,6 +801,15 @@ export default function App() {
     void syncCustomUnitsFromServer();
   }, [isAuthenticated]);
 
+  // Pull the workspace white-label brand from the server so it follows the user
+  // to any browser, not just the one an admin set it on (issue #272). Public
+  // endpoint, best-effort: the sidebar paints instantly from localStorage and
+  // this reconciles. Re-run after auth changes so a freshly signed-in user
+  // immediately sees their workspace brand.
+  useEffect(() => {
+    void useBrandingStore.getState().hydrateFromServer();
+  }, [isAuthenticated]);
+
   // Onboarding-tour migration (one-shot). The app used to mount two
   // parallel tour systems — `OnboardingTour` (storage key
   // `oe_tour_completed`, underscore) and `ProductTour` (storage key
@@ -1052,6 +1083,14 @@ export default function App() {
         <Route path="/ncr" element={<P title="NCR"><NCRPage /></P>} />
         <Route path="/projects/:projectId/moc" element={<P title="Management of Change"><MoCPage /></P>} />
         <Route path="/moc" element={<P title="Management of Change"><MoCPage /></P>} />
+        {/* Construction Control (QA/QC) - acceptance criteria, inspections,
+            material passports, as-built records, hold points, handover. */}
+        <Route path="/construction-control" element={<P title="Construction Control"><ConstructionControlPage /></P>} />
+        <Route path="/projects/:projectId/construction-control" element={<P title="Construction Control"><ConstructionControlPage /></P>} />
+        {/* Portfolio / multi-project (schedule-of-schedules) - cross-project,
+            so it is NOT scoped to the active project. Note: /portfolio/capacity
+            and /portfolio/leveling are distinct resource-planning surfaces. */}
+        <Route path="/portfolio" element={<P title="Portfolio"><PortfolioPage /></P>} />
 
         <Route path="/users" element={<P title="User Management"><UserManagementPage /></P>} />
         <Route path="/admin/audit-log" element={<P title="Audit Log"><AuditLogPage /></P>} />
@@ -1216,6 +1255,37 @@ export default function App() {
             day-works, instructions, time-impact analysis. */}
         <Route path="/variations" element={<P title="Variations"><VariationsPage /></P>} />
         <Route path="/projects/:projectId/variations" element={<P title="Variations"><VariationsPage /></P>} />
+        <Route path="/change-intelligence" element={<P title="Change Intelligence"><ChangeIntelligencePage /></P>} />
+        <Route path="/projects/:projectId/change-intelligence" element={<P title="Change Intelligence"><ChangeIntelligencePage /></P>} />
+        <Route path="/value" element={<P title="Value Realized"><ValueDashboardPage /></P>} />
+        <Route path="/projects/:projectId/value" element={<P title="Value Realized"><ValueDashboardPage /></P>} />
+        <Route path="/phone-log" element={<P title="Phone Log"><PhoneLogPage /></P>} />
+        <Route path="/projects/:projectId/phone-log" element={<P title="Phone Log"><PhoneLogPage /></P>} />
+        <Route path="/connectors" element={<P title="Document Connectors"><ConnectorsPage /></P>} />
+        <Route path="/projects/:projectId/connectors" element={<P title="Document Connectors"><ConnectorsPage /></P>} />
+        <Route path="/reconciliation" element={<P title="Event Reconciliation"><ReconciliationPage /></P>} />
+        <Route path="/projects/:projectId/reconciliation" element={<P title="Event Reconciliation"><ReconciliationPage /></P>} />
+        {/* Inbound Capture admin view - reads captured email / chat messages and
+            the configured sources. Admin-only (the read endpoint also gates with
+            inbound.read; the page exposes no secrets, only what was captured). */}
+        <Route
+          path="/inbound"
+          element={
+            <AdminOnly>
+              <P title="Inbound Capture"><InboundCapturePage /></P>
+            </AdminOnly>
+          }
+        />
+        <Route
+          path="/projects/:projectId/inbound"
+          element={
+            <AdminOnly>
+              <P title="Inbound Capture"><InboundCapturePage /></P>
+            </AdminOnly>
+          }
+        />
+        <Route path="/find" element={<P title="Find Records"><RetrievalPage /></P>} />
+        <Route path="/projects/:projectId/find" element={<P title="Find Records"><RetrievalPage /></P>} />
         <Route path="/estimates" element={<Navigate to="/boq" replace />} />
         <Route path="/profile" element={<Navigate to="/settings" replace />} />
         <Route path="/notifications" element={<P title="Notifications"><NotificationsPage /></P>} />

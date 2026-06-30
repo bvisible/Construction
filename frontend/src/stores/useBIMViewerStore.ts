@@ -9,6 +9,7 @@ import { create } from 'zustand';
 
 export type BIMRightPanelTab =
   | 'properties'
+  | 'structure'
   | 'layers'
   | 'tools'
   | 'trait-lens'

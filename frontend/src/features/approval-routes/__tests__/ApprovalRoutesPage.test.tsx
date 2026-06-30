@@ -70,6 +70,10 @@ vi.mock('../api', () => ({
   startInstance: vi.fn(),
   decideInstance: vi.fn(),
   cancelInstance: vi.fn(),
+  reassignInstance: vi.fn(),
+  listDelegations: vi.fn(() => Promise.resolve([])),
+  createDelegation: vi.fn(),
+  revokeDelegation: vi.fn(),
   approvalRoutesKeys: {
     meta: () => ['approval-routes', 'meta'] as const,
     routes: (projectId?: string | null, targetKind?: string | null) =>
@@ -90,6 +94,13 @@ vi.mock('../api', () => ({
         status ?? null,
       ] as const,
     instance: (id: string) => ['approval-routes', 'instance', id] as const,
+    delegations: (role?: string, includeInactive?: boolean) =>
+      [
+        'approval-routes',
+        'delegations',
+        role ?? 'mine',
+        includeInactive ?? false,
+      ] as const,
   },
 }));
 

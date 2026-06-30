@@ -1,11 +1,11 @@
 /**
- * Inventory Map page (task #142) — sales-floor block / floor / unit grid.
+ * Inventory Map page (task #142) - sales-floor block / floor / unit grid.
  *
  * The sales desk's daily index of every Plot in a Development. Replaces
  * the flat-table scroll with a colour-coded tile grid, KPI ribbon, bulk
  * filters and a hold/release floating action bar.
  *
- * Distinct from /dashboards/inventory-heatmap (task #140) — that one is
+ * Distinct from /dashboards/inventory-heatmap (task #140) - that one is
  * an analytics phase-grouped view; this is the sales-floor workflow view
  * with bulk actions.
  */
@@ -47,6 +47,7 @@ import {
 } from '@/shared/ui';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { MoneyDisplay } from '@/shared/ui/MoneyDisplay';
+import { useDisplayQuantity } from '@/shared/hooks/useDisplayQuantity';
 import { useToastStore } from '@/stores/useToastStore';
 import { getErrorMessage } from '@/shared/lib/api';
 import {
@@ -59,7 +60,7 @@ import {
 } from './api';
 
 /* ──────────────────────────────────────────────────────────────────────
- * Status palette — sales-desk colours match the task spec:
+ * Status palette - sales-desk colours match the task spec:
  *   available  green-500    reserved   amber-500
  *   sold       gray-500     handed_over slate-700
  *   held       purple-500   blocked    red-500
@@ -1117,6 +1118,8 @@ function FloatingActionBar({
 
 function PlotDrawerBody({ plot }: { plot: InventoryMapPlot }) {
   const { t } = useTranslation();
+  const dq = useDisplayQuantity();
+  const area = dq.convert(num(plot.area_m2), 'm²');
   return (
     <div className="space-y-3 p-4">
       <div>
@@ -1147,7 +1150,7 @@ function PlotDrawerBody({ plot }: { plot: InventoryMapPlot }) {
               defaultValue: 'Area',
             })}
           </p>
-          <p className="text-sm">{num(plot.area_m2).toFixed(2)} m²</p>
+          <p className="text-sm">{area.value.toFixed(2)} {area.unit}</p>
         </div>
         <div>
           <p className="text-2xs uppercase text-content-tertiary">

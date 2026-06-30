@@ -15,6 +15,7 @@ import type { ICellEditorParams } from 'ag-grid-community';
 import { AutocompleteInput } from '../AutocompleteInput';
 import type { CostAutocompleteItem } from '../api';
 import { getUnitsForLocale, saveCustomUnit } from '../boqHelpers';
+import type { DisplayQuantityApi } from '@/shared/hooks/useDisplayQuantity';
 import {
   evaluateFormula as evalFormulaImpl,
   isFormula as isFormulaImpl,
@@ -76,6 +77,23 @@ export function normaliseFormula(s: string): string {
 
 export interface FormulaCellEditorParams extends ICellEditorParams {
   onFormulaApplied?: (positionId: string, formula: string, result: number) => void;
+}
+
+/**
+ * Issue #285: convert a Qty value the user typed / a formula resolved in the
+ * DISPLAYED measurement system back to metric-canonical storage. The display
+ * API is threaded onto AG Grid's ``context`` (the same ``gridContext`` BOQGrid
+ * builds, see ``BOQColumnContext.displayQuantity``); the row's metric unit is
+ * read from ``params.data.unit``. Returns the value unchanged when no display
+ * API is present, or for metric / unmapped units (``toMetric`` is identity
+ * there). The formula editor writes via ``setDataValue`` which bypasses the
+ * column ``valueParser``, so this is the editor's own conversion seam.
+ */
+function toMetricQty(params: ICellEditorParams, displayValue: number): number {
+  const dq = (params.context as { displayQuantity?: DisplayQuantityApi } | undefined)?.displayQuantity;
+  if (!dq) return displayValue;
+  const unit = (params.data?.unit as string | undefined) ?? '';
+  return dq.toMetric(displayValue, unit);
 }
 
 /** Check whether an input string looks like a formula (Excel-style `=` prefix,
@@ -202,15 +220,22 @@ export const FormulaCellEditor = forwardRef(
 
       const live = inputRef.current?.value ?? value;
       const { parsed, formulaSrc } = parseInput(live);
+      // Issue #285: the Qty cell DISPLAYS the value converted into the user's
+      // measurement system, so a formula typed here resolves in the displayed
+      // unit. Convert the resolved value back to metric-canonical storage
+      // BEFORE writing via setDataValue (which bypasses the column
+      // valueParser). Identity for metric / unmapped units. We store the
+      // metric value in lastParsedRef so getValue() returns the same number.
+      const metricParsed = toMetricQty(props, parsed);
       const hadStoredFormula = !!formula;
-      lastParsedRef.current = parsed;
+      lastParsedRef.current = metricParsed;
       lastFormulaRef.current = formulaSrc;
 
       if (formulaSrc) {
-        fireFormulaApplied(props.data?.id, formulaSrc, parsed);
+        fireFormulaApplied(props.data?.id, formulaSrc, metricParsed);
       } else if (hadStoredFormula) {
         // User replaced a stored formula with a plain number — clear it.
-        fireFormulaApplied(props.data?.id, '', parsed);
+        fireFormulaApplied(props.data?.id, '', metricParsed);
       }
 
       // ag-grid-react v32 + React 18 sometimes skips ``getValue()`` after
@@ -240,9 +265,11 @@ export const FormulaCellEditor = forwardRef(
       // ``tabToNextCell()``, and the new value is already in the row.
       const colId = props.column?.getColId?.() ?? 'quantity';
       const oldValue = props.node?.data?.[colId];
-      const wroteViaSetDataValue = parsed !== oldValue;
+      // ``oldValue`` is the stored (metric-canonical) quantity, so compare it
+      // against the metric value we are about to write, not the display one.
+      const wroteViaSetDataValue = metricParsed !== oldValue;
       if (wroteViaSetDataValue) {
-        props.node?.setDataValue(colId, parsed);
+        props.node?.setDataValue(colId, metricParsed);
       }
 
       // If we already wrote the value, cancel AG Grid's secondary commit
@@ -314,8 +341,11 @@ export const FormulaCellEditor = forwardRef(
         // Parse and return — but DO NOT fire onFormulaApplied here, since
         // we can't tell if this is a real commit or a cancel-by-API call.
         // commitFromInput is the only path that persists the formula.
+        // Issue #285: the resolved value is in the displayed unit; convert it
+        // back to metric-canonical storage so getValue() can never leak an
+        // imperial number into the quantity field.
         const live = inputRef.current?.value ?? value;
-        return parseInput(live).parsed;
+        return toMetricQty(props, parseInput(live).parsed);
       },
       isCancelAfterEnd() {
         return false;

@@ -80,6 +80,7 @@ from app.modules.projects.schemas import (
     ProjectModuleRead,
     ProjectProfileResult,
     ProjectResponse,
+    ProjectStatusHistoryResponse,
     ProjectUpdate,
     WBSCreate,
     WBSResponse,
@@ -217,15 +218,34 @@ async def list_projects(
     # the full list in one call (it calls ``limit=500``). Prior cap caused
     # a 422 that silently wiped the projects dropdown across every page.
     limit: int = Query(default=50, ge=1, le=500),
-    status: str | None = Query(default=None, pattern=r"^(active|archived|template)$"),
+    status: str | None = Query(
+        default=None,
+        pattern=r"^(active|archived|template|waiting|on_hold|finished|all)$",
+    ),
 ) -> list[ProjectResponse]:
-    """List projects. Admins see all, others see only own projects."""
+    """List projects. Admins see all, others see only own projects.
+
+    ``status`` accepts the curated project-status set (active, waiting,
+    on_hold, finished, archived) plus ``template`` and an ``all`` sentinel.
+    ``all`` returns every project including archived ones; any other value
+    filters to that exact status. Omitting ``status`` keeps the default
+    behaviour: archived projects are excluded.
+    """
     is_admin = payload.get("role") == "admin"
+    # ``all`` is a view sentinel, not a real status value - translate it into
+    # "no status filter + include archived" so the listing spans every state.
+    if status == "all":
+        status_filter: str | None = None
+        include_archived = True
+    else:
+        status_filter = status
+        include_archived = False
     projects, _ = await service.list_projects(
         uuid.UUID(user_id),
         offset=offset,
         limit=limit,
-        status_filter=status,
+        status_filter=status_filter,
+        include_archived=include_archived,
         is_admin=is_admin,
     )
     return [ProjectResponse.model_validate(p) for p in projects]
@@ -271,7 +291,7 @@ async def update_project(
 ) -> ProjectResponse:
     """Update project fields. Verifies ownership."""
     await _verify_project_owner(service, project_id, user_id, payload)
-    project = await service.update_project(project_id, data)
+    project = await service.update_project(project_id, data, changed_by=user_id)
     return ProjectResponse.model_validate(project)
 
 
@@ -306,7 +326,7 @@ async def delete_project(
 
     try:
         await _verify_project_owner(service, project_id, user_id, payload)
-        await service.delete_project(project_id)
+        await service.delete_project(project_id, changed_by=user_id)
     except HTTPException:
         raise
     except Exception as exc:
@@ -344,8 +364,43 @@ async def restore_project(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You do not have access to this project",
         )
-    restored = await service.restore_project(project_id)
+    restored = await service.restore_project(project_id, changed_by=user_id)
     return ProjectResponse.model_validate(restored)
+
+
+# ── Status history (read-only audit trail) ───────────────────────────────
+
+
+@router.get(
+    "/{project_id}/status-history",
+    response_model=list[ProjectStatusHistoryResponse],
+    summary="Project status history",
+    description="Timestamped trail of this project's status transitions "
+    "(e.g. active -> on_hold -> archived -> active), newest first. Shows who "
+    "changed the status from X to Y and when. Accessible by owner, admin, or "
+    "any project team member.",
+)
+@router.get(
+    "/{project_id}/status-history/",
+    response_model=list[ProjectStatusHistoryResponse],
+    include_in_schema=False,
+)
+async def project_status_history(
+    project_id: uuid.UUID,
+    user_id: CurrentUserId,
+    payload: CurrentUserPayload,
+    session: SessionDep,
+    service: ProjectService = Depends(_get_service),
+) -> list[ProjectStatusHistoryResponse]:
+    """Return the project's status transitions, newest first.
+
+    Verifies project read access (owner, admin, or team member) so the
+    timeline follows the same IDOR policy as the other project GET
+    sub-resources.
+    """
+    await _verify_project_access(service, project_id, user_id, session, payload)
+    rows = await service.list_status_history(project_id)
+    return [ProjectStatusHistoryResponse.model_validate(r) for r in rows]
 
 
 # ── Demo data purge (Settings → Danger Zone) ─────────────────────────────

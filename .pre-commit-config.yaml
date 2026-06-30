@@ -70,3 +70,14 @@ repos:
         entry: python scripts/check_repo_hygiene.py
         language: system
         pass_filenames: false
+
+      # Forbid recording an AI assistant as a commit contributor. Runs at
+      # commit-msg time on the message being written and rejects a
+      # "Co-authored-by:" trailer or "Generated with ..." footer that names an
+      # assistant; real human and bot co-authors are preserved. CI runs the same
+      # script across history, so a trailer cannot land even if hooks are skipped.
+      - id: commit-trailer-check
+        name: Block AI attribution trailers in commit messages
+        entry: python scripts/check_commit_trailers.py
+        language: system
+        stages: [commit-msg]

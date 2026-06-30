@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.events import event_bus
 from app.modules.collaboration.models import Comment, CommentMention, Viewpoint
 from app.modules.collaboration.repository import (
     CommentRepository,
@@ -23,6 +24,20 @@ from app.modules.collaboration.repository import (
 from app.modules.collaboration.schemas import CommentCreate, CommentUpdate, ViewpointCreate
 
 logger = logging.getLogger(__name__)
+
+
+async def _safe_publish(name: str, data: dict, source_module: str = "oe_collaboration") -> None:
+    """Best-effort detached event publish - never blocks or breaks the caller.
+
+    Uses :meth:`EventBus.publish_detached` so the subscriber (which opens its
+    own write session) fires after the request has committed and released the
+    SQLite writer lock - matching the pattern the notifications service and
+    file_comments use.
+    """
+    try:
+        event_bus.publish_detached(name, data, source_module=source_module)
+    except Exception:  # noqa: BLE001 - event publish must never break a create
+        logger.debug("collaboration: event publish skipped: %s", name, exc_info=True)
 
 
 class CollaborationService:
@@ -40,8 +55,16 @@ class CollaborationService:
         self,
         data: CommentCreate,
         author_id: uuid.UUID,
+        *,
+        project_id: uuid.UUID | None = None,
     ) -> Comment:
-        """‌⁠‍Create a comment with optional mentions and viewpoint."""
+        """‌⁠‍Create a comment with optional mentions and viewpoint.
+
+        ``project_id`` is the owning project of the commented entity, resolved
+        by the router's access check. It is forwarded on the detached
+        ``collaboration.comment.created`` event so the notifications subscriber
+        can fan out to project members without re-resolving the entity.
+        """
         # Validate parent exists if threading
         if data.parent_comment_id is not None:
             parent = await self.comment_repo.get(data.parent_comment_id)
@@ -107,6 +130,24 @@ class CollaborationService:
             data.entity_type,
             data.entity_id,
             author_id,
+        )
+
+        # Detached event so the discussion also flows to in-app notifications
+        # (and from there to chat connectors). Published fire-and-forget after
+        # the request commits; a subscriber failure can never roll back the
+        # comment insert.
+        await _safe_publish(
+            "collaboration.comment.created",
+            {
+                "comment_id": str(comment.id),
+                "entity_type": data.entity_type,
+                "entity_id": data.entity_id,
+                "project_id": str(project_id) if project_id else None,
+                "author_id": str(author_id),
+                "parent_comment_id": (str(data.parent_comment_id) if data.parent_comment_id else None),
+                "comment_type": data.comment_type,
+                "body_excerpt": (data.text or "")[:160],
+            },
         )
         return comment
 

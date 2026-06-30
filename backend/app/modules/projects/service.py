@@ -83,7 +83,7 @@ async def _safe_publish(name: str, data: dict, source_module: str = "") -> None:
         _logger_ev.debug("Event publish skipped: %s", name)
 
 
-from app.modules.projects.models import Project
+from app.modules.projects.models import Project, ProjectStatusHistory
 from app.modules.projects.repository import ProjectRepository
 from app.modules.projects.schemas import ProjectCreate, ProjectUpdate
 
@@ -230,6 +230,65 @@ class ProjectService:
         self.session = session
         self.settings = settings
         self.repo = ProjectRepository(session)
+
+    # ── Status history ────────────────────────────────────────────────────
+
+    async def _record_status_change(
+        self,
+        project_id: uuid.UUID,
+        from_status: str | None,
+        to_status: str,
+        changed_by: str | None = None,
+        note: str | None = None,
+    ) -> None:
+        """Insert a row into the project status-history audit trail.
+
+        Adds the row to the session and flushes so it lands in the same
+        transaction as the status change; the request lifecycle
+        (``get_session``) commits on success and rolls back on any raise,
+        matching the no-self-commit pattern of the surrounding methods.
+        ``changed_by`` is coerced to a UUID so the GUID FK accepts it; a
+        malformed value is stored as NULL rather than failing the change.
+        """
+        actor: uuid.UUID | None = None
+        if changed_by:
+            try:
+                actor = uuid.UUID(str(changed_by))
+            except (ValueError, TypeError):
+                actor = None
+        self.session.add(
+            ProjectStatusHistory(
+                project_id=project_id,
+                from_status=from_status,
+                to_status=to_status,
+                changed_by=actor,
+                note=note,
+            )
+        )
+        await self.session.flush()
+
+    async def list_status_history(
+        self,
+        project_id: uuid.UUID,
+    ) -> list[ProjectStatusHistory]:
+        """Return the project's status transitions, newest first.
+
+        Ordered by ``created_at`` then ``id`` descending so rows recorded in
+        the same transaction (identical ``created_at``) keep a stable,
+        deterministic newest-first order.
+        """
+        from sqlalchemy import select as _select
+
+        stmt = (
+            _select(ProjectStatusHistory)
+            .where(ProjectStatusHistory.project_id == project_id)
+            .order_by(
+                ProjectStatusHistory.created_at.desc(),
+                ProjectStatusHistory.id.desc(),
+            )
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
 
     # ── Project code generation ───────────────────────────────────────────
 
@@ -419,6 +478,16 @@ class ProjectService:
         # commits on success. The generator's pre-lock prune step below
         # GC's reservations whose code is now committed in the DB.
 
+        # Seed the status timeline with the initial status (from=None) so a
+        # project's history is complete from creation, not only from the
+        # first later transition.
+        await self._record_status_change(
+            project.id,
+            from_status=None,
+            to_status=project.status,
+            changed_by=str(owner_id),
+        )
+
         await _safe_publish(
             "projects.project.created",
             {
@@ -506,19 +575,21 @@ class ProjectService:
         offset: int = 0,
         limit: int = 50,
         status_filter: str | None = None,
+        include_archived: bool = False,
         is_admin: bool = False,
     ) -> tuple[list[Project], int]:
         """List projects for a user with pagination. Admins see all.
 
         Archived projects are excluded by default; pass status_filter='archived'
-        explicitly to see soft-deleted ones.
+        explicitly to see only soft-deleted ones, or include_archived=True (the
+        "all" view) to span every status including archived.
         """
         return await self.repo.list_for_user(
             owner_id,
             offset=offset,
             limit=limit,
             status=status_filter,
-            exclude_archived=(status_filter is None),
+            exclude_archived=(status_filter is None and not include_archived),
             is_admin=is_admin,
         )
 
@@ -559,6 +630,7 @@ class ProjectService:
         data: ProjectUpdate,
         *,
         force_currency_change: bool = False,
+        changed_by: str | None = None,
     ) -> Project:
         """Update project fields. Raises 404 if not found.
 
@@ -590,6 +662,14 @@ class ProjectService:
         prior_currency = project.currency
         new_currency = fields.get("currency")
         currency_actually_changed = new_currency is not None and new_currency != prior_currency
+
+        # Snapshot the prior status BEFORE the write so we can record a
+        # status-history row if this PATCH moves the project's status (e.g.
+        # active -> on_hold). ``status`` is read off the ORM instance now
+        # because ``repo.update_fields`` expires it afterwards.
+        prior_status = project.status
+        new_status = fields.get("status")
+        status_actually_changed = new_status is not None and new_status != prior_status
         if currency_actually_changed and not force_currency_change:
             metadata_override = (fields.get("metadata_") or {}).get("allow_currency_change") is True
             if not metadata_override and await self._project_has_boq_positions(
@@ -639,6 +719,17 @@ class ProjectService:
 
         # Refresh the project object
         await self.session.refresh(project)
+
+        # Record the status transition (active -> on_hold, etc.) so the UI
+        # can show who changed status from X to Y and when. Only when the
+        # PATCH actually moved the status; a no-op write records nothing.
+        if status_actually_changed:
+            await self._record_status_change(
+                project_id,
+                from_status=prior_status,
+                to_status=new_status,
+                changed_by=changed_by,
+            )
 
         # Fire ``projects.address_set`` only when:
         #   * the PATCH actually included ``address``;
@@ -1006,7 +1097,7 @@ class ProjectService:
 
     # ── Delete (soft) ─────────────────────────────────────────────────────
 
-    async def delete_project(self, project_id: uuid.UUID) -> None:
+    async def delete_project(self, project_id: uuid.UUID, *, changed_by: str | None = None) -> None:
         """Soft-delete a project by setting status to 'archived'.
 
         Also hard-deletes child records (tasks, RFIs, etc.) that reference
@@ -1023,11 +1114,14 @@ class ProjectService:
         project = await self.get_project(project_id, include_archived=True)
         if project.status == "archived":
             return  # Already archived - silently succeed
-        # Snapshot fields before update_fields() - that calls session.expire_all(),
-        # after which any attribute access on `project` would trigger lazy IO and
-        # crash with greenlet_spawn / MissingGreenlet under the async session.
+        # Snapshot fields now, while `project` is still fresh. Both the
+        # cascade-delete loop below and update_fields() (which calls
+        # session.expire_all()) expire `project`, after which any attribute
+        # access on it would trigger lazy IO and crash with greenlet_spawn /
+        # MissingGreenlet under the async session.
         owner_id = str(project.owner_id)
         project_name = project.name
+        prior_status = project.status
 
         # Cascade-delete child records that belong to this project.
         # These models all have project_id FK with ondelete=CASCADE, but
@@ -1094,8 +1188,17 @@ class ProjectService:
                     exc,
                 )
 
-        prior_status = project.status
         await self.repo.update_fields(project_id, status="archived")
+
+        # Status-history row for the archive transition (-> archived) so the
+        # project's status timeline includes soft-deletes alongside ordinary
+        # PATCH status changes.
+        await self._record_status_change(
+            project_id,
+            from_status=prior_status,
+            to_status="archived",
+            changed_by=changed_by,
+        )
 
         await _safe_publish(
             "projects.project.deleted",
@@ -1202,7 +1305,7 @@ class ProjectService:
 
     # ── Restore (un-archive) ─────────────────────────────────────────────
 
-    async def restore_project(self, project_id: uuid.UUID) -> Project:
+    async def restore_project(self, project_id: uuid.UUID, *, changed_by: str | None = None) -> Project:
         """Restore a previously archived project back to active status.
 
         Raises 404 if project not found (including never-archived ones that
@@ -1215,8 +1318,17 @@ class ProjectService:
                 detail="Project is not archived - nothing to restore",
             )
         owner_id = str(project.owner_id)
+        prior_status = project.status
 
         await self.repo.update_fields(project_id, status="active")
+
+        # Status-history row for the restore transition (archived -> active).
+        await self._record_status_change(
+            project_id,
+            from_status=prior_status,
+            to_status="active",
+            changed_by=changed_by,
+        )
 
         await _safe_publish(
             "projects.project.restored",

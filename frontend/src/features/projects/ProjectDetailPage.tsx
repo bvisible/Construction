@@ -37,6 +37,8 @@ import {
   Image as ImageIcon,
   LayoutGrid,
   Receipt,
+  ChevronDown,
+  MessagesSquare,
 } from 'lucide-react';
 import {
   Button, Card, CardHeader, CardContent, Badge, Skeleton, EmptyState, Breadcrumb,
@@ -44,6 +46,8 @@ import {
 } from '@/shared/ui';
 import { DismissibleInfo } from '@/shared/ui/DismissibleInfo';
 import { ProjectLayoutManager } from './ProjectLayoutManager';
+import { ProjectStatusBadge, CURATED_PROJECT_STATUSES, useProjectStatusLabel } from './ProjectStatusBadge';
+import { StatusHistoryTimeline } from './StatusHistoryTimeline';
 import { useProjectDetailLayoutStore } from '@/stores/useProjectDetailLayoutStore';
 import {
   RFIInboxWidget,
@@ -1167,6 +1171,53 @@ class TabErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState>
 
 const INITIAL_PROJECT_EDIT_FORM = { name: '', description: '', region: '', currency: '' };
 
+/**
+ * ProjectStatusSelect (#274) - compact dropdown letting an owner/admin set
+ * the project's working status. Offers only the curated working statuses
+ * (active / waiting / on hold / finished); archiving is a separate action,
+ * so 'archived' is excluded. If the project currently carries a custom
+ * status outside the curated set, that value is shown as a leading option
+ * so the control never silently rewrites it on open.
+ */
+function ProjectStatusSelect({
+  value,
+  pending,
+  onChange,
+}: {
+  value: string;
+  pending: boolean;
+  onChange: (next: string) => void;
+}) {
+  const { t } = useTranslation();
+  const statusLabel = useProjectStatusLabel();
+  const options = CURATED_PROJECT_STATUSES.filter((s) => s !== 'archived');
+  const isCustom = !options.includes(value as (typeof options)[number]);
+
+  return (
+    <div className="relative">
+      <select
+        value={value}
+        disabled={pending}
+        onChange={(e) => onChange(e.target.value)}
+        aria-label={t('projects.status_select_label', {
+          defaultValue: 'Change project status',
+        })}
+        className="h-7 appearance-none rounded-lg border border-border bg-surface-primary pl-2.5 pr-7 text-xs font-medium text-content-secondary focus:outline-none focus:ring-2 focus:ring-oe-blue disabled:opacity-60"
+      >
+        {isCustom && <option value={value}>{statusLabel(value)}</option>}
+        {options.map((s) => (
+          <option key={s} value={s}>
+            {statusLabel(s)}
+          </option>
+        ))}
+      </select>
+      <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-2 text-content-tertiary">
+        <ChevronDown size={13} />
+      </div>
+    </div>
+  );
+}
+
 export function ProjectDetailPage() {
   const { t } = useTranslation();
   const { projectId } = useParams<{ projectId: string }>();
@@ -1208,6 +1259,35 @@ export function ProjectDetailPage() {
     },
     onError: (error: Error) => {
       addToast({ type: 'error', title: t('toasts.project_update_failed', { defaultValue: 'Failed to update project' }), message: error.message });
+    },
+  });
+
+  // Dedicated status-change mutation (#274). Kept separate from the inline
+  // name/description editor so a status pick is a single PATCH and can also
+  // refresh the status-history timeline. Archiving stays its own action
+  // (DELETE), so the dropdown never offers 'archived'.
+  const statusMutation = useMutation({
+    mutationFn: (status: string) => projectsApi.update(projectId!, { status }),
+    onSuccess: (updated) => {
+      queryClient.invalidateQueries({ queryKey: ['project', projectId] });
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
+      queryClient.invalidateQueries({ queryKey: ['project-status-history', projectId] });
+      addToast({
+        type: 'success',
+        title: t('toasts.project_status_updated', {
+          defaultValue: 'Project status updated',
+        }),
+      });
+      setActiveProject(projectId!, updated.name);
+    },
+    onError: (error: Error) => {
+      addToast({
+        type: 'error',
+        title: t('toasts.project_status_update_failed', {
+          defaultValue: 'Failed to update status',
+        }),
+        message: error.message,
+      });
     },
   });
 
@@ -1451,6 +1531,25 @@ export function ProjectDetailPage() {
   // can set the currency via the inline editor in the header).
   const currency = project.currency || undefined;
 
+  // Owner-or-admin gate for status edits. Mirrors the TeamStrip canManage
+  // check (the auth store keeps no separate userId, so we read the JWT
+  // ``sub`` claim and compare against project.owner_id).
+  const canManageProject = (() => {
+    const token = useAuthStore.getState().accessToken;
+    if (!token) return false;
+    try {
+      const parts = token.split('.');
+      if (parts.length !== 3) return false;
+      const payload = parts[1]!.replace(/-/g, '+').replace(/_/g, '/');
+      const padded = payload + '='.repeat((4 - (payload.length % 4)) % 4);
+      const json = JSON.parse(atob(padded)) as { sub?: string; role?: string };
+      if (json.role === 'admin') return true;
+      return !!json.sub && json.sub === project.owner_id;
+    } catch {
+      return false;
+    }
+  })();
+
   return (
     <div className="space-y-5 animate-fade-in">
       {/* Breadcrumb + Customize toggle */}
@@ -1595,9 +1694,19 @@ export function ProjectDetailPage() {
               <>
                 <div className="flex items-center gap-3">
                   <h1 className="text-2xl font-bold text-content-primary">{project.name}</h1>
-                  <Badge variant={statusVariant[project.status] ?? 'neutral'} size="md" dot>
-                    {t(`projects.${project.status}`, { defaultValue: project.status })}
-                  </Badge>
+                  <ProjectStatusBadge status={project.status} size="md" />
+                  {/* Owner/admin status picker (#274). Archiving stays its
+                      own action (the project menu / list), so 'archived' is
+                      intentionally absent from these options. */}
+                  {canManageProject && project.status !== 'archived' && (
+                    <ProjectStatusSelect
+                      value={project.status}
+                      pending={statusMutation.isPending}
+                      onChange={(next) => {
+                        if (next !== project.status) statusMutation.mutate(next);
+                      }}
+                    />
+                  )}
                   <button
                     onClick={() => {
                       setEditForm({
@@ -1669,6 +1778,25 @@ export function ProjectDetailPage() {
         /* ── Phase Ribbon ────────────────────────────────────────────── */
         <ProjectPhaseRibbon phase={project.phase ?? null} />
       )}
+
+      {/* ── Status history (#274) ─────────────────────────────────────────
+          Supplementary audit trail of status changes. Collapsed by default
+          (it is reference, not a primary control) but always reachable
+          regardless of the active tab. */}
+      <Card padding="none">
+        <details className="group">
+          <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-sm font-medium text-content-secondary transition-colors hover:bg-surface-secondary">
+            <ChevronDown
+              size={15}
+              className="shrink-0 text-content-tertiary transition-transform group-open:rotate-180"
+            />
+            {t('projects.status_history.title', { defaultValue: 'Status history' })}
+          </summary>
+          <div className="border-t border-border-light px-4 py-4">
+            <StatusHistoryTimeline projectId={projectId!} hideHeader />
+          </div>
+        </details>
+      </Card>
 
       {/* ── New widgets — grouped pulse sections ───────────────────────
           Cards are bucketed into themed sections (Commercial, Field,
@@ -2442,6 +2570,19 @@ export function ProjectDetailPage() {
                       onClick={() => navigate('/documents')}
                     >
                       {t('projects.dash_documents_link', { defaultValue: 'Documents' })}
+                    </Button>
+                    {/* #279 - jump to this project's discussion (the
+                        Collaboration hub resolves the active project, which
+                        this page has already set). Sits beside Documents so
+                        it reads as a peer destination. */}
+                    <Button
+                      variant="secondary"
+                      size="md"
+                      className="w-full justify-start"
+                      icon={<MessagesSquare size={14} />}
+                      onClick={() => navigate('/collaboration')}
+                    >
+                      {t('projects.dash_discussion_link', { defaultValue: 'Discussion' })}
                     </Button>
                     <Button
                       variant="secondary"

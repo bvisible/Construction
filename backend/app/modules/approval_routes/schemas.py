@@ -182,6 +182,10 @@ class InstanceResponse(BaseModel):
     started_at: datetime
     completed_at: datetime | None
     started_by: UUID | None
+    # Who must act on the current step right now (the "ball in court"). NULL
+    # means the step's own approver / role (or its resolved out-of-office
+    # delegate) is responsible; a value is a one-tap reassignment override.
+    current_assignee_user_id: UUID | None = None
     created_at: datetime
     updated_at: datetime
     step_states: list[StepStateResponse] = Field(default_factory=list)
@@ -203,3 +207,79 @@ class CancelInstance(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
     reason: str | None = Field(default=None, max_length=500)
+
+
+class ReassignInstance(BaseModel):
+    """One-tap reassignment of an instance's current step to another user."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    to_user_id: UUID
+    reason: str | None = Field(default=None, max_length=500)
+
+
+# ── Delegation (out-of-office) payloads ──────────────────────────────
+
+
+class DelegationCreate(BaseModel):
+    """Create an out-of-office hand-off of the caller's approvals.
+
+    The delegator is always the authenticated caller - never taken from the
+    request body - so a user can only delegate their own approvals. ``project_id``
+    NULL means a blanket hand-off across every project.
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    delegate_user_id: UUID
+    project_id: UUID | None = None
+    starts_at: datetime | None = None
+    ends_at: datetime | None = None
+    reason: str | None = Field(default=None, max_length=500)
+
+    @model_validator(mode="after")
+    def _window_is_ordered(self) -> DelegationCreate:
+        if self.starts_at is not None and self.ends_at is not None and self.ends_at < self.starts_at:
+            raise ValueError("ends_at must not be before starts_at")
+        return self
+
+
+class DelegationResponse(BaseModel):
+    """Read-side projection of a :class:`Delegation` row."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    delegator_user_id: UUID
+    delegate_user_id: UUID
+    project_id: UUID | None
+    starts_at: datetime | None
+    ends_at: datetime | None
+    is_active: bool
+    reason: str | None
+    created_by: UUID | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class EscalationOut(BaseModel):
+    """Escalation standing of one pending instance's current step (#17).
+
+    ``has_sla`` is ``False`` when the instance is not pending or its current
+    step has no SLA clock; ``severity`` is one of on_time / late / breached /
+    critical, ``next_target`` is the approver id to escalate to now (or null),
+    and ``level`` is the 1-based escalation level (0 when none is due).
+    """
+
+    instance_id: str
+    target_kind: str
+    current_step_ordinal: int
+    has_sla: bool
+    severity: str
+    hours_overdue: float
+    should_escalate: bool
+    next_target: str | None
+    level: int
+    reason: str
+    chain_length: int
+    current_holder: str | None

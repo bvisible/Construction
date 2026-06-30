@@ -22,14 +22,19 @@
 
 import { apiDelete, apiGet, apiPatch, apiPost } from '@/shared/lib/api';
 import type {
+  ApprovalDelegation,
   ApprovalInstance,
   ApprovalRoute,
   ApprovalRouteCreatePayload,
   ApprovalRoutesMeta,
   ApprovalRouteUpdatePayload,
+  DelegationCreatePayload,
+  DelegationRole,
+  Escalation,
   InstanceCancelPayload,
   InstanceCreatePayload,
   InstanceDecidePayload,
+  InstanceReassignPayload,
 } from './types';
 
 const BASE = '/v1/approval-routes';
@@ -123,6 +128,15 @@ export async function getInstance(
   return apiGet<ApprovalInstance>(`${BASE}/instances/${instanceId}`);
 }
 
+/** Escalation standing of an instance's current step (#17). Surfaces how
+ *  overdue the live step is and whether the breach has aged past its grace
+ *  window into an escalation up the route's approver chain. */
+export async function getInstanceEscalation(
+  instanceId: string,
+): Promise<Escalation> {
+  return apiGet<Escalation>(`${BASE}/instances/${instanceId}/escalation`);
+}
+
 export async function startInstance(
   payload: InstanceCreatePayload,
 ): Promise<ApprovalInstance> {
@@ -152,6 +166,61 @@ export async function cancelInstance(
   );
 }
 
+/** One-tap hand-off of the instance's current step to another user. Pins
+ *  the chosen user as the sole eligible decider for the live step without
+ *  editing the shared route template. */
+export async function reassignInstance(
+  instanceId: string,
+  payload: InstanceReassignPayload,
+): Promise<ApprovalInstance> {
+  return apiPost<ApprovalInstance, InstanceReassignPayload>(
+    `${BASE}/instances/${instanceId}/reassign`,
+    payload,
+  );
+}
+
+/* ── Delegations (out-of-office) ────────────────────────────────────── */
+
+export interface ListDelegationsParams {
+  /** ``mine`` (default) = hand-offs the caller created; ``covering`` =
+   *  hand-offs naming the caller as the stand-in. */
+  role?: DelegationRole;
+  /** Include revoked / expired rows. The backend defaults to false
+   *  (active only). */
+  includeInactive?: boolean;
+}
+
+/** List the caller's own delegations. The result is always scoped to the
+ *  caller server-side - a user can never enumerate someone else's. */
+export async function listDelegations(
+  params: ListDelegationsParams = {},
+): Promise<ApprovalDelegation[]> {
+  const qs = new URLSearchParams();
+  if (params.role) qs.set('role', params.role);
+  if (params.includeInactive) qs.set('include_inactive', 'true');
+  const query = qs.toString();
+  return apiGet<ApprovalDelegation[]>(
+    `${BASE}/delegations${query ? `?${query}` : ''}`,
+  );
+}
+
+/** Create an out-of-office hand-off of the caller's approvals. The
+ *  delegator is always the authenticated caller server-side. */
+export async function createDelegation(
+  payload: DelegationCreatePayload,
+): Promise<ApprovalDelegation> {
+  return apiPost<ApprovalDelegation, DelegationCreatePayload>(
+    `${BASE}/delegations`,
+    payload,
+  );
+}
+
+/** Revoke one of the caller's own delegations. The backend returns 404
+ *  for a hand-off that does not exist or belongs to another user. */
+export async function revokeDelegation(delegationId: string): Promise<void> {
+  await apiDelete<void>(`${BASE}/delegations/${delegationId}`);
+}
+
 /* ── React Query keys (single source of truth) ──────────────────────── */
 
 export const approvalRoutesKeys = {
@@ -179,4 +248,15 @@ export const approvalRoutesKeys = {
     ] as const,
   /** Single running instance. */
   instance: (id: string) => ['approval-routes', 'instance', id] as const,
+  /** Escalation standing of a single running instance's current step. */
+  escalation: (id: string) =>
+    ['approval-routes', 'escalation', id] as const,
+  /** The caller's own out-of-office delegations (by side + active flag). */
+  delegations: (role?: DelegationRole, includeInactive?: boolean) =>
+    [
+      'approval-routes',
+      'delegations',
+      role ?? 'mine',
+      includeInactive ?? false,
+    ] as const,
 };

@@ -8,6 +8,7 @@ import { Button, Card, Badge, EmptyState, SkeletonGrid, Breadcrumb, DismissibleI
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
+import { useDisplayQuantity } from '@/shared/hooks/useDisplayQuantity';
 import { projectsApi } from '@/features/projects/api';
 
 import {
@@ -278,6 +279,10 @@ function TemplateDrawer({
   const addToast = useToastStore((s) => s.addToast);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  // Issue #270: render the preview quantities + restate rates in the user's
+  // measurement system. The money totals (per-component total + grand total)
+  // are invariant and stay verbatim.
+  const q = useDisplayQuantity();
 
   const activeProjectId = useProjectContextStore((s) => s.activeProjectId);
   const [projectId, setProjectId] = useState<string>('');
@@ -631,11 +636,14 @@ function TemplateDrawer({
                           )}
                         </td>
                         <td className="py-1.5 pr-2 text-right font-mono">
-                          {c.scaled_quantity.toFixed(2)} {c.unit}
+                          {(() => {
+                            const d = q.convert(c.scaled_quantity, c.unit || '');
+                            return `${d.value.toFixed(2)} ${c.unit ? d.unit : ''}`.trim();
+                          })()}
                         </td>
                         <td className="py-1.5 pr-2 text-right font-mono">
                           {matched
-                            ? `${Number(c.unit_rate).toFixed(2)} ${currencyLabel}`.trim()
+                            ? `${q.convertRate(Number(c.unit_rate), c.unit || '').toFixed(2)} ${currencyLabel}`.trim()
                             : '—'}
                         </td>
                         <td className="py-1.5 text-right font-mono">

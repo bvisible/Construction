@@ -322,3 +322,94 @@ describe('WalkMode - drag-to-look (default)', () => {
     unsub();
   });
 });
+
+describe('WalkMode - setLockCursor (runtime FPS toggle)', () => {
+  let camera: THREE.PerspectiveCamera;
+  let renderer: THREE.WebGLRenderer;
+  let dom: HTMLElement;
+  let wm: WalkMode;
+
+  beforeEach(() => {
+    lockSpy.mockClear();
+    unlockSpy.mockClear();
+    camera = new THREE.PerspectiveCamera();
+    camera.position.set(0, 0, 5);
+    camera.lookAt(0, 0, 0);
+    renderer = { domElement: document.createElement('canvas') } as unknown as THREE.WebGLRenderer;
+    dom = document.createElement('div');
+    wm = new WalkMode({ camera, renderer, domElement: dom }); // drag-to-look default
+  });
+
+  afterEach(() => {
+    wm.dispose();
+  });
+
+  it('switches a live drag session into FPS pointer-lock and back', () => {
+    wm.enable();
+    expect(wm.isPointerLockMode()).toBe(false);
+    expect(dom.style.cursor).toBe('grab');
+
+    wm.setLockCursor(true);
+    expect(wm.isEnabled()).toBe(true);
+    expect(wm.isPointerLockMode()).toBe(true);
+    expect(lockSpy).toHaveBeenCalledTimes(1);
+
+    wm.setLockCursor(false);
+    expect(wm.isPointerLockMode()).toBe(false);
+    expect(dom.style.cursor).toBe('grab');
+  });
+
+  it('is a no-op when the requested mode already matches', () => {
+    wm.enable();
+    wm.setLockCursor(false);
+    expect(lockSpy).not.toHaveBeenCalled();
+    expect(wm.isEnabled()).toBe(true);
+  });
+
+  it('only sets the mode (no re-arm) when called before enable()', () => {
+    wm.setLockCursor(true);
+    expect(wm.isEnabled()).toBe(false);
+    expect(lockSpy).not.toHaveBeenCalled();
+    wm.enable();
+    expect(wm.isPointerLockMode()).toBe(true);
+    expect(lockSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('WalkMode - placeAtEyeLevel', () => {
+  let camera: THREE.PerspectiveCamera;
+  let renderer: THREE.WebGLRenderer;
+  let dom: HTMLElement;
+  let wm: WalkMode;
+
+  beforeEach(() => {
+    camera = new THREE.PerspectiveCamera();
+    renderer = { domElement: document.createElement('canvas') } as unknown as THREE.WebGLRenderer;
+    dom = document.createElement('div');
+    wm = new WalkMode({ camera, renderer, domElement: dom });
+  });
+
+  afterEach(() => {
+    wm.dispose();
+  });
+
+  it('stands the camera at the model centre, above the floor', () => {
+    const bbox = new THREE.Box3(
+      new THREE.Vector3(-10, 0, -4),
+      new THREE.Vector3(10, 30, 4),
+    );
+    wm.placeAtEyeLevel(bbox);
+    expect(camera.position.x).toBeCloseTo(0, 6);
+    expect(camera.position.z).toBeCloseTo(0, 6);
+    // 10% of the 30-unit height above the floor.
+    expect(camera.position.y).toBeCloseTo(3, 6);
+  });
+
+  it('ignores an empty bounding box', () => {
+    camera.position.set(1, 2, 3);
+    wm.placeAtEyeLevel(new THREE.Box3());
+    expect(camera.position.x).toBe(1);
+    expect(camera.position.y).toBe(2);
+    expect(camera.position.z).toBe(3);
+  });
+});

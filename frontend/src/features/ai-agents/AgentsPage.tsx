@@ -39,6 +39,8 @@ import {
 import { RunTimeline } from './components/RunTimeline';
 import { RecentRunsList } from './components/RecentRunsList';
 import { AutomatedRunsPanel } from './components/AutomatedRunsPanel';
+import { AccuracyScoreboard } from './components/AccuracyScoreboard';
+import { FeedbackSummaryPanel } from './components/FeedbackSummaryPanel';
 import { aiAgentsGuide } from './aiAgentsGuide';
 import {
   agentDisplayName,
@@ -200,6 +202,58 @@ export function AgentsPage(): JSX.Element {
     // Keep the history fresh while a run is in flight so a just-finished
     // run flips to its terminal status without a manual refresh.
     refetchInterval: 5000,
+  });
+
+  // Accuracy scoreboard: how each agent's stated confidence has held up against
+  // the user's recorded outcomes. Scoped to the active project when one is set.
+  // Invalidated by the per-run verdict so a fresh outcome shows up immediately.
+  const scoreboardQuery = useQuery({
+    queryKey: ['ai-agents', 'accuracy', projectId ?? null],
+    queryFn: () => aiAgentsApi.getAccuracyScoreboard({ projectId: projectId ?? undefined }),
+    staleTime: 30_000,
+  });
+
+  // AI feedback summary: the read side of the generic trust loop - the user's
+  // thumbs up / down verdicts on non-run AI surfaces, rolled up per surface.
+  // Scoped to the active project when one is set.
+  const feedbackSummaryQuery = useQuery({
+    queryKey: ['ai-agents', 'feedback-summary', projectId ?? null],
+    queryFn: () => aiAgentsApi.getFeedbackSummary({ projectId: projectId ?? undefined }),
+    staleTime: 30_000,
+  });
+
+  // Demo-only "see AI in practice": on the hosted demo a prospect has no runs
+  // and no LLM, so the trust + accuracy surfaces sit empty. Reuse the shared
+  // ['system-status'] query (DemoBanner / DashboardPage) so this costs no extra
+  // request, and only offer the sample-seed action when demo_mode is on.
+  const systemStatusQuery = useQuery<{ demo_mode?: boolean }>({
+    queryKey: ['system-status'],
+    queryFn: () => fetch('/api/system/status').then((r) => r.json()),
+    retry: false,
+    staleTime: Infinity,
+  });
+  const demoMode = systemStatusQuery.data?.demo_mode === true;
+
+  const seedSampleMutation = useMutation({
+    mutationFn: () => aiAgentsApi.seedSandboxRuns(),
+    onSuccess: () => {
+      // Surface the freshly seeded runs + their scores everywhere at once.
+      queryClient.invalidateQueries({ queryKey: ['ai-agents', 'runs'] });
+      queryClient.invalidateQueries({ queryKey: ['ai-agents', 'accuracy'] });
+      addToast({
+        type: 'success',
+        title: t('agents.sandbox.loaded_toast', { defaultValue: 'Sample runs loaded' }),
+        message: t('agents.sandbox.loaded_message', {
+          defaultValue: 'Scored example runs are now on the scoreboard and in your history.',
+        }),
+      });
+    },
+    onError: () => {
+      addToast({
+        type: 'error',
+        title: t('agents.sandbox.error_toast', { defaultValue: 'Could not load the sample runs' }),
+      });
+    },
   });
 
   const healthQuery = useQuery({
@@ -674,6 +728,24 @@ export function AgentsPage(): JSX.Element {
             loading={automatedRunsQuery.isLoading}
             activeRunId={activeRunId}
             onSelect={(id) => setActiveRunId(id)}
+          />
+
+          {/* Accuracy scoreboard — the trust moat made visible: each agent's
+              stated confidence scored against the outcomes the user recorded. */}
+          <AccuracyScoreboard
+            scores={scoreboardQuery.data?.scores ?? []}
+            agents={agents}
+            loading={scoreboardQuery.isLoading}
+            canSeedSample={demoMode}
+            seeding={seedSampleMutation.isPending}
+            onSeedSample={() => seedSampleMutation.mutate()}
+          />
+
+          {/* AI feedback summary — the read side of the trust loop: the user's
+              thumbs up / down on the AI surfaces that have no run row. */}
+          <FeedbackSummaryPanel
+            summary={feedbackSummaryQuery.data ?? null}
+            loading={feedbackSummaryQuery.isLoading}
           />
         </aside>
       </div>

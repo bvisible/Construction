@@ -21,11 +21,27 @@
  * Cesium viewer stays oblivious of project semantics.
  */
 
-import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  Suspense,
+  lazy,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { MapPinned, AlertTriangle, ServerCrash, Loader2, MapPin } from 'lucide-react';
+import {
+  MapPinned,
+  AlertTriangle,
+  ServerCrash,
+  Loader2,
+  MapPin,
+  Crosshair,
+  X,
+} from 'lucide-react';
 
 import { ApiError } from '@/shared/lib/api';
 import { useToastStore } from '@/stores/useToastStore';
@@ -34,6 +50,7 @@ import { projectsApi } from '@/features/projects/api';
 import { AnchorAdjustPanel } from './AnchorAdjustPanel';
 import { useTilesetOverlayState } from './hooks/useTilesetOverlayState';
 import {
+  autoAnchorFromAddress,
   createAnchor,
   fetchDiaryPhotoPins,
   fetchHsePins,
@@ -84,6 +101,86 @@ function emptyStateFor(
   const allFailed = list.every((t) => t.status === 'failed' || t.status === 'obsolete');
   if (allFailed) return 'all_failed';
   return null;
+}
+
+/**
+ * Instruction banner shown while the user is placing the project anchor by
+ * clicking the map (#284 manual-anchor flow). Top-centred and
+ * ``pointer-events-none`` on the wrapper so it never intercepts the very
+ * map clicks it's asking for - only the Cancel button is interactive.
+ */
+function AnchorPlacementBanner({ onCancel }: { onCancel: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <div className="pointer-events-none absolute inset-x-0 top-3 z-20 flex justify-center px-3">
+      <div
+        className={[
+          'pointer-events-auto flex items-center gap-3 rounded-full',
+          'border border-emerald-400/30 bg-slate-900/85 px-4 py-2',
+          'text-xs text-slate-100 shadow-lg shadow-black/30 backdrop-blur-md',
+          'ring-1 ring-white/5',
+        ].join(' ')}
+        role="status"
+        data-testid="geo-anchor-placement-banner"
+      >
+        <Crosshair
+          size={14}
+          strokeWidth={2.25}
+          className="shrink-0 text-emerald-300"
+          aria-hidden
+        />
+        <span className="font-medium">
+          {t('geo_hub.place_anchor.instruction', {
+            defaultValue: 'Click the map to place this project',
+          })}
+        </span>
+        <button
+          type="button"
+          onClick={onCancel}
+          className={[
+            'inline-flex items-center gap-1 rounded-full px-2 py-0.5',
+            'text-2xs font-semibold text-slate-300 hover:bg-white/10 hover:text-white',
+            'focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300',
+          ].join(' ')}
+          data-testid="geo-anchor-placement-cancel"
+        >
+          <X size={12} strokeWidth={2.25} />
+          {t('common.cancel', { defaultValue: 'Cancel' })}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Transient "locating from address" hint shown while the page auto-geocodes
+ * a project that has an address but no anchor yet (#284 automatic-anchor
+ * flow). Keeps the canvas from briefly flashing the manual empty card
+ * before the freshly geocoded pin lands.
+ */
+function AnchorLocatingHint() {
+  const { t } = useTranslation();
+  return (
+    <div className="pointer-events-none absolute inset-x-0 top-3 z-20 flex justify-center px-3">
+      <div
+        className={[
+          'flex items-center gap-2 rounded-full border border-white/15',
+          'bg-slate-900/85 px-4 py-2 text-xs text-slate-100',
+          'shadow-lg shadow-black/30 backdrop-blur-md ring-1 ring-white/5',
+        ].join(' ')}
+        role="status"
+        aria-live="polite"
+        data-testid="geo-anchor-locating-hint"
+      >
+        <Loader2 size={14} className="animate-spin text-emerald-300" aria-hidden />
+        <span className="font-medium">
+          {t('geo_hub.place_anchor.locating', {
+            defaultValue: 'Locating this project from its address...',
+          })}
+        </span>
+      </div>
+    </div>
+  );
 }
 
 export function ProjectGeoPage() {
@@ -192,9 +289,17 @@ export function ProjectGeoPage() {
   );
   const [overlayEditMode, setOverlayEditMode] =
     useState<OverlayEditMode>('idle');
-  // "Drag to adjust" toggle for the anchor — when on, the page captures
-  // the next click on the map and PATCHes the anchor's lat/lon.
+  // "Drag to adjust" / "place a pin" toggle for the anchor - when on, the
+  // page captures the next click on the map and PATCHes (existing anchor)
+  // or CREATEs (no anchor yet) the lat/lon. The no-anchor empty state turns
+  // this on so manual anchoring drops a pin in-map instead of bouncing the
+  // user to the project settings page (#284).
   const [anchorDragMode, setAnchorDragMode] = useState<boolean>(false);
+  // Auto-anchor-from-address attempt state. ``running`` drives the inline
+  // hint; the ref guards so we only auto-geocode once per project per mount
+  // (a 502 / address-missing must not loop). See the effect below.
+  const [autoAnchorRunning, setAutoAnchorRunning] = useState<boolean>(false);
+  const autoAnchorTriedRef = useRef<string | null>(null);
   // "Place on map" picker — lists project files (BIM models + PDFs) and
   // drops the chosen one onto the map. Opened from the header button and
   // from the ``no_tilesets`` empty state.
@@ -317,6 +422,77 @@ export function ProjectGeoPage() {
     },
     [data?.anchor?.id, data?.anchor?.metadata, addToast, t, queryClient, projectId],
   );
+
+  // Does the project carry enough address to geocode? The backend needs a
+  // country (other fields only sharpen precision), matching the geocoder's
+  // ``project_address_from_jsonb`` contract.
+  const projectHasCountry = Boolean(
+    typeof projectQuery.data?.address?.country === 'string' &&
+      projectQuery.data.address.country.trim() !== '',
+  );
+
+  // ── Automatic anchoring from the project address (#284) ───────────────
+  //
+  // Reporter set a country + address in project settings but the project
+  // never appeared on the map. Root cause: the project address form stores
+  // only the text parts (street/city/country/postcode) and drops the
+  // lat/lon the autocomplete resolved, so the backend - which only
+  // *derives* an anchor when the address already carries coordinates, and
+  // never geocodes on its own except via this explicit endpoint - had
+  // nothing to place. So when a located-by-text project opens with no
+  // anchor, geocode it once here (the same Nominatim path the manual
+  // "Auto-anchor" button uses) and refetch so the pin appears with no
+  // extra clicks.
+  //
+  // Guards:
+  //   * once per project per mount (a 502 / address-missing must not loop);
+  //   * only when the map-config genuinely has no anchor (real or derived);
+  //   * only when the project has a country to geocode;
+  //   * silent - on any failure we leave the no_anchor empty state up so
+  //     the user can still place a pin manually or complete the address.
+  useEffect(() => {
+    if (!projectId) return;
+    if (isLoading || error) return;
+    // ``data.anchor`` is null only when there is neither a saved GeoAnchor
+    // nor address-derived coordinates - exactly the case auto-geocode fixes.
+    if (!data || data.anchor) return;
+    if (!projectQuery.data) return; // wait for the address to load
+    if (!projectHasCountry) return;
+    if (autoAnchorTriedRef.current === projectId) return;
+    autoAnchorTriedRef.current = projectId;
+    let cancelled = false;
+    setAutoAnchorRunning(true);
+    (async () => {
+      try {
+        await autoAnchorFromAddress(projectId);
+        if (cancelled) return;
+        await queryClient.invalidateQueries({
+          queryKey: ['geo-hub', 'map-config', projectId],
+        });
+        await queryClient.invalidateQueries({
+          queryKey: ['geo-hub', 'map-summary', projectId],
+        });
+      } catch {
+        // 422 (address missing a country), 502 (geocoder down), 409 (raced
+        // a concurrent anchor) - all leave the empty state in place, which
+        // already explains the manual fallbacks. No toast: this ran on its
+        // own, not from a user click.
+      } finally {
+        if (!cancelled) setAutoAnchorRunning(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    projectId,
+    isLoading,
+    error,
+    data,
+    projectQuery.data,
+    projectHasCountry,
+    queryClient,
+  ]);
 
   // Apply optional ?phase / ?block / ?dev_id deep-link filters to the
   // tileset list. The map-config endpoint already returns the project's
@@ -594,13 +770,38 @@ export function ProjectGeoPage() {
                     onSelectOverlay={setActiveOverlayId}
                     onChangeEditMode={setOverlayEditMode}
                   />
-                  {emptyKind && (
-                    <GeoEmptyState
-                      kind={emptyKind}
-                      projectId={projectId}
-                      onPlaceOnMap={() => setPickerOpen(true)}
+                  {/* Placement mode banner - while the user is dropping the
+                      anchor pin (from the no-anchor empty state's "Place a
+                      pin on the map"), replace the empty card with a clear
+                      "click the map" instruction + Cancel, so the card never
+                      sits between the cursor and the globe. */}
+                  {anchorDragMode && !data?.anchor && (
+                    <AnchorPlacementBanner
+                      onCancel={() => setAnchorDragMode(false)}
                     />
                   )}
+                  {/* While auto-geocoding the project address, show a brief
+                      "locating" hint instead of the manual empty card so we
+                      don't flash "anchor manually" then replace it with a pin. */}
+                  {emptyKind === 'no_anchor' &&
+                    !anchorDragMode &&
+                    autoAnchorRunning && <AnchorLocatingHint />}
+                  {emptyKind &&
+                    !(anchorDragMode && emptyKind === 'no_anchor') &&
+                    !(emptyKind === 'no_anchor' && autoAnchorRunning) && (
+                      <GeoEmptyState
+                        kind={emptyKind}
+                        projectId={projectId}
+                        onPlaceOnMap={() => setPickerOpen(true)}
+                        // Manual anchoring drops a pin in-map instead of
+                        // navigating to the project settings page (#284).
+                        onPlaceManually={
+                          emptyKind === 'no_anchor'
+                            ? () => setAnchorDragMode(true)
+                            : undefined
+                        }
+                      />
+                    )}
                   {data?.anchor && !emptyKind && (
                     <AnchorAdjustPanel
                       projectId={projectId}

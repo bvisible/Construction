@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { Ruler } from 'lucide-react';
 import { Card, CardHeader, CardContent } from '@/shared/ui';
 import { getIntlLocale } from '@/shared/lib/formatters';
+import { useDisplayQuantity } from '@/shared/hooks/useDisplayQuantity';
 
 /* ── Types ─────────────────────────────────────────────────────────────── */
 
@@ -31,7 +32,7 @@ const BENCHMARK_RANGES: Record<ProjectType, BenchmarkRange> = {
   education: { min: 2800, max: 5000 },
 };
 
-/* Module-level constant — keys are stable, labels resolved via t() in JSX */
+/* Module-level constant - keys are stable, labels resolved via t() in JSX */
 const PROJECT_TYPE_OPTIONS: ReadonlyArray<{
   value: ProjectType;
   labelKey: string;
@@ -116,14 +117,31 @@ const RangeIndicator = memo(function RangeIndicator({
   range,
   status,
   currency,
+  rateFactor,
+  rateUnit,
 }: {
   costPerM2: number;
   range: BenchmarkRange;
   status: BenchmarkStatus;
   currency: string;
+  /**
+   * Issue #270 - reciprocal area factor for the display measurement system
+   * (1 for metric, 10.7639 for m2->ft2). Every value rendered here is a
+   * "currency per m2" RATE, so the displayed figure is divided by the factor
+   * (EUR/m2 -> EUR/ft2) and only the unit label changes. The bar geometry
+   * keeps using the raw metric values, so marker/segment positions are
+   * identical in both systems.
+   */
+  rateFactor: number;
+  /** Display unit the rates are relabelled to ("m2" / "ft2", superscripted). */
+  rateUnit: string;
 }) {
   const { t } = useTranslation();
   const colors = getStatusColor(status);
+
+  // RATE display helper: reciprocal-convert a EUR/m2 value into the display
+  // system, leaving metric byte-identical (factor === 1).
+  const fmtRate = (rate: number) => formatCurrencyValue(rate / rateFactor, currency);
 
   // Calculate the display range: extend 20% beyond the benchmark range on each side
   const rangeSpan = range.max - range.min;
@@ -147,13 +165,13 @@ const RangeIndicator = memo(function RangeIndicator({
           className="absolute -translate-x-1/2"
           style={{ left: `${rangeStartPct}%` }}
         >
-          {formatCurrencyValue(range.min, currency)}
+          {fmtRate(range.min)}
         </span>
         <span
           className="absolute -translate-x-1/2"
           style={{ left: `${rangeEndPct}%` }}
         >
-          {formatCurrencyValue(range.max, currency)}
+          {fmtRate(range.max)}
         </span>
       </div>
 
@@ -180,17 +198,18 @@ const RangeIndicator = memo(function RangeIndicator({
         <div
           className={`absolute top-1/2 -translate-y-1/2 -translate-x-1/2 h-5 w-5 rounded-full border-2 border-white shadow-sm ${colors.indicator}`}
           style={{ left: `${indicatorPct}%` }}
-          title={t('costmodel.benchmark_current_cost', {
-            defaultValue: 'Current: {{value}}/m\u00B2',
-            value: formatCurrencyValue(costPerM2, currency),
+          title={t('costmodel.benchmark_current_cost_v2', {
+            defaultValue: 'Current: {{value}}/{{unit}}',
+            value: fmtRate(costPerM2),
+            unit: rateUnit,
           })}
         />
       </div>
 
       {/* Legend below bar */}
       <div className="flex items-center justify-between text-2xs text-content-tertiary">
-        <span>{formatCurrencyValue(displayMin, currency)}</span>
-        <span>{formatCurrencyValue(displayMax, currency)}</span>
+        <span>{fmtRate(displayMin)}</span>
+        <span>{fmtRate(displayMax)}</span>
       </div>
     </div>
   );
@@ -200,10 +219,21 @@ const RangeIndicator = memo(function RangeIndicator({
 
 export const CostBenchmark = memo(function CostBenchmark({ totalBudget, currency, initialArea }: CostBenchmarkProps) {
   const { t } = useTranslation();
+  const q = useDisplayQuantity();
   const [area, setArea] = useState<string>(initialArea ? String(initialArea) : '');
   const [projectType, setProjectType] = useState<ProjectType>('residential');
 
-  // projectTypeOptions defined at module level as PROJECT_TYPE_OPTIONS — avoids re-allocation on every render
+  // Issue #270 - the benchmark figures are all "currency per m2" RATES. For an
+  // imperial user we relabel them per-ft2 and divide by the area factor so the
+  // verdict stays consistent (a cheaper-per-ft2 number reads the same way as a
+  // cheaper-per-m2 one). The area INPUT below stays metric/editable (m2): we do
+  // not convert it, so its echoed value is also left metric. metric => factor 1
+  // and unit "m2", i.e. byte-identical output to before.
+  const rateUnit = q.unitFor('m²');
+  const rateFactor = q.convert(1, 'm²').value; // 1 (metric) / 10.7639 (imperial)
+  const fmtRate = (rate: number) => formatCurrencyValue(rate / rateFactor, currency);
+
+  // projectTypeOptions defined at module level as PROJECT_TYPE_OPTIONS - avoids re-allocation on every render
 
   const areaNum = parseFloat(area);
   const hasValidArea = !isNaN(areaNum) && areaNum > 0;
@@ -299,12 +329,13 @@ export const CostBenchmark = memo(function CostBenchmark({ totalBudget, currency
                   className={`rounded-xl p-4 ${currencyMismatch ? 'bg-surface-secondary' : getStatusColor(benchmark.status).bg}`}
                 >
                   <div className="text-2xs font-medium uppercase tracking-wider text-content-tertiary mb-1">
-                    {t('costmodel.benchmark_cost_per_m2', { defaultValue: 'Cost / m\u00B2' })}
+                    {t('costmodel.benchmark_cost_per_unit', { defaultValue: 'Cost / {{unit}}', unit: rateUnit })}
                   </div>
                   <div
                     className={`text-xl font-bold tabular-nums ${currencyMismatch ? 'text-content-primary' : getStatusColor(benchmark.status).text}`}
                   >
-                    {formatCurrencyValue(benchmark.costPerM2, currency)}
+                    {/* RATE (reciprocal): EUR/m2 -> EUR/ft2 for imperial */}
+                    {fmtRate(benchmark.costPerM2)}
                   </div>
                   {!currencyMismatch && (
                     <div className="mt-1 flex items-center gap-1.5">
@@ -325,12 +356,15 @@ export const CostBenchmark = memo(function CostBenchmark({ totalBudget, currency
                       {t('costmodel.benchmark_range_label', { defaultValue: 'Benchmark Range' })}
                     </div>
                     <div className="text-sm font-semibold tabular-nums text-content-primary">
-                      {formatCurrencyValue(benchmark.range.min, currency)}{' '}
+                      {/* RATE (reciprocal): benchmark band is EUR/m2 -> EUR/ft2 for imperial */}
+                      {fmtRate(benchmark.range.min)}{' '}
                       {t('costmodel.benchmark_range_to', { defaultValue: 'to' })}{' '}
-                      {formatCurrencyValue(benchmark.range.max, currency)}
+                      {fmtRate(benchmark.range.max)}
                     </div>
                     <div className="mt-1 text-2xs text-content-tertiary">
-                      {t('costmodel.benchmark_per_m2', { defaultValue: 'per m\u00B2' })}
+                      {/* Reuse the already-translated parametrized key so the
+                          unit follows the measurement system in every locale. */}
+                      {t('costs.per_unit', { defaultValue: 'per {{unit}}', unit: rateUnit })}
                     </div>
                   </div>
                 )}
@@ -344,6 +378,10 @@ export const CostBenchmark = memo(function CostBenchmark({ totalBudget, currency
                     {formatCurrencyValue(totalBudget, currency)}
                   </div>
                   <div className="mt-1 text-2xs text-content-tertiary">
+                    {/* ABSOLUTE area, but left metric on purpose: it echoes the
+                        m2 value the user typed into the (non-converted, editable)
+                        area input above, so relabelling it to ft2 here would
+                        contradict the number they entered. */}
                     {t('costmodel.benchmark_area_value', {
                       defaultValue: '{{area}} m\u00B2',
                       area: areaNum.toLocaleString(),
@@ -352,13 +390,14 @@ export const CostBenchmark = memo(function CostBenchmark({ totalBudget, currency
                 </div>
               </div>
 
-              {/* Visual range indicator — hidden for non-EUR currencies (bands are EUR) */}
+              {/* Visual range indicator - hidden for non-EUR currencies (bands are EUR) */}
               {currencyMismatch ? (
                 <p className="text-2xs text-content-tertiary">
                   {t('costmodel.benchmark_no_currency_band', {
                     defaultValue:
-                      'No benchmark range for {{currency}} - showing cost per m² only. Benchmark ranges are available in EUR.',
+                      'No benchmark range for {{currency}} - showing cost per {{unit}} only. Benchmark ranges are available in EUR.',
                     currency,
+                    unit: rateUnit,
                   })}
                 </p>
               ) : (
@@ -367,6 +406,8 @@ export const CostBenchmark = memo(function CostBenchmark({ totalBudget, currency
                   range={benchmark.range}
                   status={benchmark.status}
                   currency={currency}
+                  rateFactor={rateFactor}
+                  rateUnit={rateUnit}
                 />
               )}
             </div>

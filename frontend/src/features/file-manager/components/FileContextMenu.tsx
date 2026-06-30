@@ -13,8 +13,10 @@ import { useTranslation } from 'react-i18next';
 import {
   Download,
   ExternalLink,
+  Eye,
   Link as LinkIcon,
   Pencil,
+  Ruler,
   Trash2,
 } from 'lucide-react';
 import clsx from 'clsx';
@@ -22,7 +24,7 @@ import { useNavigate } from 'react-router-dom';
 import { useToastStore } from '@/stores/useToastStore';
 import { copyToClipboard } from '../lib/tauri';
 import { downloadProtectedFile } from '../api';
-import { primaryModule } from '../kindModule';
+import { isInlinePreviewRow, pdfTakeoffTargetFor, primaryModule } from '../kindModule';
 import type { FileRow } from '../types';
 
 interface FileContextMenuProps {
@@ -32,6 +34,12 @@ interface FileContextMenuProps {
   onClose: () => void;
   onRename: (row: FileRow) => void;
   onDelete: (row: FileRow) => void;
+  /**
+   * Open a PDF document in the focused inline reader (#284). When omitted,
+   * the "Open" item degrades to the primary target's route fallback so the
+   * menu still works if a consumer hasn't wired the inline reader yet.
+   */
+  onInlinePreview?: (row: FileRow) => void;
 }
 
 export function FileContextMenu({
@@ -41,6 +49,7 @@ export function FileContextMenu({
   onClose,
   onRename,
   onDelete,
+  onInlinePreview,
 }: FileContextMenuProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -78,6 +87,20 @@ export function FileContextMenu({
 
   const target = primaryModule(row.kind, row.extension);
   const moduleLabel = t(target.i18nKey, { defaultValue: target.label });
+  // #284 - a PDF document reads inline by default; PDF Takeoff is a separate,
+  // explicit choice surfaced below.
+  const inlinePreview = isInlinePreviewRow(row);
+  const takeoffTarget = pdfTakeoffTargetFor(row);
+
+  function handleOpenPrimary() {
+    if (inlinePreview && onInlinePreview) {
+      onInlinePreview(row);
+      onClose();
+      return;
+    }
+    navigate(target.route(row.project_id, row.id, row.extra));
+    onClose();
+  }
 
   async function handleDownload() {
     if (!row.download_url) return;
@@ -120,16 +143,31 @@ export function FileContextMenu({
       onClick={(e) => e.stopPropagation()}
     >
       <MenuItem
-        icon={<ExternalLink size={13} />}
-        label={t('files.context.open_in', {
-          defaultValue: 'Open in {{module}}',
-          module: moduleLabel,
-        })}
-        onClick={() => {
-          navigate(target.route(row.project_id, row.id));
-          onClose();
-        }}
+        icon={inlinePreview ? <Eye size={13} /> : <ExternalLink size={13} />}
+        label={
+          inlinePreview
+            ? t('files.context.view_pdf', { defaultValue: 'View PDF' })
+            : t('files.context.open_in', {
+                defaultValue: 'Open in {{module}}',
+                module: moduleLabel,
+              })
+        }
+        onClick={handleOpenPrimary}
       />
+      {/* #284 - explicit, separate route into PDF Takeoff for a PDF document,
+          now that the default open just reads the file inline. */}
+      {takeoffTarget && (
+        <MenuItem
+          icon={<Ruler size={13} />}
+          label={t('files.context.open_in_pdf_takeoff', {
+            defaultValue: 'Open in PDF Takeoff',
+          })}
+          onClick={() => {
+            navigate(takeoffTarget.route(row.project_id, row.id, row.extra));
+            onClose();
+          }}
+        />
+      )}
       {row.download_url && (
         <MenuItem
           icon={<Download size={13} />}

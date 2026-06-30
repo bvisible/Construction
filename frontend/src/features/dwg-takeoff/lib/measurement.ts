@@ -2,6 +2,9 @@
  * Measurement utilities for DWG takeoff annotations.
  */
 
+import { toDisplayQuantity } from '@/shared/lib/unitConversion';
+import { usePreferencesStore } from '@/stores/usePreferencesStore';
+
 /** Euclidean distance between two points. */
 export function calculateDistance(
   p1: { x: number; y: number },
@@ -16,7 +19,7 @@ export function calculateDistance(
  *
  *  Most architectural DWGs are authored in millimetres even though the
  *  page is read at 1:100/1:50. Without this factor a 12 000-mm wall on
- *  an unscaled drawing reads as "12 000 m" — which is what the user
+ *  an unscaled drawing reads as "12 000 m" - which is what the user
  *  was seeing. Falls back to 1.0 for "unitless" / missing, which keeps
  *  the historical "DXF units are metres" assumption intact for files
  *  that genuinely have no header. */
@@ -46,7 +49,7 @@ export function unitFactorToMetres(units?: string | null): number {
 /** Area of a polygon defined by ordered vertices (Shoelace formula).
  *
  *  Returns the absolute shoelace magnitude. NOTE: for a *non-simple*
- *  (self-intersecting) polygon the shoelace sum cancels — a perfect
+ *  (self-intersecting) polygon the shoelace sum cancels - a perfect
  *  "bowtie" returns 0 even though it covers real area. Callers that
  *  feed a quantity to the user / BOQ should use {@link calculateAreaSafe}
  *  so the degeneracy is surfaced instead of silently understated
@@ -87,7 +90,7 @@ function onSeg(p: Pt2, q: Pt2, r: Pt2): boolean {
 }
 
 /** Proper segment-segment intersection test (shared endpoints excluded
- *  — adjacent polygon edges legitimately touch at a vertex). */
+ *  - adjacent polygon edges legitimately touch at a vertex). */
 function segmentsIntersect(a: Seg, b: Seg): boolean {
   const [p1, p2] = a;
   const [p3, p4] = b;
@@ -150,7 +153,7 @@ export function calculateAreaSafe(points: Pt2[]): {
 
 /** A unit is "composite" (area / volume) when it carries a superscript
  *  exponent (m², m³). A linear k/m SI prefix is invalid on these:
- *  1 km² = 1e6 m², not 1e3 — so `1500 m²` must NOT render `1.50 km²`
+ *  1 km² = 1e6 m², not 1e3 - so `1500 m²` must NOT render `1.50 km²`
  *  (off by 1e6). Detect and never prefix-scale them (D-TKC-006). */
 function isCompositeUnit(unit: string): boolean {
   return unit.includes('²') || unit.includes('³'); // ² or ³
@@ -159,13 +162,28 @@ function isCompositeUnit(unit: string): boolean {
 /** Format a measurement value with a unit label.
  *
  *  Linear (length) units get the usual k/m SI prefixes for readability.
- *  Area/volume units are *never* prefix-scaled — the prefix maths is
+ *  Area/volume units are *never* prefix-scaled - the prefix maths is
  *  non-linear for them and produced physically wrong labels
  *  (`1500 m²` → `1.50 km²`). Composite units are shown with adaptive
  *  fixed precision instead so a large slab area or a tiny patch both
- *  stay correct and legible. */
+ *  stay correct and legible.
+ *
+ *  Measurement-system aware: the incoming ``value``/``unit`` are always the
+ *  metric-canonical pair the DWG layer stores (m / m² / m³). When the user's
+ *  preference is "imperial" they are converted at this DISPLAY boundary
+ *  (m -> ft, m² -> ft², m³ -> ft³) before the precision/prefix rules run;
+ *  for "metric" the pair passes through unchanged so output is byte-identical
+ *  to before. Storage / on-canvas geometry are never touched - only the
+ *  formatted string. Reads the preference via ``getState()`` (not a param)
+ *  because most callers are deep inside the canvas render loop where a React
+ *  hook cannot run, and threading a flag through every renderer would be
+ *  invasive; the canvas re-renders with the new label on the next frame. */
 export function formatMeasurement(value: number, unit: string): string {
   if (!Number.isFinite(value)) return `0 ${unit}`;
+  // Convert the metric-canonical input to the display system. Metric is a
+  // pass-through (value unchanged, label normalised); imperial scales + relabels.
+  const system = usePreferencesStore.getState().measurementSystem;
+  ({ value, unit } = toDisplayQuantity(value, unit, system));
   if (isCompositeUnit(unit)) {
     const abs = Math.abs(value);
     if (abs !== 0 && abs < 0.01) return `${value.toPrecision(2)} ${unit}`;

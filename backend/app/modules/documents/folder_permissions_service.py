@@ -292,6 +292,20 @@ async def folder_access_for(
     """
     user_id_norm = uuid.UUID(str(user_id))
 
+    # Global admins have full access to every project, matching the admin
+    # bypass in ``verify_project_access`` / ``_verify_project_membership_or_404``
+    # and the document download path. Without this a non-owner admin was 404'd
+    # on ``GET /documents/{id}`` metadata while downloading the very same file
+    # succeeded - an inconsistency that surfaced as a broken "open" action.
+    from app.modules.users.repository import UserRepository
+
+    try:
+        admin_user = await UserRepository(session).get_by_id(user_id_norm)
+    except Exception:
+        admin_user = None
+    if admin_user is not None and getattr(admin_user, "role", "") == "admin":
+        return "owner"
+
     if await is_project_owner(session, project_id, user_id_norm):
         return "owner"
 

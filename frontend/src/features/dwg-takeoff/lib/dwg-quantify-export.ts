@@ -12,6 +12,11 @@
 
 import type * as ExcelJS from 'exceljs';
 import type { LayerQuantity } from './auto-quantify';
+import {
+  toDisplayQuantity,
+  displayUnitFor,
+} from '@/shared/lib/unitConversion';
+import type { MeasurementSystem } from '@/stores/usePreferencesStore';
 
 const HEADER_FILL = 'FF1F2937';
 
@@ -47,6 +52,13 @@ export interface QuantifyExportContext {
   byBlock?: { name: string; count: number }[];
   /** Manual count-tool tally, optional. */
   countTotal?: number;
+  /**
+   * Display measurement system for the WRITTEN sheet. Storage stays
+   * metric-canonical; this only relabels the column headers (m -> ft) and
+   * scales the rendered values. Defaults to ``metric`` (byte-identical to
+   * the historical output) when the caller does not pass a preference.
+   */
+  measurementSystem?: MeasurementSystem;
   /** Override-able for deterministic tests. */
   exportDate?: Date;
 }
@@ -70,6 +82,16 @@ export async function buildQuantifyWorkbook(
   wb.creator = 'OpenConstructionERP';
   wb.created = ctx.exportDate ?? new Date();
 
+  // Display measurement system for this written sheet. Storage is always
+  // metric-canonical; everything below only converts at the export boundary
+  // (header labels + the numeric values), never the source rows.
+  const system: MeasurementSystem = ctx.measurementSystem ?? 'metric';
+  const round3 = (n: number) => Math.round(n * 1000) / 1000;
+  // Convert + round a canonical metric value for the sheet. Returns the
+  // empty string for non-positive inputs so blank cells stay blank.
+  const conv = (value: number, metricUnit: string): number | '' =>
+    value > 0 ? round3(toDisplayQuantity(value, metricUnit, system).value) : '';
+
   /* ── Quantities by layer ─────────────────────────────────────── */
   const ws = wb.addWorksheet('Quantities by layer');
   ws.columns = [
@@ -77,8 +99,8 @@ export async function buildQuantifyWorkbook(
     { header: 'Measure', key: 'measure', width: 12 },
     { header: 'Quantity', key: 'quantity', width: 14 },
     { header: 'Unit', key: 'unit', width: 8 },
-    { header: 'Area (m²)', key: 'area', width: 12 },
-    { header: 'Length (m)', key: 'length', width: 12 },
+    { header: `Area (${displayUnitFor('m²', system)})`, key: 'area', width: 12 },
+    { header: `Length (${displayUnitFor('m', system)})`, key: 'length', width: 12 },
     { header: 'Entities', key: 'entities', width: 10 },
   ];
   styleHeader(ws.getRow(1));
@@ -90,13 +112,16 @@ export async function buildQuantifyWorkbook(
     totalArea += row.area;
     totalLength += row.length;
     totalEntities += row.count;
+    // The per-row headline quantity carries its own unit ("m²"/"m"/"nr");
+    // "nr" has no imperial mapping so it passes through unchanged.
+    const q = toDisplayQuantity(row.quantity, row.unit, system);
     ws.addRow({
       layer: neutraliseFormula(row.layer),
       measure: row.primary,
-      quantity: Math.round(row.quantity * 1000) / 1000,
-      unit: row.unit,
-      area: row.area > 0 ? Math.round(row.area * 1000) / 1000 : '',
-      length: row.length > 0 ? Math.round(row.length * 1000) / 1000 : '',
+      quantity: round3(q.value),
+      unit: q.unit,
+      area: conv(row.area, 'm²'),
+      length: conv(row.length, 'm'),
       entities: row.count,
     });
   }
@@ -106,8 +131,8 @@ export async function buildQuantifyWorkbook(
     measure: '',
     quantity: '',
     unit: '',
-    area: Math.round(totalArea * 100) / 100,
-    length: Math.round(totalLength * 100) / 100,
+    area: Math.round(toDisplayQuantity(totalArea, 'm²', system).value * 100) / 100,
+    length: Math.round(toDisplayQuantity(totalLength, 'm', system).value * 100) / 100,
     entities: totalEntities,
   });
   totalRow.font = { bold: true };

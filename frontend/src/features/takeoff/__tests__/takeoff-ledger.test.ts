@@ -284,4 +284,36 @@ describe('ledgerToCsv', () => {
     const csv = ledgerToCsv(measurements);
     expect(csv).toContain('"hello, ""world"""');
   });
+
+  it('defaults to metric (no system arg) - units stay m / m²', () => {
+    const csv = ledgerToCsv(fiveFixture());
+    expect(csv).toContain('"m"');
+    expect(csv).toContain('"m²"');
+    expect(csv).not.toContain('"ft"');
+    // 10 m distance row keeps its metric magnitude.
+    expect(csv).toContain('10.00');
+  });
+
+  it('emits metric labels + values verbatim when system is metric', () => {
+    const metric = ledgerToCsv(fiveFixture(), 'metric');
+    const def = ledgerToCsv(fiveFixture());
+    expect(metric).toBe(def);
+  });
+
+  it('converts values + unit labels to imperial when system is imperial', () => {
+    const csv = ledgerToCsv(fiveFixture(), 'imperial');
+    // Distance rows: 10 m -> 32.81 ft, 5 m -> 16.40 ft; unit column = ft.
+    expect(csv).toContain('"ft"');
+    expect(csv).toContain('32.81');
+    expect(csv).toContain('16.40');
+    // The metres unit label must be gone for length rows.
+    expect(csv).not.toContain('"m"');
+    // Area rows convert to ft²; unit = ft².
+    expect(csv).toContain('"ft²"');
+    expect(csv).not.toContain('"m²"');
+    // Walls distance subtotal 15 m -> 49.21 ft.
+    expect(csv).toContain('49.21');
+    // Count rows stay unit-less tallies (pcs), value unchanged.
+    expect(csv).toContain('"pcs"');
+  });
 });

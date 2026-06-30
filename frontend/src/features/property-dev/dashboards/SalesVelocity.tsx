@@ -1,5 +1,5 @@
 /**
- * Sales Velocity (task #140) — SPAs signed per period (week/month/quarter).
+ * Sales Velocity (task #140) - SPAs signed per period (week/month/quarter).
  *
  * Primary source = ``SalesContract.signing_date`` for status in {signed,
  * countersigned}. Falls back to ``Buyer.contract_signed_at`` for legacy
@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useTabKeyboardNav } from '@/shared/hooks/useTabKeyboardNav';
+import { useDisplayQuantity } from '@/shared/hooks/useDisplayQuantity';
 import type {
   CurrencyAmount,
   SalesVelocityResponse,
@@ -32,6 +33,7 @@ type Granularity = 'week' | 'month' | 'quarter';
 
 export function SalesVelocity({ developmentId }: SalesVelocityProps) {
   const { t } = useTranslation();
+  const dq = useDisplayQuantity();
   const [data, setData] = useState<SalesVelocityResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -160,10 +162,11 @@ export function SalesVelocity({ developmentId }: SalesVelocityProps) {
             <div className="mb-1 flex items-center justify-between text-xs">
               <span className="font-medium text-content-primary">{b.period}</span>
               <span className="text-content-tertiary">
-                {t('propdev.dashboards.velocity.units_short', {
-                  defaultValue: '{{count}} units • {{area}} m²',
+                {t('propdev.dashboards.velocity.units_short_u', {
+                  defaultValue: '{{count}} units • {{area}} {{unit}}',
                   count: b.units,
-                  area: fmtCompactNumber(b.area),
+                  area: fmtCompactNumber(dq.convert(b.area, 'm²').value),
+                  unit: dq.unitFor('m²'),
                 })}
               </span>
             </div>
@@ -256,6 +259,7 @@ function VelocityTotals({
   seriesLen: number;
 }) {
   const { t } = useTranslation();
+  const dq = useDisplayQuantity();
   return (
     <div className="rounded-lg border border-divider bg-surface-secondary p-3">
       <div className="mb-1 flex items-center justify-between text-xs">
@@ -272,10 +276,11 @@ function VelocityTotals({
         </span>
       </div>
       <div className="text-xs text-content-secondary">
-        {t('propdev.dashboards.velocity.totals_units', {
-          defaultValue: '{{count}} units • {{area}} m²',
+        {t('propdev.dashboards.velocity.totals_units_u', {
+          defaultValue: '{{count}} units • {{area}} {{unit}}',
           count: totals.units,
-          area: fmtCompactNumber(num(totals.area_m2)),
+          area: fmtCompactNumber(dq.convert(num(totals.area_m2), 'm²').value),
+          unit: dq.unitFor('m²'),
         })}
       </div>
       {currencies.length > 0 && (

@@ -23,7 +23,18 @@ from datetime import date
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 
 from app.dependencies import CurrentUserId, RequirePermission, SessionDep, verify_project_access
+from app.modules.schedule_advanced.delay_service import DelayAnalysisService
+from app.modules.schedule_advanced.resource_leveling_schemas import (
+    LevelApplyResponse,
+    LevelPreviewRequest,
+    LevelPreviewResponse,
+    LevelPreviewSegment,
+    LevelPreviewSegmentRun,
+    LevelPreviewShift,
+    LevelPreviewUnresolvable,
+)
 from app.modules.schedule_advanced.schemas import (
+    AutoFragnetRequest,
     BaselineCreate,
     BaselineDeltaResponse,
     BaselineResponse,
@@ -42,8 +53,19 @@ from app.modules.schedule_advanced.schemas import (
     CPMComputeSummary,
     CPMRequest,
     CPMResponse,
+    DelayAnalysisCreate,
+    DelayAnalysisListItem,
+    DelayAnalysisPatch,
+    DelayAnalysisResponse,
+    DelayComputeRequest,
+    DelayEventCreate,
+    DelayEventPatch,
+    DelayEventResponse,
+    DelayWindowResponse,
     EVMRequest,
     EVMResponse,
+    FragnetResponse,
+    FragnetUpsert,
     LevelResourcesRequest,
     LevelResourcesResponse,
     LevelResourcesShift,
@@ -62,11 +84,15 @@ from app.modules.schedule_advanced.schemas import (
     PhasePlanUpdate,
     PPCResponse,
     PPCWeeklyResponse,
+    RaiseEotClaimResponse,
     RNCCreate,
     RNCParetoResponse,
     RNCParetoSortedResponse,
     RNCResponse,
     RNCUpdate,
+    ScheduleQualityResponse,
+    ScheduleRiskRequest,
+    ScheduleRiskResponse,
     TaktActivityImport,
     TaktActivityResponse,
     TaktActivityUpdate,
@@ -1178,8 +1204,9 @@ async def run_cpm(
     """‌⁠‍Run a CPM forward+backward pass on a supplied activity list.
 
     Stateless - no DB I/O. Useful for what-if scheduling experiments,
-    importing schedules from P6/MS Project, and powering the EoT/TIA
-    analytic in :mod:`app.modules.variations`.
+    importing schedules from external interchange formats (XER, P6 XML,
+    .mpp), and powering the EoT/TIA analytic in
+    :mod:`app.modules.variations`.
     """
     acts = [a.model_dump() for a in data.activities]
     deps = [d.model_dump() for d in data.dependencies] if data.dependencies else None
@@ -1494,6 +1521,220 @@ async def level_resources_for_schedule(
         schedule_id=schedule_id,
         shifts=rows,
         num_shifted=len(rows),
+    )
+
+
+@router.post(
+    "/{schedule_id}/level-preview",
+    response_model=LevelPreviewResponse,
+)
+async def level_preview_for_schedule(
+    schedule_id: uuid.UUID,
+    data: LevelPreviewRequest,
+    session: SessionDep,
+    user_id: CurrentUserId,
+    _perm: None = Depends(RequirePermission("schedule_advanced.read")),
+) -> LevelPreviewResponse:
+    """Resource-leveling PREVIEW honouring SS/FF/SF, splits, and fractional units.
+
+    Read-only. Returns the shifted starts, any split day-runs, the explicit
+    single-activity self-overloads, the per-resource peak demand before/after,
+    and - the headline differentiator - the honest finish-date impact computed
+    from a copy of the network, before anything is committed. The arithmetic is
+    the pure :func:`app.modules.resources.resource_engine.level_preview`; the
+    older ``/level-resources`` endpoint (FS-only, no finish impact) is kept for
+    back-compat.
+    """
+    from sqlalchemy import select
+
+    from app.modules.resources.resource_engine import level_preview as _level_preview
+    from app.modules.schedule.models import Activity as _Activity
+    from app.modules.schedule.models import ScheduleRelationship as _Rel
+    from app.modules.schedule_advanced.cpm import Activity as _CPMActivity
+    from app.modules.schedule_advanced.cpm import TaskNetwork as _CPMNetwork
+
+    project_id = await _project_id_for_schedule(schedule_id, session)
+    await verify_project_access(project_id, user_id, session)
+
+    act_rows = (
+        (
+            await session.execute(
+                select(_Activity).where(_Activity.schedule_id == schedule_id),
+            )
+        )
+        .scalars()
+        .all()
+    )
+    rel_rows = (
+        (
+            await session.execute(
+                select(_Rel).where(_Rel.schedule_id == schedule_id),
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    rel_index: dict[uuid.UUID, list[tuple[uuid.UUID, str, int]]] = {}
+    for r in rel_rows:
+        rel_index.setdefault(r.successor_id, []).append(
+            (r.predecessor_id, r.relationship_type or "FS", int(r.lag_days or 0)),
+        )
+
+    cpm_acts: list[_CPMActivity] = []
+    for a in act_rows:
+        required: dict[str, int] = {}
+        for res in a.resources or []:
+            if isinstance(res, dict) and res.get("name"):
+                required[str(res["name"])] = int(res.get("count", 1) or 1)
+        cpm_acts.append(
+            _CPMActivity(
+                id=a.id,
+                duration=int(a.duration_days or 0),
+                predecessors=rel_index.get(a.id, []),
+                required_resources=required,
+            ),
+        )
+
+    network = _CPMNetwork(cpm_acts)
+    preview = _level_preview(network, dict(data.resource_limits or {}), splittable=set(data.splittable))
+
+    return LevelPreviewResponse(
+        schedule_id=schedule_id,
+        num_shifted=len(preview.shifts),
+        finish_delta_days=preview.finish_delta_days,
+        base_finish_workday=preview.base_finish_workday,
+        leveled_finish_workday=preview.leveled_finish_workday,
+        shifts=[
+            LevelPreviewShift(
+                activity_id=uuid.UUID(str(s.activity_id)),
+                base_es=s.base_es,
+                new_es=s.new_es,
+                delta=s.delta,
+            )
+            for s in preview.shifts
+        ],
+        segments=[
+            LevelPreviewSegment(
+                activity_id=uuid.UUID(str(aid)),
+                runs=[LevelPreviewSegmentRun(start=run_start, finish=run_finish) for (run_start, run_finish) in runs],
+            )
+            for aid, runs in preview.segments.items()
+        ],
+        unresolvable=[
+            LevelPreviewUnresolvable(
+                activity_id=uuid.UUID(str(u.activity_id)),
+                resource=u.resource,
+                required=u.required,
+                limit=u.limit,
+            )
+            for u in preview.unresolvable
+        ],
+        peak_before=preview.peak_before,
+        peak_after=preview.peak_after,
+    )
+
+
+def _shift_iso_date(value: str | None, delta_days: int) -> str | None:
+    """Shift an ISO date string by ``delta_days`` calendar days.
+
+    Returns the new ``YYYY-MM-DD`` string, or ``None`` when the input is empty
+    or unparseable (the caller leaves such a row untouched).
+    """
+    from datetime import date, timedelta
+
+    if not value:
+        return None
+    try:
+        parsed = date.fromisoformat(str(value)[:10])
+    except ValueError:
+        return None
+    return (parsed + timedelta(days=delta_days)).isoformat()
+
+
+@router.post(
+    "/{schedule_id}/level-apply",
+    response_model=LevelApplyResponse,
+)
+async def level_apply_for_schedule(
+    schedule_id: uuid.UUID,
+    data: LevelPreviewRequest,
+    session: SessionDep,
+    user_id: CurrentUserId,
+    _perm: None = Depends(RequirePermission("schedule_advanced.update")),
+) -> LevelApplyResponse:
+    """Run resource leveling and COMMIT it: persist each shifted activity's
+    start / end dates (moved by its leveling delta in calendar days, span
+    preserved). Same pure arithmetic as ``/level-preview``; this one writes.
+
+    Calendar-day shift keeps the result consistent with the calendar-day CPM; a
+    working-day-aware shift is a later refinement (tracked with CPM calendar
+    wiring).
+    """
+    from sqlalchemy import select
+
+    from app.modules.resources.resource_engine import level_preview as _level_preview
+    from app.modules.schedule.models import Activity as _Activity
+    from app.modules.schedule.models import ScheduleRelationship as _Rel
+    from app.modules.schedule_advanced.cpm import Activity as _CPMActivity
+    from app.modules.schedule_advanced.cpm import TaskNetwork as _CPMNetwork
+
+    project_id = await _project_id_for_schedule(schedule_id, session)
+    await verify_project_access(project_id, user_id, session)
+
+    act_rows = (await session.execute(select(_Activity).where(_Activity.schedule_id == schedule_id))).scalars().all()
+    rel_rows = (await session.execute(select(_Rel).where(_Rel.schedule_id == schedule_id))).scalars().all()
+
+    rel_index: dict[uuid.UUID, list[tuple[uuid.UUID, str, int]]] = {}
+    for r in rel_rows:
+        rel_index.setdefault(r.successor_id, []).append(
+            (r.predecessor_id, r.relationship_type or "FS", int(r.lag_days or 0)),
+        )
+
+    cpm_acts: list[_CPMActivity] = []
+    for a in act_rows:
+        required: dict[str, int] = {}
+        for res in a.resources or []:
+            if isinstance(res, dict) and res.get("name"):
+                required[str(res["name"])] = int(res.get("count", 1) or 1)
+        cpm_acts.append(
+            _CPMActivity(
+                id=a.id,
+                duration=int(a.duration_days or 0),
+                predecessors=rel_index.get(a.id, []),
+                required_resources=required,
+            ),
+        )
+
+    network = _CPMNetwork(cpm_acts)
+    preview = _level_preview(network, dict(data.resource_limits or {}), splittable=set(data.splittable))
+
+    shift_by_id = {str(s.activity_id): int(s.delta) for s in preview.shifts if int(s.delta) != 0}
+    applied = 0
+    skipped = 0
+    for a in act_rows:
+        delta = shift_by_id.get(str(a.id))
+        if not delta:
+            continue
+        new_start = _shift_iso_date(a.start_date, delta)
+        new_end = _shift_iso_date(a.end_date, delta)
+        if new_start is None or new_end is None:
+            skipped += 1
+            continue
+        a.start_date = new_start
+        a.end_date = new_end
+        applied += 1
+
+    await session.flush()
+
+    return LevelApplyResponse(
+        schedule_id=schedule_id,
+        num_shifted=len(preview.shifts),
+        num_applied=applied,
+        num_skipped=skipped,
+        finish_delta_days=preview.finish_delta_days,
+        base_finish_workday=preview.base_finish_workday,
+        leveled_finish_workday=preview.leveled_finish_workday,
     )
 
 
@@ -1891,3 +2132,670 @@ async def get_takt_violations(
     project_id = await _project_id_for_takt(takt_id, takt_service, service)
     await verify_project_access(project_id, user_id, session)
     return await takt_service.detect_violations(takt_id)
+
+
+# ── Claims-grade CPM analytics (T1.2) + Monte-Carlo schedule risk (T2.1) ─────
+#
+# Both read the schedule's activities + relationships, build the shared pure
+# ``cpm.TaskNetwork`` and run a pure engine over it. Neither mutates the
+# schedule, so both are gated by ``schedule_advanced.read`` (plus the usual
+# project-access check).
+
+
+async def _load_schedule_rows(schedule_id: uuid.UUID, session: SessionDep) -> tuple[list, list]:
+    """Load all Activity + ScheduleRelationship rows for a schedule."""
+    from sqlalchemy import select
+
+    from app.modules.schedule.models import Activity as _Activity
+    from app.modules.schedule.models import ScheduleRelationship as _Rel
+
+    act_rows = (await session.execute(select(_Activity).where(_Activity.schedule_id == schedule_id))).scalars().all()
+    rel_rows = (await session.execute(select(_Rel).where(_Rel.schedule_id == schedule_id))).scalars().all()
+    return list(act_rows), list(rel_rows)
+
+
+def _build_cpm_network(act_rows: list, rel_rows: list):
+    """Build a pure ``cpm.TaskNetwork`` from ORM Activity + relationship rows.
+
+    Predecessor links carry their relationship type (FS/SS/FF/SF) and lag, so
+    all four PDM link types flow into the engine. Resource demand is read from
+    each activity's ``resources`` JSON (``name`` -> integer ``count``).
+    """
+    from app.modules.schedule_advanced.cpm import Activity as _CPMActivity
+    from app.modules.schedule_advanced.cpm import TaskNetwork as _CPMNetwork
+
+    rel_index: dict[uuid.UUID, list[tuple[uuid.UUID, str, int]]] = {}
+    for r in rel_rows:
+        rel_index.setdefault(r.successor_id, []).append(
+            (r.predecessor_id, r.relationship_type or "FS", int(r.lag_days or 0)),
+        )
+
+    cpm_acts: list = []
+    for a in act_rows:
+        required: dict[str, int] = {}
+        for res in a.resources or []:
+            if isinstance(res, dict) and res.get("name"):
+                required[str(res["name"])] = int(res.get("count", 1) or 1)
+        cpm_acts.append(
+            _CPMActivity(
+                id=a.id,
+                duration=int(a.duration_days or 0),
+                predecessors=rel_index.get(a.id, []),
+                required_resources=required,
+            ),
+        )
+    return _CPMNetwork(cpm_acts)
+
+
+@router.post(
+    "/{schedule_id}/schedule-quality",
+    response_model=ScheduleQualityResponse,
+)
+async def schedule_quality_for_schedule(
+    schedule_id: uuid.UUID,
+    session: SessionDep,
+    user_id: CurrentUserId,
+    _perm: None = Depends(RequirePermission("schedule_advanced.read")),
+) -> ScheduleQualityResponse:
+    """Claims-grade read-only schedule analysis for ``schedule_id``.
+
+    Returns the Longest Path, the ranked float-path decomposition, the
+    scheduling QA log (open ends, hard constraints, out-of-sequence, lag
+    issues) and per-activity explain strings - all from a single CPM pass over
+    the four PDM link types. Nothing is written back to the schedule.
+    """
+    from app.modules.schedule_advanced.cpm import CycleError, QAOptions
+    from app.modules.schedule_advanced.cpm_report import quality_report
+
+    project_id = await _project_id_for_schedule(schedule_id, session)
+    await verify_project_access(project_id, user_id, session)
+
+    act_rows, rel_rows = await _load_schedule_rows(schedule_id, session)
+    network = _build_cpm_network(act_rows, rel_rows)
+
+    # Mandatory date constraints surface as HARD_CONSTRAINT findings.
+    hard = {a.id for a in act_rows if (a.constraint_type or "") in {"must_start_on", "must_finish_on"}}
+    options = QAOptions(hard_constrained=hard)
+
+    try:
+        report = quality_report(network, options=options)
+    except CycleError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+
+    return ScheduleQualityResponse(schedule_id=schedule_id, **report)
+
+
+def _risk_result_to_dict(result) -> dict:
+    """Map a pure ``ScheduleRiskResult`` dataclass into a response dict.
+
+    Note ``cpm`` ids are stringified, and the cost-engine CDF point's ``cost``
+    field carries the finish-day x-value for a schedule run (the engine reuses
+    the cost-engine CDF container), so it maps to ``x`` here.
+
+    The headline cost figures (``target_cost`` / ``cost_mean``) are emitted as
+    money (Decimal-as-string, v3 §10); the engine produces them as floats so we
+    convert via ``Decimal(str(...))`` to avoid binary-float artefacts.
+    """
+    from decimal import Decimal
+
+    jc = result.joint_confidence
+    return {
+        "iterations": result.iterations,
+        "deterministic_finish": result.deterministic_finish,
+        "mean": result.mean,
+        "std_dev": result.std_dev,
+        "cv_pct": result.cv_pct,
+        "percentiles": result.percentiles,
+        "contingency": result.contingency,
+        "contingency_pct": result.contingency_pct,
+        "recommended_finish": result.recommended_finish,
+        "target_confidence": result.target_confidence,
+        "prob_within_deterministic": result.prob_within_deterministic,
+        "correlation": result.correlation,
+        "seed": result.seed,
+        "convergence_status": result.convergence_status,
+        "convergence_margin_pct": result.convergence_margin_pct,
+        "histogram": [{"bin_start": h.bin_start, "bin_end": h.bin_end, "count": h.count} for h in result.histogram],
+        "cdf": [{"x": c.cost, "cumulative_prob": c.cumulative_prob} for c in result.cdf],
+        "criticality": [
+            {
+                "activity_id": str(s.activity_id),
+                "criticality_index": s.criticality_index,
+                "cruciality": s.cruciality,
+                "duration_sensitivity": s.duration_sensitivity,
+                "mean_duration": s.mean_duration,
+            }
+            for s in result.criticality
+        ],
+        "drivers": [
+            {
+                "activity_id": str(d.activity_id),
+                "rank_correlation": d.rank_correlation,
+                "swing_low": d.swing_low,
+                "swing_high": d.swing_high,
+            }
+            for d in result.drivers
+        ],
+        "joint_confidence": None
+        if jc is None
+        else {
+            "target_finish": jc.target_finish,
+            "target_cost": Decimal(str(jc.target_cost)),
+            "jcl": jc.jcl,
+            "prob_on_time": jc.prob_on_time,
+            "prob_on_budget": jc.prob_on_budget,
+            "cost_mean": Decimal(str(jc.cost_mean)),
+            "cost_percentiles": jc.cost_percentiles,
+            "correlation": jc.correlation,
+            "scatter": [{"finish": p.finish, "cost": p.cost} for p in jc.scatter],
+        },
+    }
+
+
+@router.post(
+    "/{schedule_id}/schedule-risk",
+    response_model=ScheduleRiskResponse,
+)
+async def schedule_risk_for_schedule(
+    schedule_id: uuid.UUID,
+    data: ScheduleRiskRequest,
+    session: SessionDep,
+    user_id: CurrentUserId,
+    _perm: None = Depends(RequirePermission("schedule_advanced.read")),
+) -> ScheduleRiskResponse:
+    """Run a correlated Monte-Carlo schedule-risk simulation for ``schedule_id``.
+
+    Activity durations are sampled (Latin Hypercube by default) around their
+    stored value using the run's optimistic / pessimistic band, or an explicit
+    three-point override per activity. Returns finish-date percentiles, an
+    S-curve, the per-activity criticality index, a duration tornado and - when
+    ``cost_inputs`` is supplied - the Joint Confidence Level. Read-only.
+    """
+    from app.modules.schedule_advanced.cpm import CycleError
+    from app.modules.schedule_advanced.schedule_risk_engine import (
+        ActivityDurationInput,
+        CostInputs,
+        simulate_schedule,
+    )
+
+    project_id = await _project_id_for_schedule(schedule_id, session)
+    await verify_project_access(project_id, user_id, session)
+
+    act_rows, rel_rows = await _load_schedule_rows(schedule_id, session)
+    if not act_rows:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Schedule has no activities to analyse.",
+        )
+
+    network = _build_cpm_network(act_rows, rel_rows)
+    base_by_id = {a.id: a.duration for a in network.activities}
+    valid_ids = set(network.ids())
+
+    risks: list[ActivityDurationInput] = []
+    for r in data.activity_risks:
+        if r.activity_id in valid_ids:
+            risks.append(
+                ActivityDurationInput(
+                    activity_id=r.activity_id,
+                    base=float(base_by_id.get(r.activity_id, 0)),
+                    low=r.low,
+                    mode=r.mode,
+                    high=r.high,
+                    distribution=r.distribution,
+                ),
+            )
+
+    cost_inputs = None
+    if data.cost_inputs is not None:
+        ci = data.cost_inputs
+        # The pure engine does float math; the schema carries Decimal money
+        # (v3 §10), so coerce to float at the engine boundary.
+        cost_inputs = CostInputs(
+            base_cost=float(ci.base_cost),
+            cost_low=float(ci.cost_low) if ci.cost_low is not None else None,
+            cost_mode=float(ci.cost_mode) if ci.cost_mode is not None else None,
+            cost_high=float(ci.cost_high) if ci.cost_high is not None else None,
+            cost_target=float(ci.cost_target) if ci.cost_target is not None else None,
+            distribution=ci.distribution,
+            optimistic_pct=data.optimistic_pct,
+            pessimistic_pct=data.pessimistic_pct,
+        )
+
+    try:
+        result = simulate_schedule(
+            network.activities,
+            None,
+            risks,
+            None,
+            iterations=data.iterations,
+            correlation=data.correlation,
+            seed=data.seed,
+            sampling=data.sampling,
+            target_confidence=data.target_confidence,
+            optimistic_pct=data.optimistic_pct,
+            pessimistic_pct=data.pessimistic_pct,
+            cost_inputs=cost_inputs,
+        )
+    except CycleError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+
+    return ScheduleRiskResponse(schedule_id=schedule_id, **_risk_result_to_dict(result))
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Forensic delay analysis (T2.2) - persisted, exhibit-producing flow
+# ────────────────────────────────────────────────────────────────────────────
+# CRUD over the delay-analysis spine + the compute endpoint that runs the pure
+# delay engine and persists windows + the exhibit ``result_json``. Read-only
+# what-if stays on ``POST /tia`` / ``/compute-cpm``; this is the persisted path.
+# Access control mirrors the compute-cpm IDOR pattern: resolve the analysis,
+# then ``verify_project_access`` against its ``project_id``.
+# ════════════════════════════════════════════════════════════════════════════
+
+
+def _get_delay_service(session: SessionDep) -> DelayAnalysisService:
+    return DelayAnalysisService(session)
+
+
+def _build_str_network(act_rows: list, rel_rows: list):
+    """Build a ``cpm.TaskNetwork`` keyed by STRING activity ids.
+
+    Fragnet ``host_id`` / event ``insert_at`` are stored as strings, so the
+    delay engine must compare them against string activity ids (the
+    UUID-keyed :func:`_build_cpm_network` would never match a stored ref).
+    """
+    from app.modules.schedule_advanced.cpm import Activity as _CPMActivity
+    from app.modules.schedule_advanced.cpm import TaskNetwork as _CPMNetwork
+
+    rel_index: dict[str, list[tuple[str, str, int]]] = {}
+    for r in rel_rows:
+        rel_index.setdefault(str(r.successor_id), []).append(
+            (str(r.predecessor_id), r.relationship_type or "FS", int(r.lag_days or 0)),
+        )
+    cpm_acts: list = []
+    for a in act_rows:
+        cpm_acts.append(
+            _CPMActivity(
+                id=str(a.id),
+                duration=int(a.duration_days or 0),
+                predecessors=rel_index.get(str(a.id), []),
+            ),
+        )
+    return _CPMNetwork(cpm_acts)
+
+
+async def _load_delay_analysis(
+    analysis_id: uuid.UUID,
+    svc: DelayAnalysisService,
+    user_id: CurrentUserId,
+    session: SessionDep,
+):
+    """Load an analysis, enforce project access (IDOR), or 404."""
+    analysis = await svc.get_analysis(analysis_id)
+    if analysis is None:
+        raise _not_found("Delay analysis not found")
+    await verify_project_access(analysis.project_id, user_id, session)
+    return analysis
+
+
+def _assert_draft(analysis) -> None:
+    if analysis.status != "draft":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Delay analysis is {analysis.status!r}; only a draft can be edited.",
+        )
+
+
+async def _delay_response(svc: DelayAnalysisService, analysis) -> DelayAnalysisResponse:
+    resp = DelayAnalysisResponse.model_validate(analysis)
+    ev_resps: list[DelayEventResponse] = []
+    for ev in await svc.list_events(analysis.id):
+        ev_resp = DelayEventResponse.model_validate(ev)
+        ev_resp.fragnets = [FragnetResponse.model_validate(f) for f in await svc.list_fragnets(ev.id)]
+        ev_resps.append(ev_resp)
+    resp.events = ev_resps
+    resp.windows = [DelayWindowResponse.model_validate(w) for w in await svc.list_windows(analysis.id)]
+    return resp
+
+
+@router.post("/delay-analyses", response_model=DelayAnalysisResponse, status_code=status.HTTP_201_CREATED)
+async def create_delay_analysis(
+    data: DelayAnalysisCreate,
+    project_id: uuid.UUID,
+    session: SessionDep,
+    user_id: CurrentUserId,
+    _perm: None = Depends(RequirePermission("schedule_advanced.create")),
+) -> DelayAnalysisResponse:
+    """Create a draft forensic delay analysis under ``project_id``."""
+    await verify_project_access(project_id, user_id, session)
+    if data.schedule_id is not None:
+        # Anti-IDOR: the targeted schedule must belong to this project. Without
+        # this check a caller could point schedule_id at another tenant's
+        # schedule and have /compute and /auto-fragnet read its activities and
+        # relationships. 404 (not 403) so it cannot be used as an existence
+        # oracle, matching verify_project_access's convention.
+        if await _project_id_for_schedule(data.schedule_id, session) != project_id:
+            raise _not_found("Schedule not found")
+    svc = _get_delay_service(session)
+    analysis = await svc.create_analysis(project_id, data, user_id)
+    return await _delay_response(svc, analysis)
+
+
+@router.get("/delay-analyses", response_model=list[DelayAnalysisListItem])
+async def list_delay_analyses(
+    project_id: uuid.UUID,
+    session: SessionDep,
+    user_id: CurrentUserId,
+    _perm: None = Depends(RequirePermission("schedule_advanced.read")),
+) -> list[DelayAnalysisListItem]:
+    """List the delay analyses for a project."""
+    await verify_project_access(project_id, user_id, session)
+    svc = _get_delay_service(session)
+    return [DelayAnalysisListItem.model_validate(a) for a in await svc.list_analyses(project_id)]
+
+
+@router.get("/delay-analyses/{analysis_id}", response_model=DelayAnalysisResponse)
+async def get_delay_analysis(
+    analysis_id: uuid.UUID,
+    session: SessionDep,
+    user_id: CurrentUserId,
+    _perm: None = Depends(RequirePermission("schedule_advanced.read")),
+) -> DelayAnalysisResponse:
+    """Fetch an analysis with its events, fragnets, windows and result."""
+    svc = _get_delay_service(session)
+    analysis = await _load_delay_analysis(analysis_id, svc, user_id, session)
+    return await _delay_response(svc, analysis)
+
+
+@router.patch("/delay-analyses/{analysis_id}", response_model=DelayAnalysisResponse)
+async def patch_delay_analysis(
+    analysis_id: uuid.UUID,
+    data: DelayAnalysisPatch,
+    session: SessionDep,
+    user_id: CurrentUserId,
+    _perm: None = Depends(RequirePermission("schedule_advanced.update")),
+) -> DelayAnalysisResponse:
+    """Edit a draft analysis (only a draft is mutable)."""
+    svc = _get_delay_service(session)
+    analysis = await _load_delay_analysis(analysis_id, svc, user_id, session)
+    _assert_draft(analysis)
+    await svc.patch_analysis(analysis, data)
+    return await _delay_response(svc, analysis)
+
+
+@router.delete("/delay-analyses/{analysis_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_delay_analysis(
+    analysis_id: uuid.UUID,
+    session: SessionDep,
+    user_id: CurrentUserId,
+    _perm: None = Depends(RequirePermission("schedule_advanced.delete")),
+) -> None:
+    """Delete a draft analysis (issued analyses are immutable)."""
+    svc = _get_delay_service(session)
+    analysis = await _load_delay_analysis(analysis_id, svc, user_id, session)
+    if analysis.status == "issued":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="An issued analysis cannot be deleted.")
+    await svc.delete_analysis(analysis)
+
+
+@router.post(
+    "/delay-analyses/{analysis_id}/events",
+    response_model=DelayEventResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def add_delay_event(
+    analysis_id: uuid.UUID,
+    data: DelayEventCreate,
+    session: SessionDep,
+    user_id: CurrentUserId,
+    _perm: None = Depends(RequirePermission("schedule_advanced.update")),
+) -> DelayEventResponse:
+    """Add a causative event to a draft analysis."""
+    svc = _get_delay_service(session)
+    analysis = await _load_delay_analysis(analysis_id, svc, user_id, session)
+    _assert_draft(analysis)
+    event = await svc.add_event(analysis.id, data)
+    return DelayEventResponse.model_validate(event)
+
+
+@router.patch("/delay-analyses/{analysis_id}/events/{event_id}", response_model=DelayEventResponse)
+async def patch_delay_event(
+    analysis_id: uuid.UUID,
+    event_id: uuid.UUID,
+    data: DelayEventPatch,
+    session: SessionDep,
+    user_id: CurrentUserId,
+    _perm: None = Depends(RequirePermission("schedule_advanced.update")),
+) -> DelayEventResponse:
+    """Edit an event on a draft analysis."""
+    svc = _get_delay_service(session)
+    analysis = await _load_delay_analysis(analysis_id, svc, user_id, session)
+    _assert_draft(analysis)
+    event = await svc.get_event(event_id)
+    if event is None or event.analysis_id != analysis.id:
+        raise _not_found("Delay event not found")
+    await svc.patch_event(event, data)
+    ev_resp = DelayEventResponse.model_validate(event)
+    ev_resp.fragnets = [FragnetResponse.model_validate(f) for f in await svc.list_fragnets(event.id)]
+    return ev_resp
+
+
+@router.delete(
+    "/delay-analyses/{analysis_id}/events/{event_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_delay_event(
+    analysis_id: uuid.UUID,
+    event_id: uuid.UUID,
+    session: SessionDep,
+    user_id: CurrentUserId,
+    _perm: None = Depends(RequirePermission("schedule_advanced.update")),
+) -> None:
+    """Delete an event (and its fragnet) from a draft analysis."""
+    svc = _get_delay_service(session)
+    analysis = await _load_delay_analysis(analysis_id, svc, user_id, session)
+    _assert_draft(analysis)
+    event = await svc.get_event(event_id)
+    if event is None or event.analysis_id != analysis.id:
+        raise _not_found("Delay event not found")
+    await svc.delete_event(event)
+
+
+@router.put("/delay-analyses/{analysis_id}/events/{event_id}/fragnet", response_model=FragnetResponse)
+async def set_delay_fragnet(
+    analysis_id: uuid.UUID,
+    event_id: uuid.UUID,
+    data: FragnetUpsert,
+    session: SessionDep,
+    user_id: CurrentUserId,
+    _perm: None = Depends(RequirePermission("schedule_advanced.update")),
+) -> FragnetResponse:
+    """Define (replace) the fragnet for an event on a draft analysis."""
+    svc = _get_delay_service(session)
+    analysis = await _load_delay_analysis(analysis_id, svc, user_id, session)
+    _assert_draft(analysis)
+    event = await svc.get_event(event_id)
+    if event is None or event.analysis_id != analysis.id:
+        raise _not_found("Delay event not found")
+    frag = await svc.set_fragnet(event.id, data)
+    return FragnetResponse.model_validate(frag)
+
+
+@router.post("/delay-analyses/{analysis_id}/auto-fragnet", response_model=FragnetResponse)
+async def auto_delay_fragnet(
+    analysis_id: uuid.UUID,
+    data: AutoFragnetRequest,
+    session: SessionDep,
+    user_id: CurrentUserId,
+    _perm: None = Depends(RequirePermission("schedule_advanced.update")),
+) -> FragnetResponse:
+    """Wizard helper: synthesise a default fragnet and attach it to an event."""
+    from app.modules.schedule_advanced.delay_engine import auto_fragnet as _auto_fragnet
+
+    svc = _get_delay_service(session)
+    analysis = await _load_delay_analysis(analysis_id, svc, user_id, session)
+    _assert_draft(analysis)
+    event = await svc.get_event(data.delay_event_id)
+    if event is None or event.analysis_id != analysis.id:
+        raise _not_found("Delay event not found")
+    if analysis.schedule_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Analysis has no schedule to synthesise a fragnet against.",
+        )
+    act_rows, rel_rows = await _load_schedule_rows(analysis.schedule_id, session)
+    network = _build_str_network(act_rows, rel_rows)
+    frag = _auto_fragnet(network, data.insert_at_activity_ref, data.insert_mode, data.added_days)
+    upsert = FragnetUpsert(
+        insert_mode=frag.insert_mode,
+        insert_at_activity_ref=str(frag.host_id),
+        added_duration_days=frag.added_duration_days,
+        fragnet_activities=list(frag.new_activities),
+        rewires=[
+            {
+                "successor_id": rw.successor_id,
+                "pred_id": rw.pred_id,
+                "op": rw.op,
+                "dep_type": rw.dep_type,
+                "lag": rw.lag,
+            }
+            for rw in frag.rewires
+        ],
+    )
+    saved = await svc.set_fragnet(event.id, upsert)
+    return FragnetResponse.model_validate(saved)
+
+
+@router.post("/delay-analyses/{analysis_id}/compute", response_model=DelayAnalysisResponse)
+async def compute_delay_analysis(
+    analysis_id: uuid.UUID,
+    data: DelayComputeRequest,
+    session: SessionDep,
+    user_id: CurrentUserId,
+    _perm: None = Depends(RequirePermission("schedule_advanced.update")),
+) -> DelayAnalysisResponse:
+    """Run the analysis method, persist the windows + totals + exhibit result."""
+    from app.modules.schedule_advanced.cpm import CycleError
+    from app.modules.schedule_advanced.delay_report import run_analysis
+
+    svc = _get_delay_service(session)
+    analysis = await _load_delay_analysis(analysis_id, svc, user_id, session)
+    if analysis.status == "issued":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="An issued analysis is immutable.")
+    if analysis.schedule_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Analysis has no schedule to compute against.",
+        )
+    act_rows, rel_rows = await _load_schedule_rows(analysis.schedule_id, session)
+    if not act_rows:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Schedule has no activities to analyse.",
+        )
+    network = _build_str_network(act_rows, rel_rows)
+    baseline = network.activities
+    event_specs = await svc.build_event_specs(analysis.id)
+    apportionment = data.apportionment_method or analysis.apportionment_method
+    try:
+        result = run_analysis(
+            analysis.method,
+            baseline_activities=baseline,
+            asbuilt_activities=baseline,
+            events=event_specs,
+            apportionment=apportionment,
+            snapshots=[baseline, baseline],
+        )
+    except CycleError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    await svc.persist_compute(analysis, result)
+    return await _delay_response(svc, analysis)
+
+
+@router.post("/delay-analyses/{analysis_id}/issue", response_model=DelayAnalysisResponse)
+async def issue_delay_analysis(
+    analysis_id: uuid.UUID,
+    session: SessionDep,
+    user_id: CurrentUserId,
+    _perm: None = Depends(RequirePermission("schedule_advanced.update")),
+) -> DelayAnalysisResponse:
+    """Freeze + e-sign a computed analysis (issued analyses are immutable)."""
+    from datetime import UTC, datetime
+
+    from app.modules.construction_control.signing import snapshot_sha256
+
+    svc = _get_delay_service(session)
+    analysis = await _load_delay_analysis(analysis_id, svc, user_id, session)
+    if analysis.status == "issued":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Analysis already issued.")
+    if analysis.status != "computed":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Only a computed analysis can be issued.",
+        )
+    snapshot = {
+        "id": str(analysis.id),
+        "project_id": str(analysis.project_id),
+        "method": analysis.method,
+        "name": analysis.name,
+        "total_entitlement_days": analysis.total_entitlement_days,
+        "result_json": analysis.result_json,
+    }
+    sha = snapshot_sha256(snapshot)
+    await svc.issue(
+        analysis,
+        user_id=user_id,
+        signature_sha256=sha,
+        signature_snapshot=snapshot,
+        issued_at=datetime.now(UTC).isoformat(),
+    )
+    return await _delay_response(svc, analysis)
+
+
+@router.post("/delay-analyses/{analysis_id}/raise-eot-claim", response_model=RaiseEotClaimResponse)
+async def raise_eot_claim(
+    analysis_id: uuid.UUID,
+    session: SessionDep,
+    user_id: CurrentUserId,
+    _perm: None = Depends(RequirePermission("schedule_advanced.update")),
+) -> RaiseEotClaimResponse:
+    """Create an Extension-of-Time claim pre-filled from a computed analysis."""
+    from datetime import UTC, datetime
+
+    from app.modules.variations.models import ExtensionOfTimeClaim
+
+    svc = _get_delay_service(session)
+    analysis = await _load_delay_analysis(analysis_id, svc, user_id, session)
+    if analysis.status not in ("computed", "issued"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Compute the analysis before raising an EOT claim.",
+        )
+    claim = ExtensionOfTimeClaim(
+        project_id=analysis.project_id,
+        raised_at=datetime.now(UTC).isoformat(),
+        raised_by=str(user_id) if user_id is not None else None,
+        description=f"Raised from forensic delay analysis '{analysis.name}' ({analysis.method}).",
+        root_cause_category="employer",
+        requested_days=analysis.total_entitlement_days,
+        critical_path_impact=bool(analysis.total_entitlement_days > 0),
+        status="draft",
+        tia_delta_days=analysis.total_entitlement_days,
+        tia_computed_at=datetime.now(UTC).isoformat(),
+        delay_analysis_id=analysis.id,
+    )
+    session.add(claim)
+    await session.flush()
+    await svc.set_eot_claim(analysis, claim.id)
+    return RaiseEotClaimResponse(
+        eot_claim_id=claim.id,
+        delay_analysis_id=analysis.id,
+        requested_days=analysis.total_entitlement_days,
+    )

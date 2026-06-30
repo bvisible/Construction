@@ -9,6 +9,8 @@
 
 import { useEffect, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useDisplayQuantity } from '@/shared/hooks/useDisplayQuantity';
+import type { DisplayQuantity } from '@/shared/lib/unitConversion';
 import {
   ZoomIn,
   Clipboard,
@@ -48,14 +50,14 @@ export interface BIMContextMenuActions {
   onCreateTask?: () => void;
   onIsolate?: () => void;
   onHide?: () => void;
-  /** W6.6 — restore visibility of all elements that were hidden via
+  /** W6.6 - restore visibility of all elements that were hidden via
    *  `Hide selected` or `Isolate selection`. Disabled in the menu when
    *  nothing is hidden. */
   onShowAll?: () => void;
   onColorByCategory?: () => void;
   onShowInFilterPanel?: () => void;
   onShowSimilar?: () => void;
-  /** W6.6 — true when at least one element is currently hidden by
+  /** W6.6 - true when at least one element is currently hidden by
    *  hide/isolate. Used to enable/disable the "Show all" menu item. */
   hasHidden?: boolean;
 }
@@ -82,21 +84,30 @@ function categorySummary(elements: BIMElementData[]): string {
     .join(', ');
 }
 
-/** Format a volume / area number for the header line. */
-function fmtQty(el: BIMElementData): string | null {
+/** Format a volume / area number for the header line. The stored quantities
+ *  are metric-canonical (m\u00B3 / m\u00B2 / m); `convert` turns the value + unit into
+ *  the user's measurement system for this display-only header. */
+function fmtQty(
+  el: BIMElementData,
+  convert: (value: number, metricUnit: string) => DisplayQuantity,
+): string | null {
   const q = el.quantities;
   if (!q) return null;
+  const fmt = (value: number, metricUnit: string): string => {
+    const d = convert(value, metricUnit);
+    return `${d.value.toLocaleString(undefined, { maximumFractionDigits: 2 })} ${d.unit}`;
+  };
   const vol = q['volume'] ?? q['Volume'];
   if (typeof vol === 'number' && vol > 0) {
-    return `${vol.toLocaleString(undefined, { maximumFractionDigits: 2 })} m\u00B3`;
+    return fmt(vol, 'm\u00B3');
   }
   const area = q['area'] ?? q['Area'];
   if (typeof area === 'number' && area > 0) {
-    return `${area.toLocaleString(undefined, { maximumFractionDigits: 2 })} m\u00B2`;
+    return fmt(area, 'm\u00B2');
   }
   const len = q['length'] ?? q['Length'];
   if (typeof len === 'number' && len > 0) {
-    return `${len.toLocaleString(undefined, { maximumFractionDigits: 2 })} m`;
+    return fmt(len, 'm');
   }
   return null;
 }
@@ -105,6 +116,7 @@ function fmtQty(el: BIMElementData): string | null {
 
 export function BIMContextMenu({ menu, actions, onClose }: BIMContextMenuProps) {
   const { t } = useTranslation();
+  const q = useDisplayQuantity();
   const menuRef = useRef<HTMLDivElement>(null);
 
   const isMulti = menu.selectedElements.length > 1;
@@ -177,7 +189,7 @@ export function BIMContextMenu({ menu, actions, onClose }: BIMContextMenuProps) 
                 <span className="mx-1">{menu.element.storey}</span>
               )}
               {(() => {
-                const qty = fmtQty(menu.element!);
+                const qty = fmtQty(menu.element!, q.convert);
                 return qty ? <span className="mx-1">{qty}</span> : null;
               })()}
             </div>
@@ -244,7 +256,7 @@ export function BIMContextMenu({ menu, actions, onClose }: BIMContextMenuProps) 
 
         <MenuDivider />
 
-        {/* Group 3: Visibility — labelled "Solo Mode" (W6.6 Stream C) so the
+        {/* Group 3: Visibility - labelled "Solo Mode" (W6.6 Stream C) so the
             hide / isolate / show-all triad reads as one feature. */}
         <MenuGroupHeader
           label={t('bim.solo_mode.group_header', { defaultValue: 'Solo Mode' })}
@@ -278,7 +290,7 @@ export function BIMContextMenu({ menu, actions, onClose }: BIMContextMenuProps) 
           }
           onClick={() => { actions.onColorByCategory?.(); onClose(); }}
         />
-        {/* W6.6 — restore visibility of all hidden elements. Disabled when
+        {/* W6.6 - restore visibility of all hidden elements. Disabled when
             nothing is hidden so the menu doesn't lie. */}
         <MenuItem
           icon={RotateCcw}

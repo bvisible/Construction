@@ -100,6 +100,8 @@ class MoCEntryUpdate(BaseModel):
     variation_request_id: uuid.UUID | None = None
     variation_order_id: uuid.UUID | None = None
     change_order_id: uuid.UUID | None = None
+    ball_in_court: str | None = None
+    response_due_date: str | None = None
     metadata: dict[str, Any] | None = None
 
     @field_validator("cost_impact", mode="before")
@@ -135,6 +137,8 @@ class MoCEntryResponse(BaseModel):
     variation_request_id: uuid.UUID | None
     variation_order_id: uuid.UUID | None
     change_order_id: uuid.UUID | None
+    ball_in_court: str | None = None
+    response_due_date: str | None = None
     # The ORM stores this under the ``metadata_`` attribute (``metadata`` is
     # reserved by SQLAlchemy declarative for the MetaData registry). Read from
     # the real attribute via validation_alias, mirroring NCR/procurement, so the

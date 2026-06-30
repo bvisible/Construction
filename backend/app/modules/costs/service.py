@@ -1145,19 +1145,21 @@ class CostBenchmarkService:
         region: str | None = None,
         currency: str | None = None,
         cost_per_m2: Decimal | None = None,
+        metric: str = "cost_per_m2",
     ) -> dict[str, Any]:
-        """Build the own-portfolio distribution payload.
+        """Build the own-portfolio distribution payload for the chosen metric.
 
-        Returns a plain dict shaped for ``BenchmarkResponse``. ``own_portfolio``
-        is None and ``percentile_vs_own`` is None when fewer than one project
-        has both a cost and an area in the filtered set.
+        Returns a plain dict shaped for ``BenchmarkResponse``. The default metric
+        ``cost_per_m2`` is the BOQ grand total over gross floor area, the figure
+        the original benchmark positions, and is currency-scoped. ``overrun_pct``
+        and ``recovery_rate`` benchmark the same tenant projects on two
+        dimensionless ratios, so a firm can read its own cost-overrun and
+        recovery-rate distribution - by region when the ``region`` filter is set.
+        For every metric ``own_portfolio`` / ``percentile_vs_own`` are None when
+        no project in the filtered set yields a value for it. ``cost_per_m2`` is
+        the optional value to position, read in the unit of the selected metric.
         """
-        from app.modules.boq.models import BOQ, Position
-        from app.modules.boq.service import (
-            _is_section,
-            _leaf_total_base_with_resources,
-            _project_fx_map,
-        )
+        metric = (metric or "cost_per_m2").strip().lower()
 
         # ── 1. Resolve the candidate projects (tenant-scoped + filtered) ──
         projects = await self._candidate_projects(
@@ -1167,61 +1169,44 @@ class CostBenchmarkService:
             region=region,
         )
         if not projects:
-            return self._empty(cost_per_m2)
+            return self._empty(metric)
 
-        project_ids = [p.id for p in projects]
-        projects_by_id = {p.id: p for p in projects}
+        if metric in ("overrun_pct", "recovery_rate"):
+            return await self._ratio_distribution(projects, metric=metric, input_value=cost_per_m2)
 
-        # ── 2. One query for each project's BOQ leaf positions ────────────
-        # Sum each project's BOQ in its OWN base currency. Position.total is
-        # stored in the position's NATIVE currency (per-position
-        # metadata.currency or foreign-priced resources), so a blind SUM of
-        # the raw strings blends currencies inside a single project (e.g.
-        # 100000 ARS + 25000 USD added as 125000). We mirror the canonical
-        # BOQ rollup: convert every leaf into the project base via the
-        # project's FX table before accumulating, so the per-project cost/m2
-        # is genuinely single-currency (Issues #111/#131/#88/#157). Section
-        # rows are skipped exactly as the direct-cost rollup does.
-        rows = (
-            await self.session.execute(
-                select(BOQ.project_id, Position)
-                .join(Position, Position.boq_id == BOQ.id)
-                .where(BOQ.project_id.in_(project_ids))
-            )
-        ).all()
-        # Cache each project's (base_currency, fx_map) so we build it once.
-        fx_by_project: dict[uuid.UUID, tuple[str, dict[str, str]]] = {}
-        totals_by_project: dict[uuid.UUID, Decimal] = {}
-        for proj_id, pos in rows:
-            if _is_section(pos):
-                continue
-            fx = fx_by_project.get(proj_id)
-            if fx is None:
-                proj = projects_by_id.get(proj_id)
-                base_ccy = (getattr(proj, "currency", "") or "").strip().upper()
-                fx = (base_ccy, _project_fx_map(proj))
-                fx_by_project[proj_id] = fx
-            base_ccy, fx_map = fx
-            amount = _leaf_total_base_with_resources(pos, fx_map, base_ccy)
-            if amount is None or amount <= 0:
-                continue
-            totals_by_project[proj_id] = totals_by_project.get(proj_id, Decimal("0")) + amount
+        # Default (and fallback for an unknown metric): the money-denominated
+        # cost-per-m2 distribution.
+        return await self._cost_per_m2_distribution(projects, currency=currency, cost_per_m2=cost_per_m2)
 
-        # ── 3. Per-project cost/m2, currency-scoped, never blending ───────
-        # Each entry: (cost_per_m2, project_currency). We compute a per-unit
-        # figure only when the project has BOTH a positive total cost AND a
-        # positive recorded area.
+    async def _cost_per_m2_distribution(
+        self,
+        projects: list[Any],
+        *,
+        currency: str | None,
+        cost_per_m2: Decimal | None,
+    ) -> dict[str, Any]:
+        """The original metric: each project's BOQ grand total over its area.
+
+        Currency-scoped and never blended: only same-currency projects share a
+        distribution, and a supplied ``cost_per_m2`` is positioned only when the
+        request named its currency (so the percentile is never cross-currency).
+        """
+        totals_by_project = await self._boq_totals_by_project(projects)
+
+        # Per-project cost/m2, currency-scoped, never blending. Each entry is
+        # (cost_per_m2, project_currency); a per-unit figure exists only when the
+        # project has BOTH a positive total cost AND a positive recorded area.
         per_project: list[tuple[Decimal, str]] = []
         for proj in projects:
             total = totals_by_project.get(proj.id)
             area = _parse_decimal(self._project_area(proj))
-            if total is None or area is None:
+            if total is None or area is None or area <= 0:
                 continue
             proj_currency = (getattr(proj, "currency", "") or "").strip().upper()
             per_project.append((total / area, proj_currency))
 
         if not per_project:
-            return self._empty(cost_per_m2)
+            return self._empty("cost_per_m2")
 
         # ── 4. Pick the currency bucket (never mix currencies) ────────────
         requested_currency = (currency or "").strip().upper()
@@ -1241,6 +1226,7 @@ class CostBenchmarkService:
                 # so the percentile is never computed across currencies.
                 return {
                     "currency": requested_currency,
+                    "metric": "cost_per_m2",
                     "own_portfolio": None,
                     "percentile_vs_own": None,
                     "explanation": (
@@ -1287,10 +1273,159 @@ class CostBenchmarkService:
 
         return {
             "currency": target_currency,
+            "metric": "cost_per_m2",
             "own_portfolio": portfolio,
             "percentile_vs_own": percentile_vs_own,
             "explanation": explanation,
         }
+
+    # ── Metric variants: regional overrun / recovery-rate benchmarks (#21) ──
+
+    async def _boq_totals_by_project(self, projects: list[Any]) -> dict[uuid.UUID, Decimal]:
+        """Each project's BOQ grand total in its OWN base currency.
+
+        Mirrors the canonical BOQ rollup: section rows are skipped and every
+        leaf is converted into the project base via the project's FX table
+        before accumulating, so a project's total is genuinely single-currency
+        (Issues #111/#131/#88/#157) rather than a blind sum that would blend
+        per-position currencies. A project with no positive priced leaf is
+        absent from the result. Shared by the cost-per-m2 and overrun metrics.
+        """
+        from app.modules.boq.models import BOQ, Position
+        from app.modules.boq.service import (
+            _is_section,
+            _leaf_total_base_with_resources,
+            _project_fx_map,
+        )
+
+        project_ids = [p.id for p in projects]
+        projects_by_id = {p.id: p for p in projects}
+        rows = (
+            await self.session.execute(
+                select(BOQ.project_id, Position)
+                .join(Position, Position.boq_id == BOQ.id)
+                .where(BOQ.project_id.in_(project_ids))
+            )
+        ).all()
+        fx_by_project: dict[uuid.UUID, tuple[str, dict[str, str]]] = {}
+        totals_by_project: dict[uuid.UUID, Decimal] = {}
+        for proj_id, pos in rows:
+            if _is_section(pos):
+                continue
+            fx = fx_by_project.get(proj_id)
+            if fx is None:
+                proj = projects_by_id.get(proj_id)
+                base_ccy = (getattr(proj, "currency", "") or "").strip().upper()
+                fx = (base_ccy, _project_fx_map(proj))
+                fx_by_project[proj_id] = fx
+            base_ccy, fx_map = fx
+            amount = _leaf_total_base_with_resources(pos, fx_map, base_ccy)
+            if amount is None or amount <= 0:
+                continue
+            totals_by_project[proj_id] = totals_by_project.get(proj_id, Decimal("0")) + amount
+        return totals_by_project
+
+    async def _ratio_distribution(
+        self,
+        projects: list[Any],
+        *,
+        metric: str,
+        input_value: Decimal | None,
+    ) -> dict[str, Any]:
+        """Distribution payload for a dimensionless ratio metric over *projects*.
+
+        ``overrun_pct`` and ``recovery_rate`` are fractions, not money, so the
+        distribution is NOT currency-scoped: a ratio is comparable across
+        currencies. Reuses the same percentile statistics and confidence model
+        as the cost-per-m2 metric. ``input_value`` (a fraction in the metric's
+        own unit) is positioned against the distribution when supplied.
+        """
+        if metric == "overrun_pct":
+            values = await self._overrun_values(projects)
+            basis = "with an approved budget and a priced BOQ"
+        else:  # recovery_rate
+            values = await self._recovery_values(projects)
+            basis = "with a recovery ledger"
+
+        values = sorted(values)
+        if not values:
+            return self._empty(metric)
+
+        count = len(values)
+        portfolio = {
+            "project_count": count,
+            "min": values[0],
+            "p25": _percentile(values, 25),
+            "median": _percentile(values, 50),
+            "p75": _percentile(values, 75),
+            "max": values[-1],
+            "confidence": self._confidence(count),
+            "note": (f"Based on {count} of your {'project' if count == 1 else 'projects'} {basis}."),
+        }
+
+        percentile_vs_own: float | None = None
+        explanation = ""
+        if input_value is not None:
+            percentile_vs_own = _position_in_distribution(input_value, values)
+            explanation = self._explain(input_value, portfolio["median"], percentile_vs_own)
+
+        return {
+            # A ratio is dimensionless, so there is no currency to report.
+            "currency": "",
+            "metric": metric,
+            "own_portfolio": portfolio,
+            "percentile_vs_own": percentile_vs_own,
+            "explanation": explanation,
+        }
+
+    async def _overrun_values(self, projects: list[Any]) -> list[Decimal]:
+        """Per-project cost overrun as a fraction: (priced BOQ - budget) / budget.
+
+        The priced BOQ grand total (the project's current priced scope, in its
+        base currency) measured against the project's approved
+        ``budget_estimate``. A project counts only when it has BOTH a positive
+        approved budget AND a BOQ total; both are in the project's own currency,
+        so the ratio is single-currency and dimensionless. The value can be
+        negative (the priced scope is under the approved budget).
+        """
+        totals = await self._boq_totals_by_project(projects)
+        out: list[Decimal] = []
+        for proj in projects:
+            total = totals.get(proj.id)
+            budget = _parse_decimal(getattr(proj, "budget_estimate", None))
+            if total is None or budget is None or budget <= 0:
+                continue
+            out.append((total - budget) / budget)
+        return out
+
+    async def _recovery_values(self, projects: list[Any]) -> list[Decimal]:
+        """Per-project recovery rate (recovered / chargeable), a fraction in [0, 1].
+
+        Uses the cost-recovery engine's primary-currency headline rate per
+        project, which never blends currencies. A project with nothing
+        chargeable has no rate and is skipped. Imported locally so this lower
+        level never takes a module-load dependency on cost_recovery.
+        """
+        from app.modules.cost_recovery.recovery_analytics import RecoveryItem, compute_recovery_performance
+        from app.modules.cost_recovery.service import list_back_charges, to_back_charge_item
+
+        out: list[Decimal] = []
+        for proj in projects:
+            rows = await list_back_charges(self.session, proj.id)
+            items = [
+                RecoveryItem(
+                    chargeable=bc.chargeable_amount,
+                    recovered=bc.recovered_amount,
+                    currency=bc.currency,
+                    traceability_band="",
+                    status=bc.status,
+                )
+                for bc in (to_back_charge_item(row) for row in rows)
+            ]
+            performance = compute_recovery_performance(items)
+            if performance.primary_rate is not None:
+                out.append(performance.primary_rate)
+        return out
 
     # ── Internal helpers ──────────────────────────────────────────────────
 
@@ -1368,9 +1503,10 @@ class CostBenchmarkService:
         return "Your value sits right at your own portfolio median."
 
     @staticmethod
-    def _empty(cost_per_m2: Decimal | None) -> dict[str, Any]:
+    def _empty(metric: str = "cost_per_m2") -> dict[str, Any]:
         return {
             "currency": "",
+            "metric": metric,
             "own_portfolio": None,
             "percentile_vs_own": None,
             "explanation": "",

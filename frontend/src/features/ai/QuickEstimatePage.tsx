@@ -1,4 +1,4 @@
-// OpenConstructionERP — DataDrivenConstruction (DDC)
+// OpenConstructionERP - DataDrivenConstruction (DDC)
 // CWICR AI Estimation Engine
 // Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
 // DDC-CWICR-OE-2026
@@ -7,6 +7,7 @@ import { useTranslation } from 'react-i18next';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useSearchParams, useLocation, Link } from 'react-router-dom';
 import { useFocusTrap } from '@/shared/hooks/useFocusTrap';
+import { useDisplayQuantity } from '@/shared/hooks/useDisplayQuantity';
 import {
   Sparkles,
   ArrowRight,
@@ -155,7 +156,7 @@ const FORMAT_LABELS: { [K in FileTab]: string } = {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 // formatNumber / formatFileSize / getFileExtension live in
-// `@/shared/lib/formatters` — they were lifted out of this file once it
+// `@/shared/lib/formatters` - they were lifted out of this file once it
 // became clear they were not AI-specific.
 
 /**
@@ -633,7 +634,7 @@ function SaveToBOQDialog({ open, onClose, onSave, saving, enrichedMatches = 0, e
             />
           </div>
 
-          {/* Apply enriched CWICR rates — only offered once the user has run
+          {/* Apply enriched CWICR rates - only offered once the user has run
               cost-DB matching and at least one same-currency match exists, so
               the saved BOQ persists the regional rates they reviewed instead
               of the raw AI guesses. */}
@@ -691,7 +692,12 @@ function SaveToBOQDialog({ open, onClose, onSave, saving, enrichedMatches = 0, e
 
 function ResultsTable({ result, selectedCurrency, enrichResult }: { result: EstimateJobResponse; selectedCurrency?: string; enrichResult?: EnrichResult | null }) {
   const { t } = useTranslation();
-  // Resolved estimate currency — explicit selection wins, else the currency
+  // Issue #270: show the physical quantity + unit in the user's measurement
+  // system. Scoped to qty + unit here (the rate/total columns carry the
+  // AI-vs-matched-rate comparison, including foreign-currency matches, and the
+  // canonical CSV export handles the reciprocal-rate conversion).
+  const displayQty = useDisplayQuantity();
+  // Resolved estimate currency - explicit selection wins, else the currency
   // the AI actually priced in. Never fall back to a hard-coded 'EUR': when it
   // is unknown we render plain numbers (no misleading ISO symbol).
   const currency = (selectedCurrency || result.currency || '').trim();
@@ -711,7 +717,7 @@ function ResultsTable({ result, selectedCurrency, enrichResult }: { result: Esti
   // estimate. We must never blend currencies into one scalar total, so a
   // match only contributes its rate to the recomputed total (and the struck-
   // through "applied rate" view) when its currency matches the estimate
-  // currency (or the match carries no currency — treated as same-currency
+  // currency (or the match carries no currency - treated as same-currency
   // legacy data). Otherwise we keep the AI's own rate for the total and show
   // the matched rate separately with its own ISO code.
   const matchAppliesToTotal = (m: CostMatch | null | undefined): boolean => {
@@ -785,20 +791,31 @@ function ResultsTable({ result, selectedCurrency, enrichResult }: { result: Esti
                       </div>
                     )}
                   </td>
-                  <td className="px-4 py-3 text-content-secondary">{item.unit}</td>
+                  <td className="px-4 py-3 text-content-secondary">
+                    {item.unit ? displayQty.unitFor(item.unit) : item.unit}
+                  </td>
                   <td className="px-4 py-3 text-right font-mono text-content-primary">
-                    {formatNumber(item.quantity)}
+                    {formatNumber(displayQty.convert(item.quantity, item.unit || '').value)}
                   </td>
                   <td className="px-4 py-3 text-right font-mono text-content-secondary">
                     {bestMatch ? (
                       <div className="flex flex-col items-end gap-0.5">
                         <span className="line-through text-content-quaternary text-xs">
-                          {formatNumber(item.unit_rate, currencyArg)}
+                          {/* Issue #270: the AI rate is money / metric unit in the
+                              estimate currency, so restate it reciprocally against
+                              the converted qty (qty * rate == total). */}
+                          {formatNumber(displayQty.convertRate(item.unit_rate, item.unit || ''), currencyArg)}
                         </span>
                         <span className="text-emerald-600 font-semibold" title={`CWICR: ${bestMatch.code} (${Math.round(bestMatch.score * 100)}% match)`}>
                           {/* Show the matched rate in ITS OWN currency so we never
-                              imply a foreign rate is in the estimate currency. */}
-                          {formatNumber(bestMatch.rate, (bestMatch.currency || currency) || undefined)}
+                              imply a foreign rate is in the estimate currency.
+                              Issue #270: only when it is in the estimate currency
+                              (folded into the total) is it the line's effective
+                              per-metric-unit rate, so reciprocate it then; a
+                              foreign-currency comparison rate is shown verbatim. */}
+                          {matchAppliesToTotal(bestMatch)
+                            ? formatNumber(displayQty.convertRate(bestMatch.rate, item.unit || ''), currencyArg)
+                            : formatNumber(bestMatch.rate, (bestMatch.currency || currency) || undefined)}
                         </span>
                         <span className="text-[10px] text-emerald-600/70 font-normal">
                           {bestMatch.code}
@@ -819,7 +836,8 @@ function ResultsTable({ result, selectedCurrency, enrichResult }: { result: Esti
                         )}
                       </div>
                     ) : (
-                      formatNumber(item.unit_rate, currencyArg)
+                      // Issue #270: reciprocal rate so qty * rate == total.
+                      formatNumber(displayQty.convertRate(item.unit_rate, item.unit || ''), currencyArg)
                     )}
                   </td>
                   <td className="px-4 py-3 text-right font-mono font-medium text-content-primary">
@@ -885,6 +903,23 @@ function ResultsTable({ result, selectedCurrency, enrichResult }: { result: Esti
 
 function QuantityTablesResult({ data }: { data: CadExtractResponse }) {
   const { t } = useTranslation();
+  // Measurement-system display seam (#270): values are stored metric-canonical
+  // (volume_m3 / area_m2 / length_m); convert only for rendering.
+  const displayQty = useDisplayQuantity();
+  const volUnit = displayQty.unitFor('m³');
+  const areaUnit = displayQty.unitFor('m²');
+  const lenUnit = displayQty.unitFor('m');
+  const dVol = (v: number) => displayQty.convert(v, 'm³').value;
+  const dArea = (v: number) => displayQty.convert(v, 'm²').value;
+  const dLen = (v: number) => displayQty.convert(v, 'm').value;
+  // Column headers carry their unit baked into the localized string
+  // ("Volume (m³)"). For imperial, swap the parenthesised metric token for the
+  // display token without disturbing the translated word; metric is a no-op so
+  // localized headers render byte-identical to before.
+  const swapUnit = (label: string, metricUnit: string) =>
+    displayQty.system === 'imperial'
+      ? label.replace(`(${metricUnit})`, `(${displayQty.unitFor(metricUnit)})`)
+      : label;
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(
     () => new Set(data.groups.map((g) => g.category)),
   );
@@ -934,13 +969,13 @@ function QuantityTablesResult({ data }: { data: CadExtractResponse }) {
                   <span>{fmtNum(group.totals.count)} pcs</span>
                 )}
                 {group.totals.volume_m3 > 0 && (
-                  <span>{fmtNum(group.totals.volume_m3)} m&sup3;</span>
+                  <span>{fmtNum(dVol(group.totals.volume_m3))} {volUnit}</span>
                 )}
                 {group.totals.area_m2 > 0 && (
-                  <span>{fmtNum(group.totals.area_m2)} m&sup2;</span>
+                  <span>{fmtNum(dArea(group.totals.area_m2))} {areaUnit}</span>
                 )}
                 {group.totals.length_m > 0 && (
-                  <span>{fmtNum(group.totals.length_m)} m</span>
+                  <span>{fmtNum(dLen(group.totals.length_m))} {lenUnit}</span>
                 )}
               </div>
             </button>
@@ -961,13 +996,13 @@ function QuantityTablesResult({ data }: { data: CadExtractResponse }) {
                         {t('ai.cad_col_count', { defaultValue: 'Count' })}
                       </th>
                       <th className="px-4 py-2 text-xs font-semibold text-content-tertiary uppercase tracking-wide text-right w-28">
-                        {t('ai.cad_col_volume', { defaultValue: 'Volume (m\u00b3)' })}
+                        {swapUnit(t('ai.cad_col_volume', { defaultValue: 'Volume (m\u00b3)' }), 'm\u00b3')}
                       </th>
                       <th className="px-4 py-2 text-xs font-semibold text-content-tertiary uppercase tracking-wide text-right w-28">
-                        {t('ai.cad_col_area', { defaultValue: 'Area (m\u00b2)' })}
+                        {swapUnit(t('ai.cad_col_area', { defaultValue: 'Area (m\u00b2)' }), 'm\u00b2')}
                       </th>
                       <th className="px-4 py-2 text-xs font-semibold text-content-tertiary uppercase tracking-wide text-right w-24">
-                        {t('ai.cad_col_length', { defaultValue: 'Length (m)' })}
+                        {swapUnit(t('ai.cad_col_length', { defaultValue: 'Length (m)' }), 'm')}
                       </th>
                     </tr>
                   </thead>
@@ -980,9 +1015,9 @@ function QuantityTablesResult({ data }: { data: CadExtractResponse }) {
                         <td className="px-4 py-2 text-content-primary">{item.type}</td>
                         <td className="px-4 py-2 text-content-secondary text-xs">{item.material || '-'}</td>
                         <td className="px-4 py-2 text-right font-mono text-content-primary">{fmtNum(item.count)}</td>
-                        <td className="px-4 py-2 text-right font-mono text-content-primary">{fmtNum(item.volume_m3)}</td>
-                        <td className="px-4 py-2 text-right font-mono text-content-primary">{fmtNum(item.area_m2)}</td>
-                        <td className="px-4 py-2 text-right font-mono text-content-primary">{fmtNum(item.length_m)}</td>
+                        <td className="px-4 py-2 text-right font-mono text-content-primary">{fmtNum(dVol(item.volume_m3))}</td>
+                        <td className="px-4 py-2 text-right font-mono text-content-primary">{fmtNum(dArea(item.area_m2))}</td>
+                        <td className="px-4 py-2 text-right font-mono text-content-primary">{fmtNum(dLen(item.length_m))}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -992,9 +1027,9 @@ function QuantityTablesResult({ data }: { data: CadExtractResponse }) {
                         {t('ai.cad_subtotal', { defaultValue: 'Subtotal' })}
                       </td>
                       <td className="px-4 py-2 text-right font-mono font-semibold text-content-primary">{fmtNum(group.totals.count)}</td>
-                      <td className="px-4 py-2 text-right font-mono font-semibold text-content-primary">{fmtNum(group.totals.volume_m3)}</td>
-                      <td className="px-4 py-2 text-right font-mono font-semibold text-content-primary">{fmtNum(group.totals.area_m2)}</td>
-                      <td className="px-4 py-2 text-right font-mono font-semibold text-content-primary">{fmtNum(group.totals.length_m)}</td>
+                      <td className="px-4 py-2 text-right font-mono font-semibold text-content-primary">{fmtNum(dVol(group.totals.volume_m3))}</td>
+                      <td className="px-4 py-2 text-right font-mono font-semibold text-content-primary">{fmtNum(dArea(group.totals.area_m2))}</td>
+                      <td className="px-4 py-2 text-right font-mono font-semibold text-content-primary">{fmtNum(dLen(group.totals.length_m))}</td>
                     </tr>
                   </tfoot>
                 </table>
@@ -1012,9 +1047,9 @@ function QuantityTablesResult({ data }: { data: CadExtractResponse }) {
           </span>
           <div className="flex items-center gap-4 text-sm font-mono font-bold text-oe-blue">
             {data.grand_totals.count > 0 && <span>{fmtNum(data.grand_totals.count)} pcs</span>}
-            {data.grand_totals.volume_m3 > 0 && <span>{fmtNum(data.grand_totals.volume_m3)} m&sup3;</span>}
-            {data.grand_totals.area_m2 > 0 && <span>{fmtNum(data.grand_totals.area_m2)} m&sup2;</span>}
-            {data.grand_totals.length_m > 0 && <span>{fmtNum(data.grand_totals.length_m)} m</span>}
+            {data.grand_totals.volume_m3 > 0 && <span>{fmtNum(dVol(data.grand_totals.volume_m3))} {volUnit}</span>}
+            {data.grand_totals.area_m2 > 0 && <span>{fmtNum(dArea(data.grand_totals.area_m2))} {areaUnit}</span>}
+            {data.grand_totals.length_m > 0 && <span>{fmtNum(dLen(data.grand_totals.length_m))} {lenUnit}</span>}
           </div>
         </div>
       </div>
@@ -1190,7 +1225,7 @@ function CompactOptions({
 }) {
   const { t } = useTranslation();
   // a11y: useId per field so labels wire to controls via htmlFor.
-  // Multiple instances of CompactOptions render across tabs — hard-coded
+  // Multiple instances of CompactOptions render across tabs - hard-coded
   // ids would collide and break SR / form associations.
   const locationId = useId();
   const currencyId = useId();
@@ -1513,8 +1548,12 @@ export function QuickEstimatePage() {
   const navigate = useNavigate();
   const addToast = useToastStore((s) => s.addToast);
   const queryClient = useQueryClient();
+  // Measurement-system seam: quantities are stored metric-canonical and only
+  // converted at the display / export boundary (GitHub #270). Storage, API
+  // payloads and editable inputs stay metric.
+  const displayQty = useDisplayQuantity();
 
-  // Active tab — read initial value from ?tab= URL param
+  // Active tab - read initial value from ?tab= URL param
   const [searchParams, setSearchParams] = useSearchParams();
   const routeLocation = useLocation();
   const isCadRoute = routeLocation.pathname === '/data-explorer';
@@ -1535,7 +1574,7 @@ export function QuickEstimatePage() {
   const [buildingType, setBuildingType] = useState('');
   const [areaM2, setAreaM2] = useState('');
 
-  // Conversational intake v2 — turns a one-line request into a confirmed,
+  // Conversational intake v2 - turns a one-line request into a confirmed,
   // vector-grounded group board through a short guided dialogue. Opt-in from
   // the text tab so the plain quick-estimate path stays unchanged.
   const [guidedMode, setGuidedMode] = useState(false);
@@ -1594,7 +1633,7 @@ export function QuickEstimatePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // a11y refs / ids — used by the textarea label, the disabled-submit
+  // a11y refs / ids - used by the textarea label, the disabled-submit
   // hint (aria-describedby), the tablist (role=tab + aria-controls), and
   // the post-submit focus target so SR users land on the result region.
   const descriptionId = useId();
@@ -1680,7 +1719,7 @@ export function QuickEstimatePage() {
     setInstallResult(null);
     setInstallError(null);
     try {
-      // 120 s explicit timeout — converter install (RVT especially) can
+      // 120 s explicit timeout - converter install (RVT especially) can
       // run 60-90 s; the user error log for v4.3.2 caught AbortErrors
       // on this exact path.
       const signal: AbortSignal | undefined =
@@ -1757,7 +1796,7 @@ export function QuickEstimatePage() {
     [selectedFile, handleRemoveFile],
   );
 
-  // ── AI runs — all five operations now share `useLLMRun` so they get
+  // ── AI runs - all five operations now share `useLLMRun` so they get
   //    AbortController cancellation, post-run focus-restore (a11y P1
   //    finding #4), and a consistent error-normalisation contract.
   //    The toast call sites are identical to the pre-refactor versions;
@@ -1994,7 +2033,7 @@ export function QuickEstimatePage() {
     }, 0);
   }, [enrichResult, currency, result?.currency]);
 
-  // a11y — focus the result region as soon as new content arrives so
+  // a11y - focus the result region as soon as new content arrives so
   // keyboard / SR users land on the freshly generated estimate rather
   // than having to Tab past the form to find it. tabIndex={-1} on the
   // wrapper makes the div focusable programmatically only.
@@ -2478,6 +2517,10 @@ export function QuickEstimatePage() {
         session_id: cadColumnsData.session_id,
         group_by: cadGroupResult?.group_by || [],
         sum_columns: cadGroupResult?.sum_columns || [],
+        // Tell the server which units the user wants in the export. The FE does
+        // not convert anything for this path; the backend may currently ignore
+        // this param (backend wiring is a separate task).
+        measurementSystem: displayQty.system,
       });
       addToast({
         type: 'success',
@@ -2501,7 +2544,7 @@ export function QuickEstimatePage() {
     } finally {
       setCadExporting(false);
     }
-  }, [cadColumnsData?.session_id, cadGroupResult, addToast, t]);
+  }, [cadColumnsData?.session_id, cadGroupResult, addToast, t, displayQty.system]);
 
   // ── Project list for BOQ creation ─────────────────────────────────────
 
@@ -2543,7 +2586,7 @@ export function QuickEstimatePage() {
           },
         ]}
       />
-      {/* Canonical top block — module name + icon live in the global top bar.
+      {/* Canonical top block - module name + icon live in the global top bar.
           The page renders only its subtitle (left) + actions (right); the
           model pill stays as the single action for the AI route. */}
       <PageHeader
@@ -2681,7 +2724,7 @@ export function QuickEstimatePage() {
           </div>
         )
       ) : aiSettings && isConfigured ? (
-        /* ── CONFIGURED — green status bar. Status icon + explicit
+        /* ── CONFIGURED - green status bar. Status icon + explicit
             "Status:" sr-only prefix so meaning does not rely on green
             colour alone (WCAG 1.4.1). */
         <div
@@ -2715,7 +2758,7 @@ export function QuickEstimatePage() {
         </div>
       ) : null}
 
-      {/* How it works — concise workflow context (AI Estimate route only,
+      {/* How it works - concise workflow context (AI Estimate route only,
           before any result is generated). Tells construction specialists
           exactly what the tool produces and where it fits in the pipeline. */}
       {!isCadRoute && !result && !cadResult && !cadGroupResult && (
@@ -2764,12 +2807,12 @@ export function QuickEstimatePage() {
         </div>
       )}
 
-      {/* Source type selector (hidden on /data-explorer) — proper
+      {/* Source type selector (hidden on /data-explorer) - proper
           WAI-ARIA tablist semantics so AT users understand the grid of
           buttons is a single-select tab control. */}
       {!isCadRoute && (
       <div className="animate-card-in" style={{ animationDelay: '100ms' }}>
-        {/* Horizontal tab pills — single row, glass treatment */}
+        {/* Horizontal tab pills - single row, glass treatment */}
         <div
           role="tablist"
           id={tablistId}
@@ -2825,7 +2868,7 @@ export function QuickEstimatePage() {
       </div>
       )}
 
-      {/* Input area for selected source — glass panel */}
+      {/* Input area for selected source - glass panel */}
       <section
         data-testid="ai-quick-estimate-input"
         {...(!isCadRoute && {
@@ -2898,7 +2941,7 @@ export function QuickEstimatePage() {
 
             {activeTab === 'text' && !guidedMode && (
               <div className="space-y-4">
-                {/* Conversational intake v2 — opt-in guided flow that turns a
+                {/* Conversational intake v2 - opt-in guided flow that turns a
                     one-line request into a confirmed, vector-grounded group
                     board through a short dialogue (max 3 rounds). */}
                 <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-violet-200/60 bg-gradient-to-r from-violet-500/5 to-cyan-500/5 px-4 py-3 dark:border-violet-500/20">
@@ -2949,7 +2992,7 @@ export function QuickEstimatePage() {
                   </div>
                 </div>
 
-                {/* Example chips — auto-fill the prompt */}
+                {/* Example chips - auto-fill the prompt */}
                 {!description && !isPending && (
                   <div
                     data-testid="ai-quick-estimate-examples"
@@ -3014,7 +3057,7 @@ export function QuickEstimatePage() {
                   </div>
                 )}
 
-                {/* Full options row for text tab — every input wired to
+                {/* Full options row for text tab - every input wired to
                     its label via htmlFor so SR users can name them. */}
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3">
                   <div className="flex flex-col gap-1">
@@ -3225,7 +3268,7 @@ export function QuickEstimatePage() {
             {/* ── Tab 5: CAD / BIM (direct extraction, no AI) ────── */}
             {activeTab === 'cad' && (
               <div>
-                {/* Converter status banner — always visible */}
+                {/* Converter status banner - always visible */}
                 {isCadRoute && convertersData && (
                   <div className={clsx(
                     'mb-4 rounded-xl border p-4 flex items-center justify-between',
@@ -3481,7 +3524,7 @@ export function QuickEstimatePage() {
         </form>
       </section>
 
-      {/* Recent estimates — server-side history. Shown on the AI-estimate
+      {/* Recent estimates - server-side history. Shown on the AI-estimate
           surfaces (not the CAD/data-explorer route) when nothing is currently
           loading and no result is on screen, so the page stays clean while an
           estimate is active. */}
@@ -3492,7 +3535,7 @@ export function QuickEstimatePage() {
       {/* Loading state */}
       {isPending && <LoadingState isCad={isCadRoute} fileName={selectedFile?.name} fileSizeMB={selectedFile ? selectedFile.size / (1024 * 1024) : undefined} />}
 
-      {/* Error state — role="alert" so AT announces it immediately;
+      {/* Error state - role="alert" so AT announces it immediately;
           the AlertCircle icon + explicit "Error:" prefix avoid relying
           on colour alone (WCAG 1.4.1). */}
       {isError && (
@@ -3670,7 +3713,7 @@ export function QuickEstimatePage() {
             </div>
           )}
 
-          {/* Preview table — show only selected columns */}
+          {/* Preview table - show only selected columns */}
           {(cadColumnsData.preview || []).length > 0 && (
             <div>
               <label className="text-xs font-medium text-content-secondary mb-2 block">
@@ -3687,12 +3730,16 @@ export function QuickEstimatePage() {
                           : Object.keys(cadColumnsData.preview[0] ?? {}).slice(0, 8);
                         return visibleCols.map((key) => {
                           const unit = cadColumnsData.unit_labels?.[key];
+                          // Display boundary (#270): relabel the metric unit to
+                          // the user's system (known units convert, others pass
+                          // through). The stored unit_labels are untouched.
+                          const displayUnit = unit ? displayQty.unitFor(unit) : unit;
                           return (
                             <th
                               key={key}
                               className="px-3 py-1.5 text-left font-semibold text-content-tertiary uppercase tracking-wide whitespace-nowrap text-oe-blue"
                             >
-                              {key}{unit ? ` (${unit})` : ''}
+                              {key}{displayUnit ? ` (${displayUnit})` : ''}
                             </th>
                           );
                         });
@@ -3709,6 +3756,13 @@ export function QuickEstimatePage() {
                         <tr key={`preview-${idx}-${Object.values(row).slice(0, 2).join('-')}`} className="border-b border-border-light/30 hover:bg-surface-secondary/20">
                           {visibleCols.map((key) => {
                             const val = row[key];
+                            // Display boundary (#270): scale numeric quantities
+                            // into the user's measurement system using the
+                            // column's metric unit (no unit -> value unchanged).
+                            const colUnit = cadColumnsData.unit_labels?.[key];
+                            const displayVal = typeof val === 'number' && colUnit
+                              ? displayQty.convert(val, colUnit).value
+                              : val;
                             return (
                               <td
                                 key={key}
@@ -3719,9 +3773,9 @@ export function QuickEstimatePage() {
                               >
                                 {val === null || val === undefined || val === 'None' || val === ''
                                   ? '-'
-                                  : typeof val === 'number'
-                                    ? val.toLocaleString(getIntlLocale(), { maximumFractionDigits: 2 })
-                                    : String(val)}
+                                  : typeof displayVal === 'number'
+                                    ? displayVal.toLocaleString(getIntlLocale(), { maximumFractionDigits: 2 })
+                                    : String(displayVal)}
                               </td>
                             );
                           })}
@@ -3847,9 +3901,11 @@ export function QuickEstimatePage() {
                     ))}
                     {(cadGroupResult.sum_columns || []).map((col) => {
                       const unit = cadColumnsData?.unit_labels?.[col];
+                      // Display boundary (#270): relabel to the user's system.
+                      const displayUnit = unit ? displayQty.unitFor(unit) : unit;
                       return (
                         <th key={col} className="px-4 py-2.5 text-xs font-semibold text-content-tertiary uppercase tracking-wide text-right">
-                          {col}{unit ? ` (${unit})` : ''}
+                          {col}{displayUnit ? ` (${displayUnit})` : ''}
                         </th>
                       );
                     })}
@@ -3868,6 +3924,11 @@ export function QuickEstimatePage() {
                     const firstSumCol = (cadGroupResult.sum_columns || []).find(c => c !== 'count') || 'count';
                     const groupByCols = cadGroupResult.group_by || [];
                     const sumCols = cadGroupResult.sum_columns || [];
+                    // Display boundary (#270): scale a summed metric quantity
+                    // into the user's measurement system using the column's
+                    // metric unit (no unit / 'count' -> value unchanged).
+                    const sumDisplay = (col: string, value: number) =>
+                      displayQty.convert(value, cadColumnsData?.unit_labels?.[col] ?? '').value;
 
                     if (treeViewMode && canShowTreeView) {
                       // ── Tree view ──
@@ -3899,7 +3960,7 @@ export function QuickEstimatePage() {
                               {sumCols.map((col) => (
                                 <td key={col} className="px-4 py-2 text-right font-mono text-sm font-semibold text-content-primary">
                                   {(node.sums[col] || 0) > 0
-                                    ? (node.sums[col] || 0).toLocaleString(getIntlLocale(), { minimumFractionDigits: 0, maximumFractionDigits: 2 })
+                                    ? sumDisplay(col, node.sums[col] || 0).toLocaleString(getIntlLocale(), { minimumFractionDigits: 0, maximumFractionDigits: 2 })
                                     : '-'}
                                 </td>
                               ))}
@@ -3943,7 +4004,7 @@ export function QuickEstimatePage() {
                                       (g.sums[col] ?? 0) > 0 ? 'text-content-primary font-medium' : 'text-content-quaternary',
                                     )}>
                                       {g.sums[col] != null && g.sums[col] > 0
-                                        ? g.sums[col].toLocaleString(getIntlLocale(), { minimumFractionDigits: 0, maximumFractionDigits: 2 })
+                                        ? sumDisplay(col, g.sums[col]).toLocaleString(getIntlLocale(), { minimumFractionDigits: 0, maximumFractionDigits: 2 })
                                         : '-'}
                                     </td>
                                   ))}
@@ -3990,7 +4051,7 @@ export function QuickEstimatePage() {
                                 (g.sums[col] ?? 0) > 0 ? 'text-content-primary font-medium' : 'text-content-quaternary',
                               )}>
                                 {g.sums[col] != null && g.sums[col] > 0
-                                  ? g.sums[col].toLocaleString(getIntlLocale(), { minimumFractionDigits: 0, maximumFractionDigits: 2 })
+                                  ? sumDisplay(col, g.sums[col]).toLocaleString(getIntlLocale(), { minimumFractionDigits: 0, maximumFractionDigits: 2 })
                                   : '-'}
                               </td>
                             ))}
@@ -4012,7 +4073,10 @@ export function QuickEstimatePage() {
                     {(cadGroupResult.sum_columns || []).map((col) => (
                       <td key={col} className="px-4 py-2.5 text-right font-mono font-bold text-oe-blue">
                         {computedTotals.sums[col] != null
-                          ? (computedTotals.sums[col] ?? 0).toLocaleString(getIntlLocale(), { minimumFractionDigits: 0, maximumFractionDigits: 2 })
+                          ? displayQty
+                              .convert(computedTotals.sums[col] ?? 0, cadColumnsData?.unit_labels?.[col] ?? '')
+                              .value
+                              .toLocaleString(getIntlLocale(), { minimumFractionDigits: 0, maximumFractionDigits: 2 })
                           : '-'}
                       </td>
                     ))}
@@ -4123,17 +4187,24 @@ export function QuickEstimatePage() {
                   <thead className="sticky top-0 z-10">
                     <tr className="border-b border-border-light bg-surface-secondary/80 backdrop-blur">
                       <th className="px-3 py-2 text-left font-semibold text-content-tertiary uppercase tracking-wide w-10">#</th>
-                      {elementDetailData.columns.map((col) => (
-                        <th
-                          key={col}
-                          className={clsx(
-                            'px-3 py-2 font-semibold text-content-tertiary uppercase tracking-wide whitespace-nowrap',
-                            col in (elementDetailData.totals || {}) ? 'text-right' : 'text-left',
-                          )}
-                        >
-                          {col}
-                        </th>
-                      ))}
+                      {elementDetailData.columns.map((col) => {
+                        // Display boundary (#270): append the user's unit so the
+                        // converted numbers below are self-describing. Only
+                        // columns with a known metric unit get a suffix.
+                        const unit = cadColumnsData?.unit_labels?.[col];
+                        const displayUnit = unit ? displayQty.unitFor(unit) : unit;
+                        return (
+                          <th
+                            key={col}
+                            className={clsx(
+                              'px-3 py-2 font-semibold text-content-tertiary uppercase tracking-wide whitespace-nowrap',
+                              col in (elementDetailData.totals || {}) ? 'text-right' : 'text-left',
+                            )}
+                          >
+                            {col}{displayUnit ? ` (${displayUnit})` : ''}
+                          </th>
+                        );
+                      })}
                     </tr>
                   </thead>
                   <tbody>
@@ -4143,6 +4214,12 @@ export function QuickEstimatePage() {
                         {elementDetailData.columns.map((col) => {
                           const val = el[col];
                           const isNumeric = col in (elementDetailData.totals || {});
+                          // Display boundary (#270): scale numeric values into
+                          // the user's measurement system using the column unit.
+                          const colUnit = cadColumnsData?.unit_labels?.[col];
+                          const displayVal = typeof val === 'number' && colUnit
+                            ? displayQty.convert(val, colUnit).value
+                            : val;
                           return (
                             <td
                               key={col}
@@ -4154,9 +4231,9 @@ export function QuickEstimatePage() {
                             >
                               {val === null || val === undefined || val === 'None' || val === ''
                                 ? '-'
-                                : typeof val === 'number'
-                                  ? val.toLocaleString(getIntlLocale(), { maximumFractionDigits: 4 })
-                                  : String(val)}
+                                : typeof displayVal === 'number'
+                                  ? displayVal.toLocaleString(getIntlLocale(), { maximumFractionDigits: 4 })
+                                  : String(displayVal)}
                             </td>
                           );
                         })}
@@ -4170,6 +4247,11 @@ export function QuickEstimatePage() {
                       </td>
                       {elementDetailData.columns.map((col) => {
                         const total = elementDetailData.totals?.[col];
+                        // Display boundary (#270): convert the column total.
+                        const colUnit = cadColumnsData?.unit_labels?.[col];
+                        const displayTotal = total != null && colUnit
+                          ? displayQty.convert(total, colUnit).value
+                          : total;
                         return (
                           <td
                             key={col}
@@ -4178,8 +4260,8 @@ export function QuickEstimatePage() {
                               total != null ? 'text-right font-mono font-bold text-oe-blue' : '',
                             )}
                           >
-                            {total != null
-                              ? total.toLocaleString(getIntlLocale(), { minimumFractionDigits: 0, maximumFractionDigits: 4 })
+                            {displayTotal != null
+                              ? displayTotal.toLocaleString(getIntlLocale(), { minimumFractionDigits: 0, maximumFractionDigits: 4 })
                               : ''}
                           </td>
                         );
@@ -4248,7 +4330,7 @@ export function QuickEstimatePage() {
         </div>
       )}
 
-      {/* AI Estimate Results — failed status. role="alert" so SRs
+      {/* AI Estimate Results - failed status. role="alert" so SRs
           announce the failure immediately; "Error:" sr-only prefix +
           icon means the failure does not rely on red colour alone. */}
       {result && !isPending && result.status === 'failed' && result.error_message && (
@@ -4291,7 +4373,7 @@ export function QuickEstimatePage() {
         </div>
       )}
 
-      {/* AI Estimate Results — success. tabIndex={-1} + ref means the
+      {/* AI Estimate Results - success. tabIndex={-1} + ref means the
           useEffect above can programmatically move focus here once the
           result lands, so SR users land on the new content. */}
       {result && !isPending && result.status === 'completed' && result.items.length > 0 && (
@@ -4410,7 +4492,7 @@ export function QuickEstimatePage() {
             )}
           </div>
 
-          {/* Next steps — make the AI→BOQ→validate→tender pipeline explicit.
+          {/* Next steps - make the AI→BOQ→validate→tender pipeline explicit.
               Without this, "Save as BOQ" feels like the end of the road. */}
           <div className="rounded-xl border border-oe-blue/15 bg-oe-blue-subtle/20 p-4">
             <p className="flex items-center gap-1.5 text-xs font-semibold text-content-primary mb-1.5">
@@ -4481,12 +4563,25 @@ export function QuickEstimatePage() {
                 size="sm"
                 icon={<Download size={14} />}
                 onClick={() => {
-                  // Generate a simple CSV download from results
+                  // Generate a simple CSV download from results.
+                  // Write-only display boundary (#270): convert the quantity +
+                  // unit into the user's measurement system, and convert the
+                  // per-unit rate reciprocally (rate / unit-factor) so price-per
+                  // -unit stays consistent with the relabelled unit. The Total
+                  // is currency and stays invariant, so it is computed from the
+                  // canonical metric quantity x rate (factors would cancel
+                  // anyway). Nothing stored or sent is changed.
                   if (!result?.items?.length) return;
                   const header = 'Pos,Description,Unit,Quantity,Unit Rate,Total\n';
-                  const rows = result.items.map((item, i) =>
-                    `${item.ordinal || i + 1},"${(item.description || '').replace(/"/g, '""')}",${item.unit},${item.quantity},${item.unit_rate},${item.quantity * item.unit_rate}`
-                  ).join('\n');
+                  const rows = result.items.map((item, i) => {
+                    const dq = displayQty.convert(item.quantity, item.unit);
+                    // unit-factor: how many display units make up one metric
+                    // unit (1 for metric / unmapped units -> rate unchanged).
+                    const unitFactor = displayQty.convert(1, item.unit).value || 1;
+                    const displayRate = item.unit_rate / unitFactor;
+                    const total = item.quantity * item.unit_rate;
+                    return `${item.ordinal || i + 1},"${(item.description || '').replace(/"/g, '""')}",${dq.unit},${dq.value},${displayRate},${total}`;
+                  }).join('\n');
                   const blob = new Blob([header + rows], { type: 'text/csv' });
                   const url = URL.createObjectURL(blob);
                   const a = document.createElement('a');

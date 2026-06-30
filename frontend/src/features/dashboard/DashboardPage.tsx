@@ -942,8 +942,6 @@ function PortfolioOverview({ projects: _projects }: { projects: ProjectSummary[]
 
   if (!analytics) return null;
 
-  const hasWarnings = analytics.over_budget_count > 0;
-
   // A-DASH-01: the flat total_planned scalar blends per-project
   // currencies. Render the Total Budget card honestly: when more than
   // one currency is in play (multi_currency flag, or totals_by_currency
@@ -971,14 +969,8 @@ function PortfolioOverview({ projects: _projects }: { projects: ProjectSummary[]
         <h3 className="text-sm font-semibold text-content-primary">
           {t('dashboard.portfolio_overview', { defaultValue: 'Portfolio Overview' })}
         </h3>
-        {hasWarnings && (
-          <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-2xs font-medium text-amber-700">
-            <AlertTriangle size={10} />
-            {analytics.over_budget_count} {t('dashboard.over_budget', { defaultValue: 'over budget' })}
-          </span>
-        )}
       </div>
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
         <div className="rounded-xl border border-border-light bg-surface-elevated/90 p-3 shadow-xs transition-shadow duration-normal ease-oe hover:shadow-sm">
           <div className="text-2xs font-medium uppercase tracking-wider text-content-tertiary">
             {t('dashboard.active_projects', { defaultValue: 'Active Projects' })}
@@ -1001,14 +993,6 @@ function PortfolioOverview({ projects: _projects }: { projects: ProjectSummary[]
           </div>
           <div className="mt-1 text-xl font-bold tabular-nums text-content-primary">
             {analytics.projects_with_budget}
-          </div>
-        </div>
-        <div className={`rounded-xl border border-border-light p-3 shadow-xs transition-shadow duration-normal ease-oe hover:shadow-sm ${hasWarnings ? 'bg-amber-50 dark:bg-amber-900/10' : 'bg-surface-elevated/90'}`}>
-          <div className="text-2xs font-medium uppercase tracking-wider text-content-tertiary">
-            {t('dashboard.budget_warnings', { defaultValue: 'Budget Warnings' })}
-          </div>
-          <div className={`mt-1 text-xl font-bold tabular-nums ${hasWarnings ? 'text-amber-600' : 'text-content-primary'}`}>
-            {analytics.over_budget_count}
           </div>
         </div>
       </div>

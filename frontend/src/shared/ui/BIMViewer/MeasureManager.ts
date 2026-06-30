@@ -1,5 +1,5 @@
 /**
- * MeasureManager — 3D distance tool (RFC 19 §4.4).
+ * MeasureManager - 3D distance tool (RFC 19 §4.4).
  *
  * State machine:
  *   idle → awaiting-first → awaiting-second → done
@@ -9,7 +9,7 @@
  * measurement; completed measurements persist until `clearAll()` is called.
  *
  * Note: we use a plain DOM overlay positioned via `Vector3.project(camera)`
- * rather than CSS2DObject — fewer dependencies, easy to style with Tailwind.
+ * rather than CSS2DObject - fewer dependencies, easy to style with Tailwind.
  */
 import * as THREE from 'three';
 import type { SceneManager } from './SceneManager';
@@ -22,6 +22,8 @@ import {
 } from './measureMath';
 import { SnapDetector, type SnapKind } from './SnapDetector';
 import { uuid } from '@/shared/lib/browser';
+import { usePreferencesStore } from '@/stores/usePreferencesStore';
+import { toDisplayQuantity } from '@/shared/lib/unitConversion';
 
 export type MeasureState = 'idle' | 'awaiting-first' | 'awaiting-second' | 'done';
 
@@ -34,20 +36,20 @@ export type MeasureKind = 'distance' | 'area' | 'angle';
 
 export interface Measurement {
   id: string;
-  /** Kind of measurement — drives how `value`/labels are interpreted. */
+  /** Kind of measurement - drives how `value`/labels are interpreted. */
   kind: MeasureKind;
   /** Every clicked point. For `distance` this is exactly the two endpoints
    *  (kept as the first two entries so existing 2-tuple consumers still
    *  work); for `area` it is the full polygon ring; for `angle` it is the
    *  three vertices [a, b, c] with the angle measured at `b`. */
   points: THREE.Vector3[];
-  /** Straight-line distance — only meaningful for `kind === 'distance'`.
+  /** Straight-line distance - only meaningful for `kind === 'distance'`.
    *  Retained as a named field for back-compat with the measurements store
    *  / Tools panel which already read `.distance`. */
   distance: number;
   /** Generic numeric result: metres (distance), m² (area), degrees (angle). */
   value: number;
-  /** Closed perimeter in metres — only set for `kind === 'area'`. */
+  /** Closed perimeter in metres - only set for `kind === 'area'`. */
   perimeter?: number;
   line: THREE.Line;
   labelEl: HTMLDivElement;
@@ -93,17 +95,17 @@ export class MeasureManager {
   private polyMarkers: THREE.Mesh[] = [];
   /** Live rubber-band line shown while collecting polygon / angle points. */
   private rubberLine: THREE.Line | null = null;
-  /** Snap refiner — converts raw raycaster hits into vertex / edge-mid /
+  /** Snap refiner - converts raw raycaster hits into vertex / edge-mid /
    *  edge-perp snap points within a 12 px screen-space radius. */
   private snapDetector = new SnapDetector();
-  /** Last snap kind picked by the most recent raycastPoint() call — used
+  /** Last snap kind picked by the most recent raycastPoint() call - used
    *  by the hover glyph to draw a square (vertex), circle (edge mid) or
    *  diamond (edge perp). */
   private lastSnapKind: SnapKind = 'none';
   /** Sprite that visualises the current snap target while the mouse moves
    *  over geometry with the tool active. Lazily created. */
   private snapGlyph: THREE.Sprite | null = null;
-  /** PointerEvent handler — drives the live snap-glyph preview. */
+  /** PointerEvent handler - drives the live snap-glyph preview. */
   private boundOnPointerMove: (e: PointerEvent) => void;
 
   private canvas: HTMLCanvasElement;
@@ -134,7 +136,7 @@ export class MeasureManager {
     this.boundOnDblClick = this.onDblClick.bind(this);
     this.boundOnPointerMove = this.onPointerMove.bind(this);
 
-    // Overlay host for labels — absolute, full-bleed, pointer-events none so
+    // Overlay host for labels - absolute, full-bleed, pointer-events none so
     // clicks still reach the canvas underneath.
     this.ensureOverlayHost();
     this.scheduleOverlayLoop();
@@ -294,7 +296,7 @@ export class MeasureManager {
     this.sceneManager.requestRender();
   }
 
-  /** Handle a global keydown — called by the React wrapper. */
+  /** Handle a global keydown - called by the React wrapper. */
   handleKeyDown(e: KeyboardEvent): boolean {
     if (!this._active) return false;
     if (e.key === 'Enter' && this._kind === 'area' && this._polyPoints.length >= 3) {
@@ -307,7 +309,7 @@ export class MeasureManager {
         this.cancelPending();
         return true;
       }
-      // No pending point — disable the whole tool.
+      // No pending point - disable the whole tool.
       this.setActive(false);
       return true;
     }
@@ -366,7 +368,7 @@ export class MeasureManager {
   }
 
   private scheduleOverlayLoop(): void {
-    // Piggy-back on rAF — the SceneManager's render loop is on-demand, so we
+    // Piggy-back on rAF - the SceneManager's render loop is on-demand, so we
     // run a lightweight rAF to reposition labels when the camera moves.
     const loop = () => {
       this.updateLabelPositions();
@@ -425,7 +427,7 @@ export class MeasureManager {
       this.sceneManager.requestRender();
       return;
     }
-    // Second click — finalise the measurement.
+    // Second click - finalise the measurement.
     this.finaliseMeasurement(this._pendingPoint, hitPoint);
     this._pendingPoint = null;
     if (this.pendingMarker) {
@@ -461,7 +463,7 @@ export class MeasureManager {
       -((e.clientY - rect.top) / rect.height) * 2 + 1,
     );
     this.raycaster.setFromCamera(ndc, this.sceneManager.camera);
-    // Recurse through the whole scene so BatchedMesh hits register — the
+    // Recurse through the whole scene so BatchedMesh hits register - the
     // individual per-element meshes returned by ElementManager.getAllMeshes()
     // are removed from the scene graph after batching and have no valid
     // world matrix, so raycasting directly against them returns nothing.
@@ -494,10 +496,10 @@ export class MeasureManager {
     return null;
   }
 
-  /** Hover handler — runs the snap pipeline against the geometry under the
+  /** Hover handler - runs the snap pipeline against the geometry under the
    *  cursor and draws a small glyph (square = vertex, circle = edge midpoint,
    *  diamond = edge perpendicular) at the snap point so the user sees what
-   *  they will get on click. No state mutation here — clicks still drive the
+   *  they will get on click. No state mutation here - clicks still drive the
    *  pending-point machinery via raycastPoint(). */
   private onPointerMove(e: PointerEvent): void {
     if (!this._active) return;
@@ -512,7 +514,7 @@ export class MeasureManager {
   /** Lazily build a single sprite-based glyph and reuse its texture across
    *  kinds by repainting the offscreen canvas. The sprite is parented to the
    *  scene so it inherits the same world coordinates as the geometry under
-   *  the cursor — no DOM overlay math needed. */
+   *  the cursor - no DOM overlay math needed. */
   private showSnapGlyph(point: THREE.Vector3, kind: SnapKind): void {
     if (kind === 'none') {
       this.hideSnapGlyph();
@@ -532,7 +534,7 @@ export class MeasureManager {
       sprite.scale.set(0.04, 0.04, 0.04);
       sprite.renderOrder = 1000;
       sprite.userData.kind = 'vertex';
-      // TODO(W6.6 integration): expects an "overlay" group on SceneManager —
+      // TODO(W6.6 integration): expects an "overlay" group on SceneManager -
       // until then we attach directly to the scene root.
       this.sceneManager.scene.add(sprite);
       this.snapGlyph = sprite;
@@ -573,7 +575,7 @@ export class MeasureManager {
     canvas.height = size;
     const ctx = canvas.getContext('2d');
     // jsdom-friendly fallback: if 2D context is unavailable (rare in browsers,
-    // common in jest-style environments) build an empty texture anyway —
+    // common in jest-style environments) build an empty texture anyway -
     // tests don't exercise the glyph rendering.
     if (ctx) {
       ctx.clearRect(0, 0, size, size);
@@ -656,7 +658,11 @@ export class MeasureManager {
     line.renderOrder = 998;
     this.sceneManager.scene.add(line);
 
-    const label = this.makeLabel(`${dist.toFixed(2)} m`);
+    // Storage stays metric-canonical (`dist` in metres); only the overlay
+    // label is converted to the user's measurement system for display.
+    const system = usePreferencesStore.getState().measurementSystem;
+    const d = toDisplayQuantity(dist, 'm', system);
+    const label = this.makeLabel(`${d.value.toFixed(2)} ${d.unit}`);
     const measurement: Measurement = {
       id: randomId(),
       kind: 'distance',
@@ -685,8 +691,12 @@ export class MeasureManager {
     line.renderOrder = 998;
     this.sceneManager.scene.add(line);
 
+    // Storage stays metric-canonical (`area` in m²); only the overlay label
+    // is converted to the user's measurement system for display.
+    const system = usePreferencesStore.getState().measurementSystem;
+    const a = toDisplayQuantity(area, 'm²', system);
     const label = this.makeLabel(
-      `${area.toLocaleString(undefined, { maximumFractionDigits: 2 })} m²`,
+      `${a.value.toLocaleString(undefined, { maximumFractionDigits: 2 })} ${a.unit}`,
     );
     const measurement: Measurement = {
       id: randomId(),

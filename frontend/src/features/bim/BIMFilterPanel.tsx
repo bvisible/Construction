@@ -1,5 +1,5 @@
 /**
- * BIMFilterPanel — fast element filter + group sidebar for the BIM viewer.
+ * BIMFilterPanel - fast element filter + group sidebar for the BIM viewer.
  *
  * Supports:
  * - Free-text search across name / type / category / storey
@@ -13,7 +13,7 @@
  * - All counts are memoized from the `elements` prop (O(n) once per change)
  * - Filter predicate is rebuilt only when filter state changes
  * - Parent applies the predicate via ElementManager.applyFilter() which
- *   just toggles mesh.visible — no re-render of Three.js scene
+ *   just toggles mesh.visible - no re-render of Three.js scene
  * - 16k+ elements tested
  */
 
@@ -42,6 +42,7 @@ import {
 import type { BIMElementGroup } from './api';
 import type { BIMElementData } from '@/shared/ui/BIMViewer';
 import { getCategoryColor } from '@/shared/ui/BIMViewer/ElementManager';
+import { useDisplayQuantity } from '@/shared/hooks/useDisplayQuantity';
 import {
   bucketOf,
   isNoiseCategory,
@@ -56,15 +57,15 @@ export type GroupBy = 'storey' | 'type';
 
 /** Top-level grouping mode for the type filter section.
  *
- *   • category — flat list of every unique element_type / IfcEntity,
+ *   • category - flat list of every unique element_type / IfcEntity,
  *                sorted by count.  Best matches "show me all the
  *                Revit categories / all the IfcEntities".  This is
  *                the default because it works for BOTH Revit and IFC
  *                without any noise / curation.
- *   • typename — hierarchical Category → Type Name (Revit Browser
+ *   • typename - hierarchical Category → Type Name (Revit Browser
  *                style: "Walls > Generic - 200mm").  Best for picking
  *                a single type out of a complex model.
- *   • buckets  — semantic buckets (Structure / Envelope / MEP / …)
+ *   • buckets  - semantic buckets (Structure / Envelope / MEP / …)
  *                that aggregate categories into estimator-friendly
  *                groups.  Useful when you want a quick overview but
  *                hides the raw category names.
@@ -86,7 +87,7 @@ export interface BIMFilterState {
 
 interface BIMFilterPanelProps {
   elements: BIMElementData[];
-  /** Active BIM model id — used as a useEffect dependency to reset
+  /** Active BIM model id - used as a useEffect dependency to reset
    *  the panel's transient filter state (search / storey / type
    *  selections / expanded headers / active group highlight) when
    *  the user switches to a different model.  Without this the
@@ -112,7 +113,7 @@ interface BIMFilterPanelProps {
     filter: BIMFilterState,
     visibleElements: BIMElementData[],
   ) => void;
-  /** Saved element groups for the current model — rendered at the top of
+  /** Saved element groups for the current model - rendered at the top of
    *  the panel as a one-click apply / link / delete row. */
   savedGroups?: BIMElementGroup[];
   /** User clicked a saved group → apply its filter_criteria to the panel. */
@@ -121,7 +122,7 @@ interface BIMFilterPanelProps {
   onLinkGroupToBOQ?: (group: BIMElementGroup) => void;
   /** User clicked the delete icon on a saved group. */
   onDeleteGroup?: (group: BIMElementGroup) => void;
-  /** Smart filter chip clicked — applies a one-shot health-bucket filter
+  /** Smart filter chip clicked - applies a one-shot health-bucket filter
    *  (validation errors / unlinked / has tasks / has docs).  Routed up to
    *  BIMPage.handleSmartFilter which sets the same predicate as the
    *  in-viewport health stats banner. */
@@ -166,7 +167,7 @@ function detectModelFormat(
     ) {
       return 'rvt';
     }
-    // #153 guard — JSON property keys can in rare RVT exports be numeric
+    // #153 guard - JSON property keys can in rare RVT exports be numeric
     // or null sentinels after a deserialise round-trip; coerce to string
     // before .toLowerCase() so the filter render can never crash.
     if (Object.keys(props).some((k) => String(k).toLowerCase().includes('revit'))) {
@@ -181,7 +182,7 @@ function detectModelFormat(
  *
  *   • Revit  →  `element_type` is the clean CamelCase-split category name
  *               set by the backend (e.g. "Curtain Wall Mullions", "Walls").
- *               We use it directly — `properties.category` was a duplicate
+ *               We use it directly - `properties.category` was a duplicate
  *               that sometimes held raw OST_ strings, causing filter confusion.
  *   • IFC    →  the IfcEntity (IfcWall, IfcSlab, IfcDoor, …) which is
  *               always on `el.element_type`.
@@ -193,7 +194,7 @@ function getTypeKey(el: BIMElementData, _format: BIMModelFormat): string {
 }
 
 /**
- * Get the second-level Type Name for an element — e.g. "Generic - 200mm"
+ * Get the second-level Type Name for an element - e.g. "Generic - 200mm"
  * for a Wall, "0915 x 1220mm" for a Door, "L Mullion 1" for a curtain
  * wall mullion.  This is the Revit "Family/Type Name" axis.
  *
@@ -210,14 +211,14 @@ function getTypeKey(el: BIMElementData, _format: BIMModelFormat): string {
  * the source file. Returning that verbatim would explode the
  * Category → Type Name hierarchy: a model with 64 walls would render 64
  * unique single-element TypeName rows under the Walls category instead
- * of collapsing into the 2–3 actual family/types. Detect that pattern
+ * of collapsing into the 2-3 actual family/types. Detect that pattern
  * (`<element_type>\s+\d+`) and treat it as no-real-name so the row falls
  * through to the "Unspecified" bucket like other unlabeled elements. */
 const GENERIC_NAME_RE = /^(?:[A-Za-z][\w&/+\- ]*?)\s+\d+$/;
 
 function isGenericPlaceholderName(name: string, elementType: string | null | undefined): boolean {
   if (!GENERIC_NAME_RE.test(name)) return false;
-  // Strip the trailing digits and compare to element_type — a
+  // Strip the trailing digits and compare to element_type - a
   // placeholder is specifically a repeat of the category + index, not a
   // legitimate type like "L Mullion 1" or "Roof 2:3.5m parapet".
   const prefix = name.replace(/\s+\d+$/, '').trim();
@@ -278,7 +279,7 @@ function getTypeNameKey(el: BIMElementData): string {
   ]);
   if (revit) return revit;
 
-  // 2. IFC type axis — ObjectType is the human label, PredefinedType the
+  // 2. IFC type axis - ObjectType is the human label, PredefinedType the
   //    enumerated sub-type. Either gives a meaningful second level for IFC.
   const ifc = readProp(props, [
     'object_type',
@@ -346,7 +347,7 @@ function parseStorey(raw: string, count: number): ParsedStorey {
   if (/^ground/i.test(trimmed)) {
     return { raw, level: 0, label: trimmed, count };
   }
-  // "Roof" / "Penthouse" — keep label, no level (sort to end)
+  // "Roof" / "Penthouse" - keep label, no level (sort to end)
   // Numeric prefix: "01 - Entry Level", "12 Foo", "Level 03"
   const numberMatch =
     /^(\d{1,3})(?:\s*[-–:.]\s*(.*))?$/.exec(trimmed) ||
@@ -407,7 +408,7 @@ export default function BIMFilterPanel({
     buildingsOnly: true,
     groupBy: 'type',
   });
-  /** Top-level grouping selector — defaults to "By Category" because
+  /** Top-level grouping selector - defaults to "By Category" because
    *  it works equally well for Revit (categories) and IFC (entities)
    *  with zero curation. */
   const [groupingMode, setGroupingMode] = useState<GroupingMode>('category');
@@ -424,14 +425,14 @@ export default function BIMFilterPanel({
   );
   /** Whether the "Saved Groups" section at the top of the panel is expanded. */
   const [groupsExpanded, setGroupsExpanded] = useState(true);
-  /** ID of the saved group whose filter is currently applied (if any) — used
+  /** ID of the saved group whose filter is currently applied (if any) - used
    *  to highlight the active group row. */
   const [activeGroupId, setActiveGroupId] = useState<string | null>(null);
 
   // Reset every transient filter state slot when the user switches
   // to a different BIM model.  Without this, checkboxes for storeys
   // and types from the previous model linger in the panel UI even
-  // though the new model has nothing matching them — the predicate
+  // though the new model has nothing matching them - the predicate
   // gets rebuilt by onFilterChange but the checkbox state is stale,
   // so the displayed filter does not match the applied filter.
   useEffect(() => {
@@ -450,7 +451,7 @@ export default function BIMFilterPanel({
 
   // ── window.__oeBimFilter bridge (v3.12.0 / Stream D) ─────────────────
   // Saved-views need to capture the panel's filter state without forcing
-  // BIMPage to lift it (the panel owns transient UI state — search box,
+  // BIMPage to lift it (the panel owns transient UI state - search box,
   // checkbox sets, etc.). We expose a tiny imperative bridge with the
   // same shape as ``window.__oeBim`` so the right-panel can call
   // ``window.__oeBimFilter.get()`` / ``.set(...)`` from anywhere in the
@@ -490,7 +491,7 @@ export default function BIMFilterPanel({
               ? snapshot.buildingsOnly
               : prev.buildingsOnly,
         }));
-        // Clear active group highlight — the user is explicitly restoring
+        // Clear active group highlight - the user is explicitly restoring
         // a saved view, not applying a saved group.
         setActiveGroupId(null);
       },
@@ -525,7 +526,7 @@ export default function BIMFilterPanel({
     onApplyGroup?.(group);
   }, [onApplyGroup]);
 
-  /** Smart-filter chip counts — computed once per `elements` change so the
+  /** Smart-filter chip counts - computed once per `elements` change so the
    *  chips can show how many elements would be selected by each filter
    *  (e.g. "Errors 12", "Unlinked 423").  Same buckets the BIMViewer
    *  health stats banner emits. */
@@ -550,16 +551,16 @@ export default function BIMFilterPanel({
   // Storey counts are scoped by the buildingsOnly toggle: when ON, the
   // ~10 000 annotation/analytical elements with `storey: null` are
   // EXCLUDED from the storey list, so the user sees a clean list of
-  // real building levels instead of an overwhelming "—" entry that
+  // real building levels instead of an overwhelming "-" entry that
   // dominates the panel.
-  /** Aggregate quantities per category type key — Volume, Area, Length. */
+  /** Aggregate quantities per category type key - Volume, Area, Length. */
   interface TypeQtyAgg {
     volume: number;
     area: number;
     length: number;
   }
 
-  // Active isolation set — declared up here (not next to `visibleElements`
+  // Active isolation set - declared up here (not next to `visibleElements`
   // below) because `counts` also needs it as a dependency: chip counts must
   // narrow to the isolated subset when isolation is active, otherwise the
   // panel still reports model-total counts while the viewport only shows a
@@ -571,14 +572,14 @@ export default function BIMFilterPanel({
   );
 
   // Facet-counts pattern: each chip's count reflects "what you'd see if
-  // you ADDED this chip to the currently active filters" — i.e. counts on
+  // you ADDED this chip to the currently active filters" - i.e. counts on
   // every axis are computed against elements that pass all OTHER axes but
   // NOT this axis. Storey counts respect the active category/type/search
   // filter; category & bucket counts respect the active storey/search
   // filter. Without this, selecting "Walls" leaves every level chip
   // showing its full unfiltered total (e.g. "L01: 64" while the viewport
   // really has 11 walls on L01), and the typename grouping still lists
-  // every category with its original total — making the user think the
+  // every category with its original total - making the user think the
   // filter "broke" because the panel counts contradict the 3D viewport
   // and the "Showing 64 Walls" summary. Reported repeatedly by Artem
   // ("группировка на виде опять не работает").
@@ -590,7 +591,7 @@ export default function BIMFilterPanel({
     /** bucket → ordered list of [typeName, count] */
     const byBucket = new Map<BIMCategoryBucket, Map<string, number>>();
     const bucketTotals = new Map<BIMCategoryBucket, number>();
-    /** Category → (TypeName → count) — Revit Browser hierarchy */
+    /** Category → (TypeName → count) - Revit Browser hierarchy */
     const byCategoryThenType = new Map<string, Map<string, number>>();
 
     const search = state.search.trim().toLowerCase();
@@ -649,7 +650,7 @@ export default function BIMFilterPanel({
       // Type / bucket / category-with-types population: NOT gated by any
       // filter. The Category sidebar, Category → Type Name tree and
       // Buckets view must show every category that exists in the model
-      // so the user can navigate to it — even after they pick a storey
+      // so the user can navigate to it - even after they pick a storey
       // or type chip. Gating these on storey (the prior ba1887cb attempt
       // at facet UI) caused the entire tree to shrink to e.g. L02-only
       // categories when the user picked storey L02, which the user
@@ -657,7 +658,7 @@ export default function BIMFilterPanel({
       //
       // Storey chip counts above DO respect facet semantics
       // (matchesTypeFilter) because that is the chip the user is
-      // actively choosing among — collapsing the storey chip's own
+      // actively choosing among - collapsing the storey chip's own
       // count to zero on pick would defeat the chip. The category /
       // bucket tree is structural, not a chip set, so it stays stable.
       byType.set(tpe, (byType.get(tpe) ?? 0) + 1);
@@ -711,7 +712,7 @@ export default function BIMFilterPanel({
       });
     }
 
-    // Storey list — parse the leading number (if any) so "10 - Roof"
+    // Storey list - parse the leading number (if any) so "10 - Roof"
     // sorts after "02 - Entry Level" and not before it. Extract a
     // short label without the numeric prefix for cleaner display.
     const storeysOrdered = Array.from(byStorey.entries())
@@ -767,12 +768,12 @@ export default function BIMFilterPanel({
         // Buildings-only toggle hides annotation/analytical noise
         if (s.buildingsOnly && isNoiseCategory(tpe)) return false;
         // Storey filter (empty set = show all).  Elements without a storey
-        // are always visible — hiding them when the user picks a specific
+        // are always visible - hiding them when the user picks a specific
         // level silently drops "unassigned" elements which is confusing.
         if (s.storeys.size > 0 && el.storey) {
           if (!s.storeys.has(el.storey)) return false;
         }
-        // Type filter — matches either the category (e.g. "Walls") OR the
+        // Type filter - matches either the category (e.g. "Walls") OR the
         // individual type name (e.g. "Generic - 200mm") so users can filter
         // at both hierarchy levels.
         if (s.types.size > 0) {
@@ -819,7 +820,7 @@ export default function BIMFilterPanel({
         else next.add(value);
         return { ...prev, [key]: next };
       });
-      // Manual filter change drops the "applied group" highlight — the
+      // Manual filter change drops the "applied group" highlight - the
       // filter is no longer 1:1 with the group's filter_criteria.
       setActiveGroupId(null);
     },
@@ -876,7 +877,7 @@ export default function BIMFilterPanel({
   // shown by itself in 3D), the panel narrows its "visible" universe to
   // that subset BEFORE applying the user's filter chips. This keeps the
   // counts, Link-to-BOQ button and CSV export aligned with what the
-  // user actually sees on screen — otherwise they'd link 109 elements
+  // user actually sees on screen - otherwise they'd link 109 elements
   // expecting "those few I isolated" and quietly link the whole filter.
   // (`isolationSet` itself is declared above, next to the `counts` memo,
   // because chip counts also need it.)
@@ -890,17 +891,17 @@ export default function BIMFilterPanel({
       // elements that actually carry a storey, so storey-less elements stay
       // visible in the panel exactly as they do in the viewport. The two
       // predicates used to drift (the panel excluded storey-less elements via
-      // `el.storey || '—'` while the viewport kept them), which made the panel
+      // `el.storey || '-'` while the viewport kept them), which made the panel
       // list, counts and CSV export disagree with what was shown in 3D.
       if (state.storeys.size > 0 && el.storey && !state.storeys.has(el.storey))
         return false;
-      // Type filter — must mirror applyFilters() above: match either the
+      // Type filter - must mirror applyFilters() above: match either the
       // category (e.g. "Walls") OR the individual Type Name (e.g.
       // "Generic - 200mm").  Without the second check, clicking an
       // individual Type Name chip would correctly isolate the 3D viewport
       // (driven by applyFilters → onFilterChange) while the panel's
       // element-explorer list, group counts, summary bar and CSV export
-      // would all silently show 0 rows — the same Category-vs-TypeName
+      // would all silently show 0 rows - the same Category-vs-TypeName
       // alias bug we hit in the earliest versions (regressed when the
       // visibleElements predicate was added alongside applyFilters).
       if (state.types.size > 0) {
@@ -981,7 +982,7 @@ export default function BIMFilterPanel({
         )}
       </div>
 
-      {/* Isolation banner — when the 3D viewer has an isolation set
+      {/* Isolation banner - when the 3D viewer has an isolation set
           active, surface it as a prominent filter-style chip at the top
           of the panel so the user understands WHY the counts below
           differ from the model total.  Acts as a real filter: counts
@@ -1050,7 +1051,7 @@ export default function BIMFilterPanel({
           )}
         </div>
 
-        {/* Natural language summary — "Showing 72 Walls on Entry Level" */}
+        {/* Natural language summary - "Showing 72 Walls on Entry Level" */}
         {hasActiveFilters && visibleElements.length > 0 && (
           <div className="mt-2 px-2.5 py-1.5 rounded-md bg-oe-blue/5 border border-oe-blue/15 text-[11px] font-medium text-oe-blue">
             {(() => {
@@ -1107,7 +1108,7 @@ export default function BIMFilterPanel({
           )}
         </div>
 
-        {/* Quick-takeoff button + Save as group button + Export CSV — act on
+        {/* Quick-takeoff button + Save as group button + Export CSV - act on
             the currently visible subset. Shown whenever any elements are
             visible, so grouping-without-filter cases (e.g. picking a Type
             Name without reducing the set) still expose the link/save buttons. */}
@@ -1187,7 +1188,7 @@ export default function BIMFilterPanel({
           </div>
         )}
 
-        {/* Smart filter chips — one-click cross-module health filters.
+        {/* Smart filter chips - one-click cross-module health filters.
             Each chip narrows the viewport to a specific bucket (errors,
             unlinked-to-BOQ, has tasks, has documents).  Counts are
             derived from the cross-module link arrays on each element. */}
@@ -1276,7 +1277,7 @@ export default function BIMFilterPanel({
           </div>
         )}
 
-        {/* Buildings-only toggle — hides annotation/analytical noise */}
+        {/* Buildings-only toggle - hides annotation/analytical noise */}
         <label className="flex items-center justify-between mt-2 text-[11px] text-content-secondary cursor-pointer select-none">
           <span className="flex items-center gap-1.5">
             <Package size={11} className="text-content-tertiary" />
@@ -1306,7 +1307,7 @@ export default function BIMFilterPanel({
 
       {/* Scroll area: Storeys + Types */}
       <div className="flex-1 overflow-y-auto">
-        {/* Saved Groups — appears at the top of the scroll area when the
+        {/* Saved Groups - appears at the top of the scroll area when the
             project has any saved BIMElementGroup rows.  Each row is a
             one-click "apply this filter", with link-to-BOQ + delete
             actions on hover. */}
@@ -1407,7 +1408,7 @@ export default function BIMFilterPanel({
           </div>
         )}
 
-        {/* Storeys — sorted by parsed level number (B2 → G → 01 → 02 → …)
+        {/* Storeys - sorted by parsed level number (B2 → G → 01 → 02 → …)
             with a small level badge on each chip. */}
         <FilterSection
           title={t('bim.filter_levels', { defaultValue: 'Levels' })}
@@ -1463,7 +1464,7 @@ export default function BIMFilterPanel({
           )}
         </FilterSection>
 
-        {/* Type filter — three grouping modes:
+        {/* Type filter - three grouping modes:
               By Category   → flat list of every element_type / IfcEntity
               By Type Name  → hierarchical Category → TypeName (Revit Browser)
               Buckets       → semantic buckets (Structure/Envelope/MEP/…)
@@ -1527,7 +1528,7 @@ export default function BIMFilterPanel({
             ))}
           </div>
 
-          {/* ── Mode 1: By Category — split into "Building" + "Other" ──
+          {/* ── Mode 1: By Category - split into "Building" + "Other" ──
               Universal logic: every category is bucketed via bucketOf()
               and we split by whether the bucket is `noise`. Building
               chips render at top in normal style; annotation/analytical
@@ -1545,7 +1546,7 @@ export default function BIMFilterPanel({
             />
           )}
 
-          {/* ── Mode 2: By Type Name — Category → Type Name hierarchy ─ */}
+          {/* ── Mode 2: By Type Name - Category → Type Name hierarchy ─ */}
           {groupingMode === 'typename' && (
             <div className="space-y-1">
               {counts.categoriesWithTypes.length === 0 ? (
@@ -1643,7 +1644,7 @@ export default function BIMFilterPanel({
             </div>
           )}
 
-          {/* ── Mode 3: Buckets — semantic groups ─────────────────────── */}
+          {/* ── Mode 3: Buckets - semantic groups ─────────────────────── */}
           {groupingMode === 'buckets' && (
             <div className="space-y-1">
               {counts.buckets
@@ -1812,7 +1813,7 @@ export default function BIMFilterPanel({
 // ── Sub-components ───────────────────────────────────────────────────────
 
 /**
- * Category flat-list view — splits every category into "Building elements"
+ * Category flat-list view - splits every category into "Building elements"
  * (real things you'd estimate) and "Annotations & analytical" (drafting +
  * analytical-model junk).  Universal: works for any project because the
  * split is driven by `bucketOf()` which classifies every category by its
@@ -1844,8 +1845,12 @@ function CategoryFlatList({
   t: ReturnType<typeof useTranslation>['t'];
 }) {
   const [otherExpanded, setOtherExpanded] = useState(false);
+  // Display-only metric->imperial conversion for the per-type quantity
+  // summaries (#270). typeQty stays metric-canonical; only the rendered
+  // subtitle string converts.
+  const q = useDisplayQuantity();
 
-  // Universal split via bucketOf — works for any project's category set
+  // Universal split via bucketOf - works for any project's category set
   const building: Array<[string, number]> = [];
   const other: Array<[string, number]> = [];
   for (const entry of types) {
@@ -1863,7 +1868,7 @@ function CategoryFlatList({
 
   return (
     <div className="space-y-1">
-      {/* Building elements — real categories with quantity summaries */}
+      {/* Building elements - real categories with quantity summaries */}
       {building.length > 0 && (
         <div className="space-y-0.5">
           {building.map(([name, count]) => {
@@ -1872,9 +1877,18 @@ function CategoryFlatList({
             // Build a compact quantity summary string
             const qtyParts: string[] = [];
             if (agg) {
-              if (agg.volume > 0) qtyParts.push(`${fmtQty(agg.volume)} m\u00B3`);
-              if (agg.area > 0) qtyParts.push(`${fmtQty(agg.area)} m\u00B2`);
-              if (agg.length > 0) qtyParts.push(`${fmtQty(agg.length)} m`);
+              if (agg.volume > 0) {
+                const v = q.convert(agg.volume, 'm\u00B3');
+                qtyParts.push(`${fmtQty(v.value)} ${v.unit}`);
+              }
+              if (agg.area > 0) {
+                const v = q.convert(agg.area, 'm\u00B2');
+                qtyParts.push(`${fmtQty(v.value)} ${v.unit}`);
+              }
+              if (agg.length > 0) {
+                const v = q.convert(agg.length, 'm');
+                qtyParts.push(`${fmtQty(v.value)} ${v.unit}`);
+              }
             }
             return (
               <FilterChip
@@ -1891,7 +1905,7 @@ function CategoryFlatList({
         </div>
       )}
 
-      {/* Annotations & analytical — collapsible, de-emphasised */}
+      {/* Annotations & analytical - collapsible, de-emphasised */}
       {other.length > 0 && (
         <div className="rounded border border-border-light/50 bg-surface-secondary/30">
           <button

@@ -618,6 +618,12 @@ class ScheduleService:
                 else _incoming
             )
 
+        # When this update advances the data (status) date, freeze an EVM
+        # snapshot at the new date so the cost / schedule performance trend
+        # accrues automatically. Compare against the value before the write so a
+        # PATCH that merely re-sends the same data date does not re-snapshot.
+        data_date_advanced = "data_date" in fields and fields["data_date"] and fields["data_date"] != schedule.data_date
+
         if fields:
             await self.schedule_repo.update_fields(schedule_id, **fields)
 
@@ -626,6 +632,15 @@ class ScheduleService:
                 {"schedule_id": str(schedule_id), "fields": list(fields.keys())},
                 source_module="oe_schedule",
             )
+
+        if data_date_advanced:
+            # Lazy import: the snapshot service imports the progress service,
+            # which imports this module - importing it at call time avoids the
+            # import cycle. The recording is best-effort and never breaks the
+            # schedule write (see ``record_snapshot_safe``).
+            from app.modules.schedule.evm_snapshot_service import ScheduleEvmSnapshotService
+
+            await ScheduleEvmSnapshotService(self.session).record_snapshot_safe(schedule_id, fields["data_date"])
 
         # Re-fetch to return fresh data
         return await self.get_schedule(schedule_id)
@@ -1570,9 +1585,16 @@ class ScheduleService:
         if "boq_position_id" in fields and fields["boq_position_id"] is not None:
             fields["boq_position_id"] = fields["boq_position_id"]
 
-        # Map 'metadata' key to the model's 'metadata_' column
+        # Map 'metadata' key to the model's 'metadata_' column. Merge the
+        # incoming dict over the stored value so a partial PATCH never drops
+        # keys the caller did not resend (json_overwrite data-loss guard).
         if "metadata" in fields:
-            fields["metadata_"] = fields.pop("metadata")
+            _incoming = fields.pop("metadata")
+            fields["metadata_"] = (
+                merge_metadata(getattr(work_order, "metadata_", None), _incoming)
+                if isinstance(_incoming, dict)
+                else _incoming
+            )
 
         if fields:
             # Snapshot published attributes before update_fields expires the instance

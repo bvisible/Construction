@@ -153,7 +153,7 @@ async def update_notice(
 ) -> NoticeResponse:
     existing = await service.get_notice(notice_id)
     await verify_project_access(existing.project_id, str(user_id), session)
-    notice = await service.update_notice(notice_id, data)
+    notice = await service.update_notice(notice_id, data, user_id=str(user_id) if user_id else None)
     return NoticeResponse.model_validate(notice)
 
 
@@ -279,7 +279,7 @@ async def update_variation_request(
 ) -> VariationRequestResponse:
     existing = await service.get_request(vr_id)
     await verify_project_access(existing.project_id, str(user_id), session)
-    vr = await service.update_request(vr_id, data)
+    vr = await service.update_request(vr_id, data, user_id=str(user_id) if user_id else None)
     return VariationRequestResponse.model_validate(vr)
 
 
@@ -457,7 +457,7 @@ async def update_variation_order(
     # with no authorisation.
     if data.final_cost_impact is not None:
         ensure_high_value_authorised(data.final_cost_impact, payload=user_payload)
-    vo = await service.update_order(vo_id, data)
+    vo = await service.update_order(vo_id, data, user_id=str(user_id) if user_id else None)
     return VariationOrderResponse.model_validate(vo)
 
 

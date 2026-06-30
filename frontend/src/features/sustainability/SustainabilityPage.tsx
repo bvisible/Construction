@@ -19,6 +19,8 @@ import { sustainabilityGuide } from './sustainabilityGuide';
 import { apiGet } from '@/shared/lib/api';
 import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
+import { usePreferencesStore } from '@/stores/usePreferencesStore';
+import { useDisplayQuantity } from '@/shared/hooks/useDisplayQuantity';
 import {
   fetchSustainability,
   enrichCO2,
@@ -50,7 +52,7 @@ interface BOQ {
 function ratingColor(rating: string): string {
   switch (rating) {
     case 'A': return '#16a34a';
-    case 'B': return '#c2723f';
+    case 'B': return '#2563eb';
     case 'C': return '#ca8a04';
     case 'D': return '#dc2626';
     default: return '#6b7280';
@@ -68,7 +70,7 @@ function complianceStyle(level: string, t: (key: string, opts?: Record<string, u
 }
 
 const DONUT_COLORS = [
-  '#c2723f', '#dc2626', '#16a34a', '#ca8a04', '#7c3aed',
+  '#2563eb', '#dc2626', '#16a34a', '#ca8a04', '#7c3aed',
   '#0891b2', '#ea580c', '#6366f1', '#be185d', '#065f46', '#9333ea',
 ];
 
@@ -157,6 +159,22 @@ export function SustainabilityPage() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const addToast = useToastStore((s) => s.addToast);
+
+  // Issue #270 - measurement-system-aware display. Embodied-carbon MASS stays in
+  // the domain-standard kg / t CO2e (EN 15804 / EU CPR use these identically in
+  // metric and imperial markets, so converting to lb/ton would misrepresent the
+  // figures). What DOES follow the preference is the AREA dimension: the per-m2
+  // benchmark + EU-CPR rates convert RECIPROCALLY (kg/m2 -> kg/ft2), and each
+  // BOQ position quantity converts as an ABSOLUTE (its own unit), with its GWP
+  // per-unit rate converted reciprocally so per-unit x qty still equals the kg
+  // total. The GFA INPUT stays metric/editable (m2) and is never converted.
+  const q = useDisplayQuantity();
+  const areaUnit = q.unitFor('m²');
+  // Reciprocal area factor (1 metric, 10.7639 imperial) for "per m2" rates.
+  const areaRateFactor = q.convert(1, 'm²').value;
+  // The user's number locale (replaces the previously hardcoded de-DE so CO2
+  // figures group/decimal the way the rest of the user's app does).
+  const numberLocale = usePreferencesStore((s) => s.numberLocale);
   const [searchParams, setSearchParams] = useSearchParams();
   const activeProjectId = useProjectContextStore((s) => s.activeProjectId);
   // Deep-link preselect (e.g. from the BOQ toolbar "Carbon footprint" action:
@@ -311,30 +329,45 @@ export function SustainabilityPage() {
         return /[",\n;]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
       };
       const lines: string[] = [];
-      // Summary block
+      // Issue #270 - this write-only CSV honours the measurement system at the
+      // export boundary. CO2 mass columns (total_co2_tons, co2_kg, gwp_total_kg)
+      // stay in the EN 15804 standard kg/t. Physical quantities convert as
+      // ABSOLUTE values (with their unit relabelled); the benchmark and the GWP
+      // per-unit columns are "per area/per unit" RATES converted RECIPROCALLY so
+      // per-unit x qty still equals the kg total.
       lines.push(['section', 'key', 'value'].join(','));
       lines.push(['summary', 'total_co2_tons', data.total_co2_tons].map(csvCell).join(','));
-      lines.push(['summary', 'benchmark_per_m2_kg', data.benchmark_per_m2 ?? ''].map(csvCell).join(','));
+      // RATE (reciprocal): kg CO2 per m2 -> per ft2. Header carries the unit.
+      lines.push(
+        ['summary', `benchmark_per_${areaUnit}_kg`, data.benchmark_per_m2 != null ? data.benchmark_per_m2 / areaRateFactor : '']
+          .map(csvCell)
+          .join(','),
+      );
       lines.push(['summary', 'rating', data.rating].map(csvCell).join(','));
       lines.push(['summary', 'eu_cpr_compliance', data.eu_cpr_compliance].map(csvCell).join(','));
       lines.push('');
-      // Breakdown by category
+      // Breakdown by category. quantity = ABSOLUTE (convert), co2_kg stays kg.
       lines.push(['breakdown', 'material', 'category', 'quantity', 'unit', 'co2_kg', 'percentage'].join(','));
       for (const b of data.breakdown) {
+        const bq = q.convert(Number(b.quantity), b.unit); // ABSOLUTE
         lines.push(
-          ['breakdown', b.material, b.category, b.quantity, b.unit, b.co2_kg, b.percentage]
+          ['breakdown', b.material, b.category, bq.value, bq.unit, b.co2_kg, b.percentage]
             .map(csvCell)
             .join(','),
         );
       }
       lines.push('');
-      // Position-level detail
+      // Position-level detail. quantity = ABSOLUTE (convert); gwp_per_unit =
+      // RATE per the position unit (reciprocal); gwp_total stays kg.
       lines.push(
         ['position', 'ordinal', 'description', 'quantity', 'unit', 'epd_material', 'gwp_per_unit', 'gwp_total_kg', 'category', 'source'].join(','),
       );
       for (const p of data.positions_detail) {
+        const pq = q.convert(Number(p.quantity), p.unit); // ABSOLUTE
+        const unitFactor = q.convert(1, p.unit).value; // 1 unless p.unit is convertible
+        const gwpPerUnit = p.gwp_per_unit / unitFactor; // RATE (reciprocal)
         lines.push(
-          ['position', p.ordinal, p.description, p.quantity, p.unit, p.epd_name ?? '', p.gwp_per_unit, p.gwp_total, p.category, p.source]
+          ['position', p.ordinal, p.description, pq.value, pq.unit, p.epd_name ?? '', gwpPerUnit, p.gwp_total, p.category, p.source]
             .map(csvCell)
             .join(','),
         );
@@ -472,7 +505,8 @@ export function SustainabilityPage() {
                 </div>
                 <div className="flex items-baseline gap-2 mb-2">
                   <span className="text-3xl font-bold tabular-nums text-content-primary">
-                    {data.total_co2_tons.toLocaleString('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}
+                    {/* ABSOLUTE CO2 mass - kept in t CO2e (EN 15804 standard) */}
+                    {data.total_co2_tons.toLocaleString(numberLocale, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}
                   </span>
                   <span className="text-lg text-content-secondary">t CO2e</span>
                 </div>
@@ -482,7 +516,12 @@ export function SustainabilityPage() {
                       style={{ backgroundColor: ratingColor(data.rating) }}>{data.rating}</div>
                     <div>
                       <div className="text-sm font-semibold text-content-primary">{data.rating_label}</div>
-                      <div className="text-xs text-content-tertiary">{data.benchmark_per_m2} kg CO2/m2</div>
+                      {/* RATE (reciprocal): kg CO2 per m2 -> per ft2 for imperial; mass stays kg */}
+                      {data.benchmark_per_m2 != null && (
+                        <div className="text-xs text-content-tertiary">
+                          {(data.benchmark_per_m2 / areaRateFactor).toLocaleString(numberLocale, { maximumFractionDigits: 1 })} kg CO2/{areaUnit}
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}
@@ -506,7 +545,11 @@ export function SustainabilityPage() {
                       <span className={`text-lg font-bold ${cpr.text}`}>{cpr.label}</span>
                     </div>
                     <div className="text-sm text-content-secondary">
-                      {data.eu_cpr_gwp_per_m2_year?.toFixed(2)} kg CO2e/m2/yr
+                      {/* RATE (reciprocal): kg CO2e per m2 per year -> per ft2/yr; mass + time stay */}
+                      {data.eu_cpr_gwp_per_m2_year != null
+                        ? (data.eu_cpr_gwp_per_m2_year / areaRateFactor).toFixed(2)
+                        : data.eu_cpr_gwp_per_m2_year}{' '}
+                      kg CO2e/{areaUnit}/yr
                     </div>
                     <div className="text-xs text-content-tertiary mt-1">{t('sustainability.rsp_label', { defaultValue: '50-year RSP' })}</div>
                   </div>
@@ -572,7 +615,8 @@ export function SustainabilityPage() {
                             <td className="py-2.5 px-4 text-right tabular-nums text-content-secondary">{item.positions_count}</td>
                             <td className="py-2.5 px-4 text-right tabular-nums text-content-secondary">{item.percentage.toFixed(1)}%</td>
                             <td className="py-2.5 pl-4 text-right tabular-nums font-medium text-content-primary">
-                              {(item.co2_kg / 1000).toLocaleString('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} t
+                              {/* ABSOLUTE CO2 mass - kept in t CO2e (EN 15804 standard) */}
+                              {(item.co2_kg / 1000).toLocaleString(numberLocale, { minimumFractionDigits: 1, maximumFractionDigits: 1 })} t
                             </td>
                           </tr>
                         ))}
@@ -603,12 +647,22 @@ export function SustainabilityPage() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-border-light">
-                      {visiblePositions.map((pos) => (
+                      {visiblePositions.map((pos) => {
+                        // ABSOLUTE quantity in the position's own unit (m2/m3/m/
+                        // kg/pcs...). q.convert multiplies + relabels; unmapped
+                        // units (pcs, lsum) pass through with factor 1.
+                        const pq = q.convert(pos.quantity, pos.unit);
+                        // GWP/unit is "kg CO2e per <pos.unit>" - a RATE, so it is
+                        // converted RECIPROCALLY (kg/m2 -> kg/ft2) so per-unit x
+                        // qty still equals the unchanged kg gwp_total.
+                        const unitFactor = q.convert(1, pos.unit).value;
+                        const gwpPerUnit = pos.gwp_per_unit / unitFactor;
+                        return (
                         <tr key={pos.position_id} className={pos.source === 'none' ? 'opacity-50' : ''}>
                           <td className="py-2 pr-3 tabular-nums text-content-secondary text-xs">{pos.ordinal}</td>
                           <td className="py-2 px-3 text-content-primary truncate max-w-[300px]" title={pos.description}>{pos.description}</td>
-                          <td className="py-2 px-3 text-right tabular-nums text-content-secondary">{pos.quantity.toLocaleString('de-DE', { maximumFractionDigits: 2 })}</td>
-                          <td className="py-2 px-3 text-center text-content-tertiary">{pos.unit}</td>
+                          <td className="py-2 px-3 text-right tabular-nums text-content-secondary">{pq.value.toLocaleString(numberLocale, { maximumFractionDigits: 2 })}</td>
+                          <td className="py-2 px-3 text-center text-content-tertiary">{pq.unit}</td>
                           <td className="py-2 px-3">
                             <EPDSelect
                               currentId={pos.epd_id}
@@ -618,17 +672,20 @@ export function SustainabilityPage() {
                             />
                           </td>
                           <td className="py-2 px-3 text-right tabular-nums text-content-secondary text-xs">
-                            {pos.gwp_per_unit ? `${pos.gwp_per_unit}` : '-'}
+                            {/* RATE (reciprocal) per the displayed unit */}
+                            {pos.gwp_per_unit ? `${gwpPerUnit.toLocaleString(numberLocale, { maximumFractionDigits: 4 })}` : '-'}
                           </td>
                           <td className="py-2 pl-3 text-right tabular-nums font-medium text-content-primary">
                             {pos.gwp_total ? (
                               <span className={pos.gwp_total < 0 ? 'text-emerald-600' : ''}>
-                                {pos.gwp_total.toLocaleString('de-DE', { maximumFractionDigits: 1 })} kg
+                                {/* ABSOLUTE CO2 mass - kept in kg CO2e */}
+                                {pos.gwp_total.toLocaleString(numberLocale, { maximumFractionDigits: 1 })} kg
                               </span>
                             ) : '-'}
                           </td>
                         </tr>
-                      ))}
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -650,20 +707,40 @@ export function SustainabilityPage() {
             </Card>
           )}
 
-          {/* Rating Scale + Export */}
+          {/* Rating Scale + Export. The A-D thresholds are an industry scale
+              defined in kg CO2 per m2 GFA (the same basis the backend rates
+              against). For imperial we reciprocal-convert the boundary numbers
+              (kg/m2 -> kg/ft2) and relabel the suffix, so the legend stays
+              consistent with the converted per-area KPI above. The band numbers
+              are built numerically (not from the baked translation) so they can
+              convert; for metric the output is identical to before. */}
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-4">
-              {[
-                { label: 'A: <80', color: '#16a34a', key: 'a' },
-                { label: 'B: 80-150', color: '#c2723f', key: 'b' },
-                { label: 'C: 150-250', color: '#ca8a04', key: 'c' },
-                { label: 'D: >250', color: '#dc2626', key: 'd' },
-              ].map((r) => (
-                <div key={r.key} className="flex items-center gap-1.5 text-xs text-content-tertiary">
-                  <div className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: r.color }} />
-                  {t(`sustainability.rating_${r.key}`, { defaultValue: r.label })} kg/m²
-                </div>
-              ))}
+              {(() => {
+                // kg CO2/m2 boundaries; null = open end.
+                const nf = (v: number) =>
+                  (v / areaRateFactor).toLocaleString(numberLocale, { maximumFractionDigits: areaRateFactor === 1 ? 0 : 1 });
+                const bands: { key: string; color: string; lo: number | null; hi: number | null }[] = [
+                  { key: 'a', color: '#16a34a', lo: null, hi: 80 },
+                  { key: 'b', color: '#2563eb', lo: 80, hi: 150 },
+                  { key: 'c', color: '#ca8a04', lo: 150, hi: 250 },
+                  { key: 'd', color: '#dc2626', lo: 250, hi: null },
+                ];
+                return bands.map((b) => {
+                  const range =
+                    b.lo === null && b.hi !== null
+                      ? `<${nf(b.hi)}`
+                      : b.hi === null && b.lo !== null
+                        ? `>${nf(b.lo)}`
+                        : `${nf(b.lo as number)}-${nf(b.hi as number)}`;
+                  return (
+                    <div key={b.key} className="flex items-center gap-1.5 text-xs text-content-tertiary">
+                      <div className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: b.color }} />
+                      {b.key.toUpperCase()}: {range} kg/{areaUnit}
+                    </div>
+                  );
+                });
+              })()}
             </div>
             <Button variant="secondary" size="sm" icon={<Download size={14} />}
               onClick={handleExportCsv}>

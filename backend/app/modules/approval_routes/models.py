@@ -180,6 +180,17 @@ class Instance(Base):
         ForeignKey("oe_users_user.id", ondelete="SET NULL"),
         nullable=True,
     )
+    # Per-instance override of who must act on the *current* step - the
+    # "ball in court" for this approval. NULL means the step's own approver
+    # (or its resolved out-of-office delegate) is responsible; a one-tap
+    # reassignment pins a specific stand-in here without editing the shared
+    # route template. The service treats a non-null value as the sole
+    # eligible decider for the current step.
+    current_assignee_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(),
+        ForeignKey("oe_users_user.id", ondelete="SET NULL"),
+        nullable=True,
+    )
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<Instance {self.target_kind}:{self.target_id} step={self.current_step_ordinal} status={self.status}>"
@@ -232,3 +243,56 @@ class StepState(Base):
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<StepState inst={self.instance_id} step={self.step_id} {self.decision}>"
+
+
+class Delegation(Base):
+    """An out-of-office hand-off of one user's approvals to a stand-in.
+
+    Personal to the ``delegator_user_id``: while it is active, any approval
+    step pinned to the delegator may also be decided by the resolved
+    ``delegate_user_id`` (see :mod:`delegation_engine`). ``project_id`` NULL
+    means a blanket hand-off across every project; a concrete id scopes it to
+    one project. ``starts_at`` / ``ends_at`` are an optional active window
+    (``None`` = open-ended on that side). The pure engine, not the DB,
+    enforces that delegator != delegate and resolves chains safely.
+    """
+
+    __tablename__ = "oe_approval_routes_delegation"
+    __table_args__ = (
+        Index("ix_approval_delegation_delegator_active", "delegator_user_id", "is_active"),
+        Index("ix_approval_delegation_delegate_active", "delegate_user_id", "is_active"),
+    )
+
+    delegator_user_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(),
+        ForeignKey("oe_users_user.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    delegate_user_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(),
+        ForeignKey("oe_users_user.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    project_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(),
+        ForeignKey("oe_projects_project.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    starts_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    is_active: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=True,
+        server_default="1",
+    )
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(),
+        ForeignKey("oe_users_user.id", ondelete="SET NULL"),
+        nullable=True,
+        default=None,
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return f"<Delegation {self.delegator_user_id} -> {self.delegate_user_id} active={self.is_active}>"

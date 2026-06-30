@@ -228,7 +228,7 @@ export const aiApi = {
    * Generate a BOQ estimate from a text description.
    *
    * Accepts an optional `signal` so callers can wire a Cancel button via
-   * `AbortController` — aborting rejects the promise with a DOMException
+   * `AbortController` - aborting rejects the promise with a DOMException
    * whose `name === 'AbortError'`. The hook layer (useQuickEstimateHistory)
    * uses that signal to distinguish user-cancelled runs (status: 'cancelled')
    * from real failures (status: 'error').
@@ -373,12 +373,20 @@ export const aiApi = {
     session_id: string;
     group_by: string[];
     sum_columns: string[];
+    /**
+     * The user's display measurement system. Sent so the server can render the
+     * exported quantities in the same units the user sees in the app. The
+     * backend may currently ignore this; storage stays metric-canonical and the
+     * FE never converts anything client-side for this path.
+     */
+    measurementSystem?: 'metric' | 'imperial';
   }): Promise<void> => {
     const query = new URLSearchParams({
       session_id: params.session_id,
       group_by: params.group_by.join(','),
       sum_columns: params.sum_columns.join(','),
       format: 'xlsx',
+      measurementSystem: params.measurementSystem ?? 'metric',
     });
     const res = await fetch(`/api/v1/takeoff/cad-group/export/?${query.toString()}`, {
       method: 'GET',

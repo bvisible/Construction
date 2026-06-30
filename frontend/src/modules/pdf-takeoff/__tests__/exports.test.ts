@@ -283,4 +283,81 @@ describe('buildTakeoffWorkbook', () => {
     // → count = 2 + 1 + 1 = 4.
     expect(totalRowCount).toBe(4);
   });
+
+  /* ── Imperial measurement system (issue #270) ─────────────────────
+   * Stored quantities are metric-canonical (D-TKC-016); the workbook must
+   * convert values + unit labels when the user prefers imperial, and stay
+   * byte-identical to the metric output when the system is metric / unset. */
+
+  /** Read a worksheet into a plain matrix of cell values (1-based -> 0-based). */
+  function sheetMatrix(ws: import('exceljs').Worksheet): unknown[][] {
+    const out: unknown[][] = [];
+    ws.eachRow((row) => {
+      const vals = row.values as unknown as unknown[];
+      out.push(vals.slice(1)); // drop the 1-based leading hole
+    });
+    return out;
+  }
+
+  it('metric (default) leaves the Measurements sheet in metres', async () => {
+    const wb = await buildTakeoffWorkbook({
+      measurements: SAMPLE_MEASUREMENTS,
+      scale: { pixelsPerUnit: 100, unitLabel: 'm' },
+      groupColorMap: GROUP_COLORS,
+      projectName: 'Test Project',
+    });
+    const text = JSON.stringify(sheetMatrix(wb.getWorksheet('Measurements')!));
+    expect(text).toContain('m²'); // m² present
+    expect(text).not.toContain('ft');
+  });
+
+  it('imperial converts Summary totals + unit labels (m -> ft, m² -> ft²)', async () => {
+    const wb = await buildTakeoffWorkbook({
+      measurements: SAMPLE_MEASUREMENTS,
+      scale: { pixelsPerUnit: 100, unitLabel: 'm' },
+      groupColorMap: GROUP_COLORS,
+      projectName: 'Test Project',
+      measurementSystem: 'imperial',
+    });
+    const summary = wb.getWorksheet('Summary')!;
+
+    const rows: Record<string, { total: number; unit: string }> = {};
+    summary.eachRow((row) => {
+      const group = row.getCell(1).value;
+      const type = row.getCell(2).value;
+      if (typeof group === 'string' && typeof type === 'string' && type) {
+        rows[`${group}::${type}`] = {
+          total: Number(row.getCell(4).value),
+          unit: String(row.getCell(5).value ?? ''),
+        };
+      }
+    });
+
+    // General/distance: 5.5 + 2.25 = 7.75 m -> 25.426 ft.
+    const dist = rows['General::distance'];
+    expect(dist).toBeDefined();
+    expect(dist!.unit).toBe('ft');
+    expect(dist!.total).toBeCloseTo(25.426, 2);
+
+    // Structural/area: 12.5 m² -> 134.549 ft².
+    const area = rows['Structural::area'];
+    expect(area).toBeDefined();
+    expect(area!.unit).toBe('ft²');
+    expect(area!.total).toBeCloseTo(134.549, 2);
+  });
+
+  it('imperial converts the Measurements data + subtotal rows', async () => {
+    const wb = await buildTakeoffWorkbook({
+      measurements: SAMPLE_MEASUREMENTS,
+      scale: { pixelsPerUnit: 100, unitLabel: 'm' },
+      groupColorMap: GROUP_COLORS,
+      projectName: 'Test Project',
+      measurementSystem: 'imperial',
+    });
+    const text = JSON.stringify(sheetMatrix(wb.getWorksheet('Measurements')!));
+    // No metric length / area unit labels remain.
+    expect(text).toContain('ft');
+    expect(text).not.toContain('"m"');
+    expect(text).not.toContain('m²');
+  });
 });

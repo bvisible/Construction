@@ -22,7 +22,7 @@
  *   DELETE /federations/{id}/models/{model_id}    — remove member
  */
 
-import { useState, useMemo, useCallback, useEffect } from 'react';
+import { useState, useMemo, useCallback, useEffect, lazy, Suspense } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useQueries, useQueryClient } from '@tanstack/react-query';
@@ -54,7 +54,6 @@ import { useProjectContextStore } from '@/stores/useProjectContextStore';
 
 import { FederationTypeTree } from './FederationTypeTree';
 import {
-  buildFederationViewerDeeplink,
   diffHasChanges,
   diffSummaryCounts,
   formatDrift,
@@ -72,6 +71,10 @@ import {
   type FederationSnapshot,
   type HealthTone,
 } from './federationHealth';
+
+// The federated 3D viewer pulls in Three.js, so it is code-split and only
+// fetched when a user actually opens the "3D" tab of a federation.
+const FederatedViewer = lazy(() => import('./FederatedViewer'));
 
 /* ── Types ─────────────────────────────────────────────────────────── */
 
@@ -1292,56 +1295,46 @@ function FederationDetailDrawer({
                 id="federation-tab-panel-3d"
                 aria-labelledby="federation-tab-3d"
               >
-                {/* The embedded federated 3D scene was unreliable: when a
-                    member's geometry endpoint 404'd the panel showed a
-                    yellow toast with raw "Geometry fetch failed (404)"
-                    text and the canvas stayed empty. Instead we render a
-                    list of member models, each row deep-linking to the
-                    per-model viewer at /bim/:modelId (which is the
-                    supported & working surface). Rows whose geometry HEAD
-                    probe fails are greyed out so the user doesn't navigate
-                    into a broken viewer. */}
-                <h3 className="mb-2 text-sm font-semibold text-slate-700">
-                  {t('bim.federation.open_in_3d_viewer', {
-                    defaultValue: 'Open a member in the 3D viewer',
+                {/* Coordinated federated scene: every member composed on one
+                    shared origin, colour-coded by discipline. The embedded
+                    viewer fails soft (per-member "no geometry yet" notes and a
+                    WebGL fallback) so one unconverted or non-GLB model never
+                    blanks the whole canvas. A single model can still be opened
+                    on its own, with element tools, from the list below. */}
+                <h3 className="mb-1 text-sm font-semibold text-slate-700">
+                  {t('bim.federation.coordinated_3d_title', {
+                    defaultValue: 'Coordinated 3D model',
                   })}
                 </h3>
                 <p className="mb-3 text-xs text-slate-500">
-                  {t('bim.federation.tab_3d_subtitle', {
+                  {t('bim.federation.coordinated_3d_subtitle', {
                     defaultValue:
-                      'Pick a model below to open the full 3D viewer for that file, or open the whole set at once. The federated scene returns in a later release.',
+                      'Every model in this federation, loaded together on one shared origin. Use the controls in the scene to color by discipline, frame the model, and show or hide each file.',
                   })}
                 </p>
-                {(() => {
-                  // "Open all" deeplinks to the first available member with
-                  // the rest carried as a ``models`` query param so the
-                  // viewer can load them as overlays. Members whose geometry
-                  // HEAD probe failed are excluded so we never seed the
-                  // viewer with a broken model.
-                  const openableIds = data.members
-                    .filter(
-                      (m) => geometryAvailability[m.bim_model_id] !== false,
-                    )
-                    .map((m) => m.bim_model_id);
-                  const allLink = buildFederationViewerDeeplink(
-                    data.id,
-                    openableIds,
-                  );
-                  if (!allLink || openableIds.length < 2) return null;
-                  return (
-                    <div className="mb-3">
-                      <Button
-                        size="sm"
-                        data-testid="federation-open-all-3d"
-                        onClick={() => navigate(allLink)}
+                {data.members.length > 0 ? (
+                  <Suspense
+                    fallback={
+                      <div
+                        data-testid="federation-3d-viewer-loading"
+                        className="flex h-[60vh] min-h-[400px] w-full items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-sm text-slate-500"
                       >
-                        {t('bim.federation.open_all_in_3d', {
-                          defaultValue: 'Open all members in 3D viewer',
+                        {t('bim.federation.viewer.loading', {
+                          defaultValue: 'Loading federation geometry…',
                         })}
-                      </Button>
-                    </div>
-                  );
-                })()}
+                      </div>
+                    }
+                  >
+                    <FederatedViewer federationId={data.id} />
+                  </Suspense>
+                ) : null}
+                {data.members.length > 0 ? (
+                  <h4 className="mb-2 mt-5 text-sm font-semibold text-slate-700">
+                    {t('bim.federation.open_single_member_title', {
+                      defaultValue: 'Open a single model with full tools',
+                    })}
+                  </h4>
+                ) : null}
                 {data.members.length === 0 ? (
                   <p className="text-sm text-slate-500">
                     {t('bim.federation.no_members')}

@@ -54,7 +54,8 @@ import structlog
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.config import Settings, build_provenance_tag, get_settings
+from app.config import Settings, build_provenance_tag, desktop_mode, get_settings
+from app.core.deployment_posture import build_data_security_posture
 from app.core.module_loader import module_loader
 from app.dependencies import RequireRole, get_current_user_id
 
@@ -1337,6 +1338,13 @@ def create_app() -> FastAPI:
 
     app.include_router(desktop_auth_router, prefix="/api/v1/auth")
 
+    # Workspace white-label branding. GET is public (the login page reads it
+    # before sign-in so invited users see the workspace brand); PUT/DELETE are
+    # admin-only. Persisted to a JSON file in the data dir, so no migration.
+    from app.core.branding_router import router as branding_router
+
+    app.include_router(branding_router, prefix="/api/v1")
+
     # Module management API (list / enable / disable)
     from app.core.module_router import router as module_mgmt_router
 
@@ -1649,6 +1657,78 @@ def create_app() -> FastAPI:
         }
 
         return result
+
+    @app.get("/api/system/data-security", tags=["System"])
+    async def system_data_security(
+        _user_id: str = Depends(get_current_user_id),
+    ) -> dict[str, Any]:
+        """Read-only deployment posture for the in-product Data & Security panel.
+
+        Surfaces only verifiable, non-secret facts about where this instance keeps
+        its data and whether it reaches out anywhere, so a self-hoster can see the
+        privacy posture without taking a marketing claim on trust. No secret is
+        ever returned - AI providers are reported by name and presence only, never
+        their keys. Requires an authenticated user so deployment internals are not
+        disclosed to anonymous callers.
+        """
+        demo_mode = os.environ.get("OE_DEMO_MODE", "").lower() in ("1", "true", "yes")
+        # An operator who points the app at their own PostgreSQL sets DATABASE_URL;
+        # with it blank the bundled embedded PostgreSQL boots. Either way the data
+        # lives on the operator's own infrastructure - the flag only distinguishes
+        # the bundled engine from an external one the operator manages.
+        external_db = bool(os.environ.get("DATABASE_URL") or os.environ.get("OE_DATABASE_URL"))
+
+        # AI providers configured at the deployment level (env) or by an operator
+        # in the settings table. Reported by name and presence only, never the key.
+        provider_names: list[str] = []
+        if settings.openai_api_key:
+            provider_names.append("OpenAI")
+        if settings.anthropic_api_key:
+            provider_names.append("Anthropic")
+        if not provider_names:
+            try:
+                from sqlalchemy import text as sa_text
+
+                from app.database import async_session_factory
+
+                async with async_session_factory() as ai_session:
+                    row = (
+                        await ai_session.execute(
+                            sa_text(
+                                "SELECT openai_api_key, anthropic_api_key, gemini_api_key FROM oe_ai_settings LIMIT 1"
+                            )
+                        )
+                    ).first()
+                    if row:
+                        if row[0]:
+                            provider_names.append("OpenAI")
+                        if row[1]:
+                            provider_names.append("Anthropic")
+                        if row[2]:
+                            provider_names.append("Gemini")
+            except Exception:
+                pass  # Table may not exist yet - treat as no provider configured.
+
+        # The source tree ships no usage analytics or third-party tracking; the
+        # public demo host injects analytics at deploy time (demo_instance), so a
+        # self-hosted install carries none. The platform is self-host only - there
+        # is no vendor-run SaaS tier - and runs with no external AI at all (local
+        # embeddings); AI reaches out only when an operator configures a provider.
+        return build_data_security_posture(
+            self_hosted=True,
+            deployment_mode="desktop" if desktop_mode() else "server",
+            demo_instance=demo_mode,
+            version=settings.app_version,
+            environment=settings.app_env,
+            database_engine="postgresql",
+            database_external=external_db,
+            storage_backend=settings.storage_backend,
+            ai_providers=provider_names,
+            registration_mode=settings.registration_mode,
+            analytics_bundled=False,
+            license_name="AGPL-3.0",
+            repository="https://github.com/datadrivenconstruction/OpenConstructionERP",
+        )
 
     def _semver_tuple(v: str) -> tuple[int, ...]:
         """Parse a dotted version (``"5.2.10"``) into a sortable int tuple.
@@ -2428,14 +2508,27 @@ def create_app() -> FastAPI:
             # ADD COLUMN IF NOT EXISTS. External PostgreSQL (a user-supplied
             # DATABASE_URL, where embedded_pg is not running) keeps managing
             # columns with Alembic and is left alone.
-            from app.core import embedded_pg as _embedded_pg
+            # Heal column/index drift on BOTH embedded and external PostgreSQL.
+            # create_all (below) only ever creates whole missing *tables*; it
+            # never adds a *column* to a table that already exists. So an
+            # external database first created under an older release is missing
+            # every column added since (for example oe_ai_agents_run.trust from
+            # v3204), and every ORM read of that table 500s with a DBAPI
+            # UndefinedColumn error (e.g. GET /ai-agents/insights). The migrator
+            # only issues ADD COLUMN / CREATE INDEX IF NOT EXISTS, which is
+            # idempotent and non-destructive, so it is safe to run regardless of
+            # who manages the schema. Wrapped non-fatally: an external DB role
+            # without DDL rights (or any other failure) just logs a warning and
+            # leaves schema management to the operator's `alembic upgrade head`,
+            # exactly as before.
+            from app.core.postgres_migrator import postgres_auto_migrate
 
-            if _embedded_pg.is_running():
-                from app.core.postgres_migrator import postgres_auto_migrate
-
+            try:
                 migrated = await postgres_auto_migrate(engine, Base)
                 if migrated:
                     logger.info("PostgreSQL auto-migration: %d schema objects (columns + indexes) added", migrated)
+            except Exception:
+                logger.warning("PostgreSQL auto-migration skipped (non-fatal)", exc_info=True)
 
             async with engine.begin() as conn:
                 await conn.run_sync(Base.metadata.create_all)
@@ -2964,6 +3057,18 @@ def create_app() -> FastAPI:
                 start_scheduler()
         except Exception:  # noqa: BLE001 - never block startup on the scheduler
             logger.exception("AI agent scheduler failed to start")
+
+        # Approval SLA monitor: background sweep that nudges the responsible
+        # approver when a step blows past its configured sla_hours and records
+        # the breach on the project timeline. Same lightweight asyncio loop;
+        # fail-soft so a hiccup never blocks startup.
+        try:
+            if not _fast_startup:
+                from app.modules.approval_routes.sla_monitor import start_sla_checker
+
+                start_sla_checker()
+        except Exception:  # noqa: BLE001 - never block startup on the monitor
+            logger.exception("Approval SLA monitor failed to start")
 
         # Risk auto-escalation (item #24): hourly sweep that escalates risks
         # crossing their severity threshold or with a lapsed review date. The

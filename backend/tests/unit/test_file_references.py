@@ -157,6 +157,34 @@ def test_iso19650_multiple_codes_accumulate() -> None:
     assert "bad-number" in result.violation_codes
 
 
+# ── Target-type allow-list (#246) ──────────────────────────────────────
+
+
+def test_target_type_accepts_inspection_and_ncr() -> None:
+    """Inspections and NCRs are first-class file-reference targets (#246)."""
+    for target_type in ("inspection", "ncr"):
+        body = FileReferenceCreate(
+            project_id=uuid.uuid4(),
+            file_kind="document",
+            file_id=str(uuid.uuid4()),
+            target_type=target_type,
+            target_id=str(uuid.uuid4()),
+        )
+        assert body.target_type == target_type
+
+
+def test_target_type_rejects_unknown_value() -> None:
+    """An unrecognised target type is still rejected by the pattern."""
+    with pytest.raises(ValueError):
+        FileReferenceCreate(
+            project_id=uuid.uuid4(),
+            file_kind="document",
+            file_id=str(uuid.uuid4()),
+            target_type="not_a_real_target",
+            target_id=str(uuid.uuid4()),
+        )
+
+
 # ── Project scan ──────────────────────────────────────────────────────
 
 

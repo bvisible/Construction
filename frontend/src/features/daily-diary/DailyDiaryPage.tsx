@@ -47,6 +47,7 @@ import {
   ModuleGuideButton,
 } from '@/shared/ui';
 import { useConfirm } from '@/shared/hooks/useConfirm';
+import { useDisplayQuantity } from '@/shared/hooks/useDisplayQuantity';
 import { RequiresProject } from '@/shared/auth/RequiresProject';
 import { DateDisplay } from '@/shared/ui/DateDisplay';
 import { PageHeader } from '@/shared/ui/PageHeader';
@@ -162,7 +163,7 @@ const inputCls =
 
 /* ── helpers ─────────────────────────────────────────────────────────── */
 
-// Local-date helpers re-export — kept as local names for in-file readability,
+// Local-date helpers re-export - kept as local names for in-file readability,
 // implementation lives in shared/lib/dates.ts and is shared with field-reports.
 const todayIso = todayLocalISO;
 const isoDate = isoDateFromLocal;
@@ -180,7 +181,7 @@ function maxDiaryIso(): string {
 
 function monthBounds(year: number, month: number): { from: string; to: string } {
   // Built from the local calendar fields the grid itself uses, NOT a UTC
-  // toISOString() slice — the latter shifts the first/last day by ±1 for
+  // toISOString() slice - the latter shifts the first/last day by ±1 for
   // any viewer behind/ahead of UTC, so the range query would miss the
   // edge-of-month diaries the grid still renders cells for.
   const lastDay = new Date(year, month + 1, 0).getDate();
@@ -272,7 +273,7 @@ export function DailyDiaryPage() {
   // project's diary for the current local day. Previously it ALWAYS queried
   // today's diary and ignored activeDiaryId, so clicking a historical day
   // in the calendar silently showed today (or an empty state) instead of
-  // the clicked diary — the calendar's primary navigation was dead.
+  // the clicked diary - the calendar's primary navigation was dead.
   const selectedDiaryQ = useQuery({
     queryKey: ['daily-diary', 'by-id', activeDiaryId],
     queryFn: () => getDiary(activeDiaryId),
@@ -423,7 +424,7 @@ export function DailyDiaryPage() {
                 type="button"
                 onClick={() => {
                   // Clicking the "Today" tab itself always means *today's*
-                  // diary — drop any diary selected from the calendar.
+                  // diary - drop any diary selected from the calendar.
                   if (it.id === 'today') setActiveDiaryId('');
                   setTab(it.id);
                 }}
@@ -575,7 +576,7 @@ export function DailyDiaryPage() {
         />
       )}
 
-      {/* Mobile PWA — Slice 1. Bottom-anchored quick-action FAB visible
+      {/* Mobile PWA - Slice 1. Bottom-anchored quick-action FAB visible
           only on viewports ≤640px so field crews on phones reach the
           primary action without scrolling. ≥44×44 tap target. */}
       <button
@@ -665,7 +666,7 @@ function DiariesCalendar({
     } else if (iso <= maxIso) {
       onEmptyDayClick(iso);
     }
-    // A future empty day is a no-op — the cell carries a tooltip explaining
+    // A future empty day is a no-op - the cell carries a tooltip explaining
     // why it can't be opened (mirrors the backend future-date rejection).
   };
 
@@ -910,7 +911,7 @@ function TodayTab({
   const [sclOpen, setSclOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
 
-  // All asset panels are scoped to the diary's OWN date — not todayIso().
+  // All asset panels are scoped to the diary's OWN date - not todayIso().
   // A diary opened from the calendar can be any past day; previously the
   // panels always queried today, so a back-dated diary showed today's
   // weather/photos beside a header for a different date.
@@ -1005,7 +1006,7 @@ function TodayTab({
   });
 
   // Readiness signal shown as a traffic-light chip before signing, and the
-  // workforce roll-up surfaced beside the diary meta — both are headline
+  // workforce roll-up surfaced beside the diary meta - both are headline
   // backend capabilities that previously had no UI surface.
   const completenessQ = useQuery({
     queryKey: ['daily-diary', 'completeness', diaryId],
@@ -1484,7 +1485,7 @@ function TodayTab({
  * Amend the diary's own fields (labour / equipment headcount, notes) via the
  * real PATCH /diaries/{id} endpoint. The backend rejects edits on
  * signed/archived diaries (409), so this is only surfaced for open/closed
- * records — matching the immutability rule in service.update_diary.
+ * records - matching the immutability rule in service.update_diary.
  */
 function EditDiaryModal({
   diary,
@@ -1849,7 +1850,7 @@ function EntriesTimeline({
         entry_type: entryType,
         // Local ISO with offset (NOT toISOString(), which is UTC). The
         // owning diary's ``diary_date`` is a local YYYY-MM-DD so the
-        // entry timestamp must agree on the same local calendar day —
+        // entry timestamp must agree on the same local calendar day -
         // otherwise an entry created at 02:30 local on 2026-05-21 in
         // Berlin would persist as 2026-05-21T00:30:00Z and read back as
         // belonging to a different day in any UTC-anchored projection.
@@ -2176,6 +2177,9 @@ function DroneSection({
   onAttach: () => void;
 }) {
   const { t } = useTranslation();
+  // Display-only: the covered-area read-out honours the measurement-system
+  // preference. The editable "Covered area" input below stays metric-canonical.
+  const q = useDisplayQuantity();
   return (
     <Card padding="md">
       <div className="flex items-center gap-2 mb-3">
@@ -2217,11 +2221,14 @@ function DroneSection({
                   <DateDisplay value={s.flown_at} />
                 </span>
               </div>
-              {s.area_m2 && (
-                <p className="mt-0.5 text-xs text-content-secondary">
-                  {String(s.area_m2)} m²
-                </p>
-              )}
+              {s.area_m2 != null && s.area_m2 !== '' && (() => {
+                const a = q.convert(Number(s.area_m2), 'm²');
+                return (
+                  <p className="mt-0.5 text-xs text-content-secondary">
+                    {Number.isFinite(a.value) ? a.value.toLocaleString() : String(s.area_m2)} {a.unit}
+                  </p>
+                );
+              })()}
             </li>
           ))}
         </ul>
@@ -2621,7 +2628,7 @@ function SignDiaryModal({
  * Registers a site photo against the diary. The binary itself lives in
  * object storage; this records its URL + capture metadata (POST
  * /diary-photos/). The URL field accepts an http(s) link or a relative
- * /files path — the same contract the backend schema enforces.
+ * /files path - the same contract the backend schema enforces.
  */
 function PhotoUploadModal({
   projectId,

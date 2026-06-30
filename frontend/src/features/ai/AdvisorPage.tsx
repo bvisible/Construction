@@ -16,7 +16,7 @@ import {
   ArrowUpRight,
   RefreshCw,
 } from 'lucide-react';
-import { Breadcrumb, AIDisclaimerBanner, DismissibleInfo, IntroRichText, ConfirmDialog } from '@/shared/ui';
+import { Breadcrumb, AIDisclaimerBanner, AITrustNote, DismissibleInfo, IntroRichText, ConfirmDialog } from '@/shared/ui';
 import { apiGet, apiPost } from '@/shared/lib/api';
 import { fmtNumber } from '@/shared/lib/formatters';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
@@ -196,10 +196,12 @@ function ChatBubble({
   msg,
   onOptionClick,
   isLast,
+  projectId,
 }: {
   msg: ChatMessage;
   onOptionClick: (text: string) => void;
   isLast: boolean;
+  projectId?: string | null;
 }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -338,6 +340,23 @@ function ChatBubble({
             <Calculator size={13} />
             {t('ai.advisor_use_in_estimate', { defaultValue: 'Use in Quick Estimate' })}
           </button>
+        </div>
+      )}
+
+      {/* Trust signal + feedback on each assistant answer. The advisor draws on
+          the CWICR cost database plus the model; there is no numeric confidence,
+          so we show the "how produced / data stays in your project" note and let
+          the user tell us whether the answer was useful. */}
+      {!isUser && msg.content && (
+        <div className="mt-2 max-w-[85%] sm:max-w-[75%]">
+          <AITrustNote
+            surface="advisor"
+            refId={String(msg.timestamp)}
+            projectId={projectId}
+            producedBy={t('ai.advisor_trust_produced', {
+              defaultValue: 'Drawn from your CWICR cost database plus AI - verify before you commit a number.',
+            })}
+          />
         </div>
       )}
 
@@ -829,6 +848,7 @@ export function AdvisorPage() {
               msg={msg}
               onOptionClick={sendMessage}
               isLast={i === messages.length - 1}
+              projectId={activeProjectId}
             />
           ))}
 

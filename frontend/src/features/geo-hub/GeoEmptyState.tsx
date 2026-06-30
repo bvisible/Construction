@@ -50,6 +50,12 @@ interface GeoEmptyStateProps {
    *  CTA opens the in-place "Place on map" picker (existing project files)
    *  instead of only linking out to BIM Hub. */
   onPlaceOnMap?: () => void;
+  /** Optional - when provided on the ``no_anchor`` state, the "Set anchor
+   *  manually" CTA turns on in-map pin placement (click the map to drop
+   *  the anchor) instead of navigating away to the project settings page.
+   *  The reporter's bug (#284) was exactly that the manual-anchor button
+   *  redirected to the project page rather than letting them place a pin. */
+  onPlaceManually?: () => void;
 }
 
 interface Variant {
@@ -78,6 +84,7 @@ export function GeoEmptyState({
   projectId,
   onAnchored,
   onPlaceOnMap,
+  onPlaceManually,
 }: GeoEmptyStateProps) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
@@ -172,14 +179,27 @@ export function GeoEmptyState({
       title: t('geo_hub.empty.no_anchor_title', {
         defaultValue: 'Anchor this project on the map',
       }),
-      description: t('geo_hub.empty.no_anchor_description_v2', {
-        defaultValue:
-          'Auto-anchor from the address you set in project settings, or pick a coordinate manually. You can fine-tune by dragging once the pin lands.',
-      }),
+      description: onPlaceManually
+        ? t('geo_hub.empty.no_anchor_description_v3', {
+            defaultValue:
+              'Auto-anchor from the address you set in project settings, or place a pin directly on the map. You can fine-tune by dragging once the pin lands.',
+          })
+        : t('geo_hub.empty.no_anchor_description_v2', {
+            defaultValue:
+              'Auto-anchor from the address you set in project settings, or pick a coordinate manually. You can fine-tune by dragging once the pin lands.',
+          }),
       ctaLabel: t('geo_hub.empty.no_anchor_manual_cta', {
         defaultValue: 'Set anchor manually',
       }),
-      ctaHref: projectId ? `/projects/${projectId}/settings` : null,
+      // When the page wires ``onPlaceManually`` the manual CTA places a pin
+      // in-map (rendered as a button below); the settings link is only the
+      // fallback for callers that don't. Keeping the link as the fallback
+      // means the legacy "edit the address in settings" path still exists.
+      ctaHref: onPlaceManually
+        ? null
+        : projectId
+          ? `/projects/${projectId}/settings`
+          : null,
     },
     no_tilesets: {
       icon: Layers,
@@ -219,7 +239,10 @@ export function GeoEmptyState({
   const Icon = v.icon;
   const showAutoAnchor = kind === 'no_anchor' && Boolean(projectId);
   const showPlaceButton = kind === 'no_tilesets' && Boolean(onPlaceOnMap);
-  const hasPrimaryAction = showAutoAnchor || showPlaceButton;
+  // In-map manual placement for the no-anchor state (#284): the user drops
+  // the pin by clicking the map instead of being bounced to settings.
+  const showPlaceManually = kind === 'no_anchor' && Boolean(onPlaceManually);
+  const hasPrimaryAction = showAutoAnchor || showPlaceButton || showPlaceManually;
 
   return (
     <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center p-6">
@@ -292,6 +315,26 @@ export function GeoEmptyState({
                 <Plus size={13} strokeWidth={2.25} />
                 {t('geo_hub.empty.place_existing_cta', {
                   defaultValue: 'Place a project file on the map',
+                })}
+              </button>
+            )}
+            {showPlaceManually && (
+              <button
+                type="button"
+                onClick={onPlaceManually}
+                data-testid="geo-empty-place-manually"
+                className={[
+                  'inline-flex items-center gap-1.5 rounded-md',
+                  // Secondary to the emerald auto-anchor button: this is the
+                  // "I'll point at it myself" alternative, not the default.
+                  'border border-white/15 bg-white/5 px-3 py-1.5',
+                  'text-xs font-semibold text-white shadow-sm transition hover:bg-white/10',
+                  'focus:outline-none focus-visible:ring-2 focus-visible:ring-white/60',
+                ].join(' ')}
+              >
+                <MapPin size={13} strokeWidth={2.25} />
+                {t('geo_hub.empty.place_manually_cta', {
+                  defaultValue: 'Place a pin on the map',
                 })}
               </button>
             )}

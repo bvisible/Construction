@@ -5,6 +5,7 @@ exporters drop alongside and get wired into the router as new
 ``GET /v1/bim_hub/models/{id}/export/{format}`` endpoints.
 """
 
+from app.modules.bim_hub.exporters.boq_xlsx import BoqExportOptions, build_boq_workbook
 from app.modules.bim_hub.exporters.cobie import build_cobie_workbook
 
-__all__ = ["build_cobie_workbook"]
+__all__ = ["BoqExportOptions", "build_boq_workbook", "build_cobie_workbook"]

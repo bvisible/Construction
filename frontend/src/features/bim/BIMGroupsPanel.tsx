@@ -28,6 +28,7 @@ import {
 import type { BIMElementGroup } from './api';
 import { updateElementGroup } from './api';
 import type { BIMElementData } from '@/shared/ui/BIMViewer';
+import { useDisplayQuantity } from '@/shared/hooks/useDisplayQuantity';
 
 /* ── Constants ──────────────────────────────────────────────────────────── */
 
@@ -103,6 +104,9 @@ export default function BIMGroupsPanel({
 }: BIMGroupsPanelProps) {
   void _projectId;
   const { t } = useTranslation();
+  // Display-only metric->imperial conversion for the group rollups (#270).
+  // groupQuantities stays metric-canonical; only the rendered numbers convert.
+  const q = useDisplayQuantity();
   const [panelExpanded, setPanelExpanded] = useState(true);
   const [expandedGroupIds, setExpandedGroupIds] = useState<Set<string>>(new Set());
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
@@ -122,7 +126,7 @@ export default function BIMGroupsPanel({
   }, [elements]);
 
   // Aggregate quantities per group. Guarded against null/missing
-  // member_element_ids — older cached rows or a drifted backend response
+  // member_element_ids - older cached rows or a drifted backend response
   // would otherwise crash the whole page here.
   const groupQuantities = useMemo(() => {
     const result = new Map<string, GroupQuantities>();
@@ -393,24 +397,33 @@ export default function BIMGroupsPanel({
                     {/* Aggregate quantities */}
                     {hasQuantities && (
                       <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] text-content-tertiary px-1">
-                        {quantities.volume > 0 && (
-                          <span className="inline-flex items-center gap-0.5">
-                            <Box size={9} className="opacity-60" />
-                            {fmt(quantities.volume)} m{'\u00B3'}
-                          </span>
-                        )}
-                        {quantities.area > 0 && (
-                          <span className="inline-flex items-center gap-0.5">
-                            <Layers size={9} className="opacity-60" />
-                            {fmt(quantities.area)} m{'\u00B2'}
-                          </span>
-                        )}
-                        {quantities.length > 0 && (
-                          <span className="inline-flex items-center gap-0.5">
-                            <Ruler size={9} className="opacity-60" />
-                            {fmt(quantities.length)} m
-                          </span>
-                        )}
+                        {quantities.volume > 0 && (() => {
+                          const v = q.convert(quantities.volume, 'm\u00B3');
+                          return (
+                            <span className="inline-flex items-center gap-0.5">
+                              <Box size={9} className="opacity-60" />
+                              {fmt(v.value)} {v.unit}
+                            </span>
+                          );
+                        })()}
+                        {quantities.area > 0 && (() => {
+                          const v = q.convert(quantities.area, 'm\u00B2');
+                          return (
+                            <span className="inline-flex items-center gap-0.5">
+                              <Layers size={9} className="opacity-60" />
+                              {fmt(v.value)} {v.unit}
+                            </span>
+                          );
+                        })()}
+                        {quantities.length > 0 && (() => {
+                          const v = q.convert(quantities.length, 'm');
+                          return (
+                            <span className="inline-flex items-center gap-0.5">
+                              <Ruler size={9} className="opacity-60" />
+                              {fmt(v.value)} {v.unit}
+                            </span>
+                          );
+                        })()}
                       </div>
                     )}
 

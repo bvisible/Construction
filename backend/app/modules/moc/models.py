@@ -63,6 +63,9 @@ class MoCEntry(Base):
     variation_request_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), nullable=True, index=True)
     variation_order_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), nullable=True, index=True)
     change_order_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), nullable=True, index=True)
+    # Change intelligence: who owes the next action and by when.
+    ball_in_court: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    response_due_date: Mapped[str | None] = mapped_column(String(40), nullable=True)
     metadata_: Mapped[dict] = mapped_column(  # type: ignore[assignment]
         "metadata",
         JSON,

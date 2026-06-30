@@ -297,3 +297,86 @@ async def test_owner_can_still_list_phase_plans(http_client, two_lps_tenants):
     assert resp.status_code == 200, resp.text
     names = {p["name"] for p in resp.json()}
     assert "A secret foundation phase" in names
+
+
+# ── Delay-analysis cross-tenant schedule_id (forensic delay engine) ─────────
+
+
+@pytest.mark.asyncio
+async def test_delay_analysis_rejects_cross_tenant_schedule_id(http_client):
+    """A forensic delay analysis must not target another tenant's schedule.
+
+    ``create_delay_analysis`` verifies access to the ``project_id`` query param
+    but used to store the body's ``schedule_id`` without checking it belonged to
+    that project. ``/compute`` and ``/auto-fragnet`` then read that schedule's
+    activities + relationships, leaking another tenant's network. The create
+    must 404 (not 403, not 201) when ``schedule_id`` is foreign.
+    """
+    from sqlalchemy import update
+
+    from app.database import async_session_factory
+    from app.modules.users.models import User
+
+    # Two independent admins - each needs create rights in their OWN project.
+    _a_uid, a_email, a_pw, _a_h = await _register_and_login(http_client, tenant="dla-a")
+    _b_uid, b_email, b_pw, _b_h = await _register_and_login(http_client, tenant="dla-b")
+    async with async_session_factory() as s:
+        await s.execute(
+            update(User).where(User.email.in_([a_email.lower(), b_email.lower()])).values(role="admin", is_active=True)
+        )
+        await s.commit()
+
+    async def _admin_headers(email: str, password: str) -> dict[str, str]:
+        login = await http_client.post("/api/v1/users/auth/login", json={"email": email, "password": password})
+        assert login.status_code == 200, login.text
+        return {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+    a_headers = await _admin_headers(a_email, a_pw)
+    b_headers = await _admin_headers(b_email, b_pw)
+
+    # A owns a project + a confidential schedule (the exfiltration target).
+    a_proj = await http_client.post(
+        "/api/v1/projects/",
+        json={"name": f"DLA-A {uuid.uuid4().hex[:6]}", "description": "A", "currency": "EUR"},
+        headers=a_headers,
+    )
+    assert a_proj.status_code == 201, a_proj.text
+    a_project_id = a_proj.json()["id"]
+
+    a_sched = await http_client.post(
+        "/api/v1/schedule/schedules/",
+        json={"project_id": a_project_id, "name": "A confidential schedule"},
+        headers=a_headers,
+    )
+    assert a_sched.status_code == 201, f"schedule create failed: {a_sched.text}"
+    a_schedule_id = a_sched.json()["id"]
+
+    # B owns their own project.
+    b_proj = await http_client.post(
+        "/api/v1/projects/",
+        json={"name": f"DLA-B {uuid.uuid4().hex[:6]}", "description": "B", "currency": "EUR"},
+        headers=b_headers,
+    )
+    assert b_proj.status_code == 201, b_proj.text
+    b_project_id = b_proj.json()["id"]
+
+    # B creates a delay analysis in their OWN project but points schedule_id at
+    # A's schedule -> must be rejected at create.
+    attack = await http_client.post(
+        f"/api/v1/schedule-advanced/delay-analyses?project_id={b_project_id}",
+        json={"name": "B exfil", "method": "tia", "schedule_id": a_schedule_id},
+        headers=b_headers,
+    )
+    assert attack.status_code == 404, (
+        f"IDOR: B targeted A's schedule in a delay analysis: {attack.status_code} {attack.text!r}"
+    )
+    assert "confidential" not in attack.text
+
+    # Regression guard: B can still create a delay analysis with no foreign
+    # schedule (schedule_id omitted).
+    ok = await http_client.post(
+        f"/api/v1/schedule-advanced/delay-analyses?project_id={b_project_id}",
+        json={"name": "B own analysis", "method": "tia"},
+        headers=b_headers,
+    )
+    assert ok.status_code == 201, f"owner create regressed: {ok.text}"

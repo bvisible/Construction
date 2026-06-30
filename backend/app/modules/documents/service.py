@@ -141,15 +141,39 @@ async def _register_version_safely(
         )
 
 
+def _upload_root() -> Path:
+    """Base directory document/photo/sheet uploads are written under.
+
+    Honours an explicit operator data dir (``OE_DATA_DIR`` / ``DATA_DIR`` /
+    ``OE_CLI_DATA_DIR``) via the canonical resolver, so a containerised
+    deployment that mounts a persistent volume (for example ``-v
+    host_dir:/data`` with ``OE_DATA_DIR=/data``) actually gets its uploads
+    written there. Previously these were hard-coded to ``~/.openestimator``;
+    inside a container whose home is ``/app`` that resolved to
+    ``/app/.openestimator``, so every uploaded document and drawing landed in
+    the container's ephemeral layer and was lost on the next ``docker compose
+    up`` / image rebuild, while the mounted ``/data`` volume stayed empty.
+
+    When no data dir is configured we keep the historical ``~/.openestimator``
+    location so existing installs keep finding files written by earlier
+    versions - nothing is silently moved.
+    """
+    if os.environ.get("OE_DATA_DIR") or os.environ.get("DATA_DIR") or os.environ.get("OE_CLI_DATA_DIR"):
+        from app.core.storage import resolve_data_dir
+
+        return resolve_data_dir()
+    return Path.home() / ".openestimator"
+
+
 # Base directory for file uploads
-UPLOAD_BASE = Path.home() / ".openestimator" / "uploads"
+UPLOAD_BASE = _upload_root() / "uploads"
 
 # Base directory for photo uploads
-PHOTO_BASE = Path.home() / ".openestimator" / "photos"
+PHOTO_BASE = _upload_root() / "photos"
 # Base directory for photo thumbnails - stored next to originals under a sibling
 # ``thumbs/`` subfolder so the gallery grid can ask for a small, cheap image
 # instead of re-streaming the 50 MB original on every render.
-PHOTO_THUMB_BASE = Path.home() / ".openestimator" / "photos" / "thumbs"
+PHOTO_THUMB_BASE = _upload_root() / "photos" / "thumbs"
 # Longest side (in px) of a generated photo thumbnail. 512 is plenty for the
 # grid view and keeps the thumbnail under ~60 kB for typical JPEGs.
 PHOTO_THUMB_MAX_SIDE = 512
@@ -1532,7 +1556,7 @@ DISCIPLINE_PREFIX_MAP: dict[str, str] = {
 }
 
 # Base directory for sheet thumbnails
-SHEET_THUMB_BASE = Path.home() / ".openestimator" / "sheets"
+SHEET_THUMB_BASE = _upload_root() / "sheets"
 
 
 def detect_discipline_from_sheet_number(sheet_number: str | None) -> str | None:

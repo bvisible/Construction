@@ -56,11 +56,28 @@ vi.mock('jspdf', () => {
   return { default: jsPDFMock };
 });
 
+// Capture every autoTable call so a test can inspect the rendered body rows
+// (the Qty / Unit Rate / Total cell strings) and assert reconciliation.
+const autoTableCalls: Array<{ head?: unknown; body?: string[][] }> = [];
+
 vi.mock('jspdf-autotable', () => ({
-  default: vi.fn().mockImplementation((doc: { lastAutoTable: { finalY: number } }) => {
-    doc.lastAutoTable = { finalY: 100 };
-  }),
+  default: vi
+    .fn()
+    .mockImplementation(
+      (
+        doc: { lastAutoTable: { finalY: number } },
+        opts: { head?: unknown; body?: string[][] },
+      ) => {
+        autoTableCalls.push({ head: opts?.head, body: opts?.body });
+        doc.lastAutoTable = { finalY: 100 };
+      },
+    ),
 }));
+
+/** Parse a locale-formatted number string ("7,580.00" / "115.50") to a float. */
+function parseNum(s: string): number {
+  return Number(s.replace(/[^0-9.-]/g, ''));
+}
 
 /* ── Test fixtures ──────────────────────────────────────────────────────── */
 
@@ -125,6 +142,7 @@ function baseOptions(overrides: Partial<PdfReportOptions> = {}): PdfReportOption
 beforeEach(() => {
   vi.clearAllMocks();
   mockPageNumber = 3;
+  autoTableCalls.length = 0;
 });
 
 describe('generateBOQPdf', () => {
@@ -293,5 +311,99 @@ describe('buildSectionGroups', () => {
     expect(result.sections).toHaveLength(1);
     // The section itself should NOT appear in ungrouped
     expect(result.ungrouped).toHaveLength(0);
+  });
+});
+
+describe('imperial unit + reciprocal-rate reconciliation', () => {
+  // A single m2 line: 100 m2 @ 50/m2 = 5000. The BOQ-table autoTable body
+  // row is [No., Description, Unit, Qty, Unit Rate, Total]. We pin column
+  // indices to those positions.
+  const COL_UNIT = 2;
+  const COL_QTY = 3;
+  const COL_RATE = 4;
+  const COL_TOTAL = 5;
+
+  function boqTableRows(): string[][] {
+    // The BOQ table is the autoTable call whose head is the 6-column BOQ
+    // header (the Cost Summary tables have a 2-column head).
+    const call = autoTableCalls.find(
+      (c) => Array.isArray(c.head) && (c.head as string[][])[0]?.length === 6,
+    );
+    return call?.body ?? [];
+  }
+
+  it('metric: qty * rate reconciles to the (invariant) total', async () => {
+    const { generateBOQPdf } = await import('./pdfReport');
+    generateBOQPdf(
+      baseOptions({
+        positions: [
+          makeSection({ id: 'sec-1', ordinal: '01', description: 'Walls' }),
+          makePosition({
+            id: 'pos-1',
+            parent_id: 'sec-1',
+            ordinal: '01.01',
+            description: 'Plaster',
+            unit: 'm2',
+            quantity: 100,
+            unit_rate: 50,
+            total: 5000,
+          }),
+        ],
+        measurementSystem: 'metric',
+      }),
+    );
+
+    const row = boqTableRows().find((r) => r[0] === '01.01');
+    expect(row).toBeDefined();
+    const qty = parseNum(row![COL_QTY]!);
+    const rate = parseNum(row![COL_RATE]!);
+    const total = parseNum(row![COL_TOTAL]!);
+    // Metric passes through unchanged: 100 m2 @ 50 = 5000.
+    expect(qty).toBeCloseTo(100, 2);
+    expect(rate).toBeCloseTo(50, 2);
+    expect(total).toBeCloseTo(5000, 2);
+    expect(qty * rate).toBeCloseTo(total, 1);
+  });
+
+  it('imperial: qty is converted, rate is restated reciprocally, total is invariant', async () => {
+    const { generateBOQPdf } = await import('./pdfReport');
+    generateBOQPdf(
+      baseOptions({
+        positions: [
+          makeSection({ id: 'sec-1', ordinal: '01', description: 'Walls' }),
+          makePosition({
+            id: 'pos-1',
+            parent_id: 'sec-1',
+            ordinal: '01.01',
+            description: 'Plaster',
+            unit: 'm2',
+            quantity: 100,
+            unit_rate: 50,
+            total: 5000,
+          }),
+        ],
+        measurementSystem: 'imperial',
+      }),
+    );
+
+    const row = boqTableRows().find((r) => r[0] === '01.01');
+    expect(row).toBeDefined();
+    const qty = parseNum(row![COL_QTY]!);
+    const rate = parseNum(row![COL_RATE]!);
+    const total = parseNum(row![COL_TOTAL]!);
+
+    // Unit label switched to the imperial form.
+    expect(row![COL_UNIT]).toContain('ft');
+    // 100 m2 -> 1076.39 ft2 (x 10.7639); rate 50/m2 -> ~4.645/ft2. The cell
+    // string is rounded to 2 decimals by the formatter, so compare at that
+    // precision (4.65).
+    expect(qty).toBeCloseTo(1076.39, 1);
+    expect(rate).toBeCloseTo(50 / 10.7639, 1);
+    // Money total is NEVER converted - still the canonical 5000.
+    expect(total).toBeCloseTo(5000, 2);
+    // The whole point: the converted line still reconciles. The displayed
+    // rate is rounded to 2 decimals, so qty * rate carries up to (qty * 0.01)
+    // of rounding error vs the exact total; assert within that envelope.
+    expect(Math.abs(qty * rate - total)).toBeLessThanOrEqual(qty * 0.01);
   });
 });

@@ -5647,13 +5647,16 @@ async def cost_benchmark_portfolio(
     session: SessionDep,
     user: CurrentUserPayload,
 ) -> BenchmarkResponse:
-    """Position a cost-per-m2 value against the tenant's OWN real projects.
+    """Benchmark a chosen metric against the tenant's OWN real projects.
 
-    Each of the caller's projects contributes a cost-per-m2 figure derived
-    from its real data: the BOQ grand total divided by the recorded gross
-    floor area. The endpoint returns the min / p25 / median / p75 / max of
-    that distribution plus, when ``cost_per_m2`` is supplied, where the
-    user value sits within it.
+    The default ``metric`` is ``cost_per_m2``: each of the caller's projects
+    contributes its BOQ grand total divided by its recorded gross floor area.
+    ``overrun_pct`` (priced scope over approved budget) and ``recovery_rate``
+    (recovered share of chargeable cost) benchmark the same projects on two
+    dimensionless ratios, giving a firm regional context for its own overrun and
+    recovery when paired with the ``region`` filter. The endpoint returns the
+    min / p25 / median / p75 / max of the distribution plus, when a value is
+    supplied, where it sits within it.
 
     Industry reference ranges are NOT returned here; the client owns the
     richer static benchmark table and computes the industry percentile
@@ -5678,5 +5681,6 @@ async def cost_benchmark_portfolio(
         region=body.region,
         currency=body.currency,
         cost_per_m2=body.cost_per_m2,
+        metric=body.metric,
     )
     return BenchmarkResponse.model_validate(result)

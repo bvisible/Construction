@@ -113,6 +113,11 @@ export interface ApprovalInstance {
   started_at: string;
   completed_at: string | null;
   started_by: string | null;
+  /** Who must act on the current step right now (the "ball in court").
+   *  null means the step's own approver / role (or its resolved
+   *  out-of-office delegate) is responsible; a value is a one-tap
+   *  reassignment override pinned via the reassign endpoint. */
+  current_assignee_user_id?: string | null;
   created_at: string;
   updated_at: string;
   step_states: StepState[];
@@ -134,10 +139,75 @@ export interface InstanceCancelPayload {
   reason?: string | null;
 }
 
+/** One-tap reassignment of an instance's current step to another user.
+ *  Mirrors the backend ReassignInstance schema. */
+export interface InstanceReassignPayload {
+  to_user_id: string;
+  reason?: string | null;
+}
+
 /** Metadata payload from GET /approval-routes/meta — single source of
  *  truth for the validated whitelists so the UI never drifts from the DB. */
 export interface ApprovalRoutesMeta {
   target_kinds: string[];
   step_modes: RouteStepMode[];
   instance_statuses: InstanceStatus[];
+}
+
+/* ── Delegations (out-of-office) ──────────────────────────────────── */
+
+/** A read-side out-of-office hand-off row. Mirrors the backend
+ *  DelegationResponse. The ``delegator`` is the user who handed their
+ *  approvals away; the ``delegate`` is the stand-in who covers them. An
+ *  optional ``starts_at``/``ends_at`` window scopes when it is live; a
+ *  null ``project_id`` is a blanket hand-off across every project. */
+export interface ApprovalDelegation {
+  id: string;
+  delegator_user_id: string;
+  delegate_user_id: string;
+  project_id: string | null;
+  starts_at: string | null;
+  ends_at: string | null;
+  is_active: boolean;
+  reason: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Create payload for an out-of-office hand-off. The delegator is always
+ *  the authenticated caller server-side — never sent in the body. Mirrors
+ *  the backend DelegationCreate. Datetimes are ISO-8601 strings. */
+export interface DelegationCreatePayload {
+  delegate_user_id: string;
+  project_id?: string | null;
+  starts_at?: string | null;
+  ends_at?: string | null;
+  reason?: string | null;
+}
+
+/** Which side of a hand-off to list: ``mine`` = hand-offs the caller
+ *  created (approvals they delegated away); ``covering`` = hand-offs
+ *  naming the caller as the stand-in. */
+export type DelegationRole = 'mine' | 'covering';
+
+/** Escalation standing of one instance's current step (#17). Mirrors the
+ *  backend EscalationOut. ``has_sla`` is false when there is no live SLA
+ *  clock; ``severity`` is the overrun band, ``next_target`` the approver to
+ *  escalate to now (or null), and ``level`` the 1-based escalation level. */
+export type EscalationSeverity = 'on_time' | 'late' | 'breached' | 'critical';
+
+export interface Escalation {
+  instance_id: string;
+  target_kind: string;
+  current_step_ordinal: number;
+  has_sla: boolean;
+  severity: EscalationSeverity;
+  hours_overdue: number;
+  should_escalate: boolean;
+  next_target: string | null;
+  level: number;
+  reason: string;
+  chain_length: number;
+  current_holder: string | null;
 }

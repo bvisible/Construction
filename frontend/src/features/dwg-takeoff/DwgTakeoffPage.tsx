@@ -1,5 +1,5 @@
 /**
- * DWG Takeoff page — upload DWG/DXF drawings, view entities in a Canvas2D
+ * DWG Takeoff page - upload DWG/DXF drawings, view entities in a Canvas2D
  * renderer, toggle layers, and create measurement annotations.
  *
  * Layout:
@@ -69,6 +69,8 @@ import { Badge, ConfirmDialog, DismissibleInfo, ElementInfoPopover, ModuleGuideB
 import { useConfirm } from '@/shared/hooks/useConfirm';
 import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
+import { usePreferencesStore } from '@/stores/usePreferencesStore';
+import { useDisplayQuantity } from '@/shared/hooks/useDisplayQuantity';
 import { useDwgUploadStore } from '@/stores/useDwgUploadStore';
 import { apiGet } from '@/shared/lib/api';
 import { boqApi, normalizePositions, type Position } from '@/features/boq/api';
@@ -153,27 +155,27 @@ import CreateTaskFromDwgModal from './CreateTaskFromDwgModal';
 import LinkDocumentToDwgModal from './LinkDocumentToDwgModal';
 import LinkActivityToDwgModal from './LinkActivityToDwgModal';
 import LinkRequirementToDwgModal from './LinkRequirementToDwgModal';
-// boqApi / Position import removed — BOQ picker now handled via ElementInfoPopover callback
+// boqApi / Position import removed - BOQ picker now handled via ElementInfoPopover callback
 
 /* ── GridBackground ──────────────────────────────────────────────────── */
 
 /**
  * AutoCAD-style drafting grid background.
  *
- * Renders two overlaid grids (minor 24px, major 120px — classic 1:5 ratio)
+ * Renders two overlaid grids (minor 24px, major 120px - classic 1:5 ratio)
  * plus a radial vignette that darkens the corners so content in the middle
  * reads as the focal point. Meant to sit absolutely behind landing / empty
  * state content of the DWG Takeoff page. Pointer-events disabled so it
  * never interferes with the upload card or buttons on top.
  *
  * Dark mode uses faint white lines on the dark canvas; light mode uses
- * faint black lines. Opacities are intentionally low — the grid should
+ * faint black lines. Opacities are intentionally low - the grid should
  * whisper, not shout.
  */
 function GridBackground({ className = '' }: { className?: string }) {
   return (
     <div className={clsx('absolute inset-0 pointer-events-none overflow-hidden', className)}>
-      {/* Grid lines — minor (24px) + major (120px), 1:5 AutoCAD-style ratio */}
+      {/* Grid lines - minor (24px) + major (120px), 1:5 AutoCAD-style ratio */}
       <div
         className="absolute inset-0"
         style={{
@@ -186,7 +188,7 @@ function GridBackground({ className = '' }: { className?: string }) {
           backgroundSize: '120px 120px, 120px 120px, 24px 24px, 24px 24px',
         }}
       />
-      {/* Vignette — darker at corners, transparent in the middle */}
+      {/* Vignette - darker at corners, transparent in the middle */}
       <div
         className="absolute inset-0"
         style={{
@@ -213,7 +215,7 @@ function extractLayers(
       map.set(e.layer, { color: e.color, count: 1 });
     }
   }
-  // Virtual layers (USER_MARKUP / ANNOTATIONS) — one entry per distinct
+  // Virtual layers (USER_MARKUP / ANNOTATIONS) - one entry per distinct
   // ``layer_name`` found on the annotation list, so estimators can toggle
   // hand-drawn markups separately from DXF entity layers. Default fallback
   // is USER_MARKUP for legacy annotations without a layer_name.
@@ -245,7 +247,7 @@ function extractLayers(
  *
  *  ``effectiveScale`` converts raw DXF units to real metres (combines the
  *  DXF $INSUNITS factor with the user-picked paper scale). Without it the
- *  popover shows raw coordinate numbers — e.g. ``3580.2 m`` for a 3.58 m
+ *  popover shows raw coordinate numbers - e.g. ``3580.2 m`` for a 3.58 m
  *  wall that is stored in a mm-unit file. */
 function toDWGElementPayload(
   entity: DxfEntity,
@@ -330,7 +332,7 @@ function toDWGElementPayload(
 /**
  * Compute a geometric centroid for a DXF entity. Used as the insertion
  * point for the `text_pin` annotation that backs a BOQ link.  Falls back
- * sensibly when the entity doesn't carry the shape it "should" (defensive —
+ * sensibly when the entity doesn't carry the shape it "should" (defensive -
  * DXF files in the wild are messy).
  */
 function computeEntityCentroid(entity: DxfEntity): { x: number; y: number } {
@@ -399,8 +401,8 @@ function extractEntityMeasurement(
  * Small pill that surfaces the backend "offline-readiness" probe.
  *
  * Traffic-light states:
- *   🟢 ``ready`` — local DWG converter present; everything runs offline.
- *   🟡 ``converter_available=false`` — DXF-only mode; hint to install
+ *   🟢 ``ready`` - local DWG converter present; everything runs offline.
+ *   🟡 ``converter_available=false`` - DXF-only mode; hint to install
  *      the binary to unlock ``.dwg`` upload. Also surfaced when the
  *      probe failed to reach the backend (treated as "unknown").
  * Clicking the pill reveals a concise install hint; the tooltip on
@@ -644,6 +646,15 @@ export function DwgTakeoffPage() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const addToast = useToastStore((s) => s.addToast);
+  // Display measurement system for the auto-quantify Excel export (write-only
+  // boundary). Storage stays metric-canonical; the export helper converts the
+  // headers + values to imperial when this preference is "imperial".
+  const measurementSystem = usePreferencesStore((s) => s.measurementSystem);
+  // Measurement-system seam for the read-only summary surfaces + the
+  // CSV/PDF summary exports. Every quantity these render/write is metric-
+  // canonical; ``q.convert``/``q.unitFor`` relabel (and, for imperial, scale)
+  // them at the display boundary. Storage / BOQ-link values are never touched.
+  const q = useDisplayQuantity();
   const navigate = useNavigate();
   const activeProjectId = useProjectContextStore((s) => s.activeProjectId);
   const setActiveProject = useProjectContextStore((s) => s.setActiveProject);
@@ -652,7 +663,7 @@ export function DwgTakeoffPage() {
   // ``clearProject`` wiped a stale id from localStorage), use the first
   // project from the server list. Without this, ``fetchDrawings('')``
   // short-circuits to ``[]`` and the DWG panel looks empty on every
-  // reload — reported as "при перезагрузке потеряются все документы".
+  // reload - reported as "при перезагрузке потеряются все документы".
   // The drawings themselves are always persisted server-side; only the
   // client-side project context was lost.
   const { data: projects = [], isLoading: projectsLoading } = useQuery({
@@ -692,7 +703,7 @@ export function DwgTakeoffPage() {
 
   // State
   const [selectedDrawingId, setSelectedDrawingId] = useState<string | null>(null);
-  // Revision compare (Item 17) — drawer visibility + onion-skin overlay hint.
+  // Revision compare (Item 17) - drawer visibility + onion-skin overlay hint.
   const [showCompare, setShowCompare] = useState(false);
   const [compareOverlay, setCompareOverlay] = useState<DwgCompareOverlayState>({
     enabled: false,
@@ -703,7 +714,7 @@ export function DwgTakeoffPage() {
 
   /* ── Q1 UX #2: Undo / redo stack ────────────────────────────────────
    * Holds the last 50 annotation mutations (create / delete / edit).
-   * Reset when the selected drawing changes — an undo from drawing A
+   * Reset when the selected drawing changes - an undo from drawing A
    * should not delete something on drawing B. */
   const [undoState, setUndoState] = useState<UndoState>(() => emptyUndoState());
   useEffect(() => {
@@ -713,7 +724,7 @@ export function DwgTakeoffPage() {
   /* ── Q1 UX #4: Snap modes ──────────────────────────────────────────
    * Estimators who want endpoint-only usually work across large plans,
    * so both modes default off. Persisted to localStorage so the user's
-   * last choice survives a reload — snap mode is a preference, not a
+   * last choice survives a reload - snap mode is a preference, not a
    * per-drawing setting. */
   const [snapModes, setSnapModes] = useState<SnapModes>(() => {
     try {
@@ -728,7 +739,7 @@ export function DwgTakeoffPage() {
     try {
       localStorage.setItem('dwg:snap_modes', JSON.stringify(snapModes));
     } catch {
-      /* storage quota / disabled — acceptable fallback is in-memory only */
+      /* storage quota / disabled - acceptable fallback is in-memory only */
     }
   }, [snapModes]);
   const [snapMenuOpen, setSnapMenuOpen] = useState(false);
@@ -758,7 +769,7 @@ export function DwgTakeoffPage() {
   const [calibPointB, setCalibPointB] = useState<{ x: number; y: number } | null>(null);
   const [calibration, setCalibration] = useState<CalibrationState | null>(null);
 
-  // Persist the scale per drawing ID — switching drawings restores its scale.
+  // Persist the scale per drawing ID - switching drawings restores its scale.
   useEffect(() => {
     if (!selectedDrawingId) return;
     const raw = localStorage.getItem(`dwg:scale:${selectedDrawingId}`);
@@ -791,7 +802,7 @@ export function DwgTakeoffPage() {
         // As soon as the upload POST returns and the backend's drawing
         // row exists (drawingId is set), auto-select it so the user
         // immediately sees the ConversionProgressCard bound to *their*
-        // specific drawing — instead of staring at the upload card with
+        // specific drawing - instead of staring at the upload card with
         // a vague corner dock. The card itself drives the 3-8 minute
         // wait honestly, with elapsed time + step list.
         if (
@@ -828,7 +839,7 @@ export function DwgTakeoffPage() {
   /**
    * Full layer roster for the drawing, accumulated across server-filtered
    * entity fetches. The entities query only ships the layers the user has
-   * toggled on (perf — a medium DWG carries 50k+ entities), which means the
+   * toggled on (perf - a medium DWG carries 50k+ entities), which means the
    * `layers` list derived from those entities would otherwise lose every
    * hidden layer's row and the user could never re-enable it. We remember
    * the union of layer names + metadata ever seen so the LayerPanel keeps
@@ -856,7 +867,7 @@ export function DwgTakeoffPage() {
 
   /** Inline cross-module link modals (mirrors the BIM page pattern).
    *  Each holds the selected DWG entity + drawing context for the
-   *  corresponding modal — null when the modal is closed. */
+   *  corresponding modal - null when the modal is closed. */
   const [createTaskFor, setCreateTaskFor] = useState<{
     entityIds: string[];
     drawingId: string;
@@ -883,13 +894,13 @@ export function DwgTakeoffPage() {
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploadFile, setUploadFile] = useState<File | null>(null);
-  /** Visual drop-zone hover state — flips on `dragenter`/`dragover` and
+  /** Visual drop-zone hover state - flips on `dragenter`/`dragover` and
    *  back on `dragleave`/`drop`. The hero card and modal both bind to it
    *  so the dashed border highlights while a real file is hovering, not
    *  only on mouse-hover. */
   const [isDragActive, setIsDragActive] = useState(false);
   const { confirm: confirmAnnotDelete, ...annotDeleteConfirmProps } = useConfirm();
-  // filmstripExpanded removed in v1.8.3 — drawings are always visible
+  // filmstripExpanded removed in v1.8.3 - drawings are always visible
   // per UX feedback. No auto-hide, no collapse toggle.
   /** Screen position for floating entity info popup. */
   const [entityPopup, setEntityPopup] = useState<{ x: number; y: number } | null>(null);
@@ -924,7 +935,7 @@ export function DwgTakeoffPage() {
    * full roster is not yet known (it is reset on every drawing switch), so
    * we fetch ALL layers unfiltered to discover them. Once the user has a
    * concrete visible set the backend filters the entity payload before
-   * serialising — only the toggled-on layers come over the wire. Sorted so
+   * serialising - only the toggled-on layers come over the wire. Sorted so
    * the array is a stable React Query cache key (toggling A then B yields
    * the same key as B then A).
    */
@@ -952,7 +963,7 @@ export function DwgTakeoffPage() {
   /* ── Honest progress: backend status polling ────────────────────────
    * The /drawings list reflects the row at first paint, but for .dwg
    * uploads the backend dispatches conversion as an asyncio.create_task
-   * and immediately returns `status="processing"` — that row can stay
+   * and immediately returns `status="processing"` - that row can stay
    * "processing" for 3-8 minutes on a medium DWG. Without active
    * polling the user previously saw the empty DxfViewer (entities=[])
    * and assumed it was "loaded but broken". Poll every 3.5 s while the
@@ -1000,7 +1011,7 @@ export function DwgTakeoffPage() {
   // walls".
   //
   // Unit resolution order:
-  //   1. The single-drawing fetch (``liveDrawing.latest_version.units``) —
+  //   1. The single-drawing fetch (``liveDrawing.latest_version.units``) -
   //      the only response that carries the backend-resolved/backfilled unit
   //      (the /drawings LIST never serialises it).
   //   2. The cached list row (kept for the rare first-paint window before the
@@ -1091,7 +1102,7 @@ export function DwgTakeoffPage() {
   }, [drawingStatus, selectedDrawingId, projectId, queryClient]);
 
   /**
-   * Offline-readiness probe (R3 #9). 60 s staleTime — the binary either
+   * Offline-readiness probe (R3 #9). 60 s staleTime - the binary either
    * is or isn't on disk; polling would only add noise. Retry once on
    * network error, then fall through to the yellow "install converter"
    * state which is still a correct user signal.
@@ -1132,7 +1143,7 @@ export function DwgTakeoffPage() {
    * The Documents page links here as ?docId=<uuid>&docName=<name> for a CAD
    * file that lives only as a Document. Such a file has no drawing to render,
    * so the viewer used to sit blank. We create (or reuse) a drawing from the
-   * document via POST /drawings/from-document/ — idempotent server-side — and
+   * document via POST /drawings/from-document/ - idempotent server-side - and
    * select the result. Mirrors the BIM page's graceful fallback: on failure
    * we open the upload panel rather than leaving the user on a blank page. */
   const importFromDocumentMutation = useMutation({
@@ -1147,7 +1158,7 @@ export function DwgTakeoffPage() {
       setImportingDocId(null);
       // Graceful fallback (BIM-page pattern): surface the reason and open the
       // upload panel pre-filled with the document name so the user can still
-      // get the file into the viewer — never a silent blank page.
+      // get the file into the viewer - never a silent blank page.
       addToast({
         type: 'error',
         title: t('dwg_takeoff.import_doc_failed', {
@@ -1200,7 +1211,7 @@ export function DwgTakeoffPage() {
     //      - ?drawingId= is present but matched nothing AND there's no
     //        ?docId=. The Files page historically passed a Document id as
     //        ?drawingId= (the blank-page bug), and stale bookmarks may
-    //        still carry it — treating it as a document id recovers them.
+    //        still carry it - treating it as a document id recovers them.
     //    The backend is idempotent (returns the existing drawing if the
     //    document already has one) and 404s a truly bogus id, where the
     //    mutation's onError opens the upload panel instead of staying
@@ -1263,7 +1274,7 @@ export function DwgTakeoffPage() {
   /**
    * Load the persisted two-click calibration whenever the drawing or
    * layout changes. The key combines projectId + filename + layout so
-   * multi-layout files keep a scale per sheet — the same floor plan
+   * multi-layout files keep a scale per sheet - the same floor plan
    * can appear at 1:50 on one sheet and 1:100 on another.
    */
   useEffect(() => {
@@ -1281,7 +1292,7 @@ export function DwgTakeoffPage() {
   }, [selectedDrawingId, selectedLayout, drawings, projectId]);
 
   // Abort an in-flight two-click calibration when the user switches tool
-  // away from "calibrate" — prevents a stranded Point A from leaking
+  // away from "calibrate" - prevents a stranded Point A from leaking
   // into a subsequent calibration.
   useEffect(() => {
     if (activeTool !== 'calibrate' && calibStep > 0 && calibStep < 3) {
@@ -1301,7 +1312,7 @@ export function DwgTakeoffPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTool]);
 
-  /** Step machine driver — receives world-space clicks from DxfViewer. */
+  /** Step machine driver - receives world-space clicks from DxfViewer. */
   const handleCalibrationPoint = useCallback(
     (pt: { x: number; y: number }) => {
       if (calibStep === 1) {
@@ -1375,7 +1386,7 @@ export function DwgTakeoffPage() {
     ],
   );
 
-  /** Cancel handler — drops any captured points and closes the dialog. */
+  /** Cancel handler - drops any captured points and closes the dialog. */
   const handleCalibrationCancel = useCallback(() => {
     setCalibStep(0);
     setCalibPointA(null);
@@ -1389,7 +1400,7 @@ export function DwgTakeoffPage() {
    * Area-cache entities at load time so the ranked hit-test (RFC 11 §4.1) can
    * score candidates in O(1) per entity without recomputing the polygon
    * area on every click. The cached ``_area`` field is an internal,
-   * non-API detail — consumed only by ``DxfViewer``'s ``collectHitCandidates``.
+   * non-API detail - consumed only by ``DxfViewer``'s ``collectHitCandidates``.
    */
   const annotatedEntities = useMemo<DxfEntity[]>(() => {
     if (entities.length === 0) return entities;
@@ -1416,7 +1427,7 @@ export function DwgTakeoffPage() {
 
   // Merge the layers from the latest fetch into the persistent full roster.
   // Because the entity fetch is filtered by `visibleLayers`, hidden layers
-  // are absent from `fetchedLayers` — the union preserves their rows so the
+  // are absent from `fetchedLayers` - the union preserves their rows so the
   // user can re-enable them. Entity counts/colours are refreshed from the
   // most recent fetch that included the layer.
   useEffect(() => {
@@ -1456,7 +1467,7 @@ export function DwgTakeoffPage() {
     if (annotations.length === 0) return annotations;
     return annotations.filter((ann) => {
       const name = ann.layer_name || USER_MARKUP_LAYER;
-      // If no layers are tracked yet (initial load) — show everything.
+      // If no layers are tracked yet (initial load) - show everything.
       if (visibleLayers.size === 0 && layers.length === 0) return true;
       return visibleLayers.has(name);
     });
@@ -1464,7 +1475,7 @@ export function DwgTakeoffPage() {
 
   // Seed visible layers from the full roster the FIRST time it is known for
   // the current drawing. A per-drawing latch (not a `visibleLayers.size === 0`
-  // check) so that a deliberate "Hide All" — which also empties the set — is
+  // check) so that a deliberate "Hide All" - which also empties the set - is
   // never silently undone by this effect on the next render.
   const seededLayersForDrawingRef = useRef<string | null>(null);
   useEffect(() => {
@@ -1487,7 +1498,7 @@ export function DwgTakeoffPage() {
   }, [filteredEntities]);
 
   // Mutations (upload itself is now dispatched via useDwgUploadStore so
-  // it survives navigation — see the subscription above).
+  // it survives navigation - see the subscription above).
   const deleteMutation = useMutation({
     mutationFn: (id: string) => deleteDrawing(id),
     onSuccess: () => {
@@ -1528,7 +1539,7 @@ export function DwgTakeoffPage() {
     },
     onError: (err: Error) => {
       skipUndoRef.current = false;
-      // Surface the failure — silent 500s previously left users thinking
+      // Surface the failure - silent 500s previously left users thinking
       // nothing happened.
       addToast({
         type: 'error',
@@ -1543,7 +1554,7 @@ export function DwgTakeoffPage() {
   // Persist drawing scale + mode to the backend so a page reload on another
   // device restores exactly what the estimator picked. Kept separate from
   // the localStorage sync above so an offline user still gets instant UI
-  // feedback — the backend call fires when the network comes back.
+  // feedback - the backend call fires when the network comes back.
   const updateScaleMutation = useMutation({
     mutationFn: (data: { drawingId: string; denom: number; mode: DwgScaleMode }) =>
       updateDrawingScale(data.drawingId, {
@@ -1567,7 +1578,7 @@ export function DwgTakeoffPage() {
       });
     }, 600);
     return () => window.clearTimeout(handle);
-    // intentionally excludes updateScaleMutation from deps — it's a stable ref
+    // intentionally excludes updateScaleMutation from deps - it's a stable ref
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedDrawingId, drawingScale, scaleMode]);
 
@@ -1636,7 +1647,7 @@ export function DwgTakeoffPage() {
    * Executes the inverse mutation for the entry. All backend calls are
    * wrapped in skipUndoRef guards so the reducer's bookkeeping stays
    * consistent (the entry was moved to the redo/undo stack synchronously
-   * — the mutation's onSuccess should NOT push a fresh entry on top). */
+   * - the mutation's onSuccess should NOT push a fresh entry on top). */
   const replayUndo = useCallback(
     (entry: UndoEntry) => {
       if (!selectedDrawingId) return;
@@ -1901,7 +1912,7 @@ export function DwgTakeoffPage() {
         return;
       }
 
-      // Pull project_id from the drawing itself — the global
+      // Pull project_id from the drawing itself - the global
       // ProjectContext store is only populated if the user opened a
       // project first, and deep-linking straight to /dwg-takeoff would
       // previously make the save silently no-op.
@@ -1937,7 +1948,7 @@ export function DwgTakeoffPage() {
       // visible-layer set is seeded ONCE per drawing from the entity layers
       // present at load (see seededLayersForDrawingRef), so a virtual markup
       // layer (USER_MARKUP / ANNOTATIONS) that only comes into existence after
-      // the user starts drawing is absent from that set — and
+      // the user starts drawing is absent from that set - and
       // `visibleAnnotations` would filter the new mark straight back out,
       // leaving the user staring at a canvas where nothing appears. Add the
       // target layer to the visible set up front so the mark is never hidden
@@ -1955,7 +1966,7 @@ export function DwgTakeoffPage() {
         layer_name: layerName,
         measurement_value: ann.measurement_value,
         measurement_unit: ann.measurement_unit,
-        // Per-annotation scale override — carries the detail-view scale on
+        // Per-annotation scale override - carries the detail-view scale on
         // every annotation drawn while the user is in per_annotation mode,
         // so mixed-scale sheets compute quantities correctly at read time.
         scale_override: scaleMode === 'per_annotation' ? drawingScale : null,
@@ -1999,7 +2010,7 @@ export function DwgTakeoffPage() {
         else next.add(id);
         return next;
       });
-      // Don't open the single-entity popup when building a multi-selection —
+      // Don't open the single-entity popup when building a multi-selection -
       // the group aggregation panel on the right is the right affordance.
       setEntityPopup(null);
     } else {
@@ -2049,7 +2060,7 @@ export function DwgTakeoffPage() {
   }, []);
 
   /* Layout switch on the same drawing also has to reset in-progress
-   * calibration — the picked points are world-space coords from the
+   * calibration - the picked points are world-space coords from the
    * previous viewport and would yield a nonsense scale. */
   useEffect(() => {
     setCalibStep(0);
@@ -2057,7 +2068,7 @@ export function DwgTakeoffPage() {
     setCalibPointB(null);
   }, [selectedLayout]);
 
-  /** First entity in the selection set — drives single-entity UI affordances. */
+  /** First entity in the selection set - drives single-entity UI affordances. */
   const primarySelectedEntityId = useMemo(
     () => (selectedEntityIds.size > 0 ? selectedEntityIds.values().next().value ?? null : null),
     [selectedEntityIds],
@@ -2083,7 +2094,7 @@ export function DwgTakeoffPage() {
 
   /**
    * Drawing-wide aggregate for the Summary tab (R3 #12). Uses the same
-   * helper as the selection panel so totals are consistent — if a polygon
+   * helper as the selection panel so totals are consistent - if a polygon
    * contributes 12 m² to the selection aggregate, it contributes the same
    * 12 m² to the drawing totals.
    */
@@ -2171,24 +2182,30 @@ export function DwgTakeoffPage() {
     [filteredEntities, effectiveScale],
   );
 
-  /** CSV export of the summary (entity-type breakdown + totals). */
+  /** CSV export of the summary (entity-type breakdown + totals).
+   *  Human-facing download (not re-imported): the totals, the per-layer
+   *  area/length values and the unit-bearing column headers are restated in
+   *  the user's measurement system so the sheet is internally consistent.
+   *  Storage stays metric-canonical. */
   const handleExportSummaryCsv = useCallback(() => {
+    const areaUnit = q.unitFor('m²');
+    const lengthUnit = q.unitFor('m');
     const lines: string[] = [
       '# DWG Summary Measurements',
       `# Entities: ${filteredEntities.length}`,
-      `# Total area (m2): ${summaryAggregate.area.toFixed(3)}`,
-      `# Total perimeter (m): ${summaryAggregate.perimeter.toFixed(3)}`,
-      `# Total length (m): ${summaryAggregate.length.toFixed(3)}`,
+      `# Total area (${areaUnit}): ${q.convert(summaryAggregate.area, 'm²').value.toFixed(3)}`,
+      `# Total perimeter (${lengthUnit}): ${q.convert(summaryAggregate.perimeter, 'm').value.toFixed(3)}`,
+      `# Total length (${lengthUnit}): ${q.convert(summaryAggregate.length, 'm').value.toFixed(3)}`,
       '',
-      'scope,key,count,area_m2,length_m',
+      `scope,key,count,area_${areaUnit},length_${lengthUnit}`,
     ];
     for (const row of summaryByLayer) {
       lines.push([
         'layer',
         JSON.stringify(row.layer),
         row.count,
-        row.area.toFixed(3),
-        row.length.toFixed(3),
+        q.convert(row.area, 'm²').value.toFixed(3),
+        q.convert(row.length, 'm').value.toFixed(3),
       ].join(','));
     }
     for (const row of summaryByType) {
@@ -2217,12 +2234,13 @@ export function DwgTakeoffPage() {
     summaryByLayer,
     summaryByType,
     selectedDrawingId,
+    q,
     addToast,
     t,
   ]);
 
   /** PDF export of the summary: totals + per-layer + per-type table.
-   *  Lean first pass — text-only tabular report, no viewport canvas.
+   *  Lean first pass - text-only tabular report, no viewport canvas.
    *  Viewport rasterisation is tracked as a v2 polish item. */
   const handleExportSummaryPdf = useCallback(async () => {
     const { jsPDF } = await import('jspdf');
@@ -2243,11 +2261,15 @@ export function DwgTakeoffPage() {
     y += 5;
     doc.text(`Entities: ${filteredEntities.length}`, margin, y);
     y += 5;
-    doc.text(`Σ area: ${summaryAggregate.area.toFixed(2)} m²`, margin, y);
+    // Totals restated in the user's measurement system (storage stays metric).
+    const sumArea = q.convert(summaryAggregate.area, 'm²');
+    const sumPerimeter = q.convert(summaryAggregate.perimeter, 'm');
+    const sumLength = q.convert(summaryAggregate.length, 'm');
+    doc.text(`Σ area: ${sumArea.value.toFixed(2)} ${sumArea.unit}`, margin, y);
     y += 5;
-    doc.text(`Σ perimeter: ${summaryAggregate.perimeter.toFixed(2)} m`, margin, y);
+    doc.text(`Σ perimeter: ${sumPerimeter.value.toFixed(2)} ${sumPerimeter.unit}`, margin, y);
     y += 5;
-    doc.text(`Σ length: ${summaryAggregate.length.toFixed(2)} m`, margin, y);
+    doc.text(`Σ length: ${sumLength.value.toFixed(2)} ${sumLength.unit}`, margin, y);
     y += 8;
 
     doc.setFont('helvetica', 'bold');
@@ -2260,9 +2282,11 @@ export function DwgTakeoffPage() {
         doc.addPage();
         y = margin;
       }
+      const rowArea = q.convert(row.area, 'm²');
+      const rowLength = q.convert(row.length, 'm');
       doc.text(
         `${row.layer.slice(0, 40).padEnd(42)} × ${String(row.count).padStart(4)}  ` +
-          `area ${row.area.toFixed(2)} m²  length ${row.length.toFixed(2)} m`,
+          `area ${rowArea.value.toFixed(2)} ${rowArea.unit}  length ${rowLength.value.toFixed(2)} ${rowLength.unit}`,
         margin,
         y,
       );
@@ -2298,6 +2322,7 @@ export function DwgTakeoffPage() {
     summaryByType,
     drawings,
     selectedDrawingId,
+    q,
     addToast,
     t,
   ]);
@@ -2315,6 +2340,7 @@ export function DwgTakeoffPage() {
         layerQuantities,
         byBlock: summaryByBlock,
         countTotal,
+        measurementSystem,
       });
       addToast({
         type: 'success',
@@ -2327,14 +2353,14 @@ export function DwgTakeoffPage() {
         message: err instanceof Error ? err.message : String(err),
       });
     }
-  }, [drawings, selectedDrawingId, layerQuantities, summaryByBlock, countTotal, addToast, t]);
+  }, [drawings, selectedDrawingId, layerQuantities, summaryByBlock, countTotal, measurementSystem, addToast, t]);
 
   /**
    * Download the current viewport as a single-page A4-landscape PDF.
    * Snapshots the live canvas (so annotations + grid + selection halos
    * are all captured) and delegates layout to ``exportCanvasToPdf`` in
    * ``lib/pdf-export.ts``. Grabs the canvas from the DOM via its
-   * parent container — the DxfViewer does not expose an imperative
+   * parent container - the DxfViewer does not expose an imperative
    * handle and we'd rather not restructure it just for this button.
    */
   const handleDownloadCanvasPdf = useCallback(() => {
@@ -2391,7 +2417,7 @@ export function DwgTakeoffPage() {
    * BOQs, and positions on demand.  "Pick existing" pushes quantity onto
    * the chosen position.  "Create new" mints a DW.NNN ordinal. */
 
-  /** Canonical unit normalization — maps display glyph → canonical backend unit. */
+  /** Canonical unit normalization - maps display glyph → canonical backend unit. */
   const normalizeUnit = useCallback((unit: string) => {
     const map: Record<string, string> = { m: 'm', 'm\u00B2': 'm2', 'm\u00B3': 'm3', pcs: 'pcs' };
     return map[unit] ?? unit;
@@ -2838,7 +2864,7 @@ export function DwgTakeoffPage() {
 
   /**
    * Save the current selection as a named DwgEntityGroup on the backend.
-   * Uses a simple prompt for the group name — good enough for v1.9.1;
+   * Uses a simple prompt for the group name - good enough for v1.9.1;
    * a proper dialog can land in v1.9.2 if we need validation hints or
    * description fields.
    */
@@ -2879,7 +2905,7 @@ export function DwgTakeoffPage() {
    * Link the current multi-selection to a BOQ position. Creates a persisted
    * DwgEntityGroup first (so the link survives reloads and has an audit
    * trail), then reuses the existing position-patch path used by single
-   * entities — writes ``dwg_group_id`` into position metadata alongside
+   * entities - writes ``dwg_group_id`` into position metadata alongside
    * the existing ``dwg_entity_id`` field so consumers can find either shape.
    *
    * Auto-fills quantity from the aggregated Σ area or Σ length depending
@@ -2965,11 +2991,11 @@ export function DwgTakeoffPage() {
       // Ignore shortcuts when typing in inputs
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
-      // Skip if a modifier other than Shift / Ctrl is active — we only
+      // Skip if a modifier other than Shift / Ctrl is active - we only
       // own single-key tools and Ctrl+{Z,Y}/Ctrl+Shift+Z.
       if (e.altKey || e.metaKey) return;
 
-      // Undo / redo first — these need to swallow the key even when
+      // Undo / redo first - these need to swallow the key even when
       // Ctrl is held, to avoid the browser shortcut kicking in.
       const key = e.key.toLowerCase();
       if (e.ctrlKey) {
@@ -3048,7 +3074,7 @@ export function DwgTakeoffPage() {
 
   return (
     <div className="flex flex-col -mx-4 sm:-mx-7 -mt-6 -mb-4 overflow-hidden" style={{ height: 'calc(100vh - 56px)' }}>
-      {/* Top filter bar removed — ToolPalette now floats inside the viewer
+      {/* Top filter bar removed - ToolPalette now floats inside the viewer
           in the top-left corner so the drawing gets maximum vertical space
           and the tools live where the cursor already is while drawing. */}
 
@@ -3203,7 +3229,7 @@ export function DwgTakeoffPage() {
                       ))}
                     </div>
 
-                    {/* Local processing badge — sits under the feature cards.
+                    {/* Local processing badge - sits under the feature cards.
                         The strong "files never leave your computer" claim is
                         shown ONLY when the backend reports local_only (browser
                         + server on the same machine). On the hosted demo we
@@ -3334,7 +3360,7 @@ export function DwgTakeoffPage() {
                 focusTarget={findFocusTarget}
               />
 
-              {/* Onion-skin overlay (Item 17) — a dim wash over the current
+              {/* Onion-skin overlay (Item 17) - a dim wash over the current
                   revision while the compare drawer's overlay toggle is on,
                   so the user gets a visual "what changed" hint without us
                   reaching into the canvas render loop. Pointer-events none so
@@ -3358,7 +3384,7 @@ export function DwgTakeoffPage() {
                 onCancel={handleCalibrationCancel}
               />
 
-              {/* Floating ToolPalette — top-left corner, above the canvas.
+              {/* Floating ToolPalette - top-left corner, above the canvas.
                   Lives here (not in a fixed header bar) so the drawing gets
                   the full viewport height and tools stay visually attached
                   to the thing they act on. */}
@@ -3488,7 +3514,7 @@ export function DwgTakeoffPage() {
                 </div>
               </div>
 
-              {/* Floating Offline Ready badge + PDF export — top-right corner
+              {/* Floating Offline Ready badge + PDF export - top-right corner
                   of the viewer (opposite the ToolPalette). Download PDF is
                   paired with the badge so estimators discover it while
                   glancing at converter status without stealing real estate
@@ -3564,7 +3590,7 @@ export function DwgTakeoffPage() {
                 />
               </div>
 
-              {/* Find-text bar — top-center overlay, parity with the PDF
+              {/* Find-text bar - top-center overlay, parity with the PDF
                   takeoff "find on sheet". Highlights every TEXT/MTEXT hit and
                   zooms to the active one; the result list jumps on click. */}
               {findOpen && (
@@ -3653,7 +3679,7 @@ export function DwgTakeoffPage() {
                   )}
                 </div>
               )}
-              {/* Floating entity info popup (shared ElementInfoPopover) —
+              {/* Floating entity info popup (shared ElementInfoPopover) -
                   only shown for a single-entity click, hidden during
                   multi-select to keep the screen readable. */}
               {selectedEntity && entityPopup && activeTool === 'select'
@@ -3754,7 +3780,7 @@ export function DwgTakeoffPage() {
                 />
               )}
 
-              {/* Right-docked BOQ-link picker panel — mirrors the PDF takeoff
+              {/* Right-docked BOQ-link picker panel - mirrors the PDF takeoff
                   picker pattern but slides in from the right edge of the
                   canvas. */}
               {linkingEntityId && selectedEntity && (() => {
@@ -4024,7 +4050,7 @@ export function DwgTakeoffPage() {
         {/* ── Right Panel: Layers / Annotations / Properties ───── */}
         {selectedDrawingId && (
           <div className="flex w-72 flex-shrink-0 flex-col border-l border-border-light bg-surface-primary text-content-primary shadow-xl shadow-black/30">
-            {/* Group aggregation panel (RFC 11 §4.5) — visible when 2+ entities selected */}
+            {/* Group aggregation panel (RFC 11 §4.5) - visible when 2+ entities selected */}
             {selectedEntityIds.size > 1 && (
               <div
                 className="border-b border-border-light px-3 py-2.5 bg-amber-950/20"
@@ -4057,10 +4083,11 @@ export function DwgTakeoffPage() {
                       className="font-semibold text-content-primary tabular-nums"
                       data-testid="dwg-group-area"
                     >
-                      {selectionAggregate.area > 0 ? selectionAggregate.area.toFixed(2) : '—'}
+                      {selectionAggregate.area > 0
+                        ? q.convert(selectionAggregate.area, 'm²').value.toFixed(2) : '—'}
                     </div>
                     <div className="text-content-tertiary text-[9px] uppercase">
-                      {t('dwg_takeoff.area', 'Area')} m²
+                      {t('dwg_takeoff.area', 'Area')} {q.unitFor('m²')}
                     </div>
                   </div>
                   <div>
@@ -4069,10 +4096,10 @@ export function DwgTakeoffPage() {
                       data-testid="dwg-group-perimeter"
                     >
                       {selectionAggregate.perimeter > 0
-                        ? selectionAggregate.perimeter.toFixed(2) : '—'}
+                        ? q.convert(selectionAggregate.perimeter, 'm').value.toFixed(2) : '—'}
                     </div>
                     <div className="text-content-tertiary text-[9px] uppercase">
-                      {t('dwg_takeoff.perimeter', 'Perimeter')} m
+                      {t('dwg_takeoff.perimeter', 'Perimeter')} {q.unitFor('m')}
                     </div>
                   </div>
                   <div>
@@ -4081,10 +4108,10 @@ export function DwgTakeoffPage() {
                       data-testid="dwg-group-length"
                     >
                       {selectionAggregate.length > 0
-                        ? selectionAggregate.length.toFixed(2) : '—'}
+                        ? q.convert(selectionAggregate.length, 'm').value.toFixed(2) : '—'}
                     </div>
                     <div className="text-content-tertiary text-[9px] uppercase">
-                      {t('dwg_takeoff.length', 'Length')} m
+                      {t('dwg_takeoff.length', 'Length')} {q.unitFor('m')}
                     </div>
                   </div>
                 </div>
@@ -4136,7 +4163,7 @@ export function DwgTakeoffPage() {
               </div>
             )}
 
-            {/* Summary bar — totals across current drawing */}
+            {/* Summary bar - totals across current drawing */}
             {(entities.length > 0 || annotations.length > 0) && (() => {
               // Persisted measurement_value is in raw DXF units; convert to
               // real metres (area × scale², distance × scale) so the totals
@@ -4204,19 +4231,19 @@ export function DwgTakeoffPage() {
                       <div className="text-content-tertiary text-[9px] uppercase">{t('dwg_takeoff.entities', 'Entities')}</div>
                     </div>
                     <div>
-                      <div className="font-semibold text-content-primary tabular-nums">{areaSum > 0 ? areaSum.toFixed(1) : '—'}</div>
-                      <div className="text-content-tertiary text-[9px] uppercase">m²</div>
+                      <div className="font-semibold text-content-primary tabular-nums">{areaSum > 0 ? q.convert(areaSum, 'm²').value.toFixed(1) : '—'}</div>
+                      <div className="text-content-tertiary text-[9px] uppercase">{q.unitFor('m²')}</div>
                     </div>
                     <div>
-                      <div className="font-semibold text-content-primary tabular-nums">{distSum > 0 ? distSum.toFixed(1) : '—'}</div>
-                      <div className="text-content-tertiary text-[9px] uppercase">m</div>
+                      <div className="font-semibold text-content-primary tabular-nums">{distSum > 0 ? q.convert(distSum, 'm').value.toFixed(1) : '—'}</div>
+                      <div className="text-content-tertiary text-[9px] uppercase">{q.unitFor('m')}</div>
                     </div>
                   </div>
                 </div>
               );
             })()}
 
-            {/* Tab bar — stacked icon + label so five tabs fit cleanly in
+            {/* Tab bar - stacked icon + label so five tabs fit cleanly in
                 a narrow side panel without the text overlapping the icon.
                 Short labels + tooltips keep it readable at ~320-360 px. */}
             <div className="flex border-b border-border">
@@ -4307,11 +4334,18 @@ export function DwgTakeoffPage() {
                         <div className="flex-1 truncate">
                           <span className="font-medium capitalize">{ann.type.replace('_', ' ')}</span>
                           {ann.text && <span className="ml-1 text-muted-foreground">- {ann.text}</span>}
-                          {ann.measurement_value != null && (
-                            <span className="ml-1 text-muted-foreground">
-                              ({ann.measurement_value.toFixed(2)} {ann.measurement_unit ?? 'm'})
-                            </span>
-                          )}
+                          {ann.measurement_value != null && (() => {
+                            // Restate the stored metric-canonical value + unit
+                            // in the user's measurement system (metric is a
+                            // pass-through; imperial scales + relabels). Storage
+                            // is untouched - this is display only.
+                            const dq = q.convert(ann.measurement_value, ann.measurement_unit ?? 'm');
+                            return (
+                              <span className="ml-1 text-muted-foreground">
+                                ({dq.value.toFixed(2)} {dq.unit})
+                              </span>
+                            );
+                          })()}
                         </div>
                         <button
                           onClick={async (e) => {
@@ -4723,7 +4757,7 @@ export function DwgTakeoffPage() {
               </div>
             )}
 
-            {/* Project picker — fixes issue #110.
+            {/* Project picker - fixes issue #110.
                 On a fresh install with zero projects, the modal previously
                 gated the submit button on a hidden `projectId` prerequisite
                 with no UI surface, so the user saw a permanently disabled
@@ -4818,7 +4852,7 @@ export function DwgTakeoffPage() {
               </select>
             </div>
 
-            {/* Upload button — routes through the global DWG upload store so
+            {/* Upload button - routes through the global DWG upload store so
                 the job survives navigation and progress is shown in the
                 corner dock.
 
@@ -4911,7 +4945,7 @@ export function DwgTakeoffPage() {
         />
       )}
 
-      {/* Inline cross-module link modals — mirror the BIM page pattern.
+      {/* Inline cross-module link modals - mirror the BIM page pattern.
           Each one POSTs/PATCHes the relevant module and invalidates
           downstream queries so new badges appear instantly. */}
       {createTaskFor && projectId && (
@@ -4983,7 +5017,7 @@ interface DrawingFilmstripProps {
  *    so a wider set of drawings fits in one row without horizontal scroll.
  *  - Shows "Uploaded <relative>" using date-fns `formatDistanceToNow` so
  *    estimators can spot stale vs. fresh drawings at a glance.
- *  - Always visible — no auto-hide / collapse toggle. All drawings in the
+ *  - Always visible - no auto-hide / collapse toggle. All drawings in the
  *    active project are always on screen. A compact header still shows
  *    the count.
  */
@@ -5012,7 +5046,7 @@ function DrawingFilmstrip({
         <span className="text-[10px] text-slate-400 ml-1">({drawings.length})</span>
       </div>
 
-      {/* Drawing cards — always visible, horizontally scrolling if needed. */}
+      {/* Drawing cards - always visible, horizontally scrolling if needed. */}
       <div className="flex items-center gap-1.5 px-3 pb-2 pt-0.5 overflow-x-auto">
         {isLoading ? (
           <Loader2 size={12} className="animate-spin text-slate-400" />
@@ -5039,7 +5073,7 @@ function DrawingFilmstrip({
             return (
               // Card itself acts as a button (click selects); rendered as a
               // <div role="button"> so the inner delete button can stay a
-              // real <button> — nesting buttons trips React's DOM warning.
+              // real <button> - nesting buttons trips React's DOM warning.
               <div
                 key={d.id}
                 role="button"
@@ -5119,7 +5153,7 @@ function DrawingFilmstrip({
             {t('dwg_takeoff.no_drawings', 'No drawings uploaded yet')}
           </span>
         )}
-        {/* Upload button — compact to match the new card dimensions. */}
+        {/* Upload button - compact to match the new card dimensions. */}
         <button
           onClick={onUpload}
           className="flex items-center justify-center shrink-0 w-9 h-9 rounded-md border-2 border-dashed
@@ -5153,7 +5187,7 @@ interface SummaryKpiCardProps {
   accent: 'blue' | 'emerald' | 'amber' | 'violet';
 }
 
-/** One KPI tile in the Summary tab — count, area, perimeter, length. */
+/** One KPI tile in the Summary tab - count, area, perimeter, length. */
 function SummaryKpiCard({ label, value, unit, accent }: SummaryKpiCardProps) {
   const accentMap: Record<SummaryKpiCardProps['accent'], string> = {
     blue: 'text-blue-400 bg-blue-500/10 border-blue-500/20',
@@ -5211,7 +5245,7 @@ interface ScaleTabProps {
   onCancelCalibration: () => void;
   /** DXF $INSUNITS label ("mm", "cm", "m", ...) read from the drawing. */
   dxfUnits?: string | null;
-  /** drawingScale × unit-factor — the multiplier actually applied to raw
+  /** drawingScale × unit-factor - the multiplier actually applied to raw
    *  DXF coordinates before they become display metres. */
   effectiveScale: number;
 }
@@ -5270,7 +5304,7 @@ function ScaleTab({
     if (!Number.isFinite(distRaw) || distRaw <= 0) return;
     const distInMetres =
       realUnit === 'mm' ? distRaw / 1000 : realUnit === 'cm' ? distRaw / 100 : distRaw;
-    // `drawingScale` is the denominator — raw/real. Ignoring the click
+    // `drawingScale` is the denominator - raw/real. Ignoring the click
     // order, two points in raw DXF units measure `calibrationPixels`; the
     // user says those correspond to `distInMetres` of real-world length.
     // Denominator = raw / real, so measured-on-screen divided by this
@@ -5322,7 +5356,7 @@ function ScaleTab({
         </h3>
       </div>
 
-      {/* DXF native unit + effective multiplier — lets the user see why
+      {/* DXF native unit + effective multiplier - lets the user see why
           measurements read the way they do. "unitless" DXFs are assumed
           to be in metres (historical default). */}
       <div
@@ -5343,7 +5377,7 @@ function ScaleTab({
         </span>
       </div>
 
-      {/* Mode picker — 3 strategies */}
+      {/* Mode picker - 3 strategies */}
       <div className="flex flex-col gap-1.5">
         <span className="text-[9px] font-semibold uppercase tracking-wider text-content-tertiary">
           {t('dwg_takeoff.scale_mode_label', { defaultValue: 'Scale mode' })}
@@ -5588,7 +5622,7 @@ interface SummaryTabProps {
 }
 
 /**
- * Summary tab (R3 #12) — KPI cards + per-layer breakdown + per-type breakdown.
+ * Summary tab (R3 #12) - KPI cards + per-layer breakdown + per-type breakdown.
  *
  * Data comes straight from ``aggregateEntities`` + the layer/type memos in
  * the parent. The per-layer "share" bar uses the maximum of area or
@@ -5607,6 +5641,10 @@ function SummaryTab({
   onExportPdf,
 }: SummaryTabProps) {
   const { t } = useTranslation();
+  // Measurement-system seam for the KPI cards + auto-quantify totals/rows.
+  // Every value below is metric-canonical (m / m² / count); ``q`` relabels
+  // and, for imperial, scales them at the display boundary.
+  const q = useDisplayQuantity();
 
   // Per-layer override of the auto-selected headline measure. The user can,
   // e.g., switch a layer from "area" to "length" when they want the running
@@ -5664,7 +5702,7 @@ function SummaryTab({
           </h3>
         </div>
         <div className="flex flex-wrap justify-end gap-1 shrink-0">
-          {/* Excel leads — it is the natural home for the quantity takeoff. */}
+          {/* Excel leads - it is the natural home for the quantity takeoff. */}
           <button
             type="button"
             onClick={onExportExcel}
@@ -5716,20 +5754,20 @@ function SummaryTab({
         />
         <SummaryKpiCard
           label={t('dwg_takeoff.kpi_total_area', { defaultValue: 'Σ Area' })}
-          value={aggregate.area > 0 ? aggregate.area.toFixed(2) : '—'}
-          unit={aggregate.area > 0 ? 'm²' : undefined}
+          value={aggregate.area > 0 ? q.convert(aggregate.area, 'm²').value.toFixed(2) : '—'}
+          unit={aggregate.area > 0 ? q.unitFor('m²') : undefined}
           accent="emerald"
         />
         <SummaryKpiCard
           label={t('dwg_takeoff.kpi_total_perimeter', { defaultValue: 'Σ Perimeter' })}
-          value={aggregate.perimeter > 0 ? aggregate.perimeter.toFixed(2) : '—'}
-          unit={aggregate.perimeter > 0 ? 'm' : undefined}
+          value={aggregate.perimeter > 0 ? q.convert(aggregate.perimeter, 'm').value.toFixed(2) : '—'}
+          unit={aggregate.perimeter > 0 ? q.unitFor('m') : undefined}
           accent="amber"
         />
         <SummaryKpiCard
           label={t('dwg_takeoff.kpi_total_length', { defaultValue: 'Σ Length' })}
-          value={aggregate.length > 0 ? aggregate.length.toFixed(2) : '—'}
-          unit={aggregate.length > 0 ? 'm' : undefined}
+          value={aggregate.length > 0 ? q.convert(aggregate.length, 'm').value.toFixed(2) : '—'}
+          unit={aggregate.length > 0 ? q.unitFor('m') : undefined}
           accent="violet"
         />
       </div>
@@ -5750,7 +5788,7 @@ function SummaryTab({
         </span>
       </div>
 
-      {/* Auto-quantify by layer — DWG's signature edge over PDF takeoff: real
+      {/* Auto-quantify by layer - DWG's signature edge over PDF takeoff: real
           quantities measured straight from the vectors, no manual tracing.
           Each layer gets a headline measure (area > length > count) the user
           can override per layer. */}
@@ -5778,9 +5816,9 @@ function SummaryTab({
             </div>
             <div className="text-[11px] font-bold tabular-nums text-emerald-300">
               {quantifyTotals.area > 0
-                ? quantifyTotals.area.toLocaleString(undefined, { maximumFractionDigits: 2 })
+                ? q.convert(quantifyTotals.area, 'm²').value.toLocaleString(undefined, { maximumFractionDigits: 2 })
                 : '-'}
-              <span className="text-[9px] font-medium opacity-70"> m²</span>
+              <span className="text-[9px] font-medium opacity-70"> {q.unitFor('m²')}</span>
             </div>
           </div>
           <div className="rounded-md bg-violet-500/10 border border-violet-500/20 px-2 py-1.5">
@@ -5789,9 +5827,9 @@ function SummaryTab({
             </div>
             <div className="text-[11px] font-bold tabular-nums text-violet-300">
               {quantifyTotals.length > 0
-                ? quantifyTotals.length.toLocaleString(undefined, { maximumFractionDigits: 2 })
+                ? q.convert(quantifyTotals.length, 'm').value.toLocaleString(undefined, { maximumFractionDigits: 2 })
                 : '-'}
-              <span className="text-[9px] font-medium opacity-70"> m</span>
+              <span className="text-[9px] font-medium opacity-70"> {q.unitFor('m')}</span>
             </div>
           </div>
           <div className="rounded-md bg-sky-500/10 border border-sky-500/20 px-2 py-1.5">
@@ -5811,6 +5849,10 @@ function SummaryTab({
             const measure = layerMeasure[row.layer] ?? row.primary;
             const quantity = quantityFor(row, measure);
             const unit = unitForMeasure(measure);
+            // Display pair in the user's measurement system. ``count``/``nr``
+            // has no imperial mapping so it passes through. The share bar uses
+            // the metric ``quantity`` (ratio is factor-invariant either way).
+            const display = q.convert(quantity, unit);
             const max = maxByMeasure[measure] || 0;
             const share = max > 0 ? (quantity / max) * 100 : 0;
             const barColor =
@@ -5848,12 +5890,12 @@ function SummaryTab({
                     className="text-[13px] font-bold tabular-nums text-content-primary"
                     data-testid="dwg-quantify-value"
                   >
-                    {quantity.toLocaleString(undefined, {
+                    {display.value.toLocaleString(undefined, {
                       maximumFractionDigits: measure === 'count' ? 0 : 2,
                     })}
-                    <span className="text-[10px] font-medium text-content-tertiary"> {unit}</span>
+                    <span className="text-[10px] font-medium text-content-tertiary"> {display.unit}</span>
                   </span>
-                  {/* Measure toggle — only the measures this layer actually has. */}
+                  {/* Measure toggle - only the measures this layer actually has. */}
                   {row.available.length > 1 && (
                     <div className="inline-flex rounded-md bg-surface-tertiary p-0.5">
                       {row.available.map((m) => (
@@ -6063,7 +6105,7 @@ function MenuItem({
 }
 
 /**
- * Inline upload progress pill — surfaces the first active DWG upload from
+ * Inline upload progress pill - surfaces the first active DWG upload from
  * the global store under the entities loader, so users get a parallel
  * signal that processing is running (not only the corner dock).
  */
@@ -6112,8 +6154,8 @@ function UploadProgressInline() {
  *
  * These render in place of the DxfViewer when the selected drawing has
  * not yet reached `status="ready"`. Before P1 the page silently rendered
- * an empty viewer for the entire 3-8 minute DDC conversion window — the
- * user reported it as "показывает что проект загружен — но ничего не
+ * an empty viewer for the entire 3-8 minute DDC conversion window - the
+ * user reported it as "показывает что проект загружен - но ничего не
  * показывается и только потом через 5 минут происходит загрузка".
  *
  * ConversionProgressCard intentionally does NOT show a determinate
@@ -6124,7 +6166,7 @@ function UploadProgressInline() {
  *
  * Cancel: the backend has no "abort conversion" endpoint (the asyncio
  * task runs DwgExporter to completion), so "Cancel" here actually means
- * "delete this drawing row" — the conversion continues server-side but
+ * "delete this drawing row" - the conversion continues server-side but
  * the user gets back to the upload flow immediately. This matches user
  * intent ("I changed my mind, get me out of here") without pretending
  * to kill a subprocess we don't control. */
@@ -6156,9 +6198,9 @@ function ConversionProgressCard({
       ? `${elapsedSec}s`
       : `${Math.floor(elapsedSec / 60)}m ${elapsedSec % 60}s`;
 
-  // Step machine — drives the highlighted "current step". When the
+  // Step machine - drives the highlighted "current step". When the
   // backend says `uploaded` the file is on disk but conversion has not
-  // started yet (step 1). `processing` covers steps 2 and 3 — we can't
+  // started yet (step 1). `processing` covers steps 2 and 3 - we can't
   // distinguish them from the API, so step 2 is "current" until the
   // status flips out of processing.
   const currentStep = status === 'uploaded' ? 1 : status === 'processing' ? 2 : 4;
@@ -6201,7 +6243,7 @@ function ConversionProgressCard({
 
   // Live-region announcement: changes whenever the backend status flips
   // (uploaded → processing → ready/error). Screen readers hear "Converting
-  // your drawing…" / "Step 2 of 4 — extracting entities" etc., instead of
+  // your drawing…" / "Step 2 of 4 - extracting entities" etc., instead of
   // silently rendering a spinner. Kept terse so it doesn't drone on.
   const liveAnnouncement = t('dwg_takeoff.conv_aria_live', {
     defaultValue: 'Converting {{name}}, step {{step}} of 4, {{elapsed}} elapsed',
@@ -6239,7 +6281,7 @@ function ConversionProgressCard({
           </span>
         </div>
 
-        {/* Indeterminate progress bar — honest motion without a fake %.
+        {/* Indeterminate progress bar - honest motion without a fake %.
             role="progressbar" with no aria-valuenow signals
             "indeterminate" to assistive tech (per ARIA 1.2). */}
         <div
@@ -6266,7 +6308,7 @@ function ConversionProgressCard({
           }
         `}</style>
 
-        {/* Step list — one row per pipeline phase, current step highlighted. */}
+        {/* Step list - one row per pipeline phase, current step highlighted. */}
         <ol className="mt-5 space-y-2">
           {steps.map((step) => {
             const isDone = step.id < currentStep;
@@ -6323,7 +6365,7 @@ function ConversionProgressCard({
           })}
         </div>
 
-        {/* Cancel — only when the parent wired a handler. Note that this
+        {/* Cancel - only when the parent wired a handler. Note that this
             removes the drawing row but does NOT abort the backend
             asyncio task (no API for that); the microcopy is explicit. */}
         {onCancel && (
@@ -6356,7 +6398,7 @@ function ConversionProgressCard({
  *
  * On successful install, the file the user already uploaded is
  * pre-processed via `onInstalled` (delete-and-reupload, matching the
- * existing Retry semantics — backend has no re-convert endpoint).
+ * existing Retry semantics - backend has no re-convert endpoint).
  */
 function InstallDwgConverterCTA({
   onInstalled,
@@ -6474,7 +6516,7 @@ function ConversionErrorCard({
 }) {
   const { t } = useTranslation();
   // Stable marker emitted by `_handle_dwg` when `find_converter('dwg')`
-  // returns None. Keeps the install CTA scoped — generic conversion
+  // returns None. Keeps the install CTA scoped - generic conversion
   // failures (wrong version, corrupt file) should still show the
   // "Retry / Delete" UX without an Install button that wouldn't help.
   const isMissingConverter = !!message && message.includes('DDC DwgExporter');

@@ -3,6 +3,8 @@ import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { getIntlLocale } from '@/shared/lib/formatters';
+import { toDisplayQuantity, displayUnitFor } from '@/shared/lib/unitConversion';
+import { usePreferencesStore } from '@/stores/usePreferencesStore';
 import {
   FileText,
   BarChart3,
@@ -41,7 +43,7 @@ import { GeneratedReportsHistory } from './GeneratedReportsHistory';
 
 // HTML-escape user-controlled strings before they land in the HTML-report
 // generators below. Pre-fix (Wave V_REPORTING audit) values like
-// projectName / risk title / BOQ description were interpolated raw —
+// projectName / risk title / BOQ description were interpolated raw -
 // a malicious "<img src=x onerror=...>" project name would execute in
 // the recipient's browser when they opened the downloaded .html.
 function esc(value: string | number | null | undefined): string {
@@ -241,7 +243,7 @@ function fmtDate(d: string | null | undefined): string {
 }
 
 /**
- * Cost Report — fetch cost model dashboard data and generate a CSV with budget,
+ * Cost Report - fetch cost model dashboard data and generate a CSV with budget,
  * committed, actual, forecast, and variance breakdown.
  */
 async function downloadCostReport(
@@ -307,7 +309,7 @@ async function downloadCostReport(
 }
 
 /**
- * Validation Report — run BOQ validation via the backend validate endpoint and
+ * Validation Report - run BOQ validation via the backend validate endpoint and
  * generate a CSV report with all rule results.
  *
  * Requires a BOQ to be selected. When called from the report card (which only
@@ -360,7 +362,7 @@ async function downloadValidationReport(
     report = await apiPost<ValidationReport>(`/v1/boq/boqs/${boq.id}/validate/`, {});
   } catch (err) {
     // The validate endpoint commonly fails when no validation rules are
-    // enabled for the project — surface that as the actionable cause rather
+    // enabled for the project - surface that as the actionable cause rather
     // than echoing a generic "Validation failed". A 404/501 means the
     // rule set isn't configured; point the user at Governance to set it up.
     const raw = err instanceof Error ? err.message : '';
@@ -430,7 +432,7 @@ async function downloadValidationReport(
 }
 
 /**
- * Schedule Report — fetch schedules and activities, then generate a plain-text
+ * Schedule Report - fetch schedules and activities, then generate a plain-text
  * summary and trigger a download.
  */
 async function downloadScheduleReport(
@@ -511,7 +513,7 @@ async function downloadScheduleReport(
 }
 
 /**
- * 5D Report — fetch dashboard data and S-curve, then generate a CSV download.
+ * 5D Report - fetch dashboard data and S-curve, then generate a CSV download.
  */
 async function download5DReport(
   projectId: string,
@@ -577,7 +579,7 @@ async function download5DReport(
 }
 
 /**
- * Tender Comparison Report — fetch tender packages and bid comparison data,
+ * Tender Comparison Report - fetch tender packages and bid comparison data,
  * then generate a CSV download.
  */
 async function downloadTenderComparisonReport(
@@ -653,7 +655,7 @@ async function downloadTenderComparisonReport(
 }
 
 /**
- * Change Order Register — fetch change orders and summary, then generate a CSV
+ * Change Order Register - fetch change orders and summary, then generate a CSV
  * download with cumulative cost and schedule impact.
  */
 async function downloadChangeOrderReport(
@@ -732,7 +734,7 @@ async function downloadChangeOrderReport(
 }
 
 /**
- * Risk Register Report — fetch risks with probability, impact, scores, and
+ * Risk Register Report - fetch risks with probability, impact, scores, and
  * mitigation plans, then generate a CSV download.
  */
 async function downloadRiskRegisterReport(
@@ -792,7 +794,7 @@ async function downloadRiskRegisterReport(
 }
 
 /**
- * Cash Flow Report — fetch S-curve data and generate a CSV with planned vs
+ * Cash Flow Report - fetch S-curve data and generate a CSV with planned vs
  * actual cumulative and per-period spending.
  */
 async function downloadCashFlowReport(
@@ -862,7 +864,7 @@ async function downloadCashFlowReport(
 }
 
 /**
- * Progress Report — generates an HTML report combining EVM performance, schedule
+ * Progress Report - generates an HTML report combining EVM performance, schedule
  * status, and top risks into a single downloadable page.
  */
 async function downloadProgressReport(
@@ -977,7 +979,7 @@ export function ReportsPage() {
 
   // BOQs are loaded via React Query so the request is automatically deduped
   // across StrictMode double-mounts and across any other components that ask
-  // for the same project's BOQs in the same session — the previous imperative
+  // for the same project's BOQs in the same session - the previous imperative
   // useEffect issued the request twice on every fresh page mount.
   const { data: boqs = [], isLoading: loadingBoqs } = useQuery({
     queryKey: ['boqs', selectedProjectId],
@@ -1001,7 +1003,7 @@ export function ReportsPage() {
   // the effect itself called setActiveProject(first) the store update bumped
   // activeProjectId, the effect re-ran (no-op via useRef guard), the cleanup
   // flipped cancelled=true, and the in-flight `setLoadingProjects(false)` was
-  // skipped — leaving the page wedged on the spinner forever (#172). Reading
+  // skipped - leaving the page wedged on the spinner forever (#172). Reading
   // store state via getState() inside the effect avoids the dep-loop entirely.
   const hasLoadedProjects = useRef(false);
   useEffect(() => {
@@ -1140,7 +1142,7 @@ export function ReportsPage() {
         ]}
       />
 
-      {/* Header — module name + icon live in the global top bar; the page
+      {/* Header - module name + icon live in the global top bar; the page
           renders only the muted subtitle here (canon §2). Project selection
           lives in the global top bar, so there is no in-page project picker;
           the BOQ picker below is a within-project picker and stays. */}
@@ -1179,7 +1181,7 @@ export function ReportsPage() {
         })}
       </DismissibleInfo>
 
-      {/* No project selected — point at the global top-bar project selector
+      {/* No project selected - point at the global top-bar project selector
           rather than rendering a local picker (canon §4). */}
       {!selectedProjectId ? (
         <EmptyState
@@ -1196,7 +1198,7 @@ export function ReportsPage() {
         />
       ) : (
       <>
-      {/* BOQ selector — a within-project picker, kept per canon §4 exception. */}
+      {/* BOQ selector - a within-project picker, kept per canon §4 exception. */}
       <div className="flex flex-wrap items-center gap-4">
         <div className="flex flex-col gap-1">
           <label
@@ -1275,7 +1277,7 @@ export function ReportsPage() {
         </div>
       </div>
 
-      {/* Recently generated reports — surfaces backend history that was
+      {/* Recently generated reports - surfaces backend history that was
           previously a blind spot for users (V_REPORTING audit). */}
       {selectedProjectId && <GeneratedReportsHistory projectId={selectedProjectId} />}
 
@@ -1300,7 +1302,7 @@ export function ReportsPage() {
               });
               return;
             }
-            // Item 2 — warn the user up front when "BOQ Detail" is selected but
+            // Item 2 - warn the user up front when "BOQ Detail" is selected but
             // no BOQ is available. Without this the section silently renders a
             // "No BOQ selected" placeholder and the user gets a report missing
             // the position detail they expected. Still allow generation (the
@@ -1322,6 +1324,10 @@ export function ReportsPage() {
               const sections = Array.from(builderSections);
               const projectName = selectedProject.name;
               const lang = getIntlLocale();
+              // Human-facing HTML export: render quantities in the user's
+              // measurement system. Read at click time (this is a one-shot
+              // export action, not reactive render). Storage is untouched.
+              const measurementSystem = usePreferencesStore.getState().measurementSystem;
 
               let cachedDashboard: Awaited<ReturnType<typeof costModelApi.getDashboard>> | null = null;
               async function getDashboard() {
@@ -1500,7 +1506,14 @@ export function ReportsPage() {
                   }
                   htmlParts.push(`<table><thead><tr><th>#</th><th>${esc(t('reports.html_col_description', { defaultValue: 'Description' }))}</th><th>${esc(t('reports.html_col_unit', { defaultValue: 'Unit' }))}</th><th style="text-align:right">${esc(t('reports.html_col_qty', { defaultValue: 'Qty' }))}</th><th style="text-align:right">${esc(t('reports.html_col_rate', { defaultValue: 'Rate' }))}</th><th style="text-align:right">${esc(t('reports.html_col_total', { defaultValue: 'Total' }))}</th></tr></thead><tbody>`);
                   for (const pos of rows) {
-                    htmlParts.push(`<tr><td>${esc(pos.ordinal)}</td><td>${esc(pos.description)}</td><td>${esc(pos.unit)}</td><td style="text-align:right">${Number(pos.quantity || 0).toLocaleString(lang, { maximumFractionDigits: 2 })}</td><td style="text-align:right">${Number(pos.unit_rate || 0).toLocaleString(lang, { maximumFractionDigits: 2 })}</td><td style="text-align:right">${Number(pos.total || 0).toLocaleString(lang, { maximumFractionDigits: 2 })}</td></tr>`);
+                    // Quantity is absolute (scaled); unit_rate is a per-unit
+                    // price (reciprocal - divide by the unit scale so rate x qty
+                    // still equals the unchanged-currency total).
+                    const dq = toDisplayQuantity(Number(pos.quantity || 0), pos.unit || '', measurementSystem);
+                    const unitScale = toDisplayQuantity(1, pos.unit || '', measurementSystem).value || 1;
+                    const dispRate = Number(pos.unit_rate || 0) / unitScale;
+                    const dispUnit = displayUnitFor(pos.unit || '', measurementSystem);
+                    htmlParts.push(`<tr><td>${esc(pos.ordinal)}</td><td>${esc(pos.description)}</td><td>${esc(dispUnit)}</td><td style="text-align:right">${dq.value.toLocaleString(lang, { maximumFractionDigits: 2 })}</td><td style="text-align:right">${dispRate.toLocaleString(lang, { maximumFractionDigits: 2 })}</td><td style="text-align:right">${Number(pos.total || 0).toLocaleString(lang, { maximumFractionDigits: 2 })}</td></tr>`);
                   }
                   const grandTotal = positions.reduce((sum, pos) => sum + Number(pos.total || 0), 0);
                   htmlParts.push(`<tr style="font-weight:700;border-top:2px solid #1a1a1a"><td colspan="5">${esc(t('reports.html_grand_total', { defaultValue: 'Grand Total' }))}</td><td style="text-align:right">${grandTotal.toLocaleString(lang, { maximumFractionDigits: 2 })}</td></tr>`);
@@ -1679,7 +1692,7 @@ function CustomReportBuilder({
   onGenerate: () => void;
   generating: boolean;
   disabled: boolean;
-  /** Whether a BOQ is currently selected — the "BOQ Detail" section needs
+  /** Whether a BOQ is currently selected - the "BOQ Detail" section needs
    *  one and is visually marked unavailable when this is false. */
   boqAvailable: boolean;
   t: TFunc;
@@ -1738,7 +1751,7 @@ function CustomReportBuilder({
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
         {REPORT_SECTIONS.map((sec) => {
           const isActive = sections.has(sec.id);
-          // Item 2 — "BOQ Detail" needs a selected BOQ. When none is selected
+          // Item 2 - "BOQ Detail" needs a selected BOQ. When none is selected
           // mark it unavailable (muted + hint) so the user understands it will
           // be skipped before they generate, rather than discovering a
           // placeholder in the downloaded file.

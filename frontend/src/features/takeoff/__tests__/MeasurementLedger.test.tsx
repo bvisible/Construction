@@ -7,10 +7,11 @@
  */
 
 // @ts-nocheck
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { MeasurementLedger } from '../components/MeasurementLedger';
 import type { Measurement } from '../lib/takeoff-types';
+import { usePreferencesStore } from '@/stores/usePreferencesStore';
 
 function m(partial: Partial<Measurement> & { id: string }): Measurement {
   return {
@@ -38,6 +39,13 @@ const FIXTURE: Measurement[] = [
 const COLORS = { Walls: '#EF4444', Floors: '#d68a59' };
 
 describe('MeasurementLedger', () => {
+  // Quantities are stored metric; the ledger reads measurementSystem from
+  // the preferences store. Reset to defaults (metric) so each test starts
+  // from a known system regardless of order.
+  beforeEach(() => {
+    usePreferencesStore.getState().resetPreferences();
+  });
+
   it('renders the empty state when there are no measurements', () => {
     render(<MeasurementLedger measurements={[]} groupColorMap={COLORS} />);
     expect(screen.getByTestId('ledger-empty')).toBeInTheDocument();
@@ -129,5 +137,57 @@ describe('MeasurementLedger', () => {
     const grands = screen.getAllByTestId('ledger-grand-total');
     const types = grands.map((el) => el.getAttribute('data-type')).sort();
     expect(types).toEqual(['area', 'count', 'distance']);
+  });
+
+  it('shows metric units + values by default (issue #270 baseline)', () => {
+    render(<MeasurementLedger measurements={FIXTURE} groupColorMap={COLORS} />);
+    // Walls distance subtotal: 10 + 5 = 15 m.
+    const wallsM = screen
+      .getAllByTestId('ledger-subtotal')
+      .find(
+        (el) =>
+          el.getAttribute('data-group') === 'Walls' &&
+          el.getAttribute('data-unit') === 'm',
+      )!;
+    expect(wallsM).toBeTruthy();
+    expect(wallsM.textContent).toContain('15');
+  });
+
+  it('converts displayed values + unit labels to imperial when preferred', () => {
+    usePreferencesStore.getState().setPreference('measurementSystem', 'imperial');
+    render(<MeasurementLedger measurements={FIXTURE} groupColorMap={COLORS} />);
+
+    // Walls distance subtotal: 15 m -> 49.21 ft, unit cell relabelled to ft.
+    const wallsFt = screen
+      .getAllByTestId('ledger-subtotal')
+      .find(
+        (el) =>
+          el.getAttribute('data-group') === 'Walls' &&
+          el.getAttribute('data-unit') === 'ft',
+      )!;
+    expect(wallsFt).toBeTruthy();
+    expect(wallsFt.textContent).toContain('49.21');
+
+    // Floors area subtotal: 35 m² -> 376.7 ft² (unit cell relabelled).
+    const floorsFt = screen
+      .getAllByTestId('ledger-subtotal')
+      .find(
+        (el) =>
+          el.getAttribute('data-group') === 'Floors' &&
+          el.getAttribute('data-unit') === 'ft²',
+      )!;
+    expect(floorsFt).toBeTruthy();
+
+    // No metric metre subtotal should remain.
+    const anyMetres = screen
+      .getAllByTestId('ledger-subtotal')
+      .some((el) => el.getAttribute('data-unit') === 'm');
+    expect(anyMetres).toBe(false);
+
+    // Count rows stay unit-less tallies.
+    const doorsRow = screen
+      .getAllByTestId('ledger-row')
+      .find((r) => r.textContent?.includes('Doors'))!;
+    expect(doorsRow.textContent).toContain('3');
   });
 });

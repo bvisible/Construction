@@ -8,6 +8,7 @@ import { Search, X, Link2, Hash, ExternalLink, Loader2 } from 'lucide-react';
 import type { BIMElementData } from '@/shared/ui/BIMViewer';
 import type { BIMBOQLinkBrief } from '@/shared/ui/BIMViewer/ElementManager';
 import { fetchBIMModelBOQLinks } from './api';
+import { useDisplayQuantity } from '@/shared/hooks/useDisplayQuantity';
 
 interface AggregatedPosition {
   boq_position_id: string;
@@ -39,6 +40,10 @@ export default function BIMLinkedBOQPanel({
   boqId,
 }: BIMLinkedBOQPanelProps) {
   const { t } = useTranslation();
+  // Display-only metric->imperial conversion for the linked-position quantity
+  // (#270). This panel is read-only; only the rendered quantity converts. The
+  // position's `total` is a money value and is never converted.
+  const q = useDisplayQuantity();
   const [search, setSearch] = useState('');
   const [activePositionId, setActivePositionId] = useState<string | null>(null);
 
@@ -51,7 +56,7 @@ export default function BIMLinkedBOQPanel({
     staleTime: 30_000,
   });
 
-  // Fallback deep-link BOQ id when none was supplied by the parent —
+  // Fallback deep-link BOQ id when none was supplied by the parent -
   // derived from the aggregate so "Open in BOQ" keeps working.
   const derivedBoqId = useMemo(() => {
     if (boqId) return boqId;
@@ -267,12 +272,17 @@ export default function BIMLinkedBOQPanel({
                       {pos.description || t('bim.linked_boq_no_desc', { defaultValue: '(no description)' })}
                     </p>
                     <div className="flex items-center gap-2 mt-1 flex-wrap">
-                      {pos.quantity != null && (
-                        <span className="text-[10px] tabular-nums font-medium text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/30 px-1.5 py-0.5 rounded">
-                          {pos.quantity.toLocaleString('en', { minimumFractionDigits: 2, maximumFractionDigits: 4 })}
-                          {pos.unit ? ` ${pos.unit}` : ''}
-                        </span>
-                      )}
+                      {pos.quantity != null && (() => {
+                        // Convert the displayed quantity to the user's system.
+                        // Unmapped units (pcs, lsum, blank) pass through.
+                        const dq = q.convert(pos.quantity, pos.unit ?? '');
+                        return (
+                          <span className="text-[10px] tabular-nums font-medium text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/30 px-1.5 py-0.5 rounded">
+                            {dq.value.toLocaleString('en', { minimumFractionDigits: 2, maximumFractionDigits: 4 })}
+                            {dq.unit ? ` ${dq.unit}` : ''}
+                          </span>
+                        );
+                      })()}
                       {pos.total != null && (
                         <span className="text-[10px] tabular-nums font-medium text-content-primary bg-surface-secondary px-1.5 py-0.5 rounded">
                           {pos.total.toLocaleString('en', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}

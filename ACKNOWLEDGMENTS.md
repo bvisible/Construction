@@ -38,3 +38,20 @@ while making sure community input is recognized.
 | [Jehad Baniowda](https://github.com/jehadbaniodeh) | [#176](https://github.com/datadrivenconstruction/OpenConstructionERP/issues/176) |
 | [leval907](https://github.com/leval907) | [#201](https://github.com/datadrivenconstruction/OpenConstructionERP/issues/201) |
 | [arvildev](https://github.com/arvildev) | [#227](https://github.com/datadrivenconstruction/OpenConstructionERP/issues/227) |
+| [arvildev](https://github.com/arvildev) | [#270](https://github.com/datadrivenconstruction/OpenConstructionERP/issues/270) |
+| [Tigercatman](https://github.com/Tigercatman) | [#271](https://github.com/datadrivenconstruction/OpenConstructionERP/issues/271) |
+| [Tigercatman](https://github.com/Tigercatman) | [#272](https://github.com/datadrivenconstruction/OpenConstructionERP/issues/272) |
+| [Tigercatman](https://github.com/Tigercatman) | [#273](https://github.com/datadrivenconstruction/OpenConstructionERP/issues/273) |
+| [skeltic-wq](https://github.com/skeltic-wq) | [#244](https://github.com/datadrivenconstruction/OpenConstructionERP/issues/244) |
+| [MeCode4](https://github.com/MeCode4) | [#278](https://github.com/datadrivenconstruction/OpenConstructionERP/issues/278) |
+| [arvildev](https://github.com/arvildev) | [#276](https://github.com/datadrivenconstruction/OpenConstructionERP/issues/276) |
+| [arvildev](https://github.com/arvildev) | [#277](https://github.com/datadrivenconstruction/OpenConstructionERP/issues/277) |
+| [Tigercatman](https://github.com/Tigercatman) | [#274](https://github.com/datadrivenconstruction/OpenConstructionERP/issues/274) |
+| [Tigercatman](https://github.com/Tigercatman) | [#279](https://github.com/datadrivenconstruction/OpenConstructionERP/issues/279) |
+| [arvildev](https://github.com/arvildev) | [#281](https://github.com/datadrivenconstruction/OpenConstructionERP/issues/281) |
+| [arvildev](https://github.com/arvildev) | [#282](https://github.com/datadrivenconstruction/OpenConstructionERP/issues/282) |
+| [arvildev](https://github.com/arvildev) | [#285](https://github.com/datadrivenconstruction/OpenConstructionERP/issues/285) |
+| [AliK](https://github.com/alikhalilx) | [#280](https://github.com/datadrivenconstruction/OpenConstructionERP/issues/280) |
+| [Mohammed Shousha](https://github.com/mohandshamada) | [#205](https://github.com/datadrivenconstruction/OpenConstructionERP/discussions/205) |
+| [Nebulasunrise-OG](https://github.com/Nebulasunrise-OG) | [#246](https://github.com/datadrivenconstruction/OpenConstructionERP/discussions/246) |
+| [Tigercatman](https://github.com/Tigercatman) | [#284](https://github.com/datadrivenconstruction/OpenConstructionERP/issues/284) |

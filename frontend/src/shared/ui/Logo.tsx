@@ -139,12 +139,12 @@ export function LogoWithText({ size = 'md', animate, showVersion = true, classNa
       <span
         className={clsx(
           textSizeMap[size],
-          'font-extrabold text-content-primary whitespace-nowrap tracking-tight',
+          'font-medium text-content-primary whitespace-nowrap tracking-tight',
         )}
         style={{ fontFamily: "'Plus Jakarta Sans', system-ui, sans-serif", letterSpacing: '-0.02em' }}
       >
         Open<span className="text-oe-blue">Construction</span>
-        {showVersion && <span className="text-content-quaternary font-semibold">ERP</span>}
+        {showVersion && <span className="text-content-quaternary">ERP</span>}
       </span>
     </div>
   );

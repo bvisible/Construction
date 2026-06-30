@@ -82,6 +82,8 @@ class NoticeUpdate(BaseModel):
     response_summary: str | None = Field(default=None, max_length=10000)
     status: str | None = Field(default=None, pattern=_NOTICE_STATUS)
     reference_change_order_id: UUID | None = None
+    ball_in_court: str | None = Field(default=None, max_length=36)
+    response_due_date: str | None = Field(default=None, max_length=40)
     metadata: dict[str, Any] | None = None
 
 
@@ -102,6 +104,8 @@ class NoticeResponse(BaseModel):
     response_summary: str = ""
     status: str = "issued"
     reference_change_order_id: UUID | None = None
+    ball_in_court: str | None = None
+    response_due_date: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict, validation_alias="metadata_")
     created_at: datetime
     updated_at: datetime
@@ -147,6 +151,8 @@ class VariationRequestUpdate(BaseModel):
     currency: str | None = Field(default=None, max_length=10)
     status: str | None = Field(default=None, pattern=_VR_STATUS)
     decision_notes: str | None = Field(default=None, max_length=10000)
+    ball_in_court: str | None = Field(default=None, max_length=36)
+    response_due_date: str | None = Field(default=None, max_length=40)
     metadata: dict[str, Any] | None = None
 
 
@@ -175,6 +181,8 @@ class VariationRequestResponse(BaseModel):
     contract_clause_ref: str = ""
     quotation_due_at: str | None = None
     assessment_due_at: str | None = None
+    ball_in_court: str | None = None
+    response_due_date: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict, validation_alias="metadata_")
     created_at: datetime
     updated_at: datetime
@@ -223,6 +231,8 @@ class VariationOrderUpdate(BaseModel):
     reference_change_order_id: UUID | None = None
     implementation_started_at: str | None = Field(default=None, max_length=40)
     implementation_completed_at: str | None = Field(default=None, max_length=40)
+    ball_in_court: str | None = Field(default=None, max_length=36)
+    response_due_date: str | None = Field(default=None, max_length=40)
     metadata: dict[str, Any] | None = None
 
 
@@ -246,6 +256,8 @@ class VariationOrderResponse(BaseModel):
     contract_clause_ref: str = ""
     implementation_started_at: str | None = None
     implementation_completed_at: str | None = None
+    ball_in_court: str | None = None
+    response_due_date: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict, validation_alias="metadata_")
     created_at: datetime
     updated_at: datetime

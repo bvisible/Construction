@@ -19,6 +19,7 @@ import {
 } from './data/benchmarks';
 import { useProjectBenchmarkData } from './hooks/useProjectBenchmarkData';
 import { fetchOwnPortfolio, type BenchmarkResponse } from './api';
+import { useDisplayQuantity } from '@/shared/hooks/useDisplayQuantity';
 
 /* ── Helpers ───────────────────────────────────────────────────────── */
 
@@ -77,12 +78,20 @@ function ElementRow({
   max,
   currency,
   barClass,
+  rateFactor,
   t,
 }: {
   row: ElementBreakdownRow;
   max: number;
   currency: string;
   barClass: string;
+  /**
+   * Issue #270 - reciprocal area factor (1 metric, 10.7639 imperial). row.value
+   * is a "currency per m2" RATE share, so it is divided by the factor for the
+   * display system. The bar width uses the raw metric value (value/max), so the
+   * geometry is identical in both systems.
+   */
+  rateFactor: number;
   t: (key: string, opts?: Record<string, unknown>) => string;
 }) {
   const widthPct = max > 0 ? (row.value / max) * 100 : 0;
@@ -100,7 +109,8 @@ function ElementRow({
         {(row.pct * 100).toFixed(0)}%
       </span>
       <span className="w-20 shrink-0 text-right tabular-nums font-medium text-content-primary">
-        {formatCurrency(row.value, currency)}
+        {/* RATE (reciprocal): EUR/m2 element share -> EUR/ft2 for imperial */}
+        {formatCurrency(row.value / rateFactor, currency)}
       </span>
     </div>
   );
@@ -110,6 +120,20 @@ function ElementRow({
 
 export default function BenchmarkModule() {
   const { t } = useTranslation();
+
+  // Issue #270 - every monetary figure on this page is a "currency per m2" RATE
+  // (cost/m2, the benchmark quartiles, the KG split, the element shares, the
+  // portfolio distribution). For imperial we relabel them per-ft2 and divide by
+  // the area factor (reciprocal) so the verdict reads the same way. The GFA
+  // INPUT stays metric/editable (m2) and is never converted. metric => factor 1
+  // and unit "m2", i.e. byte-identical output to before.
+  const q = useDisplayQuantity();
+  const rateUnit = q.unitFor('m²');
+  const rateFactor = q.convert(1, 'm²').value; // 1 (metric) / 10.7639 (imperial)
+  // RATE display helper: reciprocal-convert a "currency per m2" value into the
+  // display system (factor 1 for metric => byte-identical). Currency is passed
+  // explicitly because the portfolio block can use a different currency.
+  const fmtRate = (rate: number, currency: string) => formatCurrency(rate / rateFactor, currency);
 
   const [buildingType, setBuildingType] = useState<BuildingType>('office');
   const [region, setRegion] = useState<BenchmarkRegion>('DE');
@@ -379,13 +403,15 @@ export default function BenchmarkModule() {
         {/* Cost per m2 */}
         <div className="rounded-xl border border-border bg-surface-primary p-5">
           <p className="text-xs text-content-tertiary mb-1">
-            {t('benchmarks.your_cost_m2', { defaultValue: 'Your Cost / m2' })}
+            {t('benchmarks.your_cost_unit', { defaultValue: 'Your Cost / {{unit}}', unit: rateUnit })}
           </p>
           <p className="text-2xl font-bold text-content-primary">
-            {formatCurrency(analysis.costPerM2, regionInfo.currency)}
+            {/* RATE (reciprocal) */}
+            {fmtRate(analysis.costPerM2, regionInfo.currency)}
           </p>
           <p className="text-xs text-content-tertiary mt-1">
-            {t('benchmarks.median', { defaultValue: 'Median' })}: {formatCurrency(benchmarkRange.median, regionInfo.currency)}/m2
+            {/* RATE (reciprocal) + per-unit suffix follows the display system */}
+            {t('benchmarks.median', { defaultValue: 'Median' })}: {fmtRate(benchmarkRange.median, regionInfo.currency)}/{rateUnit}
           </p>
         </div>
 
@@ -441,9 +467,11 @@ export default function BenchmarkModule() {
             {t('benchmarks.diff_median', { defaultValue: 'Difference from Median' })}
           </p>
           <p className={`text-2xl font-bold ${analysis.diffFromMedian > 0 ? 'text-red-600' : 'text-emerald-600'}`}>
-            {analysis.diffFromMedian > 0 ? '+' : ''}{formatCurrency(analysis.diffFromMedian, regionInfo.currency)}
+            {/* RATE (reciprocal): difference of two EUR/m2 rates is itself EUR/m2 */}
+            {analysis.diffFromMedian > 0 ? '+' : ''}{fmtRate(analysis.diffFromMedian, regionInfo.currency)}
           </p>
           <p className="text-xs text-content-tertiary mt-1">
+            {/* diffPct is a percentage - passes through unchanged in both systems */}
             {analysis.diffPct > 0 ? '+' : ''}{analysis.diffPct.toFixed(1)}% {t('benchmarks.vs_median', { defaultValue: 'vs median' })}
           </p>
         </div>
@@ -461,25 +489,31 @@ export default function BenchmarkModule() {
               {t('benchmarks.reading_title', { defaultValue: 'How to read your result' })}
             </p>
             <p>
-              {t('benchmarks.reading_position', {
+              {/* RATE interpolations (cost, median) reciprocal-converted; the
+                  /unit suffix follows the display system. */}
+              {t('benchmarks.reading_position_v2', {
                 defaultValue:
-                  'At {{cost}}/m2, your {{type}} in {{region}} sits at P{{pct}} of the {{source}} reference - {{label}}. That is {{sign}}{{diff}}% versus the median of {{median}}/m2.',
-                cost: formatCurrency(analysis.costPerM2, regionInfo.currency),
+                  'At {{cost}}/{{unit}}, your {{type}} in {{region}} sits at P{{pct}} of the {{source}} reference - {{label}}. That is {{sign}}{{diff}}% versus the median of {{median}}/{{unit}}.',
+                cost: fmtRate(analysis.costPerM2, regionInfo.currency),
+                unit: rateUnit,
                 type: buildingInfo.label,
                 region: regionInfo.label,
                 pct: analysis.percentile.toFixed(0),
                 label: t(pctLabel.key, { defaultValue: pctLabel.defaultValue }).toLowerCase(),
                 sign: analysis.diffPct > 0 ? '+' : '',
                 diff: analysis.diffPct.toFixed(1),
-                median: formatCurrency(benchmarkRange.median, regionInfo.currency),
+                median: fmtRate(benchmarkRange.median, regionInfo.currency),
+                source: benchmarkRange.source,
               })}
             </p>
             <p>
-              {t('benchmarks.reading_split', {
+              {/* RATE interpolations (kg300, kg400) reciprocal-converted. */}
+              {t('benchmarks.reading_split_v2', {
                 defaultValue:
-                  'Of that, construction works (KG300) are about {{kg300}}/m2 and technical systems (KG400) about {{kg400}}/m2 - see the element breakdown below for where the money concentrates.',
-                kg300: formatCurrency(kgSplit.kg300, regionInfo.currency),
-                kg400: formatCurrency(kgSplit.kg400, regionInfo.currency),
+                  'Of that, construction works (KG300) are about {{kg300}}/{{unit}} and technical systems (KG400) about {{kg400}}/{{unit}} - see the element breakdown below for where the money concentrates.',
+                kg300: fmtRate(kgSplit.kg300, regionInfo.currency),
+                kg400: fmtRate(kgSplit.kg400, regionInfo.currency),
+                unit: rateUnit,
               })}
             </p>
             <p className="text-xs text-content-tertiary">
@@ -517,42 +551,43 @@ export default function BenchmarkModule() {
             style={{ left: `${markerLeft}%` }}
           >
             <div className="absolute -top-6 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-content-primary px-2 py-0.5 text-2xs font-bold text-white">
-              {formatCurrency(analysis.costPerM2, regionInfo.currency)}
+              {/* RATE (reciprocal); marker POSITION (markerLeft) stays metric */}
+              {fmtRate(analysis.costPerM2, regionInfo.currency)}
             </div>
             <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 h-2 w-2 rotate-45 bg-content-primary" />
           </div>
 
-          {/* Labels below */}
+          {/* Labels below - all RATE (reciprocal) */}
           <div className="flex justify-between mt-2 text-2xs text-content-quaternary">
-            <span>{formatCurrency(benchmarkRange.min, regionInfo.currency)}</span>
-            <span>{t('benchmarks.q1_short', { defaultValue: 'Q1' })}: {formatCurrency(benchmarkRange.q1, regionInfo.currency)}</span>
-            <span>{t('benchmarks.median', { defaultValue: 'Median' })}: {formatCurrency(benchmarkRange.median, regionInfo.currency)}</span>
-            <span>{t('benchmarks.q3_short', { defaultValue: 'Q3' })}: {formatCurrency(benchmarkRange.q3, regionInfo.currency)}</span>
-            <span>{formatCurrency(benchmarkRange.max, regionInfo.currency)}</span>
+            <span>{fmtRate(benchmarkRange.min, regionInfo.currency)}</span>
+            <span>{t('benchmarks.q1_short', { defaultValue: 'Q1' })}: {fmtRate(benchmarkRange.q1, regionInfo.currency)}</span>
+            <span>{t('benchmarks.median', { defaultValue: 'Median' })}: {fmtRate(benchmarkRange.median, regionInfo.currency)}</span>
+            <span>{t('benchmarks.q3_short', { defaultValue: 'Q3' })}: {fmtRate(benchmarkRange.q3, regionInfo.currency)}</span>
+            <span>{fmtRate(benchmarkRange.max, regionInfo.currency)}</span>
           </div>
         </div>
 
-        {/* Range details table */}
+        {/* Range details table - all RATE (reciprocal) */}
         <div className="mt-4 grid grid-cols-5 gap-2 text-center text-xs">
           <div className="rounded-lg bg-emerald-50 dark:bg-emerald-950/20 p-2">
             <p className="text-content-tertiary">{t('benchmarks.min', { defaultValue: 'Min' })}</p>
-            <p className="font-semibold text-content-primary">{formatCurrency(benchmarkRange.min, regionInfo.currency)}</p>
+            <p className="font-semibold text-content-primary">{fmtRate(benchmarkRange.min, regionInfo.currency)}</p>
           </div>
           <div className="rounded-lg bg-green-50 dark:bg-green-950/20 p-2">
             <p className="text-content-tertiary">{t('benchmarks.q1', { defaultValue: 'Q1 (25th)' })}</p>
-            <p className="font-semibold text-content-primary">{formatCurrency(benchmarkRange.q1, regionInfo.currency)}</p>
+            <p className="font-semibold text-content-primary">{fmtRate(benchmarkRange.q1, regionInfo.currency)}</p>
           </div>
           <div className="rounded-lg bg-blue-50 dark:bg-blue-950/20 p-2 ring-1 ring-blue-200 dark:ring-blue-800">
             <p className="text-content-tertiary">{t('benchmarks.median', { defaultValue: 'Median' })}</p>
-            <p className="font-bold text-content-primary">{formatCurrency(benchmarkRange.median, regionInfo.currency)}</p>
+            <p className="font-bold text-content-primary">{fmtRate(benchmarkRange.median, regionInfo.currency)}</p>
           </div>
           <div className="rounded-lg bg-amber-50 dark:bg-amber-950/20 p-2">
             <p className="text-content-tertiary">{t('benchmarks.q3', { defaultValue: 'Q3 (75th)' })}</p>
-            <p className="font-semibold text-content-primary">{formatCurrency(benchmarkRange.q3, regionInfo.currency)}</p>
+            <p className="font-semibold text-content-primary">{fmtRate(benchmarkRange.q3, regionInfo.currency)}</p>
           </div>
           <div className="rounded-lg bg-red-50 dark:bg-red-950/20 p-2">
             <p className="text-content-tertiary">{t('benchmarks.max', { defaultValue: 'Max' })}</p>
-            <p className="font-semibold text-content-primary">{formatCurrency(benchmarkRange.max, regionInfo.currency)}</p>
+            <p className="font-semibold text-content-primary">{fmtRate(benchmarkRange.max, regionInfo.currency)}</p>
           </div>
         </div>
       </div>
@@ -593,18 +628,19 @@ export default function BenchmarkModule() {
                 />
                 <div className="absolute h-full w-0.5 bg-oe-blue" style={{ left: `${pos(pMed)}%` }} />
               </div>
-              {/* Your value marker */}
+              {/* Your value marker - RATE (reciprocal); youPct position stays metric */}
               <div className="absolute top-0 h-4 w-0.5 bg-content-primary" style={{ left: `${youPct}%` }}>
                 <div className="absolute -top-6 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-content-primary px-2 py-0.5 text-2xs font-bold text-white">
-                  {formatCurrency(analysis.costPerM2, cur)}
+                  {fmtRate(analysis.costPerM2, cur)}
                 </div>
               </div>
+              {/* Distribution labels - all RATE (reciprocal) */}
               <div className="mt-2 flex justify-between text-2xs text-content-quaternary">
-                <span>{formatCurrency(pMin, cur)}</span>
-                <span>{t('benchmarks.q1_short', { defaultValue: 'Q1' })}: {formatCurrency(pP25, cur)}</span>
-                <span>{t('benchmarks.median', { defaultValue: 'Median' })}: {formatCurrency(pMed, cur)}</span>
-                <span>{t('benchmarks.q3_short', { defaultValue: 'Q3' })}: {formatCurrency(pP75, cur)}</span>
-                <span>{formatCurrency(pMax, cur)}</span>
+                <span>{fmtRate(pMin, cur)}</span>
+                <span>{t('benchmarks.q1_short', { defaultValue: 'Q1' })}: {fmtRate(pP25, cur)}</span>
+                <span>{t('benchmarks.median', { defaultValue: 'Median' })}: {fmtRate(pMed, cur)}</span>
+                <span>{t('benchmarks.q3_short', { defaultValue: 'Q3' })}: {fmtRate(pP75, cur)}</span>
+                <span>{fmtRate(pMax, cur)}</span>
               </div>
             </div>
 
@@ -622,7 +658,7 @@ export default function BenchmarkModule() {
         {/* KG split strip */}
         <div data-guide="benchmarks-split" className={`rounded-xl border border-border bg-surface-primary p-5 ${buildingInfo.secondaryUnitId ? 'lg:col-span-2' : 'lg:col-span-3'}`}>
           <h3 className="mb-1 text-sm font-semibold text-content-primary">
-            {t('benchmarks.kg_split_title', { defaultValue: 'Cost group split of your cost / m2' })}
+            {t('benchmarks.kg_split_title_v2', { defaultValue: 'Cost group split of your cost / {{unit}}', unit: rateUnit })}
           </h3>
           <p className="mb-4 text-xs text-content-tertiary">
             {t('benchmarks.kg_split_hint', {
@@ -662,7 +698,8 @@ export default function BenchmarkModule() {
                 </span>
               </div>
               <p className="mt-1 text-base font-bold text-content-primary">
-                {formatCurrency(kgSplit.kg300, regionInfo.currency)}/m2
+                {/* RATE (reciprocal) + per-unit suffix follows display system */}
+                {fmtRate(kgSplit.kg300, regionInfo.currency)}/{rateUnit}
               </p>
             </div>
             <div className="rounded-lg bg-surface-secondary p-3">
@@ -673,7 +710,8 @@ export default function BenchmarkModule() {
                 </span>
               </div>
               <p className="mt-1 text-base font-bold text-content-primary">
-                {formatCurrency(kgSplit.kg400, regionInfo.currency)}/m2
+                {/* RATE (reciprocal) + per-unit suffix follows display system */}
+                {fmtRate(kgSplit.kg400, regionInfo.currency)}/{rateUnit}
               </p>
             </div>
           </div>
@@ -691,12 +729,18 @@ export default function BenchmarkModule() {
               })}
             </p>
             <p className="mt-3 text-2xl font-bold text-content-primary">
+              {/* Per-unit rate is "currency per bed/room/pupil/dwelling" - the
+                  secondary unit is a COUNT with no metric->imperial mapping, so
+                  this value is left canonical (NOT an m2 rate). */}
               {formatCurrency(benchmarkRange.secondary.median, regionInfo.currency)}
             </p>
             <p className="mt-1 text-xs text-content-quaternary">
-              {t('benchmarks.secondary_basis', {
-                defaultValue: 'Median basis, about {{area}} m2 GFA per unit.',
-                area: benchmarkRange.secondary.areaPerUnit,
+              {/* areaPerUnit is an ABSOLUTE area (m2 GFA per unit) -> q.convert
+                  (multiply) to ft2 for imperial; the unit label follows. */}
+              {t('benchmarks.secondary_basis_v2', {
+                defaultValue: 'Median basis, about {{area}} {{unit}} GFA per unit.',
+                area: q.convert(benchmarkRange.secondary.areaPerUnit, 'm²').value.toLocaleString('en', { maximumFractionDigits: 0 }),
+                unit: rateUnit,
               })}
             </p>
           </div>
@@ -713,10 +757,12 @@ export default function BenchmarkModule() {
           </h3>
         </div>
         <p className="mb-4 text-xs text-content-tertiary">
-          {t('benchmarks.elements_hint', {
+          {/* RATE interpolation (cost) reciprocal-converted; /unit follows system */}
+          {t('benchmarks.elements_hint_v2', {
             defaultValue:
-              'Typical planning distribution of your {{cost}}/m2 across DIN 276 element groups for this building type. Indicative shares, not a live feed - use them to see where the budget concentrates.',
-            cost: formatCurrency(analysis.costPerM2, regionInfo.currency),
+              'Typical planning distribution of your {{cost}}/{{unit}} across DIN 276 element groups for this building type. Indicative shares, not a live feed - use them to see where the budget concentrates.',
+            cost: fmtRate(analysis.costPerM2, regionInfo.currency),
+            unit: rateUnit,
           })}
         </p>
 
@@ -728,7 +774,8 @@ export default function BenchmarkModule() {
                 {t('benchmarks.kg300', { defaultValue: 'KG300 Construction' })}
               </span>
               <span className="text-xs font-bold text-content-primary tabular-nums">
-                {formatCurrency(kgSplit.kg300, regionInfo.currency)}/m2
+                {/* RATE (reciprocal) + per-unit suffix follows display system */}
+                {fmtRate(kgSplit.kg300, regionInfo.currency)}/{rateUnit}
               </span>
             </div>
             <div className="space-y-1.5">
@@ -739,6 +786,7 @@ export default function BenchmarkModule() {
                   max={maxElementValue}
                   currency={regionInfo.currency}
                   barClass="bg-oe-blue/70"
+                  rateFactor={rateFactor}
                   t={t}
                 />
               ))}
@@ -752,7 +800,8 @@ export default function BenchmarkModule() {
                 {t('benchmarks.kg400', { defaultValue: 'KG400 Technical' })}
               </span>
               <span className="text-xs font-bold text-content-primary tabular-nums">
-                {formatCurrency(kgSplit.kg400, regionInfo.currency)}/m2
+                {/* RATE (reciprocal) + per-unit suffix follows display system */}
+                {fmtRate(kgSplit.kg400, regionInfo.currency)}/{rateUnit}
               </span>
             </div>
             <div className="space-y-1.5">
@@ -763,6 +812,7 @@ export default function BenchmarkModule() {
                   max={maxElementValue}
                   currency={regionInfo.currency}
                   barClass="bg-amber-500/70"
+                  rateFactor={rateFactor}
                   t={t}
                 />
               ))}
@@ -771,9 +821,10 @@ export default function BenchmarkModule() {
         </div>
 
         <p className="mt-4 text-2xs text-content-quaternary">
-          {t('benchmarks.elements_note', {
+          {t('benchmarks.elements_note_v2', {
             defaultValue:
-              'Element shares are typical DIN 276 planning ratios grouped by building profile and sum back to your cost/m2. Actual splits vary with design, specification and procurement.',
+              'Element shares are typical DIN 276 planning ratios grouped by building profile and sum back to your cost/{{unit}}. Actual splits vary with design, specification and procurement.',
+            unit: rateUnit,
           })}
         </p>
       </div>
@@ -814,7 +865,8 @@ export default function BenchmarkModule() {
                   />
                 </div>
                 <span className="w-24 text-right text-xs font-mono text-content-tertiary">
-                  {formatCurrency(range.median, regionInfo.currency)}
+                  {/* RATE (reciprocal); the Q1-Q3 bar positions stay metric */}
+                  {fmtRate(range.median, regionInfo.currency)}
                 </span>
               </button>
             );

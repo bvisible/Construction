@@ -388,6 +388,61 @@ async def log_activity(
     return entry
 
 
+# Stable verb for an ownership (ball-in-court) hand-off row. The
+# change-intelligence ownership-chain engine reads rows carrying this action
+# back, so it must match on both the write and the read side.
+ACTION_OWNERSHIP_HANDOFF = "ownership_handoff"
+
+
+async def log_ownership_handoff(
+    session: AsyncSession,
+    *,
+    entity_type: str,
+    entity_id: str | uuid.UUID | None,
+    from_party: str | None,
+    to_party: str | None,
+    actor_id: str | uuid.UUID | None,
+    reason: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    """Record one ball-in-court hand-off as an ``ownership_handoff`` activity row.
+
+    The change modules store ``ball_in_court`` as a single mutable string with no
+    history. This writes the custody change to ``oe_activity_log`` so the
+    :mod:`app.modules.change_intelligence.ownership_chain` engine can later
+    reconstruct who held the ball, in what order, and for how long. The prior
+    holder is stored in ``from_status`` and the new holder in ``to_status`` so the
+    generic activity row carries the hand-off without a schema change.
+
+    Best-effort by contract: wrapped in try/except (mirroring each module's own
+    ``_safe_audit`` helper) so an audit-log failure - e.g. a partially migrated
+    database without ``oe_activity_log`` - never rolls back the business write
+    that moved the ball. The row sits in the caller's session, so when the write
+    does land it commits atomically with the field update.
+    """
+    try:
+        await log_activity(
+            session,
+            actor_id=actor_id,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            action=ACTION_OWNERSHIP_HANDOFF,
+            from_status=from_party,
+            to_status=to_party,
+            reason=reason,
+            metadata=dict(metadata or {}),
+        )
+    except Exception:
+        logger.warning(
+            "ownership_handoff audit skipped for %s:%s (%s -> %s)",
+            entity_type,
+            entity_id,
+            from_party,
+            to_party,
+            exc_info=True,
+        )
+
+
 async def get_activity_for_entity(
     session: AsyncSession,
     *,

@@ -1,5 +1,5 @@
 /**
- * suggestQuantityFromBIM — pick the most relevant geometric/quantitative
+ * suggestQuantityFromBIM - pick the most relevant geometric/quantitative
  * value from a set of BIM elements for a given BOQ position unit.
  *
  * Used by the BIM → BOQ link flow (`AddToBOQModal`) to pre-fill the
@@ -29,10 +29,11 @@
  * a badge ("Σ volume = 17.40 m³ from 3 elements") and warn on low
  * confidence (computed-from-density, unit mismatch).
  *
- * This module is pure (no React, no I/O) — safe to import from tests.
+ * This module is pure (no React, no I/O) - safe to import from tests.
  */
 
 import type { BIMElementData } from '@/shared/ui/BIMViewer/ElementManager';
+import { toDisplayQuantity } from '@/shared/lib/unitConversion';
 
 /* ── Types ────────────────────────────────────────────────────────────── */
 
@@ -68,7 +69,7 @@ export interface QuantitySuggestion {
   contributingElements: number;
   /** Total number of elements considered (== `elements.length`). */
   totalElements: number;
-  /** Inferred unit ("m³", "m²", "m", "kg", "pcs", "lsum") — may differ
+  /** Inferred unit ("m³", "m²", "m", "kg", "pcs", "lsum") - may differ
    *  from the requested unit when `source === 'unit_unknown'` (in which
    *  case it falls back to a best-effort guess). */
   inferredUnit: string;
@@ -117,7 +118,7 @@ export function normalizeUnit(unit: string | null | undefined): CanonicalUnit {
   if (stripped === 'kg' || stripped === 'kgs' || stripped === 'kilogram' || stripped === 'kilograms') {
     return 'kg';
   }
-  // Count — German "Stk", Russian "шт", English "pcs/pc/piece(s)/each/ea"
+  // Count - German "Stk", Russian "шт", English "pcs/pc/piece(s)/each/ea"
   if (
     stripped === 'pcs' ||
     stripped === 'pc' ||
@@ -423,7 +424,7 @@ export function suggestQuantityFromBIM(
 
     case '':
     default: {
-      // Unknown / missing unit — fall back to volume → area → length → count,
+      // Unknown / missing unit - fall back to volume → area → length → count,
       // matching the behaviour the modal had before this helper existed.
       // Confidence is `low` because we're guessing what the user meant.
       const vol = sumField(elements, VOLUME_KEYS);
@@ -498,8 +499,17 @@ function zeroSuggestion(
  *    "count = 5 pcs"
  *    "computed mass = 285.00 kg (volume × density)"
  *
- *  Pure formatter — no React, callable from tests. */
-export function formatSuggestionBadge(s: QuantitySuggestion): string {
+ *  Pure formatter - no React, callable from tests.
+ *
+ *  `system` controls DISPLAY units only (issue #270): when `'imperial'` the
+ *  badge's number + unit are converted (m³ -> ft³, kg -> lb, ...) for display.
+ *  The suggestion's `value`/`inferredUnit` are NOT mutated - the seeded/stored
+ *  BOQ quantity always stays canonical metric. Defaults to `'metric'`, so an
+ *  omitted argument reproduces the original byte-for-byte output. */
+export function formatSuggestionBadge(
+  s: QuantitySuggestion,
+  system: 'metric' | 'imperial' = 'metric',
+): string {
   const fmt = (n: number) =>
     Number.isInteger(n)
       ? n.toLocaleString('en', { maximumFractionDigits: 0 })
@@ -510,23 +520,27 @@ export function formatSuggestionBadge(s: QuantitySuggestion): string {
       ? ` from ${s.contributingElements}/${s.totalElements} elements`
       : '';
 
+  // Display-only conversion of the (value, inferredUnit) pair. Unmapped units
+  // (pcs, lsum, "") pass through unchanged in both systems.
+  const disp = toDisplayQuantity(s.value, s.inferredUnit, system);
+
   switch (s.source) {
     case 'sum_volume':
-      return `Σ volume = ${fmt(s.value)} ${s.inferredUnit}${elementsSuffix}`;
+      return `Σ volume = ${fmt(disp.value)} ${disp.unit}${elementsSuffix}`;
     case 'sum_area':
-      return `Σ area = ${fmt(s.value)} ${s.inferredUnit}${elementsSuffix}`;
+      return `Σ area = ${fmt(disp.value)} ${disp.unit}${elementsSuffix}`;
     case 'sum_length':
-      return `Σ length = ${fmt(s.value)} ${s.inferredUnit}${elementsSuffix}`;
+      return `Σ length = ${fmt(disp.value)} ${disp.unit}${elementsSuffix}`;
     case 'sum_mass':
-      return `Σ mass = ${fmt(s.value)} ${s.inferredUnit}${elementsSuffix}`;
+      return `Σ mass = ${fmt(disp.value)} ${disp.unit}${elementsSuffix}`;
     case 'count':
-      return `count = ${fmt(s.value)} ${s.inferredUnit}`;
+      return `count = ${fmt(disp.value)} ${disp.unit}`;
     case 'lsum':
       return 'lump sum = 1';
     case 'computed_mass_from_density':
-      return `≈ ${fmt(s.value)} kg (volume × density)${elementsSuffix}`;
+      return `≈ ${fmt(disp.value)} ${disp.unit} (volume × density)${elementsSuffix}`;
     case 'unit_unknown':
-      return `unit unknown - using count = ${fmt(s.value)}`;
+      return `unit unknown - using count = ${fmt(disp.value)}`;
     case 'no_elements':
       return 'no elements selected';
   }

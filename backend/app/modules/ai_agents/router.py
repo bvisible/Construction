@@ -14,6 +14,7 @@ Endpoints (mounted at ``/api/v1/ai-agents/`` by the module loader):
 from __future__ import annotations
 
 import logging
+import os
 import time
 import uuid
 from collections import OrderedDict
@@ -23,6 +24,23 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, 
 
 from app.database import async_session_factory
 from app.dependencies import CurrentUserId, CurrentUserPayload, RequirePermission, SessionDep, verify_project_access
+from app.modules.ai_agents.accuracy_schemas import (
+    AccuracyScoreboardOut,
+    AccuracyScoreOut,
+    AIFeedbackIn,
+    AIFeedbackOut,
+    AIFeedbackSummaryOut,
+    OutcomeRecordedOut,
+    RecordOutcomeIn,
+    SandboxSeedOut,
+)
+from app.modules.ai_agents.accuracy_service import (
+    build_feedback_summary,
+    build_scoreboard,
+    record_ai_feedback,
+    record_run_outcome,
+)
+from app.modules.ai_agents.sandbox import seed_sandbox_runs
 from app.modules.ai_agents.schemas import (
     CUSTOM_AGENT_CATEGORIES,
     AgentDescriptor,
@@ -565,6 +583,179 @@ async def agents_health(
     )
 
 
+# ── Accuracy scoreboard ──────────────────────────────────────────────────
+
+
+@router.post(
+    "/runs/{run_id}/outcome",
+    response_model=OutcomeRecordedOut,
+    dependencies=[Depends(RequirePermission("ai_agents.run"))],
+)
+async def record_agent_run_outcome(
+    run_id: uuid.UUID,
+    payload: RecordOutcomeIn,
+    user_id: CurrentUserId,
+    session: SessionDep,
+) -> OutcomeRecordedOut:
+    """Record whether an agent run's answer turned out correct.
+
+    Scoped to the caller's own runs (a run the caller does not own returns
+    404). The outcome is stored on the run's trust envelope so a later accuracy
+    review can score the stated confidence against what actually happened.
+    """
+    run = await record_run_outcome(
+        session,
+        run_id,
+        correct=payload.correct,
+        recorded_by=uuid.UUID(user_id),
+        note=payload.note,
+    )
+    if run is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Agent run not found",
+        )
+    await session.commit()
+    return OutcomeRecordedOut(
+        run_id=str(run.id),
+        agent_name=run.agent_name,
+        actual_outcome=bool(payload.correct),
+    )
+
+
+@router.post(
+    "/feedback",
+    response_model=AIFeedbackOut,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(RequirePermission("ai_agents.run"))],
+)
+async def submit_ai_feedback(
+    payload: AIFeedbackIn,
+    user_id: CurrentUserId,
+    session: SessionDep,
+) -> AIFeedbackOut:
+    """Record a correct / incorrect verdict on any AI output in the app.
+
+    The generic trust-loop sink for AI surfaces that have no agent-run row to
+    score - the AI Estimator result, a match-elements suggestion, an advisor
+    answer. Always attributed to the caller; when a ``project_id`` is supplied
+    it is verified against the caller's access first (owner or team member), so
+    a verdict can never be attributed to a project the caller cannot see.
+    Money-free: just a thumbs up / down plus an optional note.
+    """
+    if payload.project_id is not None:
+        await verify_project_access(payload.project_id, user_id, session)
+
+    row = await record_ai_feedback(
+        session,
+        user_id=uuid.UUID(user_id),
+        surface=payload.surface,
+        correct=payload.correct,
+        project_id=payload.project_id,
+        ref=payload.ref,
+        note=payload.note,
+    )
+    await session.commit()
+    return AIFeedbackOut(id=str(row.id), surface=row.surface, correct=row.correct)
+
+
+@router.get(
+    "/accuracy/",
+    response_model=AccuracyScoreboardOut,
+    dependencies=[Depends(RequirePermission("ai_agents.read"))],
+)
+async def get_accuracy_scoreboard(
+    user_id: CurrentUserId,
+    session: SessionDep,
+    project_id: uuid.UUID | None = Query(default=None),
+    agent_name: str | None = Query(default=None),
+) -> AccuracyScoreboardOut:
+    """Calibration scoreboard over the caller's own scored agent runs.
+
+    Each agent with at least one run carrying both a stated confidence and a
+    recorded outcome gets a Brier score, mean confidence, observed accuracy and
+    calibration bins. Optionally filtered to one project or one agent.
+    """
+    scores = await build_scoreboard(
+        session,
+        user_id=uuid.UUID(user_id),
+        project_id=project_id,
+        agent_name=agent_name,
+    )
+    return AccuracyScoreboardOut(scores=[AccuracyScoreOut.model_validate(s) for s in scores])
+
+
+@router.get(
+    "/feedback/summary",
+    response_model=AIFeedbackSummaryOut,
+    dependencies=[Depends(RequirePermission("ai_agents.read"))],
+)
+async def get_feedback_summary(
+    user_id: CurrentUserId,
+    session: SessionDep,
+    project_id: uuid.UUID | None = Query(default=None),
+    surface: str | None = Query(default=None),
+) -> AIFeedbackSummaryOut:
+    """Roll up the caller's AI feedback verdicts overall and per surface.
+
+    The read side of the generic trust loop: every thumbs up / down recorded on
+    a non-run AI surface (the AI Estimator result, a match suggestion, an advisor
+    answer) rolled into a correct rate, so a user can see how the AI is landing
+    for them. Scoped to the caller's own verdicts; optionally narrowed to one
+    project or one surface.
+    """
+    summary = await build_feedback_summary(
+        session,
+        user_id=uuid.UUID(user_id),
+        project_id=project_id,
+        surface=surface,
+    )
+    return AIFeedbackSummaryOut.model_validate(summary)
+
+
+# ── Sample sandbox (hosted demo only) ─────────────────────────────────────
+
+
+def _demo_mode_enabled() -> bool:
+    """Whether this deployment is the public hosted demo (OE_DEMO_MODE set).
+
+    Mirrors the check behind ``GET /api/system/status``. Seeding sample data is
+    only meaningful on the demo, where a prospect has no runs and no LLM; real
+    installs are kept clean.
+    """
+    return os.environ.get("OE_DEMO_MODE", "").lower() in ("1", "true", "yes")
+
+
+@router.post(
+    "/sandbox/",
+    response_model=SandboxSeedOut,
+    dependencies=[Depends(RequirePermission("ai_agents.run"))],
+)
+async def seed_sandbox(
+    user_id: CurrentUserId,
+    session: SessionDep,
+) -> SandboxSeedOut:
+    """Seed a few clearly-labeled, pre-scored sample runs for the caller.
+
+    Lets a prospect on the hosted demo "see AI in practice": the seeded runs
+    carry a full trust envelope and a recorded outcome, so the trust panels and
+    the accuracy scoreboard render populated instead of empty. The runs are
+    tagged ``trigger_source="sample"`` and flagged in their trust JSON so they
+    are identifiable and removable.
+
+    Demo-only (403 off-demo) so real installs are never polluted with sample
+    rows. Idempotent: a repeat call creates nothing (``created`` is 0).
+    """
+    if not _demo_mode_enabled():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Sample runs are only available on the hosted demo.",
+        )
+    result = await seed_sandbox_runs(session, user_id=uuid.UUID(user_id))
+    await session.commit()
+    return SandboxSeedOut(**result)
+
+
 # ── Run lifecycle ────────────────────────────────────────────────────────
 
 
@@ -648,6 +839,7 @@ async def _run_in_background(
                 status=result.status,
                 failure_reason=result.failure_reason,
                 final_output=result.final_output,
+                trust=result.trust,
                 iterations=result.iterations,
                 total_tokens=result.total_tokens,
                 finished_at=_iso_now(),
@@ -892,10 +1084,25 @@ async def apply_run_proposals(
     as a manual add) and tag each line back to the run. Currencies are never
     blended - off-currency or un-priced lines are skipped with a reason.
 
-    403 unless the caller can access the BOQ's project; 404 when the run or BOQ
-    does not exist; 422 when the run produced no proposals.
+    The target project is taken from the RUN's own ``project_id`` - never from
+    the caller's active project. The requested BOQ must live in that same
+    project, otherwise the apply is rejected with 404 (an IDOR-safe response
+    that does not reveal whether the BOQ exists). This prevents a caller from
+    writing a run's output into a different project they happen to also have
+    open / can access.
+
+    404 when the run or BOQ does not exist, when the caller does not own the
+    run, when the BOQ belongs to a project other than the run's, or when the
+    caller cannot access the run's project; 422 when the run produced no
+    proposals.
     """
     uid = uuid.UUID(user_id)
+
+    # Resolve the run FIRST: it is the sole authority for the target project.
+    # 404 (not 403) on missing/foreign run keeps run existence non-discoverable.
+    run = await service.get_run(run_id)
+    if run is None or str(run.user_id) != str(uid):
+        raise HTTPException(status_code=404, detail="Run not found")
 
     # Resolve the BOQ and verify project access BEFORE doing any work, so a
     # caller can never apply proposals into a project they cannot see.
@@ -908,7 +1115,18 @@ async def apply_run_proposals(
         raise
     if boq is None:
         raise HTTPException(status_code=404, detail="BOQ not found")
-    await verify_project_access(boq.project_id, user_id, session)
+
+    # The run's project is authoritative. If the run is bound to a project, the
+    # target BOQ MUST belong to that same project, and the caller must be able
+    # to access it - a client-supplied BOQ in any other project is rejected
+    # (404) rather than silently honoured. A run with no project binding
+    # (advisory/global) falls back to verifying the chosen BOQ's project.
+    if run.project_id is not None:
+        await verify_project_access(run.project_id, user_id, session)
+        if str(boq.project_id) != str(run.project_id):
+            raise HTTPException(status_code=404, detail="BOQ not found")
+    else:
+        await verify_project_access(boq.project_id, user_id, session)
 
     try:
         result = await service.apply_run_proposals(
@@ -942,6 +1160,7 @@ def _serialise_run(run: Any, *, steps: list[Any]) -> AgentRunResponse:
         failure_reason=run.failure_reason,
         user_input=run.user_input,
         final_output=run.final_output,
+        trust=getattr(run, "trust", None),
         iterations=run.iterations,
         total_tokens=run.total_tokens,
         started_at=run.started_at,

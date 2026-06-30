@@ -130,6 +130,8 @@ class ChangeOrderUpdate(BaseModel):
     # T3: commitment / RFI links are mutable while the CO is in draft.
     linked_po_ids: list[UUID] | None = Field(default=None, max_length=50)
     linked_rfi_ids: list[UUID] | None = Field(default=None, max_length=50)
+    ball_in_court: str | None = Field(default=None, max_length=36)
+    response_due_date: str | None = Field(default=None, max_length=40)
     status: str | None = Field(
         default=None,
         description="Reserved - use /submit, /approve, /reject to change status.",
@@ -220,6 +222,8 @@ class ChangeOrderResponse(BaseModel):
     linked_po_ids: list[str] = Field(default_factory=list)
     linked_rfi_ids: list[str] = Field(default_factory=list)
     current_approval_step: int | None = None
+    ball_in_court: str | None = None
+    response_due_date: str | None = None
 
 
 class ChangeOrderWithItems(ChangeOrderResponse):

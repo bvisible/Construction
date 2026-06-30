@@ -14,6 +14,7 @@ import { useRecentStore } from '@/stores/useRecentStore';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useBIMLinkSelectionStore } from '@/stores/useBIMLinkSelectionStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
+import { usePreferencesStore } from '@/stores/usePreferencesStore';
 import {
   boqApi,
   groupPositionsIntoSections,
@@ -196,6 +197,11 @@ export function BOQEditorPage() {
   const currencySymbol = useMemo(() => getCurrencySymbol(project?.currency), [project?.currency]);
   const currencyCode = useMemo(() => getCurrencyCode(project?.currency), [project?.currency]);
   const locale = useMemo(() => getLocaleForRegion(project?.region), [project?.region]);
+  // Issue #270 - the user's measurement-system preference, threaded into the
+  // client-side Excel/PDF exports so quantities + unit labels print in the
+  // chosen system (storage stays metric-canonical; only the export boundary
+  // converts).
+  const measurementSystem = usePreferencesStore((s) => s.measurementSystem);
   /**
    * Project FX template (RFC 37 / Issue #93) — flatten to the shape BOQGrid
    * expects (`currency` + numeric `rate`). The API returns `code` and a
@@ -2884,6 +2890,8 @@ export function BOQEditorPage() {
             vatAmount,
             grossTotal,
             locale,
+            // Issue #270 - emit quantities + unit labels in the user's system.
+            measurementSystem,
           });
           addToast({ type: 'success', title: t('boq.file_downloaded', { defaultValue: 'File downloaded' }) });
           return;
@@ -2916,7 +2924,7 @@ export function BOQEditorPage() {
         addToast({ type: 'error', title: errorMsg });
       }
     },
-    [boqId, boq, positions, markups, directCost, netTotal, addToast, t],
+    [boqId, boq, positions, markups, directCost, netTotal, addToast, t, measurementSystem],
   );
 
   /** Pre-export validation check: warn if quality < 60%, GAEB preview before export. */

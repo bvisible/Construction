@@ -515,4 +515,10 @@ KNOWN_EVENT_TYPES: list[dict[str, str]] = [
         "module": "file_comments",
         "description": "You were @mentioned in a file comment",
     },
+    # Project discussions (collaboration comments, issue #279)
+    {
+        "event_type": "collaboration.comment.created",
+        "module": "collaboration",
+        "description": "New comment in a discussion you take part in",
+    },
 ]
