@@ -15,7 +15,9 @@
  */
 import { useEffect } from 'react';
 import type { ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import { NeoCockpit } from '@neoffice/frappe-sidebar-react';
+import { resolvePageTitleKey } from './Header';
 
 interface FrappeLayoutProps {
   title?: string;
@@ -23,9 +25,18 @@ interface FrappeLayoutProps {
 }
 
 export function FrappeLayout({ title, children }: FrappeLayoutProps) {
+  const { t, i18n } = useTranslation();
+
   useEffect(() => {
-    document.title = title ? `${title} | Construction` : 'Construction';
-  }, [title]);
+    // Translate the browser-tab title through the same map the on-screen page
+    // heading uses (e.g. "BOQ Editor" -> "Éditeur de devis"), so the embedded
+    // tab follows the active language instead of leaking raw English. Mirrors
+    // AppLayout's title handling.
+    const key = resolvePageTitleKey(title);
+    const translated = title ? (key ? t(key, { defaultValue: title }) : title) : null;
+    document.title = translated ? `${translated} | Construction` : 'Construction';
+    // i18n.language in deps so the tab re-translates on a language switch.
+  }, [title, t, i18n.language]);
 
   return (
     // Neoconstruction surface: pin the Construction module in the menu

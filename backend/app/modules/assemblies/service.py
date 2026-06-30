@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.events import event_bus
 from app.core.i18n import get_locale
 from app.core.validation.messages import translate
+from app.modules.assemblies import margins as asm_margins
 from app.modules.assemblies.models import Assembly, Component
 from app.modules.assemblies.repository import AssemblyRepository, ComponentRepository
 from app.modules.assemblies.schemas import (
@@ -726,6 +727,35 @@ class AssemblyService:
 
     # ── Composite operations ───────────────────────────────────────────────
 
+    async def _resolve_assembly_margins(self, assembly: Assembly) -> list[dict] | None:
+        """Resolve the effective margin cascade for an assembly, or ``None``.
+
+        The global default lives on the project's
+        ``metadata.margin_defaults`` (a list, or a ``{"margins": [...]}``
+        wrapper); an assembly may also carry its own
+        ``metadata.margin_defaults`` (used when it has no project, e.g. a
+        template). Per-line tweaks live on the assembly's
+        ``metadata.margin_overrides`` - ``{key: {"active"?, "rate"?,
+        "amount"?}}``. Returns the merged, ordered margin list, or ``None``
+        when nothing is configured (callers then keep the legacy bid_factor
+        behaviour, so existing assemblies are untouched).
+        """
+        defaults: object = None
+        if assembly.project_id is not None:
+            from app.modules.projects.repository import ProjectRepository
+
+            project = await ProjectRepository(self.session).get_by_id(assembly.project_id)
+            if project is not None and isinstance(project.metadata_, dict):
+                defaults = project.metadata_.get("margin_defaults")
+        asm_meta = assembly.metadata_ if isinstance(assembly.metadata_, dict) else {}
+        if not defaults:
+            defaults = asm_meta.get("margin_defaults")
+        default_list = asm_margins.extract_margin_defaults(defaults)
+        if not default_list:
+            return None
+        overrides = asm_meta.get("margin_overrides", {})
+        return asm_margins.resolve_effective_margins(default_list, overrides)
+
     async def get_assembly_with_components(self, assembly_id: uuid.UUID) -> AssemblyWithComponents:
         """Get an assembly with all its components and computed total.
 
@@ -764,9 +794,35 @@ class AssemblyService:
                 )
             )
 
-        computed_total = _str_to_float(assembly.total_rate)
         metadata = assembly.metadata_ or {}
         tags: list[str] = metadata.get("tags", []) if isinstance(metadata, dict) else []
+
+        # ── Margin cascade (global default + per-line override) ──────────
+        # When this assembly (or its project) defines a margin cascade we
+        # layer it on top of the typed component cost and expose the full
+        # breakdown so the editor can show - and let the user toggle - each
+        # margin. With nothing configured we keep the legacy bid_factor
+        # total, so existing assemblies stay byte-for-byte unchanged.
+        effective_margins: list[dict] | None = None
+        margin_cascade: dict | None = None
+        computed_total = _str_to_float(assembly.total_rate)
+        try:
+            effective_margins = await self._resolve_assembly_margins(assembly)
+            if effective_margins is not None:
+                margin_cascade = asm_margins.compute_margin_cascade(
+                    asm_margins.component_totals_by_type(components),
+                    effective_margins,
+                    decimals=2,
+                    currency=assembly.currency,
+                )
+                computed_total = _str_to_float(margin_cascade["grand_total"])
+        except Exception:
+            # Never let a margin-config problem break the assembly view -
+            # fall back to the legacy bid_factor total.
+            logger.warning("Margin cascade resolution failed for assembly %s", assembly.id, exc_info=True)
+            effective_margins = None
+            margin_cascade = None
+            computed_total = _str_to_float(assembly.total_rate)
 
         return AssemblyWithComponents(
             id=assembly.id,
@@ -790,6 +846,8 @@ class AssemblyService:
             updated_at=assembly.updated_at,
             components=component_responses,
             computed_total=computed_total,
+            margins=effective_margins,
+            margin_cascade=margin_cascade,
         )
 
     async def _recalculate_total(self, assembly_id: uuid.UUID) -> None:
@@ -1520,6 +1578,24 @@ class AssemblyService:
         return await self.get_assembly(assembly_id)
 
     # ── Usage counts ─────────────────────────────────────────────────────
+
+    async def get_component_counts(self, assembly_ids: list[uuid.UUID]) -> dict[str, int]:
+        """Count components per assembly via ONE grouped SQL query, so a
+        list/search view shows real counts without lazy-loading each
+        assembly's ``components`` (which raises MissingGreenlet out of the
+        async session and was silently degrading the count to 0)."""
+        if not assembly_ids:
+            return {}
+        from sqlalchemy import func, select as _select
+
+        rows = (
+            await self.session.execute(
+                _select(Component.assembly_id, func.count())
+                .where(Component.assembly_id.in_(assembly_ids))
+                .group_by(Component.assembly_id)
+            )
+        ).all()
+        return {str(aid): int(n) for aid, n in rows}
 
     async def get_usage_counts(
         self,

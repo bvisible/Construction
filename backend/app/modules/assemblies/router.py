@@ -144,6 +144,7 @@ async def _verify_target_boq_owner(
 def _assembly_to_response(
     assembly: object,
     usage_count: int = 0,
+    component_count: int | None = None,
 ) -> AssemblyResponse:
     """Convert an Assembly ORM model to an AssemblyResponse schema."""
     components = getattr(assembly, "components", None) or []
@@ -165,7 +166,7 @@ def _assembly_to_response(
         project_id=assembly.project_id,  # type: ignore[attr-defined]
         owner_id=assembly.owner_id,  # type: ignore[attr-defined]
         is_active=assembly.is_active,  # type: ignore[attr-defined]
-        component_count=len(components),
+        component_count=component_count if component_count is not None else len(components),
         usage_count=usage_count,
         tags=tags,
         metadata=metadata,
@@ -262,8 +263,22 @@ async def search_assemblies(
     except Exception:
         logger.debug("Could not compute assembly usage counts")
 
+    # Component counts via one grouped query (avoids lazy-load → MissingGreenlet → 0).
+    comp_map: dict[str, int] = {}
+    try:
+        comp_map = await service.get_component_counts([a.id for a in assemblies])
+    except Exception:
+        logger.debug("Could not compute assembly component counts")
+
     return AssemblySearchResponse(
-        items=[_assembly_to_response(a, usage_count=usage_map.get(str(a.id), 0)) for a in assemblies],
+        items=[
+            _assembly_to_response(
+                a,
+                usage_count=usage_map.get(str(a.id), 0),
+                component_count=comp_map.get(str(a.id), 0),
+            )
+            for a in assemblies
+        ],
         total=total,
         limit=limit,
         offset=offset,

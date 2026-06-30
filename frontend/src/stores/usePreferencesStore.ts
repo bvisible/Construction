@@ -13,7 +13,7 @@ const STORAGE_KEY = 'oe_preferences';
 
 export type MeasurementSystem = 'metric' | 'imperial';
 export type DateFormat = 'DD.MM.YYYY' | 'MM/DD/YYYY' | 'YYYY-MM-DD';
-export type NumberLocale = 'de-DE' | 'en-US' | 'en-GB' | 'fr-FR' | 'ru-RU' | 'ar-SA' | 'ja-JP' | 'zh-CN';
+export type NumberLocale = 'de-DE' | 'en-US' | 'en-GB' | 'fr-FR' | 'fr-CH' | 'de-CH' | 'ru-RU' | 'ar-SA' | 'ja-JP' | 'zh-CN';
 
 interface Preferences {
   currency: string;
@@ -26,16 +26,20 @@ interface Preferences {
   defaultStandard: string;
 }
 
+// //// NEOFFICE PATCH — Switzerland-first (Protti) defaults: CHF, Suisse
+// romande number format, TVA 8.1%. Upstream ships EUR/DACH/19%. This is an
+// upstream file, so re-verify this block on every upstream merge.
 const DEFAULTS: Preferences = {
-  currency: 'EUR',
+  currency: 'CHF',
   measurementSystem: 'metric',
   dateFormat: 'DD.MM.YYYY',
-  numberLocale: 'de-DE',
-  vatRate: 19,
-  defaultRegion: 'DACH',
-  defaultCurrency: 'EUR',
+  numberLocale: 'fr-CH',
+  vatRate: 8.1,
+  defaultRegion: 'CH',
+  defaultCurrency: 'CHF',
   defaultStandard: 'din276',
 };
+// //// END NEOFFICE PATCH
 
 function readPreferences(): Preferences {
   try {
@@ -87,7 +91,7 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
 
   formatCurrency: (amount: number) => {
     const { currency, numberLocale } = get();
-    const safe = /^[A-Z]{3}$/.test(currency) ? currency : 'EUR';
+    const safe = /^[A-Z]{3}$/.test(currency) ? currency : 'CHF'; // //// NEOFFICE PATCH — CHF fallback
     try {
       return new Intl.NumberFormat(numberLocale, {
         style: 'currency',

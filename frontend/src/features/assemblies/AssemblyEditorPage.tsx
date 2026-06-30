@@ -35,12 +35,40 @@ import {
   type AssemblyComponent,
   type ComponentMetadata,
   type CreateComponentData,
+  type MarginCascade,
   type ResourceType,
 } from './api';
 
 /* -- Constants ------------------------------------------------------------ */
 
-const UNITS = ['m', 'm2', 'm3', 'kg', 't', 'pcs', 'lsum', 'h', 'set', 'lm'];
+// Base quantity units first, then composite yield/productivity units used in
+// rendement-style estimating (effort per produced unit, e.g. 0.175 h/m2 to form
+// a slab, and the inverse productivity form m2/h). Existing units are kept in
+// place so assemblies already saved with them keep rendering unchanged.
+const UNITS = [
+  'm',
+  'm2',
+  'm3',
+  'kg',
+  't',
+  'pcs',
+  'lsum',
+  'h',
+  'set',
+  'lm',
+  // Effort per produced unit (labor / machine / tooling yield).
+  'h/m',
+  'h/m2',
+  'h/m3',
+  'h/ml',
+  'h/pcs',
+  'h/t',
+  // Productivity (produced units per hour) — inverse of the above.
+  'm/h',
+  'm2/h',
+  'm3/h',
+  'pcs/h',
+];
 
 /* -- Component ------------------------------------------------------------ */
 
@@ -131,6 +159,39 @@ export function AssemblyEditorPage() {
     },
   });
 
+  // ── Margin cascade overrides (per-line) ─────────────────────────────────
+  // Disabling or re-rating a margin on THIS assembly writes the tweak into
+  // metadata.margin_overrides; the server recomputes the cascade on refetch.
+  // The global default cascade lives on the project, so this only records the
+  // delta for this one line.
+  const marginOverrideMutation = useMutation({
+    mutationFn: (overrides: Record<string, unknown>) =>
+      assembliesApi.update(assemblyId!, {
+        metadata: {
+          ...((assembly?.metadata as Record<string, unknown> | undefined) ?? {}),
+          margin_overrides: overrides,
+        },
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['assembly', assemblyId] });
+    },
+    onError: (error: Error) => {
+      addToast({ type: 'error', title: t('toasts.update_failed', { defaultValue: 'Update failed' }), message: error.message });
+    },
+  });
+
+  const handleSetMarginOverride = useCallback(
+    (key: string, patch: Record<string, unknown>) => {
+      const current =
+        ((assembly?.metadata as Record<string, unknown> | undefined)?.margin_overrides as
+          | Record<string, Record<string, unknown>>
+          | undefined) ?? {};
+      const next = { ...current, [key]: { ...(current[key] ?? {}), ...patch } };
+      marginOverrideMutation.mutate(next);
+    },
+    [assembly?.metadata, marginOverrideMutation],
+  );
+
   // Typed seed defaults — picked to look intentional in the editor right
   // after add, so the user sees what each type expects (labor → "h",
   // equipment → "h", material → assembly's own unit). The seed metadata
@@ -157,6 +218,11 @@ export function AssemblyEditorPage() {
           description: t('assemblies.seed_equipment', { defaultValue: 'New equipment' }),
           unit: 'h',
           metadata: { rental_days: 0, fuel_cost: 0 },
+        },
+        tooling: {
+          description: t('assemblies.seed_tooling', { defaultValue: 'New tool' }),
+          unit: 'h',
+          metadata: {},
         },
         operator: {
           description: t('assemblies.seed_operator', { defaultValue: 'New operator' }),
@@ -289,7 +355,15 @@ export function AssemblyEditorPage() {
   // Fall back to the local sum only when the server hasn't rolled up a rate
   // yet (e.g. a freshly created assembly with no persisted total).
   const localAdjustedTotal = computedTotal * assembly.bid_factor;
-  const adjustedTotal = assembly.total_rate > 0 ? assembly.total_rate : localAdjustedTotal;
+  // When a margin cascade is configured (global default inherited from the
+  // project, possibly with per-line overrides), its grand_total is the
+  // authoritative headline rate. Otherwise keep the legacy bid_factor path.
+  const cascade: MarginCascade | null = assembly.margin_cascade ?? null;
+  const adjustedTotal = cascade
+    ? Number(cascade.grand_total)
+    : assembly.total_rate > 0
+      ? assembly.total_rate
+      : localAdjustedTotal;
 
   return (
     <div className="space-y-5 animate-fade-in">
@@ -612,45 +686,93 @@ export function AssemblyEditorPage() {
             </tbody>
             {components.length > 0 && (
               <tfoot>
-                {assembly.bid_factor !== 1.0 && (
-                  <tr className="border-t border-border-light bg-surface-tertiary/50">
-                    <td colSpan={7} className="px-4 py-2.5 text-right text-sm text-content-secondary">
-                      {t('assemblies.subtotal', { defaultValue: 'Subtotal' })}
-                    </td>
-                    <td className="px-4 py-2.5 text-right text-sm text-content-secondary tabular-nums">
-                      {fmt(computedTotal)}
-                    </td>
-                    <td />
-                  </tr>
+                {cascade ? (
+                  <>
+                    <tr className="border-t border-border-light bg-surface-tertiary/50">
+                      <td colSpan={7} className="px-4 py-2.5 text-right text-sm text-content-secondary">
+                        {t('assemblies.direct_cost', { defaultValue: 'Direct cost' })}
+                      </td>
+                      <td className="px-4 py-2.5 text-right text-sm text-content-secondary tabular-nums">
+                        {fmt(Number(cascade.direct_total))}
+                      </td>
+                      <td />
+                    </tr>
+                    {cascade.steps.map((s) => (
+                      <tr
+                        key={s.key}
+                        className={clsx(
+                          'border-t border-border-light bg-surface-tertiary/50',
+                          !s.active && 'opacity-40',
+                        )}
+                      >
+                        <td colSpan={7} className="px-4 py-2.5 text-right text-sm text-content-secondary">
+                          <span className={clsx(!s.active && 'line-through')}>
+                            {s.label}
+                            {s.kind === 'percentage' && ` (${Number(s.rate)}%)`}
+                          </span>
+                        </td>
+                        <td className="px-4 py-2.5 text-right text-sm text-content-secondary tabular-nums">
+                          {s.active ? `+ ${fmt(Number(s.amount))}` : '\u2014'}
+                        </td>
+                        <td />
+                      </tr>
+                    ))}
+                    <tr className="border-t-2 border-border bg-surface-tertiary font-semibold">
+                      <td colSpan={7} className="px-4 py-3 text-right text-content-primary">
+                        {t('assemblies.total_rate', { defaultValue: 'Total Rate' })}
+                      </td>
+                      <td className="px-4 py-3 text-right text-content-primary text-base tabular-nums">
+                        {fmt(adjustedTotal)}
+                        <span className="ml-1 text-xs font-normal text-content-tertiary">
+                          / {assembly.unit}
+                        </span>
+                      </td>
+                      <td />
+                    </tr>
+                  </>
+                ) : (
+                  <>
+                    {assembly.bid_factor !== 1.0 && (
+                      <tr className="border-t border-border-light bg-surface-tertiary/50">
+                        <td colSpan={7} className="px-4 py-2.5 text-right text-sm text-content-secondary">
+                          {t('assemblies.subtotal', { defaultValue: 'Subtotal' })}
+                        </td>
+                        <td className="px-4 py-2.5 text-right text-sm text-content-secondary tabular-nums">
+                          {fmt(computedTotal)}
+                        </td>
+                        <td />
+                      </tr>
+                    )}
+                    {assembly.bid_factor !== 1.0 && (
+                      <tr className="border-t border-border-light bg-surface-tertiary/50">
+                        <td colSpan={7} className="px-4 py-2.5 text-right text-sm text-content-secondary">
+                          {t('assemblies.bid_factor', { defaultValue: 'Bid Factor' })} ({assembly.bid_factor})
+                        </td>
+                        <td className="px-4 py-2.5 text-right text-sm text-content-secondary tabular-nums">
+                          x {assembly.bid_factor}
+                        </td>
+                        <td />
+                      </tr>
+                    )}
+                    <tr className="border-t-2 border-border bg-surface-tertiary font-semibold">
+                      <td colSpan={7} className="px-4 py-3 text-right text-content-primary">
+                        {assembly.bid_factor !== 1.0
+                          ? t('assemblies.total_rate_adjusted', {
+                              defaultValue: 'Total Rate (\u00d7{{factor}} bid factor)',
+                              factor: assembly.bid_factor,
+                            })
+                          : t('assemblies.total_rate', { defaultValue: 'Total Rate' })}
+                      </td>
+                      <td className="px-4 py-3 text-right text-content-primary text-base tabular-nums">
+                        {fmt(adjustedTotal)}
+                        <span className="ml-1 text-xs font-normal text-content-tertiary">
+                          / {assembly.unit}
+                        </span>
+                      </td>
+                      <td />
+                    </tr>
+                  </>
                 )}
-                {assembly.bid_factor !== 1.0 && (
-                  <tr className="border-t border-border-light bg-surface-tertiary/50">
-                    <td colSpan={7} className="px-4 py-2.5 text-right text-sm text-content-secondary">
-                      {t('assemblies.bid_factor', { defaultValue: 'Bid Factor' })} ({assembly.bid_factor})
-                    </td>
-                    <td className="px-4 py-2.5 text-right text-sm text-content-secondary tabular-nums">
-                      x {assembly.bid_factor}
-                    </td>
-                    <td />
-                  </tr>
-                )}
-                <tr className="border-t-2 border-border bg-surface-tertiary font-semibold">
-                  <td colSpan={7} className="px-4 py-3 text-right text-content-primary">
-                    {assembly.bid_factor !== 1.0
-                      ? t('assemblies.total_rate_adjusted', {
-                          defaultValue: 'Total Rate (\u00d7{{factor}} bid factor)',
-                          factor: assembly.bid_factor,
-                        })
-                      : t('assemblies.total_rate', { defaultValue: 'Total Rate' })}
-                  </td>
-                  <td className="px-4 py-3 text-right text-content-primary text-base tabular-nums">
-                    {fmt(adjustedTotal)}
-                    <span className="ml-1 text-xs font-normal text-content-tertiary">
-                      / {assembly.unit}
-                    </span>
-                  </td>
-                  <td />
-                </tr>
               </tfoot>
             )}
           </table>
@@ -663,6 +785,8 @@ export function AssemblyEditorPage() {
         currency={assembly.currency}
         unit={assembly.unit}
         bidFactor={assembly.bid_factor}
+        cascade={cascade}
+        onSetOverride={handleSetMarginOverride}
       />
       </div>
 
@@ -914,6 +1038,7 @@ const RESOURCE_TYPE_STYLES: Record<string, string> = {
   material: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-400',
   labor: 'bg-blue-50 text-blue-700 dark:bg-blue-900/20 dark:text-blue-400',
   equipment: 'bg-amber-50 text-amber-700 dark:bg-amber-900/20 dark:text-amber-400',
+  tooling: 'bg-cyan-50 text-cyan-700 dark:bg-cyan-900/20 dark:text-cyan-400',
   operator: 'bg-orange-50 text-orange-700 dark:bg-orange-900/20 dark:text-orange-400',
   subcontractor: 'bg-violet-50 text-violet-700 dark:bg-violet-900/20 dark:text-violet-400',
   overhead: 'bg-slate-100 text-slate-700 dark:bg-slate-800/40 dark:text-slate-300',
@@ -925,6 +1050,7 @@ const RESOURCE_TYPE_BAR: Record<string, string> = {
   material: 'bg-emerald-500',
   labor: 'bg-blue-500',
   equipment: 'bg-amber-500',
+  tooling: 'bg-cyan-500',
   operator: 'bg-orange-500',
   subcontractor: 'bg-violet-500',
   overhead: 'bg-slate-500',
@@ -1037,6 +1163,7 @@ function ComponentRow({
               <option value="material">{t('assemblies.type_material', { defaultValue: 'Mat' })}</option>
               <option value="labor">{t('assemblies.type_labor', { defaultValue: 'Labor' })}</option>
               <option value="equipment">{t('assemblies.type_equipment', { defaultValue: 'Equip' })}</option>
+              <option value="tooling">{t('assemblies.type_tooling', { defaultValue: 'Outil.' })}</option>
               <option value="operator">{t('assemblies.type_operator', { defaultValue: 'Oper' })}</option>
               <option value="subcontractor">{t('assemblies.type_subcontractor', { defaultValue: 'Sub' })}</option>
               <option value="overhead">{t('assemblies.type_overhead', { defaultValue: 'OH' })}</option>
@@ -1584,6 +1711,8 @@ function BreakdownSidebar({
   currency,
   unit,
   bidFactor,
+  cascade,
+  onSetOverride,
 }: {
   breakdown: {
     totals: Record<string, number>;
@@ -1594,6 +1723,8 @@ function BreakdownSidebar({
   currency: string;
   unit: string;
   bidFactor: number;
+  cascade?: MarginCascade | null;
+  onSetOverride?: (key: string, patch: Record<string, unknown>) => void;
 }) {
   const { t } = useTranslation();
   const fmt = (n: number) =>
@@ -1605,6 +1736,7 @@ function BreakdownSidebar({
     'material',
     'labor',
     'equipment',
+    'tooling',
     'operator',
     'subcontractor',
     'overhead',
@@ -1616,11 +1748,13 @@ function BreakdownSidebar({
         ? t('assemblies.type_labor_full', { defaultValue: 'Labor' })
         : rt === 'equipment'
           ? t('assemblies.type_equipment_full', { defaultValue: 'Equipment' })
-          : rt === 'operator'
-            ? t('assemblies.type_operator_full', { defaultValue: 'Operator' })
-            : rt === 'subcontractor'
-              ? t('assemblies.type_subcontractor_full', { defaultValue: 'Subcontract' })
-              : t('assemblies.type_overhead_full', { defaultValue: 'Overhead' });
+          : rt === 'tooling'
+            ? t('assemblies.type_tooling_full', { defaultValue: 'Tooling' })
+            : rt === 'operator'
+              ? t('assemblies.type_operator_full', { defaultValue: 'Operator' })
+              : rt === 'subcontractor'
+                ? t('assemblies.type_subcontractor_full', { defaultValue: 'Subcontract' })
+                : t('assemblies.type_overhead_full', { defaultValue: 'Overhead' });
   // Show every category that has components, not only the priced ones, so a
   // line you just added is visible (at 0) while you type its price in, and a
   // category with several components never silently drops out.
@@ -1668,35 +1802,112 @@ function BreakdownSidebar({
             })}
         </div>
       )}
-      {rows.length > 0 && (
-        <div className="mt-4 pt-3 border-t border-border-light space-y-1">
+      {cascade ? (
+        <div className="mt-4 pt-3 border-t border-border-light space-y-1.5">
+          <div className="flex items-center gap-1.5 mb-1">
+            <h4 className="text-[11px] font-semibold uppercase tracking-wider text-content-tertiary">
+              {t('assemblies.margins_title', { defaultValue: 'Margins' })}
+            </h4>
+          </div>
           <div className="flex items-center justify-between text-xs">
             <span className="text-content-tertiary">
-              {t('assemblies.breakdown_subtotal', { defaultValue: 'Subtotal' })}
+              {t('assemblies.direct_cost', { defaultValue: 'Direct cost' })}
             </span>
             <span className="font-medium text-content-secondary tabular-nums">
-              {fmt(breakdown.grand)} {currency}
+              {fmt(Number(cascade.direct_total))} {currency}
             </span>
           </div>
-          {bidFactor !== 1.0 && (
-            <div className="flex items-center justify-between text-xs">
-              <span className="text-content-tertiary">
-                {t('assemblies.breakdown_bid', { defaultValue: 'Bid factor' })}
-              </span>
-              <span className="font-medium text-content-secondary tabular-nums">
-                ×{bidFactor}
+          {cascade.steps.map((s) => (
+            <div
+              // Re-key on the server values so the uncontrolled rate input
+              // re-mounts and reflects the recomputed cascade after a PATCH.
+              key={`${s.key}:${s.rate}:${s.active}`}
+              className={clsx(
+                'flex items-center justify-between gap-2 text-xs',
+                !s.active && 'opacity-50',
+              )}
+            >
+              <label className="flex items-center gap-1.5 min-w-0 cursor-pointer" title={s.base.join(' + ')}>
+                <input
+                  type="checkbox"
+                  checked={s.active}
+                  onChange={(e) => onSetOverride?.(s.key, { active: e.target.checked })}
+                  className="h-3 w-3 shrink-0 rounded border-border accent-oe-blue"
+                />
+                <span className={clsx('truncate text-content-secondary', !s.active && 'line-through')}>
+                  {s.label}
+                </span>
+                {s.kind === 'percentage' && (
+                  <span className="flex shrink-0 items-center gap-0.5 text-content-tertiary">
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      defaultValue={Number(s.rate)}
+                      disabled={!s.active}
+                      onBlur={(e) => {
+                        const v = e.target.value.trim();
+                        if (v !== '' && Number(v) !== Number(s.rate)) onSetOverride?.(s.key, { rate: v });
+                      }}
+                      className="w-12 rounded border border-border bg-surface-secondary px-1 py-0.5 text-right text-[11px] tabular-nums disabled:opacity-50"
+                    />
+                    %
+                  </span>
+                )}
+              </label>
+              <span className="shrink-0 font-medium text-content-secondary tabular-nums">
+                {s.active ? `+ ${fmt(Number(s.amount))}` : '—'}
               </span>
             </div>
-          )}
-          <div className="flex items-center justify-between text-sm pt-1">
+          ))}
+          <div className="flex items-center justify-between text-xs pt-1">
+            <span className="text-content-tertiary">
+              {t('assemblies.margins_subtotal', { defaultValue: 'Margins total' })}
+            </span>
+            <span className="font-medium text-content-secondary tabular-nums">
+              {fmt(Number(cascade.margin_total))} {currency}
+            </span>
+          </div>
+          <div className="flex items-center justify-between text-sm pt-1 border-t border-border-light">
             <span className="font-semibold text-content-primary">
               {t('assemblies.breakdown_total', { defaultValue: 'Total / unit' })}
             </span>
             <span className="font-bold text-content-primary tabular-nums">
-              {fmt(breakdown.withBid)} {currency} / {unit}
+              {fmt(Number(cascade.grand_total))} {currency} / {unit}
             </span>
           </div>
         </div>
+      ) : (
+        rows.length > 0 && (
+          <div className="mt-4 pt-3 border-t border-border-light space-y-1">
+            <div className="flex items-center justify-between text-xs">
+              <span className="text-content-tertiary">
+                {t('assemblies.breakdown_subtotal', { defaultValue: 'Subtotal' })}
+              </span>
+              <span className="font-medium text-content-secondary tabular-nums">
+                {fmt(breakdown.grand)} {currency}
+              </span>
+            </div>
+            {bidFactor !== 1.0 && (
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-content-tertiary">
+                  {t('assemblies.breakdown_bid', { defaultValue: 'Bid factor' })}
+                </span>
+                <span className="font-medium text-content-secondary tabular-nums">
+                  ×{bidFactor}
+                </span>
+              </div>
+            )}
+            <div className="flex items-center justify-between text-sm pt-1">
+              <span className="font-semibold text-content-primary">
+                {t('assemblies.breakdown_total', { defaultValue: 'Total / unit' })}
+              </span>
+              <span className="font-bold text-content-primary tabular-nums">
+                {fmt(breakdown.withBid)} {currency} / {unit}
+              </span>
+            </div>
+          </div>
+        )
       )}
     </Card>
   );

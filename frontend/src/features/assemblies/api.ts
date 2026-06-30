@@ -9,6 +9,7 @@ export type ResourceType =
   | 'material'
   | 'labor'
   | 'equipment'
+  | 'tooling'
   | 'operator'
   | 'subcontractor'
   | 'overhead';
@@ -76,8 +77,37 @@ export interface Assembly {
   component_count: number;
   usage_count: number;
   tags: string[];
+  // JSON metadata blob. Carries `margin_overrides` (per-line margin
+  // tweaks: `{ <key>: { active?, rate? } }`) and `margin_defaults` when an
+  // assembly defines its own cascade. Optional — most consumers ignore it.
+  metadata?: Record<string, unknown>;
   created_at: string;
   updated_at: string;
+}
+
+/**
+ * One step of the margin cascade layered on top of an assembly's direct
+ * cost (R&B, FG admin, external / subcontractor margins…). Money values are
+ * Decimal-as-string off the wire — cast with `Number()` before arithmetic.
+ */
+export interface MarginStep {
+  key: string;
+  label: string;
+  kind: string; // 'percentage' | 'fixed'
+  rate: string;
+  base: string[];
+  base_amount: string;
+  amount: string;
+  active: boolean;
+}
+
+/** The computed margin breakdown for one assembly (or null when none). */
+export interface MarginCascade {
+  currency: string;
+  direct_total: string;
+  steps: MarginStep[];
+  margin_total: string;
+  grand_total: string;
 }
 
 export interface AssemblyExport {
@@ -118,6 +148,11 @@ export interface AssemblyStats {
 
 export interface AssemblyWithComponents extends Assembly {
   components: AssemblyComponent[];
+  // Effective ordered margins applied to this assembly, and the computed
+  // cascade breakdown. Both null/absent for assemblies priced with the
+  // legacy bid_factor (no cascade configured) — UI falls back accordingly.
+  margins?: MarginStep[] | null;
+  margin_cascade?: MarginCascade | null;
 }
 
 export interface CreateAssemblyData {
@@ -297,8 +332,10 @@ export const assembliesApi = {
     apiGet<AssemblyWithComponents>(`/v1/assemblies/${id}`).then(normalizeWithComponents),
   create: (data: CreateAssemblyData) =>
     apiPost<Assembly>('/v1/assemblies/', data).then(normalizeAssembly),
-  update: (id: string, data: Partial<CreateAssemblyData>) =>
-    apiPatch<Assembly>(`/v1/assemblies/${id}`, data).then(normalizeAssembly),
+  update: (
+    id: string,
+    data: Partial<CreateAssemblyData> & { metadata?: Record<string, unknown> },
+  ) => apiPatch<Assembly>(`/v1/assemblies/${id}`, data).then(normalizeAssembly),
   delete: (id: string) => apiDelete(`/v1/assemblies/${id}`),
   addComponent: (assemblyId: string, data: CreateComponentData) =>
     apiPost<AssemblyComponent>(`/v1/assemblies/${assemblyId}/components/`, data).then(
