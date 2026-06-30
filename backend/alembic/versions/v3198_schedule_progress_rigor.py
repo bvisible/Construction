@@ -30,6 +30,9 @@ import logging
 from typing import Sequence, Union
 
 import sqlalchemy as sa
+
+# #### NEOFFICE PATCH — PG-safe boolean defaults: sa.Boolean server_default
+# "0"/"1" (SQLite-style) -> sa.text("false"/"true") for PostgreSQL (osiris).
 from alembic import op
 
 revision: str = "v3198_schedule_progress_rigor"
@@ -109,7 +112,7 @@ def upgrade() -> None:
             sa.Column("weight", sa.Numeric(10, 4), nullable=False, server_default="1"),
             sa.Column("percent_complete", sa.Numeric(6, 3), nullable=False, server_default="0"),
             sa.Column("sort_order", sa.Integer(), nullable=False, server_default="0"),
-            sa.Column("is_milestone", sa.Boolean(), nullable=False, server_default="0"),
+            sa.Column("is_milestone", sa.Boolean(), nullable=False, server_default=sa.text("false")),
             sa.Column("metadata", sa.JSON(), nullable=False, server_default="{}"),
             sa.CheckConstraint("weight >= 0", name="ck_sched_step_weight_nonneg"),
             sa.CheckConstraint(

@@ -27,6 +27,9 @@ import logging
 from typing import Sequence, Union
 
 import sqlalchemy as sa
+
+# #### NEOFFICE PATCH — PG-safe boolean defaults: sa.Boolean server_default
+# "0"/"1" (SQLite-style) -> sa.text("false"/"true") for PostgreSQL (osiris).
 from alembic import op
 
 revision: str = "v3193_cc_asbuilt"
@@ -97,7 +100,7 @@ def upgrade() -> None:
             sa.Column("measured_value", sa.String(length=80), nullable=True),
             sa.Column("deviation_value", sa.String(length=80), nullable=True),
             sa.Column("tolerance_result", sa.String(length=20), nullable=True),
-            sa.Column("valid_for_legal_record", sa.Boolean(), nullable=False, server_default="0"),
+            sa.Column("valid_for_legal_record", sa.Boolean(), nullable=False, server_default=sa.text("false")),
             sa.Column("validity_signed_by", sa.String(length=36), nullable=True),
             sa.Column("validity_signed_at", sa.String(length=40), nullable=True),
             sa.Column("validity_signature_ip", sa.String(length=64), nullable=True),

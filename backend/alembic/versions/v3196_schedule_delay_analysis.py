@@ -34,6 +34,9 @@ import logging
 from typing import Sequence, Union
 
 import sqlalchemy as sa
+
+# #### NEOFFICE PATCH — PG-safe boolean defaults: sa.Boolean server_default
+# "0"/"1" (SQLite-style) -> sa.text("false"/"true") for PostgreSQL (osiris).
 from alembic import op
 
 revision: str = "v3196_schedule_delay_analysis"
@@ -160,9 +163,9 @@ def upgrade() -> None:
             sa.Column("root_cause", sa.Text(), nullable=False, server_default=""),
             sa.Column("responsibility", sa.String(length=20), nullable=False, server_default="employer"),
             sa.Column("risk_event_category", sa.String(length=120), nullable=False, server_default=""),
-            sa.Column("is_concurrent", sa.Boolean(), nullable=False, server_default="0"),
+            sa.Column("is_concurrent", sa.Boolean(), nullable=False, server_default=sa.text("false")),
             sa.Column("concurrency_group", sa.String(length=80), nullable=False, server_default=""),
-            sa.Column("is_pacing", sa.Boolean(), nullable=False, server_default="0"),
+            sa.Column("is_pacing", sa.Boolean(), nullable=False, server_default=sa.text("false")),
             sa.Column("source_ref_type", sa.String(length=40), nullable=True),
             sa.Column("source_ref_id", sa.String(length=36), nullable=True),
             sa.Column("insert_at_activity_ref", sa.String(length=255), nullable=False, server_default=""),

@@ -32,6 +32,9 @@ import logging
 from typing import Sequence, Union
 
 import sqlalchemy as sa
+
+# #### NEOFFICE PATCH — PG-safe boolean defaults: sa.Boolean server_default
+# "0"/"1" (SQLite-style) -> sa.text("false"/"true") for PostgreSQL (osiris).
 from alembic import op
 
 revision: str = "v3197_schedule_activity_codes"
@@ -93,10 +96,10 @@ def upgrade() -> None:
                 sa.ForeignKey("oe_projects_project.id", ondelete="CASCADE"),
                 nullable=True,
             ),
-            sa.Column("is_library", sa.Boolean(), nullable=False, server_default="0"),
+            sa.Column("is_library", sa.Boolean(), nullable=False, server_default=sa.text("false")),
             sa.Column("name", sa.String(length=255), nullable=False),
             sa.Column("description", sa.Text(), nullable=False, server_default=""),
-            sa.Column("color_band", sa.Boolean(), nullable=False, server_default="1"),
+            sa.Column("color_band", sa.Boolean(), nullable=False, server_default=sa.text("true")),
             sa.Column("sort_order", sa.Integer(), nullable=False, server_default="0"),
             sa.Column("metadata", sa.JSON(), nullable=False, server_default="{}"),
             sa.UniqueConstraint("project_id", "name", name="uq_sched_codedict_project_name"),
@@ -227,7 +230,7 @@ def upgrade() -> None:
             ),
             sa.Column("name", sa.String(length=255), nullable=False),
             sa.Column("share_scope", sa.String(length=16), nullable=False, server_default="private"),
-            sa.Column("is_default", sa.Boolean(), nullable=False, server_default="0"),
+            sa.Column("is_default", sa.Boolean(), nullable=False, server_default=sa.text("false")),
             sa.Column("spec", sa.JSON(), nullable=False, server_default="{}"),
             sa.Column("metadata", sa.JSON(), nullable=False, server_default="{}"),
             sa.UniqueConstraint("owner_id", "schedule_id", "name", name="uq_sched_layout_owner_schedule_name"),

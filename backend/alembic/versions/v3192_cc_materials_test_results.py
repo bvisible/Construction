@@ -29,6 +29,9 @@ import logging
 from typing import Sequence, Union
 
 import sqlalchemy as sa
+
+# #### NEOFFICE PATCH — PG-safe boolean defaults: sa.Boolean server_default
+# "0"/"1" (SQLite-style) -> sa.text("false"/"true") for PostgreSQL (osiris).
 from alembic import op
 
 revision: str = "v3192_cc_materials_test_results"
@@ -101,8 +104,8 @@ def upgrade() -> None:
             sa.Column("cert_issuer", sa.String(length=255), nullable=True),
             sa.Column("cert_document_id", sa.String(length=36), nullable=True),
             sa.Column("dop_number", sa.String(length=120), nullable=True),
-            sa.Column("ce_marking", sa.Boolean(), nullable=False, server_default="0"),
-            sa.Column("ukca_marking", sa.Boolean(), nullable=False, server_default="0"),
+            sa.Column("ce_marking", sa.Boolean(), nullable=False, server_default=sa.text("false")),
+            sa.Column("ukca_marking", sa.Boolean(), nullable=False, server_default=sa.text("false")),
             sa.Column("issued_at", sa.String(length=40), nullable=True),
             sa.Column("valid_from", sa.String(length=40), nullable=True),
             sa.Column("valid_until", sa.String(length=40), nullable=True),
@@ -149,7 +152,7 @@ def upgrade() -> None:
             sa.Column("test_method", sa.String(length=255), nullable=True),
             sa.Column("lab_name", sa.String(length=255), nullable=True),
             sa.Column("lab_accreditation", sa.String(length=120), nullable=True),
-            sa.Column("is_accredited", sa.Boolean(), nullable=False, server_default="0"),
+            sa.Column("is_accredited", sa.Boolean(), nullable=False, server_default=sa.text("false")),
             sa.Column("measured_value", sa.String(length=80), nullable=True),
             sa.Column("unit", sa.String(length=40), nullable=True),
             sa.Column("specimen_age_days", sa.Integer(), nullable=True),
