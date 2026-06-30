@@ -79,7 +79,11 @@ def _timestamps() -> tuple[sa.Column, sa.Column]:
 def upgrade() -> None:
     bind = op.get_bind()
     is_sqlite = bind.dialect.name == "sqlite"
-    guid_type = sa.String(36) if is_sqlite else sa.dialects.postgresql.UUID(as_uuid=True)
+    # #### NEOFFICE PATCH — osiris stores all IDs as VARCHAR(36) (fix-uuid-fk
+    # convention), so a native PG UUID FK to pre-existing tables fails with
+    # DatatypeMismatch. Force String(36) on every dialect.
+    guid_type = sa.String(36)
+    # #### END NEOFFICE PATCH
 
     if not _has_table(bind, _RATE):
         op.create_table(
