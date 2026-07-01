@@ -619,6 +619,17 @@ def compute_element_metre(
         label: round(_ml(mids, mpp), 1) for label, mids in beton_by_pattern.items()
     }
 
+    # Deterministic tabular read (schedules + cartouche): complements the geometry
+    # with the architect's own printed tables (door/window/finish lists the vector
+    # layers can't see, plus the title block). Non-fatal — a plan with no table
+    # returns empty, and a pdfplumber hiccup must not sink the métré.
+    try:
+        from app.modules.neoffice.plan_schedules import read_plan_schedules
+
+        _tables = read_plan_schedules(pdf_bytes, page_index)
+    except Exception:  # noqa: BLE001
+        _tables = {"title_block": {}, "schedules": []}
+
     return {
         "page": page_index,
         "scale_ratio": scale_ratio,
@@ -629,6 +640,8 @@ def compute_element_metre(
         "envelope": envelope,
         "beton_by_material": beton_material_ml,
         "beton_by_pattern": beton_pattern_ml,
+        "title_block": _tables.get("title_block", {}),
+        "schedules": _tables.get("schedules", []),
         "material_legend": {
             "learned": material_map is not _MATERIAL_COLORS_FALLBACK,
             "map": material_map,
