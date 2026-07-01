@@ -2930,32 +2930,69 @@ export default function TakeoffViewerModule({
         setShowMetreAxes(true);
       }
 
-      // Pre-draw the measured slab outline as a reviewable area measurement so
-      // the user sees where the slab m² comes from (the wall axes are 1000s of
-      // segments — a dedicated render layer, not measurements — so we draw only
-      // the slab footprint here). Replaces any prior métré slab on this page.
-      const outline = res.geometry?.slab_outline;
-      if (outline && outline.length >= 3) {
-        const GROUP = 'Métré — Dalle';
-        const slabArea = res.elements?.dalle?.surface_m2 ?? 0;
-        const slabM: Measurement = {
-          id: `metre-slab-${currentPage}`,
-          type: 'area',
-          points: outline.map(([x, y]) => ({ x, y })),
-          value: slabArea,
-          unit: 'm²',
-          label: formatMeasurement(slabArea, 'm²'),
-          annotation: t('takeoff_viewer.metre_slab_annot', { defaultValue: 'Dalle (métré par calque)' }),
-          page: currentPage,
-          group: GROUP,
-          color: '#22C55E',
-          suggested: true,
-          reviewStatus: 'proposed',
+      // Pre-draw ONE reviewable summary measurement PER TYPE, each in its own
+      // group ("Métré — <type>"), so the measurements list / devis is organised
+      // by type (dalle, béton coulé, béton préfab, cloisons, escalier) instead
+      // of one lumped entry. The full walls stay on the coloured axes overlay;
+      // here each type is a devis-able line carrying the aggregate quantity,
+      // anchored on a representative segment. Replaces any prior "Métré — *".
+      const geom = res.geometry;
+      if (geom) {
+        const PREFIX = 'Métré — ';
+        const firstSeg = (segs?: Array<[number, number]>) =>
+          segs && segs.length >= 2
+            ? [{ x: segs[0]![0], y: segs[0]![1] }, { x: segs[1]![0], y: segs[1]![1] }]
+            : null;
+        const motifCol = (l: string) => {
+          const s = l.toLowerCase();
+          if (s.includes('coulé') || s.includes('croisillon')) return '#2563eb';
+          if (s.includes('préfab') || s.includes('grille')) return '#f97316';
+          return '#9ca3af';
         };
-        setMeasurements((prev) => [
-          ...prev.filter((m) => !(m.group === GROUP && m.page === currentPage)),
-          slabM,
-        ]);
+        const newMs: Measurement[] = [];
+        // Dalle — the real footprint polygon (area).
+        if (geom.slab_outline && geom.slab_outline.length >= 3) {
+          const area = res.elements?.dalle?.surface_m2 ?? 0;
+          newMs.push({
+            id: `metre-dalle-${currentPage}`, type: 'area',
+            points: geom.slab_outline.map(([x, y]) => ({ x, y })),
+            value: area, unit: 'm²', label: formatMeasurement(area, 'm²'),
+            annotation: 'Dalle béton', page: currentPage, group: `${PREFIX}Dalle`,
+            color: '#22C55E', suggested: true, reviewStatus: 'proposed',
+          });
+        }
+        // Concrete by hatch motif (poured / precast).
+        for (const [label, ml] of Object.entries(res.beton_by_pattern ?? {})) {
+          const pts = firstSeg(geom.patterns?.[label]);
+          if (!pts || ml <= 0) continue;
+          newMs.push({
+            id: `metre-pat-${label}-${currentPage}`, type: 'polyline', points: pts,
+            value: ml, unit: 'm', label: formatMeasurement(ml, 'm'),
+            annotation: label, page: currentPage, group: `${PREFIX}${label}`,
+            color: motifCol(label), suggested: true, reviewStatus: 'proposed',
+          });
+        }
+        // Partitions + stairs (by element).
+        for (const [key, name, col] of [
+          ['cloison', 'Cloisons', '#a855f7'],
+          ['escalier', 'Escalier', '#7c3aed'],
+        ] as const) {
+          const ml = res.elements?.[key]?.linear_m ?? 0;
+          const pts = firstSeg(geom.walls?.[key]);
+          if (!pts || ml <= 0) continue;
+          newMs.push({
+            id: `metre-${key}-${currentPage}`, type: 'polyline', points: pts,
+            value: ml, unit: 'm', label: formatMeasurement(ml, 'm'),
+            annotation: name, page: currentPage, group: `${PREFIX}${name}`,
+            color: col, suggested: true, reviewStatus: 'proposed',
+          });
+        }
+        if (newMs.length > 0) {
+          setMeasurements((prev) => [
+            ...prev.filter((m) => !(m.group.startsWith(PREFIX) && m.page === currentPage)),
+            ...newMs,
+          ]);
+        }
       }
 
       addToast({
