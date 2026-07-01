@@ -1220,8 +1220,8 @@ export default function TakeoffViewerModule({
       };
       ctx.save();
       ctx.setLineDash([]);
-      ctx.globalAlpha = 0.85;
-      ctx.lineWidth = 1.2 * dpr;
+      ctx.globalAlpha = 0.9;
+      ctx.lineWidth = 2 * dpr;
       for (const [key, pts] of Object.entries(metreAxes.geometry.walls)) {
         const col = AX_COLORS[key];
         if (!col) continue; // skip structure_overlay (engineer cross-check)
@@ -2886,6 +2886,11 @@ export default function TakeoffViewerModule({
       const res = await apiPost<ElementMetreResponse>(
         '/v1/neoffice/takeoff/element-metre/',
         { document_id: visionDocumentId, page: currentPage, storey_height_m: 2.7 },
+        // CAD geometry pass: opt into the 5-min timeout. The compute itself is
+        // ~2 s, but the sync Frappe→OCE proxy holds a gunicorn worker, so a slow
+        // neighbour call (e.g. the AI/vision endpoint) can queue us past the 45 s
+        // default and surface a spurious "timeout". longRunning waits it out.
+        { longRunning: true },
       );
       setMetreResult(res);
       // Wall-axes overlay: béton/cloison centre-lines drawn on the canvas.
@@ -5858,70 +5863,6 @@ export default function TakeoffViewerModule({
                 </button>
               </div>
 
-              {/* //// NEOFFICE PATCH — vector room detection (precise wall-following
-                  contours). Injected into the upstream v8.8.4 toolbar after Calibrate. */}
-              <button
-                onClick={handleDetectRooms}
-                disabled={roomsLoading || !visionDocumentId}
-                className={`flex items-center gap-1 px-2 py-1.5 rounded text-xs transition-colors disabled:opacity-40 ${
-                  roomsLoading ? 'bg-emerald-500 text-white' : 'hover:bg-surface-secondary text-content-secondary'
-                }`}
-                title={t('takeoff_viewer.detect_rooms', {
-                  defaultValue: 'Détecter les pièces (contours vectoriels, suit les murs)',
-                })}
-                aria-label={t('takeoff_viewer.detect_rooms', { defaultValue: 'Détecter les pièces' })}
-                data-testid="detect-rooms-button"
-              >
-                {roomsLoading ? <Loader2 size={14} className="animate-spin" /> : <Scan size={14} />}
-                <span className="hidden sm:inline">
-                  {roomsLoading
-                    ? t('takeoff_viewer.detecting_rooms', { defaultValue: 'Détection…' })
-                    : t('takeoff_viewer.detect_rooms_short', { defaultValue: 'Pièces' })}
-                </span>
-              </button>
-              {/* //// END NEOFFICE PATCH */}
-
-              {/* //// NEOFFICE PATCH — deterministic element take-off by layer
-                  (béton / cloisons / dalles / angles). Sibling of "Pièces". */}
-              <button
-                onClick={handleElementMetre}
-                disabled={metreLoading || !visionDocumentId}
-                className={`flex items-center gap-1 px-2 py-1.5 rounded text-xs transition-colors disabled:opacity-40 ${
-                  metreLoading ? 'bg-amber-500 text-white' : 'hover:bg-surface-secondary text-content-secondary'
-                }`}
-                title={t('takeoff_viewer.element_metre', {
-                  defaultValue: 'Métré par calque (béton, cloisons, dalles, angles — déterministe)',
-                })}
-                aria-label={t('takeoff_viewer.element_metre', { defaultValue: 'Métré par calque' })}
-                data-testid="element-metre-button"
-              >
-                {metreLoading ? <Loader2 size={14} className="animate-spin" /> : <Layers size={14} />}
-                <span className="hidden sm:inline">
-                  {metreLoading
-                    ? t('takeoff_viewer.metre_loading', { defaultValue: 'Métré…' })
-                    : t('takeoff_viewer.metre_short', { defaultValue: 'Métré' })}
-                </span>
-              </button>
-              {metreAxes && (
-                <button
-                  onClick={() => setShowMetreAxes((v) => !v)}
-                  className={`flex items-center gap-1 px-2 py-1.5 rounded text-xs transition-colors ${
-                    showMetreAxes ? 'bg-red-500/15 text-red-600' : 'hover:bg-surface-secondary text-content-secondary'
-                  }`}
-                  title={t('takeoff_viewer.metre_axes_toggle', {
-                    defaultValue: 'Afficher/masquer les axes béton & cloisons sur le plan',
-                  })}
-                  aria-pressed={showMetreAxes}
-                  data-testid="element-metre-axes-toggle"
-                >
-                  {showMetreAxes ? <Eye size={14} /> : <EyeOff size={14} />}
-                  <span className="hidden sm:inline">
-                    {t('takeoff_viewer.metre_axes', { defaultValue: 'Axes' })}
-                  </span>
-                </button>
-              )}
-              {/* //// END NEOFFICE PATCH */}
-
               {/* Calibration status chip - ratio + length when calibrated, an
                   amber "Not calibrated" warning otherwise. Click to (re)calibrate.
                   Reuses the scale purple so it reads as part of the scale group. */}
@@ -6009,12 +5950,72 @@ export default function TakeoffViewerModule({
                 ))}
               </div>
 
+              {/* //// NEOFFICE PATCH — deterministic "smart tools" (vector room
+                  detection + element take-off), grouped with the AI hero actions
+                  on the right of the row. `ml-auto` on the first pushes the whole
+                  cluster right (so it replaces the ml-auto that was on Recognize). */}
+              <button
+                onClick={handleDetectRooms}
+                disabled={roomsLoading || !visionDocumentId}
+                className="ml-auto inline-flex h-7 items-center gap-1.5 rounded-md bg-gradient-to-r from-sky-500 to-cyan-500 px-2.5 text-xs font-semibold text-white shadow-xs transition-all hover:from-sky-600 hover:to-cyan-600 hover:shadow-sm disabled:opacity-50 disabled:pointer-events-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/50"
+                title={t('takeoff_viewer.detect_rooms', {
+                  defaultValue: 'Détecter les pièces (contours vectoriels, suit les murs)',
+                })}
+                aria-label={t('takeoff_viewer.detect_rooms', { defaultValue: 'Détecter les pièces' })}
+                data-testid="detect-rooms-button"
+              >
+                {roomsLoading ? <Loader2 size={14} className="animate-spin" /> : <Scan size={14} />}
+                <span className="hidden sm:inline">
+                  {roomsLoading
+                    ? t('takeoff_viewer.detecting_rooms', { defaultValue: 'Détection…' })
+                    : t('takeoff_viewer.detect_rooms_short', { defaultValue: 'Pièces' })}
+                </span>
+              </button>
+              <button
+                onClick={handleElementMetre}
+                disabled={metreLoading || !visionDocumentId}
+                className="inline-flex h-7 items-center gap-1.5 rounded-md bg-gradient-to-r from-amber-500 to-orange-500 px-2.5 text-xs font-semibold text-white shadow-xs transition-all hover:from-amber-600 hover:to-orange-600 hover:shadow-sm disabled:opacity-50 disabled:pointer-events-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/50"
+                title={t('takeoff_viewer.element_metre', {
+                  defaultValue: 'Métré par calque (béton, cloisons, dalles, angles — déterministe)',
+                })}
+                aria-label={t('takeoff_viewer.element_metre', { defaultValue: 'Métré par calque' })}
+                data-testid="element-metre-button"
+              >
+                {metreLoading ? <Loader2 size={14} className="animate-spin" /> : <Layers size={14} />}
+                <span className="hidden sm:inline">
+                  {metreLoading
+                    ? t('takeoff_viewer.metre_loading', { defaultValue: 'Métré…' })
+                    : t('takeoff_viewer.metre_short', { defaultValue: 'Métré' })}
+                </span>
+              </button>
+              {metreAxes && (
+                <button
+                  onClick={() => setShowMetreAxes((v) => !v)}
+                  aria-pressed={showMetreAxes}
+                  className={`inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs font-semibold shadow-xs transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400/50 ${
+                    showMetreAxes
+                      ? 'bg-red-500 text-white hover:bg-red-600'
+                      : 'bg-surface-secondary text-content-secondary hover:bg-surface-tertiary'
+                  }`}
+                  title={t('takeoff_viewer.metre_axes_toggle', {
+                    defaultValue: 'Afficher/masquer les axes béton & cloisons sur le plan',
+                  })}
+                  data-testid="element-metre-axes-toggle"
+                >
+                  {showMetreAxes ? <Eye size={14} /> : <EyeOff size={14} />}
+                  <span className="hidden sm:inline">
+                    {t('takeoff_viewer.metre_axes', { defaultValue: 'Axes' })}
+                  </span>
+                </button>
+              )}
+              {/* //// END NEOFFICE PATCH */}
+
               {/* AI assist - offline Recognize (issue #194) + optional vision
                   Read-with-AI. Pushed right as the two hero actions of the row. */}
               <button
                 onClick={handleRecognize}
                 disabled={recognizeBusy}
-                className="ml-auto inline-flex h-7 items-center gap-1.5 rounded-md bg-gradient-to-r from-violet-500 to-indigo-500 px-2.5 text-xs font-semibold text-white shadow-xs transition-all hover:from-violet-600 hover:to-indigo-600 hover:shadow-sm disabled:opacity-50 disabled:pointer-events-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/50"
+                className="inline-flex h-7 items-center gap-1.5 rounded-md bg-gradient-to-r from-violet-500 to-indigo-500 px-2.5 text-xs font-semibold text-white shadow-xs transition-all hover:from-violet-600 hover:to-indigo-600 hover:shadow-sm disabled:opacity-50 disabled:pointer-events-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/50"
                 title={t('takeoff_viewer.recognize_hint', { defaultValue: 'Scan this page and suggest measurements (AI proposes, you confirm)' })}
                 aria-label={t('takeoff_viewer.recognize', { defaultValue: 'Recognize' })}
                 data-testid="recognize-button"
