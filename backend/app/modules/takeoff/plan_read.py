@@ -548,6 +548,18 @@ def scale_ratio_from_plan_scale(
     return derive_scale_ratio(p1, p2, real, getattr(scale, "ref_unit", None) or getattr(scale, "unit", None))
 
 
+# The vision prompt asks the model for integer coordinates on a 0-1000 grid
+# (Gemma-lineage models emit location tokens on a ~0-1024 grid natively and are
+# far more reliable with integers than with 0.0-1.0 decimals). Divide by this to
+# get the [0, 1] normalized coordinates the NormPoint schema expects.
+_COORD_GRID = 1000.0
+
+
+def _grid_to_unit(v: Any) -> float:
+    """Map one 0-1000 grid coordinate to the [0, 1] range (clamped defensively)."""
+    return min(1.0, max(0.0, float(v) / _COORD_GRID))
+
+
 def _normalize_scale_dict(raw: dict[str, Any]) -> dict[str, Any]:
     """Coerce a raw scale dict into the shape ``PlanScale`` expects.
 
@@ -561,8 +573,8 @@ def _normalize_scale_dict(raw: dict[str, Any]) -> dict[str, Any]:
     if isinstance(ref, (list, tuple)) and len(ref) == 2:
         try:
             out["ref_pixels"] = [
-                {"x": float(ref[0][0]), "y": float(ref[0][1])},
-                {"x": float(ref[1][0]), "y": float(ref[1][1])},
+                {"x": _grid_to_unit(ref[0][0]), "y": _grid_to_unit(ref[0][1])},
+                {"x": _grid_to_unit(ref[1][0]), "y": _grid_to_unit(ref[1][1])},
             ]
         except (TypeError, ValueError, IndexError, KeyError):
             out["ref_pixels"] = None
@@ -592,7 +604,7 @@ def _normalize_points(raw: Any) -> Any:
             out.append(pt)
         elif isinstance(pt, (list, tuple)) and len(pt) >= 2:
             try:
-                out.append({"x": float(pt[0]), "y": float(pt[1])})
+                out.append({"x": _grid_to_unit(pt[0]), "y": _grid_to_unit(pt[1])})
             except (TypeError, ValueError):
                 out.append(pt)
         else:

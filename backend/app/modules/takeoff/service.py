@@ -3002,5 +3002,7 @@ class TakeoffService:
 # (image tokens + the capped output). Used only by the pre-flight cost gate;
 # the real token count from the provider replaces it after the call.
 _PLAN_READ_PREFLIGHT_TOKENS = 4000
-# Output is geometry and short labels, not prose - a small cap keeps cost down.
-_PLAN_READ_MAX_TOKENS = 2048
+# Output is geometry and short labels, not prose, but a full floor plan yields
+# many room polygons + symbol clusters: 2048 truncated the JSON mid-object on
+# real plans (-> "response_not_an_object", 0 proposals). 8192 fits a dense plan.
+_PLAN_READ_MAX_TOKENS = 8192
