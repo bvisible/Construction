@@ -323,8 +323,37 @@ interface ElementMetreResponse {
     angles: Array<{ x: number; y: number; kind: string }>;
   };
   rooms_by_category: Record<string, { count: number; net_area_m2: number }>;
+  // Deterministic tabular read (pdfplumber): the architect's own printed tables.
+  title_block?: Record<string, string>; // cartouche: scale/project/owner/date…
+  schedules?: Array<{
+    type: string; // doors | windows | finishes | rooms | generic
+    headers: string[];
+    rows: string[][];
+    row_count: number;
+  }>;
   todo: string[];
 }
+// Cartouche field → French label (vouvoiement). Keys absent from the plan are skipped.
+const NEOFFICE_TITLE_BLOCK_LABELS: Record<string, string> = {
+  project: 'Projet',
+  title: 'Titre du plan',
+  scale: 'Échelle',
+  format: 'Format',
+  owner: 'Maître d’ouvrage',
+  architect: 'Architecte',
+  signed_by: 'Signé par',
+  date: 'Date',
+  revision: 'Indice de révision',
+  plan_no: 'N° de plan',
+};
+// Schedule type → French heading.
+const NEOFFICE_SCHEDULE_LABELS: Record<string, string> = {
+  doors: 'Nomenclature des portes',
+  windows: 'Nomenclature des fenêtres',
+  finishes: 'Tableau des finitions',
+  rooms: 'Tableau des locaux',
+  generic: 'Tableau',
+};
 // French labels (vouvoiement, Swiss glossary) for the element keys. Order =
 // display order in the results panel; keys missing from the response are skipped.
 const NEOFFICE_METRE_LABELS: Array<{ key: string; label: string; muted?: boolean }> = [
@@ -7866,6 +7895,62 @@ export default function TakeoffViewerModule({
                 })}
               </p>
             )}
+
+            {/* Cartouche + schedules — deterministic pdfplumber table read */}
+            {metreResult.title_block && Object.keys(metreResult.title_block).length > 0 && (
+              <div className="mb-3 rounded-lg bg-surface-secondary px-3 py-2 text-xs text-content-secondary">
+                <div className="mb-1 font-semibold">
+                  {t('takeoff_viewer.metre_cartouche', { defaultValue: 'Cartouche du plan' })}
+                </div>
+                <div className="space-y-0.5">
+                  {Object.entries(metreResult.title_block).map(([k, v]) => (
+                    <div key={k} className="flex gap-2">
+                      <span className="min-w-[96px] text-content-tertiary">
+                        {NEOFFICE_TITLE_BLOCK_LABELS[k] ?? k}
+                      </span>
+                      <span className="text-content-primary">{v}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {(metreResult.schedules ?? []).map((sch, i) => (
+              <div key={i} className="mb-3 rounded-lg bg-surface-secondary px-3 py-2 text-xs">
+                <div className="mb-1 font-semibold text-content-secondary">
+                  {NEOFFICE_SCHEDULE_LABELS[sch.type] ?? NEOFFICE_SCHEDULE_LABELS.generic}
+                  {' · '}
+                  {t('takeoff_viewer.metre_sched_rows', {
+                    defaultValue: '{{n}} lignes',
+                    n: sch.row_count,
+                  })}
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-[11px]">
+                    <thead>
+                      <tr>
+                        {sch.headers.map((h, j) => (
+                          <th key={j} className="pr-2 text-left font-medium text-content-tertiary">
+                            {h}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sch.rows.slice(0, 20).map((row, ri) => (
+                        <tr key={ri}>
+                          {row.map((c, ci) => (
+                            <td key={ci} className="pr-2 text-content-primary">
+                              {c}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       )}
