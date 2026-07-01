@@ -86,7 +86,10 @@ _LEGEND_ANCHOR = re.compile(r"hachure|l[ée]gende|legend|mat[ée]ria|schraffur",
 # FFT needs periodic regularity, so it ignores the stray orthogonal lines that
 # fooled the raw vector angle histogram.
 _HATCH_MAX_PT = 40.0        # a stroke shorter than this is a hatch fill stroke
-_PATTERN_SCALE = 6          # raster px per PDF point for the hatch FFT
+# 2 px/pt keeps the FFT discrimination identical to higher scales but the raster
+# stays small (A0 @ scale 6 = 144 MP → OOM/swap on the constrained osiris VM;
+# @ scale 2 = 16 MP, ~0.4 s). The periodic hatch signal survives the downscale.
+_PATTERN_SCALE = 2          # raster px per PDF point for the hatch FFT
 _PATTERN_TILE_PT = 50.0     # FFT tile size (PDF points)
 _PATTERN_INK_MIN = 0.02     # min ink fraction for a tile to be analysed
 _PATTERN_LABELS = {
