@@ -311,6 +311,7 @@ interface ElementMetreResponse {
     reentrant_angles: number;
   } | null;
   beton_by_material?: Record<string, number>;
+  beton_by_pattern?: Record<string, number>; // poured vs precast, by hatch motif
   material_legend?: { learned: boolean; map: Record<string, string> }; // {hex: label}
   geometry?: {
     page_width_pt: number;
@@ -318,6 +319,7 @@ interface ElementMetreResponse {
     slab_outline: Array<[number, number]>;
     walls: Record<string, Array<[number, number]>>;
     materials?: Record<string, Array<[number, number]>>; // béton segments by material
+    patterns?: Record<string, Array<[number, number]>>; // béton segments by hatch motif
     angles: Array<{ x: number; y: number; kind: string }>;
   };
   rooms_by_category: Record<string, { count: number; net_area_m2: number }>;
@@ -1234,17 +1236,23 @@ export default function TakeoffViewerModule({
         }
         ctx.stroke();
       };
-      const mats = metreAxes.geometry.materials;
-      if (mats && Object.keys(mats).length > 0) {
-        // Béton coloured BY MATERIAL using the plan's OWN legend colours (grey
-        // for walls with no marker). Cloison/escalier keep their element colour.
-        for (const [label, pts] of Object.entries(mats)) {
-          drawSegs(pts, metreAxes.matColor[label] || '#9ca3af');
+      const pats = metreAxes.geometry.patterns;
+      if (pats && Object.keys(pats).length > 0) {
+        // Béton coloured BY HATCH MOTIF: poured (cross-hatch) blue, precast
+        // (grid) orange, uncertain grey. Cloison purple, escalier violet.
+        const motifColor = (label: string) => {
+          const l = label.toLowerCase();
+          if (l.includes('coulé') || l.includes('croisillon')) return '#2563eb';
+          if (l.includes('préfab') || l.includes('grille')) return '#f97316';
+          return '#9ca3af'; // à vérifier / indéterminé
+        };
+        for (const [label, pts] of Object.entries(pats)) {
+          drawSegs(pts, motifColor(label));
         }
-        drawSegs(metreAxes.geometry.walls.cloison ?? [], '#2563eb');
-        drawSegs(metreAxes.geometry.walls.escalier ?? [], '#9333ea');
+        drawSegs(metreAxes.geometry.walls.cloison ?? [], '#a855f7');
+        drawSegs(metreAxes.geometry.walls.escalier ?? [], '#7c3aed');
       } else {
-        // Fallback: colour by element key (no material legend on this plan).
+        // Fallback: colour by element key (no motif classification).
         const AX: Record<string, string> = {
           beton_porteur: '#DC2626', beton_exterieur: '#F97316',
           cloison: '#2563EB', escalier: '#9333EA',
@@ -7694,6 +7702,45 @@ export default function TakeoffViewerModule({
                 })}
               </tbody>
             </table>
+
+            {/* Concrete split by hatch MOTIF (poured vs precast, FFT) */}
+            {metreResult.beton_by_pattern &&
+              Object.keys(metreResult.beton_by_pattern).length > 0 && (
+                <div className="mb-3">
+                  <h4 className="text-[11px] font-semibold text-content-secondary mb-1">
+                    {t('takeoff_viewer.metre_by_pattern', {
+                      defaultValue: 'Béton par motif de hachure (ml d’axe)',
+                    })}
+                  </h4>
+                  <table className="w-full text-xs">
+                    <tbody>
+                      {Object.entries(metreResult.beton_by_pattern)
+                        .sort((a, b) => b[1] - a[1])
+                        .map(([label, ml]) => {
+                          const l = label.toLowerCase();
+                          const c =
+                            l.includes('coulé') || l.includes('croisillon')
+                              ? '#2563eb'
+                              : l.includes('préfab') || l.includes('grille')
+                                ? '#f97316'
+                                : '#9ca3af';
+                          return (
+                            <tr key={label} className="border-b border-border/40 text-content-secondary">
+                              <td className="py-1">
+                                <span
+                                  className="inline-block w-2.5 h-2.5 rounded-sm mr-1.5 align-middle"
+                                  style={{ backgroundColor: c }}
+                                />
+                                {label}
+                              </td>
+                              <td className="py-1 text-right tabular-nums">{ml.toFixed(1)}</td>
+                            </tr>
+                          );
+                        })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
 
             {/* Concrete split by material, learned from the plan's legend */}
             {metreResult.beton_by_material &&
