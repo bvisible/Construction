@@ -356,6 +356,7 @@ export const takeoffApi = {
     return apiPost<RecognizeResult>(
       `/v1/takeoff/documents/${encodeURIComponent(docId)}/recognize/?page=${page}&scale_pixels_per_unit=${sp}`,
       {},
+      { longRunning: true }, // //// NEOFFICE: AI/vision render — 5-min timeout, not 45 s
     );
   },
 
@@ -367,6 +368,7 @@ export const takeoffApi = {
     apiPost<SimilarSymbolsResult>(
       `/v1/takeoff/documents/${encodeURIComponent(docId)}/similar-symbols/?page=${page}&seed_x=${seedX}&seed_y=${seedY}`,
       {},
+      { longRunning: true }, // //// NEOFFICE: AI/vision render — 5-min timeout, not 45 s
     ),
 
   /** Detect an explicit drawing scale from the document's text layer (tier-1,
@@ -395,7 +397,8 @@ export const takeoffApi = {
     /** Start a vision plan-read run for one page. 400 when no vision key is
      *  configured, the model is text-only, or the cost cap would be exceeded. */
     start: (body: PlanReadStartRequest) =>
-      apiPost<AiTakeoffRun>('/v1/takeoff/plan-read/', body),
+      // //// NEOFFICE: AI/vision — 5-min timeout, not the 45 s default.
+      apiPost<AiTakeoffRun>('/v1/takeoff/plan-read/', body, { longRunning: true }),
 
     /** Poll a run's FSM state. */
     getRun: (runId: string) =>

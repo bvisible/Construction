@@ -2689,7 +2689,16 @@ class TakeoffService:
                 await self._fail_plan_read(run_id, "pdf_not_on_disk", start)
                 return
             content = file_path.read_bytes()
-            png, media_type, dpi, page_w_pt, page_h_pt = _pr.rasterize_page(content, run.page)
+            # //// NEOFFICE PATCH — run the CPU-heavy pymupdf render OFF the event
+            # loop. It was called synchronously inside the async plan-read task;
+            # under server load that intermittently failed ("rasterize_failed")
+            # even though the same render succeeds standalone. asyncio.to_thread
+            # matches how the rest of the codebase drives pymupdf (element_metre,
+            # detect_rooms) and stops the render from blocking/clashing on the loop.
+            png, media_type, dpi, page_w_pt, page_h_pt = await asyncio.to_thread(
+                _pr.rasterize_page, content, run.page
+            )
+            # //// END NEOFFICE PATCH
         except ImportError:
             await self._fail_plan_read(run_id, "pymupdf_missing", start)
             return
