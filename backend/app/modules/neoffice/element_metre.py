@@ -626,7 +626,11 @@ def compute_element_metre(
     try:
         from app.modules.neoffice.plan_schedules import read_plan_schedules
 
-        _tables = read_plan_schedules(pdf_bytes, page_index)
+        # Pass the vector count so the reader can skip its (slow) table scan on
+        # dense section/facade sheets — this is what stopped the métré hanging.
+        _tables = read_plan_schedules(
+            pdf_bytes, page_index, vector_count=len(page.get_drawings())
+        )
     except Exception:  # noqa: BLE001
         _tables = {"title_block": {}, "schedules": []}
 

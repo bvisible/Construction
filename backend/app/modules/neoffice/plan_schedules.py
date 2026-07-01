@@ -50,6 +50,13 @@ _TITLE_KEYS: list[tuple[str, re.Pattern[str]]] = [
 ]
 
 _MAX_SCHEDULE_ROWS = 200  # a runaway "table" is a mis-detected grid; cap it.
+# pdfplumber's extract_tables() cost scales super-linearly with edge count and
+# HANGS on dense drawing sheets (a section/facade with 400k vectors took >60 s on
+# the osiris VM, vs ~6 s for a 12k-vector floor plan). Those dense sheets never
+# carry a door/finish schedule anyway, so above this vector count we skip the
+# whole table scan — this is what kept the "Métré" button from hanging on
+# multi-sheet PDFs (sections + facades). Clean floor plans stay well under it.
+_MAX_VECTORS = 25000
 
 
 def _clean(cell: Any) -> str:
@@ -125,18 +132,25 @@ def _harvest_title_block(tables: list[list[list[Any]]]) -> dict[str, str]:
     return out
 
 
-def read_plan_schedules(pdf_bytes: bytes, page_index: int = 0) -> dict[str, Any]:
+def read_plan_schedules(
+    pdf_bytes: bytes, page_index: int = 0, *, vector_count: int | None = None
+) -> dict[str, Any]:
     """Read the schedules and the title block off one PDF page.
 
     Args:
         pdf_bytes: Raw PDF bytes.
         page_index: 0-based page index.
+        vector_count: Number of vector drawings on the page, if the caller
+            already knows it (``compute_element_metre`` does). Passed to skip the
+            table scan on dense sheets without re-parsing the page; when ``None``
+            it is counted here.
 
     Returns:
         ``{"title_block": {...}, "schedules": [...], "raw_table_count": int,
         "dropped_empty": int}``. ``schedules`` holds only real tables (each
         ``{"type", "headers", "rows", "row_count"}``); a plan that carries no
-        schedule returns an empty list (honest, never an error).
+        schedule returns an empty list (honest, never an error). A dense sheet
+        skipped by the density guard returns ``skipped_dense: True``.
     """
     result: dict[str, Any] = {
         "title_block": {},
@@ -144,6 +158,20 @@ def read_plan_schedules(pdf_bytes: bytes, page_index: int = 0) -> dict[str, Any]
         "raw_table_count": 0,
         "dropped_empty": 0,
     }
+    # Density guard — a dense section/facade sheet would hang pdfplumber; skip it.
+    if vector_count is None:
+        try:
+            import pymupdf
+
+            with pymupdf.open(stream=pdf_bytes, filetype="pdf") as _doc:
+                if 0 <= page_index < _doc.page_count:
+                    vector_count = len(_doc[page_index].get_drawings())
+        except Exception:  # noqa: BLE001 - counting must never sink the read
+            vector_count = None
+    if vector_count is not None and vector_count > _MAX_VECTORS:
+        result["skipped_dense"] = True
+        return result
+
     try:
         import pdfplumber
     except ImportError:
