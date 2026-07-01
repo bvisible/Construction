@@ -186,9 +186,11 @@ function reportLabels(locale: string) {
   const fr = (locale ?? '').toLowerCase().startsWith('fr');
   return fr
     ? {
-        title: 'Devis', summaryTitle: 'Récapitulatif des coûts',
-        no: 'N°', description: 'Désignation', unit: 'Unité', qty: 'Quantité',
-        unitRate: 'Prix unit.', total: 'Total',
+        // NEOFFICE — Cédric Protti's imposed devis vocabulary (Pos. / Description
+        // / Un. / Prix / Montant) so the export reads exactly like his devis.
+        title: 'Devis estimatif', summaryTitle: 'Récapitulatif',
+        no: 'Pos.', description: 'Description', unit: 'Un.', qty: 'Quantité',
+        unitRate: 'Prix', total: 'Montant',
         ungrouped: 'Postes sans chapitre', sectionSubtotal: 'Sous-total',
         date: 'Date', sections: 'Chapitres', positions: 'Postes', resources: 'Ressources',
         directCost: 'Coût direct', markups: 'Majorations', none: 'Aucune',
@@ -443,7 +445,9 @@ function addPageFooters(doc: jsPDF, options: PdfReportOptions): void {
     doc.setFont('helvetica', 'normal');
     doc.setTextColor(...BRAND_MID);
     doc.text(options.boqTitle, 15, pageH - 7);
-    doc.text(`Page ${i} of ${totalPages}`, pageW - 15, pageH - 7, { align: 'right' });
+    // NEOFFICE — "Page X de Y" for the French/Protti devis, "of" elsewhere.
+    const pageWord = (options.locale ?? '').toLowerCase().startsWith('fr') ? 'de' : 'of';
+    doc.text(`Page ${i} ${pageWord} ${totalPages}`, pageW - 15, pageH - 7, { align: 'right' });
   }
 }
 
@@ -474,7 +478,12 @@ function renderBOQTables(
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(13);
   doc.setTextColor(...WHITE);
-  doc.text(L.title, 20, 12);
+  // NEOFFICE — Protti header: the devis's own name/number on the left, plus the
+  // date on the right, so each page reads like Cédric's "Devis estimatif … · <date>".
+  doc.text(options.boqTitle || L.title, 20, 12);
+  doc.setFontSize(9.5);
+  doc.setFont('helvetica', 'normal');
+  doc.text(formatDate(options.date, locale), pageW - 20, 11.5, { align: 'right' });
   doc.setTextColor(...BRAND_DARK);
 
   let currentY = 26;
