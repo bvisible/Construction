@@ -310,11 +310,14 @@ interface ElementMetreResponse {
     salient_angles: number;
     reentrant_angles: number;
   } | null;
+  beton_by_material?: Record<string, number>;
+  material_legend?: { learned: boolean; map: Record<string, string> }; // {hex: label}
   geometry?: {
     page_width_pt: number;
     page_height_pt: number;
     slab_outline: Array<[number, number]>;
     walls: Record<string, Array<[number, number]>>;
+    materials?: Record<string, Array<[number, number]>>; // béton segments by material
     angles: Array<{ x: number; y: number; kind: string }>;
   };
   rooms_by_category: Record<string, { count: number; net_area_m2: number }>;
@@ -561,7 +564,11 @@ export default function TakeoffViewerModule({
   // there are 1000s of segments). Holds the geometry + the 0-based page it was
   // computed for; a toggle controls visibility.
   const [metreAxes, setMetreAxes] = useState<
-    { geometry: NonNullable<ElementMetreResponse['geometry']>; page: number } | null
+    {
+      geometry: NonNullable<ElementMetreResponse['geometry']>;
+      page: number;
+      matColor: Record<string, string>; // material label → hex (from the plan legend)
+    } | null
   >(null);
   const [showMetreAxes, setShowMetreAxes] = useState(true);
   // //// END NEOFFICE PATCH
@@ -1212,19 +1219,11 @@ export default function TakeoffViewerModule({
     // we batch one beginPath() per element colour and stroke once (fast). Same
     // `* dpr * zoom` transform as the measurements, so it tracks pan/zoom.
     if (showMetreAxes && metreAxes && metreAxes.page + 1 === currentPage) {
-      const AX_COLORS: Record<string, string> = {
-        beton_porteur: '#DC2626',
-        beton_exterieur: '#F97316',
-        cloison: '#2563EB',
-        escalier: '#9333EA',
-      };
       ctx.save();
       ctx.setLineDash([]);
       ctx.globalAlpha = 0.9;
       ctx.lineWidth = 2 * dpr;
-      for (const [key, pts] of Object.entries(metreAxes.geometry.walls)) {
-        const col = AX_COLORS[key];
-        if (!col) continue; // skip structure_overlay (engineer cross-check)
+      const drawSegs = (pts: Array<[number, number]>, col: string) => {
         ctx.strokeStyle = col;
         ctx.beginPath();
         for (let i = 0; i + 1 < pts.length; i += 2) {
@@ -1234,6 +1233,25 @@ export default function TakeoffViewerModule({
           ctx.lineTo(b[0] * dpr * zoom, b[1] * dpr * zoom);
         }
         ctx.stroke();
+      };
+      const mats = metreAxes.geometry.materials;
+      if (mats && Object.keys(mats).length > 0) {
+        // Béton coloured BY MATERIAL using the plan's OWN legend colours (grey
+        // for walls with no marker). Cloison/escalier keep their element colour.
+        for (const [label, pts] of Object.entries(mats)) {
+          drawSegs(pts, metreAxes.matColor[label] || '#9ca3af');
+        }
+        drawSegs(metreAxes.geometry.walls.cloison ?? [], '#2563eb');
+        drawSegs(metreAxes.geometry.walls.escalier ?? [], '#9333ea');
+      } else {
+        // Fallback: colour by element key (no material legend on this plan).
+        const AX: Record<string, string> = {
+          beton_porteur: '#DC2626', beton_exterieur: '#F97316',
+          cloison: '#2563EB', escalier: '#9333EA',
+        };
+        for (const [key, pts] of Object.entries(metreAxes.geometry.walls)) {
+          if (AX[key]) drawSegs(pts, AX[key]!);
+        }
       }
       // Envelope corner markers: salient red, reentrant green.
       for (const ag of metreAxes.geometry.angles) {
@@ -2893,9 +2911,14 @@ export default function TakeoffViewerModule({
         { longRunning: true },
       );
       setMetreResult(res);
-      // Wall-axes overlay: béton/cloison centre-lines drawn on the canvas.
+      // Wall-axes overlay: béton by material (in the plan's own legend colours)
+      // + cloison/escalier centre-lines drawn on the canvas.
       if (res.geometry) {
-        setMetreAxes({ geometry: res.geometry, page: res.page });
+        const matColor: Record<string, string> = {};
+        for (const [hex, label] of Object.entries(res.material_legend?.map ?? {})) {
+          matColor[label] = hex;
+        }
+        setMetreAxes({ geometry: res.geometry, page: res.page, matColor });
         setShowMetreAxes(true);
       }
 
@@ -7671,6 +7694,45 @@ export default function TakeoffViewerModule({
                 })}
               </tbody>
             </table>
+
+            {/* Concrete split by material, learned from the plan's legend */}
+            {metreResult.beton_by_material &&
+              Object.keys(metreResult.beton_by_material).length > 0 && (
+                <div className="mb-3">
+                  <h4 className="text-[11px] font-semibold text-content-secondary mb-1">
+                    {t('takeoff_viewer.metre_by_material', {
+                      defaultValue: 'Béton par matériau (ml d’axe)',
+                    })}
+                    {metreResult.material_legend?.learned && (
+                      <span className="ml-1 font-normal text-content-tertiary">
+                        · {t('takeoff_viewer.metre_from_legend', { defaultValue: 'lu dans la légende du plan' })}
+                      </span>
+                    )}
+                  </h4>
+                  <table className="w-full text-xs">
+                    <tbody>
+                      {Object.entries(metreResult.beton_by_material)
+                        .sort((a, b) => b[1] - a[1])
+                        .map(([label, ml]) => {
+                          const hex = Object.entries(metreResult.material_legend?.map ?? {})
+                            .find(([, l]) => l === label)?.[0];
+                          return (
+                            <tr key={label} className="border-b border-border/40 text-content-secondary">
+                              <td className="py-1">
+                                <span
+                                  className="inline-block w-2.5 h-2.5 rounded-sm mr-1.5 align-middle"
+                                  style={{ backgroundColor: hex || '#9ca3af' }}
+                                />
+                                {label}
+                              </td>
+                              <td className="py-1 text-right tabular-nums">{ml.toFixed(1)}</td>
+                            </tr>
+                          );
+                        })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
 
             {/* Per-use room split (from the architect's printed net areas) */}
             {Object.keys(metreResult.rooms_by_category).length > 0 && (
