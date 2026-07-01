@@ -2648,6 +2648,7 @@ class TakeoffService:
         Zero rooms reaches ``review`` with ``proposal_count=0`` (honest empty),
         never ``failed``.
         """
+        import asyncio  # //// NEOFFICE: for the to_thread rasterize below
         import time as _time
 
         from app.core.ai.pricing import estimate_cost_usd
@@ -2667,20 +2668,34 @@ class TakeoffService:
             logger.warning("plan_read run %s vanished before execution", run_id)
             return
 
+        # //// NEOFFICE PATCH — snapshot the run's immutable scalars up front.
+        # The first update_fields() below issues a bulk UPDATE whose
+        # synchronize_session expires this ORM object's attributes; a later
+        # run.<attr> access then emits a *sync* lazy-reload on the async session
+        # -> sqlalchemy MissingGreenlet, which the rasterize try/except caught
+        # and mislabelled "rasterize_failed" (the real vision-button breakage).
+        # Reading them once, before any write, keeps them plain Python and
+        # greenlet-safe for the rest of the run.
+        run_document_id = run.document_id
+        run_page = run.page
+        run_mode = run.mode
+        run_scale_ppu = run.scale_pixels_per_unit
+        # //// END NEOFFICE PATCH
+
         provider, api_key, model_override, effective_model = await self._resolve_plan_read_provider(user_id)
         start = _time.monotonic()
         await self.plan_read_repo.update_fields(run_id, status="rasterizing")
 
         # ── rasterize ──────────────────────────────────────────────────────
         try:
-            doc = await self.repo.get_by_id(uuid.UUID(run.document_id))
+            doc = await self.repo.get_by_id(uuid.UUID(run_document_id))
             if doc is None:
                 await self._fail_plan_read(run_id, "document_missing", start)
                 return
             # Read-only back-compat resolution (see recognize path): find the
             # PDF across every platform-owned data root before falling back to
             # the persisted path, so a redeployed volume still resolves.
-            file_path = _find_existing_takeoff_pdf(run.document_id)
+            file_path = _find_existing_takeoff_pdf(run_document_id)
             if file_path is None and doc.file_path:
                 candidate = Path(doc.file_path)
                 if candidate.exists():
@@ -2696,7 +2711,7 @@ class TakeoffService:
             # matches how the rest of the codebase drives pymupdf (element_metre,
             # detect_rooms) and stops the render from blocking/clashing on the loop.
             png, media_type, dpi, page_w_pt, page_h_pt = await asyncio.to_thread(
-                _pr.rasterize_page, content, run.page
+                _pr.rasterize_page, content, run_page
             )
             # //// END NEOFFICE PATCH
         except ImportError:
@@ -2713,9 +2728,9 @@ class TakeoffService:
         # heavier room / symbol blocks are added only when the mode asks for
         # them, so the cheapest mode is the cheapest call.
         instructions: list[str] = [PLAN_READ_SCALE_INSTRUCTION]
-        if run.mode in ("rooms", "full"):
+        if run_mode in ("rooms", "full"):
             instructions.append(PLAN_READ_ROOMS_INSTRUCTION)
-        if run.mode in ("symbols", "full"):
+        if run_mode in ("symbols", "full"):
             instructions.append(PLAN_READ_SYMBOLS_INSTRUCTION)
         # A free-form discipline hint would be fenced via fence_user_content
         # before reaching the model (the image itself cannot be fenced). v1
@@ -2754,15 +2769,22 @@ class TakeoffService:
         parsed = extract_json(raw_response)
         result, dropped = _pr.parse_plan_read_response(
             parsed,
-            page=run.page,
+            page=run_page,
             page_width_pt=page_w_pt,
             page_height_pt=page_h_pt,
         )
 
-        scale_ratio = run.scale_pixels_per_unit
+        scale_ratio = run_scale_ppu
         if result.scale is not None and scale_ratio is None:
             scale_ratio = _pr.scale_ratio_from_plan_scale(result.scale, page_w_pt, page_h_pt)
 
+        # //// NEOFFICE PATCH — reload run before the *sync* proposal builder.
+        # The update_fields() calls above expire_all() the session; a sync method
+        # cannot await the lazy reload of an expired attribute (run.project_id /
+        # .document_id / .page) -> MissingGreenlet. A fresh fetch has those
+        # (immutable) columns loaded so the builder reads them without IO.
+        run = await self.plan_read_repo.get_by_id(run_id) or run
+        # //// END NEOFFICE PATCH
         proposals = self._build_plan_read_proposals(
             run=run,
             result=result,
