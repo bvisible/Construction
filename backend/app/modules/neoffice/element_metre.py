@@ -58,9 +58,14 @@ _NON_BILLABLE = {"structure_overlay"}
 # bathroom) on top of the black hatch — see the plan's "hachures" legend. We
 # read the stroke/fill colour and, by proximity, tag each concrete wall's
 # material so the béton total splits by type (huge for pricing: each material is
-# a different unit price). Hex → human label. Colours are exact vector values;
-# they can differ per architect, so this map is the tunable part.
-_MATERIAL_COLORS: dict[str, str] = {
+# a different unit price).
+#
+# GENERALISATION: colours are NOT standardised across architects, so we do NOT
+# hard-code them. The primary source is the plan's OWN legend, read at runtime
+# (``_learn_materials_from_legend``) → {colour: label} for that specific PDF.
+# This map below is only a last-resort fallback when a plan has no readable
+# legend (it happens to be the ARTTESA/Savièse convention).
+_MATERIAL_COLORS_FALLBACK: dict[str, str] = {
     "#e22817": "Béton type 4 (apparent)",
     "#e7c62f": "Béton type 2 (apparent)",
     "#5081f3": "EI30 RF1 (coupe-feu)",
@@ -70,6 +75,9 @@ _MATERIAL_COLORS: dict[str, str] = {
 }
 # Buffer (PDF points) grown around a colour marker to catch the wall it tags.
 _MATERIAL_BUFFER_PT = 18.0
+# Words that mark the start of a hatch/material legend block (FR/DE/EN, since
+# offices title it differently: hachures, légende, Legende, Schraffur, materials).
+_LEGEND_ANCHOR = re.compile(r"hachure|l[ée]gende|legend|mat[ée]ria|schraffur", re.I)
 
 # Wall double-line pairing thresholds (PDF points). Defaults sized for 1:50.
 _OFFSET_MIN_PT = 2.5
@@ -139,16 +147,58 @@ def _hex_color(c) -> str | None:
         return None
 
 
-def _material_regions(page) -> dict[str, Any]:
+def _learn_materials_from_legend(page) -> dict[str, str]:
+    """Read the plan's OWN hatch/colour legend → ``{colour_hex: material_label}``.
+
+    This is what makes the material split generalise across architects: rather
+    than hard-coding one office's palette, we find the legend block (title
+    ``hachures`` / ``légende``), take each coloured swatch, and pair it with the
+    text on its row. Returns ``{}`` when no legend is found.
+    """
+    words = page.get_text("words")  # (x0, y0, x1, y1, text, block, line, wno)
+    anchor = next((w for w in words if _LEGEND_ANCHOR.search(w[4])), None)
+    if anchor is None:
+        return {}
+    ax0, ay = anchor[0], anchor[3]
+    # Coloured swatches in the legend column, at or below the title.
+    swatches: list[tuple[str, float, float]] = []  # (colour, y_center, x_right)
+    for d in page.get_drawings():
+        col = _hex_color(d.get("fill")) or _hex_color(d.get("color"))
+        if not col or col in ("#000000", "#ffffff"):
+            continue
+        r = d.get("rect")
+        if r is None:
+            continue
+        cy = (r.y0 + r.y1) / 2.0
+        if ay - 12 <= cy <= ay + 240 and ax0 - 60 <= r.x0 <= ax0 + 100:
+            swatches.append((col, cy, max(r.x0, r.x1)))
+    # Topmost swatch per colour → the legend row that defines it.
+    seen: dict[str, tuple[float, float]] = {}
+    for col, cy, xr in sorted(swatches, key=lambda s: s[1]):
+        seen.setdefault(col, (cy, xr))
+    out: dict[str, str] = {}
+    for col, (cy, xr) in seen.items():
+        row = [w for w in words if abs((w[1] + w[3]) / 2.0 - cy) < 7 and xr < w[0] < xr + 360]
+        row.sort(key=lambda w: w[0])
+        label = " ".join(w[4] for w in row).strip()
+        if label:
+            out[col] = label
+    return out
+
+
+def _material_regions(page):
     """Buffered shapely region per material, from the coloured stroke/fill markers.
 
-    Returns ``{material_label: geometry}``. A concrete wall whose centre-line
-    falls inside one of these regions is tagged with that material.
+    Returns ``(regions, colour_map)`` where ``regions`` is
+    ``{material_label: geometry}`` and ``colour_map`` is the ``{hex: label}``
+    actually used (learned from the plan's legend, else the built-in fallback).
+    A concrete wall whose centre-line falls inside a region is tagged with it.
     """
+    colour_map = _learn_materials_from_legend(page) or _MATERIAL_COLORS_FALLBACK
     by_mat: dict[str, list] = {}
     for d in page.get_drawings():
-        mat = (_MATERIAL_COLORS.get(_hex_color(d.get("color")))
-               or _MATERIAL_COLORS.get(_hex_color(d.get("fill"))))
+        mat = (colour_map.get(_hex_color(d.get("color")))
+               or colour_map.get(_hex_color(d.get("fill"))))
         if not mat:
             continue
         for it in d.get("items", []):
@@ -161,7 +211,8 @@ def _material_regions(page) -> dict[str, Any]:
                 by_mat.setdefault(mat, []).append(LineString([
                     (r.x0, r.y0), (r.x1, r.y0), (r.x1, r.y1), (r.x0, r.y1), (r.x0, r.y0),
                 ]))
-    return {m: unary_union(ls).buffer(_MATERIAL_BUFFER_PT) for m, ls in by_mat.items() if ls}
+    regions = {m: unary_union(ls).buffer(_MATERIAL_BUFFER_PT) for m, ls in by_mat.items() if ls}
+    return regions, colour_map
 
 
 def _tag_material(mid: LineString, regions: dict[str, Any]) -> str | None:
@@ -411,8 +462,9 @@ def compute_element_metre(
     geo_slab: list[list[float]] = []
     geo_angles: list[dict[str, Any]] = []
     # Material sub-classification of concrete walls, keyed by the architect's
-    # colour markers (béton apparent type 4/2, fire compartments EI30, …).
-    material_regions = _material_regions(page)
+    # colour markers (béton apparent type 4/2, fire compartments EI30, …). The
+    # colour→material map is learned from the plan's own legend (generalises).
+    material_regions, material_map = _material_regions(page)
     beton_by_material: dict[str, list] = {}
     geo_materials: dict[str, list] = {}
     for key, segs in buckets.items():
@@ -477,6 +529,10 @@ def compute_element_metre(
         "elements": elements,
         "envelope": envelope,
         "beton_by_material": beton_material_ml,
+        "material_legend": {
+            "learned": material_map is not _MATERIAL_COLORS_FALLBACK,
+            "map": material_map,
+        },
         "geometry": {
             "page_width_pt": round(page.rect.width, 2),
             "page_height_pt": round(page.rect.height, 2),
