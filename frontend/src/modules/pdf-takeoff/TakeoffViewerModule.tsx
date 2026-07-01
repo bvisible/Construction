@@ -557,6 +557,13 @@ export default function TakeoffViewerModule({
   // //// NEOFFICE PATCH — deterministic element take-off ("métré par calque")
   const [metreLoading, setMetreLoading] = useState(false);
   const [metreResult, setMetreResult] = useState<ElementMetreResponse | null>(null);
+  // Wall-axes overlay (drawn on the measurement canvas, not as measurements —
+  // there are 1000s of segments). Holds the geometry + the 0-based page it was
+  // computed for; a toggle controls visibility.
+  const [metreAxes, setMetreAxes] = useState<
+    { geometry: NonNullable<ElementMetreResponse['geometry']>; page: number } | null
+  >(null);
+  const [showMetreAxes, setShowMetreAxes] = useState(true);
   // //// END NEOFFICE PATCH
 
   // Sidebar right-panel tab: "Properties" (existing) or "Ledger" (new).
@@ -1200,6 +1207,47 @@ export default function TakeoffViewerModule({
       ctx.lineWidth = 2 * dpr;
     };
 
+    // //// NEOFFICE PATCH — métré wall-axes overlay, drawn UNDER the measurements
+    // as a background context layer. There are 1000s of centre-line segments, so
+    // we batch one beginPath() per element colour and stroke once (fast). Same
+    // `* dpr * zoom` transform as the measurements, so it tracks pan/zoom.
+    if (showMetreAxes && metreAxes && metreAxes.page + 1 === currentPage) {
+      const AX_COLORS: Record<string, string> = {
+        beton_porteur: '#DC2626',
+        beton_exterieur: '#F97316',
+        cloison: '#2563EB',
+        escalier: '#9333EA',
+      };
+      ctx.save();
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 0.85;
+      ctx.lineWidth = 1.2 * dpr;
+      for (const [key, pts] of Object.entries(metreAxes.geometry.walls)) {
+        const col = AX_COLORS[key];
+        if (!col) continue; // skip structure_overlay (engineer cross-check)
+        ctx.strokeStyle = col;
+        ctx.beginPath();
+        for (let i = 0; i + 1 < pts.length; i += 2) {
+          const a = pts[i]!;
+          const b = pts[i + 1]!;
+          ctx.moveTo(a[0] * dpr * zoom, a[1] * dpr * zoom);
+          ctx.lineTo(b[0] * dpr * zoom, b[1] * dpr * zoom);
+        }
+        ctx.stroke();
+      }
+      // Envelope corner markers: salient red, reentrant green.
+      for (const ag of metreAxes.geometry.angles) {
+        ctx.beginPath();
+        ctx.arc(ag.x * dpr * zoom, ag.y * dpr * zoom, 3.5 * dpr, 0, Math.PI * 2);
+        ctx.fillStyle = ag.kind === 'salient' ? '#DC2626' : '#16A34A';
+        ctx.fill();
+      }
+      ctx.restore();
+      ctx.globalAlpha = 1;
+      ctx.lineWidth = 2 * dpr;
+    }
+    // //// END NEOFFICE PATCH
+
     // Draw completed measurements on current page (respecting group visibility)
     for (const m of measurements.filter((m) => m.page === currentPage && !hiddenGroups.has(m.group) && !(isAnnotationType(m.type) && hiddenGroups.has('__annotations__')))) {
       const color = GROUP_COLOR_MAP[m.group] || '#d68a59';
@@ -1751,7 +1799,7 @@ export default function TakeoffViewerModule({
       }
       ctx.restore();
     }
-  }, [measurements, activePoints, currentPage, zoom, settingScale, scalePoints, activeTool, hiddenGroups, scale, annotationColor, rectStartPoint, isDraggingRect, selectedMeasurementId, dragPreview, liveCursor, panning, searchMatches, activeMatchIdx, measurementSystem]);
+  }, [measurements, activePoints, currentPage, zoom, settingScale, scalePoints, activeTool, hiddenGroups, scale, annotationColor, rectStartPoint, isDraggingRect, selectedMeasurementId, dragPreview, liveCursor, panning, searchMatches, activeMatchIdx, measurementSystem, showMetreAxes, metreAxes]);
 
   /* ── Canvas click handler ────────────────────────────────────────── */
 
@@ -2840,6 +2888,11 @@ export default function TakeoffViewerModule({
         { document_id: visionDocumentId, page: currentPage, storey_height_m: 2.7 },
       );
       setMetreResult(res);
+      // Wall-axes overlay: béton/cloison centre-lines drawn on the canvas.
+      if (res.geometry) {
+        setMetreAxes({ geometry: res.geometry, page: res.page });
+        setShowMetreAxes(true);
+      }
 
       // Pre-draw the measured slab outline as a reviewable area measurement so
       // the user sees where the slab m² comes from (the wall axes are 1000s of
@@ -5849,6 +5902,24 @@ export default function TakeoffViewerModule({
                     : t('takeoff_viewer.metre_short', { defaultValue: 'Métré' })}
                 </span>
               </button>
+              {metreAxes && (
+                <button
+                  onClick={() => setShowMetreAxes((v) => !v)}
+                  className={`flex items-center gap-1 px-2 py-1.5 rounded text-xs transition-colors ${
+                    showMetreAxes ? 'bg-red-500/15 text-red-600' : 'hover:bg-surface-secondary text-content-secondary'
+                  }`}
+                  title={t('takeoff_viewer.metre_axes_toggle', {
+                    defaultValue: 'Afficher/masquer les axes béton & cloisons sur le plan',
+                  })}
+                  aria-pressed={showMetreAxes}
+                  data-testid="element-metre-axes-toggle"
+                >
+                  {showMetreAxes ? <Eye size={14} /> : <EyeOff size={14} />}
+                  <span className="hidden sm:inline">
+                    {t('takeoff_viewer.metre_axes', { defaultValue: 'Axes' })}
+                  </span>
+                </button>
+              )}
               {/* //// END NEOFFICE PATCH */}
 
               {/* Calibration status chip - ratio + length when calibrated, an
