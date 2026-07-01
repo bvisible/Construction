@@ -533,9 +533,13 @@ function renderBOQTables(
 
     const body: string[][] = [];
     for (const p of children) {
-      // //// NEOFFICE PATCH — a libellé/description row (Cédric's "jaune") has no
-      // unit: show only its number + wording, never a "0.00" quantity or price.
-      if (!(p.unit ?? '').toString().trim()) {
+      // //// NEOFFICE PATCH — a libellé/description row (Cédric's "jaune") carries
+      // no quantity/price: print only its number + wording. It is stored with an
+      // empty or 'desc' unit — a non-section sentinel so it groups UNDER its
+      // chapter instead of being read as a section by isSection() (which treats an
+      // empty unit as a section). Never a spurious "0.00".
+      const uTrim = (p.unit ?? '').toString().trim().toLowerCase();
+      if (uTrim === '' || uTrim === 'desc') {
         body.push([p.ordinal, p.description, '', '', '', '']);
         continue;
       }
