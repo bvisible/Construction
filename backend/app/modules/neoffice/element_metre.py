@@ -79,6 +79,22 @@ _MATERIAL_BUFFER_PT = 18.0
 # offices title it differently: hachures, légende, Legende, Schraffur, materials).
 _LEGEND_ANCHOR = re.compile(r"hachure|l[ée]gende|legend|mat[ée]ria|schraffur", re.I)
 
+# Hatch-MOTIF classification (poured vs precast concrete). Unlike colour, the
+# hatch pattern is a stable drawing convention (ISO/SIA): cross-hatch (±45°) =
+# poured/apparent concrete, orthogonal grid (0/90°) = precast. We isolate the
+# concrete hatch, render it, and compare spectral energy per tile via FFT — the
+# FFT needs periodic regularity, so it ignores the stray orthogonal lines that
+# fooled the raw vector angle histogram.
+_HATCH_MAX_PT = 40.0        # a stroke shorter than this is a hatch fill stroke
+_PATTERN_SCALE = 6          # raster px per PDF point for the hatch FFT
+_PATTERN_TILE_PT = 50.0     # FFT tile size (PDF points)
+_PATTERN_INK_MIN = 0.02     # min ink fraction for a tile to be analysed
+_PATTERN_LABELS = {
+    "coule": "Béton coulé (croisillon)",
+    "prefab": "Béton préfabriqué (grille)",
+    "mix": "Béton — motif à vérifier",
+}
+
 # Wall double-line pairing thresholds (PDF points). Defaults sized for 1:50.
 _OFFSET_MIN_PT = 2.5
 _OFFSET_MAX_PT = 22.0
@@ -226,6 +242,68 @@ def _tag_material(mid: LineString, regions: dict[str, Any]) -> str | None:
         if inter > best_len:
             best_len, best = inter, mat
     return best if best_len > 0 else None
+
+
+def _beton_hatch_pattern(page):
+    """FFT of the isolated concrete hatch → tile map ``{(row,col): 'coule'|'prefab'|'mix'}``.
+
+    Returns ``(tiles, scale, tile_px)``. We render ONLY the short strokes of the
+    concrete layers (drops the long wall faces + every other layer), tile it,
+    and per tile compare diagonal (±45°, cross-hatch → poured) vs orthogonal
+    (0/90°, grid → precast) spectral energy. Isolating the hatch is what makes
+    it reliable; the FFT's periodicity requirement rejects stray orthogonal
+    lines that the raw vector angle histogram mistook for a grid.
+    """
+    import numpy as np
+
+    scale = _PATTERN_SCALE
+    doc = pymupdf.open()
+    blank = doc.new_page(width=page.rect.width, height=page.rect.height)
+    shape = blank.new_shape()
+    drew = 0
+    for d in page.get_drawings():
+        cls = classify_layer(d.get("layer"))
+        if not cls or cls[0] not in ("beton_porteur", "beton_exterieur"):
+            continue
+        for it in d.get("items", []):
+            if it[0] == "l":
+                a, b = it[1], it[2]
+                if 1.0 < math.hypot(b.x - a.x, b.y - a.y) < _HATCH_MAX_PT:
+                    shape.draw_line(pymupdf.Point(a.x, a.y), pymupdf.Point(b.x, b.y))
+                    drew += 1
+    tpx = int(_PATTERN_TILE_PT * scale)
+    if drew < 20:
+        return {}, scale, tpx
+    shape.finish(color=(0, 0, 0), width=0.5)
+    shape.commit()
+    pm = blank.get_pixmap(matrix=pymupdf.Matrix(scale, scale), colorspace=pymupdf.csGRAY)
+    img = 255.0 - np.frombuffer(pm.samples, dtype=np.uint8).reshape(pm.height, pm.width).astype(float)
+
+    h, w = img.shape
+    yy, xx = np.mgrid[0:tpx, 0:tpx]
+    r = np.hypot(xx - tpx // 2, yy - tpx // 2)
+    ang = np.degrees(np.arctan2(yy - tpx // 2, xx - tpx // 2)) % 180
+    ring = (r > 4) & (r < tpx * 0.45)
+    diag_m = ring & ((np.abs(ang - 45) < 18) | (np.abs(ang - 135) < 18))
+    ortho_m = ring & ((ang < 18) | (ang > 162) | (np.abs(ang - 90) < 18))
+    win = np.hanning(tpx)[:, None] * np.hanning(tpx)[None, :]
+    ink_min = tpx * tpx * _PATTERN_INK_MIN
+
+    tiles: dict[tuple[int, int], str] = {}
+    for ti in range(0, h - tpx, tpx):
+        for tj in range(0, w - tpx, tpx):
+            q = img[ti:ti + tpx, tj:tj + tpx]
+            if q.sum() < ink_min:
+                continue
+            fm = np.abs(np.fft.fftshift(np.fft.fft2((q - q.mean()) * win)))
+            diag = float(fm[diag_m].sum())
+            ortho = float(fm[ortho_m].sum())
+            tiles[(ti // tpx, tj // tpx)] = (
+                "coule" if diag > ortho * 1.15
+                else "prefab" if ortho > diag * 1.25
+                else "mix"
+            )
+    return tiles, scale, tpx
 
 
 def _centerlines(segs) -> list[LineString]:
@@ -467,6 +545,10 @@ def compute_element_metre(
     material_regions, material_map = _material_regions(page)
     beton_by_material: dict[str, list] = {}
     geo_materials: dict[str, list] = {}
+    # Hatch-motif split (poured vs precast) via FFT — the colour-agnostic signal.
+    pattern_tiles, p_scale, p_tpx = _beton_hatch_pattern(page)
+    beton_by_pattern: dict[str, list] = {}
+    geo_patterns: dict[str, list] = {}
     for key, segs in buckets.items():
         if key == "dalle":
             # Slab: area from polygonised outline; "linear" = edge formwork.
@@ -505,19 +587,33 @@ def compute_element_metre(
             for m in mids
             for c in (m.coords[0], m.coords[-1])
         ]
-        # Sub-classify concrete walls by material via colour-marker proximity.
-        if key in ("beton_porteur", "beton_exterieur") and material_regions:
+        # Sub-classify concrete walls two ways: by material (colour markers /
+        # legend) and by hatch motif (FFT — poured vs precast).
+        if key in ("beton_porteur", "beton_exterieur"):
             for m in mids:
-                label = _tag_material(m, material_regions) or "Standard (non marqué)"
-                beton_by_material.setdefault(label, []).append(m)
-                geo_materials.setdefault(label, []).extend([
+                seg = [
                     [round(m.coords[0][0], 2), round(m.coords[0][1], 2)],
                     [round(m.coords[-1][0], 2), round(m.coords[-1][1], 2)],
-                ])
+                ]
+                if material_regions:
+                    mat = _tag_material(m, material_regions) or "Standard (non marqué)"
+                    beton_by_material.setdefault(mat, []).append(m)
+                    geo_materials.setdefault(mat, []).extend(seg)
+                if pattern_tiles:
+                    cx, cy = m.interpolate(0.5, normalized=True).coords[0]
+                    tile = pattern_tiles.get(
+                        (int(cy * p_scale) // p_tpx, int(cx * p_scale) // p_tpx)
+                    )
+                    plabel = _PATTERN_LABELS.get(tile, "Béton — motif indéterminé")
+                    beton_by_pattern.setdefault(plabel, []).append(m)
+                    geo_patterns.setdefault(plabel, []).extend(seg)
 
-    # Union per material so overlapping face-pairs aren't double-counted.
+    # Union per material / per motif so overlapping face-pairs aren't double-counted.
     beton_material_ml = {
         label: round(_ml(mids, mpp), 1) for label, mids in beton_by_material.items()
+    }
+    beton_pattern_ml = {
+        label: round(_ml(mids, mpp), 1) for label, mids in beton_by_pattern.items()
     }
 
     return {
@@ -529,6 +625,7 @@ def compute_element_metre(
         "elements": elements,
         "envelope": envelope,
         "beton_by_material": beton_material_ml,
+        "beton_by_pattern": beton_pattern_ml,
         "material_legend": {
             "learned": material_map is not _MATERIAL_COLORS_FALLBACK,
             "map": material_map,
@@ -539,6 +636,7 @@ def compute_element_metre(
             "slab_outline": geo_slab,
             "walls": geo_walls,
             "materials": geo_materials,
+            "patterns": geo_patterns,
             "angles": geo_angles,
         },
         "rooms_by_category": _room_label_areas(page, mpp),
