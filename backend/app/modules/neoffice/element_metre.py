@@ -53,6 +53,24 @@ _LAYER_RULES: list[tuple[str, str, str]] = [
 # Element keys excluded from the headline wall total (reported separately).
 _NON_BILLABLE = {"structure_overlay"}
 
+# Material sub-classification by drawing colour. Architects tag special walls
+# with a coloured outline (béton apparent) or a coloured fill (fire compartment,
+# bathroom) on top of the black hatch — see the plan's "hachures" legend. We
+# read the stroke/fill colour and, by proximity, tag each concrete wall's
+# material so the béton total splits by type (huge for pricing: each material is
+# a different unit price). Hex → human label. Colours are exact vector values;
+# they can differ per architect, so this map is the tunable part.
+_MATERIAL_COLORS: dict[str, str] = {
+    "#e22817": "Béton type 4 (apparent)",
+    "#e7c62f": "Béton type 2 (apparent)",
+    "#5081f3": "EI30 RF1 (coupe-feu)",
+    "#e86a1f": "EI30 (coupe-feu)",
+    "#ff8000": "Swisspor (isolation)",
+    "#4eb525": "SDB (carreaux plâtre)",
+}
+# Buffer (PDF points) grown around a colour marker to catch the wall it tags.
+_MATERIAL_BUFFER_PT = 18.0
+
 # Wall double-line pairing thresholds (PDF points). Defaults sized for 1:50.
 _OFFSET_MIN_PT = 2.5
 _OFFSET_MAX_PT = 22.0
@@ -109,6 +127,54 @@ def _element_segments(page) -> dict[str, list]:
                 a, b = it[1], it[2]
                 bucket.append(((a.x, a.y), (b.x, b.y)))
     return out
+
+
+def _hex_color(c) -> str | None:
+    """PyMuPDF colour tuple (0..1 floats) → '#rrggbb', or None."""
+    if not c:
+        return None
+    try:
+        return "#%02x%02x%02x" % tuple(int(round(x * 255)) for x in c)
+    except Exception:
+        return None
+
+
+def _material_regions(page) -> dict[str, Any]:
+    """Buffered shapely region per material, from the coloured stroke/fill markers.
+
+    Returns ``{material_label: geometry}``. A concrete wall whose centre-line
+    falls inside one of these regions is tagged with that material.
+    """
+    by_mat: dict[str, list] = {}
+    for d in page.get_drawings():
+        mat = (_MATERIAL_COLORS.get(_hex_color(d.get("color")))
+               or _MATERIAL_COLORS.get(_hex_color(d.get("fill"))))
+        if not mat:
+            continue
+        for it in d.get("items", []):
+            if it[0] == "l":
+                a, b = it[1], it[2]
+                if (a.x, a.y) != (b.x, b.y):
+                    by_mat.setdefault(mat, []).append(LineString([(a.x, a.y), (b.x, b.y)]))
+            elif it[0] == "re":
+                r = it[1]
+                by_mat.setdefault(mat, []).append(LineString([
+                    (r.x0, r.y0), (r.x1, r.y0), (r.x1, r.y1), (r.x0, r.y1), (r.x0, r.y0),
+                ]))
+    return {m: unary_union(ls).buffer(_MATERIAL_BUFFER_PT) for m, ls in by_mat.items() if ls}
+
+
+def _tag_material(mid: LineString, regions: dict[str, Any]) -> str | None:
+    """Material label of the region the wall centre-line overlaps most, or None."""
+    best, best_len = None, 0.0
+    for mat, reg in regions.items():
+        try:
+            inter = mid.intersection(reg).length
+        except Exception:
+            inter = 0.0
+        if inter > best_len:
+            best_len, best = inter, mat
+    return best if best_len > 0 else None
 
 
 def _centerlines(segs) -> list[LineString]:
@@ -344,6 +410,11 @@ def compute_element_metre(
     geo_walls: dict[str, list] = {}
     geo_slab: list[list[float]] = []
     geo_angles: list[dict[str, Any]] = []
+    # Material sub-classification of concrete walls, keyed by the architect's
+    # colour markers (béton apparent type 4/2, fire compartments EI30, …).
+    material_regions = _material_regions(page)
+    beton_by_material: dict[str, list] = {}
+    geo_materials: dict[str, list] = {}
     for key, segs in buckets.items():
         if key == "dalle":
             # Slab: area from polygonised outline; "linear" = edge formwork.
@@ -382,6 +453,20 @@ def compute_element_metre(
             for m in mids
             for c in (m.coords[0], m.coords[-1])
         ]
+        # Sub-classify concrete walls by material via colour-marker proximity.
+        if key in ("beton_porteur", "beton_exterieur") and material_regions:
+            for m in mids:
+                label = _tag_material(m, material_regions) or "Standard (non marqué)"
+                beton_by_material.setdefault(label, []).append(m)
+                geo_materials.setdefault(label, []).extend([
+                    [round(m.coords[0][0], 2), round(m.coords[0][1], 2)],
+                    [round(m.coords[-1][0], 2), round(m.coords[-1][1], 2)],
+                ])
+
+    # Union per material so overlapping face-pairs aren't double-counted.
+    beton_material_ml = {
+        label: round(_ml(mids, mpp), 1) for label, mids in beton_by_material.items()
+    }
 
     return {
         "page": page_index,
@@ -391,11 +476,13 @@ def compute_element_metre(
         "storey_height_is_assumption": True,
         "elements": elements,
         "envelope": envelope,
+        "beton_by_material": beton_material_ml,
         "geometry": {
             "page_width_pt": round(page.rect.width, 2),
             "page_height_pt": round(page.rect.height, 2),
             "slab_outline": geo_slab,
             "walls": geo_walls,
+            "materials": geo_materials,
             "angles": geo_angles,
         },
         "rooms_by_category": _room_label_areas(page, mpp),
