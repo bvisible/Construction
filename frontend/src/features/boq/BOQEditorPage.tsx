@@ -57,7 +57,14 @@ import { CostRiskPanel } from './CostRiskPanel';
 import { MarkupPanel } from './MarkupPanel';
 import BOQGrid from './BOQGrid';
 import { exportBOQToExcel } from './exportExcel';
-import { generateBOQPdf } from './pdfReport';
+import { generateBOQPdf, type DevisExportContent } from './pdfReport';
+// NEOFFICE — default export content (everything) for non-menu triggers
+// (keyboard shortcut, GAEB path). The export menu passes explicit toggles.
+const DEFAULT_EXPORT_CONTENT: DevisExportContent = {
+  showPrices: true,
+  showBreakdown: true,
+  showMetre: true,
+};
 import type { BOQGridHandle } from './BOQGrid';
 import { BatchActionBar } from './BatchActionBar';
 import { ScenarioDialog } from './ScenarioDialog';
@@ -2001,7 +2008,7 @@ export function BOQEditorPage() {
   /* ── Export / Version History state ─────────────────────────────────── */
 
   const [showVersionHistory, setShowVersionHistory] = useState(false);
-  const [exportWarning, setExportWarning] = useState<{ format: 'excel' | 'csv' | 'pdf' | 'gaeb'; score: number } | null>(null);
+  const [exportWarning, setExportWarning] = useState<{ format: 'excel' | 'csv' | 'pdf' | 'gaeb'; score: number; content?: DevisExportContent } | null>(null);
   const [gaebPreviewOpen, setGaebPreviewOpen] = useState(false);
 
   /* ── Computed data ─────────────────────────────────────────────────── */
@@ -2826,7 +2833,7 @@ export function BOQEditorPage() {
 
   /** Actually perform the export (download file). */
   const doExport = useCallback(
-    async (format: 'excel' | 'csv' | 'pdf' | 'gaeb') => {
+    async (format: 'excel' | 'csv' | 'pdf' | 'gaeb', content: DevisExportContent = DEFAULT_EXPORT_CONTENT) => {
       // Client-side Excel export via SheetJS
       if (format === 'excel' && positions.length > 0) {
         try {
@@ -2853,6 +2860,10 @@ export function BOQEditorPage() {
             vatRate,
             vatAmount,
             grossTotal,
+            // NEOFFICE — honour the export-menu content toggles.
+            showPrices: content.showPrices,
+            showBreakdown: content.showBreakdown,
+            showMetre: content.showMetre,
           });
           addToast({ type: 'success', title: t('boq.file_downloaded', { defaultValue: 'File downloaded' }) });
           return;
@@ -2892,6 +2903,10 @@ export function BOQEditorPage() {
             locale,
             // Issue #270 - emit quantities + unit labels in the user's system.
             measurementSystem,
+            // NEOFFICE — honour the export-menu content toggles.
+            showPrices: content.showPrices,
+            showBreakdown: content.showBreakdown,
+            showMetre: content.showMetre,
           });
           addToast({ type: 'success', title: t('boq.file_downloaded', { defaultValue: 'File downloaded' }) });
           return;
@@ -2929,7 +2944,7 @@ export function BOQEditorPage() {
 
   /** Pre-export validation check: warn if quality < 60%, GAEB preview before export. */
   const handleExport = useCallback(
-    (format: 'excel' | 'csv' | 'pdf' | 'gaeb') => {
+    (format: 'excel' | 'csv' | 'pdf' | 'gaeb', content: DevisExportContent = DEFAULT_EXPORT_CONTENT) => {
       // Show GAEB confirmation dialog before quality check
       if (format === 'gaeb') {
         setGaebPreviewOpen(true);
@@ -2937,9 +2952,9 @@ export function BOQEditorPage() {
       }
       const score = qualityBreakdown.score;
       if (score < 60) {
-        setExportWarning({ format, score });
+        setExportWarning({ format, score, content });
       } else {
-        doExport(format);
+        doExport(format, content);
       }
     },
     [qualityBreakdown.score, doExport],
@@ -5029,7 +5044,7 @@ export function BOQEditorPage() {
           onCancel={() => setExportWarning(null)}
           onConfirm={(fmt) => {
             setExportWarning(null);
-            doExport(fmt);
+            doExport(fmt, exportWarning.content ?? DEFAULT_EXPORT_CONTENT);
           }}
           t={t}
         />

@@ -25,6 +25,7 @@
 
 import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
 import { createPortal } from 'react-dom';
+import type { DevisExportContent } from './pdfReport'; // NEOFFICE — export content toggles
 import {
   Plus,
   Download,
@@ -78,7 +79,7 @@ export interface BOQToolbarProps {
   importInputRef: React.RefObject<HTMLInputElement | null>;
   onImportInputChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
   // Export
-  onExport: (format: 'excel' | 'csv' | 'pdf' | 'gaeb') => void;
+  onExport: (format: 'excel' | 'csv' | 'pdf' | 'gaeb', content: DevisExportContent) => void;
   /**
    * Open the embodied-carbon view for this BOQ. When provided, a "Carbon
    * footprint" action appears in the File group; the host wires it to
@@ -205,6 +206,15 @@ export function BOQToolbar({
 }: BOQToolbarProps) {
   /* ── Export dropdown (portaled so it floats above the grid) ────────── */
   const [showExportMenu, setShowExportMenu] = useState(false);
+  // NEOFFICE — what the PDF/Excel export includes (chosen in the menu). A client
+  // devis shows prices + métré by default and hides the internal analyse-de-prix.
+  const [exportContent, setExportContent] = useState<DevisExportContent>({
+    showPrices: true,
+    showBreakdown: false,
+    showMetre: true,
+  });
+  const toggleExport = (key: keyof DevisExportContent) =>
+    setExportContent((c) => ({ ...c, [key]: !c[key] }));
   const exportBtnRef = useRef<HTMLButtonElement>(null);
   const exportMenuPos = useAnchoredMenu(showExportMenu, exportBtnRef, 'left');
 
@@ -236,7 +246,7 @@ export function BOQToolbar({
 
   const handleExportItem = (format: 'excel' | 'csv' | 'pdf' | 'gaeb') => {
     setShowExportMenu(false);
-    onExport(format);
+    onExport(format, exportContent);
   };
 
   /* ── Description density (single line ↔ multi-line Langtext) ───────── */
@@ -426,10 +436,30 @@ export function BOQToolbar({
                   ref={exportMenuRef}
                   role="menu"
                   style={{ position: 'fixed', top: exportMenuPos.top, left: exportMenuPos.left, zIndex: 1000 }}
-                  className="w-44 rounded-lg border border-border-light bg-surface-elevated shadow-md animate-fade-in"
+                  className="w-56 rounded-lg border border-border-light bg-surface-elevated shadow-md animate-fade-in"
                   data-portal="boq-export-menu"
                 >
-                  <button role="menuitem" onClick={() => handleExportItem('excel')} className="flex w-full items-center gap-2.5 px-3 py-2.5 text-sm text-content-primary hover:bg-surface-secondary transition-colors rounded-t-lg">
+                  {/* //// NEOFFICE PATCH — export content toggles: choose what the
+                      PDF / Excel exposes (prices, analyse de prix, métrés) before
+                      picking a format. CSV / GAEB ignore them. */}
+                  <div className="px-3 pt-2 pb-1.5 border-b border-border-light rounded-t-lg">
+                    <div className="mb-1 text-2xs font-semibold uppercase tracking-wide text-content-tertiary">
+                      {t('boq.export_include', { defaultValue: 'Inclure (PDF / Excel)' })}
+                    </div>
+                    <label className="flex items-center gap-2 py-0.5 text-sm text-content-primary cursor-pointer">
+                      <input type="checkbox" checked={exportContent.showPrices} onChange={() => toggleExport('showPrices')} className="h-3.5 w-3.5 accent-oe-blue cursor-pointer" />
+                      {t('boq.export_opt_prices', { defaultValue: 'Prix' })}
+                    </label>
+                    <label className="flex items-center gap-2 py-0.5 text-sm text-content-primary cursor-pointer">
+                      <input type="checkbox" checked={exportContent.showBreakdown} onChange={() => toggleExport('showBreakdown')} className="h-3.5 w-3.5 accent-oe-blue cursor-pointer" />
+                      {t('boq.export_opt_breakdown', { defaultValue: 'Analyse de prix' })}
+                    </label>
+                    <label className="flex items-center gap-2 py-0.5 text-sm text-content-primary cursor-pointer">
+                      <input type="checkbox" checked={exportContent.showMetre} onChange={() => toggleExport('showMetre')} className="h-3.5 w-3.5 accent-oe-blue cursor-pointer" />
+                      {t('boq.export_opt_metre', { defaultValue: 'Métrés' })}
+                    </label>
+                  </div>
+                  <button role="menuitem" onClick={() => handleExportItem('excel')} className="flex w-full items-center gap-2.5 px-3 py-2.5 text-sm text-content-primary hover:bg-surface-secondary transition-colors">
                     <FileSpreadsheet size={15} className="text-content-tertiary" />
                     {t('boq.export_format_excel', { defaultValue: 'Excel (.xlsx)' })}
                   </button>

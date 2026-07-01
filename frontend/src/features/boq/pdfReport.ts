@@ -60,6 +60,20 @@ export interface PdfReportOptions {
    * untouched and metric users see identical output to before.
    */
   measurementSystem?: 'metric' | 'imperial';
+  // NEOFFICE — export content toggles (from the export menu). Default: shown.
+  //  showPrices    false ⇒ a blank bordereau (quantities only, prices empty).
+  //  showBreakdown the analyse-de-prix resource sub-rows.
+  //  showMetre     the "» Métré sur plan …" provenance sub-rows.
+  showPrices?: boolean;
+  showBreakdown?: boolean;
+  showMetre?: boolean;
+}
+
+/** NEOFFICE — what a devis export includes; chosen in the export menu. */
+export interface DevisExportContent {
+  showPrices: boolean;
+  showBreakdown: boolean;
+  showMetre: boolean;
 }
 
 /** FX context shared between {@link buildSectionGroups} and the renderers. */
@@ -302,15 +316,21 @@ function renderCoverPage(
   doc.line(labelX, metaY - 4, pageW - 20, metaY - 4);
 
   const L = reportLabels(locale);
+  // NEOFFICE — a price-free export (bordereau) hides every cost figure.
+  const showPrices = options.showPrices !== false;
   const metaItems: Array<[string, string]> = [
     [L.date, formatDate(options.date, locale)],
     [L.sections, String(sectionCount)],
     [L.positions, String(itemCount)],
     ...(resourceCount > 0 ? [[L.resources, String(resourceCount)] as [string, string]] : []),
-    [L.directCost, formatCurrency(options.directCost, options.currency, locale)],
-    [L.markups, options.markupTotals.map((m) => `${m.name} ${m.percentage}%`).join(', ') || L.none],
-    [L.netTotal, formatCurrency(options.netTotal, options.currency, locale)],
-    [L.vat, `${(options.vatRate * 100).toFixed(0)}% (${formatCurrency(options.vatAmount, options.currency, locale)})`],
+    ...(showPrices
+      ? [
+          [L.directCost, formatCurrency(options.directCost, options.currency, locale)] as [string, string],
+          [L.markups, options.markupTotals.map((m) => `${m.name} ${m.percentage}%`).join(', ') || L.none] as [string, string],
+          [L.netTotal, formatCurrency(options.netTotal, options.currency, locale)] as [string, string],
+          [L.vat, `${(options.vatRate * 100).toFixed(0)}% (${formatCurrency(options.vatAmount, options.currency, locale)})`] as [string, string],
+        ]
+      : []),
   ];
 
   doc.setFontSize(9);
@@ -325,15 +345,17 @@ function renderCoverPage(
     doc.text(item[1], valueX, y);
   }
 
-  // Gross total — highlighted
-  const grossY = metaY + metaItems.length * 10 + 4;
-  doc.setDrawColor(...BRAND_LIGHT);
-  doc.line(labelX, grossY - 4, pageW - 20, grossY - 4);
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(12);
-  doc.setTextColor(...BRAND_ACCENT);
-  doc.text(L.grossTotal, labelX, grossY + 2);
-  doc.text(formatCurrency(options.grossTotal, options.currency, locale), valueX, grossY + 2);
+  // Gross total — highlighted (NEOFFICE: only when prices are shown)
+  if (showPrices) {
+    const grossY = metaY + metaItems.length * 10 + 4;
+    doc.setDrawColor(...BRAND_LIGHT);
+    doc.line(labelX, grossY - 4, pageW - 20, grossY - 4);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(12);
+    doc.setTextColor(...BRAND_ACCENT);
+    doc.text(L.grossTotal, labelX, grossY + 2);
+    doc.text(formatCurrency(options.grossTotal, options.currency, locale), valueX, grossY + 2);
+  }
 
   // ── Signature block ─────────────────────────────────────────────────
   const sigY = pageH - 55;
@@ -441,6 +463,10 @@ function renderBOQTables(
   // (Unit Rate / Total) stay verbatim. Default 'metric' = pass-through.
   const measurementSystem = options.measurementSystem ?? 'metric';
   const L = reportLabels(locale);
+  // NEOFFICE — export content toggles (default: everything shown).
+  const showPrices = options.showPrices !== false;
+  const showBreakdown = options.showBreakdown !== false;
+  const showMetre = options.showMetre !== false;
 
   // Section heading bar
   doc.setFillColor(...BRAND_DARK);
@@ -487,15 +513,15 @@ function renderBOQTables(
         // Issue #270 - when the quantity is shown converted, the per-unit rate
         // must be restated against the SAME displayed unit so the line still
         // reconciles (qty * rate == Total). The money Total is invariant.
-        formatCurrency(toDisplayRate(p.unit_rate, p.unit, measurementSystem), options.currency, locale),
+        showPrices ? formatCurrency(toDisplayRate(p.unit_rate, p.unit, measurementSystem), options.currency, locale) : '',
         // Issue #150 — Total converted to base currency (mirrors grid).
-        formatCurrency(positionTotalForPdf(p, fxOpts), options.currency, locale),
+        showPrices ? formatCurrency(positionTotalForPdf(p, fxOpts), options.currency, locale) : '',
       ]);
       // //// NEOFFICE PATCH — métré provenance sub-row: show HOW the quantity
       // was obtained (an annotated pré-métré formula, or a measurement taken on
       // a plan via the Takeoff) so the priced devis reads like Cédric's "devis
       // avec métrés". Nothing is printed for a hand-typed quantity.
-      const metreLine = metreLineForPosition(p, measurementSystem, locale);
+      const metreLine = showMetre ? metreLineForPosition(p, measurementSystem, locale) : null;
       if (metreLine) {
         // NEOFFICE — use a CP1252-renderable marker (»); jsPDF's core Helvetica
         // can't draw "→" (U+2192) and prints a stray glyph instead.
@@ -504,7 +530,7 @@ function renderBOQTables(
       // //// END NEOFFICE PATCH
       // Add resource sub-rows
       const meta = p.metadata ?? (p as unknown as Record<string, unknown>).metadata_;
-      const resources = (meta && Array.isArray((meta as Record<string, unknown>).resources))
+      const resources = (showBreakdown && meta && Array.isArray((meta as Record<string, unknown>).resources))
         ? (meta as Record<string, unknown>).resources as Array<{ name: string; type: string; unit: string; quantity: number; unit_rate: number; total?: number }>
         : [];
       for (const r of resources) {
@@ -516,8 +542,8 @@ function renderBOQTables(
           rDq.unit,
           formatNumber(rDq.value, locale),
           // Reciprocal rate so the resource sub-row reconciles too (see above).
-          formatCurrency(toDisplayRate(r.unit_rate, r.unit, measurementSystem), options.currency, locale),
-          formatCurrency(rTotal, options.currency, locale),
+          showPrices ? formatCurrency(toDisplayRate(r.unit_rate, r.unit, measurementSystem), options.currency, locale) : '',
+          showPrices ? formatCurrency(rTotal, options.currency, locale) : '',
         ]);
       }
     }
@@ -548,18 +574,20 @@ function renderBOQTables(
 
     const tableEndY = (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY;
 
-    // Subtotal row
+    // Subtotal row — NEOFFICE: only when prices are shown (a bordereau has none).
     const subtotalY = tableEndY + 2;
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(8.5);
-    doc.setTextColor(...BRAND_MID);
-    const subtotalText = `${L.sectionSubtotal}: ${formatCurrency(subtotal, options.currency, locale)}`;
-    doc.text(subtotalText, pageW - 15, subtotalY, { align: 'right' });
-    doc.setDrawColor(...BRAND_ACCENT);
-    doc.setLineWidth(0.4);
-    doc.line(pageW - 15 - doc.getTextWidth(subtotalText) - 2, subtotalY + 1, pageW - 15, subtotalY + 1);
+    if (showPrices) {
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(8.5);
+      doc.setTextColor(...BRAND_MID);
+      const subtotalText = `${L.sectionSubtotal}: ${formatCurrency(subtotal, options.currency, locale)}`;
+      doc.text(subtotalText, pageW - 15, subtotalY, { align: 'right' });
+      doc.setDrawColor(...BRAND_ACCENT);
+      doc.setLineWidth(0.4);
+      doc.line(pageW - 15 - doc.getTextWidth(subtotalText) - 2, subtotalY + 1, pageW - 15, subtotalY + 1);
+    }
 
-    currentY = subtotalY + 10;
+    currentY = subtotalY + (showPrices ? 10 : 4);
     if (currentY > doc.internal.pageSize.getHeight() - 35) {
       doc.addPage();
       currentY = 20;
@@ -755,7 +783,11 @@ export function generateBOQPdf(options: PdfReportOptions): void {
   }
 
   // ── 6. Summary page ────────────────────────────────────────────────────
-  renderSummary(doc, options, locale);
+  // NEOFFICE — the cost-summary page is all figures; skip it for a price-free
+  // export (bordereau).
+  if (options.showPrices !== false) {
+    renderSummary(doc, options, locale);
+  }
 
   // ── 7. Page footers ────────────────────────────────────────────────────
   addPageFooters(doc, options);

@@ -48,6 +48,12 @@ export interface ExportOptions {
    */
   baseCurrency?: string;
   fxRates?: Array<{ currency: string; rate: number }>;
+  // NEOFFICE — export content toggles (mirror pdfReport / the export menu).
+  // Default true. showPrices false ⇒ blank bordereau; showBreakdown = the
+  // analyse-de-prix rows; showMetre = the "→ Métré sur plan …" rows.
+  showPrices?: boolean;
+  showBreakdown?: boolean;
+  showMetre?: boolean;
 }
 
 /* ── Helpers ──────────────────────────────────────────────────────────── */
@@ -228,6 +234,10 @@ export function buildBOQSheetData(options: ExportOptions): {
   numberFormatStartRow: number;
 } {
   const { positions, boqTitle, markupTotals, netTotal, vatRate, vatAmount, grossTotal } = options;
+  // NEOFFICE — export content toggles (default: everything shown).
+  const showPrices = options.showPrices !== false;
+  const showBreakdown = options.showBreakdown !== false;
+  const showMetre = options.showMetre !== false;
   const grouped = groupPositionsIntoSections(positions, {
     baseCurrency: options.baseCurrency,
     fxRates: options.fxRates,
@@ -303,8 +313,8 @@ export function buildBOQSheetData(options: ExportOptions): {
         neutraliseFormula(child.description),
         neutraliseFormula(child.unit),
         child.quantity,
-        child.unit_rate,
-        positionTotalForExport(child, options),
+        showPrices ? child.unit_rate : null,
+        showPrices ? positionTotalForExport(child, options) : null,
         // getVariantCellValue can return number, string, or null; only
         // strings need neutralisation.
         (() => {
@@ -315,11 +325,11 @@ export function buildBOQSheetData(options: ExportOptions): {
         null,
       ]);
       // NEOFFICE — métré provenance sub-row (how the quantity was obtained).
-      const metreChild = metreLineForExport(child);
+      const metreChild = showMetre ? metreLineForExport(child) : null;
       if (metreChild) {
         rows.push([null, neutraliseFormula(`    → ${metreChild}`), null, null, null, null, null, null, null]);
       }
-      for (const r of getResources(child)) {
+      for (const r of (showBreakdown ? getResources(child) : [])) {
         const rTotal = r.total ?? r.quantity * r.unit_rate;
         rows.push([
           null,
@@ -328,8 +338,8 @@ export function buildBOQSheetData(options: ExportOptions): {
           neutraliseFormula(`    \u2514 ${r.name}`),
           neutraliseFormula(r.unit),
           r.quantity,
-          r.unit_rate,
-          rTotal,
+          showPrices ? r.unit_rate : null,
+          showPrices ? rTotal : null,
           null,
           neutraliseFormula(r.type || ''),
           neutraliseFormula(r.code || ''),
@@ -343,7 +353,7 @@ export function buildBOQSheetData(options: ExportOptions): {
       null,
       null,
       null,
-      group.subtotal,
+      showPrices ? group.subtotal : null,
       null,
       null,
       null,
@@ -361,8 +371,8 @@ export function buildBOQSheetData(options: ExportOptions): {
       neutraliseFormula(pos.description),
       neutraliseFormula(pos.unit),
       pos.quantity,
-      pos.unit_rate,
-      positionTotalForExport(pos, options),
+      showPrices ? pos.unit_rate : null,
+      showPrices ? positionTotalForExport(pos, options) : null,
       (() => {
         const v = getVariantCellValue(pos);
         return typeof v === 'string' ? neutraliseFormula(v) : v;
@@ -371,11 +381,11 @@ export function buildBOQSheetData(options: ExportOptions): {
       null,
     ]);
     // NEOFFICE — métré provenance sub-row (how the quantity was obtained).
-    const metrePos = metreLineForExport(pos);
+    const metrePos = showMetre ? metreLineForExport(pos) : null;
     if (metrePos) {
       rows.push([null, neutraliseFormula(`    → ${metrePos}`), null, null, null, null, null, null, null]);
     }
-    for (const r of getResources(pos)) {
+    for (const r of (showBreakdown ? getResources(pos) : [])) {
       const rTotal = r.total ?? r.quantity * r.unit_rate;
       rows.push([
         null,
@@ -405,6 +415,9 @@ export function buildBOQSheetData(options: ExportOptions): {
     return r;
   };
 
+  // NEOFFICE — the cost-summary block is all figures; skip it for a price-free
+  // export (bordereau).
+  if (showPrices) {
   rows.push(Array(colCount).fill(null));
   rows.push(summaryRow('COST SUMMARY', null));
   merge(rows.length - 1, 1, rows.length - 1, 4);
@@ -425,6 +438,7 @@ export function buildBOQSheetData(options: ExportOptions): {
   rows.push(Array(colCount).fill(null));
   rows.push(summaryRow('GROSS TOTAL', grossTotal));
   merge(rows.length - 1, 1, rows.length - 1, 4);
+  }
 
   // Footer
   rows.push(Array(colCount).fill(null));
@@ -546,18 +560,22 @@ export async function buildBOQWorkbookBuffer(options: ExportOptions): Promise<Ar
   }
 
   // ── Summary sheet ─────────────────────────────────────────────────────
-  const summarySheet = wb.addWorksheet('Summary');
-  const { rows: sumRows, numberFormatStartRow: sumNumStart } = buildSummarySheetData(options);
-  for (const row of sumRows) {
-    summarySheet.addRow(row);
-  }
-  summarySheet.columns = [{ width: 45 }, { width: 12 }, { width: 18 }];
+  // NEOFFICE — the Summary sheet is entirely cost figures; omit it for a
+  // price-free export (bordereau).
+  if (options.showPrices !== false) {
+    const summarySheet = wb.addWorksheet('Summary');
+    const { rows: sumRows, numberFormatStartRow: sumNumStart } = buildSummarySheetData(options);
+    for (const row of sumRows) {
+      summarySheet.addRow(row);
+    }
+    summarySheet.columns = [{ width: 45 }, { width: 12 }, { width: 18 }];
 
-  for (let r = sumNumStart + 1; r <= summarySheet.rowCount; r++) {
-    const row = summarySheet.getRow(r);
-    const cell = row.getCell(3);
-    if (typeof cell.value === 'number') {
-      cell.numFmt = CURRENCY_FMT;
+    for (let r = sumNumStart + 1; r <= summarySheet.rowCount; r++) {
+      const row = summarySheet.getRow(r);
+      const cell = row.getCell(3);
+      if (typeof cell.value === 'number') {
+        cell.numFmt = CURRENCY_FMT;
+      }
     }
   }
 
