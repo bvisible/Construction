@@ -167,6 +167,26 @@ function formatNumber(value: number, locale: string): string {
   }
 }
 
+// //// NEOFFICE PATCH — Cédric's SIA rule: the number of decimals on a quantity
+// depends on its unit. bloc / pce = 0, volume (m3) = 3, everything else
+// (length / surface / weight) = 2.
+function siaFractionDigits(unit: string): number {
+  const u = (unit ?? '').toLowerCase().replace(/[.\s]/g, '');
+  if (['bloc', 'blocs', 'pce', 'pces', 'pc', 'p', 'pièce', 'piece', 'u', 'ff', 'forfait', 'glob'].includes(u)) return 0;
+  if (u.includes('³') || u.endsWith('m3') || u === 'mc') return 3;
+  return 2;
+}
+function formatQuantity(value: number, unit: string, locale: string): string {
+  const d = siaFractionDigits(unit);
+  try {
+    return asciiSep(
+      new Intl.NumberFormat(locale, { minimumFractionDigits: d, maximumFractionDigits: d }).format(value),
+    );
+  } catch {
+    return value.toFixed(d);
+  }
+}
+
 /** Format a date string or Date to a human-readable display string. */
 function formatDate(dateInput: string | undefined, locale: string): string {
   const d = dateInput ? new Date(dateInput) : new Date();
@@ -513,12 +533,19 @@ function renderBOQTables(
 
     const body: string[][] = [];
     for (const p of children) {
+      // //// NEOFFICE PATCH — a libellé/description row (Cédric's "jaune") has no
+      // unit: show only its number + wording, never a "0.00" quantity or price.
+      if (!(p.unit ?? '').toString().trim()) {
+        body.push([p.ordinal, p.description, '', '', '', '']);
+        continue;
+      }
       const pDq = toDisplayQuantity(Number(p.quantity), p.unit, measurementSystem);
       body.push([
         p.ordinal,
         p.description,
         pDq.unit,
-        formatNumber(pDq.value, locale),
+        // NEOFFICE — SIA decimals by unit (bloc/pce 0, m3 3, else 2).
+        formatQuantity(pDq.value, pDq.unit, locale),
         // Issue #270 - when the quantity is shown converted, the per-unit rate
         // must be restated against the SAME displayed unit so the line still
         // reconciles (qty * rate == Total). The money Total is invariant.
