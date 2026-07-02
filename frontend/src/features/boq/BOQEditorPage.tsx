@@ -2811,6 +2811,74 @@ export function BOQEditorPage() {
     }
   }, [linkQtyPositionId, linkQtySelected, linkQtyFactor, boqId, queryClient, addToast, t]);
 
+  // //// NEOFFICE PATCH — reverse entry FROM the devis: use THIS position's
+  // quantity to drive OTHER positions (Surface 2 → Dalle X, chape, parquet…).
+  // Mirror of handleLinkQuantity, but the clicked position is the SOURCE and the
+  // picked ones are the driven targets.
+  const [drivePosSourceId, setDrivePosSourceId] = useState<string | null>(null);
+  const [drivePosSelected, setDrivePosSelected] = useState<Set<string>>(new Set());
+  const [drivePosFactor, setDrivePosFactor] = useState('1');
+  const [drivePosSearch, setDrivePosSearch] = useState('');
+  const [drivePosBusy, setDrivePosBusy] = useState(false);
+
+  const drivePosSource = useMemo(
+    () => boq?.positions.find((p) => p.id === drivePosSourceId) ?? null,
+    [boq, drivePosSourceId],
+  );
+
+  const drivePosTargets = useMemo(() => {
+    if (!drivePosSourceId)
+      return [] as Array<{ id: string; code: string; label: string; unit: string }>;
+    const q = drivePosSearch.trim().toLowerCase();
+    return (boq?.positions ?? [])
+      .filter((p) => p.id !== drivePosSourceId && !isSection(p))
+      .map((p) => ({
+        id: p.id,
+        code: p.reference_code || p.ordinal || '',
+        label: p.description || p.ordinal || 'position',
+        unit: p.unit ?? '',
+      }))
+      .filter((it) => !q || it.label.toLowerCase().includes(q) || it.code.toLowerCase().includes(q))
+      .slice(0, 80);
+  }, [boq, drivePosSourceId, drivePosSearch]);
+
+  const handleDrivePositions = useCallback((positionId: string) => {
+    setDrivePosSourceId(positionId);
+    setDrivePosSelected(new Set());
+    setDrivePosSearch('');
+    setDrivePosFactor('1');
+  }, []);
+
+  const handleDrivePositionsConfirm = useCallback(async () => {
+    if (!drivePosSourceId) return;
+    const ids = [...drivePosSelected];
+    if (ids.length === 0) return;
+    const factor = Number(drivePosFactor) || 1;
+    setDrivePosBusy(true);
+    let ok = 0;
+    for (const targetId of ids) {
+      try {
+        await boqApi.linkQuantity(targetId, { sourcePositionId: drivePosSourceId }, factor);
+        ok += 1;
+      } catch {
+        /* keep going; the toast reports how many succeeded */
+      }
+    }
+    setDrivePosBusy(false);
+    setDrivePosSourceId(null);
+    queryClient.invalidateQueries({ queryKey: ['boq', boqId] });
+    addToast({
+      type: ok === ids.length ? 'success' : 'warning',
+      title: t('boq.drive_positions_done', { defaultValue: 'Positions pilotées' }),
+      message: t('boq.drive_positions_done_hint', {
+        defaultValue: '{{ok}}/{{n}} position(s) pilotée(s) par cette quantité.',
+        ok,
+        n: ids.length,
+      }),
+    });
+  }, [drivePosSourceId, drivePosSelected, drivePosFactor, boqId, queryClient, addToast, t]);
+  // //// END NEOFFICE PATCH
+
   const handleRefreshDriven = useCallback(async () => {
     if (!boqId) return;
     setLinkQtyBusy(true);
@@ -4941,6 +5009,7 @@ export function BOQEditorPage() {
           onDuplicatePosition={handleDuplicatePosition}
           onReuseCode={handleReuseCode}
           onLinkQuantity={handleLinkQuantity}
+          onDrivePositions={handleDrivePositions}
           onAddChildPosition={(parentId) => handleAddPosition(parentId)}
           onAddSubSection={handleAddSubSection}
           maxNestingDepth={maxNestingDepth}
@@ -5393,6 +5462,118 @@ export function BOQEditorPage() {
       />
 
       {/* //// NEOFFICE PATCH — linked-quantity dialog (measurement picker + factor) */}
+      {/* //// NEOFFICE PATCH — reverse: use THIS position to drive OTHER positions */}
+      {drivePosSourceId && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+          onClick={() => !drivePosBusy && setDrivePosSourceId(null)}
+        >
+          <div
+            className="flex w-[520px] max-h-[85vh] flex-col overflow-hidden rounded-xl border border-border bg-surface-elevated p-5 shadow-lg"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-sm font-semibold text-content-primary">
+              {t('boq.drive_positions_title', {
+                defaultValue: "Utiliser cette quantité pour d'autres positions…",
+              })}
+            </h3>
+            <p className="mb-3 mt-0.5 text-xs text-content-tertiary">
+              {t('boq.drive_positions_hint', {
+                defaultValue:
+                  'Les positions choisies seront pilotées par la quantité de « {{src}} » × le facteur.',
+                src: drivePosSource?.description || drivePosSource?.ordinal || '',
+              })}
+              {drivePosSource && (
+                <span className="ml-1 font-medium text-content-secondary">
+                  {drivePosSource.quantity} {drivePosSource.unit}
+                </span>
+              )}
+            </p>
+            <input
+              type="text"
+              value={drivePosSearch}
+              onChange={(e) => setDrivePosSearch(e.target.value)}
+              placeholder={t('boq.drive_positions_search', {
+                defaultValue: 'Rechercher un code ou un libellé…',
+              })}
+              className="mb-2 w-full rounded-md border border-border bg-surface-primary px-2 py-1.5 text-sm outline-none focus:border-oe-blue"
+            />
+            <div className="mb-3 max-h-72 min-h-[120px] flex-1 overflow-y-auto rounded-lg border border-border">
+              {drivePosTargets.length === 0 ? (
+                <div className="p-3 text-xs text-content-tertiary">
+                  {t('boq.drive_positions_empty', { defaultValue: 'Aucune position.' })}
+                </div>
+              ) : (
+                drivePosTargets.map((it) => {
+                  const checked = drivePosSelected.has(it.id);
+                  return (
+                    <label
+                      key={it.id}
+                      className={`flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-xs ${
+                        checked ? 'bg-oe-blue/10' : 'hover:bg-surface-secondary'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() =>
+                          setDrivePosSelected((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(it.id)) next.delete(it.id);
+                            else next.add(it.id);
+                            return next;
+                          })
+                        }
+                      />
+                      {it.code && (
+                        <span className="shrink-0 font-mono font-semibold text-content-primary">
+                          {it.code}
+                        </span>
+                      )}
+                      <span className="truncate text-content-secondary">{it.label}</span>
+                      <span className="ml-auto shrink-0 text-content-tertiary">{it.unit}</span>
+                    </label>
+                  );
+                })
+              )}
+            </div>
+            <label className="mb-1 block text-xs font-medium text-content-secondary">
+              {t('boq.link_quantity_factor', { defaultValue: 'Facteur' })}
+            </label>
+            <input
+              type="text"
+              value={drivePosFactor}
+              onChange={(e) => setDrivePosFactor(e.target.value)}
+              className="mb-4 w-32 rounded-md border border-border bg-surface-primary px-2 py-1.5 text-sm outline-none focus:border-oe-blue"
+            />
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-content-tertiary">
+                {drivePosSelected.size}{' '}
+                {t('boq.drive_positions_selected', { defaultValue: 'sélectionnée(s)' })}
+              </span>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setDrivePosSourceId(null)}
+                  className="rounded-lg px-3 py-1.5 text-xs font-semibold text-content-secondary hover:bg-surface-secondary"
+                >
+                  {t('common.cancel', { defaultValue: 'Annuler' })}
+                </button>
+                <button
+                  type="button"
+                  disabled={drivePosBusy || drivePosSelected.size === 0}
+                  onClick={handleDrivePositionsConfirm}
+                  className="rounded-lg bg-oe-blue px-3 py-1.5 text-xs font-semibold text-white hover:bg-oe-blue/90 disabled:opacity-50"
+                >
+                  {t('boq.drive_positions_confirm', { defaultValue: 'Lier' })}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* //// END NEOFFICE PATCH */}
+
       {linkQtyPositionId && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"

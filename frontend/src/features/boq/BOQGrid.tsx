@@ -449,6 +449,7 @@ export interface BOQGridProps {
   onReuseCode?: (sectionId?: string) => void;
   /** //// NEOFFICE — drive this position's quantity from a takeoff measurement. */
   onLinkQuantity?: (positionId: string) => void;
+  onDrivePositions?: (positionId: string) => void;
   /**
    * Issue #136 — add a child Partida under the given position (deep
    * nesting of partidas-within-partidas). Disabled in the UI once the
@@ -565,6 +566,7 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
   onDuplicatePosition,
   onReuseCode,
   onLinkQuantity,
+  onDrivePositions,
   onAddChildPosition,
   onAddSubSection,
   maxNestingDepth = DEFAULT_MAX_NESTING_DEPTH,
@@ -2865,6 +2867,12 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
                   <CtxItem icon={<Link2 size={14} className="text-emerald-600"/>}
                     label={t('boq.link_quantity_action', { defaultValue: 'Lier à une quantité mesurée…' })}
                     onClick={() => { onLinkQuantity(d.id as string); closeContextMenu(); }}
+                  />
+                )}
+                {onDrivePositions && (
+                  <CtxItem icon={<Link2 size={14} className="text-sky-600"/>}
+                    label={t('boq.drive_positions_action', { defaultValue: "Utiliser cette quantité pour d'autres positions…" })}
+                    onClick={() => { onDrivePositions(d.id as string); closeContextMenu(); }}
                   />
                 )}
                 {/* //// END NEOFFICE PATCH */}

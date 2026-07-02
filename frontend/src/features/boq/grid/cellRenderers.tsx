@@ -1012,6 +1012,43 @@ export function DescriptionCellRenderer(params: ICellRendererParams) {
     </button>
   ) : null;
 
+  // //// NEOFFICE — a position whose quantity is driven by a takeoff measurement
+  // (or another position) via ``neoffice_driven_by`` shows a small source chip so
+  // the link is visible at a glance ("this position uses Surface 2 as its measure").
+  const drivenByRaw = (
+    meta as {
+      neoffice_driven_by?: {
+        label?: string;
+        source_value?: number;
+        source_unit?: string;
+        factor?: number;
+        stale?: boolean;
+      };
+    }
+  ).neoffice_driven_by;
+  const drivenByChip =
+    drivenByRaw && drivenByRaw.label ? (
+      <span
+        className={`shrink-0 inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-2xs font-medium ${
+          drivenByRaw.stale
+            ? 'bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300'
+            : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300'
+        }`}
+        title={t('boq.driven_by_tooltip', {
+          defaultValue: 'Quantité pilotée par « {{label}} » ({{val}} {{unit}} × {{factor}})',
+          label: drivenByRaw.label,
+          val: String(drivenByRaw.source_value ?? ''),
+          unit: drivenByRaw.source_unit ?? '',
+          factor: String(drivenByRaw.factor ?? 1),
+        })}
+        data-testid="boq-driven-by-pill"
+      >
+        <span aria-hidden="true">↳</span>
+        {drivenByRaw.label}
+        {drivenByRaw.stale ? ' ⚠' : ''}
+      </span>
+    ) : null;
+
   // Assembly-sourced positions carry a structured ``resource_breakdown``
   // (per-type total + pct) that the apply-to-BOQ flow stamps into
   // metadata. Render it as a tiny "60% Mat · 30% Lab · 10% Eq" pill so
@@ -1091,6 +1128,7 @@ export function DescriptionCellRenderer(params: ICellRendererParams) {
         <span className={descTextCls}>{displayValue}</span>
         {scopeHint}
         {breakdownPill}
+        {drivenByChip}
       </span>
     );
   }
@@ -1116,6 +1154,7 @@ export function DescriptionCellRenderer(params: ICellRendererParams) {
         <span className={descTextCls}>{displayValue}</span>
         {scopeHint}
         {breakdownPill}
+        {drivenByChip}
       </span>
     );
   }
@@ -1145,6 +1184,7 @@ export function DescriptionCellRenderer(params: ICellRendererParams) {
       <span className="truncate min-w-0">{displayValue}</span>
       {scopeHint}
       {breakdownPill}
+      {drivenByChip}
       <span
         className="shrink-0 inline-flex items-center gap-1 rounded
                    bg-amber-100 dark:bg-amber-900/40
