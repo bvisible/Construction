@@ -63,7 +63,7 @@ import { useProjectContextStore } from '../../stores/useProjectContextStore';
 import { useAuthStore } from '../../stores/useAuthStore';
 import { usePreferencesStore } from '../../stores/usePreferencesStore';
 import { useQueryClient } from '@tanstack/react-query';
-import { boqApi, type CreatePositionData, type Position } from '../../features/boq/api';
+import { boqApi, isSection, type CreatePositionData, type Position } from '../../features/boq/api';
 import { takeoffApi, type MeasurementResponse } from '../../features/takeoff/api';
 import {
   measurementDimension,
@@ -3481,6 +3481,96 @@ export default function TakeoffViewerModule({
     if (!selectedMeasurementId) return null;
     return measurements.find((m) => m.id === selectedMeasurementId) ?? null;
   }, [selectedMeasurementId, measurements]);
+
+  // //// NEOFFICE PATCH — reverse linked-quantity: drive N BOQ positions FROM
+  // this measurement (the inverse of the BOQ→measurement link built on the
+  // devis side). The backend already supports one measurement → many positions
+  // (the link is stored on each driven position), so this is a UI entry point.
+  const [showLinkPositionsDialog, setShowLinkPositionsDialog] = useState(false);
+  const [linkPosBusy, setLinkPosBusy] = useState(false);
+  const [linkPosItems, setLinkPosItems] = useState<
+    Array<{ id: string; code: string; label: string; boqName: string; unit: string }>
+  >([]);
+  const [linkPosSelected, setLinkPosSelected] = useState<Set<string>>(new Set());
+  const [linkPosFactor, setLinkPosFactor] = useState('1');
+  const [linkPosSearch, setLinkPosSearch] = useState('');
+
+  const openLinkPositionsDialog = useCallback(async () => {
+    setLinkPosSelected(new Set());
+    setLinkPosSearch('');
+    setLinkPosFactor('1');
+    setShowLinkPositionsDialog(true);
+    const pid = effectiveProjectId;
+    if (!pid) return;
+    setLinkPosBusy(true);
+    try {
+      const boqs = await boqApi.list(pid);
+      const detailed = await Promise.all(boqs.map((b) => boqApi.get(b.id).catch(() => null)));
+      const items: Array<{ id: string; code: string; label: string; boqName: string; unit: string }> = [];
+      for (const boq of detailed) {
+        if (!boq) continue;
+        for (const p of boq.positions ?? []) {
+          if (isSection(p)) continue; // only leaf positions can be driven
+          items.push({
+            id: p.id,
+            code: p.reference_code || p.ordinal || '',
+            label: p.description || p.ordinal || 'position',
+            boqName: boq.name ?? '',
+            unit: p.unit ?? '',
+          });
+        }
+      }
+      setLinkPosItems(items);
+    } catch (e) {
+      addToast({
+        type: 'error',
+        title: t('takeoff_viewer.link_load_error', {
+          defaultValue: 'Chargement des positions impossible',
+        }),
+        message: getErrorMessage(e),
+      });
+    } finally {
+      setLinkPosBusy(false);
+    }
+  }, [effectiveProjectId, addToast, t]);
+
+  const confirmLinkPositions = useCallback(async () => {
+    const measId = selectedMeasurement?.serverId;
+    if (!measId) {
+      addToast({
+        type: 'error',
+        title: t('takeoff_viewer.link_no_server_id', {
+          defaultValue: 'Enregistrez la mesure avant de la lier à des positions.',
+        }),
+      });
+      return;
+    }
+    const ids = [...linkPosSelected];
+    if (ids.length === 0) return;
+    const factor = Number(linkPosFactor) || 1;
+    setLinkPosBusy(true);
+    let ok = 0;
+    for (const positionId of ids) {
+      try {
+        await boqApi.linkQuantity(positionId, { measurementId: measId }, factor);
+        ok += 1;
+      } catch {
+        /* keep going; the toast reports how many succeeded */
+      }
+    }
+    setLinkPosBusy(false);
+    setShowLinkPositionsDialog(false);
+    addToast({
+      type: ok === ids.length ? 'success' : 'warning',
+      title: t('takeoff_viewer.link_done_title', { defaultValue: 'Positions liées' }),
+      message: t('takeoff_viewer.link_done_msg', {
+        defaultValue: '{{ok}}/{{n}} position(s) pilotée(s) par cette mesure.',
+        ok,
+        n: ids.length,
+      }),
+    });
+  }, [selectedMeasurement, linkPosSelected, linkPosFactor, addToast, t]);
+  // //// END NEOFFICE PATCH
 
   /** All unique group names across all measurements — for the properties-panel
    *  Group dropdown so users can move items into existing groups. */
@@ -6981,6 +7071,25 @@ export default function TakeoffViewerModule({
                   />
                 </div>
 
+                {/* //// NEOFFICE PATCH — link this measurement to BOQ positions */}
+                {(['distance', 'polyline', 'area', 'volume', 'count'] as string[]).includes(
+                  selectedMeasurement.type,
+                ) &&
+                  selectedMeasurement.value > 0 && (
+                    <button
+                      type="button"
+                      onClick={openLinkPositionsDialog}
+                      className="w-full flex items-center justify-center gap-1.5 rounded-lg bg-oe-blue/10 text-oe-blue hover:bg-oe-blue/20 px-2 py-1.5 text-xs font-semibold transition-colors border border-oe-blue/30"
+                      data-testid="prop-link-positions-button"
+                    >
+                      <Link2 size={12} />
+                      {t('takeoff_viewer.link_to_positions', {
+                        defaultValue: 'Lier à des positions du devis…',
+                      })}
+                    </button>
+                  )}
+                {/* //// END NEOFFICE PATCH */}
+
                 {/* Delete button */}
                 <button
                   type="button"
@@ -7699,6 +7808,138 @@ export default function TakeoffViewerModule({
           onCancel={handleCalibrationCancel}
         />
       )}
+
+      {/* //// NEOFFICE PATCH — reverse linked-quantity: pick BOQ positions to drive from this measurement */}
+      {showLinkPositionsDialog && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+          onClick={() => !linkPosBusy && setShowLinkPositionsDialog(false)}
+        >
+          <div
+            className="flex w-[520px] max-h-[85vh] flex-col overflow-hidden rounded-xl border border-border bg-surface-elevated p-5 shadow-lg"
+            onClick={(e) => e.stopPropagation()}
+            data-testid="link-positions-panel"
+          >
+            <h3 className="text-sm font-semibold text-content-primary">
+              {t('takeoff_viewer.link_to_positions', {
+                defaultValue: 'Lier à des positions du devis…',
+              })}
+            </h3>
+            <p className="mb-3 mt-0.5 text-xs text-content-tertiary">
+              {t('takeoff_viewer.link_positions_hint', {
+                defaultValue:
+                  'La quantité de chaque position choisie sera pilotée par cette mesure × le facteur.',
+              })}
+              {selectedMeasurement && (
+                <span className="ml-1 font-medium text-content-secondary">
+                  {selectedMeasurement.value} {selectedMeasurement.unit}
+                </span>
+              )}
+            </p>
+            <input
+              type="text"
+              value={linkPosSearch}
+              onChange={(e) => setLinkPosSearch(e.target.value)}
+              placeholder={t('takeoff_viewer.link_positions_search', {
+                defaultValue: 'Rechercher un code ou un libellé…',
+              })}
+              className="mb-2 w-full rounded-md border border-border bg-surface-primary px-2 py-1.5 text-sm outline-none focus:border-oe-blue"
+            />
+            <div className="mb-3 max-h-72 min-h-[120px] flex-1 overflow-y-auto rounded-lg border border-border">
+              {linkPosBusy && linkPosItems.length === 0 ? (
+                <div className="p-3 text-xs text-content-tertiary">
+                  {t('common.loading', { defaultValue: 'Chargement…' })}
+                </div>
+              ) : (
+                (() => {
+                  const q = linkPosSearch.trim().toLowerCase();
+                  const filtered = (q
+                    ? linkPosItems.filter(
+                        (it) =>
+                          it.label.toLowerCase().includes(q) ||
+                          it.code.toLowerCase().includes(q),
+                      )
+                    : linkPosItems
+                  ).slice(0, 200);
+                  if (filtered.length === 0) {
+                    return (
+                      <div className="p-3 text-xs text-content-tertiary">
+                        {t('takeoff_viewer.link_positions_empty', {
+                          defaultValue: 'Aucune position.',
+                        })}
+                      </div>
+                    );
+                  }
+                  return filtered.map((it) => {
+                    const checked = linkPosSelected.has(it.id);
+                    return (
+                      <label
+                        key={it.id}
+                        className={`flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-xs ${
+                          checked ? 'bg-oe-blue/10' : 'hover:bg-surface-secondary'
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() =>
+                            setLinkPosSelected((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(it.id)) next.delete(it.id);
+                              else next.add(it.id);
+                              return next;
+                            })
+                          }
+                        />
+                        {it.code && (
+                          <span className="shrink-0 font-mono font-semibold text-content-primary">
+                            {it.code}
+                          </span>
+                        )}
+                        <span className="truncate text-content-secondary">{it.label}</span>
+                        <span className="ml-auto shrink-0 text-content-tertiary">{it.boqName}</span>
+                      </label>
+                    );
+                  });
+                })()
+              )}
+            </div>
+            <label className="mb-1 block text-xs font-medium text-content-secondary">
+              {t('boq.link_quantity_factor', { defaultValue: 'Facteur' })}
+            </label>
+            <input
+              type="text"
+              value={linkPosFactor}
+              onChange={(e) => setLinkPosFactor(e.target.value)}
+              className="mb-4 w-32 rounded-md border border-border bg-surface-primary px-2 py-1.5 text-sm outline-none focus:border-oe-blue"
+            />
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-content-tertiary">
+                {linkPosSelected.size}{' '}
+                {t('takeoff_viewer.link_selected', { defaultValue: 'sélectionnée(s)' })}
+              </span>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowLinkPositionsDialog(false)}
+                  className="rounded-lg px-3 py-1.5 text-xs font-semibold text-content-secondary hover:bg-surface-secondary"
+                >
+                  {t('common.cancel', { defaultValue: 'Annuler' })}
+                </button>
+                <button
+                  type="button"
+                  disabled={linkPosBusy || linkPosSelected.size === 0}
+                  onClick={confirmLinkPositions}
+                  className="rounded-lg bg-oe-blue px-3 py-1.5 text-xs font-semibold text-white hover:bg-oe-blue/90 disabled:opacity-50"
+                >
+                  {t('takeoff_viewer.link_confirm', { defaultValue: 'Lier' })}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* //// END NEOFFICE PATCH */}
 
       {/* //// NEOFFICE PATCH — element take-off ("métré par calque") results panel */}
       {metreResult && (
