@@ -2726,6 +2726,7 @@ export function BOQEditorPage() {
     if (!linkQtyPositionId) return [] as Array<{
       kind: 'measurement' | 'position';
       id: string;
+      code: string;
       label: string;
       value: number;
       unit: string;
@@ -2733,6 +2734,7 @@ export function BOQEditorPage() {
     const meas = linkQtyMeasurements.map((m) => ({
       kind: 'measurement' as const,
       id: m.id,
+      code: '',
       label: m.annotation || m.group_name || m.type || 'mesure',
       value: m.measurement_value ?? 0,
       unit: m.measurement_unit ?? '',
@@ -2742,13 +2744,18 @@ export function BOQEditorPage() {
       .map((p) => ({
         kind: 'position' as const,
         id: p.id,
+        // Estimators identify positions by their code first, so surface it.
+        code: p.reference_code || p.ordinal || '',
         label: p.description || p.ordinal || 'position',
         value: Number(p.quantity ?? 0),
         unit: p.unit ?? '',
       }));
     const q = linkQtySearch.trim().toLowerCase();
     const all = [...meas, ...posn];
-    return (q ? all.filter((s) => s.label.toLowerCase().includes(q)) : all).slice(0, 60);
+    return (q
+      ? all.filter((s) => s.label.toLowerCase().includes(q) || s.code.toLowerCase().includes(q))
+      : all
+    ).slice(0, 60);
   }, [linkQtyPositionId, linkQtyMeasurements, boq, linkQtySearch]);
 
   const handleLinkQuantity = useCallback(
@@ -5451,6 +5458,11 @@ export function BOQEditorPage() {
                             ? t('boq.link_source_measure', { defaultValue: 'mesure' })
                             : t('boq.link_source_position', { defaultValue: 'position' })}
                         </span>
+                        {s.code && (
+                          <span className="shrink-0 font-mono font-semibold text-content-primary">
+                            {s.code}
+                          </span>
+                        )}
                         <span className="truncate">{s.label}</span>
                       </span>
                       <span className="shrink-0 tabular-nums text-content-tertiary">
