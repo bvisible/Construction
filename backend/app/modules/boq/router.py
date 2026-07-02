@@ -8105,7 +8105,9 @@ class BOQVariable(BaseModel):
         ...,
         description="Uppercase identifier without the leading '$', e.g. 'GFA'.",
     )
-    type: Literal["number", "text", "date"]
+    # //// NEOFFICE — 'formula': a reusable named calculation; ``value`` holds a
+    # formula string (e.g. "=$L * $W"), evaluated client-side by the formula engine.
+    type: Literal["number", "text", "date", "formula"]
     value: str | float | int | None = None
     description: str | None = None
 

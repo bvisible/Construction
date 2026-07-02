@@ -1842,7 +1842,9 @@ export interface CustomColumnDef {
  */
 export interface BOQVariable {
   name: string;
-  type: 'number' | 'text' | 'date';
+  // //// NEOFFICE — 'formula': a reusable named calculation (value is a formula
+  // string like "=$L * $W"), evaluated by the formula engine wherever $NAME is used.
+  type: 'number' | 'text' | 'date' | 'formula';
   value: number | string | null;
   description?: string | null;
 }

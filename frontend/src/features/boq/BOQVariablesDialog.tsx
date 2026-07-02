@@ -288,6 +288,8 @@ export function BOQVariablesDialog({ open, onClose, boqId }: BOQVariablesDialogP
                               <option value="number">number</option>
                               <option value="text">text</option>
                               <option value="date">date</option>
+                              {/* //// NEOFFICE — a reusable named formula (e.g. =$L * $W) */}
+                              <option value="formula">formula</option>
                             </select>
                           </td>
                           <td className="px-3 py-2">
@@ -296,8 +298,12 @@ export function BOQVariablesDialog({ open, onClose, boqId }: BOQVariablesDialogP
                               step={d.type === 'number' ? 'any' : undefined}
                               value={d.value}
                               onChange={(e) => patchRow(d.uid, { value: e.target.value })}
-                              placeholder={d.type === 'number' ? '1500' : ''}
-                              className="w-full rounded-md border border-border-light bg-surface-primary px-2 py-1 text-sm focus:border-oe-blue focus:outline-none"
+                              placeholder={
+                                d.type === 'number' ? '1500' : d.type === 'formula' ? '=$L * $W' : ''
+                              }
+                              className={`w-full rounded-md border border-border-light bg-surface-primary px-2 py-1 text-sm focus:border-oe-blue focus:outline-none ${
+                                d.type === 'formula' ? 'font-mono text-violet-600 dark:text-violet-300' : ''
+                              }`}
                             />
                           </td>
                           <td className="px-3 py-2">

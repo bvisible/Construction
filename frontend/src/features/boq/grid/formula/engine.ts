@@ -29,7 +29,9 @@ import type { Position } from '../../api';
 /* ── Public types ───────────────────────────────────────────────────── */
 
 export interface FormulaVariable {
-  type: 'number' | 'text' | 'date';
+  // //// NEOFFICE — 'formula': a reusable named calculation (value is a formula
+  // string like "$L * $W", evaluated with the same engine + context).
+  type: 'number' | 'text' | 'date' | 'formula';
   value: string | number | null;
 }
 
@@ -48,6 +50,9 @@ export interface FormulaContext {
   sectionsByName: Map<string, FormulaSection>;
   /** BOQ-scoped named variables. */
   variables: Map<string, FormulaVariable>;
+  /** //// NEOFFICE — variable names currently being resolved, to break cycles
+   *  when a formula-typed variable references another (A = $B, B = $A). */
+  _resolving?: Set<string>;
   /** Current row data — used by `col(...)` in calculated columns. */
   currentRow?: Record<string, unknown>;
 }
@@ -519,6 +524,23 @@ function parseFormulaExpr(input: string, ctx?: FormulaContext): Value {
       const v = ctx.variables.get(t.value);
       if (!v) throw new Error(`Unknown variable: $${t.value}`);
       if (v.value === null) throw new Error(`Variable $${t.value} has no value`);
+      // //// NEOFFICE PATCH — a variable can hold a FORMULA (a reusable named
+      // calculation, e.g. EMPRISE = $L * $W). Evaluate it with the same context
+      // and a cycle guard so $EMPRISE resolves like any other reference.
+      if (v.type === 'formula') {
+        const resolving = ctx._resolving ?? new Set<string>();
+        if (resolving.has(t.value)) throw new Error(`Circular variable: $${t.value}`);
+        resolving.add(t.value);
+        const raw = String(v.value).trim();
+        const body = raw.startsWith('=') ? raw.slice(1) : raw;
+        const r = parseFormulaExpr(normaliseFormula(body), { ...ctx, _resolving: resolving });
+        resolving.delete(t.value);
+        if (typeof r !== 'number' || !isFinite(r)) {
+          throw new Error(`Variable $${t.value} did not evaluate to a number`);
+        }
+        return r;
+      }
+      // //// END NEOFFICE PATCH
       if (v.type === 'number') return typeof v.value === 'number' ? v.value : parseFloat(String(v.value));
       return v.value;
     }
