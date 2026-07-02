@@ -1855,7 +1855,16 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
     if (params.data?._isFooter) return 32;
     // Position rows grow with the description-density preference so a long
     // Langtext is readable inline; compact keeps the historical 32px row.
-    return BOQ_DESC_ROW_HEIGHT[descDensityRef.current] ?? 32;
+    const base = BOQ_DESC_ROW_HEIGHT[descDensityRef.current] ?? 32;
+    // //// NEOFFICE — a driven position renders a 2nd indented sub-line
+    // ("↳ piloté par …") in the description cell; give it ~18px extra so the
+    // child line isn't clipped.
+    if (
+      (params.data?.metadata as { neoffice_driven_by?: unknown } | undefined)?.neoffice_driven_by
+    ) {
+      return base + 18;
+    }
+    return base;
   }, []);
 
   /* ── Cancel accidental ordinal edits from chevron clicks ─────── */

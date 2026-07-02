@@ -1026,13 +1026,17 @@ export function DescriptionCellRenderer(params: ICellRendererParams) {
       };
     }
   ).neoffice_driven_by;
-  const drivenByChip =
+  // Rendered as an indented "child" sub-line beneath the description
+  // ("↳ piloté par « Surface 2 » · 12,99 m²") so the parent→child link reads
+  // like a hierarchy. The row height is bumped +18px in getRowHeight when this
+  // is present so the second line isn't clipped.
+  const drivenBySubline =
     drivenByRaw && drivenByRaw.label ? (
       <span
-        className={`shrink-0 inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-2xs font-medium ${
+        className={`mt-0.5 ml-4 inline-flex items-center gap-1 text-2xs font-medium ${
           drivenByRaw.stale
-            ? 'bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300'
-            : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300'
+            ? 'text-rose-600 dark:text-rose-300'
+            : 'text-emerald-700 dark:text-emerald-300'
         }`}
         title={t('boq.driven_by_tooltip', {
           defaultValue: 'Quantité pilotée par « {{label}} » ({{val}} {{unit}} × {{factor}})',
@@ -1044,10 +1048,28 @@ export function DescriptionCellRenderer(params: ICellRendererParams) {
         data-testid="boq-driven-by-pill"
       >
         <span aria-hidden="true">↳</span>
-        {drivenByRaw.label}
+        {t('boq.driven_by_inline', {
+          defaultValue: 'piloté par « {{label}} »',
+          label: drivenByRaw.label,
+        })}
+        {drivenByRaw.source_value != null
+          ? ` · ${drivenByRaw.source_value} ${drivenByRaw.source_unit ?? ''}`.trimEnd()
+          : ''}
         {drivenByRaw.stale ? ' ⚠' : ''}
       </span>
     ) : null;
+
+  // Wrap the inline description content in a flex-col so the driven-by sub-line
+  // sits BELOW it (indented child). No-op when the position isn't driven.
+  const renderWithDriven = (inline: JSX.Element): JSX.Element =>
+    drivenBySubline ? (
+      <span className="flex flex-col min-w-0 max-w-full">
+        {inline}
+        {drivenBySubline}
+      </span>
+    ) : (
+      inline
+    );
 
   // Assembly-sourced positions carry a structured ``resource_breakdown``
   // (per-type total + pct) that the apply-to-BOQ flow stamps into
@@ -1113,7 +1135,7 @@ export function DescriptionCellRenderer(params: ICellRendererParams) {
     ) : null;
 
   if (!hasVariant && !hasDefault) {
-    if (!variantIconButton && !scopeHint && !breakdownPill && !drivenByChip) {
+    if (!variantIconButton && !scopeHint && !breakdownPill && !drivenBySubline) {
       return descMultiline ? (
         <span className="block w-full whitespace-pre-wrap break-words leading-snug overflow-y-auto max-h-full">
           {displayValue}
@@ -1122,14 +1144,13 @@ export function DescriptionCellRenderer(params: ICellRendererParams) {
         <span className="truncate">{displayValue}</span>
       );
     }
-    return (
+    return renderWithDriven(
       <span className={`inline-flex ${descAlignCls} gap-1.5 min-w-0 max-w-full`}>
         {variantIconButton}
         <span className={descTextCls}>{displayValue}</span>
         {scopeHint}
         {breakdownPill}
-        {drivenByChip}
-      </span>
+      </span>,
     );
   }
 
@@ -1148,14 +1169,13 @@ export function DescriptionCellRenderer(params: ICellRendererParams) {
     // Variant choice is surfaced through the V button + the synthetic
     // VARIANT row inside the expanded resource panel \u2014 the blue
     // "Variant: <label>" pill that used to render here was redundant.
-    return (
+    return renderWithDriven(
       <span className={`inline-flex ${descAlignCls} gap-1.5 min-w-0 max-w-full`}>
         {variantIconButton}
         <span className={descTextCls}>{displayValue}</span>
         {scopeHint}
         {breakdownPill}
-        {drivenByChip}
-      </span>
+      </span>,
     );
   }
 
@@ -1184,7 +1204,6 @@ export function DescriptionCellRenderer(params: ICellRendererParams) {
       <span className="truncate min-w-0">{displayValue}</span>
       {scopeHint}
       {breakdownPill}
-      {drivenByChip}
       <span
         className="shrink-0 inline-flex items-center gap-1 rounded
                    bg-amber-100 dark:bg-amber-900/40
