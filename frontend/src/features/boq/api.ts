@@ -1756,6 +1756,40 @@ export const boqApi = {
       `/v1/boq/boqs/${boqId}/renumber/`,
       options ?? {},
     ),
+
+  // //// NEOFFICE PATCH — linked quantity: one takeoff measurement drives many
+  // BOQ positions (× factor), live-refreshable. Backend: neoffice module.
+  /** Drive a position's quantity from a source (a takeoff measurement OR another
+   *  position) × factor. Pass exactly one of measurementId / sourcePositionId. */
+  linkQuantity: (
+    positionId: string,
+    source: { measurementId?: string; sourcePositionId?: string },
+    factor: number,
+  ) =>
+    apiPost<{
+      position_id: string;
+      source_value: number;
+      factor: number;
+      quantity: number;
+    }>('/v1/neoffice/boq/link-quantity/', {
+      position_id: positionId,
+      measurement_id: source.measurementId ?? null,
+      source_position_id: source.sourcePositionId ?? null,
+      factor,
+    }),
+  /** Re-push every driven position of a BOQ from its source measurement (live). */
+  refreshDrivenQuantities: (boqId: string) =>
+    apiPost<{ boq_id: string; updated: number; stale: number }>(
+      '/v1/neoffice/boq/refresh-driven/',
+      { boq_id: boqId },
+    ),
+  /** Remove a position's driven-by link (quantity kept as-is). */
+  unlinkQuantity: (positionId: string) =>
+    apiPost<{ position_id: string; unlinked: boolean }>(
+      '/v1/neoffice/boq/unlink-quantity/',
+      { position_id: positionId },
+    ),
+  // //// END NEOFFICE PATCH
 };
 
 /**

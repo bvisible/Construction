@@ -72,6 +72,8 @@ import { SendToTenderDialog } from './SendToTenderDialog';
 import { BOQFilterBar, type BoqFilterKind } from './BOQFilterBar';
 import { BOQOutline } from './BOQOutline';
 import type { TenderPackageRef } from './api';
+// //// NEOFFICE — linked quantity: pick a takeoff measurement to drive a position.
+import { takeoffApi, type MeasurementResponse } from '@/features/takeoff/api';
 import { boqGuide } from './boqGuide';
 // evaluateFormula used in BOQGrid, not directly here
 // import { evaluateFormula } from './grid/cellEditors';
@@ -2705,6 +2707,130 @@ export function BOQEditorPage() {
     [boqId, boq, grouped, selectedPosition, addMutation, t],
   );
 
+  // //// NEOFFICE PATCH — linked quantity: drive a position from a takeoff
+  // measurement (× factor). One measurement can drive many positions; a live
+  // refresh re-pushes current values into the whole devis.
+  const [linkQtyPositionId, setLinkQtyPositionId] = useState<string | null>(null);
+  const [linkQtyMeasurements, setLinkQtyMeasurements] = useState<MeasurementResponse[]>([]);
+  const [linkQtyLoadingList, setLinkQtyLoadingList] = useState(false);
+  const [linkQtySelected, setLinkQtySelected] = useState<
+    { type: 'measurement' | 'position'; id: string } | null
+  >(null);
+  const [linkQtySearch, setLinkQtySearch] = useState('');
+  const [linkQtyFactor, setLinkQtyFactor] = useState('1');
+  const [linkQtyBusy, setLinkQtyBusy] = useState(false);
+
+  // Sources the driven quantity can come from: takeoff measurements OR any other
+  // BOQ position's quantity (e.g. a "Surface 2" position drives its finishes).
+  const linkQtySources = useMemo(() => {
+    if (!linkQtyPositionId) return [] as Array<{
+      kind: 'measurement' | 'position';
+      id: string;
+      label: string;
+      value: number;
+      unit: string;
+    }>;
+    const meas = linkQtyMeasurements.map((m) => ({
+      kind: 'measurement' as const,
+      id: m.id,
+      label: m.annotation || m.group_name || m.type || 'mesure',
+      value: m.measurement_value ?? 0,
+      unit: m.measurement_unit ?? '',
+    }));
+    const posn = (boq?.positions ?? [])
+      .filter((p) => p.id !== linkQtyPositionId && !isSection(p))
+      .map((p) => ({
+        kind: 'position' as const,
+        id: p.id,
+        label: p.description || p.ordinal || 'position',
+        value: Number(p.quantity ?? 0),
+        unit: p.unit ?? '',
+      }));
+    const q = linkQtySearch.trim().toLowerCase();
+    const all = [...meas, ...posn];
+    return (q ? all.filter((s) => s.label.toLowerCase().includes(q)) : all).slice(0, 60);
+  }, [linkQtyPositionId, linkQtyMeasurements, boq, linkQtySearch]);
+
+  const handleLinkQuantity = useCallback(
+    async (positionId: string) => {
+      setLinkQtyPositionId(positionId);
+      setLinkQtySelected(null);
+      setLinkQtySearch('');
+      setLinkQtyFactor('1');
+      const projectId = boq?.project_id;
+      if (!projectId) return;
+      setLinkQtyLoadingList(true);
+      try {
+        const list = await takeoffApi.list(projectId);
+        setLinkQtyMeasurements(list.filter((m) => m.measurement_value != null));
+      } catch {
+        setLinkQtyMeasurements([]);
+      } finally {
+        setLinkQtyLoadingList(false);
+      }
+    },
+    [boq],
+  );
+
+  const handleLinkQuantityConfirm = useCallback(async () => {
+    if (!linkQtyPositionId || !linkQtySelected) return;
+    setLinkQtyBusy(true);
+    try {
+      const res = await boqApi.linkQuantity(
+        linkQtyPositionId,
+        linkQtySelected.type === 'measurement'
+          ? { measurementId: linkQtySelected.id }
+          : { sourcePositionId: linkQtySelected.id },
+        Number(linkQtyFactor) || 1,
+      );
+      addToast({
+        type: 'success',
+        title: t('boq.link_quantity_done', { defaultValue: 'Quantité liée' }),
+        message: t('boq.link_quantity_done_hint', {
+          defaultValue: 'Quantité pilotée par la mesure : {{q}}',
+          q: res.quantity,
+        }),
+      });
+      queryClient.invalidateQueries({ queryKey: ['boq', boqId] });
+      setLinkQtyPositionId(null);
+    } catch (e) {
+      addToast({
+        type: 'error',
+        title: t('boq.link_quantity_failed', { defaultValue: 'Échec de la liaison' }),
+        message: String((e as Error)?.message ?? e),
+      });
+    } finally {
+      setLinkQtyBusy(false);
+    }
+  }, [linkQtyPositionId, linkQtySelected, linkQtyFactor, boqId, queryClient, addToast, t]);
+
+  const handleRefreshDriven = useCallback(async () => {
+    if (!boqId) return;
+    setLinkQtyBusy(true);
+    try {
+      const res = await boqApi.refreshDrivenQuantities(boqId);
+      addToast({
+        type: 'success',
+        title: t('boq.refresh_driven_done', { defaultValue: 'Quantités liées rafraîchies' }),
+        message: t('boq.refresh_driven_hint', {
+          defaultValue: '{{n}} position(s) mise(s) à jour{{stale}}',
+          n: res.updated,
+          stale: res.stale > 0 ? ` · ${res.stale} source(s) manquante(s)` : '',
+        }),
+      });
+      queryClient.invalidateQueries({ queryKey: ['boq', boqId] });
+    } catch (e) {
+      addToast({
+        type: 'error',
+        title: t('boq.refresh_driven_failed', { defaultValue: 'Échec du rafraîchissement' }),
+        message: String((e as Error)?.message ?? e),
+      });
+    } finally {
+      setLinkQtyBusy(false);
+    }
+  }, [boqId, queryClient, addToast, t]);
+  // //// END NEOFFICE PATCH
+
   /* ── Issue #127: linked-positions modal + unlink ──────────────────── */
   const [linksModalFor, setLinksModalFor] = useState<{
     id: string;
@@ -4807,6 +4933,7 @@ export function BOQEditorPage() {
           onLookupResourceByCode={handleLookupResourceByCode}
           onDuplicatePosition={handleDuplicatePosition}
           onReuseCode={handleReuseCode}
+          onLinkQuantity={handleLinkQuantity}
           onAddChildPosition={(parentId) => handleAddPosition(parentId)}
           onAddSubSection={handleAddSubSection}
           maxNestingDepth={maxNestingDepth}
@@ -5257,6 +5384,130 @@ export function BOQEditorPage() {
           parent_id: p.parent_id ?? null,
         }))}
       />
+
+      {/* //// NEOFFICE PATCH — linked-quantity dialog (measurement picker + factor) */}
+      {linkQtyPositionId && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+          onClick={() => setLinkQtyPositionId(null)}
+        >
+          <div
+            className="w-[30rem] max-w-[92vw] rounded-xl border border-border bg-surface-elevated p-5 shadow-lg"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="mb-1 text-sm font-semibold text-content-primary">
+              {t('boq.link_quantity_title', { defaultValue: 'Lier à une quantité mesurée' })}
+            </h3>
+            <p className="mb-3 text-xs text-content-tertiary">
+              {t('boq.link_quantity_desc', {
+                defaultValue:
+                  'La quantité de cette position sera pilotée par la mesure choisie × le facteur. Une même mesure peut piloter plusieurs positions.',
+              })}
+            </p>
+            <input
+              type="text"
+              value={linkQtySearch}
+              onChange={(e) => setLinkQtySearch(e.target.value)}
+              placeholder={t('boq.link_quantity_search', {
+                defaultValue: 'Rechercher une mesure ou une position…',
+              })}
+              className="mb-2 w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm text-content-primary"
+            />
+            {linkQtyLoadingList ? (
+              <div className="py-6 text-center text-xs text-content-tertiary">
+                {t('common.loading', { defaultValue: 'Chargement…' })}
+              </div>
+            ) : linkQtySources.length === 0 ? (
+              <div className="py-6 text-center text-xs text-content-tertiary">
+                {t('boq.link_quantity_none', {
+                  defaultValue: 'Aucune source (mesure ou position) trouvée.',
+                })}
+              </div>
+            ) : (
+              <div className="mb-3 max-h-60 overflow-y-auto rounded-lg border border-border">
+                {linkQtySources.map((s) => {
+                  const selected =
+                    linkQtySelected?.type === s.kind && linkQtySelected?.id === s.id;
+                  return (
+                    <button
+                      key={`${s.kind}:${s.id}`}
+                      type="button"
+                      onClick={() => setLinkQtySelected({ type: s.kind, id: s.id })}
+                      className={`flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-xs ${
+                        selected
+                          ? 'bg-oe-blue/10 text-content-primary'
+                          : 'text-content-secondary hover:bg-surface-secondary'
+                      }`}
+                    >
+                      <span className="flex min-w-0 items-center gap-2">
+                        <span
+                          className={`shrink-0 rounded px-1 text-[10px] ${
+                            s.kind === 'measurement'
+                              ? 'bg-emerald-100 text-emerald-700'
+                              : 'bg-sky-100 text-sky-700'
+                          }`}
+                        >
+                          {s.kind === 'measurement'
+                            ? t('boq.link_source_measure', { defaultValue: 'mesure' })
+                            : t('boq.link_source_position', { defaultValue: 'position' })}
+                        </span>
+                        <span className="truncate">{s.label}</span>
+                      </span>
+                      <span className="shrink-0 tabular-nums text-content-tertiary">
+                        {s.value} {s.unit}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+            <label className="mb-1 block text-xs font-medium text-content-secondary">
+              {t('boq.link_quantity_factor', { defaultValue: 'Facteur' })}
+            </label>
+            <input
+              type="number"
+              step="any"
+              value={linkQtyFactor}
+              onChange={(e) => setLinkQtyFactor(e.target.value)}
+              className="mb-1 w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm text-content-primary"
+            />
+            <p className="mb-4 text-[11px] text-content-tertiary">
+              {t('boq.link_quantity_factor_hint', {
+                defaultValue:
+                  'ex. parquet ×1 (m²) · béton = aire × épaisseur (m³) · +% de chute',
+              })}
+            </p>
+            <div className="flex items-center justify-between gap-2">
+              <button
+                type="button"
+                onClick={handleRefreshDriven}
+                disabled={linkQtyBusy}
+                className="text-xs text-content-tertiary underline hover:text-content-secondary disabled:opacity-50"
+              >
+                {t('boq.refresh_driven_action', { defaultValue: 'Rafraîchir tout le devis' })}
+              </button>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setLinkQtyPositionId(null)}
+                  className="rounded-lg px-3 py-2 text-sm text-content-secondary hover:bg-surface-secondary"
+                >
+                  {t('common.cancel', { defaultValue: 'Annuler' })}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleLinkQuantityConfirm}
+                  disabled={!linkQtySelected || linkQtyBusy}
+                  className="rounded-lg bg-oe-blue px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
+                >
+                  {t('boq.link_quantity_confirm', { defaultValue: 'Lier' })}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* //// END NEOFFICE PATCH */}
 
       {/* ── Linked Positions Modal (Issue #127) ───────────────────── */}
       {linksModalFor && (

@@ -490,10 +490,12 @@ async def element_metre(
 
 
 class LinkQuantityRequest(BaseModel):
-    """Drive one BOQ position from one takeoff measurement × factor."""
+    """Drive one BOQ position from a source × factor. The source is either a
+    takeoff ``measurement_id`` OR another ``source_position_id`` (exactly one)."""
 
     position_id: str
-    measurement_id: str
+    measurement_id: str | None = None
+    source_position_id: str | None = None
     factor: float = 1.0
 
 
@@ -518,17 +520,47 @@ async def link_quantity(
     drive several positions (call once per position). A slab area can feed the
     concrete, screed and parquet positions, each with its own factor.
     """
-    from app.modules.neoffice.quantity_link import link_position_to_measurement
+    from app.modules.boq.service import BOQService
+    from app.modules.neoffice.quantity_link import (
+        link_position_to_measurement,
+        link_position_to_position,
+    )
     from app.modules.takeoff.service import TakeoffService
 
-    measurement = await TakeoffService(session).get_measurement(uuid.UUID(request.measurement_id))
-    await _verify_project_access(session, measurement.project_id, user_id)
     try:
-        return await link_position_to_measurement(
-            session,
-            uuid.UUID(request.position_id),
-            uuid.UUID(request.measurement_id),
-            factor=request.factor,
+        if request.source_position_id:
+            # Source = another BOQ position's quantity (e.g. "Surface 2").
+            src = await BOQService(session).position_repo.get_by_id(
+                uuid.UUID(request.source_position_id)
+            )
+            if src is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND, detail="Source position not found"
+                )
+            project_id = await BOQService(session).position_repo.project_id_for_boq(src.boq_id)
+            if project_id is not None:
+                await _verify_project_access(session, project_id, user_id)
+            return await link_position_to_position(
+                session,
+                uuid.UUID(request.position_id),
+                uuid.UUID(request.source_position_id),
+                factor=request.factor,
+            )
+        if request.measurement_id:
+            # Source = a takeoff measurement (a zone/area extracted from a plan).
+            measurement = await TakeoffService(session).get_measurement(
+                uuid.UUID(request.measurement_id)
+            )
+            await _verify_project_access(session, measurement.project_id, user_id)
+            return await link_position_to_measurement(
+                session,
+                uuid.UUID(request.position_id),
+                uuid.UUID(request.measurement_id),
+                factor=request.factor,
+            )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="measurement_id or source_position_id required",
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
