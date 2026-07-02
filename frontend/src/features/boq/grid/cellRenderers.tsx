@@ -1113,7 +1113,7 @@ export function DescriptionCellRenderer(params: ICellRendererParams) {
     ) : null;
 
   if (!hasVariant && !hasDefault) {
-    if (!variantIconButton && !scopeHint && !breakdownPill) {
+    if (!variantIconButton && !scopeHint && !breakdownPill && !drivenByChip) {
       return descMultiline ? (
         <span className="block w-full whitespace-pre-wrap break-words leading-snug overflow-y-auto max-h-full">
           {displayValue}
