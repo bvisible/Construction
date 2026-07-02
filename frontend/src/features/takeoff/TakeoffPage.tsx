@@ -1308,16 +1308,41 @@ export function TakeoffPage() {
     const tab = searchParams.get('tab');
     if (!docId || tab !== 'measurements') return;
     if (viewerDoc) return; // already open
-    if (!serverDocuments || serverDocuments.length === 0) return;
-    const match = serverDocuments.find((d) => d.id === docId);
-    if (!match) return;
-    setViewerDoc({
-      url: `${API_BASE}/v1/takeoff/documents/${docId}/download/`,
-      name: match.filename,
-      id: docId,
-      projectId: match.project_id,
-    });
-    setActiveTab('measurements');
+    // Fast path: the document is already in the active project's list.
+    const match = serverDocuments?.find((d) => d.id === docId);
+    if (match) {
+      setViewerDoc({
+        url: `${API_BASE}/v1/takeoff/documents/${docId}/download/`,
+        name: match.filename,
+        id: docId,
+        projectId: match.project_id,
+      });
+      setActiveTab('measurements');
+      return;
+    }
+    // //// NEOFFICE PATCH — on a fresh reload / deep-link the active-project
+    // store still points at the LAST visited project, so a takeoff document
+    // that belongs to a different project never appears in the project-scoped
+    // ``serverDocuments`` list and the viewer stayed on the empty upload state
+    // ("le PDF disparaît au reload"). Fetch the document directly by id so the
+    // viewer re-hydrates regardless of which project is active. ``projectId``
+    // comes from the document itself, so measurements load for the right one.
+    let cancelled = false;
+    (async () => {
+      const doc = await takeoffApi.getDocument(docId).catch(() => null);
+      if (cancelled || !doc) return;
+      setViewerDoc({
+        url: `${API_BASE}/v1/takeoff/documents/${docId}/download/`,
+        name: doc.filename,
+        id: docId,
+        projectId: doc.project_id,
+      });
+      setActiveTab('measurements');
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // //// END NEOFFICE PATCH
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [serverDocuments, searchParams]);
 
