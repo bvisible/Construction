@@ -162,6 +162,38 @@ export const FormulaCellEditor = forwardRef(
 
     const preview = useMemo(() => previewFor(value, formulaCtx), [value, formulaCtx]);
 
+    // //// NEOFFICE PATCH — Excel-style variable autocomplete. While the user is
+    // typing a $token, suggest the BOQ variables so they don't have to memorise
+    // names (the #1 reason the feature "didn't work" in practice). Matches the
+    // partial $token at the end of the input.
+    const varSuggestions = useMemo(() => {
+      if (!formulaCtx) return [] as Array<{ name: string; value: unknown }>;
+      const m = value.match(/\$([A-Za-z_][A-Za-z0-9_]*)?$/);
+      if (!m) return [];
+      const partial = (m[1] ?? '').toUpperCase();
+      // Hide once the token already spells a full variable name exactly.
+      if (partial && formulaCtx.variables.has(partial)) return [];
+      const out: Array<{ name: string; value: unknown }> = [];
+      for (const [name, v] of formulaCtx.variables) {
+        if (name.startsWith(partial)) {
+          out.push({ name, value: (v as { value?: unknown })?.value });
+          if (out.length >= 8) break;
+        }
+      }
+      return out;
+    }, [value, formulaCtx]);
+
+    const insertVariable = (name: string) => {
+      const next = value.replace(/\$([A-Za-z_][A-Za-z0-9_]*)?$/, '$' + name);
+      const el = inputRef.current;
+      if (el) {
+        el.value = next;
+        el.focus();
+        el.setSelectionRange(next.length, next.length);
+      }
+      setValue(next);
+    };
+
     useEffect(() => {
       inputRef.current?.focus();
       inputRef.current?.select();
@@ -431,6 +463,30 @@ export const FormulaCellEditor = forwardRef(
           </div>
         )}
 
+        {/* //// NEOFFICE PATCH — variable autocomplete dropdown (type $ to filter) */}
+        {varSuggestions.length > 0 && !showHelp && (
+          <div
+            className="absolute left-0 top-full mt-0.5 z-30 max-h-52 w-[220px] overflow-y-auto rounded-lg border border-border-light bg-surface-elevated py-1 text-xs shadow-lg pointer-events-auto"
+            onMouseDown={(e) => e.preventDefault()}
+          >
+            {varSuggestions.map((s) => (
+              <button
+                key={s.name}
+                type="button"
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  insertVariable(s.name);
+                }}
+                className="flex w-full items-center justify-between gap-2 px-2.5 py-1 text-left hover:bg-surface-secondary"
+              >
+                <span className="font-mono text-violet-600 dark:text-violet-300">${s.name}</span>
+                <span className="tabular-nums text-content-tertiary">{String(s.value ?? '')}</span>
+              </button>
+            ))}
+          </div>
+        )}
+        {/* //// END NEOFFICE PATCH */}
+
         {/* Help popover — Excel-style cheat sheet */}
         {showHelp && (
           <div
@@ -468,6 +524,23 @@ export const FormulaCellEditor = forwardRef(
                 <li><span className="text-violet-600 dark:text-violet-300">12.5 x 4</span><span className="text-content-tertiary"> → 50</span></li>
               </ul>
             </div>
+            {/* //// NEOFFICE PATCH — list the BOQ variables so they're discoverable */}
+            {formulaCtx && formulaCtx.variables.size > 0 && (
+              <div className="mt-2.5 pt-2 border-t border-border-light/70">
+                <div className="font-semibold text-content-primary mb-1">Variables (type $ to insert)</div>
+                <div className="space-y-0.5 font-mono text-[10px]">
+                  {Array.from(formulaCtx.variables.entries()).slice(0, 12).map(([name, v]) => (
+                    <div key={name} className="flex justify-between gap-2">
+                      <span className="text-violet-600 dark:text-violet-300">${name}</span>
+                      <span className="text-content-tertiary tabular-nums">
+                        {String((v as { value?: unknown })?.value ?? '')}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {/* //// END NEOFFICE PATCH */}
             <div className="mt-2 text-[10px] text-content-tertiary">
               Prefix with <kbd className="px-1 rounded bg-surface-secondary">=</kbd> or just type the expression. Press <kbd className="px-1 rounded bg-surface-secondary">Esc</kbd> to close.
             </div>
