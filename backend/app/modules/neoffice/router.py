@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
+from pydantic import BaseModel
 
 from app.dependencies import SessionDep, SettingsDep, get_current_user_id
 from app.modules.bim_hub import file_storage as bim_file_storage
@@ -483,6 +484,99 @@ async def element_metre(
             status_code=status.HTTP_502_BAD_GATEWAY, detail="Element métré failed"
         ) from exc
     return {"document_id": request.document_id, **result}
+
+
+# ── Linked quantity (Neoffice) — one measurement drives many BOQ positions ────
+
+
+class LinkQuantityRequest(BaseModel):
+    """Drive one BOQ position from one takeoff measurement × factor."""
+
+    position_id: str
+    measurement_id: str
+    factor: float = 1.0
+
+
+class RefreshDrivenRequest(BaseModel):
+    boq_id: str
+
+
+class UnlinkQuantityRequest(BaseModel):
+    position_id: str
+
+
+@router.post("/boq/link-quantity/")
+async def link_quantity(
+    request: LinkQuantityRequest,
+    session: SessionDep,
+    user_id: str = Depends(get_current_user_id),
+) -> dict[str, Any]:
+    """Drive a BOQ position's quantity from a takeoff measurement (× factor).
+
+    Neoffice one-to-many linked quantity: upstream links a measurement to a single
+    position; this stores the link on the position so the SAME measurement can
+    drive several positions (call once per position). A slab area can feed the
+    concrete, screed and parquet positions, each with its own factor.
+    """
+    from app.modules.neoffice.quantity_link import link_position_to_measurement
+    from app.modules.takeoff.service import TakeoffService
+
+    measurement = await TakeoffService(session).get_measurement(uuid.UUID(request.measurement_id))
+    await _verify_project_access(session, measurement.project_id, user_id)
+    try:
+        return await link_position_to_measurement(
+            session,
+            uuid.UUID(request.position_id),
+            uuid.UUID(request.measurement_id),
+            factor=request.factor,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+
+@router.post("/boq/refresh-driven/")
+async def refresh_driven(
+    request: RefreshDrivenRequest,
+    session: SessionDep,
+    user_id: str = Depends(get_current_user_id),
+) -> dict[str, Any]:
+    """Re-push every driven position in a BOQ from its source measurement (live).
+
+    Run after re-measuring the plan to update the whole devis in one click.
+    """
+    from app.modules.boq.service import BOQService
+    from app.modules.neoffice.quantity_link import refresh_driven_quantities
+
+    boq_id = uuid.UUID(request.boq_id)
+    project_id = await BOQService(session).position_repo.project_id_for_boq(boq_id)
+    if project_id is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="BOQ not found")
+    await _verify_project_access(session, project_id, user_id)
+    return await refresh_driven_quantities(session, boq_id)
+
+
+@router.post("/boq/unlink-quantity/")
+async def unlink_quantity(
+    request: UnlinkQuantityRequest,
+    session: SessionDep,
+    user_id: str = Depends(get_current_user_id),
+) -> dict[str, Any]:
+    """Remove a position's driven-by link (leaves its current quantity as-is)."""
+    from app.modules.boq.service import BOQService
+    from app.modules.neoffice.quantity_link import unlink_position
+
+    position_id = uuid.UUID(request.position_id)
+    boq = BOQService(session)
+    position = await boq.position_repo.get_by_id(position_id)
+    if position is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Position not found")
+    project_id = await boq.position_repo.project_id_for_boq(position.boq_id)
+    if project_id is not None:
+        await _verify_project_access(session, project_id, user_id)
+    try:
+        return await unlink_position(session, position_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
 
 def _room_detection_confidence(room: DetectedRoom) -> float:
