@@ -542,6 +542,9 @@ export interface ResourceGridContext {
 }
 
 export type FullGridContext = ActionsContext & ResourceGridContext & SectionGroupContext & {
+  // //// NEOFFICE — FormulaContext (positions + BOQ variables) the quantity cell
+  // editor reads to resolve $VARIABLES and pos()/section() references.
+  formulaContext?: import('./formula').FormulaContext;
   /** Description-density preference: how tall a position description renders
    *  at rest (compact = one truncated line, comfortable/tall = multi-line
    *  Langtext with newlines honoured). Driven by the BOQ toolbar toggle. */

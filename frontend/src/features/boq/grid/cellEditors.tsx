@@ -116,18 +116,18 @@ type FormulaPreview =
   | { kind: 'ok'; v: number }
   | { kind: 'err'; m: string };
 
-function previewFor(input: string): FormulaPreview {
+function previewFor(input: string, ctx?: FormulaContext): FormulaPreview {
   const t = input.trim();
   if (!t) return { kind: 'idle' };
   if (!isFormula(t)) {
     const n = parseFloat(t.replace(',', '.'));
     return isFinite(n) ? { kind: 'number', v: n } : { kind: 'err', m: 'Not a number' };
   }
-  // The grid editor preview operates without a FormulaContext (the
-  // editor is mounted inside a single cell and doesn't have access to
-  // the full positions list), so $VAR / pos(...) preview as a parser
-  // error here. Live evaluation with a context happens elsewhere.
-  const r = evalFormulaImpl(t);
+  // //// NEOFFICE PATCH — pass the FormulaContext (live positions + BOQ
+  // $VARIABLES, supplied via gridContext.formulaContext) so a $VAR or
+  // pos()/section() reference RESOLVES in the preview instead of erroring
+  // "unresolved reference". Upstream evaluated context-less here.
+  const r = evalFormulaImpl(t, ctx);
   if (r === null) return { kind: 'err', m: 'Syntax error or unresolved reference' };
   return { kind: 'ok', v: r };
 }
@@ -150,7 +150,17 @@ export const FormulaCellEditor = forwardRef(
     const lastParsedRef = useRef<number | null>(null);
     const lastFormulaRef = useRef<string>('');
 
-    const preview = useMemo(() => previewFor(value), [value]);
+    // //// NEOFFICE PATCH — the FormulaContext (live positions + BOQ $VARIABLES)
+    // is supplied on gridContext.formulaContext; stamp it with the current
+    // position id for self-reference detection. This is what lets $GAZON etc.
+    // resolve in a quantity formula (previously context-less → "unresolved").
+    const formulaCtx = useMemo<FormulaContext | undefined>(() => {
+      const base = (props.context as { formulaContext?: FormulaContext } | undefined)
+        ?.formulaContext;
+      return base ? { ...base, currentPositionId: props.data?.id } : undefined;
+    }, [props.context, props.data?.id]);
+
+    const preview = useMemo(() => previewFor(value, formulaCtx), [value, formulaCtx]);
 
     useEffect(() => {
       inputRef.current?.focus();
@@ -195,7 +205,7 @@ export const FormulaCellEditor = forwardRef(
       let parsed: number;
       let formulaSrc = '';
       if (isFormula(trimmed)) {
-        const result = evaluateFormula(trimmed);
+        const result = evaluateFormula(trimmed, formulaCtx); // //// NEOFFICE: with $VAR context
         if (result !== null) {
           parsed = result;
           formulaSrc = trimmed;

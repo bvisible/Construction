@@ -62,6 +62,8 @@ import {
 } from '@/features/collab_locks';
 import { getColumnDefs, getCustomColumnDefs } from './grid/columnDefs';
 import type { FormulaVariable } from './grid/formula';
+// //// NEOFFICE — build a FormulaContext so the quantity editor resolves $VARIABLES.
+import { buildFormulaContext } from './grid/formula';
 import {
   FormulaCellEditor,
   AutocompleteCellEditor,
@@ -1104,6 +1106,19 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
   const displayQuantity = useDisplayQuantity();
 
   /* ── Context for column formatters + section group + resources + actions */
+  // //// NEOFFICE PATCH — a FormulaContext (live positions + BOQ variables) for
+  // the quantity cell editor. Upstream only built one for calculated columns, so
+  // a $VARIABLE typed into a quantity fell through to a context-less eval and
+  // errored ("unresolved reference"). Exposed via gridContext for the editor.
+  const formulaContext = useMemo(() => {
+    const variables = new Map<string, FormulaVariable>();
+    for (const v of boqVariables ?? []) {
+      variables.set(v.name.toUpperCase(), { type: v.type, value: v.value });
+    }
+    return buildFormulaContext({ positions, variables });
+  }, [positions, boqVariables]);
+  // //// END NEOFFICE PATCH
+
   const gridContext = useMemo(
     () => ({
       currencySymbol,
@@ -1166,6 +1181,8 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
       // Issue #90: FormulaCellEditor reads onFormulaApplied via context
       // because the Quantity column doesn't supply cellEditorParams.
       onFormulaApplied,
+      // //// NEOFFICE — FormulaContext so the quantity editor resolves $VARIABLES.
+      formulaContext,
       // v2.9.29 — full-width resource rows iterate `customColumns` to
       // render slots aligned with regional-preset columns; reading
       // `positions` lets the renderer surface per-resource custom_fields
@@ -1184,7 +1201,7 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
      onDeletePosition, onSaveToDatabase, onAddComment,
      onDuplicatePosition, showContextMenu, anomalyMap, onApplyAnomalySuggestion, bimModelId,
      onUpdatePosition, onHighlightBIMElements, onDeleteSection, onReorderSections, onFormulaApplied,
-     positions, customColumns, showResourceSplit, renderInlineCopilot, displayQuantity],
+     positions, customColumns, showResourceSplit, renderInlineCopilot, displayQuantity, formulaContext],
   );
 
   /* ── Column defs (standard + custom) ─────────────────────────────── */
