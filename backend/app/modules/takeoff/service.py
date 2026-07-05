@@ -2105,12 +2105,17 @@ class TakeoffService:
         position = await boq_service.position_repo.get_by_id(position_uuid)
         if position is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="BOQ position not found")
-        boq = await boq_service.get_boq(position.boq_id)
-        if str(boq.project_id) != str(project_id):
+        # //// NEOFFICE PATCH — get_boq() eager-loads the WHOLE BOQ (every
+        # position + assembly + component); on a large devis (Protti, 342 pos /
+        # 327 analyses) this IDOR check hung for tens of seconds. Only the
+        # project_id is needed — resolve it with a single-column query.
+        boq_project_id = await boq_service.position_repo.project_id_for_boq(position.boq_id)
+        if str(boq_project_id) != str(project_id):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="BOQ position not found in this project",
             )
+        # //// END NEOFFICE PATCH
 
     async def _push_quantity_to_position(self, boq_position_id: str, measurement: Any) -> None:
         """Copy a measurement's value into a BOQ position's quantity.
@@ -2350,9 +2355,12 @@ class TakeoffService:
             position = await boq_service.position_repo.get_by_id(position_uuid)
             if position is None:
                 return None, None
-            boq = await boq_service.get_boq(position.boq_id)
-            if str(boq.project_id) != str(project_id):
+            # //// NEOFFICE PATCH — avoid a full get_boq() just to read project_id
+            # (heavy on large devis); use the single-column lookup instead.
+            boq_project_id = await boq_service.position_repo.project_id_for_boq(position.boq_id)
+            if str(boq_project_id) != str(project_id):
                 return None, None
+            # //// END NEOFFICE PATCH
             base_currency = await boq_service._resolve_project_currency(position.boq_id)  # noqa: SLF001
             return str(position.unit_rate), (base_currency or None)
         except HTTPException:
