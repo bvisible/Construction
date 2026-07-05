@@ -334,6 +334,26 @@ _COUNTRY_TEMPLATES: list[dict[str, Any]] = [
         "cascade_steps": _flat_steps(overhead="12", profit="7", vat="20"),
         "vat_rate": "20",
     },
+    # //// NEOFFICE PATCH — Swiss estimating methodology (backport of upstream
+    # v10 template) so Protti (Sottens VD) gets a CH cascade with the current
+    # 8.1% MWST rate (raised from 7.7% on 2024-01-01). Drop at the v10 merge.
+    {
+        "slug": "switzerland",
+        "name": "Switzerland",
+        "description": "Swiss flat estimate with overhead, profit and MWST.",
+        "country_code": "CH",
+        "industry": None,
+        "currency": "CHF",
+        "decimals": 2,
+        "hierarchy_levels": _FLAT_HIERARCHY,
+        "dimensions": [_stage_dimension()],
+        "column_preset": None,
+        "base_mapping": _FLAT_BASE_MAPPING,
+        "composites": _FLAT_COMPOSITES,
+        "cascade_steps": _flat_steps(overhead="12", profit="8", vat="8.1"),
+        "vat_rate": "8.1",
+    },
+    # //// END NEOFFICE PATCH
     {
         "slug": "united_arab_emirates",
         "name": "United Arab Emirates",
