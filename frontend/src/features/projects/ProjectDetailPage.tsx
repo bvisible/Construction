@@ -48,6 +48,7 @@ import { DismissibleInfo } from '@/shared/ui/DismissibleInfo';
 import { ProjectLayoutManager } from './ProjectLayoutManager';
 import { ProjectStatusBadge, CURATED_PROJECT_STATUSES, useProjectStatusLabel } from './ProjectStatusBadge';
 import { SiteTravelCard } from './components/SiteTravelCard';
+import { LaborTariffSettings } from '@/features/settings/LaborTariffSettings';
 import { StatusHistoryTimeline } from './StatusHistoryTimeline';
 import { useProjectDetailLayoutStore } from '@/stores/useProjectDetailLayoutStore';
 import {
@@ -1840,6 +1841,7 @@ export function ProjectDetailPage() {
           className="grid-cols-1 sm:grid-cols-2 lg:grid-cols-3"
         >
           {project && <SiteTravelCard project={project} />}
+          <LaborTariffSettings />
         </WidgetSection>
         {/* //// END NEOFFICE PATCH */}
 
