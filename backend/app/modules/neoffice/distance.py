@@ -70,6 +70,14 @@ async def depot_to_site(site_address: str, depot_address: str | None = None) -> 
     """
     depot = await geocode(depot_address or DEPOT_ADDRESS)
     site = await geocode(site_address)
+    # Robustness: a street name Nominatim doesn't know (typo, new road, rural
+    # locality) fails the full-address geocode. Retry on the locality by dropping
+    # the leading comma-segment (usually the street) — travel time is city-level
+    # anyway, so this keeps the déplacement working for any real project address.
+    site_resolved = site_address
+    while site is None and "," in site_resolved:
+        site_resolved = site_resolved.split(",", 1)[1].strip()
+        site = await geocode(site_resolved)
     if depot is None or site is None:
         return {"error": "geocode_failed", "depot_found": depot is not None, "site_found": site is not None}
     leg = await route(depot[0], depot[1], site[0], site[1])
