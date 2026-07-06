@@ -1875,14 +1875,20 @@ export function CatalogPage() {
         </div>
       </Card>
 
-      <div className="lg:grid lg:grid-cols-[220px_minmax(0,1fr)] lg:gap-5">
+      {/* //// NEOFFICE PATCH — was lg:grid lg:grid-cols-[220px_minmax(0,1fr)].
+          Same bug as CostsPage (fix 143a03fe8): when the category aside is
+          display:none, CSS grid auto-places the content into the FIRST 220px
+          track and leaves the 1fr track empty, clipping the table to ~220px.
+          Flex instead: the hidden aside takes 0 width and the content (lg:flex-1)
+          fills the row. */}
+      <div className="lg:flex lg:gap-5">
 
       {/* Category sidebar (desktop) — flat list because /catalog categories
           live in `stats.by_category` (no parent/child hierarchy, unlike
           /costs which has a real classification tree). Click → applies the
           same `category` filter the toolbar dropdown uses, so the two
           stay in sync. Hidden below `lg:` so mobile keeps the dropdown. */}
-      <aside className="hidden lg:block lg:sticky lg:top-4 lg:self-start">
+      <aside className="hidden lg:block lg:w-[220px] lg:shrink-0 lg:sticky lg:top-4 lg:self-start">
         <Card padding="none" className="overflow-hidden">
           <div className="px-3 py-2.5 border-b border-border-light bg-surface-secondary/40 flex items-center justify-between">
             <span className="text-xs font-semibold text-content-secondary">
@@ -1948,7 +1954,7 @@ export function CatalogPage() {
         </Card>
       </aside>
 
-      <div className="min-w-0">
+      <div className="min-w-0 lg:flex-1">
 
       {/* Results Table */}
       {isLoading ? (
