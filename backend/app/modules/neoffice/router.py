@@ -806,3 +806,24 @@ async def create_room_detection_proposals(
         proposal_count=len(proposals),
         stats={**detected.stats, "proposal_count": len(proposals)},
     )
+
+
+# //// NEOFFICE PATCH — Sottens -> site travel distance via OpenStreetMap
+# (Nominatim geocoding + OSRM routing, no API key). Feeds the déplacement
+# component of the composed Protti labour tariff.
+class DepotToSiteRequest(BaseModel):
+    site_address: str
+    depot_address: str | None = None
+
+
+@router.post("/distance/depot-to-site/")
+async def compute_depot_to_site(
+    request: DepotToSiteRequest,
+    user_id: str = Depends(get_current_user_id),
+) -> dict[str, Any]:
+    """Driving distance depot (Sottens) -> construction site via OpenStreetMap,
+    with the CN/CCT travel split (driver paid all, passengers the excess)."""
+    from app.modules.neoffice import distance
+
+    return await distance.depot_to_site(request.site_address, request.depot_address)
+# //// END NEOFFICE PATCH
