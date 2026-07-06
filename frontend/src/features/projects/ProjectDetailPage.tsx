@@ -47,6 +47,7 @@ import {
 import { DismissibleInfo } from '@/shared/ui/DismissibleInfo';
 import { ProjectLayoutManager } from './ProjectLayoutManager';
 import { ProjectStatusBadge, CURATED_PROJECT_STATUSES, useProjectStatusLabel } from './ProjectStatusBadge';
+import { SiteTravelCard } from './components/SiteTravelCard';
 import { StatusHistoryTimeline } from './StatusHistoryTimeline';
 import { useProjectDetailLayoutStore } from '@/stores/useProjectDetailLayoutStore';
 import {
@@ -1830,6 +1831,17 @@ export function ProjectDetailPage() {
             <VariationsWidget projectId={projectId!} currency={currency ?? ''} />
           )}
         </WidgetSection>
+
+        {/* //// NEOFFICE PATCH — Main-d'œuvre: composed labour tariff + the
+            Sottens->site travel cost, computed live (OSM + CN/CCT rule). */}
+        <WidgetSection
+          icon={<HardHat size={14} />}
+          title={t('project.section.labor', { defaultValue: 'Main-d’œuvre & déplacement' })}
+          className="grid-cols-1 sm:grid-cols-2 lg:grid-cols-3"
+        >
+          {project && <SiteTravelCard project={project} />}
+        </WidgetSection>
+        {/* //// END NEOFFICE PATCH */}
 
         {/* Field: what's happening on site today. */}
         <WidgetSection

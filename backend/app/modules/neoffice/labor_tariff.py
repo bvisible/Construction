@@ -71,7 +71,14 @@ def compose(base_hourly: str | float, params: TariffParams | None = None, travel
         dep_driver = travel_per_hour(travel["driver_billable_min"])
         dep_passenger = travel_per_hour(travel["passenger_billable_min"])
         result.update({
+            # The déplacement is billed on TIME (minutes), not distance — the km
+            # is shown for context only. The CN/CCT rule works on minutes.
             "distance_km": travel["distance_km"],
+            "one_way_min": travel["one_way_min"],
+            "round_trip_min": travel["round_trip_min"],
+            "offered_min": travel["offered_min"],
+            "driver_billable_min": travel["driver_billable_min"],
+            "passenger_billable_min": travel["passenger_billable_min"],
             "deplacement_horaire_conducteur_chf": str(dep_driver),
             "deplacement_horaire_passager_chf": str(dep_passenger),
             "cout_horaire_conducteur_chf": str(_q(fixed + dep_driver)),
