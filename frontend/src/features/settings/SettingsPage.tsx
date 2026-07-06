@@ -5,6 +5,7 @@ import { getIntlLocale } from '@/shared/lib/formatters';
 import { TranslationManager } from './TranslationManager';
 import { BackupRestore } from './BackupRestore';
 import { RegionalSettings } from './RegionalSettings';
+import { LaborTariffSettings } from './LaborTariffSettings';
 import { SettingsTeamPanel } from './SettingsTeamPanel';
 import { WebhookLeads } from './WebhookLeads';
 import VectorStatusCard from './VectorStatusCard';
@@ -1658,6 +1659,9 @@ export function SettingsPage() {
           {/* ── REGIONAL ─────────────────────────────────────────── */}
           {activeTab === 'regional' && (
             <>
+              {/* //// NEOFFICE PATCH — labour tariff calibration (Protti) */}
+              <LaborTariffSettings />
+              {/* //// END NEOFFICE PATCH */}
               {/* Language picker */}
               <Card className="lg:col-span-2">
                 <CardHeader
