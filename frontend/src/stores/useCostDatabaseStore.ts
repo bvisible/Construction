@@ -25,6 +25,12 @@ interface RegionInfo {
 }
 
 export const REGION_MAP: Record<string, RegionInfo> = {
+  // //// NEOFFICE PATCH — Switzerland (CHF) region. Our primary market; the
+  // upstream map ships no CH entry, so resources tagged region='CH' (the Protti
+  // catalogue) rendered under no tab at all (CatalogPage bails on a missing
+  // REGION_MAP entry) and the page fell back to the generic import screen.
+  CH: { label: 'Suisse (CHF)', name: 'Suisse', flag: 'ch', currency: 'CHF' },
+  // //// END NEOFFICE PATCH
   USA_USD: { label: 'USA (USD)', name: 'United States', flag: 'us', currency: 'USD' },
   UK_GBP: { label: 'UK (GBP)', name: 'United Kingdom', flag: 'gb', currency: 'GBP' },
   DE_BERLIN: { label: 'Germany (EUR)', name: 'Germany / DACH', flag: 'de', currency: 'EUR' },
