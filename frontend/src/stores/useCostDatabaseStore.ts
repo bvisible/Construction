@@ -25,11 +25,13 @@ interface RegionInfo {
 }
 
 export const REGION_MAP: Record<string, RegionInfo> = {
-  // //// NEOFFICE PATCH — Switzerland (CHF) region. Our primary market; the
-  // upstream map ships no CH entry, so resources tagged region='CH' (the Protti
-  // catalogue) rendered under no tab at all (CatalogPage bails on a missing
-  // REGION_MAP entry) and the page fell back to the generic import screen.
+  // //// NEOFFICE PATCH — Swiss catalog bases. Upstream ships no CH entry, so a
+  // resource whose region isn't in REGION_MAP renders under no tab at all
+  // (CatalogPage bails on a missing entry) and the page falls back to the import
+  // screen. Two bases: 'CH' = neutral Swiss reference (CFC / open data, shared),
+  // 'PROTTI' = the client's own catalogue (private to the Protti instance).
   CH: { label: 'Suisse (CHF)', name: 'Suisse', flag: 'ch', currency: 'CHF' },
+  PROTTI: { label: 'Protti (CHF)', name: 'Protti', flag: 'ch', currency: 'CHF' },
   // //// END NEOFFICE PATCH
   USA_USD: { label: 'USA (USD)', name: 'United States', flag: 'us', currency: 'USD' },
   UK_GBP: { label: 'UK (GBP)', name: 'United Kingdom', flag: 'gb', currency: 'GBP' },
