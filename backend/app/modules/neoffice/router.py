@@ -826,4 +826,41 @@ async def compute_depot_to_site(
     from app.modules.neoffice import distance
 
     return await distance.depot_to_site(request.site_address, request.depot_address)
+
+
+# //// NEOFFICE PATCH — composed labour tariff (the estimating "moteur"): base wage
+# -> composed hourly cost (charges + repas + indemnité + déplacement). With a site
+# address it pulls the OSM distance and returns driver + passenger tariffs.
+class LaborTariffRequest(BaseModel):
+    base_hourly: float
+    site_address: str | None = None
+    depot_address: str | None = None
+    charges_pct: str | None = None
+    repas_jour: str | None = None
+    indemnite_jour: str | None = None
+    heures_jour: str | None = None
+
+
+@router.post("/labor-tariff/compose/")
+async def compose_labor_tariff_endpoint(
+    request: LaborTariffRequest,
+    user_id: str = Depends(get_current_user_id),
+) -> dict[str, Any]:
+    """Compose the real hourly labour cost from a CN base wage, optionally adding
+    the distance-based déplacement (driver + passenger tariffs, CN/CCT split)."""
+    from app.modules.neoffice import distance, labor_tariff
+
+    overrides = {
+        k: v for k, v in {
+            "charges_pct": request.charges_pct,
+            "repas_jour": request.repas_jour,
+            "indemnite_jour": request.indemnite_jour,
+            "heures_jour": request.heures_jour,
+        }.items() if v is not None
+    }
+    params = labor_tariff.TariffParams(**overrides)
+    travel = None
+    if request.site_address:
+        travel = await distance.depot_to_site(request.site_address, request.depot_address)
+    return labor_tariff.compose(request.base_hourly, params, travel)
 # //// END NEOFFICE PATCH
