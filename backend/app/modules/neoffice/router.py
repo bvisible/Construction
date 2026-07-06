@@ -841,15 +841,35 @@ class LaborTariffRequest(BaseModel):
     heures_jour: str | None = None
 
 
+class LaborParamsUpdate(BaseModel):
+    charges_pct: str
+    repas_jour: str
+    indemnite_jour: str
+    heures_jour: str
+
+
+async def _load_labor_params(session: Any, user_id: str) -> dict[str, str]:
+    """Read the calibrated labour params stored on the user's metadata_ (or {})."""
+    from app.modules.neoffice import labor_tariff
+    from app.modules.users.models import User
+
+    user = await session.get(User, user_id)
+    meta = (user.metadata_ or {}) if user else {}
+    return meta.get(labor_tariff.PARAMS_META_KEY, {}) or {}
+
+
 @router.post("/labor-tariff/compose/")
 async def compose_labor_tariff_endpoint(
     request: LaborTariffRequest,
+    session: SessionDep,
     user_id: str = Depends(get_current_user_id),
 ) -> dict[str, Any]:
     """Compose the real hourly labour cost from a CN base wage, optionally adding
-    the distance-based déplacement (driver + passenger tariffs, CN/CCT split)."""
+    the distance-based déplacement (driver + passenger tariffs, CN/CCT split).
+    Uses the instance's calibrated parameters, overridable per request."""
     from app.modules.neoffice import distance, labor_tariff
 
+    stored = await _load_labor_params(session, user_id)
     overrides = {
         k: v for k, v in {
             "charges_pct": request.charges_pct,
@@ -858,9 +878,45 @@ async def compose_labor_tariff_endpoint(
             "heures_jour": request.heures_jour,
         }.items() if v is not None
     }
-    params = labor_tariff.TariffParams(**overrides)
+    params = labor_tariff.TariffParams(**{**stored, **overrides})
     travel = None
     if request.site_address:
         travel = await distance.depot_to_site(request.site_address, request.depot_address)
     return labor_tariff.compose(request.base_hourly, params, travel)
+
+
+@router.get("/labor-tariff/params/")
+async def get_labor_params(
+    session: SessionDep,
+    user_id: str = Depends(get_current_user_id),
+) -> dict[str, str]:
+    """Return the calibrated labour composition params (defaults where unset)."""
+    from app.modules.neoffice import labor_tariff
+
+    return {**labor_tariff.DEFAULTS, **(await _load_labor_params(session, user_id))}
+
+
+@router.put("/labor-tariff/params/")
+async def put_labor_params(
+    request: LaborParamsUpdate,
+    session: SessionDep,
+    user_id: str = Depends(get_current_user_id),
+) -> dict[str, str]:
+    """Persist the calibrated labour composition params (on the user's metadata_)."""
+    from app.modules.neoffice import labor_tariff
+    from app.modules.users.models import User
+
+    user = await session.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="user not found")
+    meta = dict(user.metadata_ or {})
+    meta[labor_tariff.PARAMS_META_KEY] = {
+        "charges_pct": request.charges_pct,
+        "repas_jour": request.repas_jour,
+        "indemnite_jour": request.indemnite_jour,
+        "heures_jour": request.heures_jour,
+    }
+    user.metadata_ = meta
+    await session.commit()
+    return meta[labor_tariff.PARAMS_META_KEY]
 # //// END NEOFFICE PATCH

@@ -21,6 +21,18 @@ from __future__ import annotations
 from decimal import ROUND_HALF_UP, Decimal
 
 
+# Documented defaults (strings) — the starting point before Protti calibrates.
+DEFAULTS: dict[str, str] = {
+    "charges_pct": "0.42",
+    "repas_jour": "23.00",
+    "indemnite_jour": "0.00",
+    "heures_jour": "8.4",
+}
+
+# Keys stored under user.metadata_ for the per-instance calibration.
+PARAMS_META_KEY = "neoffice_labor_tariff_params"
+
+
 class TariffParams:
     """Composition parameters — defaults are documented, calibratable starting points."""
 
