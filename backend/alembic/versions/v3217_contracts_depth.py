@@ -110,7 +110,7 @@ def upgrade() -> None:
     bind = op.get_bind()
     inspector = sa.inspect(bind)
     is_sqlite = bind.dialect.name == "sqlite"
-    guid_type = sa.String(36) if is_sqlite else sa.dialects.postgresql.UUID(as_uuid=True)
+    guid_type = sa.String(36)  # //// NEOFFICE PATCH: OCE ids are VARCHAR(36) not UUID (PG FK compat) //// END NEOFFICE PATCH
 
     def _common_cols() -> list[sa.Column]:
         return [
