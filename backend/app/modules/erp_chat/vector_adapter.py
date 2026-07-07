@@ -1,4 +1,4 @@
-"""‌⁠‍ERP Chat message vector adapter - feeds the ``oe_chat`` collection.
+"""ERP Chat message vector adapter - feeds the ``oe_chat`` collection.
 
 Indexes the textual ``content`` field of every chat message so the
 AI advisor and global semantic search can recall past conversations
@@ -23,13 +23,13 @@ _INDEXABLE_ROLES = {"user", "assistant"}
 
 
 class ChatMessageAdapter:
-    """‌⁠‍Embed chat messages into the unified vector store."""
+    """Embed chat messages into the unified vector store."""
 
     collection_name: str = COLLECTION_CHAT
     module_name: str = "chat"
 
     def to_text(self, row: ChatMessage) -> str:
-        """‌⁠‍Return the message body, or empty string if it should be skipped.
+        """Return the message body, or empty string if it should be skipped.
 
         We skip messages whose role is not user/assistant (system + tool
         rows are infrastructure noise) and any row with empty content.

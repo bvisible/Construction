@@ -1,4 +1,4 @@
-"""‌⁠‍OpenCDE API routes.
+"""OpenCDE API routes.
 
 BuildingSMART-compliant API endpoints:
 
@@ -86,7 +86,7 @@ async def _accessible_project_ids(session: SessionDep, payload: dict) -> set[str
 
 @router.get("/foundation/versions/", response_model=FoundationVersions)
 async def foundation_versions() -> FoundationVersions:
-    """‌⁠‍Return supported API versions (OpenCDE Foundation API 1.1)."""
+    """Return supported API versions (OpenCDE Foundation API 1.1)."""
     return FoundationVersions(
         versions=[
             {
@@ -105,7 +105,7 @@ async def foundation_versions() -> FoundationVersions:
 
 @router.get("/foundation/1.1/auth/", response_model=FoundationAuth)
 async def foundation_auth() -> FoundationAuth:
-    """‌⁠‍Return authentication info (OpenCDE Foundation API 1.1)."""
+    """Return authentication info (OpenCDE Foundation API 1.1)."""
     return FoundationAuth(
         oauth2_auth_url="",
         oauth2_token_url="",

@@ -1,4 +1,4 @@
-"""‌⁠‍Unit tests for the Risk Register Monte Carlo simulation (v3.11 — T1).
+"""Unit tests for the Risk Register Monte Carlo simulation (v3.11 — T1).
 
 Covers:
 
@@ -83,7 +83,7 @@ def _create(**overrides) -> RiskCreate:
 
 
 async def _seed_three_risks(svc: RiskService) -> list[uuid.UUID]:
-    """‌⁠‍Seed three risks with explicit PERT triples for cost+schedule."""
+    """Seed three risks with explicit PERT triples for cost+schedule."""
     r1 = await svc.create_risk(_create(title="Foundation soil", probability=0.5))
     r2 = await svc.create_risk(_create(title="Permit delay", probability=0.3))
     r3 = await svc.create_risk(_create(title="Steel price spike", probability=0.7, impact_severity="high"))

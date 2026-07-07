@@ -895,12 +895,19 @@ interface PhotoItem {
 }
 
 // A general project document, as serialised by GET /v1/documents/. We only
-// need enough to spot image uploads and address their thumbnail.
+// need enough to spot image uploads, classify them field-vs-general, and
+// address their thumbnail.
 interface DocImageItem {
   id: string;
   name: string;
   mime_type?: string | null;
   created_at?: string;
+  // ``photo`` for the twin row auto-created beside every site/diary photo
+  // upload (documents/service.py), else the user-chosen document category.
+  category?: string | null;
+  // Free-form labels; a "field" tag (added via the photo gallery editor)
+  // promotes an arbitrary image into the site-photo strip.
+  tags?: string[] | null;
 }
 
 // One tile in the strip, regardless of whether it came from the dedicated
@@ -918,21 +925,46 @@ interface StripImage {
 
 const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|bmp|tiff?|heic|heif|avif|svg)$/i;
 
-/** True when a general document is an image we can show in the strip. */
+/** True when a general document is an image (by mime or extension). */
 function isImageDocument(doc: DocImageItem): boolean {
   if (doc.mime_type && doc.mime_type.toLowerCase().startsWith('image/')) return true;
   return IMAGE_EXT_RE.test(doc.name ?? '');
 }
 
+/**
+ * True when an image *document* counts as FIELD/SITE imagery for the strip.
+ *
+ * The strip must show site documentation only, never office renders (#284
+ * follow-up). The canonical "field vs general" signal is shared across the
+ * codebase (see PhotoGalleryPage + notes):
+ *   - a dedicated ``ProjectPhoto`` (always field) - handled separately, and
+ *   - a ``Document`` carrying an explicit ``field`` tag.
+ *
+ * We deliberately EXCLUDE ``category === 'photo'`` rows: those are the twin
+ * documents auto-created beside every site/diary photo upload, so the same
+ * image would otherwise appear twice (once from the photos endpoint, once
+ * from here). Skipping them dedupes the strip; the ProjectPhoto carries the
+ * canonical tile.
+ */
+function isFieldImageDocument(doc: DocImageItem): boolean {
+  if (!isImageDocument(doc)) return false;
+  if ((doc.category ?? '').toLowerCase() === 'photo') return false; // twin row
+  const tags = (doc.tags ?? []).map((tg) => tg.toLowerCase());
+  return tags.includes('field');
+}
+
 export function PhotoStripWidget({ projectId }: { projectId: string }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  // Two sources feed the strip:
-  //  1. dedicated site photos (the Photos tab / daily-diary captures), and
-  //  2. image files uploaded straight into Project Files as documents.
-  // Tigercatman (#284) reported that images uploaded into project files never
-  // showed here because the widget only read the photos table. We now merge
-  // both so any uploaded image surfaces, newest-first.
+  // The strip is FIELD/SITE documentation only (#284 follow-up). Two sources
+  // feed it, but both are filtered to site imagery so office renders never
+  // leak in and no image is double-counted:
+  //  1. dedicated site photos (the Photos tab / daily-diary captures) - all
+  //     field by definition, always shown; and
+  //  2. general Project Files images that the user has explicitly marked as
+  //     field (a ``field`` tag) - see ``isFieldImageDocument``. The twin
+  //     ``category === 'photo'`` rows mirrored beside every photo upload are
+  //     skipped here so a site photo appears exactly once.
   const photos = useGracefulQuery<PhotoItem[]>(
     ['proj-widget-photos', projectId],
     `/v1/documents/photos/?project_id=${projectId}`,
@@ -955,7 +987,9 @@ export function PhotoStripWidget({ projectId }: { projectId: string }) {
       });
     }
     for (const d of docs.data ?? []) {
-      if (!isImageDocument(d)) continue;
+      // Only field-tagged images (never office renders, never the photo
+      // twin rows) join the dedicated site photos above.
+      if (!isFieldImageDocument(d)) continue;
       out.push({
         key: `doc:${d.id}`,
         // The document download endpoint streams the original bytes with the
@@ -975,7 +1009,7 @@ export function PhotoStripWidget({ projectId }: { projectId: string }) {
 
   const title = t('project.widget.photo-strip.title', { defaultValue: 'Photo strip' });
   const subtitle = t('project.widget.photo-strip.card_subtitle', {
-    defaultValue: 'Latest site photos and uploaded images',
+    defaultValue: 'Latest site photos',
   });
   const icon = <ImageIcon size={16} />;
   const cta = {
@@ -995,7 +1029,7 @@ export function PhotoStripWidget({ projectId }: { projectId: string }) {
         <WidgetEmpty
           message={t('project.widget.photo-strip.empty', {
             defaultValue:
-              'No photos yet - upload from the Photos tab or add an image in Project Files.',
+              'No site photos yet - capture from the Photos tab or tag a project image as field.',
           })}
         />
       ) : (

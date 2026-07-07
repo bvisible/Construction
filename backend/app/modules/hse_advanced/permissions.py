@@ -1,10 +1,10 @@
-"""‌⁠‍HSE Advanced module permission definitions."""
+"""HSE Advanced module permission definitions."""
 
 from app.core.permissions import Role, permission_registry
 
 
 def register_hse_advanced_permissions() -> None:
-    """‌⁠‍Register permissions for the hse_advanced module."""
+    """Register permissions for the hse_advanced module."""
     permission_registry.register_module_permissions(
         "hse_advanced",
         {

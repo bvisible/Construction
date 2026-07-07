@@ -1,4 +1,4 @@
-"""‌⁠‍CRM API routes.
+"""CRM API routes.
 
 Mounted at ``/api/v1/crm/``. Every mutating endpoint is gated through
 ``RequirePermission``. List endpoints fall back to the generic ``crm.read``
@@ -75,7 +75,7 @@ def _lead_to_response(
     viewer_id: str | None,
     viewer_role: str | None,
 ) -> LeadResponse:
-    """‌⁠‍Build a ``LeadResponse`` with PII redacted for non-owner viewers.
+    """Build a ``LeadResponse`` with PII redacted for non-owner viewers.
 
     R7 audit: ``LeadResponse.model_validate(lead)`` used to echo raw
     contact_email / contact_phone to every VIEWER. Only the assigned rep,
@@ -141,7 +141,7 @@ async def account_tree(
     _perm: None = Depends(RequirePermission("crm.read")),
     service: CrmService = Depends(_get_service),
 ) -> list[dict]:
-    """‌⁠‍Full account hierarchy (owner / GC / sub) as a nested tree."""
+    """Full account hierarchy (owner / GC / sub) as a nested tree."""
     return await service.account_tree(root_id=root_id)
 
 
@@ -539,7 +539,7 @@ async def activity_timeline(
     _perm: None = Depends(RequirePermission("crm.read")),
     service: CrmService = Depends(_get_service),
 ) -> list[dict]:
-    """‌⁠‍Unified chronological feed (activities + stage history)."""
+    """Unified chronological feed (activities + stage history)."""
     return await service.activity_timeline(
         account_id=account_id,
         opportunity_id=opportunity_id,

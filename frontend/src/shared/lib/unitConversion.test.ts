@@ -9,6 +9,7 @@
 
 import { describe, it, expect } from 'vitest';
 import {
+  convertBetween,
   convertUnit,
   getDisplayUnit,
   isMetricUnit,
@@ -264,5 +265,47 @@ describe('extended unit coverage (#285)', () => {
   it('round-trips an extended unit back to metric storage', () => {
     const shown = toDisplayQuantity(3.5, 'ha', 'imperial');
     expect(fromDisplayQuantity(shown.value, 'ha', 'imperial')).toBeCloseTo(3.5, 6);
+  });
+});
+
+describe('convertBetween (unit-to-unit within a dimension, #319 / #320)', () => {
+  it('converts metre cubed into US trade volume units', () => {
+    expect(convertBetween(10, 'm3', 'cy')).toBeCloseTo(13.0795, 4);
+    expect(convertBetween(1, 'm3', 'ft3')).toBeCloseTo(35.3147, 4);
+    expect(convertBetween(1, 'm3', 'bdft')).toBeCloseTo(423.776, 3);
+    expect(convertBetween(1, 'm3', 'yd3')).toBeCloseTo(1.30795, 5);
+  });
+
+  it('converts metre squared into roofing squares and square feet', () => {
+    expect(convertBetween(1, 'm2', 'sq')).toBeCloseTo(0.107639, 6);
+    expect(convertBetween(1, 'm2', 'ft2')).toBeCloseTo(10.7639, 4);
+  });
+
+  it('folds superscript source codes to the same factor', () => {
+    expect(convertBetween(2, 'm³', 'cy')).toBeCloseTo(2.6159, 4);
+    expect(convertBetween(3, 'm²', 'sq')).toBeCloseTo(0.322917, 6);
+  });
+
+  it('passes the value through for the same unit both sides', () => {
+    expect(convertBetween(5, 'm3', 'm3')).toBe(5);
+  });
+
+  it('refuses cross-dimension and unknown-unit conversions with null', () => {
+    expect(convertBetween(1, 'm3', 'm2')).toBeNull();
+    expect(convertBetween(1, 'm2', 'm')).toBeNull();
+    expect(convertBetween(1, 'm3', 'lsum')).toBeNull();
+    expect(convertBetween(1, 'kg', 'cy')).toBeNull();
+  });
+
+  it('passes the value through when a unit is missing', () => {
+    expect(convertBetween(7, null, 'm3')).toBe(7);
+    expect(convertBetween(7, 'm3', undefined)).toBe(7);
+    expect(convertBetween(7, 'm3', '')).toBe(7);
+  });
+
+  it('agrees with the metric->imperial display factor for m3 -> ft3', () => {
+    const between = convertBetween(4, 'm3', 'ft3');
+    const display = convertUnit(4, 'm3', 'imperial').value;
+    expect(between).toBeCloseTo(display, 6);
   });
 });

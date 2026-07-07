@@ -99,11 +99,44 @@ interface QuickMeasurement {
   unit: string;
 }
 
-type UnitOption = 'm' | 'm2' | 'm3' | 'kg' | 'pcs' | 'lsum' | 't' | 'l';
+type UnitOption =
+  | 'm'
+  | 'm2'
+  | 'm3'
+  | 'kg'
+  | 'pcs'
+  | 'lsum'
+  | 't'
+  | 'l'
+  // US construction trade units (GitHub #320). A metric measurement links into
+  // a position priced in one of these and is converted on link (GitHub #319).
+  | 'ft'
+  | 'ft2'
+  | 'ft3'
+  | 'yd'
+  | 'cy'
+  | 'bdft'
+  | 'sq';
 
 /* ── Constants ─────────────────────────────────────────────────────────── */
 
-const UNIT_OPTIONS: UnitOption[] = ['m', 'm2', 'm3', 'kg', 'pcs', 'lsum', 't', 'l'];
+const UNIT_OPTIONS: UnitOption[] = [
+  'm',
+  'm2',
+  'm3',
+  'kg',
+  'pcs',
+  'lsum',
+  't',
+  'l',
+  'ft',
+  'ft2',
+  'ft3',
+  'yd',
+  'cy',
+  'bdft',
+  'sq',
+];
 
 // No upload size cap — kept Number.POSITIVE_INFINITY as a sentinel so
 // the existing filter expressions still type-check while allowing any

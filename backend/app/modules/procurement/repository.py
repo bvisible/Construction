@@ -1,4 +1,4 @@
-"""‌⁠‍Procurement data access layer.
+"""Procurement data access layer.
 
 All database queries for procurement entities live here.
 No business logic - pure data access.
@@ -19,13 +19,13 @@ from app.modules.procurement.models import (
 
 
 class PurchaseOrderRepository:
-    """‌⁠‍Data access for PurchaseOrder model."""
+    """Data access for PurchaseOrder model."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
     async def get(self, po_id: uuid.UUID) -> PurchaseOrder | None:
-        """‌⁠‍Get PO by ID (with items and GRs via selectin).
+        """Get PO by ID (with items and GRs via selectin).
 
         Uses ``selectinload`` to eagerly load items and goods_receipts
         so they are available outside the async context.

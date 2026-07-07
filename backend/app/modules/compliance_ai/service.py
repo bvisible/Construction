@@ -1,4 +1,4 @@
-"""‌⁠‍Compliance-AI service - verdict pipeline + LLM cost controls.
+"""Compliance-AI service - verdict pipeline + LLM cost controls.
 
 Wraps :func:`app.core.validation.dsl.nl_builder.parse_nl_to_dsl` with:
 
@@ -58,7 +58,7 @@ async def _build_ai_caller(
     user_id: str | None,
     session: AsyncSession,
 ) -> Any | None:
-    """‌⁠‍Build a bound ``(system, prompt) -> str`` callable, or ``None``.
+    """Build a bound ``(system, prompt) -> str`` callable, or ``None``.
 
     Mirrors the helper in :mod:`app.modules.compliance.router` but is
     duplicated here so the compliance_ai module stays decoupled from

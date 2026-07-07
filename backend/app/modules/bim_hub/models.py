@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍BIM Hub ORM models.
+"""BIM Hub ORM models.
 
 Tables:
     oe_bim_model        - imported BIM/CAD model metadata
@@ -53,7 +53,7 @@ def is_non_3d_format(model_format: str | None) -> bool:
 
 
 class BIMModel(Base):
-    """‌⁠‍Imported BIM/CAD model - one record per uploaded file version."""
+    """Imported BIM/CAD model - one record per uploaded file version."""
 
     __tablename__ = "oe_bim_model"
 
@@ -90,10 +90,20 @@ class BIMModel(Base):
     )
 
     # Relationships
+    #
+    # ``lazy="select"`` (NOT ``selectin``): no code reads ``model.elements``
+    # through this relationship - elements are always queried straight from
+    # oe_bim_element (list_elements etc.). Under ``selectin`` every plain
+    # ``session.get(BIMModel, id)`` (get_model -> geometry / schema /
+    # single-model endpoints) silently hydrated ALL of a model's elements
+    # into memory, which blew up the worker on large models and surfaced as a
+    # "parsing error" in the BIM 3D viewer (issue #291: a 6114-element HVAC
+    # model). The list endpoint already guards with noload(); deletes use a
+    # Core DELETE + DB ondelete="CASCADE", so nothing depends on the eager load.
     elements: Mapped[list[BIMElement]] = relationship(
         back_populates="model",
         cascade="all, delete-orphan",
-        lazy="selectin",
+        lazy="select",
     )
 
     def __repr__(self) -> str:
@@ -101,7 +111,7 @@ class BIMModel(Base):
 
 
 class BIMElement(Base):
-    """‌⁠‍Single element extracted from a BIM model.
+    """Single element extracted from a BIM model.
 
     Since v2.3.0 BIMElement is also the **asset register** for the project
     (ISO 19650 Asset Information Model). ``asset_info`` holds the
@@ -372,7 +382,7 @@ class BIMElementGroup(Base):
 
 
 class BIMFederation(Base):
-    """‌⁠‍Federation - a named group of N BIM models with a shared origin.
+    """Federation - a named group of N BIM models with a shared origin.
 
     A federation composes multiple per-discipline models (architectural,
     structural, MEP, …) into a single coordinated set. Each member model
@@ -428,7 +438,7 @@ class BIMFederation(Base):
 
 
 class BIMFederationModel(Base):
-    """‌⁠‍Join row - one ``BIMModel`` participating in one ``BIMFederation``.
+    """Join row - one ``BIMModel`` participating in one ``BIMFederation``.
 
     A model can belong to multiple federations (e.g. the structural
     model takes part in both a clash-detection federation and a coord-

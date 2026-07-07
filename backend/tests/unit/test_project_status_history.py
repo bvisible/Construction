@@ -272,13 +272,13 @@ async def test_list_filters_to_exact_custom_status(
     session: AsyncSession,
     owner_id: uuid.UUID,
 ) -> None:
-    """status_filter='waiting' returns exactly the waiting projects."""
+    """status_filter='on_hold' returns exactly the on-hold projects."""
     service = _service(session)
     await service.create_project(ProjectCreate(name="Stays Active"), owner_id)
-    waiting = await _make_project(service, owner_id, status="waiting")
+    on_hold = await _make_project(service, owner_id, status="on_hold")
 
-    rows, total = await service.list_projects(owner_id, status_filter="waiting")
+    rows, total = await service.list_projects(owner_id, status_filter="on_hold")
 
     assert total == 1
-    assert {p.id for p in rows} == {waiting.id}
-    assert all(p.status == "waiting" for p in rows)
+    assert {p.id for p in rows} == {on_hold.id}
+    assert all(p.status == "on_hold" for p in rows)

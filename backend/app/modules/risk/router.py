@@ -1,4 +1,4 @@
-"""‌⁠‍Risk Register API routes.
+"""Risk Register API routes.
 
 Endpoints:
     POST   /                       - Create risk item
@@ -41,7 +41,7 @@ def _get_service(session: SessionDep) -> RiskService:
 
 
 def _as_float(value: object, default: float = 0.0) -> float:
-    """‌⁠‍Parse a string/None numeric column to float without raising.
+    """Parse a string/None numeric column to float without raising.
 
     Numeric values are stored as SQLite-friendly strings; legacy or
     imported rows can hold ``""`` (DB-level numeric defaults were
@@ -55,7 +55,7 @@ def _as_float(value: object, default: float = 0.0) -> float:
 
 
 def _risk_to_response(item: object) -> RiskResponse:
-    """‌⁠‍Build a RiskResponse from a RiskItem ORM object.
+    """Build a RiskResponse from a RiskItem ORM object.
 
     ``risk_score`` is ALWAYS recomputed on the single canonical 0-5 scale
     (probability x severity_numeric) rather than echoing the stored column,
@@ -118,7 +118,7 @@ async def get_summary(
     session: SessionDep,
     service: RiskService = Depends(_get_service),
 ) -> RiskSummary:
-    """‌⁠‍Aggregated risk stats for a project."""
+    """Aggregated risk stats for a project."""
     await verify_project_access(project_id, user_id, session)
     data = await service.get_summary(project_id)
     return RiskSummary(**data)
@@ -225,7 +225,7 @@ async def simulate_risks(
     session: SessionDep,
     service: RiskService = Depends(_get_service),
 ) -> RiskSimulationResult:
-    """‌⁠‍Run a Monte Carlo simulation across this project's risks.
+    """Run a Monte Carlo simulation across this project's risks.
 
     Samples a PERT (triangular) distribution on each risk's
     (p10, p50, p90) triple and weights each draw by

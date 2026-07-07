@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍Text source adapter - free-form text inputs to /match-elements.
+"""Text source adapter - free-form text inputs to /match-elements.
 
 Implements MAPPING_PROCESS.md §4.1.6 - the "Text" source type. The
 estimator types (or pastes) one or more free-form descriptions
@@ -46,7 +46,7 @@ _GROUP_BY_KEY_ORDER = (
 
 
 def _coerce_text_input(raw: Any) -> dict[str, Any] | None:
-    """‌⁠‍Normalise a single ``text_inputs`` entry to a dict shape.
+    """Normalise a single ``text_inputs`` entry to a dict shape.
 
     Accepts either a plain string (most common - UI just collects lines)
     or a dict with ``raw_text`` plus optional per-line metadata. Returns
@@ -69,7 +69,7 @@ def _coerce_text_input(raw: Any) -> dict[str, Any] | None:
 
 
 class TextAdapter:
-    """‌⁠‍Reads free-form text inputs from ``MatchSession.metadata_``.
+    """Reads free-form text inputs from ``MatchSession.metadata_``.
 
     Each non-empty line becomes a single :class:`SourceElement` with
     ``category="Text"`` (or the user-provided override) and a

@@ -1,10 +1,10 @@
-"""‌⁠‍Supplier Catalogs module permission definitions."""
+"""Supplier Catalogs module permission definitions."""
 
 from app.core.permissions import Role, permission_registry
 
 
 def register_supplier_catalogs_permissions() -> None:
-    """‌⁠‍Register supplier-catalogs permissions on the global registry."""
+    """Register supplier-catalogs permissions on the global registry."""
     permission_registry.register_module_permissions(
         "supplier_catalogs",
         {

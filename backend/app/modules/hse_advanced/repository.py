@@ -1,4 +1,4 @@
-"""‌⁠‍HSE Advanced data access layer."""
+"""HSE Advanced data access layer."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ from app.modules.hse_advanced.models import (
 
 
 class _BaseRepo:
-    """‌⁠‍Common CRUD helpers - kept simple, not a generic ORM."""
+    """Common CRUD helpers - kept simple, not a generic ORM."""
 
     model = None  # type: ignore[assignment]
 
@@ -57,7 +57,7 @@ class _BaseRepo:
 
 
 class InvestigationRepository(_BaseRepo):
-    """‌⁠‍Data access for HSEIncidentInvestigation."""
+    """Data access for HSEIncidentInvestigation."""
 
     model = HSEIncidentInvestigation
 

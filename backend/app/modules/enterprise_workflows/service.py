@@ -1,4 +1,4 @@
-"""‌⁠‍Enterprise Workflows service - business logic for approval workflows.
+"""Enterprise Workflows service - business logic for approval workflows.
 
 Stateless service layer.
 
@@ -117,7 +117,7 @@ def _validate_steps(steps: list[dict] | None) -> None:
 
 
 class WorkflowService:
-    """‌⁠‍Business logic for enterprise approval workflows."""
+    """Business logic for enterprise approval workflows."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -149,7 +149,7 @@ class WorkflowService:
     # ── Workflows ───────────────────────────────────────────────────────────
 
     async def create_workflow(self, data: WorkflowCreate, user_id: str) -> ApprovalWorkflow:
-        """‌⁠‍Create a new approval workflow definition."""
+        """Create a new approval workflow definition."""
         # Project-scope (IDOR) gate: a caller may only attach a workflow to
         # a project they can access. Global / template workflows (no
         # project_id) are allowed for any authenticated caller.

@@ -1,4 +1,4 @@
-"""‌⁠‍Collaboration service - business logic for comments and viewpoints.
+"""Collaboration service - business logic for comments and viewpoints.
 
 Stateless service layer. Handles:
 - Comment CRUD with threading
@@ -41,7 +41,7 @@ async def _safe_publish(name: str, data: dict, source_module: str = "oe_collabor
 
 
 class CollaborationService:
-    """‌⁠‍Business logic for comments and viewpoints."""
+    """Business logic for comments and viewpoints."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -58,7 +58,7 @@ class CollaborationService:
         *,
         project_id: uuid.UUID | None = None,
     ) -> Comment:
-        """‌⁠‍Create a comment with optional mentions and viewpoint.
+        """Create a comment with optional mentions and viewpoint.
 
         ``project_id`` is the owning project of the commented entity, resolved
         by the router's access check. It is forwarded on the detached

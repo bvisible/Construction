@@ -1,5 +1,5 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
-"""‌⁠‍Clash detection module manifest."""
+"""Clash detection module manifest."""
 
 from app.core.module_loader import ModuleManifest
 

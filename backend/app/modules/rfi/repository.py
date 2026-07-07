@@ -1,4 +1,4 @@
-"""‌⁠‍RFI data access layer."""
+"""RFI data access layer."""
 
 import uuid
 
@@ -9,7 +9,7 @@ from app.modules.rfi.models import RFI
 
 
 class RFIRepository:
-    """‌⁠‍Data access for RFI models."""
+    """Data access for RFI models."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -64,7 +64,7 @@ class RFIRepository:
         return rows, total
 
     async def next_rfi_number(self, project_id: uuid.UUID) -> str:
-        """‌⁠‍Generate the next ``RFI-NNN`` number using MAX to avoid duplicates.
+        """Generate the next ``RFI-NNN`` number using MAX to avoid duplicates.
 
         Only canonical ``RFI-<digits>`` rows are cast: PostgreSQL rejects an
         empty or non-numeric integer cast (unlike SQLite, which yielded 0), so

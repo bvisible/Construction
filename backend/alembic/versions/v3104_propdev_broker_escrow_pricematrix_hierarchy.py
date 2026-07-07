@@ -252,7 +252,7 @@ def upgrade() -> None:  # noqa: C901 — sequential CREATE TABLEs, easier flat.
                 "active",
                 sa.Boolean(),
                 nullable=False,
-                server_default=sa.text("1"),
+                server_default=sa.text("1") if is_sqlite else sa.text("true"),
             ),
             sa.Column(
                 "metadata",
@@ -569,7 +569,7 @@ def upgrade() -> None:  # noqa: C901 — sequential CREATE TABLEs, easier flat.
                 "is_active",
                 sa.Boolean(),
                 nullable=False,
-                server_default=sa.text("1"),
+                server_default=sa.text("1") if is_sqlite else sa.text("true"),
             ),
             sa.Column(
                 "metadata",

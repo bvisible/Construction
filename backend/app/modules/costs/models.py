@@ -1,4 +1,4 @@
-"""‌⁠‍Cost item ORM models.
+"""Cost item ORM models.
 
 Tables:
     oe_costs_item - cost database entries (CWICR, RSMeans, BKI, custom)
@@ -33,7 +33,7 @@ from app.database import GUID, Base
 
 
 class CostItem(Base):
-    """‌⁠‍A single cost database entry (rate, unit price, assembly component)."""
+    """A single cost database entry (rate, unit price, assembly component)."""
 
     __tablename__ = "oe_costs_item"
     __table_args__ = (
@@ -116,7 +116,7 @@ class CostItem(Base):
 
 
 class CostCatalog(Base):
-    """‌⁠‍A user-owned, named cost catalog ("my catalog of works and rates").
+    """A user-owned, named cost catalog ("my catalog of works and rates").
 
     Groups :class:`CostItem` rows under one named entity with a REQUIRED
     catalog currency. Items reference the catalog through the bare
@@ -140,7 +140,7 @@ class CostCatalog(Base):
 
 
 class RegionalIndex(Base):
-    """‌⁠‍Regional cost-factor row (region × category × effective_date).
+    """Regional cost-factor row (region × category × effective_date).
 
     Backs ``GET /v1/costs/regional-adjust`` - given a base rate, the
     service multiplies by ``factor`` to estimate the same line item's
@@ -185,7 +185,7 @@ class RegionalIndex(Base):
 
 
 class CostItemUsage(Base):
-    """‌⁠‍Append-only usage ledger for a single ``CostItem``.
+    """Append-only usage ledger for a single ``CostItem``.
 
     One row per "rate was applied to a BOQ position / assembly /
     tender". The certainty badge reads ``count(*) + max(used_at)`` from

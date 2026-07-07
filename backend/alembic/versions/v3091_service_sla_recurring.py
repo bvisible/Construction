@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍Service module: SLA-timer columns + recurring-schedule table.
+"""Service module: SLA-timer columns + recurring-schedule table.
 
 Wave 3 / T10 — brings the ``oe_service`` module to ServiceTitan / FieldEdge
 feature parity for the two field-ops gaps still open after Wave 2:

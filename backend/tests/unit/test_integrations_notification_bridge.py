@@ -285,6 +285,73 @@ async def test_unknown_channel_skipped_gracefully() -> None:
     assert ok is False
 
 
+# ── 6. body_context interpolates BOTH title and body (#284 follow-up) ──────
+
+
+@pytest.mark.asyncio
+async def test_body_context_interpolated_into_title_and_body(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The created event now carries body_key + body_context + action_url, so
+    the connector message must match the in-app notification: placeholders in
+    both the title and body templates are filled, and the body is forwarded
+    (not dropped to the title).
+    """
+    user_id = uuid.uuid4()
+    cfg = _make_config(
+        integration_type="telegram",
+        config={"bot_token": "t", "chat_id": "c"},
+        events=["*"],
+    )
+    _patch_session(monkeypatch, [cfg])
+
+    calls: list[dict] = []
+
+    async def _fake_send(*, bot_token: str, chat_id: str, title: str, message: str, action_url=None) -> bool:
+        calls.append({"title": title, "message": message, "action_url": action_url})
+        return True
+
+    monkeypatch.setattr(
+        "app.modules.integrations.telegram.send_telegram_notification",
+        _fake_send,
+    )
+
+    # Use the cost-overrun template: its body has {actual}/{currency}/{...}
+    # placeholders, the exact case the in-app bell renders but the bridge
+    # used to leave raw.
+    ev = Event(
+        name="notifications.notification.created",
+        data={
+            "notification_id": str(uuid.uuid4()),
+            "user_id": str(user_id),
+            "notification_type": "costmodel.overrun_alert",
+            "title_key": "notifications.costmodel.overrun_alert.title",
+            "body_key": "notifications.costmodel.overrun_alert.body",
+            "body_context": {
+                "category": "Concrete",
+                "actual": "120000",
+                "currency": "EUR",
+                "threshold_pct": "10",
+                "planned": "100000",
+            },
+            "action_url": "https://erp.example.com/projects/1/cost",
+        },
+    )
+
+    await bridge._on_notification_created(ev)
+
+    assert len(calls) == 1
+    sent = calls[0]
+    # Title renders (it has no placeholders) and the body is the distinct,
+    # fully-interpolated message - NOT a copy of the title and NOT raw braces.
+    assert sent["title"] == "Cost Overrun Alert"
+    assert sent["message"] != sent["title"]
+    assert "120000" in sent["message"]
+    assert "EUR" in sent["message"]
+    assert "{actual}" not in sent["message"]
+    assert "{currency}" not in sent["message"]
+    # The action URL rides along to the connector.
+    assert sent["action_url"] == "https://erp.example.com/projects/1/cost"
+
+
 @pytest.mark.asyncio
 async def test_missing_user_id_is_noop(monkeypatch: pytest.MonkeyPatch) -> None:
     """An event with no user_id must short-circuit before opening a session."""

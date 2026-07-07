@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍Graph DAG executor - generalises ``match_elements.pipeline.run_stage``.
+"""Graph DAG executor - generalises ``match_elements.pipeline.run_stage``.
 
 The match-elements pipeline runs a *fixed* seven-stage tuple. This module
 runs a *user-authored DAG*: the node order is a Kahn topological sort (the
@@ -68,7 +68,7 @@ NODE_STATUSES = (
 
 
 class GraphValidationError(ValueError):
-    """‌⁠‍Raised when a graph cannot be executed (cycle, unknown type, …).
+    """Raised when a graph cannot be executed (cycle, unknown type, …).
 
     The router converts this into a 400 so a malformed graph never
     silently produces a half-finished run.
@@ -85,7 +85,7 @@ def _adjacency(
     dict[str, list[str]],
     dict[str, list[str]],
 ]:
-    """‌⁠‍Return ``(nodes_by_id, out_edges, in_edges)`` from a graph dict.
+    """Return ``(nodes_by_id, out_edges, in_edges)`` from a graph dict.
 
     ``out_edges[src] = [dst, …]`` and ``in_edges[dst] = [src, …]``.
     Edges whose endpoints are not declared nodes are dropped (defensive -

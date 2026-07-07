@@ -35,6 +35,19 @@ import {
   HardHat,
   Briefcase,
   Box,
+  Construction,
+  Wrench,
+  PencilRuler,
+  House,
+  Handshake,
+  Truck,
+  CalendarClock,
+  Hammer,
+  BadgeCheck,
+  ShieldCheck,
+  Leaf,
+  Building,
+  Landmark,
   type LucideIcon,
 } from 'lucide-react';
 import { Logo, Button, CountryFlag, Badge } from '@/shared/ui';
@@ -186,6 +199,10 @@ interface ProviderOption {
   recommended?: boolean;
 }
 
+// The full provider catalogue, kept in step with the AIProvider union and the
+// Settings AI page so onboarding offers exactly the same choice of models. The
+// two local/self-hosted runtimes (Ollama, vLLM) need a base URL rather than a
+// key, so their doc link points at the runtime docs.
 const AI_PROVIDERS: ProviderOption[] = [
   {
     id: 'anthropic',
@@ -196,7 +213,7 @@ const AI_PROVIDERS: ProviderOption[] = [
   },
   {
     id: 'openai',
-    name: 'OpenAI GPT-4',
+    name: 'OpenAI',
     description: 'Widely supported',
     docsUrl: 'https://platform.openai.com/api-keys',
   },
@@ -205,6 +222,108 @@ const AI_PROVIDERS: ProviderOption[] = [
     name: 'Google Gemini',
     description: 'Multimodal capabilities',
     docsUrl: 'https://aistudio.google.com/app/apikey',
+  },
+  {
+    id: 'openrouter',
+    name: 'OpenRouter',
+    description: 'One key for many models',
+    docsUrl: 'https://openrouter.ai/keys',
+  },
+  {
+    id: 'mistral',
+    name: 'Mistral AI',
+    description: 'European open models',
+    docsUrl: 'https://console.mistral.ai/api-keys/',
+  },
+  {
+    id: 'groq',
+    name: 'Groq',
+    description: 'Very fast inference',
+    docsUrl: 'https://console.groq.com/keys',
+  },
+  {
+    id: 'deepseek',
+    name: 'DeepSeek',
+    description: 'Low cost, strong reasoning',
+    docsUrl: 'https://platform.deepseek.com/api_keys',
+  },
+  {
+    id: 'together',
+    name: 'Together AI',
+    description: 'Open models at scale',
+    docsUrl: 'https://api.together.ai/settings/api-keys',
+  },
+  {
+    id: 'fireworks',
+    name: 'Fireworks AI',
+    description: 'Fast hosted open models',
+    docsUrl: 'https://fireworks.ai/account/api-keys',
+  },
+  {
+    id: 'perplexity',
+    name: 'Perplexity',
+    description: 'Answers with sources',
+    docsUrl: 'https://www.perplexity.ai/settings/api',
+  },
+  {
+    id: 'cohere',
+    name: 'Cohere',
+    description: 'Enterprise language models',
+    docsUrl: 'https://dashboard.cohere.com/api-keys',
+  },
+  {
+    id: 'ai21',
+    name: 'AI21 Labs',
+    description: 'Jamba long-context models',
+    docsUrl: 'https://studio.ai21.com/account/api-key',
+  },
+  {
+    id: 'xai',
+    name: 'xAI Grok',
+    description: 'Grok models',
+    docsUrl: 'https://console.x.ai/',
+  },
+  {
+    id: 'zhipu',
+    name: 'Zhipu AI',
+    description: 'GLM models',
+    docsUrl: 'https://open.bigmodel.cn/usercenter/apikeys',
+  },
+  {
+    id: 'baidu',
+    name: 'Baidu ERNIE',
+    description: 'ERNIE models',
+    docsUrl: 'https://console.bce.baidu.com/',
+  },
+  {
+    id: 'yandex',
+    name: 'YandexGPT',
+    description: 'Yandex Cloud models',
+    docsUrl: 'https://yandex.cloud/en/docs/foundation-models/',
+  },
+  {
+    id: 'gigachat',
+    name: 'GigaChat',
+    description: 'Sber hosted models',
+    docsUrl: 'https://developers.sber.ru/portal/products/gigachat',
+  },
+  {
+    id: 'kimi',
+    name: 'Moonshot Kimi',
+    description: 'Long-context Chinese models',
+    docsUrl: 'https://platform.moonshot.cn/console/api-keys',
+  },
+  {
+    id: 'ollama',
+    name: 'Ollama (local)',
+    description: 'Runs models on your machine',
+    docsUrl: 'https://ollama.com/',
+  },
+  {
+    id: 'vllm',
+    name: 'vLLM (self-hosted)',
+    description: 'Your own OpenAI-compatible server',
+    docsUrl: 'https://docs.vllm.ai/',
   },
 ];
 
@@ -228,6 +347,8 @@ interface ApiCompanyPreset {
 
 const PRESET_ICON_MAP: Record<string, LucideIcon> = {
   Building2, Calculator, ClipboardList, Pencil, Home, Boxes, HardHat, Briefcase, Box,
+  Construction, Wrench, PencilRuler, House, Handshake, Truck, CalendarClock, Hammer,
+  BadgeCheck, ShieldCheck, Leaf, Building, Landmark,
 };
 
 function presetIcon(name: string): LucideIcon {
@@ -913,7 +1034,7 @@ function ReadyPackPicker({
   const { t } = useTranslation();
   const addToast = useToastStore((s) => s.addToast);
 
-  const { data, isLoading, isError } = useQuery({
+  const { data, isLoading } = useQuery({
     queryKey: ['partner-pack', 'installed'],
     queryFn: fetchInstalledPacks,
     staleTime: 60_000,
@@ -924,6 +1045,10 @@ function ReadyPackPicker({
   const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
   const [installing, setInstalling] = useState(false);
   const [installedSlug, setInstalledSlug] = useState<string | null>(null);
+  // Which curated country pack (if any) is being set up right now, so its card
+  // shows a spinner. Country packs are the always-available fallback when no
+  // pip-installed partner pack ships with this deployment.
+  const [countryInstallingId, setCountryInstallingId] = useState<string | null>(null);
   // Live progress for the in-flight install, mirrored from the global
   // background-install store the driver writes to. The picker renders the
   // prominent progress UI from this while it waits for language to be ready;
@@ -1018,6 +1143,71 @@ function ReadyPackPicker({
     [installing, onActivateLocale, onInstalled, onFallback, addToast, t],
   );
 
+  // Install a curated Country Pack (no pip pack required): apply the language
+  // immediately, then load its CWICR cost database and, when one exists, a
+  // representative built-in demo project. This is the same region + locale +
+  // demo path the step-by-step Data Setup uses, surfaced here so the ready-made
+  // pack picker is never an empty dead end on a plain install.
+  const handleInstallCountry = useCallback(
+    async (pack: CountryPack) => {
+      if (installing) return;
+      setInstalling(true);
+      setCountryInstallingId(pack.id);
+
+      // Language first so the app is usable right away, mirroring the partner
+      // pack flow.
+      onActivateLocale(pack.locale);
+
+      try {
+        const token = useAuthStore.getState().accessToken;
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 5 * 60 * 1000);
+        const res = await fetch(`/api/v1/costs/load-cwicr/${pack.region}`, {
+          method: 'POST',
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+          signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(extractErrorMessageFromBody(body) ?? `HTTP ${res.status}`);
+        }
+
+        // A representative built-in demo, when the pack declares one. Best
+        // effort: a missing demo must not fail the whole setup.
+        if (pack.demoId) {
+          try {
+            await apiPost(`/demo/install/${pack.demoId}`, undefined, { longRunning: true });
+          } catch {
+            // ignore - the cost database is the essential part
+          }
+        }
+
+        addToast({
+          type: 'success',
+          title: t('onboarding.pp_language_ready', {
+            defaultValue: '{{country}} is ready, finishing setup in the background',
+            country: t(pack.labelKey, { defaultValue: pack.labelDefault }),
+          }),
+        });
+        // Record a synthetic slug so the wizard treats this as a completed pack
+        // install and advances to Finish.
+        onInstalled(`country:${pack.id}`);
+      } catch (err) {
+        addToast({
+          type: 'error',
+          title: t('onboarding.ready_pack_failed', {
+            defaultValue: 'Could not finish the ready-made pack',
+          }),
+          message: err instanceof Error ? err.message : undefined,
+        });
+        setInstalling(false);
+        setCountryInstallingId(null);
+      }
+    },
+    [installing, onActivateLocale, onInstalled, addToast, t],
+  );
+
   return (
     <div className="flex flex-col items-center">
       <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-oe-blue-subtle text-oe-blue-text mb-4">
@@ -1040,23 +1230,80 @@ function ReadyPackPicker({
         </div>
       )}
 
-      {!isLoading && (isError || packs.length === 0) && (
-        <div className="mt-8 w-full max-w-md">
-          <div className="flex items-start gap-2 rounded-xl bg-amber-50 dark:bg-amber-950/20 px-3 py-3 text-xs text-amber-700 dark:text-amber-400">
-            <AlertTriangle size={15} className="mt-0.5 shrink-0" />
-            <span>
-              {t('onboarding.ready_pack_none', {
-                defaultValue:
-                  'No ready-made packs are available right now. Continue with step-by-step setup instead.',
-              })}
-            </span>
+      {/* Curated country packs: the always-available ready-made set. Shown when
+          no pip-installed partner pack ships with this deployment (the common
+          case), so the picker is never an empty dead end. Each card sets the
+          language and loads that market's CWICR cost database in one click. */}
+      {!isLoading && packs.length === 0 && (
+        <div className="mt-7 w-full max-w-5xl">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+            {COUNTRY_PACKS.map((pack) => {
+              const busy = countryInstallingId === pack.id;
+              const label = t(pack.labelKey, { defaultValue: pack.labelDefault });
+              return (
+                <button
+                  key={pack.id}
+                  type="button"
+                  onClick={() => handleInstallCountry(pack)}
+                  disabled={installing}
+                  aria-busy={busy}
+                  className={clsx(
+                    'group relative flex flex-col items-center gap-2.5 rounded-xl p-4 text-center transition-all duration-200',
+                    busy
+                      ? 'bg-oe-blue-subtle/50 ring-2 ring-oe-blue/45 shadow-sm'
+                      : 'bg-surface-secondary/70 ring-1 ring-transparent hover:bg-surface-secondary hover:shadow-sm hover:-translate-y-0.5',
+                    installing && !busy && 'opacity-50 cursor-not-allowed',
+                  )}
+                >
+                  {busy && (
+                    <span className="absolute right-2 top-2 flex h-5 w-5 items-center justify-center rounded-full bg-oe-blue text-white shadow-sm">
+                      <Loader2 size={12} className="animate-spin" />
+                    </span>
+                  )}
+                  <CountryFlag code={pack.flagId} size={30} className="rounded-sm shadow-sm" />
+                  <span className="truncate text-sm font-semibold text-content-primary">
+                    {label}
+                  </span>
+                  <div className="flex flex-wrap items-center justify-center gap-x-2 gap-y-0.5 text-2xs text-content-quaternary">
+                    <span className="inline-flex items-center gap-1">
+                      <Languages size={11} />
+                      {pack.locale.toUpperCase()}
+                    </span>
+                    <span className="inline-flex items-center gap-1">
+                      <Database size={11} />
+                      {pack.classification}
+                    </span>
+                  </div>
+                </button>
+              );
+            })}
           </div>
-          <div className="mt-5 flex items-center justify-center gap-3">
-            <Button variant="ghost" onClick={onBack} icon={<ArrowLeft size={16} />}>
+
+          {countryInstallingId && (
+            <p className="mt-4 text-center text-xs text-content-tertiary">
+              {t('onboarding.ready_pack_installing_country', {
+                defaultValue:
+                  'Setting up {{country}}. The language is applied first, the cost database keeps loading in the background.',
+                country: t(
+                  getCountryPack(countryInstallingId)?.labelKey ?? '',
+                  { defaultValue: getCountryPack(countryInstallingId)?.labelDefault ?? '' },
+                ),
+              })}
+            </p>
+          )}
+
+          <div className="mt-6 flex items-center justify-center gap-3">
+            <Button variant="ghost" onClick={onBack} disabled={installing} icon={<ArrowLeft size={16} />}>
               {t('common.back', { defaultValue: 'Back' })}
             </Button>
-            <Button variant="primary" onClick={onFallback} icon={<ArrowRight size={16} />} iconPosition="right">
-              {t('onboarding.ready_pack_continue_steps', { defaultValue: 'Continue setup' })}
+            <Button
+              variant="ghost"
+              onClick={onFallback}
+              disabled={installing}
+              icon={<ArrowRight size={16} />}
+              iconPosition="right"
+            >
+              {t('onboarding.ready_pack_continue_steps', { defaultValue: 'Set up step by step' })}
             </Button>
           </div>
         </div>
@@ -1064,7 +1311,7 @@ function ReadyPackPicker({
 
       {/* Pack icon grid — tidy square tiles, one per pack. */}
       {!isLoading && packs.length > 0 && (
-        <div className="mt-7 grid w-full max-w-3xl grid-cols-2 gap-3 sm:grid-cols-3">
+        <div className="mt-7 grid w-full max-w-5xl grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
           {packs.map((pack) => {
             const isSelected = selectedSlug === pack.slug;
             const country = packCountryName(pack);
@@ -1343,8 +1590,9 @@ function StepCompanyProfile({
         })}
       </p>
 
-      {/* Profile cards: 2 column grid on desktop, 1 on mobile */}
-      <div className="mt-6 w-full max-w-2xl grid grid-cols-1 sm:grid-cols-2 gap-3">
+      {/* Profile cards: three columns on desktop, matching the width of the
+          earlier start-choice step, two on tablet, one on mobile. */}
+      <div className="mt-6 w-full max-w-5xl grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
         {presets.filter((p) => p.key !== 'full_enterprise').map((preset) => {
           const isSelected = selectedType === preset.key;
           const Icon = presetIcon(preset.icon);
@@ -1547,7 +1795,7 @@ function StepModuleConfig({
         <div className="flex items-center justify-between rounded-xl bg-surface-elevated shadow-sm shadow-black/[0.04] px-4 py-3">
           <div className="flex items-center gap-3 min-w-0">
             <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-violet-50 dark:bg-violet-950/30 shrink-0">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-violet-600"><path d="M12 2a4 4 0 0 1 4 4v1a1 1 0 0 1-1 1H9a1 1 0 0 1-1-1V6a4 4 0 0 1 4-4Z"/><path d="M16 11v1a4 4 0 1 1-8 0v-1"/><path d="M12 19v3"/><path d="M8 22h8"/></svg>
+              <Sparkles size={18} className="text-violet-600" />
             </div>
             <div className="min-w-0">
               <p className="text-sm font-semibold text-content-primary">

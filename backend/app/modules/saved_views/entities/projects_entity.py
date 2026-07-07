@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍Built-in queryable entity: ``project``.
+"""Built-in queryable entity: ``project``.
 
 The project itself is project-scoped on its own primary key: the scoper pins
 ``Project.id == ctx.project_id``, so a saved project view resolves at most the

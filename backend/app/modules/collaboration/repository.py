@@ -1,4 +1,4 @@
-"""‌⁠‍Collaboration data access layer.
+"""Collaboration data access layer.
 
 All database queries for comments, mentions, and viewpoints live here.
 No business logic - pure data access.
@@ -15,13 +15,13 @@ from app.modules.collaboration.models import Comment, CommentMention, Viewpoint
 
 
 class CommentRepository:
-    """‌⁠‍Data access for Comment model."""
+    """Data access for Comment model."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
     async def get(self, comment_id: uuid.UUID) -> Comment | None:
-        """‌⁠‍Get comment by ID."""
+        """Get comment by ID."""
         return await self.session.get(Comment, comment_id)
 
     @staticmethod

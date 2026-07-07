@@ -1,4 +1,4 @@
-"""‌⁠‍ERP Chat module permission definitions (T8).
+"""ERP Chat module permission definitions (T8).
 
 Adds an ``erp_chat.admin`` permission gating the new admin observability
 endpoint. Read-side ``erp_chat.use`` is implied by anyone with editor or
@@ -11,7 +11,7 @@ from app.core.permissions import Role, permission_registry
 
 
 def register_erp_chat_permissions() -> None:
-    """‌⁠‍Register permissions for the ERP Chat module."""
+    """Register permissions for the ERP Chat module."""
     permission_registry.register_module_permissions(
         "erp_chat",
         {

@@ -1,4 +1,4 @@
-"""‌⁠‍Backup export/restore service.
+"""Backup export/restore service.
 
 BUG-018 root cause and fix
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -179,7 +179,7 @@ def build_scope_clause(by_key: dict[str, type], backup_key: str, user_id: str) -
 
 
 def _get_model_class(module_path: str, class_name: str) -> type:
-    """‌⁠‍Lazily import a model class to avoid circular imports."""
+    """Lazily import a model class to avoid circular imports."""
     import importlib
 
     mod = importlib.import_module(module_path)
@@ -187,7 +187,7 @@ def _get_model_class(module_path: str, class_name: str) -> type:
 
 
 def get_backup_tables() -> list[tuple[str, str, type]]:
-    """‌⁠‍Return resolved ``(backup_key, table_name, ModelClass)`` tuples.
+    """Return resolved ``(backup_key, table_name, ModelClass)`` tuples.
 
     Tables whose model module fails to import are dropped with a warning
     so a missing optional module does not break the whole export.

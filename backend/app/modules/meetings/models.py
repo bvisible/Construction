@@ -1,4 +1,4 @@
-"""‌⁠‍Meetings ORM models.
+"""Meetings ORM models.
 
 Tables:
     oe_meetings_meeting     - project meetings with agendas, attendees, and action items
@@ -15,7 +15,7 @@ from app.database import GUID, Base
 
 
 class Meeting(Base):
-    """‌⁠‍A project meeting with agenda, attendees, and action items."""
+    """A project meeting with agenda, attendees, and action items."""
 
     __tablename__ = "oe_meetings_meeting"
     __table_args__ = (
@@ -114,7 +114,7 @@ class Meeting(Base):
 
 
 class MeetingAttendance(Base):
-    """‌⁠‍Per-meeting attendance check-in record.
+    """Per-meeting attendance check-in record.
 
     Distinct from the JSON ``Meeting.attendees`` array because check-in
     is a transactional event (timestamped) and may carry a signature

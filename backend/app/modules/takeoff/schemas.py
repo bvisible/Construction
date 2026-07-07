@@ -1,4 +1,4 @@
-"""‌⁠‍Takeoff Pydantic schemas (request/response)."""
+"""Takeoff Pydantic schemas (request/response)."""
 
 import math
 from datetime import datetime
@@ -43,7 +43,7 @@ _MAX_POINTS_PER_MEASUREMENT = 5000
 
 
 class TakeoffDocumentResponse(BaseModel):
-    """‌⁠‍Response after uploading a PDF document."""
+    """Response after uploading a PDF document."""
 
     id: str
     filename: str
@@ -65,7 +65,7 @@ class TakeoffDocumentResponse(BaseModel):
 
 
 class ExtractedElement(BaseModel):
-    """‌⁠‍A single element extracted from AI analysis."""
+    """A single element extracted from AI analysis."""
 
     id: str
     category: str

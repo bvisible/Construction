@@ -1,4 +1,4 @@
-"""‌⁠‍Reporting & Dashboards Pydantic schemas - request/response models."""
+"""Reporting & Dashboards Pydantic schemas - request/response models."""
 
 import html
 import re
@@ -85,7 +85,7 @@ def _strip_html(value: str) -> str:
 
 
 class KPISnapshotCreate(BaseModel):
-    """‌⁠‍Create a new KPI snapshot for a project."""
+    """Create a new KPI snapshot for a project."""
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
@@ -104,7 +104,7 @@ class KPISnapshotCreate(BaseModel):
 
 
 class KPISnapshotResponse(BaseModel):
-    """‌⁠‍KPI snapshot returned from the API."""
+    """KPI snapshot returned from the API."""
 
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 

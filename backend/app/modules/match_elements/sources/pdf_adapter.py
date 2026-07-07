@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍PDF source adapter - extracted PDF line items to /match-elements.
+"""PDF source adapter - extracted PDF line items to /match-elements.
 
 Implements MAPPING_PROCESS.md §4.1.x - the "PDF" source. A tender PDF
 (printed bill of quantities, priced schedule, specification table) is

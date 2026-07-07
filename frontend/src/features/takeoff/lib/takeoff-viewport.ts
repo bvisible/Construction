@@ -284,6 +284,72 @@ export function orthoSnap(anchor: Point, cursor: Point): Point {
   };
 }
 
+/* ── Duplicate trailing vertex (double-click finish) ─────────────────────
+ * A double-click that closes a shape fires two `click` events before the
+ * `dblclick`, so the last placed vertex is a near-duplicate of the one before
+ * it. Stored points are zoom-normalised (PDF units), so the "same click" test
+ * is applied in SCREEN space (distance * zoom), not point space. */
+
+/** Screen-space distance (px) under which a finishing double-click's trailing
+ *  vertex is treated as a duplicate of the previous one and dropped. */
+export const DUP_VERTEX_SCREEN_PX = 6;
+
+/**
+ * Drop a trailing vertex that sits within `screenRadiusPx` screen pixels of the
+ * vertex before it, so a double-click that closes a shape leaves no zero-length
+ * tail (polyline) or sliver edge (area / volume). Returns the array unchanged
+ * when the last two points are meaningfully apart, or when there are fewer than
+ * two points. Pure: never mutates the input.
+ */
+export function dropTrailingDuplicateVertex(
+  points: Point[],
+  zoom: number,
+  screenRadiusPx: number = DUP_VERTEX_SCREEN_PX,
+): Point[] {
+  if (points.length < 2) return points;
+  const last = points[points.length - 1]!;
+  const prev = points[points.length - 2]!;
+  const screenDist = Math.hypot(last.x - prev.x, last.y - prev.y) * zoom;
+  return screenDist < screenRadiusPx ? points.slice(0, -1) : points;
+}
+
+/* ── Snap to existing vertices (opt-in draw aid) ─────────────────────────
+ * While drawing, an opt-in snap pulls the in-progress point onto the nearest
+ * vertex of an already-drawn measurement so a new shape connects exactly to an
+ * existing corner. The catch radius is measured in SCREEN space so it feels the
+ * same at every zoom level. */
+
+/** Default screen-space radius (px) within which the in-progress draw point
+ *  snaps onto an existing measurement vertex. */
+export const VERTEX_SNAP_SCREEN_PX = 10;
+
+/**
+ * Nearest vertex to `cursor` within `screenRadiusPx` screen pixels, or `null`
+ * when none is in range. `cursor` and `vertices` are in PDF units; the radius
+ * is converted to PDF units via `zoom` so the catch distance is constant on
+ * screen. Returns a fresh point (a copy of the matched vertex) so callers can
+ * store it without aliasing the source geometry. Pure + side-effect-free.
+ */
+export function snapToVertex(
+  cursor: Point,
+  vertices: readonly Point[],
+  zoom: number,
+  screenRadiusPx: number = VERTEX_SNAP_SCREEN_PX,
+): Point | null {
+  if (!(zoom > 0) || !(screenRadiusPx > 0)) return null;
+  const radiusPdf = screenRadiusPx / zoom;
+  let best: Point | null = null;
+  let bestDist = Infinity;
+  for (const v of vertices) {
+    const d = Math.hypot(v.x - cursor.x, v.y - cursor.y);
+    if (d <= radiusPdf && d < bestDist) {
+      bestDist = d;
+      best = { x: v.x, y: v.y };
+    }
+  }
+  return best;
+}
+
 /* ── Live drawing readout ────────────────────────────────────────────────
  * The HUD shown while a measure tool is active reports the cursor position
  * and the running length of the segment / polyline being drawn, in the

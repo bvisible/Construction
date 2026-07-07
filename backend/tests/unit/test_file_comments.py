@@ -29,6 +29,7 @@ from app.modules.file_comments.schemas import (
     FileCommentUpdate,
 )
 from app.modules.file_comments.service import (
+    _display_name,
     acknowledge_mention,
     create_comment,
     list_threads,
@@ -427,3 +428,46 @@ async def test_body_edit_replaces_mention_rows(session: AsyncSession) -> None:
     assert result is not None
     _, new_mentions = result
     assert {m.mentioned_user_id for m in new_mentions} == {beta.id}
+
+
+# ── author display name (issue #284 follow-up) ──────────────────────────
+
+
+def test_display_name_prefers_full_name_then_email_then_short_id() -> None:
+    """Pure label resolver: full name wins, then email, then a short id."""
+    uid = uuid.UUID("11112222-3333-4444-5555-666677778888")
+    # Full name present -> full name.
+    assert _display_name(uid, "Alice Smith", "alice@acme.example") == "Alice Smith"
+    # Whitespace-only full name falls through to the email.
+    assert _display_name(uid, "   ", "alice@acme.example") == "alice@acme.example"
+    # No name and no email -> the 8-char id prefix (never the raw UUID).
+    assert _display_name(uid, None, None) == "11112222"
+    assert _display_name(uid, "", "") == "11112222"
+
+
+@pytest.mark.asyncio
+async def test_list_threads_enriches_author_name(session: AsyncSession) -> None:
+    """Threads carry the resolved author name, not a raw id (issue #284)."""
+    author = await _seed_user(session, "ivy@acme.example", "Ivy Builder")
+    project = await _seed_project(session, author)
+    file_id = uuid.uuid4().hex
+
+    await create_comment(
+        session,
+        FileCommentCreate(
+            project_id=project.id,
+            file_kind="document",
+            file_id=file_id,
+            body="Named author note.",
+        ),
+        author_id=author.id,
+    )
+
+    threads, _ = await list_threads(
+        session,
+        project_id=project.id,
+        file_kind="document",
+        file_id=file_id,
+    )
+    assert len(threads) == 1
+    assert threads[0].author_name == "Ivy Builder"

@@ -1,4 +1,4 @@
-"""‌⁠‍Seed regional cost indices (v3.12.0 - Stream B).
+"""Seed regional cost indices (v3.12.0 - Stream B).
 
 Inserts ~50 sample rows into ``oe_regional_indices`` - 8 cities × 6
 trade categories. Factors are 1.0-baselined on Berlin, with values

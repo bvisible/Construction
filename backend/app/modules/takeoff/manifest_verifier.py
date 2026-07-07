@@ -1,4 +1,4 @@
-"""‌⁠‍Signed-manifest verifier for converter binaries (Audit A1).
+"""Signed-manifest verifier for converter binaries (Audit A1).
 
 ================================================================================
 THREAT MODEL
@@ -187,7 +187,7 @@ _FETCH_TIMEOUT_S: int = 30
 
 
 class ManifestError(Exception):
-    """‌⁠‍Base class for all manifest verification failures.
+    """Base class for all manifest verification failures.
 
     Callers should catch this rather than the subclasses unless they
     care about the specific failure mode (e.g. to render a different
@@ -196,7 +196,7 @@ class ManifestError(Exception):
 
 
 class ManifestSignatureInvalid(ManifestError):
-    """‌⁠‍The detached signature did not verify against the embedded pubkey.
+    """The detached signature did not verify against the embedded pubkey.
 
     This is the high-severity case: it means either the manifest was
     tampered with in transit, the key was rotated and the client

@@ -1,4 +1,4 @@
-"""‌⁠‍Catalog resource ORM models.
+"""Catalog resource ORM models.
 
 Tables:
     oe_catalog_resource - curated resources (materials, equipment, labor, operators)
@@ -11,7 +11,7 @@ from app.database import Base
 
 
 class CatalogResource(Base):
-    """‌⁠‍A single catalog resource entry (material, equipment, labor, or operator)."""
+    """A single catalog resource entry (material, equipment, labor, or operator)."""
 
     __tablename__ = "oe_catalog_resource"
 

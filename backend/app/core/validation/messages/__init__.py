@@ -1,4 +1,4 @@
-"""‌⁠‍Locale-scoped message bundle for validation rules.
+"""Locale-scoped message bundle for validation rules.
 
 OpenEstimate principle #2: i18n EVERYWHERE - zero hardcoded strings.
 
@@ -47,7 +47,7 @@ _LOAD_LOCK = Lock()
 
 
 class MessageBundle:
-    """‌⁠‍In-memory bundle of flattened translation keys, keyed by locale.
+    """In-memory bundle of flattened translation keys, keyed by locale.
 
     The bundle is lazily populated on first use. Subsequent calls hit an
     in-memory cache; there is no per-call disk I/O.
@@ -67,7 +67,7 @@ class MessageBundle:
         self._warned_missing: set[str] = set()
 
     def load(self) -> None:
-        """‌⁠‍Eager-load all locale files from ``messages_dir``.
+        """Eager-load all locale files from ``messages_dir``.
 
         Idempotent: subsequent calls short-circuit unless ``reload`` is
         requested explicitly via :meth:`reload`.

@@ -1,4 +1,4 @@
-"""‌⁠‍Field Reports Pydantic schemas - request/response models.
+"""Field Reports Pydantic schemas - request/response models.
 
 Defines create, update, response, and summary schemas
 for field reports.
@@ -60,7 +60,7 @@ FieldType = Literal["text", "textarea", "number", "select", "date", "checkbox"]
 
 
 class WorkforceEntry(BaseModel):
-    """‌⁠‍A single workforce entry: trade + count + hours."""
+    """A single workforce entry: trade + count + hours."""
 
     model_config = ConfigDict(extra="ignore")
 
@@ -73,7 +73,7 @@ class WorkforceEntry(BaseModel):
 
 
 class FieldReportCreate(BaseModel):
-    """‌⁠‍Create a new field report."""
+    """Create a new field report."""
 
     model_config = ConfigDict(str_strip_whitespace=True, extra="ignore")
 

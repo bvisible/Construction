@@ -1,4 +1,4 @@
-"""‌⁠‍Middleware to log slow API requests.
+"""Middleware to log slow API requests.
 
 Logs a warning for any request that exceeds a configurable threshold
 (default 500ms). Useful for identifying performance bottlenecks without
@@ -19,7 +19,7 @@ _DEFAULT_THRESHOLD_SECONDS = 0.5
 
 
 class SlowRequestLoggerMiddleware(BaseHTTPMiddleware):
-    """‌⁠‍Log requests that exceed a duration threshold.
+    """Log requests that exceed a duration threshold.
 
     Args:
         app: The ASGI application.

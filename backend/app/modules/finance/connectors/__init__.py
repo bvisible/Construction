@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍Finance ERP / accounting connectors.
+"""Finance ERP / accounting connectors.
 
 A connector moves money documents between OpenConstructionERP and an
 external accounting or ERP system. The first concrete connector is

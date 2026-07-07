@@ -1,4 +1,4 @@
-"""‌⁠‍Markups & Annotations ORM models.
+"""Markups & Annotations ORM models.
 
 Tables:
     oe_markups_markup          - drawing markups (cloud, arrow, text, etc.)
@@ -21,7 +21,7 @@ _MEASUREMENT = Numeric(precision=18, scale=6)
 
 
 class Markup(Base):
-    """‌⁠‍Drawing markup annotation on a project document page."""
+    """Drawing markup annotation on a project document page."""
 
     __tablename__ = "oe_markups_markup"
 
@@ -92,7 +92,7 @@ class Markup(Base):
 
 
 class ScaleConfig(Base):
-    """‌⁠‍Scale calibration for a document page (pixels-to-real-world mapping)."""
+    """Scale calibration for a document page (pixels-to-real-world mapping)."""
 
     __tablename__ = "oe_markups_scale_config"
 
@@ -144,7 +144,7 @@ class StampTemplate(Base):
 
 
 class MarkupComment(Base):
-    """‌⁠‍Threaded comment attached to a markup.
+    """Threaded comment attached to a markup.
 
     Comments are flat per markup (no nested replies in v1). Authorisation
     is delegated to the parent markup's project - anyone with project

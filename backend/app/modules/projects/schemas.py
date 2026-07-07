@@ -1,4 +1,4 @@
-"""‌⁠‍Project Pydantic schemas for request/response validation."""
+"""Project Pydantic schemas for request/response validation."""
 
 import re
 from datetime import datetime
@@ -19,7 +19,7 @@ _DATE_FORMATS = ("%Y-%m-%d", "%Y-%m-%dT%H:%M:%S", "%d.%m.%Y", "%m/%d/%Y")
 def _validate_fx_rates(
     value: list[dict[str, Any]] | dict[str, Any] | None,
 ) -> list[dict[str, Any]] | None:
-    """‌⁠‍Validate the ``fx_rates`` JSON list shape (RFC 37, Issues #88/#93).
+    """Validate the ``fx_rates`` JSON list shape (RFC 37, Issues #88/#93).
 
     Each entry must be a dict with:
 
@@ -90,7 +90,7 @@ def _validate_fx_rates(
 
 
 def _validate_vat_rate(value: str | None) -> str | None:
-    """‌⁠‍Validate ``default_vat_rate``: positive decimal string ≤100.
+    """Validate ``default_vat_rate``: positive decimal string ≤100.
 
     Empty string is treated as None so a UI that clears the field results
     in the regional default being used again (matching the column's
@@ -1155,7 +1155,7 @@ class FocusModePatch(BaseModel):
 
 
 class ProjectModulePresence(BaseModel):
-    """‌⁠‍Per-module "has any data?" booleans for one project.
+    """Per-module "has any data?" booleans for one project.
 
     Used by the frontend sidebar to dim/grey modules that have no rows
     for the current project. Every field is a single boolean - keeping

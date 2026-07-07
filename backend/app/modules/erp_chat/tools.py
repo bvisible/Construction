@@ -1,4 +1,4 @@
-"""‌⁠‍ERP Chat tool definitions and handlers.
+"""ERP Chat tool definitions and handlers.
 
 Each tool maps to a real ERP service call. Handlers return a dict with:
     renderer  - frontend component hint (e.g. "projects_grid", "boq_table")
@@ -25,11 +25,11 @@ logger = logging.getLogger(__name__)
 
 
 class ToolAuthError(Exception):
-    """‌⁠‍Raised when a tool handler fails authorization or input validation."""
+    """Raised when a tool handler fails authorization or input validation."""
 
 
 class ToolPermissionDenied(Exception):
-    """‌⁠‍Raised when the caller passes IDOR but lacks the role for a write tool.
+    """Raised when the caller passes IDOR but lacks the role for a write tool.
 
     Distinct from :class:`ToolAuthError` (404-style, "you don't see this
     project") so the dispatcher can return a 403-shaped error card with a
@@ -42,7 +42,7 @@ class ToolPermissionDenied(Exception):
 
 
 def _parse_uuid(raw: Any, field_name: str = "id") -> uuid.UUID:
-    """‌⁠‍Parse a UUID from tool arguments, raising ToolAuthError on failure."""
+    """Parse a UUID from tool arguments, raising ToolAuthError on failure."""
     if raw is None or raw == "":
         raise ToolAuthError(f"Missing required field '{field_name}'")
     try:

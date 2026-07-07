@@ -1,4 +1,4 @@
-"""‌⁠‍Finance API routes.
+"""Finance API routes.
 
 Endpoints:
     GET    /                    - List invoices with filters
@@ -112,7 +112,7 @@ def _get_service(session: SessionDep) -> FinanceService:
 
 
 def _contact_display_name(c: Contact) -> str:
-    """‌⁠‍Return the human-readable contact label (company > "first last" > email)."""
+    """Return the human-readable contact label (company > "first last" > email)."""
     if c.company_name:
         return c.company_name
     full = f"{c.first_name or ''} {c.last_name or ''}".strip()
@@ -120,7 +120,7 @@ def _contact_display_name(c: Contact) -> str:
 
 
 async def _fetch_counterparty_names(session: AsyncSession, contact_ids: Iterable[str | None]) -> dict[str, str]:
-    """‌⁠‍Resolve Invoice.contact_id → display name in one round trip."""
+    """Resolve Invoice.contact_id → display name in one round trip."""
     ids = {cid for cid in contact_ids if cid}
     if not ids:
         return {}
@@ -633,6 +633,125 @@ async def export_invoice_br_pdf(
     return StreamingResponse(
         io.BytesIO(pdf_bytes),
         media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get(
+    "/invoices/{invoice_id}/einvoice",
+    summary="Export invoice as an EN 16931 e-invoice (international: CII and UBL/Peppol)",
+    description=(
+        "Render the invoice as an EN 16931 electronic invoice. EN 16931 is the "
+        "international semantic standard, so the same invoice can be issued in "
+        "any supported country flavour and either syntax: CII for ZUGFeRD 2.1, "
+        "Factur-X 1.0 and XRechnung 3.0 (DACH/EU), or UBL for Peppol BIS "
+        "Billing 3.0 and plain EN 16931 UBL (worldwide - EU, UK, Australia, New "
+        "Zealand, Singapore and more). Choose with "
+        "?format=peppol|ubl|xrechnung|zugferd|facturx|en16931. Seller and buyer "
+        "master data, the Buyer reference (Leitweg-ID for XRechnung, PO for "
+        "Peppol) and an explicit VAT rate are read from the invoice metadata "
+        "under the 'einvoice' key. Pass ?dry_run=true to get the list of missing "
+        "EN 16931 fields as JSON instead of the file, so the UI can prompt for them."
+    ),
+    response_description="application/xml e-invoice stream, or a JSON problem list when dry_run=true",
+    response_model=None,
+)
+async def export_invoice_einvoice(
+    invoice_id: uuid.UUID,
+    session: SessionDep,
+    fmt: str = Query(default="xrechnung", alias="format"),
+    dry_run: bool = Query(default=False),
+    embed: bool = Query(default=False),
+    user_id: CurrentUserId = None,  # type: ignore[assignment]
+    _perm: None = Depends(RequirePermission("finance.read")),
+    service: FinanceService = Depends(_get_service),
+) -> StreamingResponse | dict[str, Any]:
+    """Stream an EN 16931 e-invoice (CII/UBL XML, or a hybrid PDF) from the invoice."""
+    from app.modules.einvoice import (
+        SUPPORTED_PROFILES,
+        problems_for,
+        render_einvoice,
+        render_einvoice_pdf,
+    )
+    from app.modules.einvoice.cii import EInvoiceError
+
+    profile = (fmt or "xrechnung").strip().lower()
+    if profile not in SUPPORTED_PROFILES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"unknown e-invoice format {fmt!r}; use one of {', '.join(SUPPORTED_PROFILES)}",
+        )
+
+    await _require_invoice_access(session, invoice_id, user_id)
+    fresh = await service.get_invoice(invoice_id)
+
+    # Best-effort buyer name fallback from the linked contact (never block on it).
+    buyer_fallback = ""
+    if fresh.contact_id:
+        try:
+            from app.modules.contacts.repository import ContactRepository
+
+            contact = await ContactRepository(session).get_by_id(fresh.contact_id)
+            if contact is not None:
+                buyer_fallback = str(getattr(contact, "name", "") or "").strip()
+        except Exception:  # noqa: BLE001 - fallback only
+            logger.debug("e-invoice: contact lookup failed", exc_info=True)
+
+    invoice_dict: dict[str, Any] = {
+        "invoice_number": fresh.invoice_number,
+        "invoice_direction": fresh.invoice_direction,
+        "invoice_date": fresh.invoice_date,
+        "due_date": fresh.due_date,
+        "currency_code": fresh.currency_code,
+        "amount_subtotal": fresh.amount_subtotal,
+        "tax_amount": fresh.tax_amount,
+        "retention_amount": fresh.retention_amount,
+        "amount_total": fresh.amount_total,
+        "notes": fresh.notes,
+        "metadata": dict(fresh.metadata_ or {}),
+    }
+    line_items: list[dict[str, Any]] = [
+        {
+            "description": li.description,
+            "unit": li.unit,
+            "quantity": li.quantity,
+            "unit_rate": li.unit_rate,
+            "amount": li.amount,
+        }
+        for li in (fresh.line_items or [])
+    ]
+
+    if dry_run:
+        problems = problems_for(
+            invoice=invoice_dict,
+            line_items=line_items,
+            profile=profile,
+            buyer_fallback_name=buyer_fallback,
+        )
+        return {"format": profile, "valid": not problems, "problems": problems}
+
+    render = render_einvoice_pdf if embed else render_einvoice
+    try:
+        filename, media_type, body = render(
+            invoice=invoice_dict,
+            line_items=line_items,
+            profile=profile,
+            buyer_fallback_name=buyer_fallback,
+        )
+    except EInvoiceError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"invoice is not EN 16931 complete for {profile}: {exc}. "
+                "Fill seller/buyer master data and the buyer reference under the "
+                "invoice metadata 'einvoice' key, or call with ?dry_run=true."
+            ),
+        ) from exc
+
+    # ``filename`` is already ASCII-sanitised by the service (_safe_token).
+    return StreamingResponse(
+        io.BytesIO(body),
+        media_type=media_type,
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
@@ -1839,7 +1958,11 @@ async def update_ledger_account(
 ) -> LedgerAccountResponse:
     """Update a chart-of-accounts account."""
     account = await service.get_account(account_id)
-    await _require_project_access(session, account.project_id, user_id)
+    # A workspace-level (company-wide) account has project_id=None, where the
+    # per-project owner check no-ops. Gate that path to admins like the create
+    # and seed endpoints (and the consolidated GL); a project-scoped account
+    # falls through to the normal per-project owner check.
+    await _require_gl_consolidated_scope(session, account.project_id, user_id)
     updated = await service.update_account(account_id, data)
     return LedgerAccountResponse.model_validate(updated)
 

@@ -1,4 +1,4 @@
-"""‌⁠‍Assembly API routes.
+"""Assembly API routes.
 
 Endpoints:
     POST   /                          - Create a new assembly
@@ -80,7 +80,7 @@ async def _verify_assembly_owner(
     user_id: str,
     payload: dict | None = None,
 ) -> None:
-    """‌⁠‍Load an assembly and verify ownership.
+    """Load an assembly and verify ownership.
 
     Admins bypass the check via the role claim on the JWT payload.
 
@@ -114,7 +114,7 @@ async def _verify_target_boq_owner(
     user_id: str,
     payload: dict | None = None,
 ) -> None:
-    """‌⁠‍Verify the user owns the project that contains the given BOQ.
+    """Verify the user owns the project that contains the given BOQ.
 
     Used by `apply_to_boq` to prevent cross-tenant injection of assembly
     positions into someone else's BOQ. Mirrors ``boq.router._verify_boq_owner``

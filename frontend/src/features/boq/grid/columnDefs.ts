@@ -1,4 +1,10 @@
-import type { ColDef, ValueFormatterParams, ValueGetterParams, ValueSetterParams } from 'ag-grid-community';
+import type {
+  ColDef,
+  ITooltipParams,
+  ValueFormatterParams,
+  ValueGetterParams,
+  ValueSetterParams,
+} from 'ag-grid-community';
 import { convertToBase, fmtWithCurrency, resourceAwareTotalInBase } from '../boqHelpers';
 import type { DisplayQuantityApi } from '@/shared/hooks/useDisplayQuantity';
 import { unitColumnValueSetter } from './cellEditors';
@@ -10,6 +16,23 @@ import {
   type FormulaVariable,
 } from './formula';
 import type { Position } from '../api';
+
+/**
+ * How the Material / Labor / Equipment cost-driver split is shown in the BOQ
+ * grid. Driven by one tri-state toolbar button so an estimator who does not
+ * work with the resource breakdown can remove it completely:
+ *  - `pill`    compact inline "55% MAT · 35% LAB · 10% EQU" badge in the
+ *              description cell (default; no extra columns).
+ *  - `columns` three dedicated, sortable percentage columns (the pill is
+ *              hidden so the same figures are not shown twice).
+ *  - `off`     neither pill nor columns.
+ */
+export type ResourceSplitMode = 'pill' | 'columns' | 'off';
+
+/** Toolbar cycle order: pill -> columns -> off -> pill. */
+export function nextResourceSplitMode(mode: ResourceSplitMode): ResourceSplitMode {
+  return mode === 'pill' ? 'columns' : mode === 'columns' ? 'off' : 'pill';
+}
 
 export interface BOQColumnContext {
   currencySymbol: string;
@@ -53,6 +76,12 @@ export interface BOQColumnContext {
    */
   showResourceSplit?: boolean;
   /**
+   * Show the compact inline cost-driver split pill in the description cell.
+   * The tri-state toolbar button sets exactly one of `showResourceSplit`
+   * (columns) / `showResourceSplitPill` (pill) / neither (off).
+   */
+  showResourceSplitPill?: boolean;
+  /**
    * ── Imperial-units display seam (Issue #285).
    * Carries the measurement-system-aware quantity API (built once by
    * BOQGrid via ``useDisplayQuantity``). The Qty / Unit-rate value
@@ -87,6 +116,95 @@ function totalFormatter(params: ValueFormatterParams): string {
   }
   const currencyCode = ctx?.currencyCode ?? 'EUR';
   return fmtWithCurrency(params.value, locale, currencyCode);
+}
+
+/**
+ * Plain-language explanation of how a line total was reached, shown as the
+ * Total cell's hover tooltip. The single most-used number in the grid is
+ * otherwise silent: the user sees a figure with no hint of the arithmetic,
+ * the resource roll-up, or the silent FX rebase behind it. This spells all
+ * three out.
+ *
+ * The concrete quantity and rate are expressed in the user's OWN display
+ * units (imperial or metric) via `displayQuantity`, so the numbers match what
+ * the Qty and Unit Rate cells show on the same row. Resource-backed positions
+ * say the rate comes from their resources instead of a hand-typed rate.
+ * Returns undefined for section / footer / empty rows so only real positions
+ * carry the hint.
+ */
+function totalTooltip(params: ITooltipParams): string | undefined {
+  const d = params.data as Record<string, unknown> | undefined;
+  const ctx = params.context as BOQColumnContext | undefined;
+  if (!d || d._isFooter || d._isSection || !ctx) return undefined;
+
+  const t = ctx.t;
+  const locale = ctx.locale ?? 'de-DE';
+  const baseCode = ctx.currencyCode ?? 'EUR';
+  const meta = (d.metadata || d.metadata_ || {}) as Record<string, unknown>;
+  const resources = meta.resources;
+  const hasResources = Array.isArray(resources) && resources.length > 0;
+  const totalBase = typeof params.value === 'number' ? params.value : Number(params.value) || 0;
+
+  const lines: string[] = [];
+
+  if (hasResources) {
+    lines.push(
+      t('boq.total_tip_resources', {
+        defaultValue: "Total is the sum of this position's resources (labour, material, plant).",
+      }),
+    );
+  } else {
+    const q = typeof d.quantity === 'number' ? d.quantity : parseFloat(String(d.quantity)) || 0;
+    const r = typeof d.unit_rate === 'number' ? d.unit_rate : parseFloat(String(d.unit_rate)) || 0;
+    const unit = (d.unit as string | undefined) ?? '';
+    const dq = ctx.displayQuantity;
+    const qDisp = dq ? dq.convert(q, unit) : { value: q, unit };
+    const rDisp = dq ? dq.convertRate(r, unit) : r;
+    const unitLabel = qDisp.unit || unit;
+    const srcCode = (meta.currency as string | undefined) || baseCode;
+    const qtyFmt = new Intl.NumberFormat(locale, { maximumFractionDigits: 3 });
+    lines.push(
+      t('boq.total_tip_formula', {
+        defaultValue: '{{qty}} {{unit}} x {{rate}} per {{unit}}',
+        qty: qtyFmt.format(qDisp.value),
+        unit: unitLabel,
+        rate: fmtWithCurrency(rDisp, locale, srcCode),
+      }),
+    );
+  }
+
+  // Silent FX rebase: the cell converts a foreign-priced line into the base
+  // currency before it is summed. Say so, otherwise the number looks wrong.
+  const srcCurrency = meta.currency as string | undefined;
+  if (srcCurrency && srcCurrency !== baseCode) {
+    lines.push(
+      t('boq.total_tip_fx', {
+        defaultValue: 'Priced in {{cur}}, converted to {{base}} for the project total.',
+        cur: srcCurrency,
+        base: baseCode,
+      }),
+    );
+  }
+
+  // View-only display-currency override applied on top of the base value.
+  const dc = ctx.displayCurrency;
+  if (dc && dc.rate > 0 && dc.code !== baseCode) {
+    lines.push(
+      t('boq.total_tip_display', {
+        defaultValue: 'Shown in {{code}} at the project display rate.',
+        code: dc.code,
+      }),
+    );
+  }
+
+  lines.push(
+    t('boq.total_tip_equals', {
+      defaultValue: '= {{total}}',
+      total: totalFormatter({ value: totalBase, context: ctx } as ValueFormatterParams),
+    }),
+  );
+
+  return lines.join('\n');
 }
 
 /**
@@ -179,6 +297,99 @@ export function resourceSplitMoneyTotals(
     }
   }
   return any ? totals : null;
+}
+
+/** True for a real cost line (not a section header, footer, or resource sub-row). */
+function isCostLine(d: Record<string, unknown> | undefined): boolean {
+  return (
+    !!d && !d._isSection && !d._isFooter && !d._isResource && !d._isAddResource && !d._isVariantHeader
+  );
+}
+
+/**
+ * A cost line with no quantity yet. Zero and missing both count - the line
+ * carries no measured work, so its total is zero and the estimate is
+ * understated until a quantity is set.
+ */
+export function needsQuantity(d: Record<string, unknown> | undefined): boolean {
+  if (!isCostLine(d)) return false;
+  const q = typeof d!.quantity === 'number' ? d!.quantity : parseFloat(String(d!.quantity));
+  return !Number.isFinite(q) || q === 0;
+}
+
+/**
+ * A cost line with no unit rate yet. Positions whose rate is built from
+ * resources are excluded - their rate is computed, never typed - so only a
+ * genuinely unpriced line is flagged.
+ */
+export function needsPrice(d: Record<string, unknown> | undefined): boolean {
+  if (!isCostLine(d)) return false;
+  const meta = (d!.metadata || d!.metadata_ || {}) as Record<string, unknown>;
+  const res = meta.resources;
+  if (Array.isArray(res) && res.length > 0) return false;
+  const r = typeof d!.unit_rate === 'number' ? d!.unit_rate : parseFloat(String(d!.unit_rate));
+  return !Number.isFinite(r) || r === 0;
+}
+
+/** Faint amber tint marking a cell that needs a value. Subtle, not alarming. */
+const NEEDS_VALUE_CLASS = 'bg-amber-50/70 dark:bg-amber-950/30';
+
+/** Localised resource-type labels for the unit-rate build-up tooltip. */
+const RATE_BUILDUP_TYPES: ReadonlyArray<readonly [string, string, string]> = [
+  ['labor', 'boq.res_labor', 'Labour'],
+  ['material', 'boq.res_material', 'Material'],
+  ['equipment', 'boq.res_equipment', 'Equipment'],
+  ['operator', 'boq.res_operator', 'Operator'],
+  ['subcontractor', 'boq.res_subcontractor', 'Subcontractor'],
+  ['other', 'boq.res_other', 'Other'],
+];
+
+/**
+ * Plain-language build-up of a resource-priced unit rate, shown as the Unit
+ * Rate cell tooltip so the rate stops being a magic number: the estimator
+ * sees exactly how much of it is labour, material, plant and so on. Each
+ * line is `share(type) x unit_rate`, so the parts sum to the rate by
+ * construction and reconcile with the split pill. The money is shown in the
+ * position's own currency. Returns undefined when there is nothing to break
+ * down, so the caller can fall back to the generic hint.
+ */
+function rateBuildupTooltip(
+  d: Record<string, unknown>,
+  ctx: BOQColumnContext,
+): string | undefined {
+  const meta = (d.metadata || d.metadata_ || {}) as Record<string, unknown>;
+  const resources = meta.resources;
+  if (!Array.isArray(resources) || resources.length === 0) return undefined;
+  const rate = typeof d.unit_rate === 'number' ? d.unit_rate : parseFloat(String(d.unit_rate));
+  if (!Number.isFinite(rate) || rate === 0) return undefined;
+
+  const t = ctx.t;
+  const locale = ctx.locale ?? 'de-DE';
+  const currency = (meta.currency as string | undefined) || ctx.currencyCode || 'EUR';
+
+  const entries: Array<[string, number, number]> = [];
+  for (const [type, key, fallback] of RATE_BUILDUP_TYPES) {
+    const frac = resourceSplitFraction(meta, type);
+    if (frac == null || frac <= 0) continue;
+    const label = t(key, { defaultValue: fallback });
+    entries.push([label, frac * rate, frac]);
+  }
+  if (entries.length === 0) return undefined;
+  entries.sort((a, b) => b[1] - a[1]);
+
+  const lines: string[] = [
+    t('boq.rate_buildup_header', { defaultValue: 'Unit rate is built from:' }),
+  ];
+  for (const [label, money, frac] of entries) {
+    lines.push(`${label}: ${fmtWithCurrency(money, locale, currency)} (${Math.round(frac * 100)}%)`);
+  }
+  lines.push(
+    t('boq.rate_buildup_total', {
+      defaultValue: '= {{total}} per unit',
+      total: fmtWithCurrency(rate, locale, currency),
+    }),
+  );
+  return lines.join('\n');
 }
 
 export function getColumnDefs(context: BOQColumnContext): ColDef[] {
@@ -427,12 +638,19 @@ export function getColumnDefs(context: BOQColumnContext): ColDef[] {
         return ctx?.displayQuantity ? ctx.displayQuantity.toMetric(val, unit) : val;
       },
       // Surface the source formula in the AG Grid tooltip — much easier to
-      // see than a tiny badge alone (Issue #90 follow-up).
+      // see than a tiny badge alone (Issue #90 follow-up). Also nudge the
+      // estimator when the line has no quantity yet, since that silently
+      // zeroes the line total.
       tooltipValueGetter: (params) => {
         const meta = params.data?.metadata as Record<string, unknown> | undefined;
         const f = meta?.formula;
         if (typeof f === 'string' && f) {
           return `Formula: ${f}\nClick to edit.`;
+        }
+        if (needsQuantity(params.data as Record<string, unknown> | undefined)) {
+          return t('boq.flag_no_quantity', {
+            defaultValue: 'No quantity yet - this line adds nothing to the total until you set one.',
+          });
         }
         return undefined;
       },
@@ -440,7 +658,10 @@ export function getColumnDefs(context: BOQColumnContext): ColDef[] {
         const base = 'text-right tabular-nums text-xs !pr-2 !pl-2';
         const ctx = params.context as { expandedPositions?: Set<string> } | undefined;
         const isExpanded = !!params.data?.id && (ctx?.expandedPositions?.has(params.data.id) ?? false);
-        return isExpanded ? `${base} font-bold` : base;
+        const flag = needsQuantity(params.data as Record<string, unknown> | undefined)
+          ? ` ${NEEDS_VALUE_CLASS}`
+          : '';
+        return `${isExpanded ? `${base} font-bold` : base}${flag}`;
       },
       headerClass: 'ag-right-aligned-header',
       type: 'numericColumn',
@@ -460,8 +681,12 @@ export function getColumnDefs(context: BOQColumnContext): ColDef[] {
         if (Array.isArray(res) && res.length > 0) return false;
         return true;
       },
-      cellEditor: 'agNumberCellEditor',
-      cellEditorParams: { min: 0, precision: 2 },
+      // Issue #287: a display-aware editor so the field OPENS on the same
+      // reciprocal rate the cell shows. The stock number editor opened on the
+      // raw metric rate while the valueParser below converted display->metric
+      // on commit, so opening + committing a cell unchanged double-converted
+      // and corrupted the stored rate for imperial users.
+      cellEditor: 'rateCellEditor',
       // Issue #285: the rate cell DISPLAYS a reciprocal per-unit rate when
       // the quantity is shown converted (50/m -> 15.24/ft) so the line
       // reconciles. A value typed here is therefore against the displayed
@@ -484,14 +709,31 @@ export function getColumnDefs(context: BOQColumnContext): ColDef[] {
         if (Array.isArray(res) && res.length > 0) base = `${base} text-content-tertiary`;
         const ctx = params.context as { expandedPositions?: Set<string> } | undefined;
         const isExpanded = !!params.data?.id && (ctx?.expandedPositions?.has(params.data.id) ?? false);
-        return isExpanded ? `${base} font-bold` : base;
+        const flag = needsPrice(params.data as Record<string, unknown> | undefined)
+          ? ` ${NEEDS_VALUE_CLASS}`
+          : '';
+        return `${isExpanded ? `${base} font-bold` : base}${flag}`;
       },
       headerClass: 'ag-right-aligned-header',
       type: 'numericColumn',
       tooltipValueGetter: (params) => {
         const res = params.data?.metadata?.resources;
         if (Array.isArray(res) && res.length > 0) {
-          return t('boq.rate_from_resources', { defaultValue: 'Rate is calculated from resources. Edit individual resources to change.' });
+          const buildup = rateBuildupTooltip(
+            params.data as Record<string, unknown>,
+            params.context as BOQColumnContext,
+          );
+          return (
+            buildup ??
+            t('boq.rate_from_resources', {
+              defaultValue: 'Rate is calculated from resources. Edit individual resources to change.',
+            })
+          );
+        }
+        if (needsPrice(params.data as Record<string, unknown> | undefined)) {
+          return t('boq.flag_no_price', {
+            defaultValue: 'No unit rate yet - price this line to include it in the total.',
+          });
         }
         return undefined;
       },
@@ -547,6 +789,7 @@ export function getColumnDefs(context: BOQColumnContext): ColDef[] {
         return convertToBase(raw, sourceCurrency, ctx?.currencyCode, ctx?.fxRates);
       },
       valueFormatter: totalFormatter,
+      tooltipValueGetter: totalTooltip,
       cellClass: (params) => {
         const base = 'text-right tabular-nums text-xs !pr-2 !pl-2';
         if (params.data?._isSection) return `${base} font-bold`;

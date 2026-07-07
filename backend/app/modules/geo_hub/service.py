@@ -236,6 +236,8 @@ class GeoHubService:
         * 422 - project address missing or has no country.
         * 502 - geocoder unavailable + no cached fallback.
         """
+        from types import SimpleNamespace
+
         from app.modules.geo_hub.geocoder import (
             geocode_address,
             project_address_from_jsonb,
@@ -272,20 +274,39 @@ class GeoHubService:
             )
 
         address = project_address_from_jsonb(project.address)
-        if address is None:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail={
-                    "code": "address_missing",
-                    "message": (
-                        "Project address is empty or missing a country - "
-                        "fill in at least the country before auto-anchoring."
-                    ),
-                },
+        saved_coords = _address_coords(project.address)
+
+        result = None
+        if address is not None:
+            result = await geocode_address(address, session=self.session)
+
+        if result is None and saved_coords is not None:
+            # The project address carries explicit coordinates (for example a
+            # point picked from a map search) but either has no geocodable text
+            # (a missing country) or the geocoder was unavailable. Anchor on the
+            # saved point rather than failing - those coordinates are the exact
+            # location the user chose.
+            result = SimpleNamespace(
+                lat=saved_coords[0],
+                lon=saved_coords[1],
+                precision="address_point",
+                source="project_coordinates",
+                display_name="",
             )
 
-        result = await geocode_address(address, session=self.session)
         if result is None:
+            if address is None:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail={
+                        "code": "address_missing",
+                        "message": (
+                            "Project address is empty or missing a country - "
+                            "fill in at least the country, or set a location on "
+                            "the map, before auto-anchoring."
+                        ),
+                    },
+                )
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail={
@@ -294,17 +315,19 @@ class GeoHubService:
                 },
             )
 
-        address_line = ", ".join(
-            part
-            for part in (
-                address.street,
-                address.house_number,
-                address.postal_code,
-                address.city,
-                address.country,
+        address_line = ""
+        if address is not None:
+            address_line = ", ".join(
+                part
+                for part in (
+                    address.street,
+                    address.house_number,
+                    address.postal_code,
+                    address.city,
+                    address.country,
+                )
+                if part
             )
-            if part
-        )
 
         if existing is not None:
             # Overwrite in place (force=True path).

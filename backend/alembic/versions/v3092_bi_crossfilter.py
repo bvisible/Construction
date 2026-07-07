@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍BI Dashboards: cross-filter + drill-path columns.
+"""BI Dashboards: cross-filter + drill-path columns.
 
 Wave 4 / T11 — gives the BI dashboards module Power BI-style cross-filter
 behaviour. Two strictly-additive columns:

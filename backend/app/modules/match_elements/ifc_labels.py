@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍Canonical IFC class metadata for human-readable group display.
+"""Canonical IFC class metadata for human-readable group display.
 
 Source of truth for:
 
@@ -41,7 +41,7 @@ Trade = Literal[
 
 
 class IfcClassMeta(NamedTuple):
-    """‌⁠‍Metadata one IFC class carries through the matcher pipeline."""
+    """Metadata one IFC class carries through the matcher pipeline."""
 
     en_label: str
     i18n_key: str
@@ -70,7 +70,7 @@ class IfcClassMeta(NamedTuple):
 
 
 def _arch(label: str, key: str, din: str | None, mf: str | None = None, nrm: str | None = None) -> IfcClassMeta:
-    """‌⁠‍Architectural-trade IfcClassMeta with full standards crosswalk."""
+    """Architectural-trade IfcClassMeta with full standards crosswalk."""
     return IfcClassMeta(label, key, "architectural", din, False, mf, nrm)
 
 

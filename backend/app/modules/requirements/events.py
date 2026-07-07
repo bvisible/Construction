@@ -1,4 +1,4 @@
-"""‌⁠‍Requirements event handlers​‌‍⁠​‌‍⁠​‌‍⁠​‌‍⁠ - vector indexing.
+"""Requirements event handlers​‌‍⁠​‌‍⁠​‌‍⁠​‌‍⁠ - vector indexing.
 
 Subscribes to ``requirements.requirement.*`` events and keeps the
 ``oe_requirements`` vector collection in sync with the underlying
@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 
 
 async def _index_requirement(event: Event) -> None:
-    """‌⁠‍Re-embed a single Requirement row after create / update / link.
+    """Re-embed a single Requirement row after create / update / link.
 
     Loads the row in a fresh short-lived session with the parent
     RequirementSet eager-loaded so ``project_id_of`` resolves cleanly.
@@ -76,7 +76,7 @@ async def _index_requirement(event: Event) -> None:
 
 
 async def _delete_requirement_vector(event: Event) -> None:
-    """‌⁠‍Remove a deleted Requirement row from the vector store."""
+    """Remove a deleted Requirement row from the vector store."""
     rid_raw = (event.data or {}).get("requirement_id")
     if not rid_raw:
         return

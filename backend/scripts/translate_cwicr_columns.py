@@ -1,4 +1,4 @@
-"""‌⁠‍Backfill CWICR cost-database localized columns.
+"""Backfill CWICR cost-database localized columns.
 
 The CWICR import pipeline (``router.py::_load_cwicr_data``) writes the raw
 German vocabulary tokens into ``classification.category``,
@@ -66,7 +66,7 @@ DEFAULT_DB_CANDIDATES = (
 
 
 def _find_default_db() -> Path | None:
-    """‌⁠‍Walk a few well-known relative paths to locate the active SQLite DB."""
+    """Walk a few well-known relative paths to locate the active SQLite DB."""
     for candidate in DEFAULT_DB_CANDIDATES:
         p = Path.cwd() / candidate
         if p.is_file():
@@ -86,7 +86,7 @@ def _process_row(
     metadata_raw: str | None,
     locale: str,
 ) -> tuple[str, str, str] | None:
-    """‌⁠‍Compute the new ``(classification, components, metadata)`` JSON tuple.
+    """Compute the new ``(classification, components, metadata)`` JSON tuple.
 
     Returns ``None`` when no field would change (skip write).
     """

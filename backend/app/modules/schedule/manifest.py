@@ -1,4 +1,4 @@
-"""‌⁠‍4D Schedule module manifest."""
+"""4D Schedule module manifest."""
 
 from app.core.module_loader import ModuleManifest
 

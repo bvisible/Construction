@@ -2,6 +2,35 @@
   "common": {
     "ok": "OK"
   },
+  "field_time": {
+    "hours_per_day_max": {
+      "fail": "Arbeiter {worker} ist an diesem Tag mit {hours} h gebucht, über dem Limit von {max} h",
+      "suggestion": "Die Stunden vor dem Einreichen auf den richtigen Tag oder Arbeiter aufteilen"
+    },
+    "line_complete": {
+      "fail": "Zeile {line} ist unvollständig: {reason}",
+      "labour_xor_plant": "muss entweder Lohn oder Gerät buchen, nicht beides und nicht keines",
+      "hours_positive": "Stunden müssen größer als null sein",
+      "cost_code_required": "ein Kostencode ist erforderlich",
+      "suggestion": "Die Zeile vor dem Einreichen des Stundenzettels vervollständigen"
+    },
+    "cost_code_resolves": {
+      "fail": "Zeile {line} Code '{code}' passt zu keiner LV-Position oder WBS in diesem Projekt",
+      "suggestion": "Einen Kostencode oder eine WBS wählen, die im Projekt-LV vorhanden ist"
+    },
+    "daywork_needs_variation": {
+      "fail": "Regiezeile {line} ist keiner offenen Nachtragsanordnung zugeordnet",
+      "suggestion": "Die Regiearbeit mit der beauftragten Nachtragsanordnung verknüpfen"
+    },
+    "plant_needs_equipment": {
+      "fail": "Gerätezeile {line} nennt kein Gerät",
+      "suggestion": "Das Gerät zuordnen, damit Gerätestunden kalkuliert werden können"
+    },
+    "approved_immutable": {
+      "fail": "Dieser Stundenzettel ist {status} und kann nicht bearbeitet werden",
+      "suggestion": "Einen stornierenden Stundenzettel buchen, um genehmigte Stunden zu korrigieren"
+    }
+  },
   "ai_takeoff": {
     "scale_sanity": {
       "fail": "Der von der KI erkannte Maßstab ergibt eine unplausible Blattbreite von {span} m",
@@ -247,6 +276,25 @@
     "valid_code": {
       "fail": "Ungültiger FIEBDC-3-Code '{code}' in Position {ordinal}",
       "suggestion": "FIEBDC-3-Format verwenden: alphanumerisch (z. B. E04CM040, 01.02.01, CAP01#)"
+    }
+  },
+  "mexico": {
+    "apu_completeness": {
+      "fail": "Position {ordinal} hat eine unvollständige APU; fehlende Kostenbestandteile: {missing}",
+      "suggestion": "Ergänzen Sie die fehlenden Bestandteile der direkten Kosten (mano de obra, materiales, maquinaria) in der Einheitspreisanalyse"
+    },
+    "iva_rate_valid": {
+      "fail": "Position {ordinal} hat einen ungültigen IVA-Satz {rate}; der mexikanische IVA beträgt 16, 8 (Grenzregion) oder 0 Prozent",
+      "suggestion": "Setzen Sie den IVA-Satz auf 16 Prozent (Standard), 8 Prozent (Grenzregion) oder 0 Prozent"
+    },
+    "subcontract_retencion": {
+      "fail": "Die Subunternehmer-Position {ordinal} gibt nicht an, ob IVA/ISR-Einbehalte (retenciones) gelten",
+      "suggestion": "Erfassen Sie die IVA- und ISR-Einbehalte für die Subunternehmer-Zeile oder vermerken Sie, dass keine gelten"
+    },
+    "cfdi_rfc_present": {
+      "missing": "Die CFDI-Ausstellerdaten sind für den Angebotsexport unvollständig; fehlend: {missing}",
+      "invalid_rfc": "RFC '{rfc}' ist kein gültiger CFDI-RFC (12 Zeichen für ein Unternehmen, 13 für eine Einzelperson)",
+      "suggestion": "Hinterlegen Sie RFC, regimen fiscal und uso CFDI des Ausstellers im Projektprofil für die CFDI-4.0-Rechnungsstellung"
     }
   },
   "pipeline": {

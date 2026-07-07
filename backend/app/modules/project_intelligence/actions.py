@@ -1,4 +1,4 @@
-"""‌⁠‍Action executor - triggers operations in other modules.
+"""Action executor - triggers operations in other modules.
 
 Each action_id maps to a definition describing what it does,
 which module it targets, and whether it requires confirmation.
@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class ActionDefinition:
-    """‌⁠‍Defines an executable action."""
+    """Defines an executable action."""
 
     id: str
     label: str
@@ -32,7 +32,7 @@ class ActionDefinition:
 
 @dataclass
 class ActionResult:
-    """‌⁠‍Result of executing an action."""
+    """Result of executing an action."""
 
     success: bool
     message: str

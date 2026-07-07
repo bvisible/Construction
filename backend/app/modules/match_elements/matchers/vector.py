@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍Vector matcher - wraps the existing ``match_service`` ranker.
+"""Vector matcher - wraps the existing ``match_service`` ranker.
 
 The match-elements service calls this when the user clicks "Run vector
 match" on a group. The underlying ranker handles translation cascade,

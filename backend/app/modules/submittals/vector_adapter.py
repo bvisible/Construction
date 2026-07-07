@@ -1,4 +1,4 @@
-"""‌⁠‍Submittals vector adapter - feeds the ``oe_submittals_submittals`` collection.
+"""Submittals vector adapter - feeds the ``oe_submittals_submittals`` collection.
 
 Each :class:`~app.modules.submittals.models.Submittal` row is embedded as
 the submittal number, title, spec section and type so the AI advisor and
@@ -19,13 +19,13 @@ from app.modules.submittals.models import Submittal
 
 
 class SubmittalVectorAdapter:
-    """‌⁠‍Embed submittal rows into the unified vector store."""
+    """Embed submittal rows into the unified vector store."""
 
     collection_name: str = COLLECTION_SUBMITTALS
     module_name: str = "submittals"
 
     def to_text(self, row: Submittal) -> str:
-        """‌⁠‍Build the canonical text that gets embedded.
+        """Build the canonical text that gets embedded.
 
         Concatenates the submittal number, title, spec section, type and
         status so semantic queries match regardless of which review stage

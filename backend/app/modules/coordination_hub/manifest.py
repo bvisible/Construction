@@ -1,5 +1,5 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
-"""‌⁠‍Coordination Hub module manifest."""
+"""Coordination Hub module manifest."""
 
 from app.core.module_loader import ModuleManifest
 

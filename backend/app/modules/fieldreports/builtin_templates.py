@@ -1,4 +1,4 @@
-"""‌⁠‍Code-defined built-in field-report templates.
+"""Code-defined built-in field-report templates.
 
 These are intentionally NOT database rows: keeping them as constants
 means a fresh install needs no seed migration (the architecture guide principle #1 -

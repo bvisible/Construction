@@ -1,5 +1,5 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
-"""‌⁠‍Coordination Hub - persisted ORM models.
+"""Coordination Hub - persisted ORM models.
 
 The hub remains a *thin* aggregator across the sibling BIM modules; the
 only state it owns is the per-project alert threshold configuration that
@@ -25,7 +25,7 @@ from app.database import GUID, Base
 
 
 class CoordinationThreshold(Base):
-    """‌⁠‍Per-project warn / error threshold for one named coordination metric.
+    """Per-project warn / error threshold for one named coordination metric.
 
     A single project may carry one row per ``metric`` value (the
     ``(project_id, metric)`` pair is unique). Rows are seeded the first

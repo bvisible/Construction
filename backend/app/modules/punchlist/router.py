@@ -1,4 +1,4 @@
-"""‌⁠‍Punch List API routes.
+"""Punch List API routes.
 
 Endpoints:
     POST   /items                        - Create punch item
@@ -53,7 +53,7 @@ def _get_service(session: SessionDep) -> PunchListService:
 
 
 def _item_to_response(item: object) -> PunchItemResponse:
-    """‌⁠‍Build a PunchItemResponse from a PunchItem ORM object."""
+    """Build a PunchItemResponse from a PunchItem ORM object."""
     return PunchItemResponse(
         id=item.id,  # type: ignore[attr-defined]
         project_id=item.project_id,  # type: ignore[attr-defined]
@@ -97,7 +97,7 @@ async def get_summary(
     _perm: None = Depends(RequirePermission("punchlist.read")),
     service: PunchListService = Depends(_get_service),
 ) -> PunchListSummary:
-    """‌⁠‍Aggregated punch list stats for a project."""
+    """Aggregated punch list stats for a project."""
     await verify_project_access(project_id, user_id, session)
     data = await service.get_summary(project_id)
     return PunchListSummary(**data)
@@ -468,7 +468,7 @@ async def bulk_close(
     _perm: None = Depends(RequirePermission("punchlist.update")),
     service: PunchListService = Depends(_get_service),
 ) -> PunchBulkCloseResponse:
-    """‌⁠‍Close many punch items at once.
+    """Close many punch items at once.
 
     Per-id outcomes are summarised: ``closed`` (now closed), ``skipped``
     (already closed) and ``errors`` (not found, project mismatch, critical

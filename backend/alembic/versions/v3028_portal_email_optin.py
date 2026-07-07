@@ -34,7 +34,7 @@ def upgrade() -> None:
                 "notification_email_opt_in",
                 sa.Boolean(),
                 nullable=False,
-                server_default=sa.text("1"),
+                server_default=sa.text("1") if bind.dialect.name == "sqlite" else sa.text("true"),
             ),
         )
 

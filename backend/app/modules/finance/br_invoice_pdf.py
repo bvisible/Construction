@@ -57,6 +57,7 @@ from reportlab.platypus import (
     TableStyle,
 )
 
+from app.core.pdf_branding import branded_doc_metadata, branded_header_footer
 from app.core.pdf_fonts import BODY_FONT, BOLD_FONT, register_pdf_fonts
 
 register_pdf_fonts()
@@ -269,6 +270,8 @@ def render_br_invoice_pdf(
     br_fields = (invoice.get("metadata") or {}).get("br_fields") or {}
 
     buffer = io.BytesIO()
+    # Metadata follows the workspace white-label brand (issue #284).
+    _meta = branded_doc_metadata()
     doc = SimpleDocTemplate(
         buffer,
         pagesize=A4,
@@ -277,6 +280,8 @@ def render_br_invoice_pdf(
         topMargin=MARGIN_TOP,
         bottomMargin=MARGIN_BOTTOM,
         title=f"Fatura {invoice.get('invoice_number', '')}".strip(),
+        author=_meta["author"],
+        creator=_meta["creator"],
     )
 
     story: list[Any] = []
@@ -514,5 +519,8 @@ def render_br_invoice_pdf(
         )
     )
 
-    doc.build(story)
+    # Brand header / footer on every page (issue #284). Geometry is read from
+    # the doc, so it sits in the existing top/bottom margins without disturbing
+    # the RPS layout.
+    doc.build(story, onFirstPage=branded_header_footer, onLaterPages=branded_header_footer)
     return buffer.getvalue()

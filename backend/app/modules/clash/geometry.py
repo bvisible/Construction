@@ -1,5 +1,5 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
-"""‌⁠‍Real per-element geometry for the clash-detection engine.
+"""Real per-element geometry for the clash-detection engine.
 
 This module is the geometry layer the clash engine builds on. It loads
 the *actual* triangle meshes that ship on disk as

@@ -1,4 +1,4 @@
-"""‌⁠‍5D Cost Model data access layer.
+"""5D Cost Model data access layer.
 
 All database queries for cost snapshots, budget lines, and cash flow entries
 live here.  No business logic - pure data access - *except* for the
@@ -85,13 +85,13 @@ def _amount_in_base(
 
 
 class SnapshotRepository:
-    """‌⁠‍Data access for CostSnapshot model."""
+    """Data access for CostSnapshot model."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
     async def get_by_id(self, snapshot_id: uuid.UUID) -> CostSnapshot | None:
-        """‌⁠‍Get snapshot by ID."""
+        """Get snapshot by ID."""
         return await self.session.get(CostSnapshot, snapshot_id)
 
     async def list_for_project(

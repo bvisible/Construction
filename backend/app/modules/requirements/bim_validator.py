@@ -1,4 +1,4 @@
-"""‌⁠‍Validate EAC requirements against a BIM model.
+"""Validate EAC requirements against a BIM model.
 
 Bridges the EAC schema (entity, attribute, constraint_type,
 constraint_value) to the existing ``ValidationReport`` storage so the
@@ -49,7 +49,7 @@ MAX_ELEMENTS_PER_VALIDATION = 50_000
 
 
 def _split_attribute(attribute: str) -> tuple[str | None, str]:
-    """‌⁠‍Split ``Pset_WallCommon.FireRating`` -> ('Pset_WallCommon', 'FireRating').
+    """Split ``Pset_WallCommon.FireRating`` -> ('Pset_WallCommon', 'FireRating').
 
     Returns ``(None, attribute)`` when no dot is present so callers can
     fall back to flat-property lookup.
@@ -62,7 +62,7 @@ def _split_attribute(attribute: str) -> tuple[str | None, str]:
 
 
 def _read_attribute(elem: Any, attribute: str) -> object:
-    """‌⁠‍Resolve an EAC ``attribute`` against a BIM element."""
+    """Resolve an EAC ``attribute`` against a BIM element."""
     group, name = _split_attribute(attribute)
     if not name:
         return None

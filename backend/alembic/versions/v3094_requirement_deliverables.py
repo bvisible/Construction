@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍Requirements: ISO 19650 EIR deliverable matrix.
+"""Requirements: ISO 19650 EIR deliverable matrix.
 
 Wave 4 / T13 - gives the requirements module an integrated BIM and
 scheduling suite style EIR (Employer Information Requirements) traceability

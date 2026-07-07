@@ -1,4 +1,4 @@
-"""‌⁠‍Validation Pydantic schemas - request/response models."""
+"""Validation Pydantic schemas - request/response models."""
 
 from datetime import datetime
 from typing import Any
@@ -10,7 +10,7 @@ from pydantic import AliasChoices, BaseModel, Field
 
 
 class ValidationResultItem(BaseModel):
-    """‌⁠‍A single validation rule result within a report."""
+    """A single validation rule result within a report."""
 
     rule_id: str
     status: str = Field(description="pass, warning, error")
@@ -24,7 +24,7 @@ class ValidationResultItem(BaseModel):
 
 
 class ValidationReportCreate(BaseModel):
-    """‌⁠‍Schema for creating a validation report manually (rare - prefer /run)."""
+    """Schema for creating a validation report manually (rare - prefer /run)."""
 
     project_id: UUID
     target_type: str = Field(description="boq, document, cad_import, tender")

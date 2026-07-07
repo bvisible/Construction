@@ -1,4 +1,4 @@
-"""‌⁠‍End-to-end check that the v4.x.x fix for DDC v18.3.0 actually drives
+"""End-to-end check that the v4.x.x fix for DDC v18.3.0 actually drives
 the installed binary to a successful conversion.
 
 This test is gated on the local installation: it only runs when
@@ -47,7 +47,7 @@ def _reset_caches() -> None:
 
 @pytest.mark.slow
 def test_real_v18_help_text_is_classified_as_v18_flag() -> None:
-    """‌⁠‍Sanity: spawn the actual installed binary with --help and assert
+    """Sanity: spawn the actual installed binary with --help and assert
     the capability probe classifies it as v18.  This is the regression
     that originally bit the user (substring match said "modern" against
     the v18 binary, which produced ``standard -no-collada`` and crashed
@@ -79,7 +79,7 @@ def test_real_v18_help_text_is_classified_as_v18_flag() -> None:
 
 @pytest.mark.slow
 def test_real_v18_binary_converts_rvt_via_processor(tmp_path: Path) -> None:
-    """‌⁠‍End-to-end: drive ``_try_cad2data`` against the real v18 binary
+    """End-to-end: drive ``_try_cad2data`` against the real v18 binary
     and the canonical c5436288 RVT fixture.  Asserts:
 
       * Conversion returns a non-None bim_result (no exit-15 crash).

@@ -609,6 +609,134 @@ def compute_provability(signals: ProvabilitySignals) -> ProvabilityScore:
     )
 
 
+# --------------------------------------------------------------------------- #
+# Localization + action-planning helpers (additive, pure, deterministic).
+#
+# The scoring above is deliberately country-neutral (UTC dates, no currency, no
+# locale). What was still English-only was the way a result is *presented*: the
+# signal names and band words. These catalogues let a UI show them in the user's
+# language without re-deriving anything. The dynamic weakness messages stay in
+# their English default (they carry values like day counts); a UI that needs
+# them translated switches on the stable ``token``.
+# --------------------------------------------------------------------------- #
+
+#: Short, human-readable name of each weighted signal, per language. English is
+#: always present and is the fallback for any missing language or unknown signal.
+SIGNAL_LABELS: dict[str, dict[str, str]] = {
+    "notice_timeliness": {
+        "en": "Notice timeliness",
+        "de": "Rechtzeitigkeit der Anzeige",
+        "ru": "Своевременность уведомления",
+    },
+    "acknowledgement": {
+        "en": "Acknowledgement on record",
+        "de": "Empfangsbestätigung vorhanden",
+        "ru": "Подтверждение получения",
+    },
+    "linked_instruction": {
+        "en": "Linked instruction or clause",
+        "de": "Verknüpfte Anweisung oder Klausel",
+        "ru": "Связанное указание или пункт договора",
+    },
+    "ownership_continuity": {
+        "en": "Ownership continuity",
+        "de": "Kontinuität der Zuständigkeit",
+        "ru": "Непрерывность ответственности",
+    },
+    "date_completeness": {
+        "en": "Dated record completeness",
+        "de": "Vollständigkeit der datierten Nachweise",
+        "ru": "Полнота датированных записей",
+    },
+}
+
+#: The band words, per language. English is the fallback.
+BAND_LABELS: dict[str, dict[str, str]] = {
+    BAND_WEAK: {"en": "weak", "de": "schwach", "ru": "слабая"},
+    BAND_MODERATE: {"en": "moderate", "de": "mittel", "ru": "средняя"},
+    BAND_STRONG: {"en": "strong", "de": "stark", "ru": "высокая"},
+}
+
+
+def signal_label(signal: str, lang: str = "en") -> str:
+    """Localized short name of a weighted signal.
+
+    Falls back to English for an unknown language, and to the raw ``signal`` key
+    for an unknown signal, so a caller never gets an empty string.
+    """
+    per_lang = SIGNAL_LABELS.get(signal)
+    if per_lang is None:
+        return signal
+    return per_lang.get(lang) or per_lang["en"]
+
+
+def band_label(band: str, lang: str = "en") -> str:
+    """Localized band word (weak / moderate / strong), English as fallback."""
+    per_lang = BAND_LABELS.get(band)
+    if per_lang is None:
+        return band
+    return per_lang.get(lang) or per_lang["en"]
+
+
+@dataclass(frozen=True)
+class CureStep:
+    """One prioritized action that would recover the most provability points.
+
+    Derived from a :class:`ProvabilityScore` weakness. ``priority`` is 1 for the
+    most valuable cure, 2 for the next and so on; ``points_recoverable`` is how
+    many points curing it adds back (the weakness's ``points_lost``).
+    """
+
+    priority: int
+    token: str
+    signal: str
+    points_recoverable: int
+    message: str
+
+
+def cure_plan(score: ProvabilityScore) -> list[CureStep]:
+    """Rank a score's weaknesses into a "fix this first" action list.
+
+    Orders by the points each cure recovers (largest first), breaking ties by
+    the fixed signal order so the plan is reproducible. Weaknesses that recover
+    no points (a softer duplicate already counted elsewhere) are omitted, since
+    acting on them changes nothing. An empty list means a complete record.
+    """
+    signal_rank = {signal: idx for idx, (signal, _weight) in enumerate(_SIGNAL_ORDER)}
+    curable = [wk for wk in score.weaknesses if wk.points_lost > 0]
+    ordered = sorted(
+        curable,
+        key=lambda wk: (-wk.points_lost, signal_rank.get(wk.signal, len(_SIGNAL_ORDER))),
+    )
+    return [
+        CureStep(
+            priority=idx + 1,
+            token=wk.token,
+            signal=wk.signal,
+            points_recoverable=wk.points_lost,
+            message=wk.message,
+        )
+        for idx, wk in enumerate(ordered)
+    ]
+
+
+def score_summary(score: ProvabilityScore) -> str:
+    """One-line plain-language summary of a provability result.
+
+    States the band and score, then either confirms a complete record or names
+    the single most valuable gap to cure and the points it would recover. Kept
+    in English (it quotes the English weakness message); a UI wanting other
+    languages uses :func:`signal_label` / :func:`band_label` and the token.
+    """
+    head = f"Provability is {band_label(score.band)} ({score.score}/{MAX_SCORE})."
+    plan = cure_plan(score)
+    if not plan:
+        return f"{head} The record is complete, with no gaps to cure."
+    top = plan[0]
+    point_word = "point" if top.points_recoverable == 1 else "points"
+    return f"{head} Biggest gap to cure: {top.message} (worth {top.points_recoverable} {point_word})."
+
+
 __all__ = [
     "MAX_SCORE",
     "WEIGHT_NOTICE",
@@ -640,4 +768,11 @@ __all__ = [
     "ProvabilityScore",
     "band_for",
     "compute_provability",
+    "SIGNAL_LABELS",
+    "BAND_LABELS",
+    "signal_label",
+    "band_label",
+    "CureStep",
+    "cure_plan",
+    "score_summary",
 ]

@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍Data-access layer for compliance DSL rules."""
+"""Data-access layer for compliance DSL rules."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from app.modules.compliance.models import ComplianceDSLRule
 
 
 class ComplianceDSLRepository:
-    """‌⁠‍Persistence surface for :class:`ComplianceDSLRule` rows."""
+    """Persistence surface for :class:`ComplianceDSLRule` rows."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -69,7 +69,7 @@ class ComplianceDSLRepository:
         return list(rows), int(total)
 
     async def list_all_active(self) -> list[ComplianceDSLRule]:
-        """‌⁠‍Used at startup to register every active rule into the registry."""
+        """Used at startup to register every active rule into the registry."""
         stmt = select(ComplianceDSLRule).where(ComplianceDSLRule.is_active.is_(True))
         return list((await self.session.execute(stmt)).scalars().all())
 

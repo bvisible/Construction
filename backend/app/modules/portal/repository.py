@@ -1,5 +1,5 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
-"""‌⁠‍Customer & Partner Portal data access layer."""
+"""Customer & Partner Portal data access layer."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from app.modules.portal.models import (
 
 
 class PortalUserRepository:
-    """‌⁠‍CRUD + lookup helpers for :class:`PortalUser`."""
+    """CRUD + lookup helpers for :class:`PortalUser`."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -68,7 +68,7 @@ class PortalUserRepository:
 
 
 class PortalAccessRuleRepository:
-    """‌⁠‍CRUD + lookup helpers for :class:`PortalAccessRule`."""
+    """CRUD + lookup helpers for :class:`PortalAccessRule`."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session

@@ -1,12 +1,12 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍EAC v2 module permission definitions."""
+"""EAC v2 module permission definitions."""
 
 from app.core.permissions import Role, permission_registry
 
 
 def register_eac_permissions() -> None:
-    """‌⁠‍Register permissions for the EAC v2 module.
+    """Register permissions for the EAC v2 module.
 
     The EAC engine drives QTO/cost/validation outputs, so its write,
     delete and execute surfaces must be gated by role and not merely by

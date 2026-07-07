@@ -1,4 +1,4 @@
-"""‌⁠‍Teams API routes.
+"""Teams API routes.
 
 Endpoints:
     GET    /project/{project_id}        - List teams for project
@@ -43,7 +43,7 @@ async def list_teams_by_query(
     project_id: uuid.UUID = Query(...),
     service: TeamService = Depends(_get_service),
 ) -> list[TeamResponse]:
-    """‌⁠‍List teams for a project (query-param style).
+    """List teams for a project (query-param style).
 
     IDOR-gated on the parent project: a caller may only list teams of a
     project they own / admin / belong to. The service repeats the same
@@ -61,7 +61,7 @@ async def list_teams(
     session: SessionDep,
     service: TeamService = Depends(_get_service),
 ) -> list[TeamResponse]:
-    """‌⁠‍List teams for a project.
+    """List teams for a project.
 
     IDOR-gated on the parent project (see ``list_teams_by_query``).
     """

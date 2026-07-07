@@ -1,4 +1,4 @@
-"""‌⁠‍Product & Resource Catalog module manifest."""
+"""Product & Resource Catalog module manifest."""
 
 from app.core.module_loader import ModuleManifest
 

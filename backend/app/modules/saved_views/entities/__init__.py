@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍Built-in queryable-entity registrations.
+"""Built-in queryable-entity registrations.
 
 These are the reference adapters wired by ``saved_views.on_startup``. A
 third-party module registers the same way (calling

@@ -1,6 +1,6 @@
 [project]
 name = "openconstructionerp"
-version = "9.4.0"
+version = "10.5.0"
 description = "Open-source construction cost estimation, multi-currency BOQ, AI vector matching, CAD/BIM takeoff without IfcOpenShell, resource-based cost DB import with example templates, 48 regional catalogues, 27 languages. AGPL-3.0. After install, run: openconstructionerp"
 license = "AGPL-3.0-or-later"
 requires-python = ">=3.12"
@@ -234,7 +234,7 @@ dev = [
     # formatter's output, which can shift between ruff releases. A floating
     # spec let CI pick a newer ruff than contributors ran locally, so formatted
     # code still failed the check. Bump this deliberately when adopting a new ruff.
-    "ruff==0.15.14",
+    "ruff==0.15.20",
     "mypy>=1.13.0",
     "pre-commit>=4.0.0",
     "pyinstaller>=6.0.0",

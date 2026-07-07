@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍Service layer for finance ERP / accounting connectors.
+"""Service layer for finance ERP / accounting connectors.
 
 Owns the connector config CRUD (with credential encryption) and the
 ``run_sync`` orchestration: gather the data, hand it to the connector,

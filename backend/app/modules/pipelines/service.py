@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍Pipeline Builder business logic.
+"""Pipeline Builder business logic.
 
 Owns: graph validation (registry + structural ``pipeline`` rule), JobRun
 submission, run snapshotting and the read-model assembly that the router
@@ -39,7 +39,7 @@ def _as_uuid(value: str | uuid.UUID | None) -> uuid.UUID | None:
 
 
 class PipelineService:
-    """‌⁠‍Stateless service for pipeline CRUD + run orchestration."""
+    """Stateless service for pipeline CRUD + run orchestration."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -97,7 +97,7 @@ class PipelineService:
         policy: dict[str, Any],
         created_by: str | None,
     ) -> Pipeline:
-        """‌⁠‍Create a pipeline (always starts unpublished)."""
+        """Create a pipeline (always starts unpublished)."""
         pipeline = Pipeline(
             name=name,
             description=description,

@@ -1,4 +1,4 @@
-"""‌⁠‍Markups & Annotations Pydantic schemas - request/response models.
+"""Markups & Annotations Pydantic schemas - request/response models.
 
 Defines create, update, and response schemas for markups, scale configs,
 and stamp templates.
@@ -21,7 +21,7 @@ _MAX_LENGTH = 500
 
 
 class MarkupCreate(BaseModel):
-    """‌⁠‍Create a new markup annotation."""
+    """Create a new markup annotation."""
 
     model_config = ConfigDict(str_strip_whitespace=True, extra="ignore")
 
@@ -61,7 +61,7 @@ class MarkupCreate(BaseModel):
 
 
 class MarkupUpdate(BaseModel):
-    """‌⁠‍Partial update for a markup annotation."""
+    """Partial update for a markup annotation."""
 
     model_config = ConfigDict(str_strip_whitespace=True, extra="ignore")
 

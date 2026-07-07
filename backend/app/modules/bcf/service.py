@@ -1,4 +1,4 @@
-"""‌⁠‍BCF business logic.
+"""BCF business logic.
 
 Owns:
     * Topic / comment / viewpoint CRUD.
@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 
 
 class BCFServiceError(Exception):
-    """‌⁠‍Raised for caller-facing service errors (mapped to HTTP by router)."""
+    """Raised for caller-facing service errors (mapped to HTTP by router)."""
 
 
 def _now() -> datetime:
@@ -48,7 +48,7 @@ def _now() -> datetime:
 
 
 def _snapshot_key(project_id: uuid.UUID, topic_guid: str, vp_guid: str) -> str:
-    """‌⁠‍Storage key for a viewpoint snapshot PNG.
+    """Storage key for a viewpoint snapshot PNG.
 
     POSIX, no leading slash - matches ``app.core.storage`` key rules and
     the ``bim/<project>/...`` style used elsewhere.
@@ -607,7 +607,7 @@ class BCFExportFeatureUnavailable(Exception):
 
 
 class BCFExportService:
-    """‌⁠‍Builds a BCF 3.0 ``.bcfzip`` from clash data.
+    """Builds a BCF 3.0 ``.bcfzip`` from clash data.
 
     Decoupled from :class:`BCFService` (the BCF-Topic CRUD service) so
     the clash export can run without touching the BCF persistence

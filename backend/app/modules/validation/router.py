@@ -1,4 +1,4 @@
-"""‌⁠‍Validation API routes.
+"""Validation API routes.
 
 Endpoints:
     POST  /validation/run                    - Run validation on a BOQ
@@ -56,7 +56,7 @@ async def _require_project_access(
     project_id: uuid.UUID | None,
     user_id: str | None,
 ) -> None:
-    """‌⁠‍Verify the current user may access the referenced project.
+    """Verify the current user may access the referenced project.
 
     Central choke-point for project-scoped validation endpoints. Delegates
     to the canonical :func:`app.dependencies.verify_project_access`, which
@@ -84,7 +84,7 @@ async def _require_report_access(
     report_id: uuid.UUID,
     user_id: str | None,
 ) -> ValidationReport:
-    """‌⁠‍Load a report and verify the caller owns its parent project."""
+    """Load a report and verify the caller owns its parent project."""
     report = await session.get(ValidationReport, report_id)
     if report is None:
         raise HTTPException(

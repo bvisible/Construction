@@ -1,4 +1,4 @@
-"""‌⁠‍Notifications module permission definitions.
+"""Notifications module permission definitions.
 
 Registered at module startup via ``app.modules.notifications.on_startup``.
 
@@ -13,7 +13,7 @@ from app.core.permissions import Role, permission_registry
 
 
 def register_notification_permissions() -> None:
-    """‌⁠‍Register RBAC permissions for the notifications module."""
+    """Register RBAC permissions for the notifications module."""
     permission_registry.register_module_permissions(
         "notifications",
         {

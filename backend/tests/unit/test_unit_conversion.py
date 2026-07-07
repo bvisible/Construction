@@ -25,6 +25,7 @@ from app.core.unit_conversion import (
     ConversionResult,
     conversion_factor,
     convert,
+    convert_between,
     display_rate,
     display_unit_for,
 )
@@ -223,3 +224,62 @@ def test_extended_units_match_frontend(metric_unit: str, factor: str, display_un
     result = convert(Decimal("10"), metric_unit, "imperial")
     assert result.value == Decimal("10") * Decimal(factor)
     assert result.display_unit == display_unit
+
+
+# -- convert_between: unit-to-unit within a dimension (#319 / #320) -----------
+
+
+@pytest.mark.parametrize(
+    ("value", "from_unit", "to_unit", "expected"),
+    [
+        # Volume: metre cubed into US trade volume units (#320).
+        ("10", "m3", "cy", "13.0795"),
+        ("1", "m3", "ft3", "35.3147"),
+        ("1", "m3", "bdft", "423.776"),
+        ("1", "m3", "yd3", "1.30795"),  # yd3 is a cubic-yard spelling
+        # Area: metre squared into roofing squares and square feet (#320).
+        ("1", "m2", "sq", "0.107639"),
+        ("1", "m2", "ft2", "10.7639"),
+        # Superscript source folds to the same factor as the ascii code.
+        ("2", "m³", "cy", "2.6159"),
+        ("3", "m²", "sq", "0.322917"),
+        # Identity: same unit both sides passes the value straight through.
+        ("5", "m3", "m3", "5"),
+        # Metric-to-metric within a dimension still converts.
+        ("2", "m3", "l", "2000"),
+    ],
+)
+def test_convert_between_converts_within_dimension(value: str, from_unit: str, to_unit: str, expected: str) -> None:
+    """A value converts exactly into another unit of the same dimension."""
+    result = convert_between(Decimal(value), from_unit, to_unit)
+    assert result is not None
+    assert result == Decimal(expected)
+
+
+@pytest.mark.parametrize(
+    ("from_unit", "to_unit"),
+    [
+        ("m3", "m2"),  # volume into area: different dimension
+        ("m2", "m"),  # area into length
+        ("m3", "lsum"),  # unknown target unit
+        ("kg", "cy"),  # mass into volume
+    ],
+)
+def test_convert_between_refuses_incompatible(from_unit: str, to_unit: str) -> None:
+    """Cross-dimension or unknown-unit conversions return None, never a guess."""
+    assert convert_between(Decimal("1"), from_unit, to_unit) is None
+
+
+@pytest.mark.parametrize("missing", [None, "", "   "])
+def test_convert_between_passes_through_when_a_unit_is_missing(missing: str | None) -> None:
+    """A missing unit on either side leaves the value unchanged (nothing to do)."""
+    assert convert_between(Decimal("7"), missing, "m3") == Decimal("7")
+    assert convert_between(Decimal("7"), "m3", missing) == Decimal("7")
+
+
+def test_convert_between_and_display_stay_consistent() -> None:
+    """m3 -> ft3 via convert_between matches the metric->imperial display factor."""
+    metric = Decimal("4")
+    via_between = convert_between(metric, "m3", "ft3")
+    via_display = convert(metric, "m3", "imperial").value
+    assert via_between == via_display

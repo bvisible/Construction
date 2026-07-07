@@ -13,6 +13,7 @@ import {
   Bot,
   Layers,
   Boxes,
+  Compass,
   Box,
   ShieldCheck,
   FileText,
@@ -42,6 +43,7 @@ import {
   HardHat,
   Users,
   HelpCircle,
+  Route,
   AlertOctagon,
   FileCheck,
   Mail,
@@ -64,6 +66,7 @@ import {
   Link2,
   // 18-Modules Wave icons
   Wrench,
+  Timer,
   Truck,
   BookOpen,
   Globe,
@@ -100,7 +103,6 @@ import { useGlobalSearchStore } from '@/stores/useGlobalSearchStore';
 import { getModuleNavItems } from '@/modules/_registry';
 import { APP_VERSION } from '@/shared/lib/version';
 import { useSidebarBadges } from '@/shared/hooks/useSidebarBadges';
-import { useModulePresence } from '@/shared/hooks/useModulePresence';
 import { useHiddenModules } from '@/shared/hooks/useHiddenModules';
 import { useIsRTL } from '@/shared/hooks/useIsRTL';
 import {
@@ -211,6 +213,10 @@ const navGroups: NavGroup[] = [
     items: [
       { labelKey: 'nav.dashboard', to: '/', icon: LayoutDashboard },
       { labelKey: 'projects.title', to: '/projects', icon: FolderOpen, tourId: 'projects' },
+      // Cases (playbooks) - guided, cross-module worked examples. Sits in
+      // Overview so the "learn by example" entry is discoverable from the top,
+      // and above Project files so the "learn by example" entry is seen first.
+      { labelKey: 'nav.cases', to: '/cases', icon: Route },
       { labelKey: 'nav.project_files', to: '/files', icon: HardDrive },
     ],
   },
@@ -260,6 +266,7 @@ const navGroups: NavGroup[] = [
     items: [
       { labelKey: 'costs.title', to: '/costs', icon: Database, tourId: 'costs' },
       { labelKey: 'catalog.title', to: '/catalog', icon: Boxes },
+      { labelKey: 'nav.cost_explorer', to: '/cost-explorer', icon: Compass },
       { labelKey: 'nav.assemblies', to: '/assemblies', icon: Layers },
       { labelKey: 'nav.benchmarks', to: '/benchmarks', icon: BarChart3, moduleKey: 'cost-benchmark', advancedOnly: true },
     ],
@@ -346,11 +353,15 @@ const navGroups: NavGroup[] = [
     labelKey: 'sidebar.group.commercial',
     defaultLabel: 'Commercial',
     defaultOpen: true,
-    hideInSimple: true,
+    // Visible in Simple mode too. A user reported "there is no contracts
+    // module" because this whole group was hidden outside Advanced mode
+    // (hideInSimple). The group now shows with Contracts always visible;
+    // CRM and Subcontractors stay advanced-only so Simple mode surfaces
+    // just the core commercial entry point without extra clutter.
     items: [
-      { labelKey: 'nav.crm', to: '/crm', icon: Briefcase },
+      { labelKey: 'nav.crm', to: '/crm', icon: Briefcase, advancedOnly: true },
       { labelKey: 'nav.contracts', to: '/contracts', icon: FileSignature },
-      { labelKey: 'nav.subcontractors', to: '/subcontractors', icon: HardHat },
+      { labelKey: 'nav.subcontractors', to: '/subcontractors', icon: HardHat, advancedOnly: true },
     ],
   },
   // ── 10. PROCUREMENT ────────────────────────────────────────────────
@@ -361,9 +372,6 @@ const navGroups: NavGroup[] = [
     id: 'grp_procurement',
     labelKey: 'sidebar.group.procurement',
     defaultLabel: 'Procurement',
-    descriptionKey: 'sidebar.group.procurement_desc',
-    defaultDescription:
-      'Three ways to buy. RFQ for quick quotes, Bid Management for formal competitive bids, Tendering when pricing from a bill of quantities.',
     defaultOpen: true,
     hideInSimple: true,
     items: [
@@ -402,15 +410,16 @@ const navGroups: NavGroup[] = [
       },
     ],
   },
-  // ── 10b. CHANGE & RECORDS ──────────────────────────────────────────
-  // Variations / MoC / change orders, the change-intelligence analytics
-  // they feed, and the capture surfaces (phone log, connectors, inbound,
-  // reconciliation, find). Split out of the old "Procurement & Change"
-  // group so procurement reads clean (#280).
+  // ── 10b. CHANGE ────────────────────────────────────────────────────
+  // The change-management workflow (variations, MoC, change orders) and
+  // the analytics it feeds (change-intelligence, value). Split out of the
+  // old "Procurement & Change" group so procurement reads clean (#280),
+  // then split again from the capture/records surfaces (now "Records &
+  // Capture" below) so neither group carries too many items.
   {
     id: 'grp_change',
     labelKey: 'sidebar.group.change',
-    defaultLabel: 'Change & Records',
+    defaultLabel: 'Change',
     defaultOpen: true,
     hideInSimple: true,
     items: [
@@ -419,6 +428,19 @@ const navGroups: NavGroup[] = [
       { labelKey: 'nav.change_orders', to: '/changeorders', icon: FileEdit, advancedOnly: true },
       { labelKey: 'nav.change_intelligence', to: '/change-intelligence', icon: BrainCircuit, advancedOnly: true },
       { labelKey: 'nav.value', to: '/value', icon: TrendingUp, advancedOnly: true },
+    ],
+  },
+  // ── 10c. RECORDS & CAPTURE ──────────────────────────────────────────
+  // The surfaces that capture project record (phone log, connectors,
+  // reconciliation, inbound) plus cross-record search. Kept distinct from
+  // "Change" above so each group stays short and scannable.
+  {
+    id: 'grp_records',
+    labelKey: 'sidebar.group.records',
+    defaultLabel: 'Records & Capture',
+    defaultOpen: true,
+    hideInSimple: true,
+    items: [
       { labelKey: 'nav.phone_log', to: '/phone-log', icon: Phone, advancedOnly: true },
       { labelKey: 'nav.connectors', to: '/connectors', icon: HardDrive, advancedOnly: true },
       { labelKey: 'nav.reconciliation', to: '/reconciliation', icon: Link2, advancedOnly: true },
@@ -448,6 +470,7 @@ const navGroups: NavGroup[] = [
     items: [
       { labelKey: 'nav.daily_diary', to: '/daily-diary', icon: BookOpen },
       { labelKey: 'nav.field_reports', to: '/field-reports', icon: ClipboardList, advancedOnly: true },
+      { labelKey: 'nav.field_time', to: '/field-time', icon: Timer, advancedOnly: true },
       { labelKey: 'nav.service', to: '/service', icon: Wrench },
       { labelKey: 'nav.portal', to: '/portal', icon: Globe },
     ],
@@ -757,6 +780,7 @@ const ROUTE_BACKEND_MODULE: Record<string, string> = {
   // Field operations
   '/daily-diary': 'oe_daily_diary',
   '/field-reports': 'oe_fieldreports',
+  '/field-time': 'oe_field_time',
   '/equipment': 'oe_equipment',
   '/resources': 'oe_resources',
   '/payroll': 'oe_payroll',
@@ -795,115 +819,6 @@ const ROUTE_BACKEND_MODULE: Record<string, string> = {
   '/bi-dashboards': 'oe_bi_dashboards',
   '/reporting': 'oe_reporting',
   '/architecture': 'oe_architecture_map',
-};
-
-/** Maps a sidebar route (`NavItem.to`, query string stripped) to the canonical
- *  module key used by Company Profiles and the onboarding catalogue
- *  (`frontend/src/features/onboarding/modules.ts` + the backend
- *  `onboarding_presets.py`). When a profile leaves that module out, the row is
- *  hidden — this is what makes a Company Profile actually shape the sidebar
- *  rather than just toggle a counter.
- *
- *  Several routes can share one key (e.g. all model-coordination surfaces map
- *  to `bim_hub`, every property-dev tab to `property_dev`) so a profile reveals
- *  or hides a whole capability at once. Core surfaces every company needs
- *  (Dashboard, Projects, Files, Contacts, Estimation Intelligence, Architecture
- *  Map) are intentionally absent here, so a profile can never hide them. */
-const ROUTE_MODULE_KEY: Record<string, string> = {
-  // Estimating
-  '/boq': 'boq',
-  '/match-elements': 'match_elements',
-  '/ai-estimator': 'ai_estimator',
-  '/ai-estimate': 'ai',
-  // Catalogues & reference (/costs, /catalog, /assemblies) are intentionally
-  // absent: the cost database, resource catalogue and assembly library are
-  // core to a cost-estimation platform, so a company profile must never hide
-  // them. They are forced on in onboarding_presets._CORE_MODULES too.
-  // Takeoff
-  '/quantities': 'takeoff',
-  '/takeoff': 'takeoff',
-  '/dwg-takeoff': 'dwg_takeoff',
-  '/bim': 'bim_hub',
-  '/data-explorer': 'cad',
-  // Model coordination (all powered by the BIM hub capability)
-  '/coordination': 'bim_hub',
-  '/bim/federations': 'bim_hub',
-  '/clash': 'bim_hub',
-  '/bim/rules': 'bim_requirements',
-  '/requirements/matrix': 'bim_requirements',
-  '/geo': 'bim_hub',
-  // AI & tools
-  '/ai-agents': 'ai',
-  '/advisor': 'ai',
-  '/chat': 'erp_chat',
-  // (/pipelines, /benchmarks, /sustainability are gated by their inline
-  //  `moduleKey` instead — no Company-Profile mapping. /risk-analysis was
-  //  retired in the Monte Carlo IA merge and now redirects to /risks.)
-  // Commercial
-  '/crm': 'crm',
-  '/contracts': 'contracts',
-  '/subcontractors': 'subcontractors',
-  '/bid-management': 'bid_management',
-  '/tendering': 'tendering',
-  '/variations': 'variations',
-  '/moc': 'moc',
-  '/supplier-catalogs': 'supplier_catalogs',
-  // Real estate development (every tab tied to the one capability)
-  '/property-dev': 'property_dev',
-  '/accommodation': 'property_dev',
-  '/property-dev/dashboards': 'property_dev',
-  '/property-dev/settings/house-types': 'property_dev',
-  '/property-dev/settings/document-templates': 'property_dev',
-  // Planning
-  '/schedule': 'schedule',
-  '/schedule-advanced': 'schedule_advanced',
-  '/portfolio': 'schedule_advanced',
-  '/takt': 'schedule_advanced',
-  '/tasks': 'tasks',
-  '/5d': 'costmodel',
-  '/risks': 'risk',
-  // Field operations
-  '/daily-diary': 'daily_diary',
-  '/field-reports': 'fieldreports',
-  '/equipment': 'equipment',
-  '/resources': 'resources',
-  '/payroll': 'payroll',
-  '/service': 'service',
-  '/portal': 'portal',
-  '/assets': 'equipment',
-  // Quality
-  '/validation': 'validation',
-  '/inspections': 'inspections',
-  '/construction-control': 'construction_control',
-  '/ncr': 'ncr',
-  '/punchlist': 'punchlist',
-  '/closeout': 'closeout',
-  '/qms': 'qms',
-  // Safety & HSE
-  '/safety': 'safety',
-  '/hse-advanced': 'hse_advanced',
-  '/carbon': 'carbon',
-  // Communication
-  '/meetings': 'meetings',
-  '/rfi': 'rfi',
-  '/submittals': 'submittals',
-  '/transmittals': 'transmittals',
-  '/correspondence': 'correspondence',
-  '/collaboration': 'collaboration',
-  // Documentation
-  '/cde': 'cde',
-  '/photos': 'documents',
-  '/markups': 'markups',
-  // Finance & procurement
-  '/finance': 'finance',
-  '/procurement': 'procurement',
-  '/changeorders': 'changeorders',
-  // Analytics & reports
-  '/reports': 'reporting',
-  '/project-controls': 'project_controls',
-  '/bi-dashboards': 'bi_dashboards',
-  '/dashboards': 'reporting',
-  '/reporting': 'reporting',
 };
 
 // localStorage key for collapsed state
@@ -1056,7 +971,6 @@ export function Sidebar({ onClose }: { onClose?: () => void }) {
   const isAdvanced = useViewModeStore((s) => s.isAdvanced);
   const setViewMode = useViewModeStore((s) => s.setMode);
   const badgeCounts = useSidebarBadges();
-  const modulePresence = useModulePresence();
   const openSearch = useGlobalSearchStore((s) => s.openModal);
   const iconified = useSidebarCollapseStore((s) => s.iconified);
   const toggleIconified = useSidebarCollapseStore((s) => s.toggle);
@@ -1598,18 +1512,19 @@ export function Sidebar({ onClose }: { onClose?: () => void }) {
           // the menu tidy.
           const allItems = [...group.items, ...dynamicItems];
           const visibleItems = allItems.filter((item) => {
-            // The active Company Profile maps each route to a canonical module
-            // key; when the profile leaves that module out, the row is hidden.
-            // Inline `moduleKey` (e.g. dynamic plugin rows) is the fallback.
-            // Routes absent from ROUTE_MODULE_KEY are never profile-gated.
-            const moduleKey = ROUTE_MODULE_KEY[item.to.split('?')[0]!] ?? item.moduleKey;
+            // Company Profiles / onboarding packs PRE-SELECT modules, they do
+            // not remove them. Every module stays listed in the menu whatever
+            // profile was chosen during onboarding, so nothing a company might
+            // need is ever hidden by its profile. The per-project focus gate
+            // below only annotates rows with a sequence number; it never drops
+            // them either.
             return (
-              (!moduleKey || isModuleEnabled(moduleKey)) &&
               (!item.advancedOnly || isAdvanced) &&
               (!item.adminOnly || userRole === 'admin') &&
-              // Backend-disabled gate — a System Module switched off on the
-              // Modules page hides its sidebar route here so we never link
-              // to a broken/blank surface.
+              // Backend-disabled gate - a System Module a company admin has
+              // explicitly switched off on the System Modules admin tab hides
+              // its sidebar route here so we never link to a broken/blank
+              // surface. This is an admin control, not the onboarding profile.
               !isRouteBackendDisabled(item.to) &&
               // Menu-editor filter — in normal mode, drop user-hidden
               // rows; in edit mode `effectiveHidden` is empty so every
@@ -1660,21 +1575,16 @@ export function Sidebar({ onClose }: { onClose?: () => void }) {
                   const notNeeded = g != null && !g.enabled;
                   const needed = g != null && g.enabled;
                   const seq = needed ? (routeSeq += 1) : null;
-                  // Module-presence dimming: modules with no data for
-                  // this project render at 55 % opacity so users see at
-                  // a glance which surfaces are populated. Only applies
-                  // when project-focus is OFF (project-focus already
-                  // greys-out unrelated rows more strongly via opacity-45).
-                  const isEmptyForProject =
-                    !notNeeded && !modulePresence.isPopulated(item.to);
+                  // No opacity dimming: every visible nav row renders at full
+                  // strength. Modules that are empty for the current project or
+                  // outside the project focus are no longer greyed out, since
+                  // the faded rows read as broken or disabled rather than as a
+                  // hint. Project focus still annotates needed rows with a
+                  // sequence number and keeps them compact.
                   return (
                     <li
                       key={item.to}
-                      className={clsx(
-                        'oe-stagger',
-                        notNeeded && 'opacity-45',
-                        isEmptyForProject && 'opacity-55',
-                      )}
+                      className="oe-stagger"
                       style={{ animationDelay: `${i * 18}ms` }}
                     >
                       <SidebarItem

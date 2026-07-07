@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍Resources catalogue matcher - fuzzy search over ``oe_catalog_resource``.
+"""Resources catalogue matcher - fuzzy search over ``oe_catalog_resource``.
 
 This is the "raw materials" alternative to the CWICR composite-position
 matchers. When CWICR has no good composite match for a group, the user
@@ -32,7 +32,7 @@ from app.modules.catalog.models import CatalogResource
 
 
 def _lex_band(raw_score: float, lang: str | None) -> ConfidenceBand:
-    """‌⁠‍Map a rapidfuzz ``token_set_ratio`` (0-100) → confidence band.
+    """Map a rapidfuzz ``token_set_ratio`` (0-100) → confidence band.
 
     Reads ``lex_thresholds_for_language`` so inflectional languages
     (PL/RU/FI/TR/...) get a lower cutoff than analytical ones (EN/DE).

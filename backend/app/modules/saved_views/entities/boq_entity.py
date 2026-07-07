@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍Built-in queryable entity: ``boq_position``.
+"""Built-in queryable entity: ``boq_position``.
 
 A BOQ position has no direct ``project_id`` column: it reaches a project through
 its owning BOQ (``Position.boq_id -> BOQ.project_id``). So the project pin cannot

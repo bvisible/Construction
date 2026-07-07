@@ -1,4 +1,4 @@
-"""‌⁠‍Full EVM service - advanced Earned Value Management with forecasting.
+"""Full EVM service - advanced Earned Value Management with forecasting.
 
 Stateless service layer.  Extends the basic EVM in the finance module
 with ETC, EAC, VAC, TCPI calculations and S-curve data.
@@ -44,7 +44,7 @@ FORECAST_KPI_CODES = frozenset(
 
 
 def _dec(value: str) -> Decimal:
-    """‌⁠‍Safely convert a string to a finite, bounded Decimal.
+    """Safely convert a string to a finite, bounded Decimal.
 
     Returns ZERO for unparseable, non-finite (NaN/Infinity) or absurd-magnitude
     input so a downstream quantize() in calculate_forecast can never raise
@@ -61,7 +61,7 @@ def _dec(value: str) -> Decimal:
 
 @dataclass
 class ForecastBreach:
-    """‌⁠‍A single AlertRule that a forecast breached.
+    """A single AlertRule that a forecast breached.
 
     Carries everything the event payload and the notification need without
     re-querying the rule - stays decoupled from the bi_dashboards ORM.
@@ -79,7 +79,7 @@ class ForecastBreach:
 
 
 def _compare(condition: str, observed: Decimal, threshold: Decimal) -> bool:
-    """‌⁠‍Apply an AlertRule comparison operator.
+    """Apply an AlertRule comparison operator.
 
     Mirrors the operator grammar in ``bi_dashboards.service.evaluate_alert``
     (``above`` / ``below`` / ``equals`` / ``not_equals``); ``changed_by_…``
@@ -97,7 +97,7 @@ def _compare(condition: str, observed: Decimal, threshold: Decimal) -> bool:
 
 
 class EVMService:
-    """‌⁠‍Business logic for advanced EVM forecasting."""
+    """Business logic for advanced EVM forecasting."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -281,7 +281,7 @@ class EVMService:
     # ── Predictive alert evaluation (TOP-30 #19) ────────────────────────────
 
     async def _load_alert_rules(self, project_id: uuid.UUID) -> list[dict]:
-        """‌⁠‍Read enabled forecast-relevant AlertRules for a project.
+        """Read enabled forecast-relevant AlertRules for a project.
 
         AlertRule lives in the ``bi_dashboards`` module which this module
         does not own; we read its table directly via raw SQL (the same
@@ -328,7 +328,7 @@ class EVMService:
         return rules
 
     def _forecast_kpi_values(self, forecast: EVMForecast) -> dict[str, Decimal]:
-        """‌⁠‍Resolve every forecast KPI code to a comparable Decimal.
+        """Resolve every forecast KPI code to a comparable Decimal.
 
         ``cpi`` / ``spi`` come from the source snapshot stashed in the
         forecast metadata; ``eac`` / ``vac`` / ``etc`` / ``tcpi`` are the
@@ -356,7 +356,7 @@ class EVMService:
         forecast: EVMForecast,
         project_id: uuid.UUID,
     ) -> list[ForecastBreach]:
-        """‌⁠‍Return the AlertRules a forecast breaches (empty == healthy).
+        """Return the AlertRules a forecast breaches (empty == healthy).
 
         Deterministic threshold evaluation - no AI, no side effects. The
         batch job uses this; the unit tests call it directly.
@@ -387,7 +387,7 @@ class EVMService:
         return breaches
 
     async def _project_owner_id(self, project_id: uuid.UUID) -> str | None:
-        """‌⁠‍Look up the project owner - the default alert recipient."""
+        """Look up the project owner - the default alert recipient."""
         try:
             row = (
                 await self.session.execute(
@@ -406,7 +406,7 @@ class EVMService:
         forecast: EVMForecast,
         breaches: list[ForecastBreach],
     ) -> None:
-        """‌⁠‍Send one in-app notification per recipient summarising the breach.
+        """Send one in-app notification per recipient summarising the breach.
 
         Recipients are the union of every breached rule's ``recipients_json``;
         when a rule lists none we fall back to the project owner so the alert
@@ -472,7 +472,7 @@ class EVMService:
         *,
         forecast_method: str = "cpi",
     ) -> list[dict]:
-        """‌⁠‍Compute a fresh forecast per project, evaluate alerts, dispatch.
+        """Compute a fresh forecast per project, evaluate alerts, dispatch.
 
         For each project:
             1. Recompute the forecast from the latest EVM snapshot.
@@ -572,7 +572,7 @@ class EVMService:
         return results
 
     async def acknowledge_alert(self, forecast_id: uuid.UUID) -> EVMForecast | None:
-        """‌⁠‍Resolve a triggered/snoozed forecast alert.
+        """Resolve a triggered/snoozed forecast alert.
 
         Sets ``alert_status='acknowledged'``. Returns the row (None if the
         forecast does not exist). Caller owns IDOR + the transaction.
@@ -586,7 +586,7 @@ class EVMService:
         return forecast
 
     async def snooze_alert(self, forecast_id: uuid.UUID, hours: int) -> EVMForecast | None:
-        """‌⁠‍Snooze a forecast alert for ``hours`` from now.
+        """Snooze a forecast alert for ``hours`` from now.
 
         Sets ``alert_status='snoozed'`` and records the snooze-until time in
         the forecast metadata so the UI can show a countdown. The next batch

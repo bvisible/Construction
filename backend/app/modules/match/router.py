@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍HTTP routes for the element-to-CWICR matcher.
+"""HTTP routes for the element-to-CWICR matcher.
 
 Endpoints:
     * ``POST /api/v1/match/element``  - run the matcher.
@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 
 
 class MatchElementRequest(BaseModel):
-    """‌⁠‍Inbound body for ``POST /element``."""
+    """Inbound body for ``POST /element``."""
 
     model_config = ConfigDict(extra="ignore")
 
@@ -54,7 +54,7 @@ class MatchElementRequest(BaseModel):
 
 
 class MatchFeedbackRequest(BaseModel):
-    """‌⁠‍Inbound body for ``POST /feedback``."""
+    """Inbound body for ``POST /feedback``."""
 
     model_config = ConfigDict(extra="ignore")
 

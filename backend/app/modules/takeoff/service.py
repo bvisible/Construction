@@ -1,4 +1,4 @@
-"""‌⁠‍Takeoff business logic."""
+"""Takeoff business logic."""
 
 import io
 import logging
@@ -710,7 +710,7 @@ def _find_existing_takeoff_pdf(doc_id: str) -> Path | None:
 
 
 def _describe_pdf_input(content: bytes, *, filename: str | None = None) -> str:
-    """‌⁠‍Build a short server-side diagnostic string for a PDF blob.
+    """Build a short server-side diagnostic string for a PDF blob.
 
     Includes size, the ``%PDF-`` magic header presence, and a filename
     extension guess.  Kept free of any filesystem paths so the return
@@ -724,7 +724,7 @@ def _describe_pdf_input(content: bytes, *, filename: str | None = None) -> str:
 
 
 def _extract_pdf_pages(content: bytes, *, filename: str | None = None) -> list[dict]:
-    """‌⁠‍Extract text and tables from each page of a PDF.
+    """Extract text and tables from each page of a PDF.
 
     Returns a list of dicts: [{ page: 1, text: "...", tables: [...] }, ...]
 
@@ -2169,6 +2169,33 @@ class TakeoffService:
                 position_dim,
             )
             return
+
+        # Restate the measured value in the position's own unit before storing
+        # it (GitHub #319). The measurement is metric-canonical (m / m2 / m3);
+        # a position priced per cubic yard or roofing square must receive the
+        # quantity converted into that unit or its unit_rate silently mis-prices
+        # the line. convert_between returns None when the two units cannot be
+        # reconciled (a magnitude mismatch the coarse dimension guard above did
+        # not catch, e.g. m3 vs an unknown volume unit), in which case we refuse
+        # rather than write a wrong number. A same-unit or unknown-unit link
+        # passes the value through untouched.
+        from app.core.unit_conversion import convert_between  # noqa: PLC0415
+
+        measurement_unit = getattr(measurement, "measurement_unit", None)
+        position_unit = getattr(position, "unit", None)
+        converted = convert_between(value, measurement_unit, position_unit)
+        if converted is None:
+            logger.warning(
+                "push_quantity: cannot convert measurement %s (%s) into BOQ position %s unit %r "
+                "- refusing to overwrite the quantity",
+                getattr(measurement, "id", "?"),
+                measurement_unit,
+                boq_position_id,
+                position_unit,
+            )
+            return
+        if converted != Decimal(str(value)):
+            value = converted.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
 
         await boq_service.position_repo.update_fields(position.id, quantity=str(value))
         await self.session.refresh(position)

@@ -1,4 +1,4 @@
-"""‌⁠‍Predictive schedule and cost risk analytics (TOP-30 #19).
+"""Predictive schedule and cost risk analytics (TOP-30 #19).
 
 This module is a *deterministic, explainable* forecasting layer. It needs no
 ML training data: every number is a closed-form Earned-Value or schedule-slip
@@ -52,7 +52,7 @@ RAG_RED_THRESHOLD = Decimal("0.67")
 
 @dataclass
 class CostForecast:
-    """‌⁠‍Earned-value cost forecast for a project.
+    """Earned-value cost forecast for a project.
 
     All money values are strings (currency-tagged elsewhere) to avoid float
     drift; the index values are floats for easy JSON rendering. ``available``
@@ -79,7 +79,7 @@ class CostForecast:
 
 @dataclass
 class ScheduleSlip:
-    """‌⁠‍Forward projection of schedule finish-date variance.
+    """Forward projection of schedule finish-date variance.
 
     ``available`` is False when there is no schedule with dated activities.
     ``finish_variance_days`` is positive when the project is forecast to finish
@@ -100,7 +100,7 @@ class ScheduleSlip:
 
 @dataclass
 class CostOverrunRisk:
-    """‌⁠‍Deterministic cost-overrun risk score with rationale.
+    """Deterministic cost-overrun risk score with rationale.
 
     ``score`` is 0..1 (higher == riskier). ``band`` is the RAG mapping. The
     ``confidence`` reflects how much signal fed the score (more inputs present
@@ -116,7 +116,7 @@ class CostOverrunRisk:
 
 @dataclass
 class ProjectForecast:
-    """‌⁠‍The complete predictive-analytics payload for one project."""
+    """The complete predictive-analytics payload for one project."""
 
     project_id: str = ""
     project_name: str = ""
@@ -133,7 +133,7 @@ class ProjectForecast:
 
 
 def to_decimal(value: object, default: Decimal = ZERO) -> Decimal:
-    """‌⁠‍Best-effort convert any value to ``Decimal`` (never raises).
+    """Best-effort convert any value to ``Decimal`` (never raises).
 
     Empty strings and ``None`` fall back to ``default``; an unparseable value
     also returns ``default`` so a single bad row never breaks a forecast.
@@ -173,7 +173,7 @@ def compute_cost_forecast(
     currency: str = "",
     snapshot_date: str | None = None,
 ) -> CostForecast:
-    """‌⁠‍Compute the canonical Earned-Value forecast from raw EVM inputs.
+    """Compute the canonical Earned-Value forecast from raw EVM inputs.
 
     Formulas (PMBOK):
         CPI  = EV / AC
@@ -245,7 +245,7 @@ def compute_cost_forecast(
 
 
 def degraded_cost_forecast(reason: str, currency: str = "") -> CostForecast:
-    """‌⁠‍Return an unavailable cost forecast carrying a human-readable reason."""
+    """Return an unavailable cost forecast carrying a human-readable reason."""
     return CostForecast(available=False, reason=reason, currency=currency)
 
 
@@ -268,7 +268,7 @@ def project_schedule_slip(
     baseline_finish: str | None,
     data_date: str | None = None,
 ) -> ScheduleSlip:
-    """‌⁠‍Project a finish-date variance from per-activity progress.
+    """Project a finish-date variance from per-activity progress.
 
     Deterministic linear projection: from the aggregate planned-vs-actual
     percent complete we derive a Schedule Performance Index against duration
@@ -377,7 +377,7 @@ def score_cost_overrun_risk(
     finish_variance_days: int | None,
     open_high_severity_risks: int,
 ) -> CostOverrunRisk:
-    """‌⁠‍Deterministically score the cost-overrun risk (0..1) with rationale.
+    """Deterministically score the cost-overrun risk (0..1) with rationale.
 
     The score blends four weighted signals, each normalised to 0..1:
 

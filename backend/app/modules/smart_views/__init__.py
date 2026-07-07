@@ -1,5 +1,5 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
-"""‌⁠‍Smart Views - rule-based, re-evaluating BIM viewer presets.
+"""Smart Views - rule-based, re-evaluating BIM viewer presets.
 
 The counter-intuitive design choice - and the single biggest
 differentiator from the snapshot-style "save view" feature most BIM
@@ -18,7 +18,7 @@ Views drive visibility / colour / opacity, not topology.
 
 
 async def on_startup() -> None:
-    """‌⁠‍Module startup hook - register RBAC permissions."""
+    """Module startup hook - register RBAC permissions."""
     from app.modules.smart_views.permissions import (
         register_smart_views_permissions,
     )

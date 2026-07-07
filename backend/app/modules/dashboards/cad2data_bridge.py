@@ -1,4 +1,4 @@
-"""‌⁠‍Bridge between uploaded CAD/BIM files and the snapshot Parquet layer.
+"""Bridge between uploaded CAD/BIM files and the snapshot Parquet layer.
 
 T01 responsibility: take a list of uploaded source files, run each
 through the appropriate converter, and produce three DataFrames in the
@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class UploadedFile:
-    """‌⁠‍In-memory representation of an uploaded source file.
+    """In-memory representation of an uploaded source file.
 
     Route code wraps each ``UploadFile`` into this shape so the bridge
     does not have to know about FastAPI.
@@ -56,7 +56,7 @@ class UploadedFile:
 
 @dataclass
 class SnapshotBuildResult:
-    """‌⁠‍Output of :func:`convert_to_snapshot_frames`.
+    """Output of :func:`convert_to_snapshot_frames`.
 
     The three DataFrames share one invariant: every ``entity_guid`` in
     ``materials_df`` appears in ``entities_df`` (referential integrity

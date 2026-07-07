@@ -18,11 +18,51 @@ from decimal import Decimal, InvalidOperation
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.change_intelligence.action_register import (
+    SOURCE_CHANGE_ORDER as REGISTER_SOURCE_CHANGE_ORDER,
+)
+from app.modules.change_intelligence.action_register import (
+    SOURCE_MEETING_ACTION,
+    SOURCE_RFI,
+    SOURCE_RISK_ACTION,
+    SOURCE_SUBMITTAL,
+    CommitmentRegister,
+    RegisterItem,
+    build_register,
+)
+from app.modules.change_intelligence.change_drivers import (
+    SOURCE_CHANGE_ORDER as DRIVER_SOURCE_CHANGE_ORDER,
+)
+from app.modules.change_intelligence.change_drivers import (
+    SOURCE_DISRUPTION_CLAIM,
+    SOURCE_EOT_CLAIM,
+    SOURCE_RISK,
+    DriverAnalytics,
+    DriverRecord,
+    build_driver_analytics,
+)
+from app.modules.change_intelligence.change_run_rate import (
+    KIND_CHANGE_ORDER as RUNRATE_KIND_CHANGE_ORDER,
+)
+from app.modules.change_intelligence.change_run_rate import (
+    KIND_VARIATION_ORDER as RUNRATE_KIND_VARIATION_ORDER,
+)
+from app.modules.change_intelligence.change_run_rate import (
+    KIND_VARIATION_REQUEST as RUNRATE_KIND_VARIATION_REQUEST,
+)
+from app.modules.change_intelligence.change_run_rate import (
+    ChangeEvent,
+    RunRate,
+    build_run_rate,
+    classify_change_bucket,
+    resolve_effective_date,
+)
 from app.modules.change_intelligence.clarifier import ClarifiedRequest, analyze_change_note
 from app.modules.change_intelligence.coordination import (
     ActionItem,
     CoordinationPlan,
     build_plan,
+    parse_date,
 )
 from app.modules.change_intelligence.cycle_time import (
     KIND_CHANGE_ORDER,
@@ -103,9 +143,19 @@ from app.modules.claims_evidence.provability import (
 from app.modules.correspondence.models import Correspondence
 from app.modules.cost_recovery.back_charge import BackChargeItem
 from app.modules.cost_recovery.models import BackCharge
+from app.modules.meetings.models import Meeting
 from app.modules.moc.models import MoCEntry
 from app.modules.projects.models import Project
-from app.modules.variations.models import Notice, VariationOrder, VariationRequest
+from app.modules.rfi.models import RFI
+from app.modules.risk.models import RiskItem
+from app.modules.submittals.models import Submittal
+from app.modules.variations.models import (
+    DisruptionClaim,
+    ExtensionOfTimeClaim,
+    Notice,
+    VariationOrder,
+    VariationRequest,
+)
 
 # Each change-family source table mapped to its engine kind token. Every model
 # carries the same shape we read: id / code / title / status / ball_in_court /
@@ -891,3 +941,394 @@ async def build_delay_risk_board(
     ranked = rank_delay_risk(inputs)
     items_by_id = {item.id: item for item in board.items}
     return ranked, items_by_id
+
+
+# --- Cross-source commitment / action register -----------------------------
+#
+# Consolidates every open commitment a project carries across five source
+# modules into one owner-ranked, overdue-first register. Meeting action items
+# and risk mitigation actions live as JSON arrays on their parent record (each
+# entry carries its own description / owner / due date / status), while change
+# orders, RFIs and submittals each carry a ball-in-court owner and a response /
+# required date on the row. All are projected onto the pure engine's
+# :class:`RegisterItem`, which decides open-ness per source and ranks the result.
+
+
+def _first_nonempty_str(*values: object) -> str:
+    """First value that stringifies to a non-empty, stripped string, else ``""``."""
+    for value in values:
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return ""
+
+
+def _finite_decimal_or_zero(value: object) -> Decimal:
+    """Parse *value* to a finite :class:`Decimal`, or ``Decimal("0")``.
+
+    Costs read back from the ORM are already :class:`Decimal`; risk impact cost
+    is a stored string. A blank, unparseable or non-finite (NaN / Infinity)
+    value yields zero so one bad row can never poison a Pareto or a curve sum.
+    """
+    if value is None:
+        return Decimal("0")
+    if isinstance(value, Decimal):
+        return value if value.is_finite() else Decimal("0")
+    text = str(value).strip()
+    if not text:
+        return Decimal("0")
+    try:
+        amount = Decimal(text)
+    except (InvalidOperation, ValueError):
+        return Decimal("0")
+    return amount if amount.is_finite() else Decimal("0")
+
+
+def _month_of(moment: datetime) -> str:
+    """The ``YYYY-MM`` bucket a timestamp falls in."""
+    return f"{moment.year:04d}-{moment.month:02d}"
+
+
+def _json_actions(value: object) -> list[dict]:
+    """Return *value* as a list of action dicts, tolerating legacy / bad JSON."""
+    if not isinstance(value, list):
+        return []
+    return [entry for entry in value if isinstance(entry, dict)]
+
+
+async def build_commitment_register(
+    session: AsyncSession,
+    project_id: uuid.UUID,
+    *,
+    now: datetime | None = None,
+) -> CommitmentRegister:
+    """Build the consolidated open-commitment register for one project.
+
+    Reads meeting action items and risk mitigation actions (both JSON arrays),
+    plus the open change orders, RFIs and submittals, projects each onto a
+    :class:`RegisterItem`, and feeds them to the pure :func:`build_register`,
+    which filters to open commitments and ranks them overdue-first with a
+    per-owner load summary.
+    """
+    moment = now or datetime.now(UTC)
+    items: list[RegisterItem] = []
+
+    # Meeting action items: [{description, owner_id, due_date, status}].
+    meeting_rows = await session.execute(
+        select(Meeting.id, Meeting.meeting_number, Meeting.action_items, Meeting.created_at).where(
+            Meeting.project_id == project_id
+        )
+    )
+    for row in meeting_rows.all():
+        for idx, action in enumerate(_json_actions(row.action_items)):
+            items.append(
+                RegisterItem(
+                    source=SOURCE_MEETING_ACTION,
+                    ref_id=f"{row.id}:{idx}",
+                    code=row.meeting_number or "",
+                    title=_first_nonempty_str(action.get("description"), action.get("title"), action.get("action")),
+                    owner=_first_nonempty_str(action.get("owner_id"), action.get("owner"), action.get("assigned_to")),
+                    status=_first_nonempty_str(action.get("status")) or None,
+                    due_date=_first_nonempty_str(action.get("due_date"), action.get("due")) or None,
+                    opened_at=row.created_at,
+                )
+            )
+
+    # Risk mitigation actions: [{description, responsible_id, due_date, status}].
+    risk_rows = await session.execute(
+        select(RiskItem.id, RiskItem.code, RiskItem.mitigation_actions, RiskItem.created_at).where(
+            RiskItem.project_id == project_id
+        )
+    )
+    for row in risk_rows.all():
+        for idx, action in enumerate(_json_actions(row.mitigation_actions)):
+            items.append(
+                RegisterItem(
+                    source=SOURCE_RISK_ACTION,
+                    ref_id=f"{row.id}:{idx}",
+                    code=row.code or "",
+                    title=_first_nonempty_str(action.get("description"), action.get("title"), action.get("action")),
+                    owner=_first_nonempty_str(
+                        action.get("responsible_id"), action.get("owner_id"), action.get("owner")
+                    ),
+                    status=_first_nonempty_str(action.get("status")) or None,
+                    due_date=_first_nonempty_str(action.get("due_date"), action.get("due")) or None,
+                    opened_at=row.created_at,
+                )
+            )
+
+    # Change orders: the ball-in-court owes the next action by response_due_date.
+    co_rows = await session.execute(
+        select(
+            ChangeOrder.id,
+            ChangeOrder.code,
+            ChangeOrder.title,
+            ChangeOrder.status,
+            ChangeOrder.ball_in_court,
+            ChangeOrder.response_due_date,
+            ChangeOrder.created_at,
+        ).where(ChangeOrder.project_id == project_id)
+    )
+    for row in co_rows.all():
+        items.append(
+            RegisterItem(
+                source=REGISTER_SOURCE_CHANGE_ORDER,
+                ref_id=str(row.id),
+                code=row.code or "",
+                title=(row.title or "").strip(),
+                owner=_first_nonempty_str(row.ball_in_court),
+                status=row.status or None,
+                due_date=row.response_due_date,
+                opened_at=row.created_at,
+            )
+        )
+
+    # RFIs: owner is the ball-in-court (then the assignee); due is the response
+    # due date (then the date required).
+    rfi_rows = await session.execute(
+        select(
+            RFI.id,
+            RFI.rfi_number,
+            RFI.subject,
+            RFI.status,
+            RFI.ball_in_court,
+            RFI.assigned_to,
+            RFI.response_due_date,
+            RFI.date_required,
+            RFI.created_at,
+        ).where(RFI.project_id == project_id)
+    )
+    for row in rfi_rows.all():
+        items.append(
+            RegisterItem(
+                source=SOURCE_RFI,
+                ref_id=str(row.id),
+                code=row.rfi_number or "",
+                title=(row.subject or "").strip(),
+                owner=_first_nonempty_str(row.ball_in_court, row.assigned_to),
+                status=row.status or None,
+                due_date=_first_nonempty_str(row.response_due_date, row.date_required) or None,
+                opened_at=row.created_at,
+            )
+        )
+
+    # Submittals: owner is the ball-in-court (then the reviewer); due is the
+    # date required for the review to return.
+    sub_rows = await session.execute(
+        select(
+            Submittal.id,
+            Submittal.submittal_number,
+            Submittal.title,
+            Submittal.status,
+            Submittal.ball_in_court,
+            Submittal.reviewer_id,
+            Submittal.date_required,
+            Submittal.created_at,
+        ).where(Submittal.project_id == project_id)
+    )
+    for row in sub_rows.all():
+        items.append(
+            RegisterItem(
+                source=SOURCE_SUBMITTAL,
+                ref_id=str(row.id),
+                code=row.submittal_number or "",
+                title=(row.title or "").strip(),
+                owner=_first_nonempty_str(row.ball_in_court, row.reviewer_id),
+                status=row.status or None,
+                due_date=row.date_required,
+                opened_at=row.created_at,
+            )
+        )
+
+    return build_register(items, moment)
+
+
+# --- Change-driver Pareto analytics ----------------------------------------
+#
+# Aggregates the full population of change-bearing records by their originating
+# cause and (via a transparent fault allocation of the cause taxonomy) by
+# responsible party. Change orders carry a reason category and a signed cost;
+# disruption claims a free-text root cause and a cost; extension-of-time claims a
+# root-cause category and no cost (time only); risk-register entries a category
+# and a stored (string) impact cost. It does not filter by approval status, so it
+# reflects total change pressure - the impact projection is the committed view.
+
+
+async def build_change_drivers(session: AsyncSession, project_id: uuid.UUID) -> DriverAnalytics:
+    """Build the change-driver Pareto + trend for one project."""
+    records: list[DriverRecord] = []
+
+    co_rows = await session.execute(
+        select(
+            ChangeOrder.reason_category,
+            ChangeOrder.cost_impact,
+            ChangeOrder.currency,
+            ChangeOrder.created_at,
+        ).where(ChangeOrder.project_id == project_id)
+    )
+    for row in co_rows.all():
+        records.append(
+            DriverRecord(
+                source=DRIVER_SOURCE_CHANGE_ORDER,
+                cause=row.reason_category or "",
+                cost=_finite_decimal_or_zero(row.cost_impact),
+                currency=row.currency or "",
+                month=_month_of(row.created_at),
+            )
+        )
+
+    disruption_rows = await session.execute(
+        select(
+            DisruptionClaim.root_cause,
+            DisruptionClaim.cost_amount,
+            DisruptionClaim.currency,
+            DisruptionClaim.created_at,
+        ).where(DisruptionClaim.project_id == project_id)
+    )
+    for row in disruption_rows.all():
+        records.append(
+            DriverRecord(
+                source=SOURCE_DISRUPTION_CLAIM,
+                cause=row.root_cause or "",
+                cost=_finite_decimal_or_zero(row.cost_amount),
+                currency=row.currency or "",
+                month=_month_of(row.created_at),
+            )
+        )
+
+    # Extension-of-time claims carry no cost column (they are a time remedy), so
+    # they contribute to the count and the trend at zero cost.
+    eot_rows = await session.execute(
+        select(
+            ExtensionOfTimeClaim.root_cause_category,
+            ExtensionOfTimeClaim.created_at,
+        ).where(ExtensionOfTimeClaim.project_id == project_id)
+    )
+    for row in eot_rows.all():
+        records.append(
+            DriverRecord(
+                source=SOURCE_EOT_CLAIM,
+                cause=row.root_cause_category or "",
+                cost=Decimal("0"),
+                currency="",
+                month=_month_of(row.created_at),
+            )
+        )
+
+    risk_rows = await session.execute(
+        select(
+            RiskItem.category,
+            RiskItem.impact_cost,
+            RiskItem.currency,
+            RiskItem.created_at,
+        ).where(RiskItem.project_id == project_id)
+    )
+    for row in risk_rows.all():
+        records.append(
+            DriverRecord(
+                source=SOURCE_RISK,
+                cause=row.category or "",
+                cost=_finite_decimal_or_zero(row.impact_cost),
+                currency=row.currency or "",
+                month=_month_of(row.created_at),
+            )
+        )
+
+    return build_driver_analytics(records)
+
+
+# --- Change run-rate / cumulative change curve -----------------------------
+#
+# Places every change order and variation on the timeline at its effective date,
+# buckets it approved or pending by status, and feeds the pure engine, which
+# builds the month-by-month cumulative change value against the original contract
+# value, the intake rate, and a linear burn-rate forecast of the final change
+# percentage at completion. Variation requests only contribute pending pipeline
+# value while undecided (once decided the downstream variation order carries it),
+# so the curve never double counts a request and its order.
+
+#: Each run-rate change family mapped to (model, kind, cost column). Variation
+#: notices carry no cost and are absent - the curve is value over time.
+_RUNRATE_SOURCES: tuple[tuple[type, str, str], ...] = (
+    (ChangeOrder, RUNRATE_KIND_CHANGE_ORDER, "cost_impact"),
+    (VariationRequest, RUNRATE_KIND_VARIATION_REQUEST, "estimated_cost_impact"),
+    (VariationOrder, RUNRATE_KIND_VARIATION_ORDER, "final_cost_impact"),
+)
+
+
+async def build_change_run_rate(
+    session: AsyncSession,
+    project_id: uuid.UUID,
+    *,
+    now: datetime | None = None,
+) -> RunRate:
+    """Build the change run-rate curve and forecast for one project.
+
+    Reads the change orders and variation requests / orders, classifies each
+    into an approved or pending bucket (skipping dead records), resolves the
+    date it lands on the timeline, and feeds them to the pure
+    :func:`build_run_rate` together with the project's original contract value
+    and planned start / end dates for the burn-rate forecast.
+    """
+    moment = (now or datetime.now(UTC)).date()
+
+    events: list[ChangeEvent] = []
+    for model, kind, cost_col in _RUNRATE_SOURCES:
+        submitted_col = getattr(model, "submitted_at", None)
+        approved_col = getattr(model, "approved_at", None) or getattr(model, "agreed_at", None)
+        columns = [
+            model.id,
+            getattr(model, cost_col),
+            model.currency,
+            model.status,
+            model.created_at,
+        ]
+        submitted_idx = approved_idx = None
+        if submitted_col is not None:
+            submitted_idx = len(columns)
+            columns.append(submitted_col.label("submitted_ts"))
+        if approved_col is not None:
+            approved_idx = len(columns)
+            columns.append(approved_col.label("approved_ts"))
+
+        rows = await session.execute(select(*columns).where(model.project_id == project_id))
+        for row in rows.all():
+            bucket = classify_change_bucket(kind, row.status)
+            if bucket is None:
+                continue
+            submitted = parse_date(row[submitted_idx]) if submitted_idx is not None else None
+            approved = parse_date(row[approved_idx]) if approved_idx is not None else None
+            at = resolve_effective_date(bucket, row.created_at.date(), submitted, approved)
+            events.append(
+                ChangeEvent(
+                    ref_id=str(row.id),
+                    kind=kind,
+                    bucket=bucket,
+                    cost=_finite_decimal_or_zero(getattr(row, cost_col)),
+                    currency=row.currency or "",
+                    at=at,
+                )
+            )
+
+    proj = (
+        await session.execute(
+            select(
+                Project.contract_value,
+                Project.planned_start_date,
+                Project.planned_end_date,
+            ).where(Project.id == project_id)
+        )
+    ).one_or_none()
+    contract_value = _parse_positive_money(proj.contract_value) if proj is not None else None
+    project_start = parse_date(proj.planned_start_date) if proj is not None else None
+    project_end = parse_date(proj.planned_end_date) if proj is not None else None
+
+    return build_run_rate(
+        events,
+        contract_value=contract_value,
+        project_start=project_start,
+        project_end=project_end,
+        now=moment,
+    )

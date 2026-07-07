@@ -1,4 +1,4 @@
-"""‌⁠‍Enterprise Workflows API routes.
+"""Enterprise Workflows API routes.
 
 Endpoints:
     GET    /                         - List workflows
@@ -51,7 +51,7 @@ async def list_workflows(
     _perm: None = Depends(RequirePermission("enterprise_workflows.read")),
     service: WorkflowService = Depends(_get_service),
 ) -> WorkflowListResponse:
-    """‌⁠‍List approval workflows with optional filters."""
+    """List approval workflows with optional filters."""
     items, total = await service.list_workflows(
         project_id=project_id,
         entity_type=entity_type,
@@ -75,7 +75,7 @@ async def create_workflow(
     _perm: None = Depends(RequirePermission("enterprise_workflows.manage")),
     service: WorkflowService = Depends(_get_service),
 ) -> WorkflowResponse:
-    """‌⁠‍Create a new approval workflow."""
+    """Create a new approval workflow."""
     workflow = await service.create_workflow(data, user_id=user_id)
     return WorkflowResponse.model_validate(workflow)
 

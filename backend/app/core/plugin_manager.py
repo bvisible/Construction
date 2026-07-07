@@ -1,4 +1,4 @@
-"""‌⁠‍Module plugin manager - download, install, update, uninstall modules.
+"""Module plugin manager - download, install, update, uninstall modules.
 
 Modules are distributed as zip archives with a standard structure:
     module-name/
@@ -67,7 +67,7 @@ DEFAULT_REGISTRY_URL = ""
 
 @dataclass
 class ModuleInfo:
-    """‌⁠‍Module metadata from registry."""
+    """Module metadata from registry."""
 
     name: str
     display_name: str
@@ -88,7 +88,7 @@ class ModuleInfo:
 
 
 class ModulePluginManager:
-    """‌⁠‍Manages module installation lifecycle."""
+    """Manages module installation lifecycle."""
 
     def __init__(
         self,

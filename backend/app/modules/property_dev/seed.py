@@ -1,4 +1,4 @@
-"""‌⁠‍Deterministic seed data for Property Development demo.
+"""Deterministic seed data for Property Development demo.
 
 Public entry point: :func:`seed_property_dev_demo`.
 
@@ -165,7 +165,7 @@ _OPTION_GROUP_SPEC: Sequence[dict[str, object]] = (
 
 
 async def seed_property_dev_demo(session: AsyncSession, project_ids: Iterable[uuid.UUID]) -> Development | None:
-    """‌⁠‍Seed a deterministic demo development for the first project in the list.
+    """Seed a deterministic demo development for the first project in the list.
 
     Args:
         session: An open ``AsyncSession``.

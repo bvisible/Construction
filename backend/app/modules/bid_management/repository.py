@@ -1,4 +1,4 @@
-"""‌⁠‍Bid Management data access layer."""
+"""Bid Management data access layer."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ from app.modules.bid_management.models import (
 
 
 class _BaseRepo:
-    """‌⁠‍Shared CRUD helpers for a single ORM class."""
+    """Shared CRUD helpers for a single ORM class."""
 
     model: type[Any]
 
@@ -55,7 +55,7 @@ class _BaseRepo:
 
 
 class BidPackageRepository(_BaseRepo):
-    """‌⁠‍Data access for :class:`BidPackage`."""
+    """Data access for :class:`BidPackage`."""
 
     model = BidPackage
 

@@ -1,4 +1,4 @@
-"""‌⁠‍Document Management service - business logic for document management.
+"""Document Management service - business logic for document management.
 
 Stateless service layer. Handles:
 - Document CRUD
@@ -182,8 +182,40 @@ PHOTO_THUMB_QUALITY = 82
 # Security constants
 MAX_FILE_SIZE = 500 * 1024 * 1024  # 500MB
 MAX_PHOTO_SIZE = 200 * 1024 * 1024  # 200MB
-VALID_CATEGORIES = {"drawing", "contract", "specification", "photo", "correspondence", "other"}
-VALID_PHOTO_CATEGORIES = {"site", "progress", "defect", "delivery", "safety", "other"}
+VALID_CATEGORIES = {
+    "drawing",
+    "contract",
+    "specification",
+    "photo",
+    "correspondence",
+    "reality_capture",
+    "other",
+}
+VALID_PHOTO_CATEGORIES = {"site", "progress", "defect", "delivery", "safety", "aerial", "other"}
+
+# Reality-capture / drone-survey point-cloud file extensions. A file dropped
+# into the generic documents upload with one of these extensions is auto-
+# categorised as ``reality_capture`` (mirroring how a photo upload becomes a
+# site picture) so it surfaces as a reality-capture asset instead of a nameless
+# ``other`` blob.
+#
+# Scope note (deliberate boundary): only point-cloud container extensions are
+# listed. Drone orthomosaic imagery uses ordinary raster extensions
+# (``.tif`` / ``.tiff``) that are indistinguishable from a normal TIFF drawing
+# without parsing GeoTIFF GeoKeys, so auto-treating every ``.tif`` as reality
+# capture would hijack legitimate drawing uploads. GeoTIFF orthomosaics are
+# therefore out of scope for auto-detection here - upload them through the
+# dedicated Reality Capture ingest or set the category by hand.
+REALITY_CAPTURE_EXTENSIONS = {
+    ".las",  # ASPRS LAS point cloud
+    ".laz",  # LASzip-compressed LAS
+    ".e57",  # ASTM E57 point cloud / imagery
+    ".copc",  # Cloud-Optimized Point Cloud (LAS-based)
+    ".ply",  # Polygon / point cloud
+    ".pcd",  # Point Cloud Data (PCL)
+    ".pts",  # Leica point cloud (plain text)
+    ".xyz",  # XYZ point cloud (plain text)
+}
 ALLOWED_IMAGE_TYPES = {
     "image/jpeg",
     "image/png",
@@ -217,7 +249,7 @@ BLOCKED_EXTENSIONS = {
 
 
 def _sanitize_filename(name: str) -> str:
-    """‌⁠‍Remove path components and dangerous characters from filename."""
+    """Remove path components and dangerous characters from filename."""
     name = os.path.basename(name)
     name = re.sub(r"[^\w.\-]", "_", name)
     if not name or name.startswith("."):
@@ -249,11 +281,25 @@ def _blocked_extension_segment(name: str) -> str | None:
     return None
 
 
+def _reality_capture_extension(name: str) -> str | None:
+    """Return the reality-capture point-cloud extension of ``name``, else None.
+
+    Matches only the final suffix against :data:`REALITY_CAPTURE_EXTENSIONS`, so
+    ``site-scan.las`` is detected while an ordinary ``plan.pdf`` is not. Used to
+    auto-categorise reality-capture / drone-survey point clouds uploaded through
+    the generic documents path, mirroring the photo -> site-picture bridge.
+    """
+    suffix = Path(name).suffix.lower()
+    if suffix in REALITY_CAPTURE_EXTENSIONS:
+        return suffix
+    return None
+
+
 def _generate_photo_thumbnail(
     source_bytes: bytes,
     dest_path: Path,
 ) -> bool:
-    """‌⁠‍Write a JPEG thumbnail of ``source_bytes`` to ``dest_path``.
+    """Write a JPEG thumbnail of ``source_bytes`` to ``dest_path``.
 
     Returns ``True`` on success, ``False`` if anything went wrong (missing
     Pillow, corrupt image, unsupported mode). Thumbnail generation is a
@@ -343,6 +389,21 @@ class DocumentService:
         if category not in VALID_CATEGORIES:
             category = "other"
 
+        # Reality-capture / drone bridge: a point-cloud file dropped into the
+        # generic uploads path is auto-categorised as ``reality_capture`` so it
+        # surfaces as a reality-capture asset instead of a nameless ``other``
+        # blob - mirroring how a photo upload becomes a site picture. Only done
+        # when the caller did NOT pick a specific category (``other`` is the
+        # non-specific default), so an explicit choice always wins. The heavy
+        # scan ingest is NEVER run here; this only labels the stored file and
+        # announces it (see the detached event below) for the Reality Capture
+        # module / a later ingest phase to pick up.
+        reality_capture_ext: str | None = None
+        if category == "other":
+            reality_capture_ext = _reality_capture_extension(safe_name)
+            if reality_capture_ext is not None:
+                category = "reality_capture"
+
         # Enforce size cap (defence in depth - max also expected at the
         # API gateway level). Done after reading because UploadFile is a
         # streaming object: we cap on read by checking length before
@@ -412,6 +473,13 @@ class DocumentService:
         upload_dir.mkdir(parents=True, exist_ok=True)
         file_path = upload_dir / storage_name
 
+        # Tag reality-capture assets so they are easy to find in the Documents
+        # hub (which supports a tag/category filter) and so downstream consumers
+        # can recognise a point-cloud drop without re-sniffing the extension.
+        doc_tags: list[str] = []
+        if reality_capture_ext is not None:
+            doc_tags = ["reality-capture", "point-cloud", reality_capture_ext.lstrip(".")]
+
         # Create DB record FIRST - if this fails we haven't written a file
         document = Document(
             project_id=project_id,
@@ -421,6 +489,7 @@ class DocumentService:
             mime_type=stored_mime,
             file_path=str(file_path),
             uploaded_by=user_id,
+            tags=doc_tags,
         )
         document = await self.repo.create(document)
 
@@ -472,6 +541,35 @@ class DocumentService:
             )
         except Exception as exc:
             logger.debug("Failed to publish documents.document.created event: %s", exc)
+
+        # Reality-capture bridge event - give the Reality Capture / point-cloud
+        # module a clean subscription seam so a later ingest phase can promote
+        # this already-stored file into a scan dataset. Fail-soft: a publish
+        # failure must never block the upload, and no heavy processing runs in
+        # the request path. Boundary: the pointcloud module's own list_scans is
+        # backed by object storage (MinIO) with a stricter format subset
+        # (e57/las/laz/copc) and a tenant-namespaced multipart ingest, so we do
+        # NOT fabricate a scan row here; the document is discoverable today via
+        # the Documents hub category filter, and this event is the honest hand-
+        # off point for real ingest.
+        if reality_capture_ext is not None:
+            try:
+                from app.core.events import event_bus
+
+                event_bus.publish_detached(
+                    "documents.reality_capture.detected",
+                    {
+                        "project_id": str(project_id),
+                        "document_id": str(document.id),
+                        "name": safe_name,
+                        "file_path": str(file_path),
+                        "file_size": len(content),
+                        "extension": reality_capture_ext,
+                    },
+                    source_module="oe_documents",
+                )
+            except Exception as exc:
+                logger.debug("Failed to publish documents.reality_capture.detected event: %s", exc)
 
         logger.info(
             "Document uploaded: %s (%d bytes) for project %s",

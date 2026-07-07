@@ -1,4 +1,4 @@
-"""‌⁠‍Internationalization foundation ORM models.
+"""Internationalization foundation ORM models.
 
 Tables:
     oe_i18n_exchange_rate - currency exchange rates (manual, ECB, custom sources)
@@ -14,7 +14,7 @@ from app.database import Base
 
 
 class ExchangeRate(Base):
-    """‌⁠‍Currency exchange rate entry.
+    """Currency exchange rate entry.
 
     Stores exchange rates between currency pairs. Rates are stored as strings
     for SQLite compatibility. Supports manual entry and automated feeds (ECB, custom).
@@ -42,7 +42,7 @@ class ExchangeRate(Base):
 
 
 class Country(Base):
-    """‌⁠‍Country registry entry.
+    """Country registry entry.
 
     Stores ISO country codes, localized names, default currency/measurement,
     and regional grouping. Name translations are stored as a JSON dict for

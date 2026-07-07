@@ -979,6 +979,24 @@ export function FieldReportsPage() {
             delete window.__fieldreportPrefillDate;
           }}
           onCreate={(data) => createMut.mutate(data)}
+          onCreateDraft={async (data) => {
+            // Persist a draft so attachments can be added before the user's
+            // first explicit Save. Deliberately does NOT close the modal or
+            // swap ``editingReport`` (that would remount the form and lose
+            // in-progress edits); the modal tracks the draft internally.
+            try {
+              const created = await createFieldReport(data);
+              queryClient.invalidateQueries({ queryKey: ['fieldreports'] });
+              return created;
+            } catch (e) {
+              addToast({
+                type: 'error',
+                title: t('common.error', { defaultValue: 'Error' }),
+                message: e instanceof Error ? e.message : String(e),
+              });
+              return null;
+            }
+          }}
           onUpdate={(id, data) => updateMut.mutate({ id, data })}
           onSubmit={(id) => {
             submitMut.mutate(id);
@@ -1246,6 +1264,7 @@ function ReportModal({
   projectId,
   onClose,
   onCreate,
+  onCreateDraft,
   onUpdate,
   onSubmit,
   onApprove,
@@ -1255,6 +1274,9 @@ function ReportModal({
   projectId: string;
   onClose: () => void;
   onCreate: (data: CreateFieldReportPayload) => void;
+  // Create a draft report WITHOUT closing the modal, returning the saved row
+  // so attachments can target its id. Resolves null on failure.
+  onCreateDraft: (data: CreateFieldReportPayload) => Promise<FieldReport | null>;
   onUpdate: (id: string, data: UpdateFieldReportPayload) => void;
   onSubmit: (id: string) => void;
   onApprove: (id: string) => void | Promise<unknown>;
@@ -1262,7 +1284,15 @@ function ReportModal({
 }) {
   const { t } = useTranslation();
   const addToast = useToastStore((s) => s.addToast);
-  const isEdit = report != null;
+
+  // A report created mid-session purely so attachments can be added before
+  // the user's first explicit Save (the attachments API needs a report id).
+  // Once it exists the modal behaves exactly like editing an existing draft:
+  // ``effectiveReport`` is the report we save / gate attachments on.
+  const [draftReport, setDraftReport] = useState<FieldReport | null>(null);
+  const effectiveReport = report ?? draftReport;
+  const isEdit = effectiveReport != null;
+  const [creatingDraft, setCreatingDraft] = useState(false);
 
   // Prefill date from calendar click
   const prefillDate =
@@ -1508,14 +1538,14 @@ function ReportModal({
       metadata: baseMeta,
     };
 
-    if (isEdit && report) {
-      onUpdate(report.id, payload);
+    if (isEdit && effectiveReport) {
+      onUpdate(effectiveReport.id, payload);
     } else {
       onCreate({ ...payload, project_id: projectId } as CreateFieldReportPayload);
     }
   }, [
     isEdit,
-    report,
+    effectiveReport,
     projectId,
     reportDate,
     reportType,
@@ -1546,6 +1576,35 @@ function ReportModal({
     onUpdate,
   ]);
 
+  // Lazily persist a draft so attachments can be added before the user's
+  // first explicit Save. No-op once a report already exists. Seeds the draft
+  // with the date/type already chosen so it is not an empty shell; the rest
+  // of the form is written on the next Save (which now updates this draft).
+  const handleEnsureDraft = useCallback(async (): Promise<FieldReport | null> => {
+    if (effectiveReport) return effectiveReport;
+    if (!reportDate) {
+      addToast({
+        type: 'error',
+        title: t('fieldreports.date_required_for_attach', {
+          defaultValue: 'Pick a report date before attaching files.',
+        }),
+      });
+      return null;
+    }
+    setCreatingDraft(true);
+    try {
+      const created = await onCreateDraft({
+        project_id: projectId,
+        report_date: reportDate,
+        report_type: reportType,
+      } as CreateFieldReportPayload);
+      if (created) setDraftReport(created);
+      return created;
+    } finally {
+      setCreatingDraft(false);
+    }
+  }, [effectiveReport, reportDate, reportType, projectId, onCreateDraft, addToast, t]);
+
   const inputCls = 'w-full rounded-lg border border-border-light bg-surface-primary px-3 py-2 text-sm text-content-primary';
   const textareaCls = 'w-full rounded-lg border border-border-light bg-surface-primary px-3 py-2 text-sm text-content-primary resize-y';
 
@@ -1561,18 +1620,20 @@ function ReportModal({
           : t('fieldreports.new_report', { defaultValue: 'New Field Report' })
       }
       subtitle={
-        isEdit && report
-          ? t(`fieldreports.status_${report.status}`, { defaultValue: report.status })
+        isEdit && effectiveReport
+          ? t(`fieldreports.status_${effectiveReport.status}`, {
+              defaultValue: effectiveReport.status,
+            })
           : undefined
       }
       footer={
         <>
           <div className="mr-auto flex items-center gap-2">
-            {isEdit && report?.status === 'draft' && (
+            {isEdit && effectiveReport?.status === 'draft' && (
               <Button
                 size="sm"
                 variant="secondary"
-                onClick={() => onSubmit(report.id)}
+                onClick={() => onSubmit(effectiveReport.id)}
                 className="shrink-0 whitespace-nowrap"
                 title={t('fieldreports.submit_hint', {
                   defaultValue: 'Submitting sends the report for approval.',
@@ -1582,11 +1643,11 @@ function ReportModal({
                 <span className="whitespace-nowrap">{t('fieldreports.submit', { defaultValue: 'Submit for Approval' })}</span>
               </Button>
             )}
-            {isEdit && report?.status === 'submitted' && (
+            {isEdit && effectiveReport?.status === 'submitted' && (
               <Button
                 size="sm"
                 variant="secondary"
-                onClick={() => onApprove(report.id)}
+                onClick={() => onApprove(effectiveReport.id)}
                 className="shrink-0 whitespace-nowrap"
                 title={t('fieldreports.approve_hint', {
                   defaultValue: 'Approve (locks the report permanently)',
@@ -1596,10 +1657,10 @@ function ReportModal({
                 <span className="whitespace-nowrap">{t('fieldreports.approve', { defaultValue: 'Approve' })}</span>
               </Button>
             )}
-            {isEdit && (report?.status === 'draft' || report?.status === 'submitted') && (
+            {isEdit && (effectiveReport?.status === 'draft' || effectiveReport?.status === 'submitted') && (
               <span className="hidden items-center gap-1 text-xs text-content-tertiary sm:flex">
                 <Info size={12} className="shrink-0" />
-                {report?.status === 'draft'
+                {effectiveReport?.status === 'draft'
                   ? t('fieldreports.submit_hint', {
                       defaultValue: 'Submitting sends the report for approval.',
                     })
@@ -1612,7 +1673,7 @@ function ReportModal({
           <Button size="sm" variant="ghost" onClick={onClose} disabled={loading}>
             {t('common.cancel', { defaultValue: 'Cancel' })}
           </Button>
-          {(!isEdit || report?.status !== 'approved') && (
+          {(!isEdit || effectiveReport?.status !== 'approved') && (
             <Button size="sm" onClick={handleSave} disabled={loading || !reportDate}>
               {isEdit
                 ? t('common.save', { defaultValue: 'Save' })
@@ -1622,7 +1683,7 @@ function ReportModal({
         </>
       }
     >
-      {isEdit && report?.status === 'approved' && (
+      {isEdit && effectiveReport?.status === 'approved' && (
         <div className="mb-5 flex items-start gap-2 rounded-lg border border-border-light bg-surface-secondary/50 p-3 text-xs text-content-secondary">
           <Lock size={14} className="mt-0.5 shrink-0 text-content-tertiary" />
           <span>
@@ -1640,7 +1701,7 @@ function ReportModal({
           value={templateId}
           onChange={handleTemplateChange}
           onResolve={setSelectedTemplate}
-          disabled={isEdit && report?.status === 'approved'}
+          disabled={isEdit && effectiveReport?.status === 'approved'}
         />
         <WideModalField label={t('fieldreports.report_date', { defaultValue: 'Date' })}>
           <input
@@ -1648,7 +1709,7 @@ function ReportModal({
             value={reportDate}
             onChange={(e) => setReportDate(e.target.value)}
             className={inputCls}
-            disabled={isEdit && report?.status === 'approved'}
+            disabled={isEdit && effectiveReport?.status === 'approved'}
           />
         </WideModalField>
         <WideModalField label={t('fieldreports.report_type', { defaultValue: 'Report Type' })}>
@@ -1656,7 +1717,7 @@ function ReportModal({
             value={reportType}
             onChange={(e) => setReportType(e.target.value as ReportType)}
             className={inputCls}
-            disabled={isEdit && report?.status === 'approved'}
+            disabled={isEdit && effectiveReport?.status === 'approved'}
           >
             {REPORT_TYPES.map((rt) => (
               <option key={rt} value={rt}>
@@ -1675,11 +1736,14 @@ function ReportModal({
         />
       )}
 
-      {isEdit && report && (
-        <ReportAttachments reportId={report.id} projectId={projectId} />
-      )}
-
-      {!isEdit && (
+      {effectiveReport ? (
+        // A report (existing or just-created draft) exists, so its id can
+        // anchor uploaded photos/documents.
+        <ReportAttachments reportId={effectiveReport.id} projectId={projectId} />
+      ) : (
+        // No report yet: offer to start attaching now. The first click
+        // persists a draft (date/type only) so the existing uploader can
+        // target it - no need to fully save first.
         <WideModalSection
           title={t('fieldreports.attachments', { defaultValue: 'Attachments' })}
           columns={1}
@@ -1688,12 +1752,29 @@ function ReportModal({
             label={t('fieldreports.attachments', { defaultValue: 'Attachments' })}
             className="sm:[&>label]:hidden"
           >
-            <p className="text-xs text-content-tertiary">
-              {t('fieldreports.attachments_after_save', {
-                defaultValue:
-                  'Save the report first, then reopen it to attach photos and documents.',
-              })}
-            </p>
+            <div className="flex flex-col items-start gap-2">
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={creatingDraft || !reportDate}
+                onClick={() => void handleEnsureDraft()}
+              >
+                {creatingDraft ? (
+                  <Loader2 size={14} className="mr-1.5 animate-spin" />
+                ) : (
+                  <Upload size={14} className="mr-1.5" />
+                )}
+                {t('fieldreports.start_attaching', {
+                  defaultValue: 'Add photos & documents',
+                })}
+              </Button>
+              <p className="text-xs text-content-tertiary">
+                {t('fieldreports.attachments_autodraft_hint', {
+                  defaultValue:
+                    'Saves a draft so you can attach files right away; finish the rest of the report and Save when ready.',
+                })}
+              </p>
+            </div>
           </WideModalField>
         </WideModalSection>
       )}
@@ -1980,11 +2061,15 @@ function ReportModal({
         </WideModalField>
       </WideModalSection>
 
-      {/* Structured workforce / equipment logs — only for saved reports, since
-          the rows attach to an existing report id. These drive the detailed
-          CRUD endpoints that feed the labour-cost rollup. */}
-      {isEdit && report && (
-        <SiteLogEditor reportId={report.id} disabled={report.status === 'approved'} />
+      {/* Structured workforce / equipment logs - only for saved reports
+          (existing or a just-created draft), since the rows attach to an
+          existing report id. These drive the detailed CRUD endpoints that
+          feed the labour-cost rollup. */}
+      {effectiveReport && (
+        <SiteLogEditor
+          reportId={effectiveReport.id}
+          disabled={effectiveReport.status === 'approved'}
+        />
       )}
 
       <WideModalSection

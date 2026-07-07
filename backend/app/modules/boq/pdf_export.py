@@ -1,4 +1,4 @@
-"""‌⁠‍PDF report generation for BOQ cost estimates.
+"""PDF report generation for BOQ cost estimates.
 
 Produces a professional multi-page PDF document with:
 - Cover page: project name, BOQ title, cost summary, date, status
@@ -46,6 +46,7 @@ from reportlab.platypus import (
     TableStyle,
 )
 
+from app.core.pdf_branding import branded_cover_brand, branded_doc_metadata, branded_header_logo
 from app.core.pdf_fonts import BODY_FONT, BOLD_FONT, register_pdf_fonts
 from app.core.unit_conversion import convert as convert_units
 from app.core.unit_conversion import display_rate
@@ -73,7 +74,7 @@ TABLE_COL_WIDTHS = [COL_POS, COL_DESC, COL_UNIT, COL_QTY, COL_RATE, COL_TOTAL]
 
 
 def _fmt(value: float, decimals: int = 2, currency: str = "") -> str:
-    """‌⁠‍Format a number with thousands separator and fixed decimals.
+    """Format a number with thousands separator and fixed decimals.
 
     When *currency* is provided, uses locale-aware formatting:
     - EUR (German/DACH): 1.234,56  (dot=thousands, comma=decimal)
@@ -93,7 +94,7 @@ def _fmt(value: float, decimals: int = 2, currency: str = "") -> str:
 
 
 def _safe_para(text: Any, style: ParagraphStyle) -> "Paragraph":
-    """‌⁠‍Construct a ``Paragraph`` from possibly-untrusted user input.
+    """Construct a ``Paragraph`` from possibly-untrusted user input.
 
     HTML metacharacters in ``text`` are escaped via ``html.escape`` so
     ReportLab's paraparser sees inert characters, not markup. ``None``
@@ -279,11 +280,12 @@ def _make_header_footer(
     ``func(canvas, doc)``.
     """
 
-    def _header(canvas: Any, _doc: Any) -> None:
+    def _header(canvas: Any, doc: Any) -> None:
         canvas.saveState()
         canvas.setFont(BODY_FONT, 8)
         canvas.setFillColor(colors.HexColor("#666666"))
-        text = f"{project_name}  \u2014  {boq_name}"
+        # Plain hyphen separator (never an em dash) per the project text rule.
+        text = f"{project_name}  -  {boq_name}"
         canvas.drawString(MARGIN_LEFT, PAGE_HEIGHT - 15 * mm, text)
         # Thin line under header
         canvas.setStrokeColor(colors.HexColor("#cccccc"))
@@ -291,10 +293,12 @@ def _make_header_footer(
         line_y = PAGE_HEIGHT - 17 * mm
         canvas.line(MARGIN_LEFT, line_y, PAGE_WIDTH - MARGIN_RIGHT, line_y)
         canvas.restoreState()
+        # White-label logo (if configured) top-right, clearing the header title.
+        branded_header_logo(canvas, doc)
 
     def _footer(canvas: Any, doc: Any) -> None:
         canvas.saveState()
-        # Left side: brand
+        # Left side: brand (follows the workspace white-label, issue #284)
         canvas.setFont(BODY_FONT, 7)
         canvas.setFillColor(colors.HexColor("#999999"))
         # //// NEOFFICE PATCH — Public-facing brand
@@ -1053,11 +1057,11 @@ def generate_boq_pdf_simple(
         topMargin=MARGIN_TOP,
         bottomMargin=MARGIN_BOTTOM,
         title=f"Cost Estimate - {boq_data.name} (Summary)",
-        author="OpenConstructionERP",
-        subject="Bill of Quantities · DDC-CWICR-OE",
-        creator="OpenConstructionERP · DataDrivenConstruction",
-        producer="OpenConstructionERP / reportlab · datadrivenconstruction.io",
-        keywords="DDC-CWICR-OE-2026,OpenConstructionERP,BOQ,DataDrivenConstruction",
+        author=branded_doc_metadata()["author"],
+        subject="Bill of Quantities",
+        creator=branded_doc_metadata()["creator"],
+        producer=branded_doc_metadata()["producer"],
+        keywords=branded_doc_metadata()["keywords"],
     )
     doc.addPageTemplates([cover_template, table_template])
 

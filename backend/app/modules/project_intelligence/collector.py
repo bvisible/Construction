@@ -1,4 +1,4 @@
-"""‌⁠‍Project state collector - gathers project data from all modules.
+"""Project state collector - gathers project data from all modules.
 
 Uses raw SQL via session.execute(text(...)) for speed and to avoid
 circular imports with other module services. All queries are project-scoped
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class BOQState:
-    """‌⁠‍Bill of Quantities domain state."""
+    """Bill of Quantities domain state."""
 
     exists: bool = False
     total_items: int = 0
@@ -46,7 +46,7 @@ class BOQState:
 
 @dataclass
 class ScheduleState:
-    """‌⁠‍Schedule domain state."""
+    """Schedule domain state."""
 
     exists: bool = False
     activities_count: int = 0
@@ -360,7 +360,7 @@ async def _collect_boq(
 
 
 def _count_snapshot_positions(snapshot_data: Any) -> int:
-    """‌⁠‍Count leaf positions inside a BOQ version snapshot's payload.
+    """Count leaf positions inside a BOQ version snapshot's payload.
 
     Snapshots store ``snapshot_data`` as a JSON blob. We tolerate the two
     shapes seen in the wild: a flat ``{"positions": [...]}`` list, or a
@@ -397,7 +397,7 @@ async def _resolve_scope_baseline(
     boq_ids: list[str],
     current_leaf_count: int,
 ) -> tuple[int, str]:
-    """‌⁠‍Resolve the scope baseline for the scope-coverage metric.
+    """Resolve the scope baseline for the scope-coverage metric.
 
     Returns ``(baseline_count, source)`` where source is one of
     ``metadata`` / ``snapshot`` / ``current``. Read-only and fail-soft:
@@ -534,7 +534,7 @@ async def _compute_schedule_health(
     schedule_id: str,
     state: ScheduleState,
 ) -> None:
-    """‌⁠‍Compute mean progress and baseline adherence from activity progress.
+    """Compute mean progress and baseline adherence from activity progress.
 
     * ``progress_pct`` - the mean actual percent-complete across activities.
     * ``baseline_adherence_pct`` - the share of activities whose actual

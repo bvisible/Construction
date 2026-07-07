@@ -72,10 +72,21 @@ def upgrade() -> None:
     # Coerce any non-numeric strings to "0" before the type change so
     # the cast does not fail.  This is defensive — production rows
     # should already be parseable.
+    # The "contains a non-numeric character" test is dialect-specific:
+    # SQLite uses GLOB, PostgreSQL uses a POSIX regex match (~). Unknown
+    # dialects fall back to coercing only NULL/empty values.
+    bind = op.get_bind()
+    dialect = bind.dialect.name
+    if dialect == "sqlite":
+        non_numeric = f"{COLUMN_NAME} GLOB '*[^0-9.]*'"
+    elif dialect in ("postgresql", "postgres"):
+        non_numeric = f"{COLUMN_NAME} ~ '[^0-9.]'"
+    else:
+        non_numeric = "0 = 1"
     op.execute(
         f"UPDATE {TABLE_NAME} SET {COLUMN_NAME} = '0' "
         f"WHERE {COLUMN_NAME} IS NULL OR {COLUMN_NAME} = '' "
-        f"OR {COLUMN_NAME} GLOB '*[^0-9.]*'"
+        f"OR {non_numeric}"
     )
 
     with op.batch_alter_table(TABLE_NAME) as batch_op:

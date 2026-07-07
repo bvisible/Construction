@@ -1,5 +1,5 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
-"""‌⁠‍Data access for the Smart Views module."""
+"""Data access for the Smart Views module."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from app.modules.smart_views.models import SmartView
 
 
 class SmartViewRepository:
-    """‌⁠‍CRUD + scoped queries for :class:`SmartView` rows."""
+    """CRUD + scoped queries for :class:`SmartView` rows."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session

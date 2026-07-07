@@ -1,4 +1,4 @@
-"""‌⁠‍Full EVM ORM models.
+"""Full EVM ORM models.
 
 Tables:
     oe_evm_forecast - advanced EVM forecast records with ETC, EAC, VAC, TCPI
@@ -14,7 +14,7 @@ from app.database import GUID, Base
 
 
 class EVMForecast(Base):
-    """‌⁠‍Advanced EVM forecast with ETC, EAC, VAC, and TCPI metrics."""
+    """Advanced EVM forecast with ETC, EAC, VAC, and TCPI metrics."""
 
     __tablename__ = "oe_evm_forecast"
 

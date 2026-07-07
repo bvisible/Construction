@@ -1,4 +1,4 @@
-"""‌⁠‍Unit tests for T10 — Service SLA timer + recurring schedules.
+"""Unit tests for T10 — Service SLA timer + recurring schedules.
 
 Covers:
     * compute_sla_due() priority lookup (urgent/critical/high/normal/med/low).

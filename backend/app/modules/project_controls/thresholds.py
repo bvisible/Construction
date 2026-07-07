@@ -1,5 +1,5 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
-"""‌⁠‍Status-banding thresholds for the controls spine.
+"""Status-banding thresholds for the controls spine.
 
 Region-neutral defaults. A threshold entry carries an ``amber`` and ``red``
 boundary plus a ``direction`` telling the bander whether higher or lower is

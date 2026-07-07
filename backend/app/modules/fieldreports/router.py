@@ -1,4 +1,4 @@
-"""‌⁠‍Field Reports API routes.
+"""Field Reports API routes.
 
 Endpoints:
     POST   /reports                        - Create field report
@@ -63,7 +63,7 @@ def _get_template_service(session: SessionDep) -> FieldReportTemplateService:
 
 
 def _report_to_response(report: object) -> FieldReportResponse:
-    """‌⁠‍Build a FieldReportResponse from a FieldReport ORM object."""
+    """Build a FieldReportResponse from a FieldReport ORM object."""
     return FieldReportResponse(
         id=report.id,  # type: ignore[attr-defined]
         project_id=report.project_id,  # type: ignore[attr-defined]
@@ -113,7 +113,7 @@ async def get_summary(
     _perm: None = Depends(RequirePermission("fieldreports.read")),
     service: FieldReportService = Depends(_get_service),
 ) -> FieldReportSummary:
-    """‌⁠‍Aggregated field report stats for a project."""
+    """Aggregated field report stats for a project."""
     await verify_project_access(project_id, user_id, session)
     data = await service.get_summary(project_id)
     return FieldReportSummary(**data)
@@ -963,7 +963,22 @@ async def get_linked_documents(
 
     from app.modules.documents.models import Document
 
-    stmt = select(Document).where(Document.id.in_([uuid.UUID(d) for d in doc_ids]))
+    parsed_ids: list[uuid.UUID] = []
+    for d in doc_ids:
+        try:
+            parsed_ids.append(uuid.UUID(str(d)))
+        except (ValueError, AttributeError):
+            continue
+    if not parsed_ids:
+        return []
+
+    # Scope to the report's own project as defense in depth: even a
+    # document_id linked before the write-side guard existed cannot leak
+    # another project's metadata through this endpoint.
+    stmt = select(Document).where(
+        Document.id.in_(parsed_ids),
+        Document.project_id == report.project_id,
+    )
     result = await session.execute(stmt)
     docs = result.scalars().all()
 

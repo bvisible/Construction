@@ -286,6 +286,21 @@ export function AssembliesPage() {
     });
   }, [selected, addToast, queryClient, clearSelection, t]);
 
+  // Single-assembly delete, shared by the card menu and the table row action
+  // so both views expose the same affordance (the table previously had no
+  // per-row delete at all - the only path was bulk-select).
+  const deleteAssembly = useCallback(async (id: string) => {
+    try {
+      await apiDelete(`/v1/assemblies/${id}`);
+      queryClient.invalidateQueries({ queryKey: ['assemblies'] });
+      queryClient.invalidateQueries({ queryKey: ['assemblies-stats'] });
+      queryClient.invalidateQueries({ queryKey: ['assemblies-all-for-banner'] });
+      addToast({ type: 'success', title: t('toasts.assembly_deleted', { defaultValue: 'Assembly deleted' }) });
+    } catch {
+      addToast({ type: 'error', title: t('toasts.delete_failed', { defaultValue: 'Delete failed' }) });
+    }
+  }, [addToast, queryClient, t]);
+
   const handleBulkExport = useCallback(async () => {
     const ids = Array.from(selected);
     if (ids.length === 0) return;
@@ -865,15 +880,7 @@ export function AssembliesPage() {
                       addToast({ type: 'error', title: t('toasts.duplicate_failed', { defaultValue: 'Duplicate failed' }) });
                     }
                   }}
-                  onDelete={async () => {
-                    try {
-                      await apiDelete(`/v1/assemblies/${assembly.id}`);
-                      queryClient.invalidateQueries({ queryKey: ['assemblies'] });
-                      addToast({ type: 'success', title: t('toasts.assembly_deleted', { defaultValue: 'Assembly deleted' }) });
-                    } catch {
-                      addToast({ type: 'error', title: t('toasts.delete_failed', { defaultValue: 'Delete failed' }) });
-                    }
-                  }}
+                  onDelete={() => deleteAssembly(assembly.id)}
                   onExport={async () => {
                     try {
                       const exported = await assembliesApi.exportAssembly(assembly.id);
@@ -901,6 +908,7 @@ export function AssembliesPage() {
               sortDir={sortDir}
               onSort={cycleSortDir}
               onOpen={(id) => navigate(`/assemblies/${id}`)}
+              onDelete={deleteAssembly}
             />
           )}
 
@@ -1099,6 +1107,7 @@ function AssemblyTable({
   sortDir,
   onSort,
   onOpen,
+  onDelete,
 }: {
   items: Assembly[];
   fmt: (n: number) => string;
@@ -1111,8 +1120,12 @@ function AssemblyTable({
   sortDir: SortDir;
   onSort: (k: SortKey) => void;
   onOpen: (id: string) => void;
+  onDelete: (id: string) => void;
 }) {
   const { t } = useTranslation();
+  // Two-step inline confirm for per-row delete (id armed for deletion). Keeps
+  // the table compact while still guarding against an accidental click.
+  const [confirmId, setConfirmId] = useState<string | null>(null);
   const headerCellBase =
     'px-3 py-2 text-left text-xs font-medium text-content-secondary select-none';
   const sortBtn = (key: SortKey, label: string, align: 'left' | 'right' | 'center' = 'left') => (
@@ -1147,6 +1160,9 @@ function AssemblyTable({
               <th className={`${headerCellBase} text-right`}>{sortBtn('component_count', t('assemblies.col_components', { defaultValue: 'Components' }), 'right')}</th>
               <th className={`${headerCellBase} text-right`}>{sortBtn('usage_count', t('assemblies.col_usage', { defaultValue: 'Used in BOQ' }), 'right')}</th>
               <th className={headerCellBase}>{sortBtn('updated_at', t('assemblies.col_updated', { defaultValue: 'Updated' }))}</th>
+              <th className={`${headerCellBase} w-24 text-right`}>
+                <span className="sr-only">{t('common.actions', { defaultValue: 'Actions' })}</span>
+              </th>
             </tr>
           </thead>
           <tbody className="divide-y divide-border-light">
@@ -1196,6 +1212,39 @@ function AssemblyTable({
                   </td>
                   <td className="px-3 py-2 align-middle text-xs text-content-tertiary whitespace-nowrap">
                     {new Date(a.updated_at).toLocaleDateString(getIntlLocale())}
+                  </td>
+                  <td className="px-3 py-2 align-middle text-right" onClick={(e) => e.stopPropagation()}>
+                    {confirmId === a.id ? (
+                      <span className="inline-flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => { setConfirmId(null); onDelete(a.id); }}
+                          className="rounded-md px-2 py-1 text-xs font-medium text-white bg-red-500 hover:bg-red-600 transition-colors"
+                        >
+                          {t('common.delete', { defaultValue: 'Delete' })}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setConfirmId(null)}
+                          className="rounded-md px-2 py-1 text-xs font-medium text-content-secondary hover:bg-surface-secondary transition-colors"
+                        >
+                          {t('common.cancel', { defaultValue: 'Cancel' })}
+                        </button>
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setConfirmId(a.id)}
+                        className="opacity-0 group-hover:opacity-100 focus:opacity-100 inline-flex h-7 w-7 items-center justify-center rounded-md text-content-tertiary hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-900/20 transition-all"
+                        title={t('assemblies.delete_confirm', { defaultValue: 'Delete assembly?' })}
+                        aria-label={t('a11y.assemblies.delete_row', {
+                          defaultValue: 'Delete assembly {{name}}',
+                          name: a.name,
+                        })}
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    )}
                   </td>
                 </tr>
               );
@@ -1777,7 +1826,10 @@ function AssemblyCard({
             <button
               type="button"
               onClick={(e) => { e.stopPropagation(); setMenuOpen(!menuOpen); }}
-              className="opacity-0 group-hover:opacity-100 flex h-6 w-6 items-center justify-center rounded-md text-content-tertiary hover:bg-surface-secondary hover:text-content-primary transition-all"
+              /* Always visible (not hover-only) so the delete/duplicate/export
+                 actions are discoverable on touch and for users who do not
+                 hover - the menu is the only place card-view delete lives. */
+              className="opacity-60 group-hover:opacity-100 flex h-6 w-6 items-center justify-center rounded-md text-content-tertiary hover:bg-surface-secondary hover:text-content-primary transition-all"
               aria-label={t('a11y.assemblies.card_actions', {
                 defaultValue: 'Actions for assembly {{name}}',
                 name: assembly.name,

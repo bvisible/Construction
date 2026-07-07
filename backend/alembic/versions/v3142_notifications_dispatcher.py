@@ -76,7 +76,7 @@ def upgrade() -> None:
             "active",
             sa.Boolean(),
             nullable=False,
-            server_default=sa.text("1"),
+            server_default=sa.text("1") if bind.dialect.name == "sqlite" else sa.text("true"),
         ),
         sa.Column("last_status", sa.Integer(), nullable=True),
         sa.Column("last_attempt_at", sa.DateTime(timezone=True), nullable=True),

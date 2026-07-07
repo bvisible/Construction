@@ -281,6 +281,114 @@ class PayrollService:
             rows.append(row)
         return rows
 
+    async def _collect_field_timesheet_hours(
+        self,
+        project_id: uuid.UUID,
+        *,
+        date_from: str | None,
+        date_to: str | None,
+    ) -> list[dict]:
+        """Collect approved field-timesheet labour hours for the project.
+
+        An approved field timesheet (see the field_time module) is the
+        authoritative record of who worked and for how long, coded to the BOQ.
+        Only labour lines (those carrying a ``resource_id``) feed payroll; plant
+        lines are equipment cost, not wages. Reversals are excluded and a
+        reversed original flips to status ``reversed`` (so no longer
+        ``approved``), which nets a reversed pair to zero here without any
+        negative-hour handling.
+
+        Best-effort: if the field_time module is not loaded (or the table is
+        missing) this returns an empty list, so payroll behaves exactly as
+        before on a project that has no field timesheets.
+        """
+        try:
+            from app.modules.field_time.models import FieldTimesheet, FieldTimesheetLine
+            from app.modules.resources.models import Resource
+        except Exception:
+            return []
+
+        stmt = (
+            select(
+                FieldTimesheetLine.resource_id,
+                FieldTimesheetLine.hours,
+                FieldTimesheet.date,
+                Resource.name,
+            )
+            .select_from(FieldTimesheetLine)
+            .join(FieldTimesheet, FieldTimesheetLine.timesheet_id == FieldTimesheet.id)
+            .join(Resource, FieldTimesheetLine.resource_id == Resource.id, isouter=True)
+            .where(
+                FieldTimesheet.project_id == project_id,
+                FieldTimesheet.status == _STATUS_APPROVED,
+                FieldTimesheet.reverses_id.is_(None),
+                FieldTimesheetLine.resource_id.isnot(None),
+            )
+        )
+        df = _coerce_date(date_from)
+        dt = _coerce_date(date_to)
+        if df is not None:
+            stmt = stmt.where(FieldTimesheet.date >= df)
+        if dt is not None:
+            stmt = stmt.where(FieldTimesheet.date <= dt)
+
+        try:
+            result = await self.session.execute(stmt)
+        except Exception:
+            logger.debug("Field-timesheet hours unavailable for project=%s", project_id)
+            return []
+
+        rows: list[dict] = []
+        for resource_id, hours, work_date, resource_name in result.all():
+            worked = _to_decimal(hours)
+            if worked <= 0:
+                continue
+            rows.append(
+                {
+                    "worker_type": (resource_name or "labour"),
+                    "work_date": str(work_date) if work_date is not None else None,
+                    "hours": worked,
+                    "headcount": 1,
+                    "resource_id": str(resource_id),
+                    "source": "field_timesheet",
+                }
+            )
+        return rows
+
+    async def _collect_all_labour_sources(
+        self,
+        project_id: uuid.UUID,
+        *,
+        date_from: str | None,
+        date_to: str | None,
+    ) -> list[dict]:
+        """Collect every field-labour source, preferring approved timesheets.
+
+        Field reports and the field diary are the historic sources; approved
+        field timesheets are authoritative where present. To avoid double
+        counting the same person-day, any field-report / diary row whose
+        ``(resource_id, date)`` is already covered by an approved timesheet is
+        dropped in favour of the timesheet row. Rows without a ``resource_id``
+        (headcount-only labour) are a different granularity and are always kept.
+
+        When there are no field timesheets the result is byte-for-byte identical
+        to the previous ``workforce + diary`` collection (order preserved).
+        """
+        workforce = await self._collect_workforce_logs(project_id, date_from=date_from, date_to=date_to)
+        diary = await self._collect_diary_hours(project_id, date_from=date_from, date_to=date_to)
+        timesheets = await self._collect_field_timesheet_hours(project_id, date_from=date_from, date_to=date_to)
+        if not timesheets:
+            return workforce + diary
+
+        covered = {(row["resource_id"], row.get("work_date")) for row in timesheets if row.get("resource_id")}
+        kept: list[dict] = []
+        for row in workforce + diary:
+            resource_id = row.get("resource_id")
+            if resource_id and (str(resource_id), row.get("work_date")) in covered:
+                continue
+            kept.append(row)
+        return kept + timesheets
+
     # ── Aggregation core ────────────────────────────────────────────────────
 
     async def _aggregate(
@@ -352,8 +460,7 @@ class PayrollService:
         Raises 404 when there is no labour to aggregate so the caller gets a
         clear signal rather than an empty zero-total batch.
         """
-        source_rows = await self._collect_workforce_logs(project_id, date_from=date_from, date_to=date_to)
-        source_rows += await self._collect_diary_hours(project_id, date_from=date_from, date_to=date_to)
+        source_rows = await self._collect_all_labour_sources(project_id, date_from=date_from, date_to=date_to)
 
         agg_rows, base, fx = await self._aggregate(project_id, source_rows)
         if not agg_rows:
@@ -900,10 +1007,7 @@ class PayrollService:
 
         # Live source hours, keyed the same way the generator keys entries:
         # resource_id when present, else worker_type label, paired with date.
-        source_rows = await self._collect_workforce_logs(
-            batch.project_id, date_from=batch.period_start, date_to=batch.period_end
-        )
-        source_rows += await self._collect_diary_hours(
+        source_rows = await self._collect_all_labour_sources(
             batch.project_id, date_from=batch.period_start, date_to=batch.period_end
         )
         agg_rows, _base, _fx = await self._aggregate(batch.project_id, source_rows)
@@ -1000,8 +1104,7 @@ class PayrollService:
         A read-only mirror of the generation math - lets the UI show a
         "Labour cost" figure without persisting a batch.
         """
-        source_rows = await self._collect_workforce_logs(project_id, date_from=date_from, date_to=date_to)
-        source_rows += await self._collect_diary_hours(project_id, date_from=date_from, date_to=date_to)
+        source_rows = await self._collect_all_labour_sources(project_id, date_from=date_from, date_to=date_to)
         agg_rows, base, fx = await self._aggregate(project_id, source_rows)
 
         total_hours = Decimal("0")

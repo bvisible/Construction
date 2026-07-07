@@ -294,6 +294,20 @@ export interface BIMViewerProps {
    * material so toggling the prop back to ``null`` restores the model
    * exactly.  See {@link applySmartView} / {@link revertSmartView}. */
   smartViewEvalResult?: SmartViewEvalResult | null;
+  /**
+   * View-only mode - used by the client portal's shared-model viewer.
+   * When true: the Measure, Section box / clipping and Walk-mode tools are
+   * never constructed (no toolbar buttons, no keyboard shortcuts), the
+   * right-click context menu shows no authoring actions, and every
+   * authoring callback (`onAddToBOQ`, `onUnlinkBOQ`, `onCreateTask`,
+   * `onLinkDocument`, `onLinkActivity`, `onLinkRequirement`,
+   * `onSmartFilter`) is treated as absent so the properties panel renders
+   * strictly read-only. Camera presets, Fit, zoom-to-selection, screenshot,
+   * wireframe, grid, ghost-non-selected and element selection all keep
+   * working normally. Defaults to `false` so every existing caller is
+   * unaffected.
+   */
+  readOnly?: boolean;
 }
 
 /* ── Properties Table ──────────────────────────────────────────────────── */
@@ -669,7 +683,23 @@ export function BIMViewer({
   clashHighlightIds = null,
   focusPoint = null,
   smartViewEvalResult = null,
+  readOnly = false,
 }: BIMViewerProps) {
+  // View-only mode (portal shared-model viewer): every authoring callback is
+  // treated as absent so the properties panel and context menu render their
+  // already-existing "no callback supplied" branches (see the `onAddToBOQ &&`
+  // / `onLinkDocument ? ... : undefined` style guards throughout this file).
+  // Measure/Section/Walk tools are skipped entirely further down where the
+  // scene is constructed.
+  if (readOnly) {
+    onAddToBOQ = undefined;
+    onUnlinkBOQ = undefined;
+    onCreateTask = undefined;
+    onLinkDocument = undefined;
+    onLinkActivity = undefined;
+    onLinkRequirement = undefined;
+    onSmartFilter = undefined;
+  }
   const { t } = useTranslation();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const sceneRef = useRef<SceneManager | null>(null);
@@ -1171,103 +1201,117 @@ export function BIMViewer({
     });
     selectionMgrRef.current = selectionMgr;
 
-    const measureMgr = new MeasureManager(scene, elementMgr, {
-      onMeasurementsChanged: (count) => setMeasureCount(count),
-      onMeasurementAdded: (m) => {
-        // Mirror the new measurement into the Tools-panel store so the user
-        // can manage it (rename / hide / delete) after they leave measure
-        // mode. RFC 19 §UX-10. Carries kind/value/perimeter so the list can
-        // show m / m² / ° correctly (not just metres).
-        useBIMMeasurementsStore.getState().add({
-          id: m.id,
-          kind: m.kind,
-          distance: m.distance,
-          value: m.value,
-          perimeter: m.perimeter,
-        });
-      },
-      onMiss: () => {
-        useToastStore.getState().addToast({
-          type: 'info',
-          title: t('bim.measure_miss_title', { defaultValue: 'Click missed the model' }),
-          message: t('bim.measure_miss_msg', {
-            defaultValue: 'Click directly on an element to place a measurement point.',
-          }),
-        });
-      },
-    });
-    measureMgrRef.current = measureMgr;
+    // Measure / Section box / Walk mode are authoring-adjacent tools with no
+    // place in the view-only portal viewer - skip constructing them entirely
+    // when `readOnly` is set so their toolbar buttons (gated on the refs
+    // below being non-null) and keyboard shortcuts never appear.
+    let measureMgr: MeasureManager | null = null;
+    let clipMgr: ClipManager | null = null;
+    let sectionBox: SectionBox | null = null;
+    let walkModeHelper: WalkMode | null = null;
+    let measureToolHelper: MeasureTool | null = null;
+    let unsubWalkLock: (() => void) | null = null;
 
-    const clipMgr = new ClipManager(scene);
-    // W6.6 Stream A "Section Stamp" — make sure the hatched cap renders on
-    // every section cut by default. The flag is on by default in the
-    // manager itself; we re-affirm here so this call site is the single
-    // source of truth in case the default ever flips.
-    clipMgr.setCapEnabled(true);
-    clipMgrRef.current = clipMgr;
+    if (!readOnly) {
+      measureMgr = new MeasureManager(scene, elementMgr, {
+        onMeasurementsChanged: (count) => setMeasureCount(count),
+        onMeasurementAdded: (m) => {
+          // Mirror the new measurement into the Tools-panel store so the user
+          // can manage it (rename / hide / delete) after they leave measure
+          // mode. RFC 19 §UX-10. Carries kind/value/perimeter so the list can
+          // show m / m² / ° correctly (not just metres).
+          useBIMMeasurementsStore.getState().add({
+            id: m.id,
+            kind: m.kind,
+            distance: m.distance,
+            value: m.value,
+            perimeter: m.perimeter,
+          });
+        },
+        onMiss: () => {
+          useToastStore.getState().addToast({
+            type: 'info',
+            title: t('bim.measure_miss_title', { defaultValue: 'Click missed the model' }),
+            message: t('bim.measure_miss_msg', {
+              defaultValue: 'Click directly on an element to place a measurement point.',
+            }),
+          });
+        },
+      });
+      measureMgrRef.current = measureMgr;
 
-    // ── Additive viewer tools (Slice: Section Box / Walk / Measure) ──
-    // These are independent of the existing ClipManager/MeasureManager —
-    // they're surfaced through the floating `ViewerToolbar` overlay and
-    // intended as BIM-coordination-tool-style affordances. Mutual exclusion (only one
-    // active at a time) is enforced by the toolbar; the helpers themselves
-    // only operate on the shared Three.js scene/camera/renderer.
-    const sectionBox = new SectionBox({
-      scene: scene.scene,
-      camera: scene.camera,
-      renderer: scene.renderer,
-      // SceneManager renders on-demand. SectionBox mutates material
-      // clippingPlanes + the renderer.localClippingEnabled flag, but no
-      // existing event invalidates the frame — without this hook the
-      // clip would only become visible the next time the user happened
-      // to move the camera.
-      onChange: () => scene.requestRender(),
-    });
-    const walkModeHelper = new WalkMode({
-      camera: scene.camera,
-      renderer: scene.renderer,
-      domElement: canvas,
-      orbitControls: scene.controls,
-      // Drag-to-look is the DEFAULT: the OS cursor stays visible and the
-      // browser never shows its "site has taken control of your cursor"
-      // banner (pdf07). The user holds the primary mouse button and drags
-      // to look. Pointer-lock FPS mode stays available behind
-      // ``lockCursor: true`` but is not the default.
-      lockCursor: false,
-      // OrbitControls is disabled while walk mode is active, so its
-      // `change` listener (the only thing that normally invalidates the
-      // on-demand render loop) never fires. WalkMode pings us every
-      // frame the camera moved or (in FPS mode) the cursor is pointer-locked.
-      onChange: () => scene.requestRender(),
-      // Pointer-lock lost unexpectedly (alt-tab / browser Esc) while still
-      // in walk mode → gracefully fall back to orbit so the user is never
-      // stranded without a cursor AND without camera control. Mirrors the
-      // explicit toolbar/Esc teardown below.
-      onExitRequest: () => {
-        walkModeHelper.disable();
-        scene.controls.enabled = true;
-        setWalkActive(false);
-        scene.requestRender();
-      },
-    });
-    const measureToolHelper = new MeasureTool({
-      scene: scene.scene,
-      camera: scene.camera,
-      renderer: scene.renderer,
-      domElement: canvas,
-    });
-    sectionBoxRef.current = sectionBox;
-    walkModeRef.current = walkModeHelper;
-    measureToolRef.current = measureToolHelper;
-    // Drive the on-screen Walk chrome from the actual lock state. In FPS
-    // (pointer-lock) mode this tracks the captured cursor; in the default
-    // drag-to-look mode the helper also flips this true while a look-drag is
-    // in progress. The crosshair is gated on FPS mode (below) so it never
-    // appears in drag mode regardless.
-    const unsubWalkLock = walkModeHelper.onLockChange((locked) => {
-      setWalkLocked(locked);
-      setWalkPointerLockMode(walkModeHelper.isPointerLockMode());
-    });
+      clipMgr = new ClipManager(scene);
+      // W6.6 Stream A "Section Stamp" — make sure the hatched cap renders on
+      // every section cut by default. The flag is on by default in the
+      // manager itself; we re-affirm here so this call site is the single
+      // source of truth in case the default ever flips.
+      clipMgr.setCapEnabled(true);
+      clipMgrRef.current = clipMgr;
+
+      // ── Additive viewer tools (Slice: Section Box / Walk / Measure) ──
+      // These are independent of the existing ClipManager/MeasureManager —
+      // they're surfaced through the floating `ViewerToolbar` overlay and
+      // intended as BIM-coordination-tool-style affordances. Mutual exclusion (only one
+      // active at a time) is enforced by the toolbar; the helpers themselves
+      // only operate on the shared Three.js scene/camera/renderer.
+      sectionBox = new SectionBox({
+        scene: scene.scene,
+        camera: scene.camera,
+        renderer: scene.renderer,
+        // SceneManager renders on-demand. SectionBox mutates material
+        // clippingPlanes + the renderer.localClippingEnabled flag, but no
+        // existing event invalidates the frame — without this hook the
+        // clip would only become visible the next time the user happened
+        // to move the camera.
+        onChange: () => scene.requestRender(),
+      });
+      walkModeHelper = new WalkMode({
+        camera: scene.camera,
+        renderer: scene.renderer,
+        domElement: canvas,
+        orbitControls: scene.controls,
+        // Drag-to-look is the DEFAULT: the OS cursor stays visible and the
+        // browser never shows its "site has taken control of your cursor"
+        // banner (pdf07). The user holds the primary mouse button and drags
+        // to look. Pointer-lock FPS mode stays available behind
+        // ``lockCursor: true`` but is not the default.
+        lockCursor: false,
+        // OrbitControls is disabled while walk mode is active, so its
+        // `change` listener (the only thing that normally invalidates the
+        // on-demand render loop) never fires. WalkMode pings us every
+        // frame the camera moved or (in FPS mode) the cursor is pointer-locked.
+        onChange: () => scene.requestRender(),
+        // Pointer-lock lost unexpectedly (alt-tab / browser Esc) while still
+        // in walk mode → gracefully fall back to orbit so the user is never
+        // stranded without a cursor AND without camera control. Mirrors the
+        // explicit toolbar/Esc teardown below.
+        onExitRequest: () => {
+          walkModeHelper?.disable();
+          scene.controls.enabled = true;
+          setWalkActive(false);
+          scene.requestRender();
+        },
+      });
+      measureToolHelper = new MeasureTool({
+        scene: scene.scene,
+        camera: scene.camera,
+        renderer: scene.renderer,
+        domElement: canvas,
+      });
+      sectionBoxRef.current = sectionBox;
+      walkModeRef.current = walkModeHelper;
+      measureToolRef.current = measureToolHelper;
+      // Drive the on-screen Walk chrome from the actual lock state. In FPS
+      // (pointer-lock) mode this tracks the captured cursor; in the default
+      // drag-to-look mode the helper also flips this true while a look-drag is
+      // in progress. The crosshair is gated on FPS mode (below) so it never
+      // appears in drag mode regardless.
+      const walkHelperForLockChange = walkModeHelper;
+      unsubWalkLock = walkModeHelper.onLockChange((locked) => {
+        setWalkLocked(locked);
+        setWalkPointerLockMode(walkHelperForLockChange.isPointerLockMode());
+      });
+    }
     setViewerToolsReady(true);
 
     // Track mouse position for hover tooltip
@@ -1285,14 +1329,14 @@ export function BIMViewer({
     return () => {
       canvas.removeEventListener('mousemove', handleMouseMoveForTooltip);
       unsubscribeHiddenCount();
-      unsubWalkLock();
-      clipMgr.dispose();
-      measureMgr.dispose();
+      unsubWalkLock?.();
+      clipMgr?.dispose();
+      measureMgr?.dispose();
       // Dispose the additive viewer-tools slice helpers BEFORE the scene
       // itself so they can detach their overlays from a still-live scene.
-      sectionBox.dispose();
-      walkModeHelper.dispose();
-      measureToolHelper.dispose();
+      sectionBox?.dispose();
+      walkModeHelper?.dispose();
+      measureToolHelper?.dispose();
       selectionMgr.dispose();
       elementMgr.dispose();
       scene.dispose();
@@ -2643,7 +2687,8 @@ export function BIMViewer({
           sceneRef.current?.zoomToFit();
           break;
         case 'm':
-          // Toggle measure tool (RFC 19 §4.4).
+          // Toggle measure tool (RFC 19 §4.4). Not available in read-only mode.
+          if (readOnly) break;
           e.preventDefault();
           setMeasureActive(!useBIMViewerStore.getState().measureActive);
           break;
@@ -2729,7 +2774,7 @@ export function BIMViewer({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onElementSelect, showShortcuts, contextMenu, isIsolated, handleSelectionHide, handleSelectionIsolate, handleShowAll]);
+  }, [onElementSelect, showShortcuts, contextMenu, isIsolated, handleSelectionHide, handleSelectionIsolate, handleShowAll, readOnly]);
 
   // Memoize the element properties/quantities for the panel
   const elementProperties = useMemo(() => {
@@ -3547,24 +3592,28 @@ export function BIMViewer({
           active={boxesVisible}
           variant="group"
         />
-        <div className="w-px h-5 bg-border-light mx-1.5" />
-        <ToolbarButton
-          icon={Ruler}
-          label={t('bim.measure_toggle', { defaultValue: 'Measure distance (M)' })}
-          onClick={() => setMeasureActive(!measureActive)}
-          active={measureActive}
-          variant="group"
-        />
-        <ToolbarButton
-          icon={Scissors}
-          label={t('bim.clip_toggle', {
-            defaultValue: 'Section box / clipping plane',
-          })}
-          onClick={() => setClipPanelOpen(!clipPanelOpen)}
-          active={clipMode !== 'none' || clipPanelOpen}
-          variant="group"
-          testId="bim-clip-toggle"
-        />
+        {!readOnly && (
+          <>
+            <div className="w-px h-5 bg-border-light mx-1.5" />
+            <ToolbarButton
+              icon={Ruler}
+              label={t('bim.measure_toggle', { defaultValue: 'Measure distance (M)' })}
+              onClick={() => setMeasureActive(!measureActive)}
+              active={measureActive}
+              variant="group"
+            />
+            <ToolbarButton
+              icon={Scissors}
+              label={t('bim.clip_toggle', {
+                defaultValue: 'Section box / clipping plane',
+              })}
+              onClick={() => setClipPanelOpen(!clipPanelOpen)}
+              active={clipMode !== 'none' || clipPanelOpen}
+              variant="group"
+              testId="bim-clip-toggle"
+            />
+          </>
+        )}
         {/* Begehung / walk-mode toggle — moved up from the previous
             bottom-left ``ViewerToolbar`` cluster (2026-05-28) so all
             view controls live in one row. ``WalkMode.enable()`` throws

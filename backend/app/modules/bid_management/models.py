@@ -1,4 +1,4 @@
-"""‌⁠‍Bid Management ORM models.
+"""Bid Management ORM models.
 
 Tables:
     oe_bid_management_package           - bid packages (formal RFx)
@@ -29,7 +29,7 @@ from app.database import GUID, Base
 
 
 class BidPackage(Base):
-    """‌⁠‍A formal bid package (RFx) belonging to a project."""
+    """A formal bid package (RFx) belonging to a project."""
 
     __tablename__ = "oe_bid_management_package"
 
@@ -101,7 +101,7 @@ class BidPackage(Base):
 
 
 class BidPackageLineItem(Base):
-    """‌⁠‍A single line of scope inside a bid package."""
+    """A single line of scope inside a bid package."""
 
     __tablename__ = "oe_bid_management_line_item"
 

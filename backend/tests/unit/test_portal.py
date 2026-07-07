@@ -395,18 +395,38 @@ async def test_consume_magic_link_success() -> None:
             email="carl@example.com",
             role="consultant",
         )
-        user2, sess, session_plain, sess_expires = await svc.consume_magic_link(
-            plain,
-        )
+        user2, sess, session_plain, sess_expires, redirect_path = await svc.consume_magic_link(plain)
     assert user2.id == user.id
     assert sess.portal_user_id == user.id
     assert len(session_plain) == 64
     assert sess_expires > now_utc()
+    # No redirect_path was set on this invite, so the consume returns None
+    # (the landing page then falls back to its default view).
+    assert redirect_path is None
     # User flips invited → active.
     assert user2.status == "active"
     # Magic link is now consumed.
     link = list(svc.magic_repo.rows.values())[0]
     assert link.consumed_at is not None
+
+
+@pytest.mark.asyncio
+async def test_consume_magic_link_returns_redirect_path() -> None:
+    """The inviter-chosen redirect_path round-trips through consume.
+
+    Activates the end-to-end deep-link: an invite carrying a redirect_path
+    must surface it from ``consume_magic_link`` so the portal landing page can
+    navigate the client / partner straight to the page meant for them.
+    """
+    svc = _make_service()
+    with _patch_bus():
+        _, plain, _ = await svc.invite_portal_user(
+            email="redir@example.com",
+            role="client",
+            redirect_path="/projects/abc/progress-reports",
+        )
+        _, _, _, _, redirect_path = await svc.consume_magic_link(plain)
+    assert redirect_path == "/projects/abc/progress-reports"
 
 
 @pytest.mark.asyncio
@@ -480,7 +500,7 @@ async def test_verify_session_valid_and_touches_last_seen() -> None:
             email="gina@example.com",
             role="client",
         )
-        _, sess, session_plain, _ = await svc.consume_magic_link(plain)
+        _, sess, session_plain, _, _ = await svc.consume_magic_link(plain)
 
     user = await svc.verify_session(session_plain)
     assert user is not None
@@ -497,7 +517,7 @@ async def test_verify_session_revoked_returns_none() -> None:
             email="hank@example.com",
             role="client",
         )
-        _, sess, session_plain, _ = await svc.consume_magic_link(plain)
+        _, sess, session_plain, _, _ = await svc.consume_magic_link(plain)
 
     ok = await svc.revoke_session(session_plain)
     assert ok is True
@@ -512,7 +532,7 @@ async def test_verify_session_expired_returns_none() -> None:
             email="iris@example.com",
             role="client",
         )
-        _, sess, session_plain, _ = await svc.consume_magic_link(plain)
+        _, sess, session_plain, _, _ = await svc.consume_magic_link(plain)
     # Force expiry on the only session.
     sess_row = list(svc.session_repo.rows.values())[0]
     sess_row.expires_at = now_utc() - timedelta(seconds=1)
@@ -533,12 +553,12 @@ async def test_revoke_all_for_user() -> None:
             email="jane@example.com",
             role="client",
         )
-        _, sess1, p1, _ = await svc.consume_magic_link(plain)
+        _, sess1, p1, _, _ = await svc.consume_magic_link(plain)
         _, plain2, _ = await svc.invite_portal_user(
             email="jane@example.com",
             role="client",
         )
-        _, sess2, p2, _ = await svc.consume_magic_link(plain2)
+        _, sess2, p2, _, _ = await svc.consume_magic_link(plain2)
 
     n = await svc.revoke_all_for_user(sess1.portal_user_id)
     assert n == 2

@@ -143,9 +143,30 @@ describe('measurementLabel - metric reproduces the stored format', () => {
     );
   });
 
-  it('count / annotation keeps the stored label', () => {
-    const mc = m({ id: 'c', type: 'count', value: 3, unit: 'pcs', label: 'Doors (3)' });
+  it('count shows the annotation plus a live tally of placed points (issue #300)', () => {
+    // The tally lives in points.length, not the static label. Mirrors the
+    // on-canvas / export renderers `${annotation} (${points.length})`.
+    const mc = m({
+      id: 'c',
+      type: 'count',
+      value: 3,
+      unit: 'pcs',
+      annotation: 'Doors',
+      label: 'Element',
+      points: [
+        { x: 0, y: 0 },
+        { x: 10, y: 0 },
+        { x: 20, y: 0 },
+      ],
+    });
     expect(measurementLabel(mc, scale, 'metric')).toBe('Doors (3)');
+    // A count carries no convertible quantity, so imperial is identical.
+    expect(measurementLabel(mc, scale, 'imperial')).toBe('Doors (3)');
+  });
+
+  it('annotation markups keep the stored label', () => {
+    const mk = m({ id: 'k', type: 'cloud', value: 0, unit: '', label: 'Revision A' });
+    expect(measurementLabel(mk, scale, 'metric')).toBe('Revision A');
   });
 });
 

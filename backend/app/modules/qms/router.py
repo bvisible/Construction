@@ -1,4 +1,4 @@
-"""‌⁠‍QMS API routes (mount point: ``/api/v1/qms/``).
+"""QMS API routes (mount point: ``/api/v1/qms/``).
 
 All endpoints require an authenticated user via :func:`get_current_user_payload`.
 Per-project access is enforced via :func:`verify_project_access`.
@@ -153,7 +153,7 @@ async def list_itp_plans(
     _perm: None = Depends(RequirePermission("qms.itp.read")),
     service: QMSService = Depends(_get_service),
 ) -> list[ITPPlanRead]:
-    """‌⁠‍List ITP plans for a project."""
+    """List ITP plans for a project."""
     await verify_project_access(project_id, user_id, session)
     plans, _ = await service.repo.list_itp_plans(
         project_id,
@@ -188,7 +188,7 @@ async def list_itp_items(
     _perm: None = Depends(RequirePermission("qms.itp.read")),
     service: QMSService = Depends(_get_service),
 ) -> list[ITPItemRead]:
-    """‌⁠‍List the control-point items of an ITP plan (IDOR-gated)."""
+    """List the control-point items of an ITP plan (IDOR-gated)."""
     plan = await service.repo.get_itp_plan(plan_id)
     if plan is None:
         raise _not_found("ITP plan not found")
@@ -230,7 +230,7 @@ async def link_itp_item_to_spec(
     _perm: None = Depends(RequirePermission("qms.itp.write")),
     service: QMSService = Depends(_get_service),
 ) -> ITPItemRead:
-    """‌⁠‍Link a control point to its BOQ / drawing / BIM spec + predecessor.
+    """Link a control point to its BOQ / drawing / BIM spec + predecessor.
 
     IDOR-gated by the plan's project; the item is checked to belong to the
     plan so the URL can't cross-link items between plans.
@@ -366,7 +366,7 @@ async def list_inspection_signatures(
     _perm: None = Depends(RequirePermission("qms.inspection.read")),
     service: QMSService = Depends(_get_service),
 ) -> InspectionSignaturesEnvelope:
-    """‌⁠‍List collected signatures and the count required to complete.
+    """List collected signatures and the count required to complete.
 
     The required count is inherited from the linked ITP item so the UI can
     show ``collected/required`` and only enable Complete once satisfied.
@@ -438,7 +438,7 @@ async def get_inspection(
     _perm: None = Depends(RequirePermission("qms.inspection.read")),
     service: QMSService = Depends(_get_service),
 ) -> InspectionRead:
-    """‌⁠‍Fetch one inspection (IDOR-gated by project ownership)."""
+    """Fetch one inspection (IDOR-gated by project ownership)."""
     inspection = await service.repo.get_inspection(inspection_id)
     if inspection is None:
         raise _not_found("Inspection not found")
@@ -459,7 +459,7 @@ async def upload_inspection_attachment(
     _perm: None = Depends(RequirePermission("qms.inspection.write")),
     service: QMSService = Depends(_get_service),
 ) -> dict[str, object]:
-    """‌⁠‍Upload an attachment to an inspection (magic-byte gated).
+    """Upload an attachment to an inspection (magic-byte gated).
 
     The ``Content-Type`` header is fully attacker-controlled - magic-byte
     sniffing is the only thing that decides whether we keep the file. The
@@ -540,7 +540,7 @@ async def attach_inspection_evidence(
     _perm: None = Depends(RequirePermission("qms.inspection.write")),
     service: QMSService = Depends(_get_service),
 ) -> InspectionAttachmentRead:
-    """‌⁠‍Link an already-stored document to an inspection as evidence."""
+    """Link an already-stored document to an inspection as evidence."""
     inspection = await service.repo.get_inspection(inspection_id)
     if inspection is None:
         raise _not_found("Inspection not found")
@@ -572,7 +572,7 @@ async def list_inspection_evidence(
     _perm: None = Depends(RequirePermission("qms.inspection.read")),
     service: QMSService = Depends(_get_service),
 ) -> list[InspectionAttachmentRead]:
-    """‌⁠‍List evidence attachments for an inspection (IDOR-gated)."""
+    """List evidence attachments for an inspection (IDOR-gated)."""
     inspection = await service.repo.get_inspection(inspection_id)
     if inspection is None:
         raise _not_found("Inspection not found")
@@ -592,7 +592,7 @@ async def hold_point_status(
     _perm: None = Depends(RequirePermission("qms.inspection.read")),
     service: QMSService = Depends(_get_service),
 ) -> HoldPointStatus:
-    """‌⁠‍Resolve the predecessor / hold-point gate state for an inspection."""
+    """Resolve the predecessor / hold-point gate state for an inspection."""
     inspection = await service.repo.get_inspection(inspection_id)
     if inspection is None:
         raise _not_found("Inspection not found")
@@ -617,7 +617,7 @@ async def release_hold_point(
     _perm: None = Depends(RequirePermission("qms.inspection.release_hold")),
     service: QMSService = Depends(_get_service),
 ) -> HoldPointReleaseRead:
-    """‌⁠‍Release a passed hold point so dependent work can proceed.
+    """Release a passed hold point so dependent work can proceed.
 
     Requires the dedicated ``qms.inspection.release_hold`` permission
     (MANAGER+); a conflict (already released / wrong status) returns 409.
@@ -656,7 +656,7 @@ async def get_hold_point_release(
     _perm: None = Depends(RequirePermission("qms.inspection.read")),
     service: QMSService = Depends(_get_service),
 ) -> HoldPointReleaseRead:
-    """‌⁠‍Fetch the hold-point release record for an inspection (404 if none)."""
+    """Fetch the hold-point release record for an inspection (404 if none)."""
     inspection = await service.repo.get_inspection(inspection_id)
     if inspection is None:
         raise _not_found("Inspection not found")
@@ -679,7 +679,7 @@ async def itp_item_gate_status(
     _perm: None = Depends(RequirePermission("qms.inspection.read")),
     service: QMSService = Depends(_get_service),
 ) -> dict[str, object]:
-    """‌⁠‍Resolve whether a control point's hold point blocks downstream work.
+    """Resolve whether a control point's hold point blocks downstream work.
 
     Read-only seam other modules (task progression, change-order approval)
     can consult before allowing a gated action. IDOR-gated by the plan's
@@ -770,7 +770,7 @@ async def inspection_compliance_export(
     _perm: None = Depends(RequirePermission("qms.report.read")),
     service: QMSService = Depends(_get_service),
 ) -> object:
-    """‌⁠‍Audit-ready compliance record for one inspection (JSON or CSV).
+    """Audit-ready compliance record for one inspection (JSON or CSV).
 
     Bundles signatures (with non-repudiation context), evidence attachments
     with their SHA-256 integrity hashes, and the hold-point release. IDOR-gated
@@ -803,7 +803,7 @@ async def plan_compliance_export(
     _perm: None = Depends(RequirePermission("qms.report.read")),
     service: QMSService = Depends(_get_service),
 ) -> object:
-    """‌⁠‍Full compliance dossier for an ITP plan (JSON or CSV).
+    """Full compliance dossier for an ITP plan (JSON or CSV).
 
     One record per inspection across every control point in the plan, with
     signatures + evidence integrity hashes + hold-point releases. IDOR-gated
@@ -924,7 +924,7 @@ async def list_ncr_actions(
     _perm: None = Depends(RequirePermission("qms.ncr.read")),
     service: QMSService = Depends(_get_service),
 ) -> list[NCRActionRead]:
-    """‌⁠‍List corrective actions for an NCR (IDOR-gated by project)."""
+    """List corrective actions for an NCR (IDOR-gated by project)."""
     ncr = await service.repo.get_ncr(ncr_id)
     if ncr is None:
         raise _not_found("NCR not found")
@@ -945,7 +945,7 @@ async def verify_ncr_action(
     _perm: None = Depends(RequirePermission("qms.ncr.write")),
     service: QMSService = Depends(_get_service),
 ) -> NCRActionRead:
-    """‌⁠‍Mark a corrective action verified ("done").
+    """Mark a corrective action verified ("done").
 
     When every action on the parent NCR is done the NCR auto-advances to
     ``verifying`` (see :meth:`QMSService.verify_action`), which unlocks the
@@ -1019,7 +1019,7 @@ async def get_ncr(
     _perm: None = Depends(RequirePermission("qms.ncr.read")),
     service: QMSService = Depends(_get_service),
 ) -> NCRRead:
-    """‌⁠‍Fetch one NCR (IDOR-gated by project ownership)."""
+    """Fetch one NCR (IDOR-gated by project ownership)."""
     ncr = await service.repo.get_ncr(ncr_id)
     if ncr is None:
         raise _not_found("NCR not found")
@@ -1039,7 +1039,7 @@ async def upload_ncr_attachment(
     _perm: None = Depends(RequirePermission("qms.ncr.write")),
     service: QMSService = Depends(_get_service),
 ) -> dict[str, object]:
-    """‌⁠‍Upload an attachment to an NCR (magic-byte gated, IDOR-gated)."""
+    """Upload an attachment to an NCR (magic-byte gated, IDOR-gated)."""
     ncr = await service.repo.get_ncr(ncr_id)
     if ncr is None:
         raise _not_found("NCR not found")
@@ -1327,7 +1327,7 @@ async def copq_report(
     _perm: None = Depends(RequirePermission("qms.ncr.read")),
     service: QMSService = Depends(_get_service),
 ) -> COPQReport:
-    """‌⁠‍Cost of Poor Quality report for a project."""
+    """Cost of Poor Quality report for a project."""
     await verify_project_access(project_id, user_id, session)
     data = await service.compute_copq(project_id, currency=currency)
     return COPQReport(**data)
@@ -1569,7 +1569,7 @@ async def create_calibration(
     _perm: None = Depends(RequirePermission("qms.calibration.write")),
     service: QMSService = Depends(_get_service),
 ) -> CalibrationRead:
-    """‌⁠‍Create a calibration certificate.
+    """Create a calibration certificate.
 
     Two flavours:
 

@@ -50,6 +50,8 @@ export function DateDisplay({ value, format = 'date', className }: DateDisplayPr
   }
 
   const locale = getIntlLocale();
+  // A date-only string (YYYY-MM-DD) parses as UTC midnight; see the date case.
+  const isDateOnly = typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value);
 
   let formatted: string;
   try {
@@ -65,7 +67,13 @@ export function DateDisplay({ value, format = 'date', className }: DateDisplayPr
         break;
       case 'date':
       default:
-        formatted = new Intl.DateTimeFormat(locale, DATE_OPTIONS).format(dateObj);
+        // Render date-only values in UTC so the calendar day is not pushed
+        // back a day at negative UTC offsets (e.g. UTC-6). Timestamps keep
+        // local-zone rendering.
+        formatted = new Intl.DateTimeFormat(
+          locale,
+          isDateOnly ? { ...DATE_OPTIONS, timeZone: 'UTC' } : DATE_OPTIONS,
+        ).format(dateObj);
         break;
     }
   } catch {

@@ -1,5 +1,21 @@
 import { describe, it, expect } from 'vitest';
-import { resourceSplitFraction, resourceSplitPct, resourceSplitMoneyTotals } from './columnDefs';
+import { resourceSplitFraction, resourceSplitPct, resourceSplitMoneyTotals, nextResourceSplitMode } from './columnDefs';
+
+/* ── resource-split toolbar tri-state cycle (pill -> columns -> off) ── */
+describe('nextResourceSplitMode', () => {
+  it('cycles pill -> columns -> off -> pill', () => {
+    expect(nextResourceSplitMode('pill')).toBe('columns');
+    expect(nextResourceSplitMode('columns')).toBe('off');
+    expect(nextResourceSplitMode('off')).toBe('pill');
+  });
+
+  it('returns to the start after a full three-click loop', () => {
+    const afterThree = nextResourceSplitMode(
+      nextResourceSplitMode(nextResourceSplitMode('pill')),
+    );
+    expect(afterThree).toBe('pill');
+  });
+});
 
 /* ── resourceSplitPct / resourceSplitFraction ───────────────────────── */
 

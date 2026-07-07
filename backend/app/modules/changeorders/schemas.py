@@ -1,4 +1,4 @@
-"""‌⁠‍Change Order Pydantic schemas - request/response models.
+"""Change Order Pydantic schemas - request/response models.
 
 Defines create, update, and response schemas for change orders and their items.
 Monetary values (cost_impact, cost_delta, quantities, rates) are exposed as
@@ -27,7 +27,7 @@ _MONEY_MAX = Decimal("1e15")
 
 
 def _validate_decimal(v: str, field_name: str = "value") -> str:
-    """‌⁠‍Validate that a string is a valid decimal number (allows negative - CO
+    """Validate that a string is a valid decimal number (allows negative - CO
     cost impacts can be credits)."""
     try:
         d = Decimal(v)
@@ -41,7 +41,7 @@ def _validate_decimal(v: str, field_name: str = "value") -> str:
 
 
 def _validate_non_negative_decimal(v: str, field_name: str = "value") -> str:
-    """‌⁠‍Validate that a string is a valid non-negative decimal number."""
+    """Validate that a string is a valid non-negative decimal number."""
     try:
         d = Decimal(v)
     except (InvalidOperation, ValueError, TypeError) as exc:
@@ -69,7 +69,7 @@ def _decimal_to_str(v: object) -> object:
 
 
 class ChangeOrderCreate(BaseModel):
-    """‌⁠‍Create a new change order."""
+    """Create a new change order."""
 
     model_config = ConfigDict(str_strip_whitespace=True, extra="ignore")
 
@@ -106,7 +106,7 @@ class ChangeOrderCreate(BaseModel):
 
 
 class ChangeOrderUpdate(BaseModel):
-    """‌⁠‍Partial update for a change order.
+    """Partial update for a change order.
 
     Status transitions must go through the dedicated action endpoints
     (``/submit``, ``/approve``, ``/reject``). Sending ``status`` here

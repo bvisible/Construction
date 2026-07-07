@@ -269,19 +269,19 @@ def upgrade() -> None:  # noqa: C901 — flat sequential CREATE TABLEs.
                 "requires_api_key",
                 sa.Boolean(),
                 nullable=False,
-                server_default=sa.text("0"),
+                server_default=sa.text("0") if is_sqlite else sa.text("false"),
             ),
             sa.Column(
                 "default_for_project",
                 sa.Boolean(),
                 nullable=False,
-                server_default=sa.text("0"),
+                server_default=sa.text("0") if is_sqlite else sa.text("false"),
             ),
             sa.Column(
                 "is_visible",
                 sa.Boolean(),
                 nullable=False,
-                server_default=sa.text("1"),
+                server_default=sa.text("1") if is_sqlite else sa.text("true"),
             ),
             sa.Column(
                 "metadata",
@@ -320,7 +320,7 @@ def upgrade() -> None:  # noqa: C901 — flat sequential CREATE TABLEs.
                 "is_default",
                 sa.Boolean(),
                 nullable=False,
-                server_default=sa.text("0"),
+                server_default=sa.text("0") if is_sqlite else sa.text("false"),
             ),
             sa.Column(
                 "metadata",
@@ -442,7 +442,7 @@ def upgrade() -> None:  # noqa: C901 — flat sequential CREATE TABLEs.
                 "is_visible",
                 sa.Boolean(),
                 nullable=False,
-                server_default=sa.text("1"),
+                server_default=sa.text("1") if is_sqlite else sa.text("true"),
             ),
             sa.Column("source_event_id", sa.String(64), nullable=True),
             sa.Column(

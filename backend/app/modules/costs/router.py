@@ -1,4 +1,4 @@
-"""‌⁠‍Cost database API routes.
+"""Cost database API routes.
 
 Endpoints:
     GET  /autocomplete    -- Fast text autocomplete for cost items (public)
@@ -214,7 +214,7 @@ def _resolve_currency(
     *,
     warnings: list[str] | None = None,
 ) -> str:
-    """‌⁠‍Return the catalogue currency, deriving it from region when empty.
+    """Return the catalogue currency, deriving it from region when empty.
 
     The CWICR import historically stored ``currency = ''`` because the source
     parquet doesn't carry the field - every rate is in the region's local
@@ -290,7 +290,7 @@ _BREAKDOWN_KEYS: tuple[str, ...] = ("labor_cost", "material_cost", "equipment_co
 
 
 def _extract_cost_breakdown(metadata: dict[str, Any] | None) -> dict[str, float] | None:
-    """‌⁠‍Pull labor / material / equipment numbers out of CWICR metadata.
+    """Pull labor / material / equipment numbers out of CWICR metadata.
 
     The CWICR ingest stamps these as ``round(value, 2)`` only when the
     source row carries a non-zero figure - so an absent key really means
@@ -568,10 +568,25 @@ async def autocomplete_cost_items(
 )
 async def create_cost_item(
     data: CostItemCreate,
-    _user_id: CurrentUserId,
+    user: CurrentUserPayload,
     service: CostItemService = Depends(_get_service),
+    catalog_service: CostCatalogService = Depends(_get_catalog_service),
 ) -> CostItemResponse:
-    """Create a new cost item."""
+    """Create a new cost item.
+
+    When ``catalog_id`` is set, the caller must own that catalog (or be an
+    admin) - this is the write-side half of the ownership gate already
+    enforced on update/delete (``_enforce_item_catalog_ownership``), closing
+    the gap where any caller holding ``costs.create`` could otherwise add a
+    position into another user's private catalog by guessing its UUID. A
+    non-owner gets a 404 (existence not leaked), matching
+    ``get_owned_catalog``. Items with no ``catalog_id`` keep going into the
+    shared global catalogue as before.
+    """
+    if data.catalog_id is not None:
+        owner_id = _parse_user_uuid((user or {}).get("sub"))
+        is_admin = (user or {}).get("role") == "admin"
+        await catalog_service.get_owned_catalog(data.catalog_id, owner_id=owner_id, is_admin=is_admin)
     item = await service.create_cost_item(data)
     return CostItemResponse.model_validate(item)
 
@@ -581,8 +596,9 @@ async def create_cost_item(
 
 @router.get("/")
 async def search_cost_items(
-    user_id: CurrentUserId = None,  # type: ignore[assignment]
+    user: CurrentUserPayload = None,  # type: ignore[assignment]
     service: CostItemService = Depends(_get_service),
+    catalog_service: CostCatalogService = Depends(_get_catalog_service),
     q: str | None = Query(
         default=None,
         description=(
@@ -682,7 +698,19 @@ async def search_cost_items(
     Backwards compatibility: clients that don't send ``cursor`` continue
     to receive a non-null ``total``. The new fields ``next_cursor`` and
     ``has_more`` are additions to the response shape.
+
+    When ``catalog_id`` is supplied, the caller must own that catalog (or
+    be an admin) - listing is otherwise the one place a private catalog's
+    items were readable by anyone who could guess its UUID, even though the
+    single-item GET/PATCH/DELETE endpoints already scope by ownership. A
+    non-owner gets a 404 (existence not leaked), matching
+    ``get_owned_catalog``.
     """
+    if catalog_id is not None:
+        owner_id = _parse_user_uuid((user or {}).get("sub"))
+        is_admin = (user or {}).get("role") == "admin"
+        await catalog_service.get_owned_catalog(catalog_id, owner_id=owner_id, is_admin=is_admin)
+
     # Merge canonical ``q`` with the silent aliases ``search`` / ``query``.
     # First non-empty wins; explicit ``q`` always takes precedence so a
     # caller that mistakenly sends both ``q=foo&search=bar`` gets ``foo``
@@ -5342,7 +5370,7 @@ async def regional_adjust(
         description="Optional finer slice - falls back to the whole-category row when absent.",
     ),
 ) -> RegionalAdjustResponse:
-    """‌⁠‍Preview the same rate in a different region.
+    """Preview the same rate in a different region.
 
     RSMeans-style city cost index lookup - multiplies ``base_rate`` by
     the most recent ``factor`` on file for ``(region, category)``.
@@ -5376,7 +5404,7 @@ async def list_regional_indices(
     user: OptionalUserPayload,
     region: str = Query(..., min_length=2, max_length=64),
 ) -> list[RegionalIndexResponse]:
-    """‌⁠‍List every cost-index row for ``region``.
+    """List every cost-index row for ``region``.
 
     Used by the Regional Adjust panel to populate the category picker
     and show historical effective dates. Ordered by category then
@@ -5394,7 +5422,7 @@ async def get_cost_item_certainty_batch(
     session: SessionDep,
     user: OptionalUserPayload,
 ) -> list[CertaintyBadge]:
-    """‌⁠‍Return certainty badges for many cost items in a single round-trip.
+    """Return certainty badges for many cost items in a single round-trip.
 
     The list view renders one badge per visible row; fetching them
     individually fires N HTTP requests per page (one per row), which is
@@ -5537,7 +5565,7 @@ async def get_cost_item_certainty(
     session: SessionDep,
     user: OptionalUserPayload,
 ) -> CertaintyBadge:
-    """‌⁠‍Return the green / yellow / red certainty badge for one cost item.
+    """Return the green / yellow / red certainty badge for one cost item.
 
     Aggregates the usage ledger into:
 
@@ -5569,7 +5597,7 @@ async def record_cost_item_usage(
     session: SessionDep,
     user: CurrentUserPayload,
 ) -> dict[str, object]:
-    """‌⁠‍Append one row to the usage ledger.
+    """Append one row to the usage ledger.
 
     Called from the BOQ apply-rate path so the next user of the same
     rate sees an up-to-date certainty badge. Body intentionally small:

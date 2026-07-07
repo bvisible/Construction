@@ -1,4 +1,4 @@
-"""‌⁠‍Seed BOQ sections and markups for demo projects.
+"""Seed BOQ sections and markups for demo projects.
 
 Adds section headers to existing BOQ positions and applies default markups.
 Usage: python -m app.scripts.seed_sections

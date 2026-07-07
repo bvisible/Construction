@@ -1,4 +1,4 @@
-"""‌⁠‍Carbon & Sustainability service - pure carbon-math + orchestration.
+"""Carbon & Sustainability service - pure carbon-math + orchestration.
 
 Pure functions:
     * normalise_quantity_to_factor_unit
@@ -20,23 +20,29 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import uuid
 from datetime import UTC, date, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any, Iterable
 
 from fastapi import HTTPException, status
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.events import event_bus
 from app.core.json_merge import merge_metadata
+from app.modules.bim_hub.models import BIMElement, BIMModel
+from app.modules.carbon import lcc
 from app.modules.carbon.models import (
     CarbonInventory,
     CarbonTarget,
     EmbodiedCarbonEntry,
     EPDRecord,
+    LifeCycleCostEntry,
     MaterialCarbonFactor,
+    OperationalCarbonEntry,
     Scope1Entry,
     Scope2Entry,
     Scope3Entry,
@@ -46,7 +52,9 @@ from app.modules.carbon.repository import (
     EmbodiedEntryRepository,
     EPDRecordRepository,
     InventoryRepository,
+    LifeCycleCostEntryRepository,
     MaterialFactorRepository,
+    OperationalCarbonEntryRepository,
     Scope1EntryRepository,
     Scope2EntryRepository,
     Scope3EntryRepository,
@@ -62,8 +70,10 @@ from app.modules.carbon.schemas import (
     EmbodiedCarbonEntryUpdate,
     EPDRecordCreate,
     EPDRecordUpdate,
+    LifeCycleCostComputeRequest,
     MaterialCarbonFactorCreate,
     MaterialCarbonFactorUpdate,
+    OperationalCarbonComputeRequest,
     Scope1EntryCreate,
     Scope1EntryUpdate,
     Scope2EntryCreate,
@@ -187,7 +197,7 @@ async def ingest_epd_document(
 
 
 class UnitMismatchError(ValueError):
-    """‌⁠‍Raised when two units cannot be converted without extra info."""
+    """Raised when two units cannot be converted without extra info."""
 
 
 # ── Pure helpers ──────────────────────────────────────────────────────────
@@ -229,7 +239,7 @@ _PIECE_ALIASES: dict[str, str] = {
 
 
 def _canon_unit(unit: str | None) -> str:
-    """‌⁠‍Lowercase a unit and resolve common aliases."""
+    """Lowercase a unit and resolve common aliases."""
     if not unit:
         return ""
     u = unit.strip().lower()
@@ -311,14 +321,39 @@ def compute_embodied_entry_carbon(
     factor_unit: str,
     density: Decimal | float | int | None = None,
 ) -> Decimal:
-    """Pure: compute embodied carbon kg = normalised_qty × factor_value."""
+    """Compute embodied carbon in kgCO2e = normalised quantity x factor value.
+
+    The result is always in kgCO2e. ``factor_value`` is the emission factor in
+    kgCO2e per ``factor_unit`` (for example kgCO2e per kg of steel, or kgCO2e
+    per m3 of concrete). The quantity is first converted into ``factor_unit`` so
+    the multiplication is dimensionally correct in any unit system.
+
+    A quantity may be zero (an empty line contributes 0 kgCO2e) but must not be
+    negative, and the emission factor must not be negative: embodied carbon of a
+    real material is never below zero. End-of-life credits (EN 15978 module D)
+    are recorded on their own stage and are not routed through this function.
+
+    Raises:
+        ValueError: quantity or factor value is negative.
+        UnitMismatchError: units are incompatible and no density was supplied.
+    """
+    qty = Decimal(str(quantity))
+    factor = Decimal(str(factor_value))
+    if qty < 0:
+        raise ValueError(
+            f"quantity must not be negative (got {qty}); embodied carbon needs a positive quantity",
+        )
+    if factor < 0:
+        raise ValueError(
+            f"emission factor must not be negative (got {factor}); module D credits use their own stage",
+        )
     normalised = normalise_quantity_to_factor_unit(
         quantity,
         quantity_unit,
         factor_unit,
         density,
     )
-    return normalised * Decimal(str(factor_value))
+    return normalised * factor
 
 
 def compute_scope1_co2e(
@@ -326,21 +361,47 @@ def compute_scope1_co2e(
     fuel_type: str,
     factor: Decimal | float | int | str,
 ) -> Decimal:
-    """Pure: scope-1 emissions = litres × factor.
+    """Compute direct (Scope 1) emissions in kgCO2e = fuel quantity x factor.
 
-    ``fuel_type`` is accepted but the emission factor is the source of
-    truth - the caller is expected to supply the per-fuel factor.
+    ``litres`` is the fuel burned in the reporting period, in litres for liquid
+    fuels or m3 for gases. ``factor`` is the emission factor in kgCO2e per that
+    same unit; the caller supplies the per-fuel factor. ``fuel_type`` is kept for
+    a readable record and future fuel-aware logic. Both inputs must be
+    non-negative; you cannot burn a negative amount of fuel.
+
+    Raises:
+        ValueError: fuel quantity or emission factor is negative.
     """
     _ = fuel_type  # accepted for API symmetry / future fuel-aware logic
-    return Decimal(str(litres)) * Decimal(str(factor))
+    amount = Decimal(str(litres))
+    ef = Decimal(str(factor))
+    if amount < 0:
+        raise ValueError(f"fuel quantity must not be negative (got {amount})")
+    if ef < 0:
+        raise ValueError(f"emission factor must not be negative (got {ef})")
+    return amount * ef
 
 
 def compute_scope2_co2e(
     kwh: Decimal | float | int | str,
     factor: Decimal | float | int | str,
 ) -> Decimal:
-    """Pure: scope-2 emissions = kWh × factor."""
-    return Decimal(str(kwh)) * Decimal(str(factor))
+    """Compute purchased-energy (Scope 2) emissions in kgCO2e = kWh x factor.
+
+    ``kwh`` is the electricity or heat purchased in the period, in kWh. ``factor``
+    is the grid or supplier emission factor in kgCO2e per kWh. Both must be
+    non-negative.
+
+    Raises:
+        ValueError: energy amount or emission factor is negative.
+    """
+    energy = Decimal(str(kwh))
+    ef = Decimal(str(factor))
+    if energy < 0:
+        raise ValueError(f"energy amount must not be negative (got {energy})")
+    if ef < 0:
+        raise ValueError(f"emission factor must not be negative (got {ef})")
+    return energy * ef
 
 
 def match_cost_item_to_epd(
@@ -395,6 +456,238 @@ def match_cost_item_to_epd(
     return None
 
 
+# ── 6D BIM auto-enrichment pure helpers ───────────────────────────────────
+# All DB-free so they are unit-testable without a database. The orchestration
+# (CarbonService.auto_enrich_inventory_from_bim) loads the BIM elements and
+# candidate factors, then leans on these to match, pick a quantity, and
+# compute carbon with Decimal. Confidence follows the AI-augmented /
+# human-confirmed principle: nothing is auto-finalised.
+
+# Property keys a converted BIM element may carry its material under
+# (canonical "material"/"Material", plus a few common variants).
+_BIM_MATERIAL_KEYS: tuple[str, ...] = (
+    "material",
+    "Material",
+    "material_class",
+    "MaterialClass",
+    "material_name",
+)
+# Property keys that may carry a bulk density (kg / m3) for m3 <-> kg.
+_BIM_DENSITY_KEYS: tuple[str, ...] = (
+    "density_kg_per_m3",
+    "density",
+    "bulk_density",
+    "Density",
+)
+# Minimum material-match score below which an element is treated as unmatched.
+_MATCH_MIN_SCORE: float = 0.3
+
+_TOKEN_RE = re.compile(r"[a-z0-9]+")
+
+
+def extract_element_material(properties: dict[str, Any] | None) -> str:
+    """Pure: pull a material name from a BIM element's properties.
+
+    Looks at the canonical ``material`` / ``Material`` keys first, then a few
+    common variants. A layered-material value (dict) falls back to its
+    ``name`` / ``material`` field. Returns ``""`` when no material is present
+    (the caller may then fall back to ``element_type``).
+    """
+    if not isinstance(properties, dict):
+        return ""
+    for key in _BIM_MATERIAL_KEYS:
+        value = properties.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        if isinstance(value, dict):
+            name = value.get("name") or value.get("material")
+            if isinstance(name, str) and name.strip():
+                return name.strip()
+    return ""
+
+
+def _element_density(properties: dict[str, Any] | None) -> Decimal | None:
+    """Pure: read a positive bulk density (kg/m3) from element properties."""
+    if not isinstance(properties, dict):
+        return None
+    for key in _BIM_DENSITY_KEYS:
+        value = properties.get(key)
+        if value is None:
+            continue
+        try:
+            dens = Decimal(str(value))
+        except (InvalidOperation, ValueError, TypeError):
+            continue
+        if dens > 0:
+            return dens
+    return None
+
+
+def _tokens(text: str | None) -> set[str]:
+    """Pure: lowercase alphanumeric tokens (length >= 2) of ``text``."""
+    return {t for t in _TOKEN_RE.findall((text or "").lower()) if len(t) >= 2}
+
+
+def material_match_score(
+    material: str | None,
+    element_type: str | None,
+    candidate_class: str | None,
+) -> float:
+    """Pure: 0.0-1.0 similarity of an element's material to an EPD class.
+
+    Exact (normalised) equality scores 1.0; substring containment 0.85;
+    otherwise a token-overlap fraction (material tokens weighted above
+    element-type tokens). Returns 0.0 when nothing overlaps.
+    """
+    cls = (candidate_class or "").strip().lower()
+    mat = (material or "").strip().lower()
+    if not cls:
+        return 0.0
+    if mat:
+        if mat == cls:
+            return 1.0
+        if cls in mat or mat in cls:
+            return 0.85
+    cls_tokens = _tokens(cls)
+    mat_tokens = _tokens(mat)
+    if cls_tokens and mat_tokens:
+        overlap = len(cls_tokens & mat_tokens)
+        if overlap:
+            return 0.6 * (overlap / min(len(cls_tokens), len(mat_tokens)))
+    type_tokens = _tokens(element_type)
+    if cls_tokens and type_tokens:
+        overlap = len(cls_tokens & type_tokens)
+        if overlap:
+            return 0.45 * (overlap / min(len(cls_tokens), len(type_tokens)))
+    return 0.0
+
+
+def _confidence_for(score: float, region_match: bool, has_region: bool) -> str:
+    """Pure: map a match score + region agreement to a confidence band."""
+    if score >= 0.999:
+        return "high" if (region_match or not has_region) else "medium"
+    if score >= 0.6:
+        return "medium" if (region_match or not has_region) else "low"
+    return "low"
+
+
+def _operational_confidence(energy_source: str) -> str:
+    """Pure: confidence band for a B6 line, from how its energy was resolved.
+
+    Metered/declared energy (asset register or element geometry) is high; a
+    power-rating estimate is medium; a modelled floor-area intensity is low.
+    """
+    if energy_source in ("asset_info", "element"):
+        return "high"
+    if energy_source == "asset_power_rating":
+        return "medium"
+    return "low"
+
+
+def _best_factor_for_element(
+    material: str | None,
+    element_type: str | None,
+    region: str | None,
+    candidates: Iterable[dict[str, Any]],
+) -> tuple[dict[str, Any], str] | None:
+    """Pure: pick the best candidate factor for one BIM element.
+
+    Each candidate is a dict with at least ``material_class`` and ``region``.
+    Selection is by descending material-match score, with a same-region
+    candidate winning ties. Returns ``(candidate, confidence)`` or ``None``
+    when no candidate clears ``_MATCH_MIN_SCORE``.
+    """
+    el_region = (region or "").strip().lower()
+    best: dict[str, Any] | None = None
+    best_score = 0.0
+    best_region_match = False
+    for cand in candidates:
+        cls = cand.get("material_class")
+        if not cls:
+            continue
+        score = material_match_score(material, element_type, cls)
+        if score <= 0:
+            continue
+        cand_region = (cand.get("region") or "").strip().lower()
+        region_match = bool(el_region and cand_region == el_region)
+        is_better = score > best_score + 1e-9 or (
+            abs(score - best_score) <= 1e-9 and region_match and not best_region_match
+        )
+        if best is None or is_better:
+            best = cand
+            best_score = score
+            best_region_match = region_match
+    if best is None or best_score < _MATCH_MIN_SCORE:
+        return None
+    return best, _confidence_for(best_score, best_region_match, bool(el_region))
+
+
+def select_quantity_for_unit(
+    quantities: dict[str, Any] | None,
+    declared_unit: str,
+) -> tuple[Decimal, str] | None:
+    """Pure: pick the canonical SI quantity matching a factor's unit dimension.
+
+    The factor's ``declared_unit`` dictates which quantity to read:
+
+        kg / t / m3  -> volume (returned as m3, converted to mass via density)
+        m2           -> area
+        m            -> length
+        pcs          -> count (defaults to 1 per element)
+
+    Returns ``(quantity, si_unit)`` or ``None`` when no positive quantity of
+    the required dimension is present.
+    """
+    if not isinstance(quantities, dict):
+        return None
+    dst = _canon_unit(declared_unit)
+
+    def _first_positive(keys: tuple[str, ...]) -> Decimal | None:
+        for key in keys:
+            value = quantities.get(key)
+            if value is None:
+                continue
+            try:
+                dec = Decimal(str(value))
+            except (InvalidOperation, ValueError, TypeError):
+                continue
+            if dec > 0:
+                return dec
+        return None
+
+    if dst in ("kg", "t", "m3"):
+        vol = _first_positive(
+            ("net_volume", "volume_m3", "volume", "net_volume_m3", "Volume", "NetVolume"),
+        )
+        return (vol, "m3") if vol is not None else None
+    if dst == "m2":
+        area = _first_positive(("area_m2", "area", "net_area", "Area", "NetArea"))
+        return (area, "m2") if area is not None else None
+    if dst == "m":
+        length = _first_positive(("length_m", "length", "Length"))
+        return (length, "m") if length is not None else None
+    if dst == "pcs":
+        count = _first_positive(("count", "pcs", "pieces", "quantity"))
+        return (count if count is not None else Decimal("1")), "pcs"
+    return None
+
+
+def _carbon_from_quantity(
+    quantity: Decimal | float | int | str,
+    unit: str,
+    factor_value: Decimal | float | int | str,
+    declared_unit: str,
+    density: Decimal | float | int | None = None,
+) -> Decimal:
+    """Pure: kgCO2e for one element.
+
+    Thin wrapper over :func:`compute_embodied_entry_carbon` so the auto-enrich
+    path uses the exact same unit-normalisation + Decimal multiplication that
+    ``assign_boq_position_carbon`` relies on.
+    """
+    return compute_embodied_entry_carbon(quantity, unit, factor_value, declared_unit, density)
+
+
 def _stage_bucket(stage: str) -> str:
     """Map a (possibly granular) EN 15978 stage to a rollup bucket.
 
@@ -434,10 +727,15 @@ def compute_inventory_totals(
     scope1_entries: Iterable[Any] = (),
     scope2_entries: Iterable[Any] = (),
     scope3_entries: Iterable[Any] = (),
+    operational_entries: Iterable[Any] = (),
 ) -> dict[str, Any]:
-    """Pure: roll up A1-A5/B/C/D embodied + scope 1/2/3 operational.
+    """Pure: roll up A1-A5/B/C/D embodied + B6 operational + scope 1/2/3.
 
-    Returns a dict ready to be JSON-serialised into ``CarbonInventory.totals``.
+    ``operational_entries`` are 6D Phase 2 B6 use-phase lines; each carries a
+    study-period ``carbon_kg`` that folds into the EN 15978 B stage (so
+    ``embodied_b`` is the full use stage: embodied B1-B5 plus B6 operational)
+    and into the cradle-to-grave ``total``. The dict is JSON-serialisable into
+    ``CarbonInventory.totals``.
     """
     stage_totals: dict[str, Decimal] = {
         "a1a3": Decimal("0"),
@@ -453,6 +751,13 @@ def compute_inventory_totals(
         bucket = _stage_bucket(raw_stage)
         if bucket in stage_totals:
             stage_totals[bucket] += carbon
+
+    # B6 use-phase operational carbon folds into the B stage total.
+    b6_operational = sum(
+        (Decimal(str(getattr(e, "carbon_kg", 0) or 0)) for e in operational_entries),
+        Decimal("0"),
+    )
+    stage_totals["b"] += b6_operational
 
     a1a5 = stage_totals["a1a3"] + stage_totals["a4"] + stage_totals["a5"]
 
@@ -471,8 +776,26 @@ def compute_inventory_totals(
 
     operational = s1 + s2
     total = a1a5 + stage_totals["b"] + stage_totals["c"] + operational + s3
+    # Plain-language audit trail: exactly which parts add up to the headline
+    # total, all in kgCO2e. This makes the number traceable for a reviewer and
+    # states the one deliberate exclusion (module D benefits are reported apart
+    # from the total, per EN 15978, so a credit cannot flatter the footprint).
+    basis = [
+        "All figures are in kgCO2e (kilograms of CO2 equivalent).",
+        f"Product stage A1-A3 (materials): {stage_totals['a1a3']}",
+        f"Transport to site A4: {stage_totals['a4']}",
+        f"Construction / installation A5: {stage_totals['a5']}",
+        f"Use stage B (embodied B1-B5 plus B6 operational {b6_operational}): {stage_totals['b']}",
+        f"End of life C1-C4: {stage_totals['c']}",
+        f"Scope 1 direct + Scope 2 purchased energy: {operational}",
+        f"Scope 3 value chain: {s3}",
+        f"Total (A1-A5 + B + C + Scope 1/2/3) = {total}",
+        f"Module D benefits beyond the system boundary ({stage_totals['d']}) are reported "
+        "separately and are not included in the total.",
+    ]
     return {
         "inventory_id": str(inventory_id),
+        "unit": "kgCO2e",
         "embodied_a1a3": str(stage_totals["a1a3"]),
         "embodied_a4": str(stage_totals["a4"]),
         "embodied_a5": str(stage_totals["a5"]),
@@ -480,12 +803,14 @@ def compute_inventory_totals(
         "embodied_b": str(stage_totals["b"]),
         "embodied_c": str(stage_totals["c"]),
         "embodied_d": str(stage_totals["d"]),
+        "b6_operational": str(b6_operational),
         "scope1": str(s1),
         "scope2": str(s2),
         "scope3": str(s3),
         "operational": str(operational),
         "end_of_life": str(stage_totals["c"]),
         "total": str(total),
+        "basis": basis,
     }
 
 
@@ -669,6 +994,56 @@ GRID_FACTORS_DEFAULT: dict[tuple[str, int], dict[str, Any]] = {
     ("TR", 2023): {"factor": "0.4380", "method": "location", "source": "IEA 2023"},
     # Japan - IEA
     ("JP", 2023): {"factor": "0.4360", "method": "location", "source": "IEA 2023"},
+    # South Korea - IEA
+    ("KR", 2023): {"factor": "0.4360", "method": "location", "source": "IEA 2023"},
+    # Mexico - IEA
+    ("MX", 2023): {"factor": "0.4230", "method": "location", "source": "IEA 2023"},
+    # Indonesia - IEA
+    ("ID", 2023): {"factor": "0.7600", "method": "location", "source": "IEA 2023"},
+    # Vietnam - IEA
+    ("VN", 2023): {"factor": "0.4750", "method": "location", "source": "IEA 2023"},
+    # Nigeria - IEA
+    ("NG", 2023): {"factor": "0.4400", "method": "location", "source": "IEA 2023"},
+    # Egypt - IEA
+    ("EG", 2023): {"factor": "0.4700", "method": "location", "source": "IEA 2023"},
+    # Argentina - IEA
+    ("AR", 2023): {"factor": "0.3300", "method": "location", "source": "IEA 2023"},
+    # Chile - IEA
+    ("CL", 2023): {"factor": "0.3500", "method": "location", "source": "IEA 2023"},
+    # Switzerland - IEA (hydro / nuclear heavy)
+    ("CH", 2023): {"factor": "0.0300", "method": "location", "source": "IEA 2023"},
+    # Austria - IEA
+    ("AT", 2023): {"factor": "0.1100", "method": "location", "source": "IEA 2023"},
+    # Belgium - IEA
+    ("BE", 2023): {"factor": "0.1700", "method": "location", "source": "IEA 2023"},
+    # Ireland - IEA
+    ("IE", 2023): {"factor": "0.3200", "method": "location", "source": "IEA 2023"},
+    # Portugal - IEA
+    ("PT", 2023): {"factor": "0.1800", "method": "location", "source": "IEA 2023"},
+    # Greece - IEA
+    ("GR", 2023): {"factor": "0.3700", "method": "location", "source": "IEA 2023"},
+    # Denmark - IEA
+    ("DK", 2023): {"factor": "0.1400", "method": "location", "source": "IEA 2023"},
+    # Finland - IEA
+    ("FI", 2023): {"factor": "0.0900", "method": "location", "source": "IEA 2023"},
+    # New Zealand - IEA
+    ("NZ", 2023): {"factor": "0.1000", "method": "location", "source": "IEA 2023"},
+    # Thailand - IEA
+    ("TH", 2023): {"factor": "0.5100", "method": "location", "source": "IEA 2023"},
+    # Malaysia - IEA
+    ("MY", 2023): {"factor": "0.5500", "method": "location", "source": "IEA 2023"},
+}
+
+# Last-resort worldwide average electricity grid carbon intensity
+# (kgCO2e per kWh, location-based). Used only when a project's country is not
+# in the catalogue above, so an operational-carbon estimate anywhere in the
+# world still returns a number, clearly flagged as a low-confidence global
+# default rather than a country-specific figure. Source: IEA global average
+# electricity CO2 intensity, 2023 (about 0.48 kgCO2e/kWh).
+GRID_FACTOR_WORLD_DEFAULT: dict[str, Any] = {
+    "factor": "0.4800",
+    "method": "location",
+    "source": "IEA world average 2023",
 }
 
 
@@ -713,6 +1088,41 @@ def lookup_grid_factor_default(
         "method": best["method"],
         "source": best["source"],
         "fallback": True,
+    }
+
+
+def resolve_grid_factor(
+    country_code: str,
+    year: int,
+    *,
+    allow_world_fallback: bool = True,
+) -> dict[str, Any] | None:
+    """Resolve a grid emission factor for any country, worldwide.
+
+    Tries the catalogued country / year factor first (see
+    :func:`lookup_grid_factor_default`). When the country is not in the
+    catalogue and ``allow_world_fallback`` is true, returns the documented IEA
+    world-average intensity, flagged ``fallback=True`` and ``world_fallback=True``
+    with ``country_code="WORLD"``. This keeps operational-carbon estimates
+    possible for every country while making the low-confidence global default
+    obvious, so a reviewer is never handed a country-specific-looking number
+    that is really a world average. Returns ``None`` only when the country is
+    uncatalogued and the world fallback is switched off.
+    """
+    hit = lookup_grid_factor_default(country_code, year)
+    if hit is not None:
+        return hit
+    if not allow_world_fallback:
+        return None
+    return {
+        "country_code": "WORLD",
+        "requested_country": (country_code or "").strip().upper(),
+        "year": year,
+        "factor_kg_co2e_per_kwh": Decimal(GRID_FACTOR_WORLD_DEFAULT["factor"]),
+        "method": GRID_FACTOR_WORLD_DEFAULT["method"],
+        "source": GRID_FACTOR_WORLD_DEFAULT["source"],
+        "fallback": True,
+        "world_fallback": True,
     }
 
 
@@ -919,6 +1329,8 @@ class CarbonService:
         self.scope1_repo = Scope1EntryRepository(session)
         self.scope2_repo = Scope2EntryRepository(session)
         self.scope3_repo = Scope3EntryRepository(session)
+        self.operational_repo = OperationalCarbonEntryRepository(session)
+        self.lcc_repo = LifeCycleCostEntryRepository(session)
         self.target_repo = TargetRepository(session)
         self.report_repo = SustainabilityReportRepository(session)
 
@@ -1221,7 +1633,8 @@ class CarbonService:
         s1 = await self.scope1_repo.list_for_inventory(inventory_id)
         s2 = await self.scope2_repo.list_for_inventory(inventory_id)
         s3 = await self.scope3_repo.list_for_inventory(inventory_id)
-        return compute_inventory_totals(inventory_id, embodied, s1, s2, s3)
+        operational = await self.operational_repo.list_for_inventory(inventory_id)
+        return compute_inventory_totals(inventory_id, embodied, s1, s2, s3, operational)
 
     # ── Embodied entries ─────────────────────────────────────────────────
     async def create_embodied_entry(
@@ -1344,11 +1757,17 @@ class CarbonService:
     async def create_scope1(self, data: Scope1EntryCreate) -> Scope1Entry:
         payload = data.model_dump(exclude={"metadata"})
         if payload.get("total_co2e_kg") is None:
-            payload["total_co2e_kg"] = compute_scope1_co2e(
-                payload["litres_or_m3"],
-                payload["fuel_type"],
-                payload["emission_factor_kg_co2e_per_unit"],
-            )
+            try:
+                payload["total_co2e_kg"] = compute_scope1_co2e(
+                    payload["litres_or_m3"],
+                    payload["fuel_type"],
+                    payload["emission_factor_kg_co2e_per_unit"],
+                )
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=str(exc),
+                ) from exc
         entry = Scope1Entry(**payload)
         entry.metadata_ = data.metadata
         return await self.scope1_repo.create(entry)
@@ -1395,10 +1814,16 @@ class CarbonService:
     async def create_scope2(self, data: Scope2EntryCreate) -> Scope2Entry:
         payload = data.model_dump(exclude={"metadata"})
         if payload.get("total_co2e_kg") is None:
-            payload["total_co2e_kg"] = compute_scope2_co2e(
-                payload["kwh"],
-                payload["emission_factor_kg_co2e_per_kwh"],
-            )
+            try:
+                payload["total_co2e_kg"] = compute_scope2_co2e(
+                    payload["kwh"],
+                    payload["emission_factor_kg_co2e_per_kwh"],
+                )
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=str(exc),
+                ) from exc
         entry = Scope2Entry(**payload)
         entry.metadata_ = data.metadata
         return await self.scope2_repo.create(entry)
@@ -1886,6 +2311,12 @@ class CarbonService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"unit_mismatch: {exc}",
             ) from exc
+        except ValueError as exc:
+            # Negative quantity / factor caught by compute_embodied_entry_carbon.
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
 
         entry = EmbodiedCarbonEntry(
             inventory_id=inventory_id,
@@ -1897,6 +2328,7 @@ class CarbonService:
             factor_value_used=factor_value,
             carbon_kg=carbon_kg,
             stage=stage_norm,
+            source="boq_derived",
         )
         entry.metadata_ = {
             "boq_position_id": str(boq_position_id),
@@ -1915,6 +2347,819 @@ class CarbonService:
             source_module="carbon",
         )
         return created
+
+    # ── 6D auto-enrichment from BIM (EN 15978 A1-A3) ─────────────────────
+
+    async def _load_project_bim_elements(
+        self,
+        project_id: uuid.UUID,
+        *,
+        model_id: uuid.UUID | None = None,
+    ) -> list[BIMElement]:
+        """Load BIM elements for a project (optionally one model).
+
+        Joins ``BIMElement`` to ``BIMModel`` so ownership is scoped by
+        ``BIMModel.project_id`` - the carbon module never trusts a raw
+        ``model_id`` without confirming it belongs to the project.
+        """
+        stmt = (
+            select(BIMElement)
+            .join(BIMModel, BIMElement.model_id == BIMModel.id)
+            .where(BIMModel.project_id == project_id)
+        )
+        if model_id is not None:
+            stmt = stmt.where(BIMElement.model_id == model_id)
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def _bim_factor_candidates(self) -> list[dict[str, Any]]:
+        """Build the match candidate list from EPDs + material factors.
+
+        Each candidate carries the material_class / region to match on, the
+        factor value to apply (manual override beats EPD-derived A1-A3 GWP,
+        mirroring ``assign_boq_position_carbon``), the unit that value is
+        declared in, and the linkable ``factor_id`` (NULL when no material
+        factor references the EPD - the entry then stores the value only).
+        """
+        epds, _ = await self.epd_repo.list_filtered(limit=100000)
+        factors, _ = await self.factor_repo.list_filtered(limit=100000)
+        factor_by_epd: dict[uuid.UUID, MaterialCarbonFactor] = {}
+        for fac in factors:
+            if fac.epd_id is not None and fac.epd_id not in factor_by_epd:
+                factor_by_epd[fac.epd_id] = fac
+        candidates: list[dict[str, Any]] = []
+        for epd in epds:
+            fac = factor_by_epd.get(epd.id)
+            if fac is not None and fac.manual_override_factor is not None:
+                factor_value = Decimal(str(fac.manual_override_factor))
+                declared_unit = fac.unit_for_factor or epd.declared_unit or "kg"
+                region = fac.region or epd.region or ""
+                factor_id = fac.id
+            else:
+                factor_value = Decimal(str(epd.gwp_a1a3 or 0))
+                declared_unit = epd.declared_unit or "kg"
+                region = epd.region or ""
+                factor_id = fac.id if fac is not None else None
+            candidates.append(
+                {
+                    "material_class": epd.material_class,
+                    "region": region,
+                    "declared_unit": declared_unit,
+                    "factor_value": factor_value,
+                    "factor_id": factor_id,
+                    "epd_id": epd.id,
+                },
+            )
+        return candidates
+
+    async def auto_enrich_inventory_from_bim(
+        self,
+        inventory_id: uuid.UUID,
+        *,
+        model_id: uuid.UUID | None = None,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Auto-extract embodied carbon (A1-A3) from a project's BIM elements.
+
+        For every BIM element in the inventory's project (optionally limited to
+        one ``model_id``) this matches the element's material / type to the
+        best EPD-backed carbon factor, reads the matching SI quantity from the
+        model geometry, converts it into the factor's unit (the same helper
+        ``assign_boq_position_carbon`` uses) and computes ``carbon_kg`` with
+        Decimal.
+
+        Human-confirmed: entries are created as normal draft rows linked to the
+        BIM element (``element_id`` + ``source='auto_enriched'`` +
+        ``match_confidence``); the inventory is NOT finalised. With
+        ``dry_run=True`` nothing is persisted - the same suggestions are
+        returned for review.
+
+        Returns ``{inventory_id, model_id, dry_run, created, skipped_no_match,
+        skipped_no_quantity, skipped_existing, entries}``.
+        """
+        inv = await self.get_inventory(inventory_id)
+        elements = await self._load_project_bim_elements(inv.project_id, model_id=model_id)
+        candidates = await self._bim_factor_candidates()
+
+        created_models: list[EmbodiedCarbonEntry] = []
+        suggestions: list[dict[str, Any]] = []
+        skipped_no_match = 0
+        skipped_no_quantity = 0
+        skipped_existing = 0
+
+        # Idempotency: never link an element that already carries an
+        # auto_enriched entry in this inventory. Re-running enrichment (or a
+        # model re-upload) must not duplicate rows and double-count carbon.
+        existing_rows = await self.session.execute(
+            select(EmbodiedCarbonEntry.element_id).where(
+                EmbodiedCarbonEntry.inventory_id == inventory_id,
+                EmbodiedCarbonEntry.source == "auto_enriched",
+                EmbodiedCarbonEntry.element_id.is_not(None),
+            ),
+        )
+        already_linked: set[uuid.UUID] = {row[0] for row in existing_rows.all()}
+
+        for element in elements:
+            if element.id in already_linked:
+                skipped_existing += 1
+                continue
+            props = element.properties if isinstance(element.properties, dict) else {}
+            material = extract_element_material(props)
+            element_type = element.element_type or ""
+            if not material and not element_type.strip():
+                skipped_no_match += 1
+                continue
+            el_region = ""
+            region_value = props.get("region") or props.get("Region")
+            if isinstance(region_value, str):
+                el_region = region_value
+            match = _best_factor_for_element(material, element_type, el_region, candidates)
+            if match is None:
+                skipped_no_match += 1
+                continue
+            candidate, confidence = match
+            picked = select_quantity_for_unit(element.quantities or {}, candidate["declared_unit"])
+            if picked is None:
+                skipped_no_quantity += 1
+                continue
+            quantity, si_unit = picked
+            density = _element_density(props)
+            try:
+                carbon_kg = _carbon_from_quantity(
+                    quantity,
+                    si_unit,
+                    candidate["factor_value"],
+                    candidate["declared_unit"],
+                    density,
+                )
+            except UnitMismatchError:
+                # Quantity exists but cannot be expressed in the factor's unit
+                # (e.g. volume in m3 with a per-kg factor and no density).
+                skipped_no_quantity += 1
+                continue
+
+            element_ref = element.name or element.stable_id or str(element.id)
+            factor_id = candidate["factor_id"]
+            suggestions.append(
+                {
+                    "element_id": str(element.id),
+                    "element_ref": element_ref,
+                    "material": material or element_type,
+                    "matched_material_class": candidate["material_class"],
+                    "quantity": str(quantity),
+                    "unit": si_unit,
+                    "factor_id": (str(factor_id) if factor_id is not None else None),
+                    "factor_value_used": str(candidate["factor_value"]),
+                    "carbon_kg": str(carbon_kg),
+                    "stage": "a1a3",
+                    "match_confidence": confidence,
+                    "source": "auto_enriched",
+                },
+            )
+
+            if not dry_run:
+                entry = EmbodiedCarbonEntry(
+                    inventory_id=inventory_id,
+                    element_id=element.id,
+                    element_ref=element_ref,
+                    description=f"Auto-enriched from BIM element {element_ref}",
+                    quantity=quantity,
+                    unit=si_unit,
+                    factor_id=factor_id,
+                    factor_value_used=candidate["factor_value"],
+                    carbon_kg=carbon_kg,
+                    stage="a1a3",
+                    source="auto_enriched",
+                    match_confidence=confidence,
+                )
+                entry.metadata_ = {
+                    "auto_enriched": True,
+                    "matched_material_class": candidate["material_class"],
+                    "matched_epd_id": str(candidate["epd_id"]),
+                    "match_confidence": confidence,
+                    "density_kg_per_m3": (str(density) if density is not None else None),
+                }
+                created_models.append(entry)
+
+        created = 0
+        if not dry_run and created_models:
+            self.session.add_all(created_models)
+            await self.session.flush()
+            created = len(created_models)
+            event_bus.publish_detached(
+                "carbon.inventory.auto_enriched",
+                {
+                    "project_id": str(inv.project_id),
+                    "inventory_id": str(inventory_id),
+                    "model_id": (str(model_id) if model_id is not None else None),
+                    "created": created,
+                },
+                source_module="carbon",
+            )
+
+        return {
+            "inventory_id": str(inventory_id),
+            "model_id": (str(model_id) if model_id is not None else None),
+            "dry_run": dry_run,
+            "created": created,
+            "skipped_no_match": skipped_no_match,
+            "skipped_no_quantity": skipped_no_quantity,
+            "skipped_existing": skipped_existing,
+            "entries": suggestions,
+        }
+
+    # ── 6D Phase 2: operational carbon (B6 use-phase) ────────────────────
+
+    async def _resolve_grid_factor(
+        self,
+        inventory_id: uuid.UUID,
+        req: OperationalCarbonComputeRequest,
+    ) -> tuple[Decimal, str]:
+        """Resolve the grid emission factor (kgCO2e/kWh) and its provenance.
+
+        Priority, most trustworthy first: an explicit request override, then the
+        built-in country / year catalogue, then the average of the inventory's
+        own Scope-2 entry factors, and finally the IEA world-average intensity
+        so a country outside the catalogue still gets an estimate (flagged as a
+        low-confidence world default). Raises HTTP 400 only when the caller gave
+        no location signal at all and the inventory has no Scope-2 data to lean
+        on.
+        """
+        if req.grid_factor_kg_co2e_per_kwh is not None:
+            return Decimal(str(req.grid_factor_kg_co2e_per_kwh)), "override"
+        if req.grid_country:
+            hit = lookup_grid_factor_default(req.grid_country, req.grid_year)
+            if hit is not None:
+                return Decimal(str(hit["factor_kg_co2e_per_kwh"])), str(hit["source"])
+        scope2_rows = await self.scope2_repo.list_for_inventory(inventory_id)
+        factors = [
+            Decimal(str(r.emission_factor_kg_co2e_per_kwh))
+            for r in scope2_rows
+            if r.emission_factor_kg_co2e_per_kwh is not None and Decimal(str(r.emission_factor_kg_co2e_per_kwh)) > 0
+        ]
+        if factors:
+            avg = sum(factors, Decimal("0")) / Decimal(len(factors))
+            return avg, "scope2_average"
+        # A country was named but is outside the catalogue: fall back to the IEA
+        # world average rather than failing, so the estimate still runs. The
+        # provenance string makes clear this is a global default, not a
+        # country-specific figure.
+        if req.grid_country:
+            world = resolve_grid_factor(req.grid_country, req.grid_year, allow_world_fallback=True)
+            if world is not None:
+                return Decimal(str(world["factor_kg_co2e_per_kwh"])), str(world["source"])
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "No grid emission factor to work from. Do one of these: pass "
+                "grid_factor_kg_co2e_per_kwh directly, set grid_country (any "
+                "country works, uncatalogued ones use the IEA world average), or "
+                "add at least one Scope-2 entry to this inventory first."
+            ),
+        )
+
+    async def compute_operational_carbon(
+        self,
+        inventory_id: uuid.UUID,
+        req: OperationalCarbonComputeRequest,
+        *,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Compute B6 use-phase operational carbon for the inventory's BIM.
+
+        Per-asset lines come from elements that carry an energy signal (annual
+        energy, or a rated power x run hours on the asset register). A single
+        modelled whole-building line is added when both ``gross_floor_area_m2``
+        and ``modelled_intensity_kwh_per_m2_year`` are supplied. Each line is
+        ``annual energy x grid factor x study period`` and lands as a draft
+        (AI proposes, a human confirms). Idempotent by element id and by the
+        single whole-building line, so a re-run never double-counts.
+        """
+        inv = await self.get_inventory(inventory_id)
+        grid_factor, grid_source = await self._resolve_grid_factor(inventory_id, req)
+        study_period = int(req.study_period_years)
+        elements = await self._load_project_bim_elements(inv.project_id, model_id=req.model_id)
+        already_linked = await self.operational_repo.linked_element_ids(inventory_id)
+
+        created_models: list[OperationalCarbonEntry] = []
+        suggestions: list[dict[str, Any]] = []
+        skipped_existing = 0
+        skipped_no_energy = 0
+        total_b6 = Decimal("0")
+
+        for element in elements:
+            if element.id in already_linked:
+                skipped_existing += 1
+                continue
+            quantities = element.quantities if isinstance(element.quantities, dict) else {}
+            asset_info = element.asset_info if isinstance(element.asset_info, dict) else {}
+            energy = lcc.element_annual_energy_kwh(quantities, asset_info)
+            if energy is None:
+                skipped_no_energy += 1
+                continue
+            annual_kwh, energy_source = energy
+            rolled = lcc.operational_carbon_over_period(annual_kwh, grid_factor, study_period)
+            confidence = _operational_confidence(energy_source)
+            element_ref = element.name or element.stable_id or str(element.id)
+            system = (element.element_type or "asset").strip().lower() or "asset"
+            assumptions = (
+                f"Per-asset B6: {annual_kwh} kWh/yr (from {energy_source}) x "
+                f"{grid_factor} kgCO2e/kWh x {study_period} yr = {rolled['carbon_kg']} kgCO2e"
+            )
+            total_b6 += Decimal(str(rolled["carbon_kg"]))
+            suggestions.append(
+                {
+                    "element_id": str(element.id),
+                    "element_ref": element_ref,
+                    "system": system,
+                    "energy_source": energy_source,
+                    "annual_energy_kwh": str(annual_kwh),
+                    "annual_carbon_kg": str(rolled["annual_carbon_kg"]),
+                    "carbon_kg": str(rolled["carbon_kg"]),
+                    "stage": "b6",
+                    "match_confidence": confidence,
+                    "source": "auto_enriched",
+                    "assumptions": assumptions,
+                },
+            )
+            if not dry_run:
+                entry = OperationalCarbonEntry(
+                    inventory_id=inventory_id,
+                    element_id=element.id,
+                    element_ref=element_ref,
+                    system=system,
+                    description=f"Operational (B6) for {element_ref}",
+                    end_use=req.end_use,
+                    energy_source=energy_source,
+                    annual_energy_kwh=annual_kwh,
+                    grid_country=(req.grid_country or ""),
+                    grid_year=req.grid_year,
+                    grid_factor_kg_co2e_per_kwh=grid_factor,
+                    study_period_years=study_period,
+                    annual_carbon_kg=rolled["annual_carbon_kg"],
+                    carbon_kg=rolled["carbon_kg"],
+                    stage="b6",
+                    source="auto_enriched",
+                    match_confidence=confidence,
+                    status="draft",
+                    assumptions=assumptions,
+                )
+                entry.metadata_ = {"grid_factor_source": grid_source}
+                created_models.append(entry)
+
+        # Optional single modelled whole-building line (GFA x intensity).
+        gfa = req.gross_floor_area_m2
+        intensity = req.modelled_intensity_kwh_per_m2_year
+        if gfa and intensity and Decimal(str(gfa)) > 0 and Decimal(str(intensity)) > 0:
+            if await self.operational_repo.has_whole_building(inventory_id):
+                skipped_existing += 1
+            else:
+                annual_kwh = Decimal(str(gfa)) * Decimal(str(intensity))
+                rolled = lcc.operational_carbon_over_period(annual_kwh, grid_factor, study_period)
+                assumptions = (
+                    f"Modelled whole-building B6: {gfa} m2 x {intensity} kWh/m2/yr x "
+                    f"{grid_factor} kgCO2e/kWh x {study_period} yr = {rolled['carbon_kg']} kgCO2e"
+                )
+                total_b6 += Decimal(str(rolled["carbon_kg"]))
+                suggestions.append(
+                    {
+                        "element_id": None,
+                        "element_ref": "whole_building",
+                        "system": "whole_building",
+                        "energy_source": "modelled_intensity",
+                        "annual_energy_kwh": str(annual_kwh),
+                        "annual_carbon_kg": str(rolled["annual_carbon_kg"]),
+                        "carbon_kg": str(rolled["carbon_kg"]),
+                        "stage": "b6",
+                        "match_confidence": "low",
+                        "source": "modelled",
+                        "assumptions": assumptions,
+                    },
+                )
+                if not dry_run:
+                    entry = OperationalCarbonEntry(
+                        inventory_id=inventory_id,
+                        element_id=None,
+                        element_ref="whole_building",
+                        system="whole_building",
+                        description="Modelled whole-building operational (B6)",
+                        end_use=req.end_use,
+                        energy_source="modelled_intensity",
+                        annual_energy_kwh=annual_kwh,
+                        grid_country=(req.grid_country or ""),
+                        grid_year=req.grid_year,
+                        grid_factor_kg_co2e_per_kwh=grid_factor,
+                        study_period_years=study_period,
+                        annual_carbon_kg=rolled["annual_carbon_kg"],
+                        carbon_kg=rolled["carbon_kg"],
+                        stage="b6",
+                        source="modelled",
+                        match_confidence="low",
+                        status="draft",
+                        assumptions=assumptions,
+                    )
+                    entry.metadata_ = {
+                        "grid_factor_source": grid_source,
+                        "gross_floor_area_m2": str(gfa),
+                        "modelled_intensity_kwh_per_m2_year": str(intensity),
+                    }
+                    created_models.append(entry)
+
+        created = 0
+        if not dry_run and created_models:
+            self.session.add_all(created_models)
+            await self.session.flush()
+            created = len(created_models)
+            event_bus.publish_detached(
+                "carbon.inventory.operational_computed",
+                {
+                    "project_id": str(inv.project_id),
+                    "inventory_id": str(inventory_id),
+                    "created": created,
+                    "total_b6_carbon_kg": str(total_b6),
+                },
+                source_module="carbon",
+            )
+
+        return {
+            "inventory_id": str(inventory_id),
+            "model_id": (str(req.model_id) if req.model_id is not None else None),
+            "dry_run": dry_run,
+            "study_period_years": study_period,
+            "grid_factor_kg_co2e_per_kwh": str(grid_factor),
+            "grid_factor_source": grid_source,
+            "created": created,
+            "skipped_existing": skipped_existing,
+            "skipped_no_energy": skipped_no_energy,
+            "total_b6_carbon_kg": str(total_b6),
+            "entries": suggestions,
+        }
+
+    async def list_operational_entries(
+        self,
+        inventory_id: uuid.UUID,
+    ) -> tuple[list[OperationalCarbonEntry], int]:
+        rows = await self.operational_repo.list_for_inventory(inventory_id)
+        return rows, len(rows)
+
+    async def get_operational_entry(self, entry_id: uuid.UUID) -> OperationalCarbonEntry:
+        entry = await self.operational_repo.get_by_id(entry_id)
+        if entry is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Operational-carbon entry not found",
+            )
+        return entry
+
+    async def get_operational_project_id(self, entry_id: uuid.UUID) -> uuid.UUID:
+        entry = await self.get_operational_entry(entry_id)
+        inv = await self.get_inventory(entry.inventory_id)
+        return inv.project_id
+
+    async def confirm_operational_entry(self, entry_id: uuid.UUID) -> OperationalCarbonEntry:
+        """Human confirmation: flip a draft operational line to 'confirmed'."""
+        await self.get_operational_entry(entry_id)
+        await self.operational_repo.update_fields(entry_id, status="confirmed")
+        return await self.get_operational_entry(entry_id)
+
+    async def delete_operational_entry(self, entry_id: uuid.UUID) -> None:
+        await self.get_operational_entry(entry_id)
+        await self.operational_repo.delete(entry_id)
+
+    # ── 6D Phase 2: whole-life cost (ISO 15686-5) ────────────────────────
+
+    def _lcc_entry_from_inputs(
+        self,
+        *,
+        inventory_id: uuid.UUID,
+        element_id: uuid.UUID | None,
+        element_ref: str | None,
+        description: str,
+        category: str,
+        currency: str,
+        inputs: dict[str, Any],
+        discount_rate: Decimal,
+        study_period: int,
+        source: str,
+        confidence: str,
+    ) -> tuple[LifeCycleCostEntry, dict[str, Any]]:
+        """Compute one LCC row from resolved inputs; return (model, suggestion)."""
+        result = lcc.compute_life_cycle_cost(
+            capex=inputs["capex"],
+            annual_opex=inputs["annual_opex"],
+            replacement_cost=inputs["replacement_cost"],
+            service_life_years=inputs["service_life_years"],
+            eol_cost=inputs["eol_cost"],
+            discount_rate=discount_rate,
+            study_period_years=study_period,
+            # ISO 15686-5 residual value: credit the study-end residual worth of
+            # the components still in service against the whole-life total. It is
+            # surfaced per entry below (residual_value_pv) and as its own credit
+            # line in the 6D whole-life dashboard, so the capex / opex /
+            # replacement / end-of-life breakdown still reconciles to the total
+            # (components - residual = whole-life cost).
+            include_residual_value=True,
+        )
+        assumptions = (
+            f"ISO 15686-5: capex {result['capex']}, opex {result['annual_opex']}/yr, "
+            f"replace every {result['service_life_years']} yr "
+            f"({result['replacement_count']}x), EoL {result['eol_cost']}; discounted at "
+            f"{discount_rate} over {study_period} yr"
+        )
+        suggestion = {
+            "element_id": (str(element_id) if element_id is not None else None),
+            "element_ref": element_ref,
+            "description": description,
+            "category": category,
+            "currency": currency,
+            "capex": str(result["capex"]),
+            "opex_pv": str(result["opex_pv"]),
+            "replacement_pv": str(result["replacement_pv"]),
+            "replacement_count": result["replacement_count"],
+            "eol_pv": str(result["eol_pv"]),
+            "residual_value_pv": str(result["residual_value_pv"]),
+            "whole_life_cost": str(result["whole_life_cost"]),
+            "confidence": confidence,
+            "source": source,
+            "assumptions": assumptions,
+        }
+        entry = LifeCycleCostEntry(
+            inventory_id=inventory_id,
+            element_id=element_id,
+            element_ref=element_ref,
+            description=description,
+            category=category,
+            currency=currency,
+            capex=result["capex"],
+            annual_opex=result["annual_opex"],
+            replacement_cost=result["replacement_cost"],
+            service_life_years=result["service_life_years"],
+            eol_cost=result["eol_cost"],
+            discount_rate=discount_rate,
+            study_period_years=study_period,
+            capex_pv=result["capex_pv"],
+            opex_pv=result["opex_pv"],
+            replacement_pv=result["replacement_pv"],
+            replacement_count=result["replacement_count"],
+            eol_pv=result["eol_pv"],
+            whole_life_cost=result["whole_life_cost"],
+            source=source,
+            confidence=confidence,
+            status="draft",
+            assumptions=assumptions,
+        )
+        entry.metadata_ = {"replacement_years": result["replacement_years"]}
+        return entry, suggestion
+
+    async def compute_life_cycle_cost(
+        self,
+        inventory_id: uuid.UUID,
+        req: LifeCycleCostComputeRequest,
+        *,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Compute ISO 15686-5 whole-life cost lines for the inventory.
+
+        BIM-derived lines read service life and any cost fields from the asset
+        register (with modelled fallbacks); explicit ``lines`` are costed too.
+        Each line discounts opex, the B4/B5 replacement cycle and end-of-life to
+        a present value and lands as a draft. BIM lines are idempotent by
+        element id; manual lines are additive.
+        """
+        inv = await self.get_inventory(inventory_id)
+        discount_rate = Decimal(str(req.discount_rate))
+        study_period = int(req.study_period_years)
+        currency = req.currency or "EUR"
+        opex_rate = Decimal(str(req.opex_rate_pct)) / Decimal("100")
+        eol_rate = Decimal(str(req.eol_rate_pct)) / Decimal("100")
+
+        created_models: list[LifeCycleCostEntry] = []
+        suggestions: list[dict[str, Any]] = []
+        skipped_existing = 0
+        skipped_no_cost = 0
+        total_wlc = Decimal("0")
+
+        # BIM-derived lines (service life from the AIM asset register).
+        elements = await self._load_project_bim_elements(inv.project_id, model_id=req.model_id)
+        already_linked = await self.lcc_repo.linked_element_ids(inventory_id)
+        for element in elements:
+            if element.id in already_linked:
+                skipped_existing += 1
+                continue
+            asset_info = element.asset_info if isinstance(element.asset_info, dict) else {}
+            properties = element.properties if isinstance(element.properties, dict) else {}
+            inputs = lcc.derive_lcc_inputs(
+                asset_info=asset_info,
+                properties=properties,
+                default_capex=req.default_capex,
+                opex_rate=opex_rate,
+                eol_rate=eol_rate,
+                default_service_life_years=req.default_service_life_years,
+            )
+            if inputs is None:
+                skipped_no_cost += 1
+                continue
+            element_ref = element.name or element.stable_id or str(element.id)
+            entry, suggestion = self._lcc_entry_from_inputs(
+                inventory_id=inventory_id,
+                element_id=element.id,
+                element_ref=element_ref,
+                description=f"Whole-life cost for {element_ref}",
+                category=(element.element_type or "").strip().lower(),
+                currency=currency,
+                inputs=inputs,
+                discount_rate=discount_rate,
+                study_period=study_period,
+                source="auto_enriched",
+                confidence=inputs["confidence"],
+            )
+            total_wlc += Decimal(str(suggestion["whole_life_cost"]))
+            suggestions.append(suggestion)
+            if not dry_run:
+                created_models.append(entry)
+
+        # Explicit manual lines (additive; realistic without BIM cost data).
+        for line in req.lines:
+            capex = Decimal(str(line.capex))
+            if capex <= 0:
+                skipped_no_cost += 1
+                continue
+            inputs = {
+                "capex": capex,
+                "annual_opex": (Decimal(str(line.annual_opex)) if line.annual_opex is not None else capex * opex_rate),
+                "replacement_cost": (
+                    Decimal(str(line.replacement_cost)) if line.replacement_cost is not None else capex
+                ),
+                "eol_cost": (Decimal(str(line.eol_cost)) if line.eol_cost is not None else capex * eol_rate),
+                "service_life_years": (
+                    int(line.service_life_years)
+                    if line.service_life_years is not None
+                    else int(req.default_service_life_years)
+                ),
+            }
+            entry, suggestion = self._lcc_entry_from_inputs(
+                inventory_id=inventory_id,
+                element_id=None,
+                element_ref=None,
+                description=line.description or "Whole-life cost line",
+                category=line.category or "",
+                currency=currency,
+                inputs=inputs,
+                discount_rate=discount_rate,
+                study_period=study_period,
+                source="manual",
+                confidence="high",
+            )
+            total_wlc += Decimal(str(suggestion["whole_life_cost"]))
+            suggestions.append(suggestion)
+            if not dry_run:
+                created_models.append(entry)
+
+        created = 0
+        if not dry_run and created_models:
+            self.session.add_all(created_models)
+            await self.session.flush()
+            created = len(created_models)
+            event_bus.publish_detached(
+                "carbon.inventory.lcc_computed",
+                {
+                    "project_id": str(inv.project_id),
+                    "inventory_id": str(inventory_id),
+                    "created": created,
+                    "currency": currency,
+                    "total_whole_life_cost": str(total_wlc),
+                },
+                source_module="carbon",
+            )
+
+        return {
+            "inventory_id": str(inventory_id),
+            "model_id": (str(req.model_id) if req.model_id is not None else None),
+            "dry_run": dry_run,
+            "currency": currency,
+            "discount_rate": str(discount_rate),
+            "study_period_years": study_period,
+            "created": created,
+            "skipped_existing": skipped_existing,
+            "skipped_no_cost": skipped_no_cost,
+            "total_whole_life_cost": str(total_wlc),
+            "entries": suggestions,
+        }
+
+    async def list_lcc_entries(
+        self,
+        inventory_id: uuid.UUID,
+    ) -> tuple[list[LifeCycleCostEntry], int]:
+        rows = await self.lcc_repo.list_for_inventory(inventory_id)
+        return rows, len(rows)
+
+    async def get_lcc_entry(self, entry_id: uuid.UUID) -> LifeCycleCostEntry:
+        entry = await self.lcc_repo.get_by_id(entry_id)
+        if entry is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Life-cycle cost entry not found",
+            )
+        return entry
+
+    async def get_lcc_project_id(self, entry_id: uuid.UUID) -> uuid.UUID:
+        entry = await self.get_lcc_entry(entry_id)
+        inv = await self.get_inventory(entry.inventory_id)
+        return inv.project_id
+
+    async def confirm_lcc_entry(self, entry_id: uuid.UUID) -> LifeCycleCostEntry:
+        """Human confirmation: flip a draft LCC line to 'confirmed'."""
+        await self.get_lcc_entry(entry_id)
+        await self.lcc_repo.update_fields(entry_id, status="confirmed")
+        return await self.get_lcc_entry(entry_id)
+
+    async def delete_lcc_entry(self, entry_id: uuid.UUID) -> None:
+        await self.get_lcc_entry(entry_id)
+        await self.lcc_repo.delete(entry_id)
+
+    # ── 6D Phase 2: combined whole-life rollup (carbon + cost) ───────────
+
+    async def whole_life_summary(
+        self,
+        inventory_id: uuid.UUID,
+        *,
+        carbon_price_per_tonne: Decimal | float | int | str | None = None,
+    ) -> dict[str, Any]:
+        """Whole-life carbon (A-B-C-D) side by side with whole-life cost.
+
+        The carbon side reuses the embodied stage rollup plus the B6 operational
+        lines; the cost side sums the ISO 15686-5 present-value components. Also
+        reports coverage of the model by embodied / operational / cost data, and
+        an optional monetised cost of the whole-life carbon.
+        """
+        inv = await self.get_inventory(inventory_id)
+        embodied = await self.embodied_repo.list_for_inventory(inventory_id)
+        operational = await self.operational_repo.list_for_inventory(inventory_id)
+        lcc_entries = await self.lcc_repo.list_for_inventory(inventory_id)
+
+        # Embodied-only stage buckets (no operational folded in here).
+        embodied_totals = compute_inventory_totals(inventory_id, embodied)
+        b6_operational = sum(
+            (Decimal(str(e.carbon_kg or 0)) for e in operational),
+            Decimal("0"),
+        )
+        carbon = lcc.whole_life_carbon(
+            a1a3=embodied_totals["embodied_a1a3"],
+            a4=embodied_totals["embodied_a4"],
+            a5=embodied_totals["embodied_a5"],
+            b_embodied=embodied_totals["embodied_b"],
+            b6_operational=b6_operational,
+            c_end_of_life=embodied_totals["embodied_c"],
+            d_beyond=embodied_totals["embodied_d"],
+        )
+
+        cost = lcc.summarize_life_cycle_cost(lcc_entries)
+        currency = lcc_entries[0].currency if lcc_entries else "EUR"
+
+        # Study period: the largest declared among the persisted lines.
+        study_periods = [int(e.study_period_years) for e in operational]
+        study_periods += [int(e.study_period_years) for e in lcc_entries]
+        study_period = max(study_periods) if study_periods else lcc.DEFAULT_STUDY_PERIOD_YEARS
+
+        # Coverage of the BIM model.
+        count_stmt = (
+            select(func.count(BIMElement.id))
+            .join(BIMModel, BIMElement.model_id == BIMModel.id)
+            .where(BIMModel.project_id == inv.project_id)
+        )
+        bim_count = int((await self.session.execute(count_stmt)).scalar_one() or 0)
+        embodied_linked = len({e.element_id for e in embodied if e.element_id is not None})
+        operational_linked = len({e.element_id for e in operational if e.element_id is not None})
+        lcc_linked = len({e.element_id for e in lcc_entries if e.element_id is not None})
+
+        def _pct(linked: int) -> float:
+            return round(linked / bim_count * 100, 1) if bim_count > 0 else 0.0
+
+        coverage = {
+            "bim_element_count": bim_count,
+            "embodied_linked_count": embodied_linked,
+            "operational_linked_count": operational_linked,
+            "lcc_linked_count": lcc_linked,
+            "embodied_coverage_pct": _pct(embodied_linked),
+            "operational_coverage_pct": _pct(operational_linked),
+            "lcc_coverage_pct": _pct(lcc_linked),
+        }
+
+        cost_of_whole_life_carbon: Decimal | None = None
+        price: Decimal | None = None
+        if carbon_price_per_tonne is not None:
+            price = Decimal(str(carbon_price_per_tonne))
+            cost_of_whole_life_carbon = lcc.cost_of_carbon(carbon["whole_life_total"], price)
+
+        return {
+            "inventory_id": inventory_id,
+            "study_period_years": study_period,
+            "carbon": carbon,
+            "cost": {**cost, "currency": currency},
+            "coverage": coverage,
+            "carbon_price_per_tonne": price,
+            "cost_of_whole_life_carbon": cost_of_whole_life_carbon,
+        }
 
     # ── Grid factor lookup ──────────────────────────────────────────────
 

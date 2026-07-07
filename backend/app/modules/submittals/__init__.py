@@ -1,4 +1,4 @@
-"""‌⁠‍Submittals module.
+"""Submittals module.
 
 Construction submittal management - shop drawings, product data, samples,
 test reports, and certificates with multi-stage review/approval workflows.
@@ -6,7 +6,7 @@ test reports, and certificates with multi-stage review/approval workflows.
 
 
 async def on_startup() -> None:
-    """‌⁠‍Module startup hook - register permissions + approval-routes wiring."""
+    """Module startup hook - register permissions + approval-routes wiring."""
     from app.modules.submittals.approval_subscribers import (
         register_submittal_approval_subscribers,
     )

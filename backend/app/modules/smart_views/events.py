@@ -1,5 +1,5 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
-"""‌⁠‍Smart Views event subscribers - cross-module visibility refresh.
+"""Smart Views event subscribers - cross-module visibility refresh.
 
 This module is auto-imported by ``module_loader`` when ``oe_smart_views``
 loads (see ``core/module_loader.py:_load_module`` → ``events.py``).

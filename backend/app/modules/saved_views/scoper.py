@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍SAFETY PRIMITIVE 1 - the mandatory scoper.
+"""SAFETY PRIMITIVE 1 - the mandatory scoper.
 
 Every executed query has scope predicates ANDed in server-side, derived from the
 request context, before any user filter is applied. There is no code path that

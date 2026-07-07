@@ -1,4 +1,4 @@
-"""‌⁠‍IFC/RVT file processor - uses DDC cad2data when available, text parser as fallback.
+"""IFC/RVT file processor - uses DDC cad2data when available, text parser as fallback.
 
 Processing pipeline:
 1. Try DDC cad2data (external tool) → full DataFrame + COLLADA geometry
@@ -224,7 +224,7 @@ _LAST_DDC_FAILURE: dict[str, Any] = {}
 
 
 def last_ddc_failure() -> dict[str, Any]:
-    """‌⁠‍Return the most recent DDC conversion failure context, if any.
+    """Return the most recent DDC conversion failure context, if any.
 
     Keys are best-effort and may be missing:
       * ``reason`` - short tag: ``timeout`` / ``nonzero_exit`` / ``empty_output``
@@ -250,7 +250,7 @@ _OUTDATED_CLI_STDERR_MARKERS = (
 
 
 def _infer_failure_cause(*, reason: str, exit_code: int | None, stderr_text: str) -> str:
-    """‌⁠‍Map raw subprocess output to a stable ``cause`` enum for the UI.
+    """Map raw subprocess output to a stable ``cause`` enum for the UI.
 
     The frontend dispatches on this string - keep the values stable.
     Currently supported:
@@ -292,7 +292,7 @@ def _record_ddc_failure(
     ifc_path: Path | None = None,
     cause: str | None = None,
 ) -> None:
-    """‌⁠‍Update the module-level failure record with everything the router
+    """Update the module-level failure record with everything the router
     needs to render an actionable error message.
 
     ``cause`` may be passed explicitly to skip the heuristic - used by
@@ -345,7 +345,7 @@ def _record_ddc_failure(
 
 
 def _detect_converter_version_safe(extension: str) -> dict[str, str | None]:
-    """‌⁠‍Best-effort wrapper around ``detect_converter_version``.
+    """Best-effort wrapper around ``detect_converter_version``.
 
     Used by the ``_try_cad2data`` success path to attach a DDC version stamp
     to the BIM result. Re-exports the same dict shape as the underlying
@@ -362,7 +362,7 @@ def _detect_converter_version_safe(extension: str) -> dict[str, str | None]:
 
 
 def _try_cad2data(ifc_path: Path, output_dir: Path, *, conversion_depth: str = "standard") -> dict[str, Any] | None:
-    """‌⁠‍Try to convert CAD files using DDC converters.
+    """Try to convert CAD files using DDC converters.
 
     Pipeline (tried in order):
     1. DDC Community Converter (RvtExporter.exe / IfcExporter.exe) → Excel → elements
@@ -468,7 +468,7 @@ def _try_cad2data(ifc_path: Path, output_dir: Path, *, conversion_depth: str = "
             )
 
             def _stderr_indicates_unknown_arg(stderr_bytes: bytes) -> bool:
-                """‌⁠‍True iff stderr contains an 'unknown CLI arg' substring.
+                """True iff stderr contains an 'unknown CLI arg' substring.
 
                 Used in conjunction with exit-15 - *both* must be true for
                 the retry-without-extras path to fire, so a normal
@@ -491,7 +491,7 @@ def _try_cad2data(ifc_path: Path, output_dir: Path, *, conversion_depth: str = "
                 allow_no_collada: bool,
                 extra: tuple[str, ...] = (),
             ) -> list[str]:
-                """‌⁠‍Compose the CLI invocation honouring the capability flags.
+                """Compose the CLI invocation honouring the capability flags.
 
                 Routes through ``cad_import.build_ddc_args`` whenever the
                 probe identified a v18 flag-driven binary - that path
@@ -552,7 +552,7 @@ def _try_cad2data(ifc_path: Path, output_dir: Path, *, conversion_depth: str = "
                 return args_list
 
             def _invoke(args_list: list[str]) -> tuple[int, bytes, bytes]:
-                """‌⁠‍Thin subprocess wrapper - separated so the retry path can
+                """Thin subprocess wrapper - separated so the retry path can
                 rebuild the args list and call again without re-implementing
                 the cwd/timeout/stdin plumbing."""
                 logger.debug("DDC call: %s", args_list)
@@ -571,7 +571,7 @@ def _try_cad2data(ifc_path: Path, output_dir: Path, *, conversion_depth: str = "
                 return proc.returncode, proc.stdout, proc.stderr
 
             def _run_ddc(out_path: Path, *extra_args: str) -> tuple[int, bytes, bytes]:
-                """‌⁠‍Invoke RvtExporter / IfcExporter with the given output target.
+                """Invoke RvtExporter / IfcExporter with the given output target.
 
                 Two-stage logic:
                   1. Build args using the probed capability matrix and run.

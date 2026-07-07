@@ -1,4 +1,4 @@
-"""‌⁠‍Database engine​‌‍⁠​‌‍⁠​‌‍⁠​‌‍⁠, session, and base model.
+"""Database engine​‌‍⁠​‌‍⁠​‌‍⁠​‌‍⁠, session, and base model.
 
 PostgreSQL only. The app runs embedded PostgreSQL 16 by default (no Docker);
 set DATABASE_URL to point at an external PostgreSQL to override.
@@ -101,7 +101,7 @@ convention = {
 
 
 class GUID(TypeDecorator):
-    """‌⁠‍Platform-independent UUID type.
+    """Platform-independent UUID type.
 
     Uses PostgreSQL UUID when available, otherwise stores as String(36).
     This allows the same models to work with both PostgreSQL and SQLite.
@@ -142,7 +142,7 @@ def _utcnow() -> datetime:
 
 
 class Base(DeclarativeBase):
-    """‌⁠‍Base class for all ORM models.
+    """Base class for all ORM models.
 
     Provides: id (UUID PK), created_at, updated_at.
     Table naming: set __tablename__ explicitly as 'oe_{module}_{entity}'.

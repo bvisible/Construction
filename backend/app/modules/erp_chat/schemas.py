@@ -1,4 +1,4 @@
-"""‌⁠‍ERP Chat Pydantic schemas - request/response models."""
+"""ERP Chat Pydantic schemas - request/response models."""
 
 from datetime import datetime
 from typing import Literal
@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class StreamChatRequest(BaseModel):
-    """‌⁠‍Request body for the streaming chat endpoint."""
+    """Request body for the streaming chat endpoint."""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -19,7 +19,7 @@ class StreamChatRequest(BaseModel):
 
 
 class ChatSessionResponse(BaseModel):
-    """‌⁠‍Chat session returned from the API."""
+    """Chat session returned from the API."""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -70,7 +70,7 @@ class SessionListResponse(BaseModel):
 
 
 class FeedbackRequest(BaseModel):
-    """‌⁠‍Body for ``POST /v1/erp_chat/messages/{id}/feedback``."""
+    """Body for ``POST /v1/erp_chat/messages/{id}/feedback``."""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -82,7 +82,7 @@ class FeedbackRequest(BaseModel):
 
 
 class FeedbackResponse(BaseModel):
-    """‌⁠‍Echo of the persisted feedback row."""
+    """Echo of the persisted feedback row."""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -96,7 +96,7 @@ class FeedbackResponse(BaseModel):
 
 
 class DailyChatStat(BaseModel):
-    """‌⁠‍One row of the admin-stats daily breakdown."""
+    """One row of the admin-stats daily breakdown."""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -108,7 +108,7 @@ class DailyChatStat(BaseModel):
 
 
 class NegativePromptSnippet(BaseModel):
-    """‌⁠‍One of the top user-prompts that received a thumbs-down."""
+    """One of the top user-prompts that received a thumbs-down."""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -118,7 +118,7 @@ class NegativePromptSnippet(BaseModel):
 
 
 class AdminStatsResponse(BaseModel):
-    """‌⁠‍Admin observability rollup over a ``window_days`` window."""
+    """Admin observability rollup over a ``window_days`` window."""
 
     model_config = ConfigDict(from_attributes=True)
 

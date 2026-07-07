@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍The saved-views orchestrator.
+"""The saved-views orchestrator.
 
 ``SavedViewService`` is the only place that wires the three safety primitives
 together for every entry point. ``_scoped_base`` is the single producer of a base
@@ -355,12 +355,42 @@ class SavedViewService:
         return list(merged.values())
 
     async def get_view(self, view_id: uuid.UUID, ctx: ScopeContext) -> SavedView:
-        """Fetch one definition the caller may see."""
+        """Fetch one definition the caller may see.
+
+        Unlike run / count / export, this path never flows through the scoper
+        (it returns the stored definition, it does not run the stored spec), so
+        the project-access check the scoper performs for those paths has to be
+        applied here explicitly. A ``project`` / ``workspace`` shared view is
+        readable only by a real member (owner / admin / team-member) of the
+        view's OWN project, resolved via ``verify_project_access(view.project_id,
+        ...)``. Trusting ``ctx.project_id`` - a caller-supplied query parameter -
+        would let any holder of ``saved_views.read`` read a shared definition of
+        a project they cannot access simply by echoing that project's id back in
+        the request (there is no scoper on this path to catch it).
+        """
         view = await self.repo.get_by_id(view_id)
         if view is None:
             raise ScopeDenied("Saved view not found")
-        self._assert_view_visible(view, ctx)
-        return view
+        # Owner / admin: always visible.
+        if ctx.is_admin or view.owner_id == ctx.user_id:
+            return view
+        # Shared (project / workspace): visible only to a real member of the
+        # view's own project - never derived from the caller-supplied
+        # ctx.project_id. Mirrors the scoper's access check on the run path.
+        if view.share_scope in ("project", "workspace") and view.project_id is not None:
+            from app.dependencies import verify_project_access
+
+            try:
+                await verify_project_access(view.project_id, str(ctx.user_id), self.session)
+            except Exception as exc:  # noqa: BLE001 - normalise to a scope refusal
+                from fastapi import HTTPException
+
+                if isinstance(exc, HTTPException) and exc.status_code == 404:
+                    raise ScopeDenied("Saved view not found") from exc
+                raise
+            return view
+        # Private, or a shared view with no project pin: owner / admin only.
+        raise ScopeDenied("Saved view not found")
 
     # ── Helpers ─────────────────────────────────────────────────────────
 

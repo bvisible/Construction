@@ -1,4 +1,4 @@
-"""‌⁠‍Cost item data access layer.
+"""Cost item data access layer.
 
 All database queries for cost items live here.
 No business logic - pure data access.
@@ -35,7 +35,7 @@ from app.core.sql_json import json_path_text
 
 
 def _split_classification_path(path: str) -> list[str | None]:
-    """‌⁠‍Split a slash-delimited prefix path into per-depth filters.
+    """Split a slash-delimited prefix path into per-depth filters.
 
     Empty path → empty list (no filter).
     Empty segments in the middle (``"Buildings//Walls"``) → ``None`` for
@@ -59,7 +59,7 @@ def _split_classification_path(path: str) -> list[str | None]:
 
 
 def _classification_expr(depth_key: str) -> Any:
-    """‌⁠‍Return a dialect-aware SQL expression that extracts classification[depth].
+    """Return a dialect-aware SQL expression that extracts classification[depth].
 
     Uses ``json_extract`` on SQLite and the ``->>`` operator on PostgreSQL,
     mirroring the existing ``category`` filter path so the same data

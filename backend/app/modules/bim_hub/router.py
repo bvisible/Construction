@@ -1,4 +1,4 @@
-"""‌⁠‍BIM Hub API routes.
+"""BIM Hub API routes.
 
 Endpoint convention
 -------------------
@@ -125,6 +125,14 @@ from app.modules.bim_hub.service import BIMHubService
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["bim_hub"])
+
+
+# Bytes of a geometry blob to read for the serve-time magic-byte check. The
+# heaviest branch of _quick_validate_geometry_bytes inspects the first 16 KB
+# (the glTF asset object); GLB (12 bytes) and COLLADA (4 KB) need far less.
+# Reading a bounded head lets the local-disk serve path validate a 100+ MB GLB
+# without paging the whole file into memory (issue #291).
+_GEOMETRY_HEAD_PROBE_BYTES: int = 16 * 1024
 
 
 def _quick_validate_geometry_bytes(blob: bytes, ext: str) -> tuple[bool, str]:
@@ -260,7 +268,7 @@ async def _verify_project_access(
     project_id: uuid.UUID,
     user_id: str,
 ) -> None:
-    """‌⁠‍Raise 404 unless the user owns, administers, or is a member of the project.
+    """Raise 404 unless the user owns, administers, or is a member of the project.
 
     Applies the same rule as the central ``app.dependencies.verify_project_access``
     helper - owner OR admin OR a ``TeamMembership`` on the project (shared
@@ -317,7 +325,7 @@ async def _verify_model_access(
     model_id: uuid.UUID,
     user_id: str,
 ) -> Any:
-    """‌⁠‍Load a BIM model and verify the caller may access its project.
+    """Load a BIM model and verify the caller may access its project.
 
     Access is owner, admin, or team-member of the model's project (see
     :func:`_verify_project_access`). Returns the model object so callers can
@@ -2883,11 +2891,39 @@ async def get_model_geometry(
         if presigned:
             return RedirectResponse(url=presigned, status_code=307)
 
-        # Read the full blob and gzip-compress for transfer.
-        # GLB: 9.5 MB → 1.7 MB, DAE: 32 MB → 3.5 MB typical.
+        # Resolve a local filesystem path for the blob when the backend keeps
+        # it on disk (the default local backend). Serving straight from disk
+        # via FileResponse streams with HTTP Range support and ZERO in-memory
+        # copy, instead of reading the whole GLB into RAM and then holding a
+        # SECOND full gzip copy. A large HVAC RVT converts to a 100+ MB GLB, so
+        # the old read-all-then-gzip path peaked at ~2x the file per request
+        # and OOM'd the 1-CPU production box (issue #291). S3-style backends
+        # already returned a presigned redirect above; a backend that exposes
+        # no local path falls through to the in-memory byte path below.
         from app.core.storage import get_storage_backend
 
-        _geo_bytes = await get_storage_backend().get(key)
+        backend = get_storage_backend()
+        disk_path = backend.local_path(key)
+
+        if disk_path is not None:
+            # Bounded head read: _quick_validate_geometry_bytes only inspects
+            # the first ~16 KB (GLB magic, COLLADA root, glTF asset), so we
+            # never page the full blob in just to validate it. The true size
+            # comes from stat() for the failure diagnostic below.
+            import asyncio
+
+            def _read_geometry_head(p: pathlib.Path) -> tuple[bytes, int]:
+                with p.open("rb") as fh:
+                    head = fh.read(_GEOMETRY_HEAD_PROBE_BYTES)
+                return head, p.stat().st_size
+
+            _geo_bytes, _geo_size = await asyncio.to_thread(_read_geometry_head, disk_path)
+        else:
+            # Backend has no local path (remote S3 without presigning, or a
+            # community backend): read the blob once. The response side below
+            # still avoids ever holding a second full copy.
+            _geo_bytes = await backend.get(key)
+            _geo_size = len(_geo_bytes)
 
         # Serve-time integrity check - closes the gap where geometry written
         # by an older converter (before _validate_geometry_file existed on
@@ -2895,7 +2931,9 @@ async def get_model_geometry(
         # surfaces this as an opaque "Cannot read properties of undefined
         # (reading 'getAttribute')" deep inside Three.js. We re-check the
         # first ~4 KB of the blob and 422 with a precise diagnostic if it
-        # doesn't match the format the extension promises.
+        # doesn't match the format the extension promises. On the local path
+        # this inspects the bounded head, which is byte-for-byte identical to
+        # the head of the full blob for every check the validator performs.
         ok_serve, reason_serve = _quick_validate_geometry_bytes(_geo_bytes, ext)
         if not ok_serve:
             # Build a structured diagnostic payload. We deliberately limit
@@ -2992,7 +3030,7 @@ async def get_model_geometry(
                 reason_serve,
                 request_id,
                 model_id,
-                len(_geo_bytes),
+                _geo_size,
                 head_hex,
                 first_tag,
                 ext,
@@ -3006,7 +3044,7 @@ async def get_model_geometry(
                 "format": ext.lstrip(".") or "unknown",
                 "stored_extension": ext,
                 "expected_signature": expected_signature,
-                "size_bytes": len(_geo_bytes),
+                "size_bytes": _geo_size,
                 "head_hex": head_hex,
                 "head_ascii": head_ascii,
                 "first_tag": first_tag,
@@ -3028,7 +3066,6 @@ async def get_model_geometry(
                 headers={"X-Request-Id": request_id},
             )
 
-        compressed = _gzip.compress(_geo_bytes, compresslevel=6)
         # RFC 5987 encoding so non-ASCII model names (Cyrillic / Arabic / …)
         # don't blow up the latin-1 HTTP header encoder. Without this the
         # whole geometry response 500's and the frontend spins on "loading"
@@ -3036,24 +3073,51 @@ async def get_model_geometry(
         # UTF-8-encoded `filename*=` for browsers that support it.
         from urllib.parse import quote as _qs
 
-        from fastapi.responses import Response
+        from fastapi.responses import FileResponse, Response
 
         display_name = f"{model.name}{ext}"
         ascii_fallback = display_name.encode("ascii", "replace").decode("ascii")
         cd_header = f"inline; filename=\"{ascii_fallback}\"; filename*=UTF-8''{_qs(display_name)}"
 
+        # Surface the correlation ID even on the happy path so a downstream JS
+        # parsing failure still has a request_id to quote (matches every error
+        # branch above).
+        response_headers = {
+            **cache_headers,
+            "Content-Disposition": cd_header,
+            "X-Request-Id": request_id,
+        }
+
+        if disk_path is not None:
+            # Stream from disk: FileResponse sets Content-Length + Accept-Ranges
+            # and honours Range requests, all without holding the blob in
+            # memory. We do NOT gzip - GLB is binary and near-incompressible,
+            # and the frontend loader (ElementManager.doLoadGeometry) reads the
+            # response body straight into an ArrayBuffer and sniffs the raw
+            # bytes (glTF magic / <COLLADA root), so raw bytes parse correctly.
+            # Passing the Content-Disposition via headers (not filename=) keeps
+            # the header byte-identical to the in-memory branch below.
+            return FileResponse(
+                disk_path,
+                media_type=media_type,
+                headers=response_headers,
+            )
+
+        # In-memory fallback (backend exposed no local path). GLB is
+        # near-incompressible, so gzip would only buy a second full copy for no
+        # real transfer win - return the raw bytes. Text geometry (.dae /
+        # .gltf) still compresses well, so gzip those, reassigning _geo_bytes
+        # so the raw and compressed copies are never both held. Either way the
+        # browser transparently decompresses Content-Encoding: gzip before the
+        # loader sees the bytes, so the client parses correctly in both cases.
+        if ext.lower() in (".dae", ".gltf"):
+            _geo_bytes = _gzip.compress(_geo_bytes, compresslevel=6)
+            response_headers["Content-Encoding"] = "gzip"
+
         return Response(
-            content=compressed,
+            content=_geo_bytes,
             media_type=media_type,
-            headers={
-                **cache_headers,
-                "Content-Encoding": "gzip",
-                "Content-Disposition": cd_header,
-                # Surface the correlation ID even on the happy path so a
-                # downstream JS parsing failure still has a request_id to
-                # quote when reporting (matches every error branch above).
-                "X-Request-Id": request_id,
-            },
+            headers=response_headers,
         )
 
     # ── No geometry blob on storage - disambiguate by model status ──────────

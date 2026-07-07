@@ -55,6 +55,7 @@ from app.core.url_safety import UnsafeUrlError, resolve_and_validate_external_ur
 from app.database import async_session_factory
 from app.modules.integrations.models import IntegrationConfig
 from app.modules.notifications.dispatcher import _event_filter_matches
+from app.modules.notifications.templates import combine_title_body
 from app.modules.notifications.templates import render as render_template
 
 logger = logging.getLogger(__name__)
@@ -173,8 +174,10 @@ async def _send_to_connector(
                 return False
             # The body text is passed as the single template parameter so the
             # recipient sees the notification content (the title is folded in
-            # because Meta templates are positional-parameter only).
-            body_param = f"{title} - {message}".strip(" -") if message else title
+            # because the message template is positional-parameter only). The
+            # shared helper avoids a "Title - Title" line when an event sets the
+            # body equal to the title.
+            body_param = combine_title_body(title, message)
             return await send_whatsapp_notification(
                 phone_number_id=phone_number_id,
                 access_token=access_token,
@@ -221,13 +224,16 @@ async def _on_notification_created(event: Event) -> None:
 
     # Resolve the human-readable strings from the i18n template registry so
     # the connector message matches what the in-app bell shows. The created
-    # event carries the title_key; the body_context is not on the event, so
-    # the body falls back to the rendered (placeholder-free) template or the
-    # title alone.
+    # event carries title_key + body_key + body_context, so we interpolate
+    # BOTH the title and the body against that context - placeholders like
+    # {actual} {currency} are filled exactly as the in-app notification
+    # renders them (render() falls back to the raw template if a placeholder
+    # is missing, never to a half-substituted string).
+    body_context = data.get("body_context") or {}
     title_key = data.get("title_key") or f"notifications.{notification_type}.title"
-    title = render_template(title_key, {}) or notification_type or "Notification"
+    title = render_template(title_key, body_context) or notification_type or "Notification"
     body_key = data.get("body_key")
-    message = render_template(body_key, {}) if body_key else ""
+    message = render_template(body_key, body_context) if body_key else ""
     if not message:
         # No distinct body - the bell shows just the title, so do the same.
         message = title

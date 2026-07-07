@@ -1,5 +1,5 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
-"""‌⁠‍BCF 3.0 → :class:`ClashIssue` import service.
+"""BCF 3.0 → :class:`ClashIssue` import service.
 
 This module is the **inverse** of :class:`app.modules.bcf.service.BCFExportService`:
 it takes a ``.bcfzip`` produced by Revit / ArchiCAD / Solibri (or by our
@@ -49,7 +49,7 @@ logger = logging.getLogger(__name__)
 
 
 class BCFImportFeatureUnavailable(Exception):
-    """‌⁠‍Raised when the clash schema (v41) hasn't migrated yet.
+    """Raised when the clash schema (v41) hasn't migrated yet.
 
     Mirrors :class:`app.modules.bcf.service.BCFExportFeatureUnavailable`
     so the router maps the same condition consistently for both halves
@@ -127,7 +127,7 @@ class ImportReport:
 
 
 class BCFImportService:
-    """‌⁠‍Maps a parsed BCF archive onto the project's clash-issue tables."""
+    """Maps a parsed BCF archive onto the project's clash-issue tables."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session

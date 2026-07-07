@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍SAFETY PRIMITIVE 2 - the per-entity column whitelist.
+"""SAFETY PRIMITIVE 2 - the per-entity column whitelist.
 
 Only explicitly whitelisted columns can be filtered, sorted, grouped, or
 returned for a given entity. A module opts an entity in by calling

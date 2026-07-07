@@ -1,13 +1,16 @@
 // @ts-nocheck
 /**
- * Tests for the project-overview Photo strip widget (#284).
+ * Tests for the project-overview Photo strip widget (#284 follow-up).
  *
- * Tigercatman reported that images uploaded into Project Files never showed
- * in the Photo strip - it only read the dedicated photos table. These tests
- * pin the fix: the strip now MERGES dedicated site photos with image-type
- * general documents, sorts newest-first, and loads every thumbnail through
- * the authenticated <AuthImage> path (a bare <img src> would 401 on the
- * bearer-protected endpoints).
+ * The strip shows FIELD/SITE imagery only. It merges:
+ *   - dedicated site photos (the photos table), always shown, and
+ *   - general Project Files images ONLY when they carry an explicit "field"
+ *     tag (a render with no field tag must be excluded).
+ *
+ * It also DEDUPES: every photo upload mirrors a twin document row with
+ * ``category === 'photo'``; that twin must be skipped so a site photo never
+ * appears twice. Every thumbnail loads through the authenticated <AuthImage>
+ * path (a bare <img src> would 401 on the bearer-protected endpoints).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
@@ -46,7 +49,7 @@ function mockApi(byUrl: Record<string, unknown>) {
   });
 }
 
-describe('PhotoStripWidget (#284 - uploaded images appear in the strip)', () => {
+describe('PhotoStripWidget (#284 follow-up - field/site imagery only)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     // Thumbnails are bearer-protected; <AuthImage> fetches the bytes with the
@@ -67,90 +70,116 @@ describe('PhotoStripWidget (#284 - uploaded images appear in the strip)', () => 
     vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
   });
 
-  it('shows an image uploaded into project files even with zero dedicated photos', async () => {
+  it('excludes general (untagged) images - only a field-tagged image shows', async () => {
     mockApi({
       '/v1/documents/photos/': [],
       '/v1/documents/?project_id=': [
+        // A field-tagged image -> shown.
         {
-          id: 'doc-img-1',
-          name: 'site_photo.jpg',
+          id: 'doc-field-1',
+          name: 'east_elevation.jpg',
           mime_type: 'image/jpeg',
+          category: 'other',
+          tags: ['field', 'elevation'],
           created_at: '2026-06-01T10:00:00Z',
         },
-        // A non-image document must be ignored.
+        // An office render (image, but no field tag) -> excluded.
+        {
+          id: 'doc-render-1',
+          name: 'lobby_render.png',
+          mime_type: 'image/png',
+          category: 'other',
+          tags: ['marketing'],
+          created_at: '2026-06-02T10:00:00Z',
+        },
+        // A non-image document -> ignored.
         {
           id: 'doc-pdf-1',
           name: 'contract.pdf',
           mime_type: 'application/pdf',
-          created_at: '2026-06-02T10:00:00Z',
+          created_at: '2026-06-03T10:00:00Z',
         },
       ],
     });
 
     renderWithProviders(<PhotoStripWidget projectId="proj-1" />);
 
-    // The empty state must NOT show - we have one image document.
-    await waitFor(() => {
-      expect(screen.queryByText(/No photos yet/i)).not.toBeInTheDocument();
-    });
-    // Exactly one tile rendered (the image doc), and its thumbnail was fetched
-    // with auth via AuthImage (the document download endpoint).
+    // The field-tagged image is fetched as a thumbnail (auth via AuthImage).
     await waitFor(() => {
       expect(global.fetch).toHaveBeenCalledWith(
-        '/api/v1/documents/doc-img-1/download/',
+        '/api/v1/documents/doc-field-1/download/',
         expect.objectContaining({ headers: expect.anything() }),
       );
     });
-    // The PDF document must never be fetched as a thumbnail.
+    // The render and the PDF must never be fetched.
+    expect(global.fetch).not.toHaveBeenCalledWith(
+      '/api/v1/documents/doc-render-1/download/',
+      expect.anything(),
+    );
     expect(global.fetch).not.toHaveBeenCalledWith(
       '/api/v1/documents/doc-pdf-1/download/',
       expect.anything(),
     );
   });
 
-  it('merges dedicated photos with image documents and loads both via AuthImage', async () => {
+  it('dedupes: a photo and its twin document row render exactly once', async () => {
     mockApi({
       '/v1/documents/photos/': [
         { id: 'photo-1', taken_at: '2026-06-03T10:00:00Z', created_at: '2026-06-03T10:00:00Z' },
       ],
       '/v1/documents/?project_id=': [
+        // The twin row mirrored beside ``photo-1`` (category === 'photo').
+        // It must be skipped so the image is not double-counted.
         {
-          id: 'doc-img-2',
-          name: 'progress.png',
-          mime_type: 'image/png',
-          created_at: '2026-06-04T10:00:00Z',
+          id: 'doc-twin-1',
+          name: 'photo-1.jpg',
+          mime_type: 'image/jpeg',
+          category: 'photo',
+          tags: ['photo', 'site'],
+          created_at: '2026-06-03T10:00:00Z',
         },
       ],
     });
 
     renderWithProviders(<PhotoStripWidget projectId="proj-1" />);
 
-    // Photo thumb uses the dedicated thumb route...
+    // The dedicated photo loads via the photos thumb route...
     await waitFor(() => {
       expect(global.fetch).toHaveBeenCalledWith(
         '/api/v1/documents/photos/photo-1/thumb/',
         expect.objectContaining({ headers: expect.anything() }),
       );
     });
-    // ...and the image document uses its download route.
-    expect(global.fetch).toHaveBeenCalledWith(
-      '/api/v1/documents/doc-img-2/download/',
-      expect.objectContaining({ headers: expect.anything() }),
+    // ...and the twin document row is NEVER fetched (would be a duplicate).
+    expect(global.fetch).not.toHaveBeenCalledWith(
+      '/api/v1/documents/doc-twin-1/download/',
+      expect.anything(),
     );
   });
 
-  it('shows the empty state when there are neither photos nor image documents', async () => {
+  it('shows the empty state when there are no site photos (only an untagged render)', async () => {
     mockApi({
       '/v1/documents/photos/': [],
       '/v1/documents/?project_id=': [
-        { id: 'doc-pdf-2', name: 'spec.pdf', mime_type: 'application/pdf' },
+        {
+          id: 'doc-render-2',
+          name: 'render.png',
+          mime_type: 'image/png',
+          category: 'other',
+          tags: [],
+        },
       ],
     });
 
     renderWithProviders(<PhotoStripWidget projectId="proj-1" />);
 
     await waitFor(() => {
-      expect(screen.getByText(/No photos yet/i)).toBeInTheDocument();
+      expect(screen.getByText(/No site photos yet/i)).toBeInTheDocument();
     });
+    // The render must not be fetched as a thumbnail.
+    expect(global.fetch).not.toHaveBeenCalledWith(
+      '/api/v1/documents/doc-render-2/download/',
+      expect.anything(),
+    );
   });
 });

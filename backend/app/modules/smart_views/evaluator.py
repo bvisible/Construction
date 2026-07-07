@@ -1,5 +1,5 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
-"""‌⁠‍Smart Views rule engine.
+"""Smart Views rule engine.
 
 The evaluator is **pure** - no DB, no IO, no globals. Callers pass in a
 :class:`SmartView` (or its rules + defaults) and a list of element-like

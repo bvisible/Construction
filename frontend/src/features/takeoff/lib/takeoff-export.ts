@@ -247,9 +247,16 @@ export function renderMeasurementsOnCanvas(
   );
 
   for (const m of visible) {
-    const color = groupColorMap[m.group] || '#d68a59';
+    // A per-measurement colour (set via the properties swatch) wins over the
+    // group default so a recoloured measurement exports in its chosen colour
+    // (issue #299); annotation markups already resolve `m.color` below.
+    const color = m.color || groupColorMap[m.group] || '#d68a59';
     ctx.strokeStyle = color;
     ctx.fillStyle = color;
+    // Per-measurement stroke width (issue #312); defaults to the 2px hairline
+    // so the export matches the on-screen canvas. Scales with zoom (issue #321)
+    // to stay in document space, keeping the export a mirror of the overlay.
+    ctx.lineWidth = (m.strokeWidth ?? 2) * dpr * zoom;
 
     if (m.type === 'distance' && m.points.length === 2) {
       const p0 = m.points[0]!;
@@ -308,7 +315,7 @@ export function renderMeasurementsOnCanvas(
         ctx.lineTo(pt.x * dpr * zoom, pt.y * dpr * zoom);
       }
       ctx.closePath();
-      ctx.globalAlpha = 0.15;
+      ctx.globalAlpha = m.fillAlpha ?? 0.15;
       ctx.fill();
       ctx.globalAlpha = 1;
       ctx.stroke();
@@ -326,7 +333,7 @@ export function renderMeasurementsOnCanvas(
       for (const p of m.points) {
         ctx.beginPath();
         ctx.arc(p.x * dpr * zoom, p.y * dpr * zoom, 8 * dpr, 0, Math.PI * 2);
-        ctx.globalAlpha = 0.3;
+        ctx.globalAlpha = m.fillAlpha ?? 0.3;
         ctx.fill();
         ctx.globalAlpha = 1;
         ctx.stroke();

@@ -91,12 +91,41 @@ def sanitise(data: Any) -> dict[str, Any]:
     return {"mode": mode, "logo_data_url": logo, "company_name": name}
 
 
+#: Process-local cache of the parsed branding, keyed by file path and
+#: invalidated by modification time. A PDF export reads the branding several
+#: times per page (header logo + footer brand + document metadata) and the logo
+#: data URL can be megabytes, so re-reading and re-parsing the file every time
+#: is wasteful. The mtime key means an admin save (which rewrites the file) is
+#: picked up on the next read with no explicit bust, and a reset (which unlinks
+#: it) falls through to the defaults.
+_branding_cache: dict[str, tuple[int, dict[str, Any]]] = {}
+
+
 def read_branding(data_dir: Path | None = None) -> dict[str, Any]:
-    """Return the stored branding, or defaults when none/corrupt."""
+    """Return the stored branding, or defaults when none/corrupt.
+
+    Cached per file path and invalidated by modification time, so repeated reads
+    within a single PDF export (or across requests) avoid re-parsing a possibly
+    multi-megabyte logo data URL while still reflecting an admin update promptly.
+    A fresh ``dict`` is returned each call so callers can never mutate the cache.
+    """
     path = branding_path(data_dir)
+    key = str(path)
+    try:
+        mtime = path.stat().st_mtime_ns
+    except FileNotFoundError:
+        _branding_cache.pop(key, None)
+        return dict(DEFAULT_BRANDING)
+    except OSError as exc:
+        logger.warning("Could not stat branding at %s: %s", path, exc)
+        return dict(DEFAULT_BRANDING)
+    cached = _branding_cache.get(key)
+    if cached is not None and cached[0] == mtime:
+        return dict(cached[1])
     try:
         raw = path.read_text(encoding="utf-8")
     except FileNotFoundError:
+        _branding_cache.pop(key, None)
         return dict(DEFAULT_BRANDING)
     except OSError as exc:
         logger.warning("Could not read branding at %s: %s", path, exc)
@@ -106,7 +135,9 @@ def read_branding(data_dir: Path | None = None) -> dict[str, Any]:
     except ValueError:
         logger.warning("Ignoring corrupt branding file at %s", path)
         return dict(DEFAULT_BRANDING)
-    return sanitise(data)
+    clean = sanitise(data)
+    _branding_cache[key] = (mtime, dict(clean))
+    return dict(clean)
 
 
 def write_branding(payload: Any, data_dir: Path | None = None) -> dict[str, Any]:

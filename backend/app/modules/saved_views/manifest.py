@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍Saved Views module manifest."""
+"""Saved Views module manifest."""
 
 from app.core.module_loader import ModuleManifest
 

@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍Match-service tunables - every magic number lives here.
+"""Match-service tunables - every magic number lives here.
 
 Boost weights, score clamps, fuzzy-match cutoffs, reranker model name,
 and cost caps. The defaults here were calibrated on the v2.8.0 golden
@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 
 
 def _env_float(name: str, default: float) -> float:
-    """‌⁠‍Read ``name`` from env as a float, or return ``default`` on miss."""
+    """Read ``name`` from env as a float, or return ``default`` on miss."""
     raw = os.environ.get(name)
     if raw is None or not raw.strip():
         return default
@@ -47,7 +47,7 @@ def _env_float(name: str, default: float) -> float:
 
 
 def _env_int(name: str, default: int) -> int:
-    """‌⁠‍Read ``name`` from env as an int, or return ``default`` on miss."""
+    """Read ``name`` from env as an int, or return ``default`` on miss."""
     raw = os.environ.get(name)
     if raw is None or not raw.strip():
         return default
@@ -199,7 +199,7 @@ _LEX_PROFILE_PATH: Path = _PROFILE_DIR / "lex_thresholds.json"
 
 @lru_cache(maxsize=1)
 def _load_encoder_profiles_raw() -> dict[str, Any]:
-    """‌⁠‍Read ``encoder_profiles.json`` once, cache for process lifetime.
+    """Read ``encoder_profiles.json`` once, cache for process lifetime.
 
     Returns an empty dict on any I/O or parse error so callers can fall
     back to the canonical constants without raising.
@@ -220,7 +220,7 @@ def _load_encoder_profiles_raw() -> dict[str, Any]:
 
 @lru_cache(maxsize=1)
 def _load_lex_profiles_raw() -> dict[str, Any]:
-    """‌⁠‍Read ``lex_thresholds.json`` once, cache for process lifetime."""
+    """Read ``lex_thresholds.json`` once, cache for process lifetime."""
     try:
         with _LEX_PROFILE_PATH.open("r", encoding="utf-8") as fh:
             data = json.load(fh)
@@ -236,7 +236,7 @@ def _load_lex_profiles_raw() -> dict[str, Any]:
 
 
 def _load_encoder_profile(model_id: str | None) -> dict[str, float]:
-    """‌⁠‍Return the encoder profile dict for ``model_id`` or {}.
+    """Return the encoder profile dict for ``model_id`` or {}.
 
     Lookup order: explicit ``model_id`` → file's ``default`` key →
     empty dict (caller falls back to canonical constants).
@@ -265,7 +265,7 @@ def _load_encoder_profile(model_id: str | None) -> dict[str, float]:
 
 
 def _load_lex_thresholds_for(lang: str) -> dict[str, int]:
-    """‌⁠‍Return the lex-threshold dict for ``lang`` or the file default."""
+    """Return the lex-threshold dict for ``lang`` or the file default."""
     raw = _load_lex_profiles_raw()
     if not raw:
         return {}
@@ -283,7 +283,7 @@ def _load_lex_thresholds_for(lang: str) -> dict[str, int]:
 def confidence_thresholds_for_model(
     model_id: str | None,
 ) -> tuple[float, float, float]:
-    """‌⁠‍Resolve ``(high, medium, low)`` confidence bands for ``model_id``.
+    """Resolve ``(high, medium, low)`` confidence bands for ``model_id``.
 
     Falls back to the canonical ``CONFIDENCE_HIGH_THRESHOLD`` /
     ``CONFIDENCE_MEDIUM_THRESHOLD`` constants (and ``0.40`` for low)
@@ -307,7 +307,7 @@ def confidence_thresholds_for_model(
 
 
 def lex_thresholds_for_language(lang: str | None) -> tuple[int, int]:
-    """‌⁠‍Resolve ``(high, medium)`` lex thresholds for ``lang``.
+    """Resolve ``(high, medium)`` lex thresholds for ``lang``.
 
     Falls back to ``LEX_HIGH_THRESHOLD`` / ``LEX_MEDIUM_THRESHOLD`` so
     callers that don't pass a language (or pass an unknown one) keep the
@@ -326,7 +326,7 @@ def lex_thresholds_for_language(lang: str | None) -> tuple[int, int]:
 
 
 def boost_weights_for_standard(standard: str | None) -> dict[str, float]:
-    """‌⁠‍Resolve boost weights for a classification ``standard``.
+    """Resolve boost weights for a classification ``standard``.
 
     Stub for T3.2 - currently returns the canonical ``BOOST_WEIGHTS`` as
     a plain dict regardless of ``standard``. The API surface lets future

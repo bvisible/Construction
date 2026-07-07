@@ -1,4 +1,4 @@
-"""‌⁠‍Schedule Advanced module manifest."""
+"""Schedule Advanced module manifest."""
 
 from app.core.module_loader import ModuleManifest
 

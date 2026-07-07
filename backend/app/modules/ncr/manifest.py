@@ -1,4 +1,4 @@
-"""‌⁠‍NCR module manifest."""
+"""NCR module manifest."""
 
 from app.core.module_loader import ModuleManifest
 

@@ -1,4 +1,4 @@
-"""‌⁠‍Markups & Annotations API routes.
+"""Markups & Annotations API routes.
 
 Endpoints:
     Markups:
@@ -59,7 +59,7 @@ def _get_service(session: SessionDep) -> MarkupsService:
 
 
 def _markup_to_response(item: object) -> MarkupResponse:
-    """‌⁠‍Build a MarkupResponse from a Markup ORM object."""
+    """Build a MarkupResponse from a Markup ORM object."""
     return MarkupResponse(
         id=item.id,  # type: ignore[attr-defined]
         project_id=item.project_id,  # type: ignore[attr-defined]
@@ -88,7 +88,7 @@ def _markup_to_response(item: object) -> MarkupResponse:
 
 
 def _scale_to_response(item: object) -> ScaleConfigResponse:
-    """‌⁠‍Build a ScaleConfigResponse from a ScaleConfig ORM object."""
+    """Build a ScaleConfigResponse from a ScaleConfig ORM object."""
     return ScaleConfigResponse(
         id=item.id,  # type: ignore[attr-defined]
         document_id=item.document_id,  # type: ignore[attr-defined]

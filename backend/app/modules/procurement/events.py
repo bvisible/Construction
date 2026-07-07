@@ -1,4 +1,4 @@
-"""‌⁠‍Procurement event handlers - auto-create PO from awarded tender / bid.
+"""Procurement event handlers - auto-create PO from awarded tender / bid.
 
 Subscribes to BOTH award events emitted by the two sister tendering
 modules and creates a draft Purchase Order pre-populated from the winner:
@@ -67,7 +67,7 @@ logger = logging.getLogger(__name__)
 
 
 def _to_decimal(value: object) -> Decimal:
-    """‌⁠‍Coerce a JSON-loaded numeric/string into Decimal, defaulting to 0."""
+    """Coerce a JSON-loaded numeric/string into Decimal, defaulting to 0."""
     if value is None:
         return Decimal("0")
     try:
@@ -113,7 +113,7 @@ async def _find_existing_po(
 
 
 async def _on_tender_awarded(event: Event) -> None:
-    """‌⁠‍Schedule the auto-PO creation as a detached task.
+    """Schedule the auto-PO creation as a detached task.
 
     The publisher (``tendering.service.apply_winner``) calls
     ``event_bus.publish`` while still holding its request transaction. On
@@ -287,7 +287,7 @@ async def _create_po_from_award(event: Event) -> None:
 
 
 async def _on_bid_management_awarded(event: Event) -> None:
-    """‌⁠‍Schedule auto-PO creation from a bid_management award (detached).
+    """Schedule auto-PO creation from a bid_management award (detached).
 
     Mirrors :func:`_on_tender_awarded`. ``bid_management.service.award_package``
     publishes ``bid_management.package.awarded`` via ``publish_detached``
@@ -521,7 +521,7 @@ async def _bid_line_lookup(session: AsyncSession, package_id: uuid.UUID) -> dict
 
 
 async def _on_supplier_rating_update(event: Event) -> None:
-    """‌⁠‍``procurement.supplier_rating_update`` → flag the vendor on a defect.
+    """``procurement.supplier_rating_update`` → flag the vendor on a defect.
 
     Published by ``qms/events.py::_on_ncr_raised_fanout`` whenever an NCR
     is raised. When the payload carries a ``supplier_id`` (the responsible

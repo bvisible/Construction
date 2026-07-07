@@ -1,4 +1,4 @@
-"""‌⁠‍Telegram Bot API connector.
+"""Telegram Bot API connector.
 
 Setup: User creates a bot via @BotFather, gets bot token,
 adds bot to a group/channel, provides chat_id.
@@ -23,19 +23,29 @@ async def send_telegram_notification(
     message: str,
     action_url: str | None = None,
 ) -> bool:
-    """‌⁠‍Send an HTML-formatted notification via Telegram Bot API.
+    """Send an HTML-formatted notification via Telegram Bot API.
 
     Args:
         bot_token: The bot token obtained from @BotFather.
         chat_id: The target chat/group/channel ID.
         title: Bold heading for the message.
-        message: Body text (plain text, will be HTML-escaped).
+        message: Body text (plain text, will be HTML-escaped). When it is
+            empty or identical to the title it is omitted so the message does
+            not repeat itself.
         action_url: Optional link appended to the message.
 
     Returns:
         True if Telegram accepted the message, False otherwise.
     """
-    parts = [f"<b>{html.escape(title)}</b>", "", html.escape(message)]
+    parts = [f"<b>{html.escape(title)}</b>"]
+
+    # Only add a body block when it carries information beyond the title -
+    # the bridge falls the body back to the title when there is no distinct
+    # message, and repeating it would look broken.
+    body = (message or "").strip()
+    if body and body != title.strip():
+        parts.append("")
+        parts.append(html.escape(body))
 
     if action_url:
         parts.append("")

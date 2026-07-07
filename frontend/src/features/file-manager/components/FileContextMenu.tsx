@@ -14,8 +14,10 @@ import {
   Download,
   ExternalLink,
   Eye,
+  Image as ImageIcon,
   Link as LinkIcon,
   Pencil,
+  PlayCircle,
   Ruler,
   Trash2,
 } from 'lucide-react';
@@ -24,7 +26,13 @@ import { useNavigate } from 'react-router-dom';
 import { useToastStore } from '@/stores/useToastStore';
 import { copyToClipboard } from '../lib/tauri';
 import { downloadProtectedFile } from '../api';
-import { isInlinePreviewRow, pdfTakeoffTargetFor, primaryModule } from '../kindModule';
+import {
+  isInlinePreviewRow,
+  isLightboxRow,
+  isVideoRow,
+  pdfTakeoffTargetFor,
+  primaryModule,
+} from '../kindModule';
 import type { FileRow } from '../types';
 
 interface FileContextMenuProps {
@@ -40,6 +48,13 @@ interface FileContextMenuProps {
    * menu still works if a consumer hasn't wired the inline reader yet.
    */
   onInlinePreview?: (row: FileRow) => void;
+  /**
+   * Open an image / video in the MediaLightbox (#284 follow-up, ITEM 10).
+   * When omitted, the "Open" item degrades to the primary target's route
+   * fallback (which keeps the file selected in /files) rather than a dead
+   * click - it never routes a media file to PDF Takeoff.
+   */
+  onMediaPreview?: (row: FileRow) => void;
 }
 
 export function FileContextMenu({
@@ -50,6 +65,7 @@ export function FileContextMenu({
   onRename,
   onDelete,
   onInlinePreview,
+  onMediaPreview,
 }: FileContextMenuProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -90,11 +106,19 @@ export function FileContextMenu({
   // #284 - a PDF document reads inline by default; PDF Takeoff is a separate,
   // explicit choice surfaced below.
   const inlinePreview = isInlinePreviewRow(row);
+  // ITEM 10 - an image / video opens in the MediaLightbox, never PDF Takeoff.
+  const lightbox = isLightboxRow(row);
+  const isVideo = lightbox && isVideoRow(row);
   const takeoffTarget = pdfTakeoffTargetFor(row);
 
   function handleOpenPrimary() {
     if (inlinePreview && onInlinePreview) {
       onInlinePreview(row);
+      onClose();
+      return;
+    }
+    if (lightbox && onMediaPreview) {
+      onMediaPreview(row);
       onClose();
       return;
     }
@@ -143,14 +167,30 @@ export function FileContextMenu({
       onClick={(e) => e.stopPropagation()}
     >
       <MenuItem
-        icon={inlinePreview ? <Eye size={13} /> : <ExternalLink size={13} />}
+        icon={
+          inlinePreview ? (
+            <Eye size={13} />
+          ) : lightbox ? (
+            isVideo ? (
+              <PlayCircle size={13} />
+            ) : (
+              <ImageIcon size={13} />
+            )
+          ) : (
+            <ExternalLink size={13} />
+          )
+        }
         label={
           inlinePreview
             ? t('files.context.view_pdf', { defaultValue: 'View PDF' })
-            : t('files.context.open_in', {
-                defaultValue: 'Open in {{module}}',
-                module: moduleLabel,
-              })
+            : lightbox
+              ? isVideo
+                ? t('files.context.play_video', { defaultValue: 'Play video' })
+                : t('files.context.view_image', { defaultValue: 'View image' })
+              : t('files.context.open_in', {
+                  defaultValue: 'Open in {{module}}',
+                  module: moduleLabel,
+                })
         }
         onClick={handleOpenPrimary}
       />

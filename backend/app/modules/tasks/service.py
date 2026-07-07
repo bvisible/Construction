@@ -1,4 +1,4 @@
-"""‌⁠‍Tasks service - business logic for task management.
+"""Tasks service - business logic for task management.
 
 - Event publishing on create/update/delete
 """
@@ -40,7 +40,7 @@ async def _safe_audit(
     user_id: str | None = None,
     details: dict | None = None,
 ) -> None:
-    """‌⁠‍Best-effort audit log - never blocks the caller on failure."""
+    """Best-effort audit log - never blocks the caller on failure."""
     try:
         from app.core.audit import audit_log
 
@@ -69,7 +69,7 @@ _TASK_STATUS_TRANSITIONS: dict[str, set[str]] = {
 
 
 class TaskService:
-    """‌⁠‍Business logic for task operations."""
+    """Business logic for task operations."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session

@@ -1,4 +1,4 @@
-"""‌⁠‍Notification Pydantic schemas - request/response models.
+"""Notification Pydantic schemas - request/response models.
 
 The response schema renders English fallback strings server-side so the
 bell always has readable text even when the frontend i18n layer hasn't
@@ -148,7 +148,7 @@ class NotificationResponse(BaseModel):
 
 
 class NotificationListResponse(BaseModel):
-    """‌⁠‍Paginated notification list."""
+    """Paginated notification list."""
 
     items: list[NotificationResponse]
     total: int

@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍Project ORM models.
+"""Project ORM models.
 
 Tables:
     oe_projects_project          - construction estimation projects
@@ -65,7 +65,7 @@ MATCH_ALLOWED_SOURCES: frozenset[str] = frozenset(MATCH_DEFAULT_SOURCES)
 
 
 class Project(Base):
-    """‌⁠‍Construction estimation project."""
+    """Construction estimation project."""
 
     __tablename__ = "oe_projects_project"
 
@@ -276,7 +276,7 @@ class ProjectStatusHistory(Base):
 
 
 class ProjectWBS(Base):
-    """‌⁠‍Work Breakdown Structure node for a project.
+    """Work Breakdown Structure node for a project.
 
     Supports hierarchical decomposition of project scope into cost, schedule,
     or scope-oriented WBS trees.  Each node can carry planned cost/hours for

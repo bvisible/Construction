@@ -1,4 +1,4 @@
-"""‌⁠‍Variations Pydantic schemas (request/response models)."""
+"""Variations Pydantic schemas (request/response models)."""
 
 from __future__ import annotations
 
@@ -671,7 +671,7 @@ class ExtensionOfTimeClaimResponse(BaseModel):
 
 
 class EOTTIARecordRequest(BaseModel):
-    """‌⁠‍Stamp a TIA result onto an EoT claim."""
+    """Stamp a TIA result onto an EoT claim."""
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
@@ -680,7 +680,7 @@ class EOTTIARecordRequest(BaseModel):
 
 
 class NEC4TimerStatusResponse(BaseModel):
-    """‌⁠‍NEC4 SLA-overdue status for a VariationRequest."""
+    """NEC4 SLA-overdue status for a VariationRequest."""
 
     request_id: UUID
     contract_standard: str

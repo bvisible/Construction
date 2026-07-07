@@ -1,4 +1,4 @@
-"""‌⁠‍CRM service - business logic for sales pipeline, forecasting, analytics.
+"""CRM service - business logic for sales pipeline, forecasting, analytics.
 
 Pure helpers (no I/O) for math + state-machine validation are kept at module
 level so they can be unit-tested in isolation. Anything that hits the DB
@@ -190,12 +190,12 @@ _OPPORTUNITY_TRANSITIONS: dict[str, set[str]] = {
 
 
 def allowed_lead_transitions(current: str) -> set[str]:
-    """‌⁠‍Return the set of valid status transitions from ``current``."""
+    """Return the set of valid status transitions from ``current``."""
     return set(_LEAD_TRANSITIONS.get(current, set()))
 
 
 def allowed_opportunity_transitions(current: str) -> set[str]:
-    """‌⁠‍Return the set of valid status transitions for an opportunity from ``current``."""
+    """Return the set of valid status transitions for an opportunity from ``current``."""
     return set(_OPPORTUNITY_TRANSITIONS.get(current, set()))
 
 

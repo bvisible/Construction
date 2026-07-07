@@ -1,4 +1,4 @@
-"""‌⁠‍Admin service - qa-reset implementation.
+"""Admin service - qa-reset implementation.
 
 Resets the demo dataset to a known baseline so the QA crawler can run
 idempotently. Three independent gates protect the destructive path:
@@ -55,7 +55,7 @@ MAX_USERS_FOR_RESET: int = 100
 
 @dataclass
 class GateError(Exception):
-    """‌⁠‍Raised when one of the three gates rejects the request.
+    """Raised when one of the three gates rejects the request.
 
     ``code`` is the machine-readable gate ID; ``message`` is shown to the
     operator. The HTTP layer maps this to a 403/503 response without
@@ -70,7 +70,7 @@ class GateError(Exception):
 
 
 def is_production_hostname(hostname: str | None) -> bool:
-    """‌⁠‍Return ``True`` when the hostname does NOT look like dev/staging.
+    """Return ``True`` when the hostname does NOT look like dev/staging.
 
     Conservative: missing hostname → production (refuse). Any safe substring
     match → not production.

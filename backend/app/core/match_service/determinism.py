@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍Deterministic-mode helpers for the match pipeline.
+"""Deterministic-mode helpers for the match pipeline.
 
 Background
 ==========
@@ -78,7 +78,7 @@ _ACTIVE_SEED: int | None = None
 
 
 def is_enabled() -> bool:
-    """‌⁠‍Return ``True`` when ``OE_MATCH_DETERMINISTIC`` is set truthy.
+    """Return ``True`` when ``OE_MATCH_DETERMINISTIC`` is set truthy.
 
     Cheap probe - read once per call. Callers that need the value many
     times should cache it on the call stack.
@@ -88,7 +88,7 @@ def is_enabled() -> bool:
 
 
 def _resolve_seed() -> int:
-    """‌⁠‍Read ``OE_MATCH_SEED`` from env or fall back to 42.
+    """Read ``OE_MATCH_SEED`` from env or fall back to 42.
 
     A non-int value falls back silently - the goal is "always have a
     seed", not "shout at the operator".

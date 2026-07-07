@@ -1,4 +1,4 @@
-"""‌⁠‍Slack incoming webhook connector.
+"""Slack incoming webhook connector.
 
 Setup: User creates an Incoming Webhook in Slack app settings,
 copies the webhook URL.
@@ -23,7 +23,7 @@ async def send_slack_notification(
     action_url: str | None = None,
     fields: list[dict[str, str]] | None = None,
 ) -> bool:
-    """‌⁠‍Send a Block Kit notification to a Slack channel via incoming webhook.
+    """Send a Block Kit notification to a Slack channel via incoming webhook.
 
     Args:
         webhook_url: The incoming webhook URL from the Slack app.

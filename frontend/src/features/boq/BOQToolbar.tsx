@@ -110,9 +110,10 @@ export interface BOQToolbarProps {
   // Custom columns
   onManageColumns?: () => void;
   customColumnCount?: number;
-  // Resource cost-driver split (Material/Labor/Equipment %) columns
-  showResourceSplit?: boolean;
-  onToggleResourceSplit?: () => void;
+  // Resource cost-driver split (Material/Labor/Equipment) display: one button
+  // cycles pill -> columns -> off so it can be removed entirely.
+  resourceSplitMode?: 'pill' | 'columns' | 'off';
+  onCycleResourceSplit?: () => void;
   // Per-BOQ named variables ($GFA, $LABOR_RATE, …)
   onManageVariables?: () => void;
   // Renumber positions (gap-of-10 scheme)
@@ -191,8 +192,8 @@ export function BOQToolbar({
   onToggleSmartPanel,
   onPasteFromExcel,
   onManageColumns,
-  showResourceSplit,
-  onToggleResourceSplit,
+  resourceSplitMode,
+  onCycleResourceSplit,
   customColumnCount,
   onManageVariables,
   onRenumber,
@@ -501,7 +502,7 @@ export function BOQToolbar({
             />
           )}
 
-          {(onManageColumns || onManageVariables || onRenumber || onToggleResourceSplit) && (
+          {(onManageColumns || onManageVariables || onRenumber || onCycleResourceSplit) && (
             <span className="mx-0.5 h-5 w-px shrink-0 bg-border-light" />
           )}
 
@@ -532,28 +533,35 @@ export function BOQToolbar({
               testId="boq-renumber-button"
             />
           )}
-          {/* Resource-split toggle keeps a short label: it is the on/off for the
-              Material / Labor / Equipment share columns and must stay obvious. */}
-          {onToggleResourceSplit && (
+          {/* Resource-split control: ONE button cycling three states so an
+              estimator who does not need the Material / Labor / Equipment
+              breakdown can remove it entirely. pill -> columns -> off -> pill.
+              The chosen mode is persisted by BOQEditorPage. */}
+          {onCycleResourceSplit && (
             <button
               type="button"
-              onClick={onToggleResourceSplit}
-              aria-pressed={!!showResourceSplit}
+              onClick={onCycleResourceSplit}
+              aria-label={t('boq.resource_split_cycle', { defaultValue: 'Resource split display: click to switch between compact, columns and hidden' })}
               title={
-                showResourceSplit
-                  ? t('boq.resource_split_hide_tip', { defaultValue: 'Hide the Material, Labor and Equipment percentage columns' })
-                  : t('boq.resource_split_show_tip', { defaultValue: 'Show Material, Labor and Equipment percentage columns for each position' })
+                resourceSplitMode === 'columns'
+                  ? t('boq.resource_split_tip_columns', { defaultValue: 'Material, Labor and Equipment shown as sortable columns. Click to hide them.' })
+                  : resourceSplitMode === 'off'
+                    ? t('boq.resource_split_tip_off', { defaultValue: 'Material, Labor and Equipment hidden. Click to show the compact split.' })
+                    : t('boq.resource_split_tip_pill', { defaultValue: 'Material, Labor and Equipment shown as a compact inline split. Click to show them as columns.' })
               }
               data-testid="boq-resource-split-toolbar-toggle"
+              data-mode={resourceSplitMode ?? 'pill'}
               className={`flex h-7 shrink-0 items-center gap-1 rounded-md px-2 text-2xs font-semibold transition-colors ${
-                showResourceSplit
+                resourceSplitMode === 'columns'
                   ? 'bg-oe-blue/10 text-oe-blue'
                   : 'text-content-secondary hover:bg-surface-secondary hover:text-content-primary'
               }`}
             >
-              <PieChart size={14} />
-              <span>{t('boq.resource_split_short', { defaultValue: 'MAT/LAB/EQU' })}</span>
-              {showResourceSplit && <Check size={12} />}
+              <PieChart size={14} className={resourceSplitMode === 'off' ? 'opacity-40' : undefined} />
+              <span className={resourceSplitMode === 'off' ? 'line-through opacity-60' : undefined}>
+                {t('boq.resource_split_short', { defaultValue: 'MAT/LAB/EQU' })}
+              </span>
+              {resourceSplitMode === 'columns' && <Check size={12} />}
             </button>
           )}
 

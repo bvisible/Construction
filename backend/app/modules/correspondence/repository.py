@@ -1,4 +1,4 @@
-"""‌⁠‍Correspondence data access layer."""
+"""Correspondence data access layer."""
 
 import uuid
 
@@ -10,7 +10,7 @@ from app.modules.correspondence.models import Correspondence
 
 
 class CorrespondenceRepository:
-    """‌⁠‍Data access for Correspondence models."""
+    """Data access for Correspondence models."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -41,7 +41,7 @@ class CorrespondenceRepository:
         return list(result.scalars().all()), total
 
     async def next_reference_number(self, project_id: uuid.UUID) -> str:
-        """‌⁠‍Generate the next reference number using MAX to avoid collisions after deletions.
+        """Generate the next reference number using MAX to avoid collisions after deletions.
 
         Numbers are server-generated as ``COR-%03d``. We select the existing
         numbers for the project and compute the max ordinal in Python rather
@@ -76,7 +76,7 @@ class CorrespondenceRepository:
         return f"COR-{max_num + 1:03d}"
 
     async def create(self, correspondence: Correspondence) -> Correspondence:
-        """‌⁠‍Persist a new correspondence record.
+        """Persist a new correspondence record.
 
         Raises :class:`sqlalchemy.exc.IntegrityError` on unique-constraint
         collision - the service layer retries with a fresh reference number

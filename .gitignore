@@ -172,6 +172,8 @@ test-screenshots/
 # built the frontend without them and a fresh install served the SPA
 # index.html in their place - the founder avatar rendered as a broken image.
 !frontend/public/brand/*.png
+# Contributor avatars on the About page thank-you wall are shipped assets too
+!frontend/public/contributors/*.png
 !docs/screenshots/*.png
 !docs/screenshots/*.jpg
 !docs/screenshots/*.jpeg

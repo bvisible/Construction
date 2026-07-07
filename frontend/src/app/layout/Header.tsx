@@ -1405,7 +1405,7 @@ function ProjectSwitcher() {
   }, [projects, activeProjectId, clearProject, isFetching, isError]);
 
   return (
-    <div className="relative hidden sm:block" ref={ref} data-testid="header-project-picker">
+    <div className="relative hidden sm:block min-w-0" ref={ref} data-testid="header-project-picker">
       {/* Split-button — visibly the most-used surface in the app. Left half
           opens the active project's detail; right half (chevron) opens
           the switcher dropdown. Two distinct visual modes:

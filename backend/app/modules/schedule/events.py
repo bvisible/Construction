@@ -1,4 +1,4 @@
-"""‌⁠‍Schedule event handlers - bridge field reports into the 4D progress log.
+"""Schedule event handlers - bridge field reports into the 4D progress log.
 
 Subscribes to ``fieldreports.report.submitted`` and converts each
 ``schedule_progress`` payload entry into a :class:`ScheduleProgressEntry`
@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 
 
 def _coerce_percent(value: object) -> float | None:
-    """‌⁠‍Coerce a JSON-loaded numeric/string into a 0..100 float, or None."""
+    """Coerce a JSON-loaded numeric/string into a 0..100 float, or None."""
     if value is None:
         return None
     try:
@@ -54,7 +54,7 @@ def _coerce_percent(value: object) -> float | None:
 
 
 async def _on_field_report_submitted(event: Event) -> None:
-    """‌⁠‍Schedule progress-rollup work as a detached task.
+    """Schedule progress-rollup work as a detached task.
 
     See ``procurement/events.py`` for the same SQLite-deadlock-avoidance
     rationale: the publisher is still inside its request transaction

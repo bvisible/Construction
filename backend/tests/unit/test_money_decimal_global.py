@@ -224,6 +224,12 @@ IGNORE_QUALIFIED_MONEY: set[str] = {
     # figures on the same response (``JointConfidenceSchema.target_cost`` /
     # ``cost_mean``) ARE Decimal-as-string; only the scatter series is float.
     "schedule_advanced.ScatterPointSchema.cost",
+    # Cost Explorer By-resources ranking weight: the share of a work item's
+    # total cost that the matched resources account for, clamped to 0..1 and
+    # rounded to 4 dp (see ``cost_explorer/ranking.py``). It is a ranking input
+    # (``0.6*coverage + 0.4*cost_weight``), never summed into a ledger or shown
+    # as currency, so float is correct. The word "cost" trips the money regex.
+    "cost_explorer.ByResourcesMatch.cost_weight",
 }
 
 

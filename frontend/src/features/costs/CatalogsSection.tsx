@@ -16,6 +16,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   BookOpen,
   Download,
+  ListPlus,
   Loader2,
   Pencil,
   Plus,
@@ -88,7 +89,9 @@ function CatalogFormDialog({
   /** `null` = create mode; a catalog = edit mode. */
   catalog: CostCatalog | null;
   onClose: () => void;
-  onSaved: () => void;
+  /** Receives the created / updated catalog so the caller can chain into
+   *  "select it and immediately offer to add a position" on create. */
+  onSaved: (saved: CostCatalog) => void;
 }) {
   const { t } = useTranslation();
   const addToast = useToastStore((s) => s.addToast);
@@ -125,14 +128,14 @@ function CatalogFormDialog({
         description: description.trim() || null,
       });
     },
-    onSuccess: () => {
+    onSuccess: (saved) => {
       addToast({
         type: 'success',
         title: isEdit
           ? t('costs_catalogs.updated', { defaultValue: 'Catalog updated' })
           : t('costs_catalogs.created', { defaultValue: 'Catalog created' }),
       });
-      onSaved();
+      onSaved(saved);
     },
     onError: (err: Error) => {
       addToast({
@@ -442,11 +445,17 @@ function DeleteCatalogDialog({
 export function CatalogsSection({
   selectedId,
   onSelect,
+  onAddPosition,
 }: {
   /** Currently selected catalog id ('' = no catalog filter). */
   selectedId: string;
   /** Select a catalog to filter the items list ('' clears the filter). */
   onSelect: (catalogId: string) => void;
+  /** Open the "Add position" form scoped to this catalog. Called both from
+   *  the per-chip "Add position" action and automatically right after a
+   *  new catalog is created - creating a catalog with no obvious way to
+   *  put items into it was the reported gap this closes. */
+  onAddPosition?: (catalogId: string) => void;
 }) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
@@ -567,6 +576,16 @@ export function CatalogsSection({
                   isActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
                 }`}
               >
+                {onAddPosition && (
+                  <button
+                    onClick={() => onAddPosition(catalog.id)}
+                    title={t('costs_catalogs.add_position', { defaultValue: 'Add position' })}
+                    aria-label={t('costs_catalogs.add_position', { defaultValue: 'Add position' })}
+                    className="flex h-6 w-6 items-center justify-center rounded text-content-tertiary hover:bg-oe-blue-subtle/30 hover:text-oe-blue-text transition-colors"
+                  >
+                    <ListPlus size={12} />
+                  </button>
+                )}
                 <button
                   onClick={() => setEditCatalog(catalog)}
                   title={t('costs_catalogs.edit', { defaultValue: 'Edit catalog' })}
@@ -614,9 +633,14 @@ export function CatalogsSection({
         <CatalogFormDialog
           catalog={null}
           onClose={() => setShowCreate(false)}
-          onSaved={() => {
+          onSaved={(created) => {
             setShowCreate(false);
             invalidate();
+            // Select the brand-new (empty) catalog and immediately hand off
+            // to the "Add position" form - a freshly created catalog has no
+            // items yet and, without this, no obvious next step.
+            onSelect(created.id);
+            onAddPosition?.(created.id);
           }}
         />
       )}

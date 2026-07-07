@@ -1,4 +1,4 @@
-"""‌⁠‍Safety data access layer."""
+"""Safety data access layer."""
 
 import uuid
 
@@ -32,7 +32,7 @@ def _next_suffix(numbers: list[str]) -> int:
 
 
 class IncidentRepository:
-    """‌⁠‍Data access for SafetyIncident models."""
+    """Data access for SafetyIncident models."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -110,7 +110,7 @@ class IncidentRepository:
 
 
 class ObservationRepository:
-    """‌⁠‍Data access for SafetyObservation models."""
+    """Data access for SafetyObservation models."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session

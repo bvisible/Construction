@@ -20,10 +20,12 @@ import {
   Loader2,
   Trash2,
   Upload,
+  FolderInput,
 } from 'lucide-react';
 import { WideModalSection, WideModalField, Badge } from '@/shared/ui';
 import { useToastStore } from '@/stores/useToastStore';
 import { uploadDocument, uploadPhoto, deleteDocument } from '@/features/documents/api';
+import AttachExistingFileModal from './AttachExistingFileModal';
 import {
   fetchFieldReportTemplates,
   fetchReportDocuments,
@@ -219,6 +221,7 @@ export function ReportAttachments({
   const docInputRef = useRef<HTMLInputElement>(null);
   const photoInputRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
+  const [showExistingPicker, setShowExistingPicker] = useState(false);
 
   const { data: docs = [], isLoading } = useQuery({
     queryKey: ['fieldreports', 'documents', reportId],
@@ -363,7 +366,24 @@ export function ReportAttachments({
                 defaultValue: 'Attach document',
               })}
             </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => setShowExistingPicker(true)}
+              className="flex items-center gap-1.5 rounded-lg border border-border-light px-3 py-1.5 text-sm text-content-secondary hover:bg-surface-secondary disabled:opacity-50 transition-colors"
+            >
+              <FolderInput size={14} />
+              {t('fieldreports.attach_existing', {
+                defaultValue: 'Attach existing file',
+              })}
+            </button>
           </div>
+          <p className="text-[11px] text-content-tertiary">
+            {t('fieldreports.attach_existing_hint', {
+              defaultValue:
+                'Attach a file already in project files instead of uploading it again.',
+            })}
+          </p>
 
           {isLoading ? (
             <div className="flex items-center gap-2 text-sm text-content-tertiary">
@@ -418,6 +438,14 @@ export function ReportAttachments({
           )}
         </div>
       </WideModalField>
+      {showExistingPicker && (
+        <AttachExistingFileModal
+          reportId={reportId}
+          projectId={projectId}
+          attachedIds={docs.map((d) => d.id)}
+          onClose={() => setShowExistingPicker(false)}
+        />
+      )}
     </WideModalSection>
   );
 }

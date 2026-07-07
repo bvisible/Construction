@@ -1,4 +1,4 @@
-"""‌⁠‍Pydantic schemas for Project Intelligence API requests and responses."""
+"""Pydantic schemas for Project Intelligence API requests and responses."""
 
 from typing import Any
 

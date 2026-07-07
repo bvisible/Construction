@@ -1,4 +1,4 @@
-"""‌⁠‍Unit tests for the BIM converter-version surfacing path.
+"""Unit tests for the BIM converter-version surfacing path.
 
 v3.12.0 / Stream D — the BIM hub's ``_try_cad2data`` success path attaches
 the installed DDC converter's version + source onto its result dict so the
@@ -21,7 +21,7 @@ from app.modules.boq import cad_import
 
 
 def _stub_subprocess_run(monkeypatch: pytest.MonkeyPatch, *, returncode: int, stdout: bytes) -> None:
-    """‌⁠‍Replace ``subprocess.run`` with a stub that returns a canned response."""
+    """Replace ``subprocess.run`` with a stub that returns a canned response."""
     import subprocess as _subprocess
 
     class _Proc:
@@ -37,7 +37,7 @@ def _stub_subprocess_run(monkeypatch: pytest.MonkeyPatch, *, returncode: int, st
 
 
 def test_detect_converter_version_safe_linux_dpkg_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """‌⁠‍Linux + dpkg available → ``_detect_converter_version_safe`` mirrors
+    """Linux + dpkg available → ``_detect_converter_version_safe`` mirrors
     the apt-package version verbatim and tags the source as ``dpkg:…``."""
     fake_bin = tmp_path / "RvtExporter"
     fake_bin.write_bytes(b"x" * 2048)
@@ -53,7 +53,7 @@ def test_detect_converter_version_safe_linux_dpkg_path(tmp_path: Path, monkeypat
 
 
 def test_detect_converter_version_safe_windows_parent_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """‌⁠‍Windows path (no dpkg) → falls back to the install dir name and tags
+    """Windows path (no dpkg) → falls back to the install dir name and tags
     the source as ``binary_metadata``."""
     install_dir = tmp_path / "rvt_windows_v18.0.0"
     install_dir.mkdir()
@@ -72,7 +72,7 @@ def test_detect_converter_version_safe_windows_parent_dir(tmp_path: Path, monkey
 def test_detect_converter_version_safe_missing_converter(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """‌⁠‍When the converter binary isn't installed at all, the helper returns
+    """When the converter binary isn't installed at all, the helper returns
     an all-None dict (and the frontend hides the badge)."""
     monkeypatch.setattr(cad_import, "find_converter", lambda _ext: None)
 
@@ -84,7 +84,7 @@ def test_detect_converter_version_safe_missing_converter(
 def test_detect_converter_version_safe_never_raises(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """‌⁠‍``_detect_converter_version_safe`` must swallow any exception from
+    """``_detect_converter_version_safe`` must swallow any exception from
     the underlying helper so a diagnostic failure never blocks an otherwise
     successful BIM import.  We force a ``RuntimeError`` from
     ``detect_converter_version`` and assert the wrapper returns the
@@ -101,7 +101,7 @@ def test_detect_converter_version_safe_never_raises(
 
 
 def test_excel_result_round_trip_carries_converter_version(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """‌⁠‍Integration check: the dict returned by ``_excel_elements_to_bim_result``
+    """Integration check: the dict returned by ``_excel_elements_to_bim_result``
     is the same shape that ``_try_cad2data`` augments with the converter
     fields before returning. We verify the converter fields can be attached
     without disturbing the canonical keys (geometry_type, geometry_quality,
@@ -146,7 +146,7 @@ def test_excel_result_round_trip_carries_converter_version(tmp_path: Path, monke
 def test_excel_result_with_installed_converter_attaches_metadata(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """‌⁠‍End-to-end: with a fake DDC binary present on Linux and a dpkg-style
+    """End-to-end: with a fake DDC binary present on Linux and a dpkg-style
     version reply, the augmented result dict carries the badge metadata in
     the exact shape the router expects (string version, string source
     starting with ``dpkg:``)."""

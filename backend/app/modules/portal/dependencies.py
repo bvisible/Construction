@@ -1,5 +1,5 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
-"""‌⁠‍Module-local FastAPI dependencies for the Customer & Partner Portal.
+"""Module-local FastAPI dependencies for the Customer & Partner Portal.
 
 We deliberately do NOT touch the global :mod:`app.dependencies` - portal
 authentication is a parallel surface to the internal JWT auth used by
@@ -28,7 +28,7 @@ async def get_current_portal_user(
         Depends(_portal_bearer),
     ] = None,
 ) -> PortalUser:
-    """‌⁠‍Validate the ``Authorization: Bearer <token>`` header against
+    """Validate the ``Authorization: Bearer <token>`` header against
     :meth:`PortalService.verify_session`. Raises 401 on any failure.
     """
     if credentials is None or not credentials.credentials:
@@ -54,7 +54,7 @@ async def get_current_portal_session_token(
         Depends(_portal_bearer),
     ] = None,
 ) -> str:
-    """‌⁠‍Return the raw bearer token for revocation endpoints. Raises 401 if absent."""
+    """Return the raw bearer token for revocation endpoints. Raises 401 if absent."""
     if credentials is None or not credentials.credentials:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

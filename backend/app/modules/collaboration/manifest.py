@@ -1,4 +1,4 @@
-"""‌⁠‍Comments & Viewpoints module manifest."""
+"""Comments & Viewpoints module manifest."""
 
 from app.core.module_loader import ModuleManifest
 

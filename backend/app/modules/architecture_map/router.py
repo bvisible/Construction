@@ -1,4 +1,4 @@
-"""‌⁠‍Architecture Map API routes.
+"""Architecture Map API routes.
 
 Read-only endpoints that serve the architecture manifest JSON and provide
 search/filter capabilities over modules, connections, and statistics.
@@ -75,7 +75,7 @@ _EMPTY_MANIFEST: dict[str, Any] = {
 
 
 def _load_manifest(force: bool = False) -> dict[str, Any]:
-    """‌⁠‍Load the architecture manifest from disk, with in-memory caching.
+    """Load the architecture manifest from disk, with in-memory caching.
 
     Args:
         force: If True, bypass cache and re-read from disk. Caller must
@@ -107,7 +107,7 @@ def _load_manifest(force: bool = False) -> dict[str, Any]:
 
 
 def invalidate_cache() -> None:
-    """‌⁠‍Drop the in-memory manifest cache.
+    """Drop the in-memory manifest cache.
 
     Public so the module loader / hot-reload code can call us after a
     module install / enable / disable event; otherwise the cached graph
@@ -123,7 +123,7 @@ def _audit(
     action: str,
     **extra: Any,
 ) -> None:
-    """‌⁠‍Structured log line for security-relevant architecture probes.
+    """Structured log line for security-relevant architecture probes.
 
     Even though the surface is admin-only, admin actions on a system-map
     endpoint are exactly the kind of thing a forensic timeline wants.
@@ -148,7 +148,7 @@ async def get_manifest(
     payload: Annotated[dict[str, Any], Depends(get_current_user_payload)],
     refresh: bool = Query(False, description="Force reload manifest from disk"),
 ) -> dict[str, Any]:
-    """‌⁠‍Return the full architecture manifest JSON.
+    """Return the full architecture manifest JSON.
 
     Pass ?refresh=true to force re-reading the file from disk.
     Admin-only (router-level gate).

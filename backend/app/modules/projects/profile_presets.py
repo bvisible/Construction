@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍Project-creation wizard - preset library + core/region maps.
+"""Project-creation wizard - preset library + core/region maps.
 
 This is the *deterministic* layer of the profile→modules mapping. A
 preset is a named set of module folder names (the real
@@ -279,7 +279,7 @@ PRESETS: dict[str, PresetMeta] = {
 
 
 def preset_modules(preset_id: str) -> set[str]:
-    """‌⁠‍Full module set for a preset: ALWAYS_ON ∪ the preset's extras.
+    """Full module set for a preset: ALWAYS_ON ∪ the preset's extras.
 
     Unknown / "custom" preset → just the always-on core.
     """

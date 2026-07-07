@@ -1,4 +1,4 @@
-"""‌⁠‍Catalog resource data access layer.
+"""Catalog resource data access layer.
 
 All database queries for catalog resources live here.
 No business logic - pure data access.
@@ -7,11 +7,12 @@ No business logic - pure data access.
 import uuid
 from decimal import Decimal
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.sql_numeric import numeric_value
 from app.modules.catalog.models import CatalogResource
+from app.modules.catalog.synonyms import expand_query
 
 
 def _escape_like(term: str) -> str:
@@ -29,13 +30,13 @@ def _escape_like(term: str) -> str:
 
 
 class CatalogResourceRepository:
-    """‌⁠‍Data access for CatalogResource model."""
+    """Data access for CatalogResource model."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
     async def get_by_id(self, resource_id: uuid.UUID) -> CatalogResource | None:
-        """‌⁠‍Get catalog resource by ID."""
+        """Get catalog resource by ID."""
         return await self.session.get(CatalogResource, resource_id)
 
     async def get_by_code(self, resource_code: str) -> CatalogResource | None:
@@ -76,14 +77,19 @@ class CatalogResourceRepository:
         base = select(CatalogResource).where(CatalogResource.is_active.is_(True))
 
         if q:
-            # Escape LIKE wildcards so a literal '%' / '_' in the query
-            # matches a literal '%' / '_' instead of acting as a
-            # wildcard that returns the whole catalog (NEW-CAT-105).
-            pattern = f"%{_escape_like(q)}%"
-            base = base.where(
-                CatalogResource.resource_code.ilike(pattern, escape="\\")
-                | CatalogResource.name.ilike(pattern, escape="\\")
-            )
+            # Expand the query with construction synonyms (so "rebar" also finds
+            # "reinforcement", a US "labor" finds a UK "labour") and OR every
+            # variant across code and name, so a trade term the price book spells
+            # differently is not a dead end. LIKE wildcards are escaped so a
+            # literal '%' / '_' matches literally instead of returning the whole
+            # catalog (NEW-CAT-105).
+            clauses = []
+            for term in expand_query(q):
+                pattern = f"%{_escape_like(term)}%"
+                clauses.append(CatalogResource.resource_code.ilike(pattern, escape="\\"))
+                clauses.append(CatalogResource.name.ilike(pattern, escape="\\"))
+            if clauses:
+                base = base.where(or_(*clauses))
 
         if resource_type:
             base = base.where(CatalogResource.resource_type == resource_type)

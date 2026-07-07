@@ -1,5 +1,5 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
-"""‌⁠‍Clash cost-impact module permission definitions.
+"""Clash cost-impact module permission definitions.
 
 This module is a cross-module read-projection: it never mutates clash or
 BOQ data. The router additionally requires the caller to hold BOTH
@@ -13,7 +13,7 @@ from app.core.permissions import Role, permission_registry
 
 
 def register_clash_cost_impact_permissions() -> None:
-    """‌⁠‍Register the cross-module read permission.
+    """Register the cross-module read permission.
 
     The single permission ``clash_cost.read`` is granted at viewer level
     - pure read-projection, no writes, no costly compute. Endpoints

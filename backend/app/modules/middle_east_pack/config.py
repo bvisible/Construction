@@ -1,4 +1,4 @@
-"""‌⁠‍Regional configuration for the Middle East and GCC countries."""
+"""Regional configuration for the Middle East and GCC countries."""
 
 from decimal import Decimal
 from typing import Any

@@ -68,6 +68,7 @@ import {
 } from '@/shared/ui/WideModal';
 import { MoneyDisplay } from '@/shared/ui/MoneyDisplay';
 import { DateDisplay } from '@/shared/ui/DateDisplay';
+import { CountryCombobox } from '@/shared/ui/CountryCombobox';
 import { useConfirm } from '@/shared/hooks/useConfirm';
 import { useTabKeyboardNav } from '@/shared/hooks/useTabKeyboardNav';
 import { useDisplayQuantity } from '@/shared/hooks/useDisplayQuantity';
@@ -7002,25 +7003,6 @@ const DEV_TYPES: DevelopmentType[] = [
   'other',
 ];
 
-// Shared between this form and the Plot catalogue picker - keeping the
-// list inline avoids a circular import vs the catalogue picker which
-// owns the more elaborate localised labels.
-const DEV_COUNTRY_OPTIONS: Array<{ value: string; label: string }> = [
-  { value: '', label: '—' },
-  { value: 'DE', label: 'Deutschland (DE)' },
-  { value: 'US', label: 'United States (US)' },
-  { value: 'UK', label: 'United Kingdom (UK)' },
-  { value: 'RU', label: 'Россия (RU)' },
-  { value: 'TR', label: 'Türkiye (TR)' },
-  { value: 'FR', label: 'France (FR)' },
-  { value: 'ES', label: 'España (ES)' },
-  { value: 'IT', label: 'Italia (IT)' },
-  { value: 'PL', label: 'Polska (PL)' },
-  { value: 'JP', label: '日本 (JP)' },
-  { value: 'CN', label: '中国 (CN)' },
-  { value: 'SA', label: 'السعودية (SA)' },
-];
-
 const DEV_SALES_PHASES: DevelopmentSalesPhase[] = [
   'planning',
   'launch',
@@ -7188,17 +7170,21 @@ function DevelopmentFormBody({
               'Drives the house-type catalogue and the tax engine.',
           })}
         >
-          <select
+          {/* Full ISO 3166-1 list via the shared searchable picker (same
+              component the house-type catalogue uses) so operators in any
+              region can pick their country - the old 12-entry <select>
+              excluded most of the world and used an invalid "UK" code. The
+              development form has no custom-region concept, so allowCustom
+              is off, keeping ``country_code`` a clean ISO code or empty. */}
+          <CountryCombobox
             value={devForm.country_code}
-            onChange={(e) => set('country_code', e.target.value)}
-            className={inputCls}
-          >
-            {DEV_COUNTRY_OPTIONS.map((c) => (
-              <option key={c.value || 'none'} value={c.value}>
-                {c.label}
-              </option>
-            ))}
-          </select>
+            onChange={(v) => set('country_code', v)}
+            allowEmpty
+            allowCustom={false}
+            placeholder={t('propdev.development.country_placeholder', {
+              defaultValue: 'Global / no country',
+            })}
+          />
         </WideModalField>
         <WideModalField
           label={t('propdev.development.currency', {

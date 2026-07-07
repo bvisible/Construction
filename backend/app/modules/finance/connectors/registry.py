@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍Process-wide registry of available connector types.
+"""Process-wide registry of available connector types.
 
 The registry is the single place the router (catalogue endpoint) and the
 service (instantiating a connector for a run) look up connector classes by

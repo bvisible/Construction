@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction - OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍Pure compute-orchestration for forensic delay analysis (T2.2).
+"""Pure compute-orchestration for forensic delay analysis (T2.2).
 
 This sits between the persistence layer (the stored ``DelayAnalysis`` /
 ``DelayEvent`` / ``Fragnet`` rows) and the pure :mod:`delay_engine`. It maps

@@ -1,4 +1,4 @@
-"""‌⁠‍BCF data-access layer.
+"""BCF data-access layer.
 
 Thin async wrappers around the ORM so the service layer never builds raw
 SQLAlchemy statements. All reads are project-scoped - the service is
@@ -17,7 +17,7 @@ from app.modules.bcf.models import BCFComment, BCFTopic, BCFViewpoint
 
 
 class BCFRepository:
-    """‌⁠‍Data access for BCF topics, comments and viewpoints."""
+    """Data access for BCF topics, comments and viewpoints."""
 
     #: Hard upper bound on a single ``list_topics`` page. Mirrors the clamp
     #: other repositories apply (e.g. the OpenCDE topic list caps ``$top`` at
@@ -39,7 +39,7 @@ class BCFRepository:
         offset: int = 0,
         limit: int = MAX_TOPICS_LIMIT,
     ) -> list[BCFTopic]:
-        """‌⁠‍Return topics for ``project_id``, newest first.
+        """Return topics for ``project_id``, newest first.
 
         Comments + viewpoints are eager-loaded so callers (list endpoint,
         export) can touch the collections after the request session closes.

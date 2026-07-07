@@ -1,4 +1,4 @@
-"""‌⁠‍Business logic for collaboration locks.
+"""Business logic for collaboration locks.
 
 Responsibilities
 ----------------
@@ -44,11 +44,11 @@ logger = logging.getLogger(__name__)
 
 
 class CollabLockError(Exception):
-    """‌⁠‍Base class for service-level lock errors."""
+    """Base class for service-level lock errors."""
 
 
 class UnknownEntityTypeError(CollabLockError):
-    """‌⁠‍Raised when the caller tries to lock an entity type not on the
+    """Raised when the caller tries to lock an entity type not on the
     allowlist.  Surfaces as HTTP 400 in the router."""
 
 

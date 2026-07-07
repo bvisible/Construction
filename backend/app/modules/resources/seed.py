@@ -1,4 +1,4 @@
-"""‌⁠‍Resources demo seed data.
+"""Resources demo seed data.
 
 Generates a deterministic demo dataset:
     50 people + 5 crews + 30 equipment + 20 subcontractors = 105 resources
@@ -170,7 +170,7 @@ def _make_skills() -> list[Skill]:
 
 
 def _make_certifications(rng: random.Random, resources: Sequence[Resource]) -> list[Certification]:
-    """‌⁠‍15 certifications spread across persons."""
+    """15 certifications spread across persons."""
     persons = [r for r in resources if r.resource_type == "person"]
     cert_types = [
         "Crane Operator",
@@ -208,7 +208,7 @@ def _make_assignments(
     resources: Sequence[Resource],
     project_ids: Sequence[uuid.UUID],
 ) -> list[Assignment]:
-    """‌⁠‍200 assignments over 8 weeks across given projects."""
+    """200 assignments over 8 weeks across given projects."""
     if not project_ids:
         return []
     out: list[Assignment] = []

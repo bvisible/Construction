@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍LLM matcher - AI re-rank over a vector-prefiltered candidate shortlist.
+"""LLM matcher - AI re-rank over a vector-prefiltered candidate shortlist.
 
 The match-elements service calls this when the user picks ``method="llm"``
 on a group. Rather than asking the LLM to invent CWICR codes from thin
@@ -75,7 +75,7 @@ _SYSTEM_PROMPT = (
 
 
 def _build_prompt(envelope: ElementEnvelope, candidates: list[MatchCandidate]) -> str:
-    """‌⁠‍Render the source element + numbered shortlist into a user prompt.
+    """Render the source element + numbered shortlist into a user prompt.
 
     The candidate rate is deliberately omitted - a relevance judgement
     must not be swayed by how cheap or expensive a row is.
@@ -110,7 +110,7 @@ def _build_prompt(envelope: ElementEnvelope, candidates: list[MatchCandidate]) -
 
 
 def _parse_ranking(raw: str, n_candidates: int) -> list[tuple[int, float, str]]:
-    """‌⁠‍Parse the LLM JSON ranking into ``[(index, confidence, reason)]``.
+    """Parse the LLM JSON ranking into ``[(index, confidence, reason)]``.
 
     Tolerates code fences / surrounding prose via the shared
     :func:`extract_json` helper. Drops out-of-range indices and

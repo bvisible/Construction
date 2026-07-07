@@ -1,4 +1,4 @@
-"""‌⁠‍Correspondence Pydantic schemas - request/response models."""
+"""Correspondence Pydantic schemas - request/response models."""
 
 from datetime import datetime
 from typing import Any
@@ -29,7 +29,7 @@ def _sanitize_email_header_value(value: str) -> str:
 
 
 class CorrespondenceCreate(BaseModel):
-    """‌⁠‍Create a new correspondence record."""
+    """Create a new correspondence record."""
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
@@ -60,7 +60,7 @@ class CorrespondenceCreate(BaseModel):
 
 
 class CorrespondenceUpdate(BaseModel):
-    """‌⁠‍Partial update for a correspondence record."""
+    """Partial update for a correspondence record."""
 
     model_config = ConfigDict(str_strip_whitespace=True)
 

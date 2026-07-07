@@ -1,4 +1,4 @@
-"""‌⁠‍AI prompt templates for construction cost estimation.
+"""AI prompt templates for construction cost estimation.
 
 Contains carefully crafted prompts for text-based and photo-based estimation.
 Prompts instruct the AI to return structured JSON arrays of work items
@@ -111,7 +111,7 @@ def fence_user_content(text: str, *, max_len: int = USER_FENCE_MAX_LEN) -> str:
     )
 
 
-TEXT_ESTIMATE_PROMPT = """‌⁠‍\
+TEXT_ESTIMATE_PROMPT = """\
 You are a professional construction cost estimator with 20+ years of experience.
 Based on the following project description, generate a detailed Bill of Quantities.
 
@@ -149,7 +149,7 @@ Plumbing, Electrical, Fire Protection, Finishing, Landscaping, General
 - Return ONLY the JSON array, no other text
 """
 
-PHOTO_ESTIMATE_PROMPT = """‌⁠‍\
+PHOTO_ESTIMATE_PROMPT = """\
 You are a construction cost estimator analyzing a building photo.
 Look at this photo and estimate the construction costs.
 

@@ -1,4 +1,4 @@
-"""‌⁠‍Unit tests for the v18 flag-driven CLI profile added in Task #164.
+"""Unit tests for the v18 flag-driven CLI profile added in Task #164.
 
 DDC v18.3.0 ships a new ``RvtExporter --help`` layout:
 
@@ -121,7 +121,7 @@ def _fake_binary(tmp_path: Path, name: str = "RvtExporter") -> Path:
 
 
 def _stub_subprocess(monkeypatch: pytest.MonkeyPatch, *, stdout: bytes) -> dict[str, int]:
-    """‌⁠‍Replace subprocess.run with a fake that returns the given stdout."""
+    """Replace subprocess.run with a fake that returns the given stdout."""
     import subprocess as _subprocess
 
     counter = {"calls": 0}
@@ -144,7 +144,7 @@ def _stub_subprocess(monkeypatch: pytest.MonkeyPatch, *, stdout: bytes) -> dict[
 
 
 def test_v18_help_text_classified_as_v18_flag() -> None:
-    """‌⁠‍The literal v18.3.0 help blob must classify as v18 even though it
+    """The literal v18.3.0 help blob must classify as v18 even though it
     contains the word ``complete`` (which used to false-positive the
     substring-based ``_MODERN_HELP_MARKERS``)."""
     profile = cad_import._classify_help_text(V18_HELP_TEXT.lower())
@@ -152,21 +152,21 @@ def test_v18_help_text_classified_as_v18_flag() -> None:
 
 
 def test_v17_help_text_classified_as_v17_positional() -> None:
-    """‌⁠‍The v17 help text (still in the wild on older installs) must keep
+    """The v17 help text (still in the wild on older installs) must keep
     being routed to the v17 positional profile so the existing CLI works."""
     profile = cad_import._classify_help_text(V17_HELP_TEXT.lower())
     assert profile == cad_import.CLI_PROFILE_V17_POSITIONAL
 
 
 def test_legacy_help_text_classified_as_legacy() -> None:
-    """‌⁠‍A bare ``Usage: RvtExporter <in> <out>`` banner with no v18 or v17
+    """A bare ``Usage: RvtExporter <in> <out>`` banner with no v18 or v17
     markers stays on the conservative legacy profile."""
     profile = cad_import._classify_help_text(LEGACY_HELP_TEXT.lower())
     assert profile == cad_import.CLI_PROFILE_LEGACY
 
 
 def test_classify_handles_punctuation_around_tokens() -> None:
-    """‌⁠‍CLI11 help formatters sometimes append commas after flag aliases
+    """CLI11 help formatters sometimes append commas after flag aliases
     (``--no-dae, --skip-collada``).  The tokenizer must strip trailing
     punctuation so an alias-list still triggers the v18 detection."""
     blob = "options:\n    --no-dae,    disable collada output\n"
@@ -174,7 +174,7 @@ def test_classify_handles_punctuation_around_tokens() -> None:
 
 
 def test_classify_word_complete_alone_does_not_imply_v18() -> None:
-    """‌⁠‍Bare ``complete`` (in any English-language context) must NOT
+    """Bare ``complete`` (in any English-language context) must NOT
     trigger v18 — it has to be one of the v18-exclusive flag tokens.
     This is the regression that the new probe is specifically designed
     to prevent."""
@@ -184,7 +184,7 @@ def test_classify_word_complete_alone_does_not_imply_v18() -> None:
 
 
 def test_classify_short_flags_only_is_v18() -> None:
-    """‌⁠‍A v18 build whose --help advertises only the short output flags
+    """A v18 build whose --help advertises only the short output flags
     (``-x``/``-d``/``-m``) and none of the optional long ``--no-*`` /
     ``--force-path`` tokens must STILL classify as a flag CLI. Dropping it
     to legacy made the bundled v18 reject the bare positional call with exit
@@ -200,7 +200,7 @@ def test_classify_short_flags_only_is_v18() -> None:
 
 
 def test_v18_binary_probe_returns_v18_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """‌⁠‍End-to-end probe: stub subprocess to return the v18 help blob,
+    """End-to-end probe: stub subprocess to return the v18 help blob,
     assert the cached capability dict has the v18 flag profile and all
     the new flag capabilities flipped to True."""
     binary = _fake_binary(tmp_path)
@@ -223,7 +223,7 @@ def test_v18_binary_probe_returns_v18_profile(tmp_path: Path, monkeypatch: pytes
 
 
 def test_v17_binary_probe_returns_v17_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """‌⁠‍v17 binaries stay on the v17 positional profile — the existing
+    """v17 binaries stay on the v17 positional profile — the existing
     fix from v4.6.2 keeps working."""
     binary = _fake_binary(tmp_path)
     monkeypatch.setattr(cad_import, "find_converter", lambda _ext: binary)
@@ -240,7 +240,7 @@ def test_v17_binary_probe_returns_v17_profile(tmp_path: Path, monkeypatch: pytes
 
 
 def test_legacy_binary_probe_returns_legacy_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """‌⁠‍A binary that emits no recognised flag tokens stays on the legacy
+    """A binary that emits no recognised flag tokens stays on the legacy
     bare-positional profile.  This is the user-reported v4.6.2 path that
     must not regress."""
     binary = _fake_binary(tmp_path)
@@ -256,7 +256,7 @@ def test_legacy_binary_probe_returns_legacy_profile(tmp_path: Path, monkeypatch:
 
 
 def test_v18_help_with_complete_token_does_not_trigger_v17(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """‌⁠‍THE regression test for task #164: the v18 binary's help mentions
+    """THE regression test for task #164: the v18 binary's help mentions
     ``complete`` in the ``{basic,standard,complete,custom}`` mode enum.
     The previous substring-based probe used that as a "modern v17" signal
     and emitted ``standard`` + ``-no-collada`` against a v18 binary, which
@@ -292,7 +292,7 @@ def _v17_caps() -> dict[str, object]:
 
 
 def test_build_args_v18_xlsx_only_pass(tmp_path: Path) -> None:
-    """‌⁠‍v18 XLSX-only pass: input + ``-x`` + path + ``--no-dae`` (suppress
+    """v18 XLSX-only pass: input + ``-x`` + path + ``--no-dae`` (suppress
     DAE since we don't want it) + ``-m standard`` + ``--force-path``."""
     converter = tmp_path / "RvtExporter.exe"
     input_path = tmp_path / "in.rvt"
@@ -320,7 +320,7 @@ def test_build_args_v18_xlsx_only_pass(tmp_path: Path) -> None:
 
 
 def test_build_args_v18_dae_only_pass(tmp_path: Path) -> None:
-    """‌⁠‍v18 DAE-only pass: input + ``-d`` + path + ``--no-xlsx`` +
+    """v18 DAE-only pass: input + ``-d`` + path + ``--no-xlsx`` +
     ``-m standard`` + ``--force-path``."""
     converter = tmp_path / "RvtExporter.exe"
     input_path = tmp_path / "in.rvt"
@@ -348,7 +348,7 @@ def test_build_args_v18_dae_only_pass(tmp_path: Path) -> None:
 
 
 def test_build_args_v18_combined_pass(tmp_path: Path) -> None:
-    """‌⁠‍v18 combined pass: both ``-x`` and ``-d`` in the same call so the
+    """v18 combined pass: both ``-x`` and ``-d`` in the same call so the
     RVT only loads once for both outputs."""
     converter = tmp_path / "RvtExporter.exe"
     input_path = tmp_path / "in.rvt"
@@ -378,7 +378,7 @@ def test_build_args_v18_combined_pass(tmp_path: Path) -> None:
 
 
 def test_build_args_v17_xlsx_pass(tmp_path: Path) -> None:
-    """‌⁠‍v17 positional XLSX pass: input + output + ``standard`` +
+    """v17 positional XLSX pass: input + output + ``standard`` +
     ``-no-collada``.  Skipping COLLADA via the v17 flag."""
     converter = tmp_path / "RvtExporter.exe"
     input_path = tmp_path / "in.rvt"
@@ -403,7 +403,7 @@ def test_build_args_v17_xlsx_pass(tmp_path: Path) -> None:
 
 
 def test_build_args_legacy_bare(tmp_path: Path) -> None:
-    """‌⁠‍Legacy profile: just ``[exe, input, output]`` — no depth-mode, no
+    """Legacy profile: just ``[exe, input, output]`` — no depth-mode, no
     -no-collada, no v18 flags.  The bare-retry fallback that the
     v4.6.2 fix added."""
     converter = tmp_path / "RvtExporter.exe"
@@ -423,7 +423,7 @@ def test_build_args_legacy_bare(tmp_path: Path) -> None:
 
 
 def test_build_args_v18_no_outputs_requested_emits_minimal_call(tmp_path: Path) -> None:
-    """‌⁠‍v18 without any output target: still emits a valid minimal call
+    """v18 without any output target: still emits a valid minimal call
     (mode preset + force-path).  Lets callers drive an "auto-named
     everything" run if they want; never raises like the legacy profile."""
     converter = tmp_path / "RvtExporter.exe"
@@ -440,7 +440,7 @@ def test_build_args_v18_no_outputs_requested_emits_minimal_call(tmp_path: Path) 
 
 
 def test_build_args_legacy_requires_output_path(tmp_path: Path) -> None:
-    """‌⁠‍Legacy profile can't run without an output target (positional CLI).
+    """Legacy profile can't run without an output target (positional CLI).
     Surface this as ValueError so callers don't silently invoke a
     converter that would output to cwd in an unpredictable way."""
     converter = tmp_path / "RvtExporter.exe"

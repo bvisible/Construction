@@ -1,4 +1,4 @@
-"""‌⁠‍HSE Advanced ORM models.
+"""HSE Advanced ORM models.
 
 Tables:
     oe_hse_advanced_incident_investigation
@@ -36,7 +36,7 @@ from app.database import GUID, Base
 
 
 class HSEIncidentInvestigation(Base):
-    """‌⁠‍In-depth root-cause investigation of a safety incident."""
+    """In-depth root-cause investigation of a safety incident."""
 
     __tablename__ = "oe_hse_advanced_incident_investigation"
 
@@ -65,7 +65,7 @@ class HSEIncidentInvestigation(Base):
 
 
 class JobSafetyAnalysis(Base):
-    """‌⁠‍JSA - Job Safety Analysis (a.k.a. Job Hazard Analysis)."""
+    """JSA - Job Safety Analysis (a.k.a. Job Hazard Analysis)."""
 
     __tablename__ = "oe_hse_advanced_jsa"
 

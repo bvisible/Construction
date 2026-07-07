@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction - OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍Persistence service for forensic delay analysis (T2.2).
+"""Persistence service for forensic delay analysis (T2.2).
 
 Thin async DB glue around the :class:`DelayAnalysis` / :class:`DelayEvent` /
 :class:`Fragnet` / :class:`DelayWindow` tables. All compute is the pure

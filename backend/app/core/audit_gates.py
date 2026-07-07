@@ -1,4 +1,4 @@
-"""‌⁠‍Generalised transition-gate registry (Epic H).
+"""Generalised transition-gate registry (Epic H).
 
 The CDE ISO 19650 workflow uses a "Gate B" check on the
 SHARED → PUBLISHED transition: the request body MUST carry a non-empty

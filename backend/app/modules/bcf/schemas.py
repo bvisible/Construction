@@ -1,4 +1,4 @@
-"""‌⁠‍BCF module Pydantic schemas (request / response).
+"""BCF module Pydantic schemas (request / response).
 
 These are the *API* shapes. They are deliberately decoupled from the
 on-the-wire BCF-XML element names (which live in :mod:`app.modules.bcf.
@@ -17,7 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class Vec3(BaseModel):
-    """‌⁠‍A 3-component vector / point (BCF XYZ triplet)."""
+    """A 3-component vector / point (BCF XYZ triplet)."""
 
     x: float = 0.0
     y: float = 0.0
@@ -25,7 +25,7 @@ class Vec3(BaseModel):
 
 
 class PerspectiveCamera(BaseModel):
-    """‌⁠‍BCF ``PerspectiveCamera``."""
+    """BCF ``PerspectiveCamera``."""
 
     camera_view_point: Vec3 = Field(default_factory=Vec3)
     camera_direction: Vec3 = Field(default_factory=Vec3)

@@ -1,4 +1,4 @@
-"""‌⁠‍Collaboration locks module manifest.
+"""Collaboration locks module manifest.
 
 Layer 1 of the real-time collaboration plan: pessimistic, per-row soft
 locks with presence broadcast over a WebSocket.  Solves the 90% case

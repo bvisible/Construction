@@ -1,4 +1,4 @@
-"""‌⁠‍Module loader​‌‍⁠​‌‍⁠​‌‍⁠​‌‍⁠ - discovers, loads, and manages business modules.
+"""Module loader​‌‍⁠​‌‍⁠​‌‍⁠​‌‍⁠ - discovers, loads, and manages business modules.
 
 Each module is a Python package under app/modules/ with a manifest.py.
 The loader handles dependency resolution, lifecycle, and route mounting.
@@ -27,7 +27,7 @@ MODULES_DIR = Path(__file__).parent.parent / "modules"
 
 @dataclass
 class ModuleManifest:
-    """‌⁠‍Metadata for a module. Defined in each module's manifest.py."""
+    """Metadata for a module. Defined in each module's manifest.py."""
 
     name: str  # Unique module name, e.g. "oe_boq"
     version: str  # SemVer, e.g. "1.0.0"
@@ -44,7 +44,7 @@ class ModuleManifest:
 
 @dataclass
 class LoadedModule:
-    """‌⁠‍A module that has been loaded into the application."""
+    """A module that has been loaded into the application."""
 
     manifest: ModuleManifest
     package: Any  # The imported Python package

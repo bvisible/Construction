@@ -6,7 +6,7 @@ import { Badge } from '@/shared/ui';
  * coloured pill with an i18n label.
  *
  * The backend stores status as a free-form string (<=50 chars), but the UI
- * curates a recommended set - active, waiting, on_hold, finished, cancelled,
+ * curates a recommended set - active, on_hold, finished, cancelled,
  * archived - each mapped to a Badge variant and a translated label. Any value
  * outside the curated set still renders (humanised + neutral colour) so a
  * custom status set elsewhere never shows a blank or breaks the layout.
@@ -17,7 +17,6 @@ type BadgeVariant = 'neutral' | 'blue' | 'success' | 'warning' | 'error';
 /** The curated, recommended project statuses, in lifecycle order. */
 export const CURATED_PROJECT_STATUSES = [
   'active',
-  'waiting',
   'on_hold',
   'finished',
   'cancelled',
@@ -28,7 +27,6 @@ export type CuratedProjectStatus = (typeof CURATED_PROJECT_STATUSES)[number];
 
 const STATUS_VARIANT: Record<CuratedProjectStatus, BadgeVariant> = {
   active: 'success',
-  waiting: 'blue',
   on_hold: 'warning',
   finished: 'neutral',
   // Cancelled is a terminal, abandoned state - red to read as negative,
@@ -39,7 +37,6 @@ const STATUS_VARIANT: Record<CuratedProjectStatus, BadgeVariant> = {
 
 const STATUS_LABEL_DEFAULT: Record<CuratedProjectStatus, string> = {
   active: 'Active',
-  waiting: 'Waiting',
   on_hold: 'On hold',
   finished: 'Finished',
   cancelled: 'Cancelled',

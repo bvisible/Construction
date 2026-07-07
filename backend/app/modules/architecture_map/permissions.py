@@ -1,5 +1,5 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
-"""‌⁠‍Architecture Map module permission definitions.
+"""Architecture Map module permission definitions.
 
 The architecture manifest leaks substantial structural detail about the
 deployed system - every module's file list, every ORM model + table name +
@@ -18,7 +18,7 @@ from app.core.permissions import Role, permission_registry
 
 
 def register_architecture_map_permissions() -> None:
-    """‌⁠‍Register RBAC permissions for the architecture-map module."""
+    """Register RBAC permissions for the architecture-map module."""
     permission_registry.register_module_permissions(
         "architecture_map",
         {

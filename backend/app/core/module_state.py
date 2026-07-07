@@ -1,4 +1,4 @@
-"""‌⁠‍Persistent module state -- tracks enabled/disabled status across restarts.
+"""Persistent module state -- tracks enabled/disabled status across restarts.
 
 Stores state in a JSON file alongside the database.  Core modules cannot be disabled.
 
@@ -23,7 +23,7 @@ STATE_FILENAME = "module_states.json"
 
 @dataclass
 class ModuleState:
-    """‌⁠‍Persisted state for a single module."""
+    """Persisted state for a single module."""
 
     name: str
     enabled: bool = True
@@ -32,7 +32,7 @@ class ModuleState:
 
 
 def _resolve_data_dir(data_dir: Path | None = None) -> Path:
-    """‌⁠‍Determine the directory where ``module_states.json`` should live."""
+    """Determine the directory where ``module_states.json`` should live."""
     if data_dir is not None:
         return data_dir
 

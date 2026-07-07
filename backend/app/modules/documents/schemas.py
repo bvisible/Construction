@@ -1,4 +1,4 @@
-"""‌⁠‍Document Management Pydantic schemas - request/response models.
+"""Document Management Pydantic schemas - request/response models.
 
 Defines create, update, and response schemas for documents.
 """
@@ -15,7 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class DocumentUpdate(BaseModel):
-    """‌⁠‍Partial update for a document."""
+    """Partial update for a document."""
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
@@ -23,7 +23,7 @@ class DocumentUpdate(BaseModel):
     description: str | None = None
     category: str | None = Field(
         default=None,
-        pattern=r"^(drawing|contract|specification|photo|correspondence|other)$",
+        pattern=r"^(drawing|contract|specification|photo|correspondence|reality_capture|other)$",
     )
     tags: list[str] | None = None
     metadata: dict[str, Any] | None = None
@@ -73,7 +73,7 @@ class DocumentUpdate(BaseModel):
 
 
 class DocumentResponse(BaseModel):
-    """‌⁠‍Document returned from the API."""
+    """Document returned from the API."""
 
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 

@@ -40,6 +40,8 @@ function makeNode(overrides: Partial<ThreadNode> = {}): ThreadNode {
     file_version_snapshot: null,
     parent_id: null,
     author_id: overrides.author_id ?? '00000000-0000-0000-0000-000000000001',
+    author_name:
+      overrides.author_name !== undefined ? overrides.author_name : 'Alice Smith',
     body: overrides.body ?? 'Top-level note.',
     page_number: null,
     anchor_x: null,
@@ -154,6 +156,66 @@ describe('CommentThread', () => {
     const mention = within(node).getByText('@alice');
     expect(mention).toBeInTheDocument();
     expect(mention.tagName).toBe('SPAN');
+  });
+
+  it('renders the resolved author name instead of the raw id', async () => {
+    const top = makeNode({
+      id: 'c-1',
+      author_id: '11112222-3333-4444-5555-666677778888',
+      author_name: 'Alice Smith',
+    });
+    vi.mocked(listThreads).mockResolvedValue({
+      file_kind: 'document',
+      file_id: 'f-1',
+      threads: [top],
+      total: 1,
+    });
+
+    renderWithClient(
+      <CommentThread
+        projectId="p-1"
+        fileKind="document"
+        fileId="f-1"
+        currentUserId={null}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('comment-node-c-1')).toBeInTheDocument();
+    });
+    const node = screen.getByTestId('comment-node-c-1');
+    expect(within(node).getByText('Alice Smith')).toBeInTheDocument();
+    // The 8-char id prefix must no longer appear in the byline.
+    expect(within(node).queryByText(/^11112222$/)).not.toBeInTheDocument();
+  });
+
+  it('falls back to the short id when author_name is null (legacy payload)', async () => {
+    const top = makeNode({
+      id: 'c-1',
+      author_id: '11112222-3333-4444-5555-666677778888',
+      author_name: null,
+    });
+    vi.mocked(listThreads).mockResolvedValue({
+      file_kind: 'document',
+      file_id: 'f-1',
+      threads: [top],
+      total: 1,
+    });
+
+    renderWithClient(
+      <CommentThread
+        projectId="p-1"
+        fileKind="document"
+        fileId="f-1"
+        currentUserId={null}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('comment-node-c-1')).toBeInTheDocument();
+    });
+    const node = screen.getByTestId('comment-node-c-1');
+    expect(within(node).getByText('11112222')).toBeInTheDocument();
   });
 
   it('renders a tombstone for [deleted] bodies and hides the Reply affordance', async () => {

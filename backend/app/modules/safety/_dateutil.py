@@ -1,4 +1,4 @@
-"""‌⁠‍Defensive date parsing/normalisation for the safety module.
+"""Defensive date parsing/normalisation for the safety module.
 
 ``SafetyIncident.incident_date`` is stored as a ``String`` column (no schema
 migration is in scope to change that). The API layer enforces a strict
@@ -35,7 +35,7 @@ _FALLBACK_FORMATS: tuple[str, ...] = (
 
 
 def parse_incident_date(value: str | None) -> date | None:
-    """‌⁠‍Best-effort parse of a stored incident-date string.
+    """Best-effort parse of a stored incident-date string.
 
     Returns a ``date`` on success, or ``None`` if the value is empty or
     cannot be parsed unambiguously. ``None`` is *cannot confirm*, never
@@ -67,7 +67,7 @@ def parse_incident_date(value: str | None) -> date | None:
 
 
 def canonicalize_incident_date(value: str | None) -> str:
-    """‌⁠‍Normalise a date string to canonical ISO ``YYYY-MM-DD`` for storage.
+    """Normalise a date string to canonical ISO ``YYYY-MM-DD`` for storage.
 
     Guarantees future rows are clean so the "days without incident / LTI"
     billboard never has to guess. If the value cannot be parsed it is

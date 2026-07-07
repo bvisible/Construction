@@ -1,4 +1,4 @@
-"""‌⁠‍Schedule ORM models.
+"""Schedule ORM models.
 
 Tables:
     oe_schedule_schedule        - project schedule (container for activities)
@@ -35,7 +35,7 @@ from app.database import GUID, Base
 
 
 class Schedule(Base):
-    """‌⁠‍Project schedule - groups activities for 4D planning."""
+    """Project schedule - groups activities for 4D planning."""
 
     __tablename__ = "oe_schedule_schedule"
 
@@ -76,7 +76,7 @@ class Schedule(Base):
 
 
 class Activity(Base):
-    """‌⁠‍Individual activity / task in a schedule with WBS hierarchy."""
+    """Individual activity / task in a schedule with WBS hierarchy."""
 
     __tablename__ = "oe_schedule_activity"
 

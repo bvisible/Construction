@@ -1,4 +1,4 @@
-"""‌⁠‍Streaming-upload helper.
+"""Streaming-upload helper.
 
 UploadFile.read() loads the entire request body into memory.  On the
 2 GB-RAM VPS this is a trivial DoS vector once we removed the per-route
@@ -60,7 +60,7 @@ def proportional_timeout(
     sec_per_mb: float = 30.0,
     max_sec: float | None = None,
 ) -> float:
-    """‌⁠‍Derive a subprocess wall-time from the size of the input file.
+    """Derive a subprocess wall-time from the size of the input file.
 
     The old fixed 300 s ceiling we used for CAD/RVT/IFC conversion was a
     silent ceiling on legitimate uploads - a 100 MB hospital RVT model
@@ -98,7 +98,7 @@ def proportional_timeout(
 
 @dataclass(frozen=True)
 class StreamedUpload:
-    """‌⁠‍The result of streaming a request body to disk."""
+    """The result of streaming a request body to disk."""
 
     path: Path
     size: int

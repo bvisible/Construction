@@ -13,6 +13,8 @@ import {
   ZOOM_MAX,
   FIT_PADDING_PX,
   FIT_ZOOM_MIN,
+  DUP_VERTEX_SCREEN_PX,
+  VERTEX_SNAP_SCREEN_PX,
   clampZoom,
   computeFitZoom,
   boundingBoxOfPoints,
@@ -21,6 +23,8 @@ import {
   zoomAtCursorScroll,
   wheelZoomStep,
   orthoSnap,
+  dropTrailingDuplicateVertex,
+  snapToVertex,
   computeDrawReadout,
 } from '@/features/takeoff/lib/takeoff-viewport';
 import type { ScaleConfig } from '@/modules/pdf-takeoff/data/scale-helpers';
@@ -237,6 +241,105 @@ describe('orthoSnap', () => {
 
   it('returns the anchor for a zero-length drag', () => {
     expect(orthoSnap(anchor, { x: 100, y: 100 })).toEqual({ x: 100, y: 100 });
+  });
+});
+
+describe('dropTrailingDuplicateVertex', () => {
+  it('drops a trailing vertex within the screen-space threshold (issue #298)', () => {
+    const pts = [
+      { x: 0, y: 0 },
+      { x: 40, y: 0 },
+      { x: 42, y: 0 }, // 2 PDF units from the previous vertex
+    ];
+    // At zoom 1: screen distance 2px < DUP_VERTEX_SCREEN_PX (6) -> dropped.
+    expect(dropTrailingDuplicateVertex(pts, 1)).toEqual([
+      { x: 0, y: 0 },
+      { x: 40, y: 0 },
+    ]);
+  });
+
+  it('measures in screen space, so a high zoom keeps a vertex a low zoom would drop', () => {
+    const pts = [
+      { x: 0, y: 0 },
+      { x: 40, y: 0 },
+      { x: 44, y: 0 }, // 4 PDF units apart
+    ];
+    // zoom 1: 4px < 6px -> dropped.
+    expect(dropTrailingDuplicateVertex(pts, 1)).toHaveLength(2);
+    // zoom 4: 16px >= 6px -> kept (the points are far apart on screen).
+    expect(dropTrailingDuplicateVertex(pts, 4)).toHaveLength(3);
+  });
+
+  it('keeps meaningfully separated vertices (a right-click finish)', () => {
+    const pts = [
+      { x: 0, y: 0 },
+      { x: 50, y: 0 },
+      { x: 50, y: 60 },
+    ];
+    expect(dropTrailingDuplicateVertex(pts, 1)).toBe(pts); // unchanged reference
+  });
+
+  it('returns the input unchanged for fewer than two points', () => {
+    expect(dropTrailingDuplicateVertex([], 1)).toEqual([]);
+    const one = [{ x: 5, y: 5 }];
+    expect(dropTrailingDuplicateVertex(one, 1)).toBe(one);
+  });
+
+  it('honours a custom screen radius', () => {
+    const pts = [
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+      { x: 15, y: 0 }, // 5 units
+    ];
+    expect(dropTrailingDuplicateVertex(pts, 1, DUP_VERTEX_SCREEN_PX)).toHaveLength(2); // 5 < 6
+    expect(dropTrailingDuplicateVertex(pts, 1, 4)).toHaveLength(3); // 5 >= 4
+  });
+});
+
+describe('snapToVertex', () => {
+  const vertices: Point[] = [
+    { x: 0, y: 0 },
+    { x: 100, y: 100 },
+    { x: 200, y: 50 },
+  ];
+
+  it('snaps to the nearest vertex within the screen-space radius', () => {
+    // Cursor 4 PDF-units from (100,100); at zoom 2 that is 8 screen px < 10.
+    const snapped = snapToVertex({ x: 102, y: 103 }, vertices, 2);
+    expect(snapped).toEqual({ x: 100, y: 100 });
+  });
+
+  it('returns null when no vertex is within the radius', () => {
+    // 20 PDF-units away at zoom 1 = 20 screen px > 10.
+    expect(snapToVertex({ x: 120, y: 100 }, vertices, 1)).toBeNull();
+  });
+
+  it('applies the radius in screen space (zoom scales the catch distance)', () => {
+    const cursor = { x: 108, y: 100 }; // 8 PDF-units from (100,100)
+    // zoom 1: 8 screen px < 10 -> snaps.
+    expect(snapToVertex(cursor, vertices, 1)).toEqual({ x: 100, y: 100 });
+    // zoom 2: 16 screen px > 10 -> no snap.
+    expect(snapToVertex(cursor, vertices, 2)).toBeNull();
+  });
+
+  it('picks the closest of several in-range vertices', () => {
+    const near: Point[] = [
+      { x: 100, y: 100 },
+      { x: 103, y: 100 }, // closer to the cursor below
+    ];
+    const snapped = snapToVertex({ x: 104, y: 100 }, near, 1, VERTEX_SNAP_SCREEN_PX);
+    expect(snapped).toEqual({ x: 103, y: 100 });
+  });
+
+  it('returns a fresh copy, never the source vertex reference', () => {
+    const snapped = snapToVertex({ x: 0, y: 0 }, vertices, 1);
+    expect(snapped).toEqual({ x: 0, y: 0 });
+    expect(snapped).not.toBe(vertices[0]);
+  });
+
+  it('returns null for an empty vertex set or a non-positive zoom', () => {
+    expect(snapToVertex({ x: 0, y: 0 }, [], 1)).toBeNull();
+    expect(snapToVertex({ x: 0, y: 0 }, vertices, 0)).toBeNull();
   });
 });
 

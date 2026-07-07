@@ -1,4 +1,4 @@
-"""‌⁠‍NCR Pydantic schemas - request/response models."""
+"""NCR Pydantic schemas - request/response models."""
 
 from datetime import datetime
 from typing import Any
@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class NCRCreate(BaseModel):
-    """‌⁠‍Create a new NCR."""
+    """Create a new NCR."""
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
@@ -40,7 +40,7 @@ class NCRCreate(BaseModel):
 
 
 class NCRUpdate(BaseModel):
-    """‌⁠‍Partial update for an NCR."""
+    """Partial update for an NCR."""
 
     model_config = ConfigDict(str_strip_whitespace=True)
 

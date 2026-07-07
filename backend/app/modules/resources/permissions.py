@@ -1,10 +1,10 @@
-"""‌⁠‍Resources module permission definitions."""
+"""Resources module permission definitions."""
 
 from app.core.permissions import Role, permission_registry
 
 
 def register_resources_permissions() -> None:
-    """‌⁠‍Register permissions for the resources module."""
+    """Register permissions for the resources module."""
     permission_registry.register_module_permissions(
         "resources",
         {

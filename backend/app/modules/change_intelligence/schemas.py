@@ -7,7 +7,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class PartyLoadOut(BaseModel):
@@ -94,8 +94,21 @@ class ImpactProjectionOut(BaseModel):
 class ClarifyIn(BaseModel):
     """Request body for the clarifier: a rough change note to structure."""
 
-    note: str
-    contract_standard: str = ""
+    note: str = Field(
+        max_length=20_000,
+        description=(
+            "The rough free-text change note to structure. May be blank; capped "
+            "in length so the analysis stays fast for everyone."
+        ),
+    )
+    contract_standard: str = Field(
+        default="",
+        max_length=100,
+        description=(
+            "Optional contract form (for example FIDIC, NEC4, JCT) used to "
+            "suggest a likely governing clause. Leave blank if unknown."
+        ),
+    )
 
 
 class ClarificationGapOut(BaseModel):
@@ -498,3 +511,190 @@ class ScopeAmbiguityReportOut(BaseModel):
     counts_by_band: dict[str, int]
     top_reasons: list[str]
     lines: list[ScopeAmbiguityLineOut]
+
+
+# --- Contractual notice and time-bar clock ---------------------------------
+# Dates are serialized as ISO-8601 strings (or null); days_remaining is signed
+# (negative once a clock is overdue). The register is computed on read from the
+# event dates already on the change / variation / EOT records - it owns no table.
+
+
+class NoticeClockOut(BaseModel):
+    """One derived notice / response clock in the project register."""
+
+    source_kind: str
+    source_id: str
+    source_ref: str
+    title: str
+    standard: str
+    notice_type: str
+    clause_ref: str
+    trigger_date: str | None
+    period_days: int | None
+    deadline: str | None
+    days_remaining: float | None
+    status: str
+    requires_notice: bool
+    proof_on_file: bool
+    satisfied_at: str | None
+    served_late: bool
+    entitlement_at_risk: bool
+    is_open: bool
+
+
+class NoticeRegisterSummaryOut(BaseModel):
+    """Roll-up over the clocks in the register."""
+
+    total: int
+    open_total: int
+    counts_by_status: dict[str, int]
+    at_risk: int
+    proof_missing: int
+    overdue: int
+    due_soon: int
+
+
+class NoticeRegisterOut(BaseModel):
+    """The project notice register: resolved standard, clocks, and roll-up.
+
+    ``contract_standard`` is the standard the periods were resolved against
+    (``UNKNOWN`` when none could be determined, in which case standard-neutral
+    fallback periods were used). ``clocks`` are ordered worst-first so overdue
+    and at-risk deadlines surface at the top.
+    """
+
+    project_id: str
+    contract_standard: str
+    generated_at: str
+    due_soon_days: int
+    clocks: list[NoticeClockOut]
+    summary: NoticeRegisterSummaryOut
+
+
+# --- Cross-source commitment / action register -----------------------------
+
+
+class CommitmentOut(BaseModel):
+    """One open commitment in the consolidated register."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    source: str
+    ref_id: str
+    code: str
+    title: str
+    owner: str
+    due_date: str | None
+    overdue: bool
+    days_overdue: float
+    age_days: float | None
+
+
+class OwnerLoadOut(BaseModel):
+    """How many open commitments sit with one owner, and how many are overdue."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    owner: str
+    open_count: int
+    overdue_count: int
+
+
+class CommitmentRegisterOut(BaseModel):
+    """Project-wide, owner-ranked, overdue-first open-commitment register."""
+
+    project_id: str
+    generated_at: str
+    total_open: int
+    overdue_count: int
+    by_owner: list[OwnerLoadOut]
+    by_source: dict[str, int]
+    items: list[CommitmentOut]
+
+
+# --- Change-driver Pareto analytics ----------------------------------------
+# Cost is carried as a string (the signed Decimal rendered losslessly) per the
+# platform money-as-string convention, so these rows are built explicitly in the
+# router rather than validated straight off the engine dataclasses.
+
+
+class ParetoRowOut(BaseModel):
+    """One driver's ranked contribution with its running cumulative percentage."""
+
+    key: str
+    count: int
+    cost: str
+    cost_pct: float
+    cumulative_pct: float
+
+
+class DriverCurrencyOut(BaseModel):
+    """Signed change-cost total carried by one currency (never blended)."""
+
+    currency: str
+    count: int
+    cost: str
+
+
+class DriverTrendPointOut(BaseModel):
+    """Change count and signed cost for one ``YYYY-MM`` month."""
+
+    month: str
+    count: int
+    cost: str
+
+
+class ChangeDriverAnalyticsOut(BaseModel):
+    """Pareto (by cause and by responsible party) + monthly trend of change."""
+
+    project_id: str
+    total_count: int
+    total_cost: str
+    primary_currency: str
+    by_cause: list[ParetoRowOut]
+    by_party: list[ParetoRowOut]
+    by_currency: list[DriverCurrencyOut]
+    trend: list[DriverTrendPointOut]
+
+
+# --- Change run-rate / cumulative change curve -----------------------------
+# Every money / percentage figure is serialized as a string so the signed
+# Decimal round-trips losslessly on the wire.
+
+
+class RunRatePointOut(BaseModel):
+    """Cumulative change value through one ``YYYY-MM`` month."""
+
+    month: str
+    approved_value: str
+    pending_value: str
+    cumulative_value: str
+    change_pct: str | None
+
+
+class RunRateForecastOut(BaseModel):
+    """Simple linear burn-rate forecast of change at completion."""
+
+    method: str
+    elapsed_days: int
+    total_days: int
+    rate_per_day: str
+    final_change_value: str
+    final_change_pct: str | None
+    at_date: str
+
+
+class ChangeRunRateOut(BaseModel):
+    """Change run-rate: cumulative curve vs contract, intake rate and forecast."""
+
+    project_id: str
+    original_contract_value: str | None
+    currency: str
+    change_count: int
+    approved_value: str
+    pending_value: str
+    total_change_value: str
+    current_change_pct: str | None
+    intake_rate_per_month: float
+    points: list[RunRatePointOut]
+    forecast: RunRateForecastOut | None

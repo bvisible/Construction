@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍Match Elements ORM models.
+"""Match Elements ORM models.
 
 Tables:
     oe_match_elements_session   - per-project session: source, group-by config,
@@ -35,7 +35,7 @@ from app.database import GUID, Base
 
 
 class MatchSession(Base):
-    """‌⁠‍A user's matching session for a single project + source.
+    """A user's matching session for a single project + source.
 
     Sessions are durable so estimators can pause and come back. The
     ``group_by`` and ``filters`` columns are the live config; changes
@@ -157,7 +157,7 @@ class MatchSession(Base):
 
 
 class MatchGroup(Base):
-    """‌⁠‍A single group within a session - N elements that share group-by values.
+    """A single group within a session - N elements that share group-by values.
 
     ``group_key`` is the human-readable composite key
     (``"ifc_class:IfcWall|material:STB|thickness:240"``). ``signature`` is the

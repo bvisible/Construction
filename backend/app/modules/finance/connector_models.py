@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍ORM models for finance ERP / accounting connectors.
+"""ORM models for finance ERP / accounting connectors.
 
 Tables:
     oe_finance_connector_config - a configured connection to an external

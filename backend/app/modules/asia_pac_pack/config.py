@@ -1,4 +1,4 @@
-"""‌⁠‍Regional configuration for Asia-Pacific (AU, NZ, JP, SG)."""
+"""Regional configuration for Asia-Pacific (AU, NZ, JP, SG)."""
 
 from decimal import Decimal
 from typing import Any

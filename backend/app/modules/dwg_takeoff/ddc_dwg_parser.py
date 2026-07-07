@@ -1,4 +1,4 @@
-"""‌⁠‍Parse DDC DwgExporter Excel output into drawable entities.
+"""Parse DDC DwgExporter Excel output into drawable entities.
 
 DDC DwgExporter produces an Excel file with AutoCAD database records.
 Geometry entities (AcDbLine, AcDbPolyline+AcDbVertex, AcDbArc, AcDbCircle,
@@ -47,7 +47,7 @@ _ACI_COLORS: dict[int, str] = {
 
 
 def _aci_to_hex(aci_str: str | int | None) -> str:
-    """‌⁠‍Convert ACI color string/int to hex."""
+    """Convert ACI color string/int to hex."""
     if aci_str is None:
         return "#cccccc"
     s = str(aci_str).strip()
@@ -62,7 +62,7 @@ def _aci_to_hex(aci_str: str | int | None) -> str:
 
 
 def _parse_coord_csv(s: str | None) -> tuple[float, float] | None:
-    """‌⁠‍Parse '295.144, 812.512, 0' → (295.144, 812.512)."""
+    """Parse '295.144, 812.512, 0' → (295.144, 812.512)."""
     if not s or not isinstance(s, str):
         return None
     parts = [p.strip() for p in s.split(",")]

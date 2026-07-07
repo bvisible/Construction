@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍Pure-Python forensic delay-analysis engine (T2.2).
+"""Pure-Python forensic delay-analysis engine (T2.2).
 
 Forensic delay analysis in the industry-standard suite is a manual,
 expert-only exercise: the analyst hand-builds delay fragments ("fragnets"),

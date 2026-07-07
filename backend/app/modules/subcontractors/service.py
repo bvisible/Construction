@@ -1,4 +1,4 @@
-"""‌⁠‍Business logic for the subcontractors module.
+"""Business logic for the subcontractors module.
 
 Highlights:
     - Pure helpers (`derive_cert_status`, `compute_expiry_alerts`,
@@ -114,7 +114,7 @@ def derive_cert_status(
     *,
     today: date | None = None,
 ) -> str:
-    """‌⁠‍Derive certificate status from validity / revocation state.
+    """Derive certificate status from validity / revocation state.
 
     Returns one of: valid / expired / revoked.
     """
@@ -132,7 +132,7 @@ def compute_expiry_alerts(
     certificates: list[Certificate],
     today: date | None = None,
 ) -> list[ExpiryAlert]:
-    """‌⁠‍Return alerts at 60 / 30 / 7 days before each certificate expires.
+    """Return alerts at 60 / 30 / 7 days before each certificate expires.
 
     A certificate emits one alert per window it has just crossed
     (e.g. a cert that expires in 5 days fires both the 7-day and lower

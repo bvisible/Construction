@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍File-based ERP / accounting connector.
+"""File-based ERP / accounting connector.
 
 Push: writes the project's invoices and payments to the configured storage
 backend as CSV (or JSON) files - the simplest, vendor-neutral way to hand

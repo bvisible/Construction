@@ -1,4 +1,4 @@
-"""‌⁠‍Pydantic v2 request/response schemas for the Service & Maintenance module.
+"""Pydantic v2 request/response schemas for the Service & Maintenance module.
 
 Status / priority / frequency enums are enforced via regex patterns so
 validation works the same on Pydantic v2 and any downstream OpenAPI consumer.
@@ -342,7 +342,7 @@ class DebriefReportResponse(BaseModel):
 
 
 class WorkOrderCompleteRequest(BaseModel):
-    """‌⁠‍Body for POST /work-orders/{id}/complete."""
+    """Body for POST /work-orders/{id}/complete."""
 
     debrief: DebriefReportCreate
     customer_signature: str | None = Field(default=None, max_length=200_000)

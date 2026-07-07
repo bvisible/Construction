@@ -1,4 +1,4 @@
-"""‌⁠‍Document share-link service - business logic for password-protected
+"""Document share-link service - business logic for password-protected
 public share URLs.
 
 Stateless service layer mirroring the pattern in
@@ -58,13 +58,13 @@ _DEFAULT_EXPIRES_IN_DAYS = 30
 
 
 def _hash_password(password: str) -> str:
-    """‌⁠‍Bcrypt-hash a share-link password."""
+    """Bcrypt-hash a share-link password."""
     salt = bcrypt.gensalt(rounds=_BCRYPT_ROUNDS)
     return bcrypt.hashpw(password.encode("utf-8"), salt).decode("utf-8")
 
 
 def _verify_password(plain: str, hashed: str) -> bool:
-    """‌⁠‍Verify a recipient-supplied password against the stored hash."""
+    """Verify a recipient-supplied password against the stored hash."""
     try:
         return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
     except (ValueError, TypeError):

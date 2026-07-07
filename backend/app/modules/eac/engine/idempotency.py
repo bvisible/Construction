@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍Idempotency keys for ``POST /rulesets/{id}:run`` (Wave 1, RFC 36 W1.1).
+"""Idempotency keys for ``POST /rulesets/{id}:run`` (Wave 1, RFC 36 W1.1).
 
 A re-posted run with the same idempotency key returns the existing
 ``EacRun`` instead of starting a fresh execution. This is important for
@@ -57,7 +57,7 @@ def compute_idempotency_key(
     elements: Sequence[dict[str, Any]],
     client_supplied: str | None = None,
 ) -> str:
-    """‌⁠‍Return the idempotency key for a ``POST /rulesets/{id}:run`` call.
+    """Return the idempotency key for a ``POST /rulesets/{id}:run`` call.
 
     See module docstring for the contract.
     """
@@ -95,7 +95,7 @@ def compute_idempotency_key(
 def _canonical_sorted(
     elements: Sequence[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """‌⁠‍Return ``elements`` sorted by ``stable_id`` for deterministic hashing.
+    """Return ``elements`` sorted by ``stable_id`` for deterministic hashing.
 
     Elements without a ``stable_id`` are still hashed but sorted to the
     end - they shouldn't normally exist (the runner emits a stable id

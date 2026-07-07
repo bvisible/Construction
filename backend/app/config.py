@@ -1,4 +1,4 @@
-"""‌⁠‍Application configuration​‌‍⁠​‌‍⁠​‌‍⁠​‌‍⁠.
+"""Application configuration​‌‍⁠​‌‍⁠​‌‍⁠​‌‍⁠.
 
 Loads from environment variables with .env file fallback.
 All settings are typed and validated via Pydantic.
@@ -63,7 +63,7 @@ def reset_jwt_dev_warning() -> None:
 
 
 def _read_pyproject_version() -> str | None:
-    """‌⁠‍Best-effort parse of ``version = "..."`` from backend/pyproject.toml.
+    """Best-effort parse of ``version = "..."`` from backend/pyproject.toml.
 
     Used when the package isn't installed (``pip install -e .`` not run).
     Walks up from this file so it works whether CWD is repo root, backend/,
@@ -85,7 +85,7 @@ def _read_pyproject_version() -> str | None:
 
 
 def _detect_version() -> str:
-    """‌⁠‍Pick the version /api/health should report.
+    """Pick the version /api/health should report.
 
     When running from the source tree (the common dev workflow:
     ``cd backend && python -m uvicorn app.main:create_app --factory``),
@@ -115,7 +115,7 @@ def _detect_version() -> str:
 
 
 def build_provenance_tag(version: str) -> str:
-    """‌⁠‍Derive the opaque build-provenance signature reported by /api/health.
+    """Derive the opaque build-provenance signature reported by /api/health.
 
     Combines a fixed seed with a content-hash component (sha256 of the
     running version) so the value rotates per release like a routine

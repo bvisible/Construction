@@ -1,4 +1,4 @@
-"""‌⁠‍BIM Hub service​‌‍⁠​‌‍⁠​‌‍⁠​‌‍⁠ - business logic for BIM data management.
+"""BIM Hub service​‌‍⁠​‌‍⁠​‌‍⁠​‌‍⁠ - business logic for BIM data management.
 
 Stateless service layer. Handles:
 - BIM model CRUD
@@ -83,7 +83,7 @@ async def _safe_publish(
     data: dict[str, Any],
     source_module: str = "oe_bim_hub",
 ) -> None:
-    """‌⁠‍Publish event safely - ignores MissingGreenlet errors with SQLite async."""
+    """Publish event safely - ignores MissingGreenlet errors with SQLite async."""
     try:
         event_bus.publish_detached(name, data, source_module=source_module)
     except Exception:
@@ -351,7 +351,7 @@ def diff_federation_snapshots(
 
 
 def _safe_float(value: Any) -> float | None:
-    """‌⁠‍Coerce a Position string/Decimal/None money or quantity to float.
+    """Coerce a Position string/Decimal/None money or quantity to float.
 
     Position.quantity / unit_rate / total are stored as strings to avoid
     SQLite REAL precision loss. Aggregation endpoints surface them as JSON

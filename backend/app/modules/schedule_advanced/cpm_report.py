@@ -1,4 +1,4 @@
-"""‌⁠‍Claims-grade schedule-quality report assembly.
+"""Claims-grade schedule-quality report assembly.
 
 A thin, pure aggregation layer on top of :mod:`app.modules.schedule_advanced.cpm`.
 It runs one CPM pass and projects it through the claims-grade post-processors

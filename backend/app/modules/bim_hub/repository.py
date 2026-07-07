@@ -1,4 +1,4 @@
-"""‌⁠‍BIM Hub data access layer.
+"""BIM Hub data access layer.
 
 All database queries for BIM models, elements, BOQ links, quantity maps,
 and model diffs live here. No business logic - pure data access.
@@ -25,13 +25,13 @@ from app.modules.bim_hub.models import (
 
 
 class BIMModelRepository:
-    """‌⁠‍Data access for BIMModel."""
+    """Data access for BIMModel."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
     async def get(self, model_id: uuid.UUID) -> BIMModel | None:
-        """‌⁠‍Get BIM model by ID."""
+        """Get BIM model by ID."""
         return await self.session.get(BIMModel, model_id)
 
     async def list_for_project(
@@ -495,7 +495,7 @@ class BIMModelDiffRepository:
 
 
 class BIMFederationRepository:
-    """‌⁠‍Data access for BIMFederation + BIMFederationModel."""
+    """Data access for BIMFederation + BIMFederationModel."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session

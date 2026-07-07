@@ -1,4 +1,4 @@
-"""‌⁠‍RFI vector adapter - feeds the ``oe_rfi_rfis`` collection.
+"""RFI vector adapter - feeds the ``oe_rfi_rfis`` collection.
 
 Each :class:`~app.modules.rfi.models.RFI` row is embedded as the RFI
 number, subject, question and official response so the AI advisor and
@@ -20,13 +20,13 @@ from app.modules.rfi.models import RFI
 
 
 class RFIVectorAdapter:
-    """‌⁠‍Embed RFI rows into the unified vector store."""
+    """Embed RFI rows into the unified vector store."""
 
     collection_name: str = COLLECTION_RFI
     module_name: str = "rfi"
 
     def to_text(self, row: RFI) -> str:
-        """‌⁠‍Build the canonical text that gets embedded.
+        """Build the canonical text that gets embedded.
 
         Concatenates the RFI number, subject, question, official response,
         discipline and status so semantic queries match regardless of

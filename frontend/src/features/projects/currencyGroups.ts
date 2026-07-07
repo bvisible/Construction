@@ -114,14 +114,39 @@ export const CURRENCY_GROUPS: OptionGroup[] = [
   },
 ];
 
+/** Sentinel select value that reveals the free-text "type your own code"
+ *  input. Kept identical to the literal used across the project forms and
+ *  ``CountryCombobox`` so the grouped picker can reuse the same option. */
+export const CUSTOM_CURRENCY_SENTINEL = '__custom__';
+
 /** Set of every selectable currency code (excluding `__custom__`) — used
  *  by the detail-page edit form to validate a project's stored currency
  *  against the catalogue before rendering it as the select's value. */
 export const CURRENCY_CODES: ReadonlySet<string> = new Set(
   CURRENCY_GROUPS.flatMap((g) => g.options.map((o) => o.value)).filter(
-    (v) => v !== '__custom__',
+    (v) => v !== CUSTOM_CURRENCY_SENTINEL,
   ),
 );
+
+/**
+ * Normalize a free-text currency code the same way the money formatter does
+ * before it renders a symbol: trim, drop inner whitespace, upper-case. This
+ * does NOT hard-reject input - it returns the cleaned string so the caller
+ * can store a non-ISO code (the backend ``currency`` column is a free-form
+ * ``str`` and ``formatCurrency`` already degrades unknown codes gracefully).
+ *
+ * Use {@link isValidCurrencyCode} to decide whether to show a soft hint.
+ */
+export function normalizeCurrencyCode(raw: string): string {
+  return raw.replace(/\s+/g, '').toUpperCase();
+}
+
+/** Whether a (normalized or raw) code matches the ISO-4217 shape the
+ *  ``Intl.NumberFormat`` currency style understands (3 ascii letters).
+ *  Mirrors ``CURRENCY_CODE_RE`` in ``shared/lib/money.ts``. */
+export function isValidCurrencyCode(code: string): boolean {
+  return /^[A-Z]{3}$/.test(normalizeCurrencyCode(code));
+}
 
 // ── Country → (region, currency) defaults ────────────────────────────────
 //

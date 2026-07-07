@@ -1,4 +1,4 @@
-"""‌⁠‍Finance ORM models.
+"""Finance ORM models.
 
 Tables:
     oe_finance_invoice       - payable/receivable invoices
@@ -19,7 +19,7 @@ from app.database import GUID, Base
 
 
 class Invoice(Base):
-    """‌⁠‍A payable or receivable invoice linked to a project."""
+    """A payable or receivable invoice linked to a project."""
 
     __tablename__ = "oe_finance_invoice"
     __table_args__ = (
@@ -84,7 +84,7 @@ class Invoice(Base):
 
 
 class InvoiceLineItem(Base):
-    """‌⁠‍A single line item within an invoice."""
+    """A single line item within an invoice."""
 
     __tablename__ = "oe_finance_invoice_item"
 

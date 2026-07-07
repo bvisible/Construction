@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍Saved Views module.
+"""Saved Views module.
 
 A record-level, no-code saved-search engine. A user saves a named filter spec
 against any entity a module has registered as searchable, then runs it as a

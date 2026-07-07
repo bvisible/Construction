@@ -1,4 +1,4 @@
-"""‌⁠‍Parametric formula engine for assembly components.
+"""Parametric formula engine for assembly components.
 
 Evaluates formulas with variable substitution, conditionals, and lookups.
 Used to calculate resource quantities dynamically based on parameters
@@ -25,11 +25,11 @@ _MAX_PAREN_DEPTH = 64
 
 
 class FormulaError(ValueError):
-    """‌⁠‍Raised when a formula cannot be evaluated."""
+    """Raised when a formula cannot be evaluated."""
 
 
 class FormulaEvaluator:
-    """‌⁠‍Safe parametric formula evaluator.
+    """Safe parametric formula evaluator.
 
     Supports:
     - Basic math: +, -, *, /, (), decimals

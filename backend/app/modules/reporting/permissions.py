@@ -1,4 +1,4 @@
-"""‌⁠‍Reporting module permission definitions.
+"""Reporting module permission definitions.
 
 Registered at module startup via ``app.modules.reporting.on_startup``.
 Without this, every ``RequirePermission("reporting.*")`` gate in
@@ -17,7 +17,7 @@ from app.core.permissions import Role, permission_registry
 
 
 def register_reporting_permissions() -> None:
-    """‌⁠‍Register permissions for the reporting module.
+    """Register permissions for the reporting module.
 
     R7 audit (2026-05-24) added ``reporting.distribute`` for the
     schedule + recipient-list endpoints. Distribution is elevated to

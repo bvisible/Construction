@@ -1,5 +1,5 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
-"""‌⁠‍Property Development event registry.
+"""Property Development event registry.
 
 Documents events PUBLISHED by the property_dev module + wires
 cross-module SUBSCRIBERS that mutate property_dev state in response to

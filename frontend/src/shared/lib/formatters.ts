@@ -110,7 +110,15 @@ export function fmtDate(dateStr: string, options?: Intl.DateTimeFormatOptions): 
     month: 'short',
     year: 'numeric',
   };
-  return new Date(dateStr).toLocaleDateString(getIntlLocale(), options || defaults);
+  const opts = options || defaults;
+  // A date-only string (YYYY-MM-DD) is parsed by `new Date()` as UTC
+  // midnight, so rendering it in the browser's local zone shifts it a day
+  // back at negative UTC offsets (a diary date of 2026-07-01 shows as
+  // 2026-06-30 in UTC-6). Pin date-only values to UTC so the calendar day
+  // is preserved; full timestamps keep their local-zone rendering.
+  const isDateOnly = /^\d{4}-\d{2}-\d{2}$/.test(dateStr);
+  const finalOpts = isDateOnly && !opts.timeZone ? { ...opts, timeZone: 'UTC' } : opts;
+  return new Date(dateStr).toLocaleDateString(getIntlLocale(), finalOpts);
 }
 
 // ---------------------------------------------------------------------------

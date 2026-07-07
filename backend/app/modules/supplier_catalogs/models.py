@@ -1,4 +1,4 @@
-"""‌⁠‍Supplier Catalogs ORM models.
+"""Supplier Catalogs ORM models.
 
 Tables (prefix ``oe_supplier_catalogs_``):
     vendor              - supplier master (with contacts in JSON)
@@ -50,7 +50,7 @@ from app.database import GUID, Base
 
 
 class Vendor(Base):
-    """‌⁠‍Supplier master record."""
+    """Supplier master record."""
 
     __tablename__ = "oe_supplier_catalogs_vendor"
 
@@ -112,7 +112,7 @@ class Vendor(Base):
 
 
 class ItemCategory(Base):
-    """‌⁠‍Hierarchical category tree for materials and services."""
+    """Hierarchical category tree for materials and services."""
 
     __tablename__ = "oe_supplier_catalogs_item_category"
 

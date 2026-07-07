@@ -1,5 +1,5 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
-"""‌⁠‍Clash cost-impact module manifest."""
+"""Clash cost-impact module manifest."""
 
 from app.core.module_loader import ModuleManifest
 

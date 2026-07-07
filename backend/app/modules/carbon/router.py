@@ -1,4 +1,4 @@
-"""‌⁠‍Carbon & Sustainability API routes.
+"""Carbon & Sustainability API routes.
 
 Mounted at ``/api/v1/carbon/``.
 
@@ -50,6 +50,15 @@ Endpoints:
     DELETE /reports/{id}                 - Delete report
     POST   /reports/generate             - Generate report from inventory
     GET    /dashboard?project_id=        - Project carbon dashboard
+    POST   /inventories/{id}/operational-carbon/compute - Compute B6 operational carbon
+    GET    /inventories/{id}/operational-carbon         - List B6 operational entries
+    POST   /operational-carbon/{id}/confirm             - Confirm a draft B6 line
+    DELETE /operational-carbon/{id}                      - Delete a B6 line
+    POST   /inventories/{id}/life-cycle-cost/compute    - Compute ISO 15686-5 whole-life cost
+    GET    /inventories/{id}/life-cycle-cost            - List whole-life cost entries
+    POST   /life-cycle-cost/{id}/confirm                - Confirm a draft cost line
+    DELETE /life-cycle-cost/{id}                         - Delete a cost line
+    GET    /inventories/{id}/whole-life                 - Whole-life carbon + cost rollup
 """
 
 from __future__ import annotations
@@ -57,6 +66,7 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import date
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
@@ -79,9 +89,15 @@ from app.modules.carbon.schemas import (
     EPDRecordResponse,
     EPDRecordUpdate,
     InventoryTotalsResponse,
+    LifeCycleCostComputeRequest,
+    LifeCycleCostComputeResponse,
+    LifeCycleCostEntryResponse,
     MaterialCarbonFactorCreate,
     MaterialCarbonFactorResponse,
     MaterialCarbonFactorUpdate,
+    OperationalCarbonComputeRequest,
+    OperationalCarbonComputeResponse,
+    OperationalCarbonEntryResponse,
     Scope1EntryCreate,
     Scope1EntryResponse,
     Scope1EntryUpdate,
@@ -96,6 +112,7 @@ from app.modules.carbon.schemas import (
     SustainabilityReportResponse,
     SustainabilityReportUpdate,
     TargetProgressResponse,
+    WholeLifeResponse,
 )
 from app.modules.carbon.service import CarbonService
 
@@ -338,6 +355,7 @@ async def inventory_totals(
     totals = await service.compute_inventory_totals_fresh(inventory_id)
     return InventoryTotalsResponse(
         inventory_id=inventory_id,
+        unit=totals.get("unit", "kgCO2e"),
         embodied_a1a3=totals.get("embodied_a1a3", "0"),
         embodied_a4=totals.get("embodied_a4", "0"),
         embodied_a5=totals.get("embodied_a5", "0"),
@@ -345,12 +363,14 @@ async def inventory_totals(
         embodied_b=totals.get("embodied_b", "0"),
         embodied_c=totals.get("embodied_c", "0"),
         embodied_d=totals.get("embodied_d", "0"),
+        b6_operational=totals.get("b6_operational", "0"),
         scope1=totals.get("scope1", "0"),
         scope2=totals.get("scope2", "0"),
         scope3=totals.get("scope3", "0"),
         operational=totals.get("operational", "0"),
         end_of_life=totals.get("end_of_life", "0"),
         total=totals.get("total", "0"),
+        basis=totals.get("basis", []),
     )
 
 
@@ -817,7 +837,7 @@ async def ingest_epd_by_identifier(
     _perm: None = Depends(RequirePermission("carbon.import_epd")),
     service: CarbonService = Depends(_get_service),
 ) -> dict:
-    """‌⁠‍Ingest an EPD record by parsing a public-database identifier or URL.
+    """Ingest an EPD record by parsing a public-database identifier or URL.
 
     Body:
         identifier: str - e.g. "oekobaudat:1.4.01.04" or a URL.
@@ -880,7 +900,7 @@ async def lookup_grid_factor(
     _perm: None = Depends(RequirePermission("carbon.read")),
     service: CarbonService = Depends(_get_service),
 ) -> dict:
-    """‌⁠‍Look up the grid emission factor (kg CO2e / kWh) for (country, year).
+    """Look up the grid emission factor (kg CO2e / kWh) for (country, year).
 
     Falls back to the nearest year ≤ requested for the same country.
     """
@@ -946,6 +966,42 @@ async def assign_boq_position(
         "stage": entry.stage,
         "carbon_kg": str(entry.carbon_kg),
     }
+
+
+# ── 6D auto-enrichment from BIM elements ─────────────────────────────────
+
+
+@router.post("/inventories/{inventory_id}/auto-enrich-bim")
+async def auto_enrich_bim(
+    inventory_id: uuid.UUID,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    model_id: uuid.UUID | None = Query(default=None),
+    dry_run: bool = Query(default=False),
+    _perm: None = Depends(RequirePermission("carbon.create")),
+    service: CarbonService = Depends(_get_service),
+) -> dict:
+    """Auto-extract embodied carbon (EN 15978 A1-A3) from the project's BIM.
+
+    For each BIM element in the inventory's project, match its material / type
+    to the best EPD-backed carbon factor, take the matching SI quantity from
+    the model geometry, and create a draft embodied-carbon entry linked to the
+    element (``element_id`` + ``source='auto_enriched'`` + ``match_confidence``).
+    The inventory is not finalised - AI suggests, a human confirms.
+
+    Query:
+        model_id: optional - limit enrichment to a single BIM model.
+        dry_run: when true, compute and return suggestions without persisting.
+    """
+    # IDOR gate: enrichment writes into the inventory, so the caller must own
+    # the inventory's project - mirror the assign-boq-position endpoint.
+    project_id = await service.get_inventory_project_id(inventory_id)
+    await verify_project_access(project_id, user_id, session)
+    return await service.auto_enrich_inventory_from_bim(
+        inventory_id,
+        model_id=model_id,
+        dry_run=dry_run,
+    )
 
 
 # ── TCFD / ISSB structured report ────────────────────────────────────────
@@ -1016,3 +1072,183 @@ async def generate_tcfd_report(
         "period_end": str(report.period_end),
         "totals": report.totals,
     }
+
+
+# ── 6D Phase 2: operational carbon (B6 use-phase) ─────────────────────────
+
+
+@router.post(
+    "/inventories/{inventory_id}/operational-carbon/compute",
+    response_model=OperationalCarbonComputeResponse,
+)
+async def compute_operational_carbon(
+    inventory_id: uuid.UUID,
+    body: OperationalCarbonComputeRequest,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    dry_run: bool = Query(default=False),
+    _perm: None = Depends(RequirePermission("carbon.create")),
+    service: CarbonService = Depends(_get_service),
+) -> OperationalCarbonComputeResponse:
+    """Compute B6 use-phase operational carbon from the project's BIM.
+
+    Per-asset lines come from elements that carry an energy signal (annual
+    energy, or a rated power x run hours on the asset register). A single
+    modelled whole-building line is added when both gross_floor_area_m2 and
+    modelled_intensity_kwh_per_m2_year are supplied. Each line is
+    ``annual energy x grid factor x study period`` and lands as a draft for
+    human confirmation. ``dry_run`` returns the proposals without persisting.
+    """
+    project_id = await service.get_inventory_project_id(inventory_id)
+    await verify_project_access(project_id, user_id, session)
+    result = await service.compute_operational_carbon(inventory_id, body, dry_run=dry_run)
+    return OperationalCarbonComputeResponse(**result)
+
+
+@router.get(
+    "/inventories/{inventory_id}/operational-carbon",
+    response_model=list[OperationalCarbonEntryResponse],
+)
+async def list_operational_carbon(
+    inventory_id: uuid.UUID,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    service: CarbonService = Depends(_get_service),
+) -> list[OperationalCarbonEntryResponse]:
+    project_id = await service.get_inventory_project_id(inventory_id)
+    await verify_project_access(project_id, user_id, session)
+    items, _ = await service.list_operational_entries(inventory_id)
+    return [OperationalCarbonEntryResponse.model_validate(i) for i in items]
+
+
+@router.post(
+    "/operational-carbon/{entry_id}/confirm",
+    response_model=OperationalCarbonEntryResponse,
+)
+async def confirm_operational_carbon(
+    entry_id: uuid.UUID,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    _perm: None = Depends(RequirePermission("carbon.update")),
+    service: CarbonService = Depends(_get_service),
+) -> OperationalCarbonEntryResponse:
+    """Human confirmation: flip a draft operational (B6) line to 'confirmed'."""
+    project_id = await service.get_operational_project_id(entry_id)
+    await verify_project_access(project_id, user_id, session)
+    entry = await service.confirm_operational_entry(entry_id)
+    return OperationalCarbonEntryResponse.model_validate(entry)
+
+
+@router.delete("/operational-carbon/{entry_id}", status_code=204)
+async def delete_operational_carbon(
+    entry_id: uuid.UUID,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    _perm: None = Depends(RequirePermission("carbon.delete")),
+    service: CarbonService = Depends(_get_service),
+) -> None:
+    project_id = await service.get_operational_project_id(entry_id)
+    await verify_project_access(project_id, user_id, session)
+    await service.delete_operational_entry(entry_id)
+
+
+# ── 6D Phase 2: whole-life cost (ISO 15686-5) ─────────────────────────────
+
+
+@router.post(
+    "/inventories/{inventory_id}/life-cycle-cost/compute",
+    response_model=LifeCycleCostComputeResponse,
+)
+async def compute_life_cycle_cost(
+    inventory_id: uuid.UUID,
+    body: LifeCycleCostComputeRequest,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    dry_run: bool = Query(default=False),
+    _perm: None = Depends(RequirePermission("carbon.create")),
+    service: CarbonService = Depends(_get_service),
+) -> LifeCycleCostComputeResponse:
+    """Compute ISO 15686-5 whole-life cost lines for the inventory.
+
+    BIM-derived lines read service life and any cost fields from the AIM asset
+    register (with modelled fallbacks); explicit ``lines`` are costed too. Each
+    line discounts opex, the B4/B5 replacement cycle and end-of-life to a
+    present value and lands as a draft. ``dry_run`` returns proposals only.
+    """
+    project_id = await service.get_inventory_project_id(inventory_id)
+    await verify_project_access(project_id, user_id, session)
+    result = await service.compute_life_cycle_cost(inventory_id, body, dry_run=dry_run)
+    return LifeCycleCostComputeResponse(**result)
+
+
+@router.get(
+    "/inventories/{inventory_id}/life-cycle-cost",
+    response_model=list[LifeCycleCostEntryResponse],
+)
+async def list_life_cycle_cost(
+    inventory_id: uuid.UUID,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    service: CarbonService = Depends(_get_service),
+) -> list[LifeCycleCostEntryResponse]:
+    project_id = await service.get_inventory_project_id(inventory_id)
+    await verify_project_access(project_id, user_id, session)
+    items, _ = await service.list_lcc_entries(inventory_id)
+    return [LifeCycleCostEntryResponse.model_validate(i) for i in items]
+
+
+@router.post(
+    "/life-cycle-cost/{entry_id}/confirm",
+    response_model=LifeCycleCostEntryResponse,
+)
+async def confirm_life_cycle_cost(
+    entry_id: uuid.UUID,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    _perm: None = Depends(RequirePermission("carbon.update")),
+    service: CarbonService = Depends(_get_service),
+) -> LifeCycleCostEntryResponse:
+    """Human confirmation: flip a draft whole-life cost line to 'confirmed'."""
+    project_id = await service.get_lcc_project_id(entry_id)
+    await verify_project_access(project_id, user_id, session)
+    entry = await service.confirm_lcc_entry(entry_id)
+    return LifeCycleCostEntryResponse.model_validate(entry)
+
+
+@router.delete("/life-cycle-cost/{entry_id}", status_code=204)
+async def delete_life_cycle_cost(
+    entry_id: uuid.UUID,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    _perm: None = Depends(RequirePermission("carbon.delete")),
+    service: CarbonService = Depends(_get_service),
+) -> None:
+    project_id = await service.get_lcc_project_id(entry_id)
+    await verify_project_access(project_id, user_id, session)
+    await service.delete_lcc_entry(entry_id)
+
+
+# ── 6D Phase 2: combined whole-life rollup (carbon + cost side by side) ────
+
+
+@router.get("/inventories/{inventory_id}/whole-life", response_model=WholeLifeResponse)
+async def whole_life(
+    inventory_id: uuid.UUID,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    carbon_price_per_tonne: Decimal | None = Query(default=None, ge=0),
+    service: CarbonService = Depends(_get_service),
+) -> WholeLifeResponse:
+    """Whole-life carbon (EN 15978 A-B-C-D) side by side with whole-life cost.
+
+    Combines the embodied stage rollup, the B6 operational lines and the ISO
+    15686-5 present-value cost components, plus coverage of the model. Pass
+    ``carbon_price_per_tonne`` to also get the monetised whole-life carbon.
+    """
+    project_id = await service.get_inventory_project_id(inventory_id)
+    await verify_project_access(project_id, user_id, session)
+    payload = await service.whole_life_summary(
+        inventory_id,
+        carbon_price_per_tonne=carbon_price_per_tonne,
+    )
+    return WholeLifeResponse(**payload)

@@ -1,4 +1,4 @@
-"""‌⁠‍Punch List data access layer.
+"""Punch List data access layer.
 
 All database queries for punch list items live here.
 No business logic - pure data access.
@@ -14,13 +14,13 @@ from app.modules.punchlist.models import PunchItem
 
 
 class PunchListRepository:
-    """‌⁠‍Data access for PunchItem models."""
+    """Data access for PunchItem models."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
     async def get_by_id(self, item_id: uuid.UUID) -> PunchItem | None:
-        """‌⁠‍Get punch item by ID."""
+        """Get punch item by ID."""
         return await self.session.get(PunchItem, item_id)
 
     async def list_for_project(

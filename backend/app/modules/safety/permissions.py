@@ -1,10 +1,10 @@
-"""‌⁠‍Safety module permission definitions."""
+"""Safety module permission definitions."""
 
 from app.core.permissions import Role, permission_registry
 
 
 def register_safety_permissions() -> None:
-    """‌⁠‍Register permissions for the safety module."""
+    """Register permissions for the safety module."""
     permission_registry.register_module_permissions(
         "safety",
         {

@@ -1,4 +1,4 @@
-"""‌⁠‍Supplier Catalogs data access layer.
+"""Supplier Catalogs data access layer.
 
 Thin SQLAlchemy wrappers - no business logic.
 """
@@ -37,7 +37,7 @@ from app.modules.supplier_catalogs.models import (
 
 
 class VendorRepository:
-    """‌⁠‍CRUD for Vendor."""
+    """CRUD for Vendor."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -194,7 +194,7 @@ class PriceListRepository:
         self,
         catalog_item_id: uuid.UUID,
     ) -> list[tuple[CatalogEntry, PriceList, Vendor]]:
-        """‌⁠‍Return (entry, price_list, vendor) tuples for active price lists."""
+        """Return (entry, price_list, vendor) tuples for active price lists."""
         stmt = (
             select(CatalogEntry, PriceList, Vendor)
             .join(PriceList, PriceList.id == CatalogEntry.price_list_id)

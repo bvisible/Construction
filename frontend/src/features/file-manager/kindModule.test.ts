@@ -15,6 +15,9 @@ import {
   modulesForKind,
   isInlinePreviewRow,
   pdfTakeoffTargetFor,
+  isImageRow,
+  isVideoRow,
+  isLightboxRow,
 } from './kindModule';
 import type { FileRow } from './types';
 
@@ -181,5 +184,126 @@ describe('modulesForKind - document-kind BIM offers the convert-on-demand viewer
     const mods = modulesForKind('bim_model', '.ifc');
     expect(mods.length).toBeGreaterThan(1);
     expect(mods[0]!.route('PROJ1', 'MODEL-7')).toBe('/projects/PROJ1/bim/MODEL-7');
+  });
+});
+
+describe('images & videos open in a viewer/player, NOT PDF Takeoff (ITEM 10)', () => {
+  function mediaRow(over: Partial<FileRow> = {}): FileRow {
+    return {
+      id: 'DOC-IMG-1',
+      kind: 'document',
+      name: 'site.jpg',
+      project_id: 'PROJ1',
+      size_bytes: 1,
+      mime_type: 'image/jpeg',
+      extension: '.jpg',
+      modified_at: null,
+      physical_path: '',
+      relative_path: '',
+      storage_backend: 'local',
+      download_url: '/api/v1/documents/DOC-IMG-1/download/',
+      preview_url: null,
+      thumbnail_url: null,
+      discipline: null,
+      category: null,
+      extra: {},
+      ...over,
+    };
+  }
+
+  // ── Predicates ───────────────────────────────────────────────────────
+  it('isImageRow is true for common image extensions (case / dot insensitive)', () => {
+    for (const ext of ['.jpg', 'JPEG', '.png', 'gif', '.webp', '.heic', '.svg', '.tiff']) {
+      expect(isImageRow({ kind: 'document', extension: ext })).toBe(true);
+    }
+  });
+
+  it('isImageRow falls back to the image/* mime type when the extension is unknown', () => {
+    expect(
+      isImageRow({ kind: 'document', extension: '.bin', mime_type: 'image/png' }),
+    ).toBe(true);
+  });
+
+  it('isVideoRow is true for common video extensions and the video/* mime', () => {
+    for (const ext of ['.mp4', 'MOV', '.webm', 'avi', '.mkv', '.m4v']) {
+      expect(isVideoRow({ kind: 'document', extension: ext })).toBe(true);
+    }
+    expect(
+      isVideoRow({ kind: 'document', extension: '.bin', mime_type: 'video/mp4' }),
+    ).toBe(true);
+  });
+
+  it('an image is neither a video nor a PDF, and vice-versa', () => {
+    expect(isVideoRow(mediaRow())).toBe(false);
+    expect(isImageRow(mediaRow({ name: 'c.pdf', extension: '.pdf', mime_type: 'application/pdf' }))).toBe(false);
+    expect(isVideoRow(mediaRow({ name: 'clip.mp4', extension: '.mp4', mime_type: 'video/mp4' }))).toBe(true);
+  });
+
+  // ── isLightboxRow gating ─────────────────────────────────────────────
+  it('isLightboxRow is true for an image / video document with a download URL', () => {
+    expect(isLightboxRow(mediaRow())).toBe(true);
+    expect(
+      isLightboxRow(mediaRow({ name: 'clip.mp4', extension: '.mp4', mime_type: 'video/mp4' })),
+    ).toBe(true);
+  });
+
+  it('isLightboxRow is false without a download URL (nothing to fetch)', () => {
+    expect(isLightboxRow(mediaRow({ download_url: null }))).toBe(false);
+  });
+
+  it('isLightboxRow excludes the photo kind (it has its own Site Photos viewer)', () => {
+    expect(isLightboxRow(mediaRow({ kind: 'photo' }))).toBe(false);
+  });
+
+  it('isLightboxRow is false for a PDF (that has its own inline reader path)', () => {
+    expect(
+      isLightboxRow(mediaRow({ name: 'c.pdf', extension: '.pdf', mime_type: 'application/pdf' })),
+    ).toBe(false);
+  });
+
+  // ── Primary action / module list never route to takeoff ──────────────
+  it('the primary action for an image is the in-place media viewer, not takeoff', () => {
+    const primary = primaryModule('document', '.png');
+    expect(primary.mediaPreview).toBe(true);
+    expect(primary.inlinePreview).toBeUndefined();
+    // The fallback route keeps the file selected in /files and must NOT
+    // navigate to the takeoff tool.
+    const route = primary.route('PROJ1', 'DOC-IMG-1');
+    expect(route).toBe('/projects/PROJ1/files?file=DOC-IMG-1');
+    expect(route).not.toContain('/takeoff');
+  });
+
+  it('the primary action for a video is the in-place player, not takeoff', () => {
+    const primary = primaryModule('document', '.mp4');
+    expect(primary.mediaPreview).toBe(true);
+    expect(primary.route('PROJ1', 'DOC-V-1')).not.toContain('/takeoff');
+  });
+
+  it('the image module list is the viewer only - PDF Takeoff is removed', () => {
+    const mods = modulesForKind('document', '.jpg');
+    expect(mods).toHaveLength(1);
+    expect(mods[0]!.mediaPreview).toBe(true);
+    expect(mods.some((m) => m.label === 'PDF Takeoff')).toBe(false);
+  });
+
+  it('the video module list is the player only - PDF Takeoff is removed', () => {
+    const mods = modulesForKind('document', '.mov');
+    expect(mods).toHaveLength(1);
+    expect(mods[0]!.mediaPreview).toBe(true);
+    expect(mods.some((m) => m.label === 'PDF Takeoff')).toBe(false);
+  });
+
+  it('pdfTakeoffTargetFor returns null for an image / video (no takeoff offer)', () => {
+    expect(pdfTakeoffTargetFor(mediaRow())).toBeNull();
+    expect(
+      pdfTakeoffTargetFor(mediaRow({ name: 'clip.mp4', extension: '.mp4', mime_type: 'video/mp4' })),
+    ).toBeNull();
+  });
+
+  it('isInlinePreviewRow is false for media (they take the lightbox path, not the PDF reader)', () => {
+    expect(isInlinePreviewRow(mediaRow())).toBe(false);
+    expect(
+      isInlinePreviewRow(mediaRow({ name: 'clip.mp4', extension: '.mp4', mime_type: 'video/mp4' })),
+    ).toBe(false);
   });
 });

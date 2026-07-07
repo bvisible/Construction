@@ -1,4 +1,4 @@
-"""‌⁠‍Tasks API routes.
+"""Tasks API routes.
 
 Endpoints:
     GET    /                    - List tasks for a project
@@ -48,7 +48,7 @@ def _get_service(session: SessionDep) -> TaskService:
 
 
 def _compute_checklist_progress(checklist: list | None) -> float:
-    """‌⁠‍Return completion percentage (0.0 - 100.0) for a checklist."""
+    """Return completion percentage (0.0 - 100.0) for a checklist."""
     if not checklist:
         return 0.0
     total = len(checklist)
@@ -57,7 +57,7 @@ def _compute_checklist_progress(checklist: list | None) -> float:
 
 
 def _compute_is_overdue(item: object) -> bool:
-    """‌⁠‍Determine if a task is overdue based on due_date and status."""
+    """Determine if a task is overdue based on due_date and status."""
     status = getattr(item, "status", "")
     if status == "completed":
         return False

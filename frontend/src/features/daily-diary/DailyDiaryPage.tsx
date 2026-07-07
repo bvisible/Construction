@@ -31,6 +31,10 @@ import {
   ClipboardList,
   ExternalLink,
   Orbit,
+  Search,
+  Check,
+  Loader2,
+  Image as ImageIcon,
 } from 'lucide-react';
 import {
   Button,
@@ -45,6 +49,7 @@ import {
   ConfirmDialog,
   DismissibleInfo,
   ModuleGuideButton,
+  AuthImage,
 } from '@/shared/ui';
 import { useConfirm } from '@/shared/hooks/useConfirm';
 import { useDisplayQuantity } from '@/shared/hooks/useDisplayQuantity';
@@ -99,6 +104,19 @@ import {
 import { dailyDiaryGuide } from './dailyDiaryGuide';
 import { Panorama360Viewer } from './Panorama360Viewer';
 import { is360Photo, panoramaImageUrl } from './panorama360';
+// Real file upload + "choose from already-uploaded" picker reuse the
+// documents/photo APIs. A diary photo only stores a URL, so we upload the
+// binary through the photo endpoint first (which classifies it as a field
+// site photo) and then register the diary photo against that file.
+import {
+  uploadPhoto,
+  fetchPhotos,
+  fetchDocuments,
+  getPhotoFileUrl,
+  getPhotoThumbUrl,
+  type PhotoItem as SitePhoto,
+  type DocumentItem,
+} from '@/features/documents/api';
 
 type Tab = 'diaries' | 'today' | 'archive';
 
@@ -2053,6 +2071,45 @@ function EntriesTimeline({
   );
 }
 
+/**
+ * Render a diary-photo thumbnail. Diary photos uploaded through the new file
+ * input / file picker point at the platform's OWN bearer-protected endpoints
+ * (``/api/v1/documents/...``); a bare <img> would 401 on those, so we route
+ * same-origin API URLs through <AuthImage> (token fetch -> object URL).
+ * Externally-hosted or public ``/files/...`` URLs keep the plain <img> path.
+ */
+function isAuthAssetUrl(url: string | null | undefined): boolean {
+  return !!url && url.startsWith('/api/');
+}
+
+function DiaryPhotoThumb({
+  url,
+  alt,
+  className,
+}: {
+  url: string;
+  alt: string;
+  className: string;
+}) {
+  if (isAuthAssetUrl(url)) {
+    return (
+      <AuthImage
+        src={url}
+        alt={alt}
+        className={className}
+        loading="lazy"
+        placeholder={<div className="h-full w-full animate-pulse bg-surface-secondary" />}
+        fallback={
+          <div className="flex h-full w-full items-center justify-center text-content-quaternary">
+            <Camera size={16} strokeWidth={1.5} />
+          </div>
+        }
+      />
+    );
+  }
+  return <img src={url} alt={alt} loading="lazy" className={className} />;
+}
+
 function PhotoGrid({
   photos,
   loading,
@@ -2121,10 +2178,9 @@ function PhotoGrid({
                 data-testid="daily-diary-photo-360"
               >
                 {thumb && (
-                  <img
-                    src={thumb}
+                  <DiaryPhotoThumb
+                    url={thumb}
                     alt={p.description || ''}
-                    loading="lazy"
                     className="h-full w-full object-cover transition-transform group-hover:scale-105"
                   />
                 )}
@@ -2142,10 +2198,9 @@ function PhotoGrid({
                 className="relative aspect-square overflow-hidden rounded-md bg-surface-secondary border border-border-light"
               >
                 {thumb && (
-                  <img
-                    src={thumb}
+                  <DiaryPhotoThumb
+                    url={thumb}
                     alt={p.description || ''}
-                    loading="lazy"
                     className="h-full w-full object-cover"
                   />
                 )}
@@ -2625,11 +2680,27 @@ function SignDiaryModal({
 
 /* ── Photo upload modal ──────────────────────────────────────────────────
  *
- * Registers a site photo against the diary. The binary itself lives in
- * object storage; this records its URL + capture metadata (POST
- * /diary-photos/). The URL field accepts an http(s) link or a relative
- * /files path - the same contract the backend schema enforces.
+ * Adds a FIELD/SITE photo to the diary. A diary photo only stores a URL, so
+ * there are three ways in:
+ *   1. Upload a file - the binary is sent through the photo endpoint (which
+ *      classifies it as a site photo with a server thumbnail + EXIF), then a
+ *      diary photo is registered against that file.
+ *   2. Choose from already-uploaded files - a searchable picker over the
+ *      project's site photos and image documents; the selected file is linked
+ *      to the diary.
+ *   3. Paste a URL - the original contract (an http(s) link or a relative
+ *      /files path) kept as a fallback for externally hosted assets.
  */
+type PhotoAddMode = 'upload' | 'existing' | 'url';
+
+// Image MIME the diary backend accepts (mirrors _PHOTO_MIME_RE). SVG is
+// excluded on purpose (script payload). Anything else falls back to jpeg,
+// which the upload endpoint has already validated by magic bytes.
+const DIARY_PHOTO_MIME_RE = /^image\/(jpeg|png|gif|webp|heic|heif|avif|tiff)$/;
+function safePhotoMime(mime: string | null | undefined): string {
+  return mime && DIARY_PHOTO_MIME_RE.test(mime) ? mime : 'image/jpeg';
+}
+
 function PhotoUploadModal({
   projectId,
   diaryId,
@@ -2644,12 +2715,77 @@ function PhotoUploadModal({
   const { t } = useTranslation();
   const qc = useQueryClient();
   const addToast = useToastStore((s) => s.addToast);
+
+  const [mode, setMode] = useState<PhotoAddMode>('upload');
   const [fileUrl, setFileUrl] = useState('');
   const [locationLabel, setLocationLabel] = useState('');
   const [description, setDescription] = useState('');
   const [busy, setBusy] = useState(false);
 
-  const submit = async () => {
+  // Capture time anchored to the diary's local calendar day so the photo
+  // lands in this diary's date-scoped panel (not a UTC shift).
+  const takenAt = `${diaryDate}T${nowLocalISO().slice(11)}`;
+
+  const afterAdd = (count: number) => {
+    qc.invalidateQueries({ queryKey: ['daily-diary', 'photos'] });
+    qc.invalidateQueries({ queryKey: ['daily-diary', 'completeness'] });
+    addToast({
+      type: 'success',
+      title:
+        count > 1
+          ? t('daily_diary.photos_added', {
+              defaultValue: '{{count}} photos added',
+              count,
+            })
+          : t('daily_diary.photo_added', { defaultValue: 'Photo added' }),
+    });
+    onClose();
+  };
+
+  // Mode 1: upload a real file, then register it against the diary.
+  const submitUpload = async (files: FileList | null) => {
+    const file = files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      addToast({
+        type: 'error',
+        title: t('daily_diary.photo_only_images', {
+          defaultValue: 'Only image files can be added.',
+        }),
+      });
+      return;
+    }
+    setBusy(true);
+    try {
+      // Upload as a site photo (field evidence) so it also surfaces in the
+      // Photo gallery + project Photo strip; tag it "field" for the strip's
+      // general-document path too.
+      const photo = await uploadPhoto(projectId, file, {
+        category: 'site',
+        tags: ['field'],
+        caption: description.trim() || file.name,
+        taken_at: takenAt,
+      });
+      await createPhoto({
+        project_id: projectId,
+        diary_id: diaryId,
+        taken_at: takenAt,
+        file_url: getPhotoFileUrl(photo.id),
+        thumbnail_url: getPhotoThumbUrl(photo.id),
+        mime_type: safePhotoMime(file.type),
+        location_label: locationLabel.trim() || undefined,
+        description: description.trim() || undefined,
+      });
+      afterAdd(1);
+    } catch (err) {
+      addToast({ type: 'error', title: getErrorMessage(err) });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Mode 3: register an externally hosted / pasted URL directly.
+  const submitUrl = async () => {
     if (!fileUrl.trim()) {
       addToast({
         type: 'error',
@@ -2664,26 +2800,58 @@ function PhotoUploadModal({
       await createPhoto({
         project_id: projectId,
         diary_id: diaryId,
-        // Capture time anchored to the diary's local calendar day so the
-        // photo lands in this diary's date-scoped panel (not a UTC shift).
-        taken_at: `${diaryDate}T${nowLocalISO().slice(11)}`,
+        taken_at: takenAt,
         file_url: fileUrl.trim(),
         location_label: locationLabel.trim() || undefined,
         description: description.trim() || undefined,
       });
-      qc.invalidateQueries({ queryKey: ['daily-diary', 'photos'] });
-      qc.invalidateQueries({ queryKey: ['daily-diary', 'completeness'] });
-      addToast({
-        type: 'success',
-        title: t('daily_diary.photo_added', { defaultValue: 'Photo added' }),
-      });
-      onClose();
+      afterAdd(1);
     } catch (err) {
       addToast({ type: 'error', title: getErrorMessage(err) });
     } finally {
       setBusy(false);
     }
   };
+
+  // Mode 2: link one or more already-uploaded files to the diary.
+  const linkExisting = async (assets: ExistingAsset[]) => {
+    if (assets.length === 0) return;
+    setBusy(true);
+    try {
+      for (const a of assets) {
+        await createPhoto({
+          project_id: projectId,
+          diary_id: diaryId,
+          taken_at: takenAt,
+          file_url: a.file_url,
+          thumbnail_url: a.thumbnail_url ?? undefined,
+          mime_type: safePhotoMime(a.mime_type),
+          description: a.label || undefined,
+        });
+      }
+      afterAdd(assets.length);
+    } catch (err) {
+      addToast({ type: 'error', title: getErrorMessage(err) });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const tabBtn = (m: PhotoAddMode, label: string) => (
+    <button
+      type="button"
+      onClick={() => setMode(m)}
+      disabled={busy}
+      className={clsx(
+        'rounded-lg px-3 py-1.5 text-sm font-medium transition-colors disabled:opacity-50',
+        mode === m
+          ? 'bg-oe-blue-subtle/40 text-oe-blue-text'
+          : 'text-content-secondary hover:bg-surface-secondary',
+      )}
+    >
+      {label}
+    </button>
+  );
 
   return (
     <WideModal
@@ -2697,52 +2865,297 @@ function PhotoUploadModal({
           <Button variant="ghost" onClick={onClose} disabled={busy}>
             {t('common.cancel', { defaultValue: 'Cancel' })}
           </Button>
-          <Button variant="primary" onClick={submit} loading={busy} icon={<Upload size={14} />}>
-            {t('daily_diary.upload_photo', { defaultValue: 'Add photo' })}
-          </Button>
+          {mode === 'url' && (
+            <Button variant="primary" onClick={submitUrl} loading={busy} icon={<Upload size={14} />}>
+              {t('daily_diary.upload_photo', { defaultValue: 'Add photo' })}
+            </Button>
+          )}
         </>
       }
     >
-      <WideModalSection columns={1}>
-        <WideModalField
-          label={t('daily_diary.photo_url', { defaultValue: 'Photo file URL' })}
-          required
-          hint={t('daily_diary.photo_url_hint', {
-            defaultValue:
-              'An http(s) link or a relative /files path to the uploaded image (jpeg, png, heic, webp, tiff).',
-          })}
-        >
-          <input
-            type="text"
-            value={fileUrl}
-            onChange={(e) => setFileUrl(e.target.value)}
-            placeholder="/files/site/2026-06-04/east-elevation.jpg"
-            className={inputCls}
-          />
-        </WideModalField>
-        <WideModalField
-          label={t('daily_diary.photo_location', { defaultValue: 'Location label' })}
-        >
-          <input
-            type="text"
-            value={locationLabel}
-            onChange={(e) => setLocationLabel(e.target.value)}
-            placeholder={t('daily_diary.photo_location_ph', {
-              defaultValue: 'e.g. East elevation, Level 3',
+      {/* Mode switch */}
+      <div className="mb-4 flex flex-wrap gap-1 rounded-xl border border-border-light bg-surface-secondary/40 p-1">
+        {tabBtn('upload', t('daily_diary.photo_mode_upload', { defaultValue: 'Upload file' }))}
+        {tabBtn('existing', t('daily_diary.photo_mode_existing', { defaultValue: 'Choose existing' }))}
+        {tabBtn('url', t('daily_diary.photo_mode_url', { defaultValue: 'Paste URL' }))}
+      </div>
+
+      {/* Shared metadata - applies to upload + URL modes (the picker carries
+          each file's own label). */}
+      {mode !== 'existing' && (
+        <WideModalSection columns={1}>
+          <WideModalField
+            label={t('daily_diary.photo_location', { defaultValue: 'Location label' })}
+          >
+            <input
+              type="text"
+              value={locationLabel}
+              onChange={(e) => setLocationLabel(e.target.value)}
+              placeholder={t('daily_diary.photo_location_ph', {
+                defaultValue: 'e.g. East elevation, Level 3',
+              })}
+              className={inputCls}
+            />
+          </WideModalField>
+          <WideModalField label={t('common.notes')}>
+            <textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              rows={2}
+              className={clsx(inputCls, 'h-auto py-2')}
+            />
+          </WideModalField>
+        </WideModalSection>
+      )}
+
+      {mode === 'upload' && (
+        <div className="mt-3">
+          <label
+            className={clsx(
+              'flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-border-light px-6 py-8 text-center transition-colors hover:border-oe-blue/40 hover:bg-surface-secondary/40',
+              busy && 'pointer-events-none opacity-60',
+            )}
+          >
+            <input
+              type="file"
+              accept="image/*"
+              className="hidden"
+              disabled={busy}
+              data-testid="daily-diary-photo-file-input"
+              onChange={(e) => {
+                void submitUpload(e.target.files);
+                e.target.value = '';
+              }}
+            />
+            {busy ? (
+              <Loader2 size={28} className="animate-spin text-oe-blue" />
+            ) : (
+              <Upload size={28} className="text-content-tertiary" />
+            )}
+            <span className="text-sm text-content-secondary">
+              {busy
+                ? t('daily_diary.photo_uploading', { defaultValue: 'Uploading...' })
+                : t('daily_diary.photo_drop_or_click', {
+                    defaultValue: 'Click to choose an image from this device',
+                  })}
+            </span>
+            <span className="text-2xs text-content-quaternary">
+              {t('daily_diary.photo_supported', {
+                defaultValue: 'JPEG, PNG, WebP, HEIC, TIFF. Saved as a site photo.',
+              })}
+            </span>
+          </label>
+        </div>
+      )}
+
+      {mode === 'existing' && (
+        <ExistingFilePicker
+          projectId={projectId}
+          busy={busy}
+          onConfirm={linkExisting}
+        />
+      )}
+
+      {mode === 'url' && (
+        <WideModalSection columns={1}>
+          <WideModalField
+            label={t('daily_diary.photo_url', { defaultValue: 'Photo file URL' })}
+            required
+            hint={t('daily_diary.photo_url_hint', {
+              defaultValue:
+                'An http(s) link or a relative /files path to the uploaded image (jpeg, png, heic, webp, tiff).',
             })}
-            className={inputCls}
-          />
-        </WideModalField>
-        <WideModalField label={t('common.notes')}>
-          <textarea
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            rows={2}
-            className={clsx(inputCls, 'h-auto py-2')}
-          />
-        </WideModalField>
-      </WideModalSection>
+          >
+            <input
+              type="text"
+              value={fileUrl}
+              onChange={(e) => setFileUrl(e.target.value)}
+              placeholder="/files/site/2026-06-04/east-elevation.jpg"
+              className={inputCls}
+            />
+          </WideModalField>
+        </WideModalSection>
+      )}
     </WideModal>
+  );
+}
+
+/* ── Existing-file picker ─────────────────────────────────────────────────
+ *
+ * A searchable grid over the project's already-uploaded site photos and image
+ * documents. Selected files are linked to the diary via createPhoto. Each
+ * thumbnail loads through <AuthImage> because the platform's file endpoints
+ * are bearer-protected.
+ */
+interface ExistingAsset {
+  /** Stable selection key. */
+  key: string;
+  /** Bearer-protected file URL (relative /api/... path). */
+  file_url: string;
+  thumbnail_url?: string | null;
+  mime_type?: string | null;
+  /** Display + diary description text. */
+  label: string;
+}
+
+const PICKER_IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|bmp|tiff?|heic|heif|avif)$/i;
+
+function ExistingFilePicker({
+  projectId,
+  busy,
+  onConfirm,
+}: {
+  projectId: string;
+  busy: boolean;
+  onConfirm: (assets: ExistingAsset[]) => void;
+}) {
+  const { t } = useTranslation();
+  const [search, setSearch] = useState('');
+  const [selected, setSelected] = useState<Record<string, ExistingAsset>>({});
+
+  const photosQ = useQuery({
+    queryKey: ['daily-diary', 'picker-photos', projectId],
+    queryFn: () => fetchPhotos(projectId),
+    enabled: !!projectId,
+  });
+  const docsQ = useQuery({
+    queryKey: ['daily-diary', 'picker-docs', projectId],
+    queryFn: () => fetchDocuments(projectId),
+    enabled: !!projectId,
+  });
+
+  const assets = useMemo<ExistingAsset[]>(() => {
+    const out: ExistingAsset[] = [];
+    const seen = new Set<string>();
+    for (const p of (photosQ.data ?? []) as SitePhoto[]) {
+      out.push({
+        key: `photo:${p.id}`,
+        file_url: getPhotoFileUrl(p.id),
+        thumbnail_url: getPhotoThumbUrl(p.id),
+        mime_type: 'image/jpeg',
+        label: p.caption || p.filename || '',
+      });
+      // The twin document row of a site photo carries category "photo"; skip
+      // it below so the same image isn't offered twice.
+      if (p.document_id) seen.add(p.document_id);
+    }
+    for (const d of (docsQ.data ?? []) as DocumentItem[]) {
+      if (seen.has(d.id)) continue;
+      if ((d.category ?? '').toLowerCase() === 'photo') continue; // twin row
+      const isImage =
+        (d.mime_type ?? '').toLowerCase().startsWith('image/') ||
+        PICKER_IMAGE_EXT_RE.test(d.name ?? '');
+      if (!isImage) continue;
+      out.push({
+        key: `doc:${d.id}`,
+        file_url: `/api/v1/documents/${d.id}/download/`,
+        mime_type: d.mime_type ?? null,
+        label: d.name || '',
+      });
+    }
+    return out;
+  }, [photosQ.data, docsQ.data]);
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return assets;
+    return assets.filter((a) => a.label.toLowerCase().includes(q));
+  }, [assets, search]);
+
+  const loading = photosQ.isLoading || docsQ.isLoading;
+  const selectedList = Object.values(selected);
+
+  const toggle = (a: ExistingAsset) => {
+    setSelected((prev) => {
+      const next = { ...prev };
+      if (next[a.key]) delete next[a.key];
+      else next[a.key] = a;
+      return next;
+    });
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="relative">
+        <Search
+          size={14}
+          className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-content-quaternary"
+        />
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder={t('daily_diary.photo_search_files', {
+            defaultValue: 'Search uploaded files...',
+          })}
+          className={clsx(inputCls, 'pl-9')}
+        />
+      </div>
+
+      {loading ? (
+        <SkeletonTable rows={2} columns={4} />
+      ) : filtered.length === 0 ? (
+        <p className="py-6 text-center text-sm text-content-tertiary">
+          {t('daily_diary.photo_no_files', {
+            defaultValue: 'No matching images uploaded to this project yet.',
+          })}
+        </p>
+      ) : (
+        <div className="grid max-h-64 grid-cols-3 gap-2 overflow-y-auto sm:grid-cols-4">
+          {filtered.map((a) => {
+            const isSel = !!selected[a.key];
+            return (
+              <button
+                key={a.key}
+                type="button"
+                onClick={() => toggle(a)}
+                title={a.label}
+                className={clsx(
+                  'group relative aspect-square overflow-hidden rounded-md border bg-surface-secondary transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-oe-blue/40',
+                  isSel ? 'border-oe-blue ring-2 ring-oe-blue/40' : 'border-border-light hover:border-oe-blue/40',
+                )}
+              >
+                <AuthImage
+                  src={a.thumbnail_url || a.file_url}
+                  alt={a.label}
+                  className="h-full w-full object-cover"
+                  loading="lazy"
+                  placeholder={<div className="h-full w-full animate-pulse bg-surface-secondary" />}
+                  fallback={
+                    <div className="flex h-full w-full items-center justify-center text-content-quaternary">
+                      <ImageIcon size={16} strokeWidth={1.5} />
+                    </div>
+                  }
+                />
+                {isSel && (
+                  <span className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-oe-blue text-white">
+                    <Check size={12} />
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      <div className="flex items-center justify-end gap-2 pt-1">
+        <Button
+          variant="primary"
+          size="sm"
+          disabled={busy || selectedList.length === 0}
+          loading={busy}
+          icon={<Plus size={14} />}
+          onClick={() => onConfirm(selectedList)}
+        >
+          {selectedList.length > 0
+            ? t('daily_diary.photo_link_count', {
+                defaultValue: 'Add {{count}} to diary',
+                count: selectedList.length,
+              })
+            : t('daily_diary.photo_link', { defaultValue: 'Add to diary' })}
+        </Button>
+      </div>
+    </div>
   );
 }
 

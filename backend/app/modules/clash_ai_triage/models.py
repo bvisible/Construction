@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍ORM models for the clash AI triage module.
+"""ORM models for the clash AI triage module.
 
 Tables:
     oe_clash_triage_result - one LLM triage verdict for a clash subject.
@@ -39,7 +39,7 @@ from app.database import GUID, Base
 
 
 class ClashTriageResult(Base):
-    """‌⁠‍A persisted LLM triage verdict for one clash subject.
+    """A persisted LLM triage verdict for one clash subject.
 
     ``subject_type`` + ``subject_id`` form the polymorphic link to either
     a ``ClashResult`` (per-run row) or a ``ClashIssue`` (cross-run

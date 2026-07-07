@@ -1,4 +1,4 @@
-"""‌⁠‍BCF API routes - mounted by the module loader at ``/api/v1/bcf``.
+"""BCF API routes - mounted by the module loader at ``/api/v1/bcf``.
 
 Endpoints
     GET    /projects/{project_id}/topics/
@@ -77,7 +77,7 @@ async def _require_project_access(
     project_id: uuid.UUID,
     user_id: str,
 ) -> str:
-    """‌⁠‍Verify the caller may access ``project_id``.
+    """Verify the caller may access ``project_id``.
 
     Returns the project name (needed for the BCF project.bcfp on export).
     Delegates to the canonical :func:`app.dependencies.verify_project_access`,
@@ -97,7 +97,7 @@ async def _require_project_access(
 
 
 def _locale_of(payload_user_id: str) -> str:
-    """‌⁠‍Resolve the request locale for user-facing messages.
+    """Resolve the request locale for user-facing messages.
 
     The current i18n surface is context-scoped via middleware; we read the
     active locale rather than trusting a header here, falling back to

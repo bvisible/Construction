@@ -1,4 +1,4 @@
-"""‌⁠‍R5 deep-audit tests for the RFI attachment magic-byte gate.
+"""R5 deep-audit tests for the RFI attachment magic-byte gate.
 
 Scope (one happy / one adversarial per behaviour):
     1. ``require_signature`` against ``ALLOWED_ATTACHMENT_TYPES`` accepts

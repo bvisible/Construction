@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""‌⁠‍ERP Chat ORM models.
+"""ERP Chat ORM models.
 
 Tables:
     oe_erp_chat_session         - chat session per user, optionally scoped to a project
@@ -26,7 +26,7 @@ from app.database import GUID, Base
 
 
 class ChatSession(Base):
-    """‌⁠‍A single chat session between a user and the ERP AI assistant."""
+    """A single chat session between a user and the ERP AI assistant."""
 
     __tablename__ = "oe_erp_chat_session"
 
@@ -62,7 +62,7 @@ class ChatSession(Base):
 
 
 class ChatMessage(Base):
-    """‌⁠‍A single message in a chat session."""
+    """A single message in a chat session."""
 
     __tablename__ = "oe_erp_chat_message"
 
@@ -106,7 +106,7 @@ class ChatMessage(Base):
 
 
 class ChatTurnFeedback(Base):
-    """‌⁠‍User-supplied thumbs up/down on a single assistant message.
+    """User-supplied thumbs up/down on a single assistant message.
 
     One row per ``(message_id, user_id)``. Re-submitting on the same
     pair updates the rating in place - see

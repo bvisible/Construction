@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍Pydantic schemas for the finance connectors API.
+"""Pydantic schemas for the finance connectors API.
 
 Security note: the encrypted ``credentials`` blob is NEVER echoed back to
 the client. Responses carry a ``has_credentials`` boolean instead, and the

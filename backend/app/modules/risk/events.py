@@ -1,4 +1,4 @@
-"""‌⁠‍Risk event handlers - vector indexing for lessons-learned reuse.
+"""Risk event handlers - vector indexing for lessons-learned reuse.
 
 Subscribes to ``risk.risk.*`` events and keeps the ``oe_risks`` vector
 collection in sync with the underlying :class:`RiskItem` rows.  Risks
@@ -55,7 +55,7 @@ RISK_ESCALATED_EVENT = "risk.escalated"
 
 
 async def _index_risk(event: Event) -> None:
-    """‌⁠‍Re-embed a single RiskItem row after create / update."""
+    """Re-embed a single RiskItem row after create / update."""
     rid_raw = (event.data or {}).get("risk_id")
     if not rid_raw:
         return
@@ -83,7 +83,7 @@ async def _index_risk(event: Event) -> None:
 
 
 async def _delete_risk_vector(event: Event) -> None:
-    """‌⁠‍Remove a deleted RiskItem row from the vector store."""
+    """Remove a deleted RiskItem row from the vector store."""
     rid_raw = (event.data or {}).get("risk_id")
     if not rid_raw:
         return
@@ -115,7 +115,7 @@ event_bus.subscribe("risk.risk.deleted", _on_risk_deleted)
 
 
 async def _can_open_isolated_session() -> bool:
-    """‌⁠‍Return True only when we can safely write from a subscriber.
+    """Return True only when we can safely write from a subscriber.
 
     Matches the gate used by notifications/qms subscribers: SQLite (dev)
     has a single-writer lock, so opening a second session inside an event
@@ -145,7 +145,7 @@ _HSE_SEVERITY_TO_RISK_TIER: dict[str, str] = {
 
 
 async def _on_contracts_risk_register_update(event: Event) -> None:
-    """‌⁠‍``contracts.risk_register_update`` → materialise a RiskItem.
+    """``contracts.risk_register_update`` → materialise a RiskItem.
 
     Published by ``hse_advanced/events.py::_on_safety_incident_created``
     when a safety incident is recorded. The risk register is the

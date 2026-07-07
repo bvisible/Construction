@@ -1,4 +1,4 @@
-"""‌⁠‍4D Schedule module.
+"""4D Schedule module.
 
 Provides construction scheduling with WBS hierarchy, BOQ position linking,
 Gantt chart data, and work order management.
@@ -6,7 +6,7 @@ Gantt chart data, and work order management.
 
 
 async def on_startup() -> None:
-    """‌⁠‍Module startup hook - register permissions + the queryable entity."""
+    """Module startup hook - register permissions + the queryable entity."""
     from app.modules.saved_views.registry import entity_registry
     from app.modules.schedule.permissions import register_schedule_permissions
     from app.modules.schedule.realtime_router import register_schedule_realtime_subscribers

@@ -1,4 +1,4 @@
-"""‌⁠‍User Pydantic schemas for request/response validation."""
+"""User Pydantic schemas for request/response validation."""
 
 import re
 from datetime import datetime
@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, mo
 
 
 def _sanitize_name(name: str) -> str:
-    """‌⁠‍Strip HTML tags from a name to prevent XSS."""
+    """Strip HTML tags from a name to prevent XSS."""
     return re.sub(r"<[^>]+>", "", name).strip()
 
 
@@ -47,7 +47,7 @@ _COMMON_PASSWORDS: frozenset[str] = frozenset(
 
 
 def _validate_strong_password(value: str) -> str:
-    """‌⁠‍Reject weak passwords. Used by `UserCreate`, `ChangePasswordRequest`,
+    """Reject weak passwords. Used by `UserCreate`, `ChangePasswordRequest`,
     and `ResetPasswordRequest` so the policy is consistent everywhere.
 
     Rules (intentionally lenient - strong enough to block trivial passwords

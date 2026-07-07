@@ -1,4 +1,4 @@
-"""‌⁠‍Teams Pydantic schemas - request/response models."""
+"""Teams Pydantic schemas - request/response models."""
 
 import re
 from datetime import datetime
@@ -29,7 +29,7 @@ _TEAM_ROLE_PATTERN = r"^(" + "|".join(ALL_TEAM_ROLES) + r")$"
 
 
 def _reject_unsafe_string(value: str, field: str) -> str:
-    """‌⁠‍Strip/validate free-text strings; raise on control-character junk.
+    """Strip/validate free-text strings; raise on control-character junk.
 
     Error messages embed a stable ``teams.validation.*`` i18n key in the
     rendered text so the frontend can localise them without re-parsing the
@@ -48,7 +48,7 @@ def _reject_unsafe_string(value: str, field: str) -> str:
 
 
 class TeamCreate(BaseModel):
-    """‌⁠‍Create a new team within a project."""
+    """Create a new team within a project."""
 
     model_config = ConfigDict(str_strip_whitespace=True, extra="ignore")
 

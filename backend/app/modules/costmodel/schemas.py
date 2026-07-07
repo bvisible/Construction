@@ -1,4 +1,4 @@
-"""‌⁠‍5D Cost Model Pydantic schemas - request/response models.
+"""5D Cost Model Pydantic schemas - request/response models.
 
 Defines create, update, and response schemas for cost snapshots,
 budget lines, and cash flow entries. v3 §10 - monetary values are
@@ -34,7 +34,7 @@ def _serialise_money(v: Decimal | None) -> str | None:
 
 
 class SnapshotCreate(BaseModel):
-    """‌⁠‍Create a new EVM cost snapshot.
+    """Create a new EVM cost snapshot.
 
     v3 §10 - ``planned_cost`` / ``earned_value`` / ``actual_cost`` are
     money; Decimal-as-string in JSON. SPI/CPI/forecast_eac stay float
@@ -61,7 +61,7 @@ class SnapshotCreate(BaseModel):
 
 
 class SnapshotUpdate(BaseModel):
-    """‌⁠‍Partial update for an EVM snapshot."""
+    """Partial update for an EVM snapshot."""
 
     model_config = ConfigDict(str_strip_whitespace=True)
 

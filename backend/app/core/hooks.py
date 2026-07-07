@@ -1,4 +1,4 @@
-"""‌⁠‍Hook system​‌‍⁠​‌‍⁠​‌‍⁠​‌‍⁠ for data transformation and action injection.
+"""Hook system​‌‍⁠​‌‍⁠​‌‍⁠​‌‍⁠ for data transformation and action injection.
 
 Two types:
 - **Filters**: transform data through a chain of handlers (like WordPress filters).
@@ -36,7 +36,7 @@ HookHandler = Callable[..., Any]
 
 @dataclass
 class HookEntry:
-    """‌⁠‍A registered hook handler with priority."""
+    """A registered hook handler with priority."""
 
     handler: HookHandler
     priority: int
@@ -44,7 +44,7 @@ class HookEntry:
 
 
 class HookRegistry:
-    """‌⁠‍Central registry for filters and actions."""
+    """Central registry for filters and actions."""
 
     def __init__(self) -> None:
         self._filters: dict[str, list[HookEntry]] = defaultdict(list)

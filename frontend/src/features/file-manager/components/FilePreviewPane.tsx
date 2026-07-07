@@ -2,7 +2,7 @@
 
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
-import { Download, Mail, FolderOpen, Copy, X, FileText, Image as ImageIcon, Layout, Box, Pencil, File, PenTool, FileBarChart, Tag, ExternalLink, Activity, Share2, Lock, Send, ClipboardCheck, CheckCircle2, Link as LinkIcon, History, RotateCcw, Loader2, Check, ChevronDown } from 'lucide-react';
+import { Download, Mail, FolderOpen, Copy, X, FileText, Image as ImageIcon, Layout, Box, Pencil, File, PenTool, FileBarChart, Tag, ExternalLink, Activity, Share2, Lock, Send, ClipboardCheck, CheckCircle2, Link as LinkIcon, History, RotateCcw, Loader2, Check, ChevronDown, PlayCircle } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import clsx from 'clsx';
@@ -11,10 +11,13 @@ import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { DateDisplay } from '@/shared/ui/DateDisplay';
 import { apiGet } from '@/shared/lib/api';
 import type { FileRow, FileKind } from '../types';
+import { useAuthStore } from '@/stores/useAuthStore';
+import { AuthImage } from '@/shared/ui';
 import { downloadProtectedFile, fetchProtectedObjectUrl } from '../api';
 import { isTauri, openInOSFinder, copyToClipboard } from '../lib/tauri';
-import { modulesForKind, primaryModule } from '../kindModule';
+import { modulesForKind, primaryModule, isImageRow, isVideoRow, isLightboxRow } from '../kindModule';
 import { InlinePdfPreviewModal } from '@/features/file-references/InlinePdfPreviewModal';
+import { MediaLightbox } from './MediaLightbox';
 import { useSetDocumentCdeState } from '../hooks';
 import type { CdeState } from '../api';
 import { CDE_BADGE } from './CDEBadge';
@@ -69,6 +72,25 @@ function isPdf(row: FileRow): boolean {
   if (row.extension && row.extension.toLowerCase().replace(/^\./, '') === 'pdf') return true;
   if (row.mime_type && row.mime_type.toLowerCase() === 'application/pdf') return true;
   return false;
+}
+
+/* Decode the JWT ``sub`` claim - the canonical user id - so CommentThread can
+   show the author-only delete affordance for the current user's own comments
+   (#284 follow-up). Mirrors the lightweight per-feature decoders used across
+   the app (changeorders / meetings / rfi); no external dep, returns null on any
+   decode error. */
+function decodeUserIdFromToken(token: string | null): string | null {
+  if (!token) return null;
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return null;
+    const payload = parts[1]!.replace(/-/g, '+').replace(/_/g, '/');
+    const padded = payload + '='.repeat((4 - (payload.length % 4)) % 4);
+    const json = JSON.parse(atob(padded)) as { sub?: string };
+    return typeof json.sub === 'string' ? json.sub : null;
+  } catch {
+    return null;
+  }
 }
 
 export function FilePreviewPane({ row, onClose, onEmail, onShare, onManageAccess }: FilePreviewPaneProps) {
@@ -126,6 +148,13 @@ export function FilePreviewPane({ row, onClose, onEmail, onShare, onManageAccess
   // #284 - the primary "Open" action for a PDF document opens a focused
   // inline reader overlay instead of routing to PDF Takeoff.
   const [inlinePdfOpen, setInlinePdfOpen] = useState(false);
+  // #284 follow-up (ITEM 10) - the primary action for an image / video opens
+  // the MediaLightbox viewer/player overlay instead of routing to PDF Takeoff.
+  const [lightboxOpen, setLightboxOpen] = useState(false);
+  // Canonical user id for the comment author-only delete affordance (#284
+  // follow-up). Sourced from the JWT so no extra request is needed.
+  const accessToken = useAuthStore((s) => s.accessToken);
+  const currentUserId = decodeUserIdFromToken(accessToken);
 
   // Find any active approval workflow for the current file so the
   // "Approval status" entry shows up only when relevant.
@@ -184,6 +213,12 @@ export function FilePreviewPane({ row, onClose, onEmail, onShare, onManageAccess
     // focused reader overlay on this screen instead of navigating away.
     if (target.inlinePreview) {
       setInlinePdfOpen(true);
+      return;
+    }
+    // ITEM 10 - a media target (image / video) opens the MediaLightbox overlay
+    // instead of routing to a module (it would otherwise fall to PDF Takeoff).
+    if (target.mediaPreview) {
+      setLightboxOpen(true);
       return;
     }
     // Clash Detection / CAD-BIM BI Explorer read the project from the
@@ -260,6 +295,41 @@ export function FilePreviewPane({ row, onClose, onEmail, onShare, onManageAccess
             ) : (
               <Loader2 size={28} className="animate-spin text-content-tertiary" />
             )
+          ) : isImageRow(row) && row.download_url ? (
+            // ITEM 10 - real image thumbnail (authed). Click to open the
+            // full-screen lightbox; falls back to the kind icon on a load error.
+            <button
+              type="button"
+              onClick={() => setLightboxOpen(true)}
+              className="h-full w-full focus:outline-none focus-visible:ring-2 focus-visible:ring-oe-blue/40 rounded-lg"
+              title={t('files.actions.view_file', { defaultValue: 'View' })}
+            >
+              <AuthImage
+                src={row.download_url}
+                alt={row.name}
+                className="h-full w-full object-contain rounded-lg"
+                placeholder={
+                  <Loader2 size={28} className="animate-spin text-content-tertiary" />
+                }
+                fallback={
+                  <Icon size={48} strokeWidth={1.5} className="text-content-tertiary" />
+                }
+              />
+            </button>
+          ) : isVideoRow(row) && row.download_url ? (
+            // ITEM 10 - a video preview is a play affordance; the clip itself
+            // streams in the lightbox so the pane stays light.
+            <button
+              type="button"
+              onClick={() => setLightboxOpen(true)}
+              className="flex h-full w-full flex-col items-center justify-center gap-1.5 text-content-tertiary hover:text-oe-blue focus:outline-none focus-visible:ring-2 focus-visible:ring-oe-blue/40 rounded-lg"
+              title={t('files.module.play_video', { defaultValue: 'Play' })}
+            >
+              <PlayCircle size={44} strokeWidth={1.5} />
+              <span className="text-[11px] font-medium">
+                {t('files.module.play_video', { defaultValue: 'Play' })}
+              </span>
+            </button>
           ) : row.thumbnail_url ? (
             <img
               src={row.thumbnail_url}
@@ -308,11 +378,14 @@ export function FilePreviewPane({ row, onClose, onEmail, onShare, onManageAccess
             <PrimaryIcon size={13} strokeWidth={2.25} />
             {primary.inlinePreview
               ? t('files.actions.view_file', { defaultValue: 'View' })
-              : t('files.actions.open_in', {
-                  defaultValue: 'Open in {{module}}',
-                  module: t(primary.i18nKey, { defaultValue: primary.label }),
-                })}
-            {!primary.inlinePreview && (
+              : primary.mediaPreview
+                ? // "View" for an image, "Play" for a video (the target label).
+                  t(primary.i18nKey, { defaultValue: primary.label })
+                : t('files.actions.open_in', {
+                    defaultValue: 'Open in {{module}}',
+                    module: t(primary.i18nKey, { defaultValue: primary.label }),
+                  })}
+            {!primary.inlinePreview && !primary.mediaPreview && (
               <ExternalLink size={11} className="opacity-80" />
             )}
           </button>
@@ -570,7 +643,7 @@ export function FilePreviewPane({ row, onClose, onEmail, onShare, onManageAccess
           projectId={row.project_id}
           fileKind={row.kind}
           fileId={row.id}
-          currentUserId={null}
+          currentUserId={currentUserId}
           className="mt-3"
         />
 
@@ -639,6 +712,25 @@ export function FilePreviewPane({ row, onClose, onEmail, onShare, onManageAccess
         downloadUrl={row.download_url}
         title={row.name}
         onClose={() => setInlinePdfOpen(false)}
+      />
+
+      {/* ITEM 10 - image viewer / video player, opened by the primary action
+          (and the preview thumbnail) for an image or video document. Single
+          file here, so prev/next is disabled. */}
+      <MediaLightbox
+        open={lightboxOpen && isLightboxRow(row)}
+        items={[
+          {
+            id: row.id,
+            kind: row.kind,
+            name: row.name,
+            extension: row.extension,
+            mime_type: row.mime_type,
+            download_url: row.download_url,
+          },
+        ]}
+        index={0}
+        onClose={() => setLightboxOpen(false)}
       />
     </aside>
   );

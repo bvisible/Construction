@@ -1,4 +1,4 @@
-"""‌⁠‍Takeoff data access layer."""
+"""Takeoff data access layer."""
 
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -10,7 +10,7 @@ from app.modules.takeoff.models import AiTakeoffRun, TakeoffDocument, TakeoffMea
 
 
 class TakeoffRepository:
-    """‌⁠‍Data access for TakeoffDocument model."""
+    """Data access for TakeoffDocument model."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -53,7 +53,7 @@ class TakeoffRepository:
 
 
 class MeasurementRepository:
-    """‌⁠‍Data access for TakeoffMeasurement models."""
+    """Data access for TakeoffMeasurement models."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session

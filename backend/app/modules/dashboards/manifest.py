@@ -1,4 +1,4 @@
-"""‌⁠‍Dashboards module manifest - analytical dashboards + snapshots."""
+"""Dashboards module manifest - analytical dashboards + snapshots."""
 
 from app.core.module_loader import ModuleManifest
 

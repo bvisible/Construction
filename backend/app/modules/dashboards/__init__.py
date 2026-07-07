@@ -1,4 +1,4 @@
-"""‌⁠‍Dashboards module - analytical layer over snapshots.
+"""Dashboards module - analytical layer over snapshots.
 
 Tasks in scope (see ``CLAUDE-DASHBOARDS.md`` in the repo root):
     T01 Data Snapshot Registry
@@ -30,7 +30,7 @@ _SUBSCRIBERS_REGISTERED = False
 
 
 def _on_snapshot_refreshed(event):  # type: ignore[no-untyped-def]
-    """‌⁠‍T09 sync protocol - mark every preset pointing at the refreshed
+    """T09 sync protocol - mark every preset pointing at the refreshed
     snapshot as ``sync_status='stale'``.
 
     The handler is intentionally minimal: it opens its own session via
@@ -84,7 +84,7 @@ def _on_snapshot_refreshed(event):  # type: ignore[no-untyped-def]
 
 
 def register_subscribers() -> None:
-    """‌⁠‍Idempotent - call multiple times safely (tests do)."""
+    """Idempotent - call multiple times safely (tests do)."""
     global _SUBSCRIBERS_REGISTERED
     if _SUBSCRIBERS_REGISTERED:
         return

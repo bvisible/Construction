@@ -1,4 +1,4 @@
-"""‌⁠‍Supplier Catalogs API routes.
+"""Supplier Catalogs API routes.
 
 Mounted at ``/api/v1/supplier-catalogs/`` by the module loader.
 """
@@ -505,7 +505,7 @@ async def ingest_peppol_invoice(
     auto_match: bool = Query(default=True),
     service: SupplierCatalogsService = Depends(_svc),
 ) -> PeppolIngestResult:
-    """‌⁠‍Accept a UBL 2.1 PEPPOL invoice XML file → VendorInvoice + 3-way match.
+    """Accept a UBL 2.1 PEPPOL invoice XML file → VendorInvoice + 3-way match.
 
     The supplier is matched by VAT-id then by name; the buyer PO is
     resolved by ``cac:OrderReference/cbc:ID`` against
@@ -647,7 +647,7 @@ async def seed_commodity_codes(
     user_id: CurrentUserId,
     service: SupplierCatalogsService = Depends(_svc),
 ) -> dict[str, int]:
-    """‌⁠‍Idempotently bulk-load UNSPSC + CPV codes from the bundled CSV."""
+    """Idempotently bulk-load UNSPSC + CPV codes from the bundled CSV."""
     return await service.seed_commodity_codes()
 
 

@@ -1,4 +1,4 @@
-"""‌⁠‍Per-element BIM validation service.
+"""Per-element BIM validation service.
 
 Runs :class:`BIMElementRule` instances against every ``BIMElement`` in a
 model and writes the resulting per-element outcomes into a
@@ -103,7 +103,7 @@ class _IDSPassTotals:
 
 
 class BIMValidationService:
-    """‌⁠‍Run :class:`BIMElementRule` instances against BIM models."""
+    """Run :class:`BIMElementRule` instances against BIM models."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -120,7 +120,7 @@ class BIMValidationService:
         *,
         user_id: str | None = None,
     ) -> ValidationReport:
-        """‌⁠‍Run BIM element rules against every element in a model.
+        """Run BIM element rules against every element in a model.
 
         Args:
             model_id: Target BIM model UUID.

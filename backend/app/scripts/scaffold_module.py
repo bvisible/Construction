@@ -1,4 +1,4 @@
-"""‌⁠‍Scaffold a new OpenEstimate module from the template.
+"""Scaffold a new OpenEstimate module from the template.
 
 Usage::
 

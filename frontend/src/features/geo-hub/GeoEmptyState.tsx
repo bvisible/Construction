@@ -29,6 +29,8 @@ import {
   Loader2,
   Sparkles,
   Plus,
+  X,
+  ChevronUp,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -91,6 +93,15 @@ export function GeoEmptyState({
   const navigate = useNavigate();
   const addToast = useToastStore((s) => s.addToast);
   const [isAnchoring, setIsAnchoring] = useState(false);
+  // The centered card sits over the middle of the globe; for the no-anchor
+  // state (the reporter's masked-map complaint, #284) the user can tuck it
+  // away to a small corner pill so it stops covering the map while they
+  // pan/zoom to eyeball where the project should sit. Kept as transient
+  // view state (not persisted) so the anchoring CTA is never permanently
+  // hidden - it returns on the next page open. Only the no-anchor variant
+  // is dismissible; no_tilesets / all_failed always show their card.
+  const [dismissed, setDismissed] = useState(false);
+  const collapsible = kind === 'no_anchor';
 
   async function runAutoAnchor() {
     if (!projectId || isAnchoring) return;
@@ -244,11 +255,49 @@ export function GeoEmptyState({
   const showPlaceManually = kind === 'no_anchor' && Boolean(onPlaceManually);
   const hasPrimaryAction = showAutoAnchor || showPlaceButton || showPlaceManually;
 
+  // Dismissed no-anchor card -> bottom-centre pill clear of the corner
+  // chrome (tileset sidebar / overlay panel / HUD). Tapping it restores the
+  // full anchoring prompt.
+  if (collapsible && dismissed) {
+    return (
+      <div className="pointer-events-none absolute inset-x-0 bottom-3 z-10 flex justify-center px-3">
+        <button
+          type="button"
+          onClick={() => setDismissed(false)}
+          className={[
+            'pointer-events-auto inline-flex items-center gap-2 rounded-full',
+            'border border-white/15 bg-slate-900/85 px-3 py-1.5',
+            'text-xs font-medium text-white shadow-lg shadow-black/20 backdrop-blur-md',
+            'ring-1 ring-white/5 transition hover:bg-slate-800/90',
+            'focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300',
+          ].join(' ')}
+          aria-expanded={false}
+          data-testid="geo-empty-pill"
+        >
+          <MapPin size={13} strokeWidth={2} className="text-blue-300" />
+          {t('geo_hub.empty.no_anchor_pill', {
+            defaultValue: 'Anchor this project',
+          })}
+          <ChevronUp size={13} strokeWidth={2.25} className="text-white/70" />
+        </button>
+      </div>
+    );
+  }
+
   return (
-    <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center p-6">
+    <div
+      className={
+        // The no-anchor prompt docks to the top-left as a side panel so the map
+        // stays visible behind it (#288: the centred card used to cover the
+        // whole map). Other empty states stay centred.
+        collapsible
+          ? 'pointer-events-none absolute left-3 top-3 z-10 w-full max-w-xs sm:max-w-sm'
+          : 'pointer-events-none absolute inset-0 z-10 flex items-center justify-center p-6'
+      }
+    >
       <div
         className={[
-          'pointer-events-auto relative w-full max-w-md overflow-hidden',
+          `pointer-events-auto relative w-full overflow-hidden ${collapsible ? '' : 'max-w-md'}`,
           'rounded-xl border border-white/10 bg-slate-900/70 p-6 text-slate-100',
           'shadow-xl backdrop-blur-md ring-1 ring-white/5',
         ].join(' ')}
@@ -262,6 +311,23 @@ export function GeoEmptyState({
             TONE_RING[v.tone],
           ].join(' ')}
         />
+        {collapsible && (
+          <button
+            type="button"
+            onClick={() => setDismissed(true)}
+            className={[
+              'absolute right-2 top-2 z-10 inline-flex h-7 w-7 items-center justify-center rounded-md',
+              'text-slate-400 transition hover:bg-white/10 hover:text-slate-100',
+              'focus:outline-none focus-visible:ring-2 focus-visible:ring-white/60',
+            ].join(' ')}
+            aria-label={t('geo_hub.empty.dismiss', {
+              defaultValue: 'Hide and show the map',
+            })}
+            data-testid="geo-empty-dismiss"
+          >
+            <X size={15} strokeWidth={2.25} />
+          </button>
+        )}
         <div className="relative">
           <div
             className={[

@@ -1,4 +1,4 @@
-"""‌⁠‍Daily Site Diary business logic.
+"""Daily Site Diary business logic.
 
 Pure helpers are exposed as module-level functions so they can be unit
 tested without a database. The :class:`DailyDiaryService` orchestrates
@@ -107,7 +107,7 @@ def _ensure_can_transition(current: str, target: str) -> None:
 
 
 def _diary_signed_immutable_detail(diary_id: uuid.UUID, status_str: str) -> dict[str, Any]:
-    """‌⁠‍Return the structured 409 detail body for signed-immutable rejections.
+    """Return the structured 409 detail body for signed-immutable rejections.
 
     The ``code`` field is the i18n key the frontend renders against the
     user's locale. Inlining the english ``message`` keeps API consumers
@@ -126,7 +126,7 @@ def _diary_signed_immutable_detail(diary_id: uuid.UUID, status_str: str) -> dict
 
 
 def _entry_signed_immutable_detail(diary_id: uuid.UUID, status_str: str) -> dict[str, Any]:
-    """‌⁠‍Structured 409 detail when a child entry/photo's parent diary is sealed."""
+    """Structured 409 detail when a child entry/photo's parent diary is sealed."""
     return {
         "code": "entry_signed_immutable",
         "message": (
@@ -143,7 +143,7 @@ def _entry_signed_immutable_detail(diary_id: uuid.UUID, status_str: str) -> dict
 
 
 def _json_default(value: Any) -> Any:
-    """‌⁠‍JSON encoder fallback used by the canonical payload serialiser."""
+    """JSON encoder fallback used by the canonical payload serialiser."""
     if isinstance(value, uuid.UUID):
         return str(value)
     if isinstance(value, datetime):
@@ -617,7 +617,7 @@ class DailyDiaryService:
         user_id: str | None = None,
         reason: str | None = None,
     ) -> DailyDiary:
-        """‌⁠‍Re-open a signed diary so manager-+ can amend it.
+        """Re-open a signed diary so manager-+ can amend it.
 
         The archive signature is preserved (with its hash) so the
         original sealed snapshot remains forensically traceable. After

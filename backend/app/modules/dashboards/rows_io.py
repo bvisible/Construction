@@ -1,4 +1,4 @@
-"""‌⁠‍Tabular Data I/O for snapshots (T06).
+"""Tabular Data I/O for snapshots (T06).
 
 Three things live here:
 
@@ -55,7 +55,7 @@ class _StagedImport:
 
 
 class RowsIOError(Exception):
-    """‌⁠‍Base class for tabular-IO errors."""
+    """Base class for tabular-IO errors."""
 
     http_status: int = 500
     message_key: str = "common.unknown_error"
@@ -89,7 +89,7 @@ class ImportSchemaError(RowsIOError):
 
 
 def _resolve_filters(filters: str | dict | None) -> dict[str, Any]:
-    """‌⁠‍Coerce a filter parameter into a dict[str, list[str]]-ish shape."""
+    """Coerce a filter parameter into a dict[str, list[str]]-ish shape."""
     if filters is None or filters == "":
         return {}
     if isinstance(filters, dict):

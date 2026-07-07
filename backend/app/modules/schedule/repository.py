@@ -1,4 +1,4 @@
-"""‌⁠‍Schedule data access layer.
+"""Schedule data access layer.
 
 All database queries for schedules, activities, and work orders live here.
 No business logic - pure data access.
@@ -14,13 +14,13 @@ from app.modules.schedule.models import Activity, Schedule, ScheduleRelationship
 
 
 class ScheduleRepository:
-    """‌⁠‍Data access for Schedule model."""
+    """Data access for Schedule model."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
     async def get_by_id(self, schedule_id: uuid.UUID) -> Schedule | None:
-        """‌⁠‍Get schedule by ID."""
+        """Get schedule by ID."""
         return await self.session.get(Schedule, schedule_id)
 
     async def list_for_project(

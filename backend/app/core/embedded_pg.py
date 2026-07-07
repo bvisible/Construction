@@ -247,6 +247,31 @@ def boot(data_dir: Path | str) -> bool:
         # get_uri() is portable: TCP loopback on Windows, a unix socket on
         # Linux/macOS. Swap only the SQLAlchemy driver - never hand-parse it.
         base = make_url(srv.get_uri())
+
+        # Pin a TCP loopback host to the IPv4 literal 127.0.0.1.
+        #
+        # On Windows the embedded postmaster is launched by pixeltable-pgserver
+        # with ``-h "127.0.0.1"``, so it listens on IPv4 loopback ONLY (never on
+        # IPv6 ``::1``). But get_uri() can hand back a loopback *name*
+        # ("localhost") read from postmaster.pid, and on Windows "localhost" may
+        # resolve to ``::1`` first - a Windows 11 upgrade can flip the resolver
+        # to prefer IPv6. asyncpg then dials ``::1``, where nothing is listening,
+        # and the first startup connection is refused with WinError 1225 even
+        # though the cluster is up and healthy. That is exactly the reported
+        # failure: the "Embedded PostgreSQL ready" stage passed (our readiness
+        # probe in _wait_until_connectable connects to 127.0.0.1 explicitly), yet
+        # "Starting the application server" died on the first asyncpg connect.
+        # Rewriting a loopback host to 127.0.0.1 makes the app URL agree with the
+        # address the server actually listens on and with the readiness probe.
+        #
+        # This only touches the TCP (Windows) embedded path: on Linux/macOS
+        # get_uri() returns a unix-socket URI whose host is None (the socket dir
+        # lives in the query string), so the guard below is skipped and that path
+        # is unchanged. An external/remote DATABASE_URL the operator set never
+        # reaches here - boot() runs solely for the embedded cluster.
+        if (base.host or "").lower() in {"localhost", "::1", "ip6-localhost", "127.0.0.1"}:
+            base = base.set(host="127.0.0.1")
+
         async_url = base.set(drivername="postgresql+asyncpg")
         sync_url = base.set(drivername="postgresql+psycopg2")
         os.environ["DATABASE_URL"] = async_url.render_as_string(hide_password=False)

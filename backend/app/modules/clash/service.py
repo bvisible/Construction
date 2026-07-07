@@ -1,5 +1,5 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
-"""‌⁠‍Clash detection engine + run lifecycle.
+"""Clash detection engine + run lifecycle.
 
 Three-phase, mathematically-exact narrow phase over **real triangle
 meshes** (faces → vertices) supplied by
@@ -940,7 +940,7 @@ def _severity_for(clash_type: str, penetration_m: float, distance_m: float, clea
 
 
 def _norm_bbox(bb: object) -> tuple[float, float, float, float, float, float] | None:
-    """‌⁠‍Normalise either bbox dialect to ``(minx,miny,minz,maxx,maxy,maxz)``.
+    """Normalise either bbox dialect to ``(minx,miny,minz,maxx,maxy,maxz)``.
 
     The DDC pipeline writes the flat ``min_x..max_z`` form per element;
     some legacy paths use the nested ``{"min":{x,y,z},"max":{x,y,z}}``
@@ -970,7 +970,7 @@ def _norm_bbox(bb: object) -> tuple[float, float, float, float, float, float] | 
 
 
 def _discipline_of(element: object) -> str:
-    """‌⁠‍Resolve an element's coordination discipline.
+    """Resolve an element's coordination discipline.
 
     Prefer the persisted ``discipline`` column (the DDC pipeline already
     classifies on import); otherwise reuse bim_hub's keyword classifier on

@@ -1,4 +1,4 @@
-"""‌⁠‍Resources ORM models.
+"""Resources ORM models.
 
 Tables:
     oe_resources_resource             - people / crews / equipment / subcontractors
@@ -36,7 +36,7 @@ from app.database import GUID, Base
 
 
 class Resource(Base):
-    """‌⁠‍A resource that can be assigned to projects / tasks / work orders.
+    """A resource that can be assigned to projects / tasks / work orders.
 
     resource_type controls behaviour:
         person          - individual worker
@@ -96,7 +96,7 @@ class Resource(Base):
 
 
 class Skill(Base):
-    """‌⁠‍A skill / qualification / language tag.
+    """A skill / qualification / language tag.
 
     category values: trade, certification, language, other
     """

@@ -1,5 +1,5 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
-"""‌⁠‍Client & Partner Portal manifest."""
+"""Client & Partner Portal manifest."""
 
 from app.core.module_loader import ModuleManifest
 

@@ -1,4 +1,4 @@
-"""‌⁠‍Cost-catalog vector adapter - feeds the ``oe_cost_items`` collection.
+"""Cost-catalog vector adapter - feeds the ``oe_cost_items`` collection.
 
 Each :class:`~app.modules.costs.models.CostItem` row is embedded with the
 multilingual-e5-small model so element→catalog matching can recall the
@@ -74,7 +74,7 @@ from app.core.match_service.region_language import language_for as _language_for
 
 
 def _language_for(item: CostItem) -> str:
-    """‌⁠‍Best-effort ISO-639-1 language code for a cost item.
+    """Best-effort ISO-639-1 language code for a cost item.
 
     Resolution order:
         1. Explicit ``metadata['language']`` (operator override).
@@ -124,7 +124,7 @@ _FIXTURE_CODE_RE = None  # lazy compile on first use
 
 
 def _looks_like_fixture(payload: dict[str, Any]) -> bool:
-    """‌⁠‍Heuristic: is this LanceDB hit a test fixture, not real CWICR?
+    """Heuristic: is this LanceDB hit a test fixture, not real CWICR?
 
     Earlier versions used a generic ``^[A-Z]\\d{3}$`` regex that silently
     dropped legitimate short CWICR codes (``M001``, ``B100``, ``S420``)

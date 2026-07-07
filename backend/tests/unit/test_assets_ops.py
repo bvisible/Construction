@@ -10,7 +10,7 @@ Two layers:
 from __future__ import annotations
 
 import uuid
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 import pytest_asyncio
@@ -245,7 +245,10 @@ class TestAssetOpsService:
         await _seed(
             session,
             pid,
-            asset_info={"warranty_until": "2026-07-01", "operational_status": "operational"},
+            asset_info={
+                "warranty_until": (date.today() + timedelta(days=30)).isoformat(),
+                "operational_status": "operational",
+            },
             is_tracked_asset=True,
         )
         await _seed(

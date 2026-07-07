@@ -1,4 +1,4 @@
-"""‌⁠‍Property Development data access layer.
+"""Property Development data access layer.
 
 Each entity gets its own repository with CRUD + a small set of query
 helpers tuned to the most common access patterns.
@@ -50,7 +50,7 @@ from app.modules.property_dev.models import (
 
 
 class _BaseRepo:
-    """‌⁠‍Tiny shared helper for create/update/delete boilerplate."""
+    """Tiny shared helper for create/update/delete boilerplate."""
 
     model: type
 
@@ -95,7 +95,7 @@ class _BaseRepo:
 
 
 class DevelopmentRepository(_BaseRepo):
-    """‌⁠‍Data access for Development models."""
+    """Data access for Development models."""
 
     model = Development
 

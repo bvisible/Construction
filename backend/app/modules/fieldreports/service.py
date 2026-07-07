@@ -1,4 +1,4 @@
-"""‌⁠‍Field Reports service - business logic for field report management.
+"""Field Reports service - business logic for field report management.
 
 Stateless service layer. Handles:
 - Field report CRUD
@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.i18n import get_locale
 from app.core.json_merge import merge_metadata
+from app.core.pdf_branding import branded_cover_brand
 from app.core.validation.messages import translate
 from app.modules.fieldreports.builtin_templates import (
     BUILTIN_TEMPLATES,
@@ -40,7 +41,7 @@ logger = logging.getLogger(__name__)
 
 
 class FieldReportService:
-    """‌⁠‍Business logic for field report operations."""
+    """Business logic for field report operations."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -53,7 +54,7 @@ class FieldReportService:
         data: FieldReportCreate,
         user_id: str | None = None,
     ) -> FieldReport:
-        """‌⁠‍Create a new field report.
+        """Create a new field report.
 
         If ``lat`` and ``lon`` are provided and OPENWEATHERMAP_API_KEY is
         configured, weather_data is auto-populated from OpenWeatherMap.
@@ -501,13 +502,65 @@ class FieldReportService:
 
     # ── Link documents ─────────────────────────────────────────────────────
 
+    async def _reject_foreign_document_ids(
+        self,
+        project_id: uuid.UUID,
+        document_ids: list[str],
+    ) -> None:
+        """Raise 422 if any document_id belongs to a different project.
+
+        A field report's ``document_ids`` JSON array is a cross-module
+        reference into ``oe_documents_document``. Without this guard a
+        caller who can edit a report in their own project could attach a
+        UUID that resolves to a document in another project, and the
+        ``GET /reports/{id}/documents/`` endpoint would echo that foreign
+        document's name and metadata back to them. The check is symmetric:
+        a missing document and a document owned by another project both
+        return the same 422, so the endpoint never becomes a UUID-existence
+        oracle.
+        """
+        if not document_ids:
+            return
+        from sqlalchemy import select as _select
+
+        from app.modules.documents.models import Document
+
+        ids: list[uuid.UUID] = []
+        for raw in document_ids:
+            try:
+                ids.append(uuid.UUID(str(raw)))
+            except (ValueError, AttributeError):
+                continue
+        if not ids:
+            return
+
+        stmt = _select(Document.id, Document.project_id).where(Document.id.in_(ids))
+        rows = (await self.session.execute(stmt)).all()
+        by_id = {str(row[0]): str(row[1]) for row in rows}
+
+        bad: list[str] = []
+        for raw in document_ids:
+            owner = by_id.get(str(raw))
+            if owner is None or owner != str(project_id):
+                bad.append(str(raw))
+        if bad:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(f"document_ids reference documents that do not belong to project {project_id}: {bad}"),
+            )
+
     async def link_documents(
         self,
         report_id: uuid.UUID,
         document_ids: list[str],
     ) -> FieldReport:
-        """Link documents to a field report (merge, deduplicate)."""
+        """Link documents to a field report (merge, deduplicate).
+
+        Foreign-project or unknown document_ids are rejected with 422 so a
+        report can only ever reference documents inside its own project.
+        """
         report = await self.get_report(report_id)
+        await self._reject_foreign_document_ids(report.project_id, document_ids)
 
         existing = list(report.document_ids or [])
         merged = list(dict.fromkeys(existing + document_ids))  # preserve order, deduplicate
@@ -610,6 +663,8 @@ class FieldReportService:
         report = await self.get_report(report_id)
 
         lines: list[str] = []
+        # Workspace brand title line (issue #284); falls back to the default name.
+        lines.append(branded_cover_brand())
         lines.append("FIELD REPORT")
         lines.append(f"Project: {report.project_id}")
         lines.append(f"Date: {report.report_date}")
@@ -674,7 +729,7 @@ class FieldReportService:
 
 
 class FieldReportTemplateService:
-    """‌⁠‍Business logic for report templates.
+    """Business logic for report templates.
 
     Merges code-defined built-in templates with the project's own
     custom templates. Built-ins are read-only; mutation endpoints reject

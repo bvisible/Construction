@@ -641,3 +641,71 @@ export function getScopeAmbiguity(
     `${CI_BASE}/projects/${projectId}/scope-ambiguity${qs}`,
   );
 }
+
+// --- Contractual notice and time-bar register ------------------------------
+// Every open notice / response clock on the project's changes, variations and
+// extension-of-time claims, counted down against the notice period for the
+// resolved contract standard (FIDIC / NEC / JCT / AIA / ConsensusDocs, or a
+// standard-neutral fallback). Worst-first. days_remaining is a signed pure day
+// count (negative once overdue), never money, so it is rendered directly. A
+// required notice with no proof on file, or a lapsed bar, is flagged
+// entitlement_at_risk so the entitlement is not quietly lost.
+
+export type NoticeStatus = 'met' | 'overdue' | 'due_soon' | 'upcoming' | 'unknown';
+
+export interface NoticeClock {
+  source_kind: string;
+  source_id: string;
+  source_ref: string;
+  title: string;
+  standard: string;
+  notice_type: string;
+  clause_ref: string;
+  trigger_date: string | null;
+  period_days: number | null;
+  deadline: string | null;
+  days_remaining: number | null;
+  status: NoticeStatus;
+  requires_notice: boolean;
+  proof_on_file: boolean;
+  satisfied_at: string | null;
+  served_late: boolean;
+  entitlement_at_risk: boolean;
+  is_open: boolean;
+}
+
+export interface NoticeRegisterSummary {
+  total: number;
+  open_total: number;
+  counts_by_status: Record<string, number>;
+  at_risk: number;
+  proof_missing: number;
+  overdue: number;
+  due_soon: number;
+}
+
+export interface NoticeRegister {
+  project_id: string;
+  contract_standard: string;
+  generated_at: string;
+  due_soon_days: number;
+  clocks: NoticeClock[];
+  summary: NoticeRegisterSummary;
+}
+
+// standard is an optional override that wins over the project's own contract
+// standard; dueSoonDays sets the amber window (the backend clamps it to 1..90).
+// Both are omitted from the query string when not supplied, so the register
+// resolves the standard and window on its own.
+export function getNoticeRegister(
+  projectId: string,
+  opts?: { standard?: string; dueSoonDays?: number },
+): Promise<NoticeRegister> {
+  const params = new URLSearchParams();
+  if (opts?.standard) params.set('standard', opts.standard);
+  if (opts?.dueSoonDays != null) params.set('due_soon_days', String(opts.dueSoonDays));
+  const qs = params.toString();
+  return apiGet<NoticeRegister>(
+    `${CI_BASE}/projects/${projectId}/notice-register${qs ? `?${qs}` : ''}`,
+  );
+}

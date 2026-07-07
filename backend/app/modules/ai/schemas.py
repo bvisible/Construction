@@ -1,4 +1,4 @@
-"""‌⁠‍AI Estimation Pydantic schemas - request/response models.
+"""AI Estimation Pydantic schemas - request/response models.
 
 Defines schemas for AI settings management, quick/photo estimate requests,
 and estimate job responses with generated BOQ items.
@@ -34,7 +34,7 @@ def _serialise_money(v: Decimal | None) -> str | None:
 
 
 class AISettingsUpdate(BaseModel):
-    """‌⁠‍Update per-user AI configuration (API keys, preferred model)."""
+    """Update per-user AI configuration (API keys, preferred model)."""
 
     # NOTE: extra='forbid' deliberately NOT set - the onboarding wizard and the
     # AI settings page both POST a ``provider`` field that this schema does not
@@ -77,7 +77,7 @@ class AISettingsUpdate(BaseModel):
 
 
 class AISettingsResponse(BaseModel):
-    """‌⁠‍AI settings returned from the API.
+    """AI settings returned from the API.
 
     API keys are masked - only the last 4 characters are shown.
     """

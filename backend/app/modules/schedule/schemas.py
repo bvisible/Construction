@@ -1,4 +1,4 @@
-"""‌⁠‍Schedule Pydantic schemas - request/response models.
+"""Schedule Pydantic schemas - request/response models.
 
 Defines create, update, and response schemas for schedules, activities,
 and work orders.  Numeric values are stored as strings in SQLite-compatible
@@ -54,7 +54,7 @@ def _parse_iso_date(value: str | None, field_name: str) -> date | None:
 
 
 def _validate_date_range(start: str | None, end: str | None) -> None:
-    """‌⁠‍Reject schedules/activities where end_date is before start_date,
+    """Reject schedules/activities where end_date is before start_date,
     and reject impossible calendar dates (Feb 30, month 13, etc.).
     """
     parsed_start = _parse_iso_date(start, "start_date")
@@ -69,7 +69,7 @@ def _validate_date_range(start: str | None, end: str | None) -> None:
 
 
 class ScheduleCreate(BaseModel):
-    """‌⁠‍Create a new schedule."""
+    """Create a new schedule."""
 
     model_config = ConfigDict(str_strip_whitespace=True)
 

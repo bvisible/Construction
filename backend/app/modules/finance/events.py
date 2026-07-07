@@ -1,4 +1,4 @@
-"""‌⁠‍Finance event subscribers - turn procurement mutation events into
+"""Finance event subscribers - turn procurement mutation events into
 ProjectBudget.committed / actual updates.
 
 Until v2.9.17 ``procurement.po.issued`` and ``procurement.gr.confirmed``
@@ -85,7 +85,7 @@ def _committed_marker_key(po_id_raw: object) -> str | None:
 
 
 def _to_decimal(value: object, default: Decimal = Decimal("0")) -> Decimal:
-    """‌⁠‍Best-effort string/Decimal coercion - never raises."""
+    """Best-effort string/Decimal coercion - never raises."""
     if value is None:
         return default
     try:
@@ -95,7 +95,7 @@ def _to_decimal(value: object, default: Decimal = Decimal("0")) -> Decimal:
 
 
 def _coerce_uuid(value: object) -> uuid.UUID | None:
-    """‌⁠‍Coerce a string/UUID to UUID, returning None on failure."""
+    """Coerce a string/UUID to UUID, returning None on failure."""
     if value is None:
         return None
     if isinstance(value, uuid.UUID):

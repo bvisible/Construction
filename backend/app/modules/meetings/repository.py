@@ -1,4 +1,4 @@
-"""‌⁠‍Meetings data access layer.
+"""Meetings data access layer.
 
 All database queries for meetings live here.
 No business logic - pure data access.
@@ -13,13 +13,13 @@ from app.modules.meetings.models import Meeting
 
 
 class MeetingRepository:
-    """‌⁠‍Data access for Meeting models."""
+    """Data access for Meeting models."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
     async def get_by_id(self, meeting_id: uuid.UUID) -> Meeting | None:
-        """‌⁠‍Get meeting by ID."""
+        """Get meeting by ID."""
         return await self.session.get(Meeting, meeting_id)
 
     async def list_for_project(

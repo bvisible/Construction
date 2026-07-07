@@ -1,4 +1,4 @@
-"""‌⁠‍Inspections Pydantic schemas - request/response models."""
+"""Inspections Pydantic schemas - request/response models."""
 
 from datetime import datetime
 from typing import Any
@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class ChecklistEntry(BaseModel):
-    """‌⁠‍A single checklist item within an inspection."""
+    """A single checklist item within an inspection."""
 
     id: str | None = None
     category: str | None = Field(default=None, max_length=100)
@@ -20,7 +20,7 @@ class ChecklistEntry(BaseModel):
 
 
 class InspectionCreate(BaseModel):
-    """‌⁠‍Create a new quality inspection."""
+    """Create a new quality inspection."""
 
     model_config = ConfigDict(str_strip_whitespace=True)
 

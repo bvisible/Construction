@@ -1,4 +1,4 @@
-"""‌⁠‍Submittals event handlers - vector indexing subscribers.
+"""Submittals event handlers - vector indexing subscribers.
 
 Subscribes to ``submittal.created`` / ``submittal.updated`` /
 ``submittal.deleted`` lifecycle events and keeps the
@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 
 async def _index_submittal(event: Event) -> None:
-    """‌⁠‍Re-embed a single Submittal row after create / update."""
+    """Re-embed a single Submittal row after create / update."""
     sid_raw = (event.data or {}).get("submittal_id")
     if not sid_raw:
         return
@@ -64,7 +64,7 @@ async def _index_submittal(event: Event) -> None:
 
 
 async def _delete_submittal_vector(event: Event) -> None:
-    """‌⁠‍Remove a deleted Submittal row from the vector store."""
+    """Remove a deleted Submittal row from the vector store."""
     sid_raw = (event.data or {}).get("submittal_id")
     if not sid_raw:
         return

@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍Load DDC-published CWICR snapshots into a server-mode Qdrant.
+"""Load DDC-published CWICR snapshots into a server-mode Qdrant.
 
 Companion to :mod:`app.modules.costs.qdrant_adapter`. The adapter handles
 *search*; this module handles *populate-from-DDC* - i.e. taking the
@@ -72,7 +72,7 @@ _V3_MARKER_RE = re.compile(r"BGEM3_V3", re.IGNORECASE)
 
 
 def cwicr_snapshot_target_for(snapshot_filename: str | Path) -> str | None:
-    """‌⁠‍Return the target collection name for a DDC v3 snapshot, or ``None``.
+    """Return the target collection name for a DDC v3 snapshot, or ``None``.
 
     ``None`` means "skip this file" - either it isn't a BGE-M3 v3
     snapshot, or its filename doesn't follow the DDC convention. The
@@ -110,7 +110,7 @@ def cwicr_snapshot_target_for(snapshot_filename: str | Path) -> str | None:
 
 @dataclass
 class SnapshotLoadSummary:
-    """‌⁠‍Aggregate result of :func:`load_ddc_snapshot_dir`.
+    """Aggregate result of :func:`load_ddc_snapshot_dir`.
 
     Three buckets:
 

@@ -1,4 +1,4 @@
-"""‌⁠‍ERP Chat service - agent loop with SSE streaming and tool calling.
+"""ERP Chat service - agent loop with SSE streaming and tool calling.
 
 Supports Anthropic and OpenAI APIs with tool-calling (function calling).
 Other providers fall back to plain text via the shared ai_client.call_ai().
@@ -66,7 +66,7 @@ DAILY_TOKEN_BUDGET = int(_os.environ.get("ERPCHAT_DAILY_TOKEN_BUDGET", "500000")
 
 
 def _truncate_tool_result(result: Any) -> Any:
-    """‌⁠‍Trim tool output to a safe size before re-injecting into the LLM context.
+    """Trim tool output to a safe size before re-injecting into the LLM context.
 
     Strategy: if the result has a ``data`` list longer than 50 items, cap it.
     Then serialize and, if still too large, return a compact summary skeleton.
@@ -98,7 +98,7 @@ def _truncate_tool_result(result: Any) -> Any:
 
 
 def _sse(event_type: str, data: dict[str, Any]) -> str:
-    """‌⁠‍Format a Server-Sent Event string."""
+    """Format a Server-Sent Event string."""
     return f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
 
 

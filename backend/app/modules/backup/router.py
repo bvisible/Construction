@@ -1,4 +1,4 @@
-"""‌⁠‍Backup & Restore API.
+"""Backup & Restore API.
 
 Endpoints:
     POST /export    -- Download a ZIP backup of all user data

@@ -1,4 +1,4 @@
-"""‌⁠‍Full EVM module manifest."""
+"""Full EVM module manifest."""
 
 from app.core.module_loader import ModuleManifest
 

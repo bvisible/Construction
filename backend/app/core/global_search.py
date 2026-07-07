@@ -1,4 +1,4 @@
-"""‌⁠‍Global search - searches across all modules simultaneously.
+"""Global search - searches across all modules simultaneously.
 
 Usage:
     GET /api/v1/search?q=reinforced+concrete&project_id=xxx&limit=20
@@ -22,7 +22,7 @@ async def global_search(
     project_id: str | None = None,
     limit: int = 20,
 ) -> list[dict[str, Any]]:
-    """‌⁠‍Search across all modules using ILIKE text matching.
+    """Search across all modules using ILIKE text matching.
 
     Each result is a dict with keys:
         module, type, id, title, subtitle, url, score
@@ -322,7 +322,7 @@ async def global_search(
 
 
 def _boq_id_for_project(project_id: str):
-    """‌⁠‍Return a subquery selecting BOQ IDs for a specific project."""
+    """Return a subquery selecting BOQ IDs for a specific project."""
     from app.modules.boq.models import BOQ
 
     return select(BOQ.id).where(BOQ.project_id == project_id).scalar_subquery()

@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍Saved-views ORM models.
+"""Saved-views ORM models.
 
 Two tables, both inheriting :class:`app.database.Base` (so ``id`` / ``created_at``
 / ``updated_at`` are free). No money is involved here, so no ``MoneyType``. JSON
@@ -33,7 +33,7 @@ from app.database import GUID, Base
 
 
 class SavedView(Base):
-    """‌⁠‍A named, scoped saved search against one registered entity.
+    """A named, scoped saved search against one registered entity.
 
     The ``spec`` JSON is the serialized ``FilterSpec``; it is re-validated by
     Pydantic on every read and write, never trusted as-is. ``share_scope`` is one
@@ -100,7 +100,7 @@ class SavedView(Base):
 
 
 class SavedViewRun(Base):
-    """‌⁠‍Append-only audit row written after a run.
+    """Append-only audit row written after a run.
 
     Lets budget-overflow attempts and slow views be observed. ``outcome`` is one
     of ``ok`` / ``budget`` / ``scope`` / ``whitelist`` / ``error``.

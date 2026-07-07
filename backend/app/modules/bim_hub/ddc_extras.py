@@ -1,4 +1,4 @@
-"""‌⁠‍DDC adapter extras - canonical-format helpers for the EAC engine (RFC 35).
+"""DDC adapter extras - canonical-format helpers for the EAC engine (RFC 35).
 
 Pure-Python helpers operating on the canonical BIM element dict produced by
 the DDC ``cad2data`` pipeline (the ONLY supported BIM ingestion path per
@@ -47,7 +47,7 @@ _VERTEX_DECIMALS: int = 4
 
 @dataclass(frozen=True)
 class SignatureV1:
-    """‌⁠‍Stable geometric fingerprint of one canonical BIM element.
+    """Stable geometric fingerprint of one canonical BIM element.
 
     All numeric fields are in SI units (metres, square metres, cubic metres).
     The ``mesh_sha256`` is computed over the *deduplicated*, *sorted*,
@@ -66,7 +66,7 @@ class SignatureV1:
 
 @dataclass(frozen=True)
 class PropertyChange:
-    """‌⁠‍One row in a property-set diff.
+    """One row in a property-set diff.
 
     ``change_type`` is one of ``"added"``, ``"removed"``, ``"modified"``.
     ``left_value`` / ``right_value`` carry the value on each side; for

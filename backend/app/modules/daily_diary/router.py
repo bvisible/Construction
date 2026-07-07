@@ -1,4 +1,4 @@
-"""‌⁠‍Daily Site Diary API routes.
+"""Daily Site Diary API routes.
 
 Mounted at ``/api/v1/daily-diary/``. Each endpoint is guarded by a
 ``RequirePermission(...)`` dependency. Project access checks are
@@ -107,7 +107,7 @@ async def list_diaries(
     _perm: None = Depends(RequirePermission("daily_diary.read")),
     service: DailyDiaryService = Depends(_get_service),
 ) -> list[DailyDiaryResponse]:
-    """‌⁠‍List daily diaries for a project."""
+    """List daily diaries for a project."""
     await verify_project_access(project_id, user_id, session)
     items, _ = await service.list_diaries(
         project_id,
@@ -128,7 +128,7 @@ async def create_diary(
     _perm: None = Depends(RequirePermission("daily_diary.create")),
     service: DailyDiaryService = Depends(_get_service),
 ) -> DailyDiaryResponse:
-    """‌⁠‍Create a new daily diary (one per project per date)."""
+    """Create a new daily diary (one per project per date)."""
     await verify_project_access(data.project_id, user_id, session)
     diary = await service.create_diary(data, user_id=user_id)
     return DailyDiaryResponse.model_validate(diary)
@@ -223,7 +223,7 @@ async def unlock_diary(
     _perm: None = Depends(RequirePermission("daily_diary.unlock")),
     service: DailyDiaryService = Depends(_get_service),
 ) -> DailyDiaryResponse:
-    """‌⁠‍Re-open a signed diary so a manager can amend it.
+    """Re-open a signed diary so a manager can amend it.
 
     The original archive signature is preserved (its hash continues to
     point at the pre-edit snapshot) so the integrity break is forensic

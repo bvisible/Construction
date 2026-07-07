@@ -70,7 +70,7 @@ from tests._pg import transactional_session
 
 @pytest_asyncio.fixture
 async def session() -> AsyncIterator[AsyncSession]:
-    """‌⁠‍Per-test session in a rolled-back PostgreSQL transaction.
+    """Per-test session in a rolled-back PostgreSQL transaction.
 
     The shared ``oe_test_unit`` database already carries the full schema, so
     no table creation is needed. The outer transaction is rolled back on
@@ -89,7 +89,7 @@ async def svc(session: AsyncSession) -> QMSService:
 
 
 def test_qms_calibration_tenant_write_is_manager() -> None:
-    """‌⁠‍The R7 tenant-write split must register at MANAGER+, not EDITOR."""
+    """The R7 tenant-write split must register at MANAGER+, not EDITOR."""
     register_qms_permissions()
     assert permission_registry.role_has_permission(
         Role.MANAGER,
@@ -106,7 +106,7 @@ def test_qms_calibration_tenant_write_is_manager() -> None:
 
 
 def test_qms_ncr_escalate_is_manager() -> None:
-    """‌⁠‍NCR escalation to variation must be MANAGER+ (cost-impact gate)."""
+    """NCR escalation to variation must be MANAGER+ (cost-impact gate)."""
     register_qms_permissions()
     assert permission_registry.role_has_permission(
         Role.MANAGER,
@@ -122,7 +122,7 @@ def test_qms_ncr_escalate_is_manager() -> None:
 
 
 def test_calibration_url_rejects_javascript_scheme() -> None:
-    """‌⁠‍``javascript:`` URLs in certificate_url must 422 at schema parse."""
+    """``javascript:`` URLs in certificate_url must 422 at schema parse."""
     with pytest.raises(ValidationError) as exc_info:
         CalibrationCreate(
             instrument_id="i-1",
@@ -136,7 +136,7 @@ def test_calibration_url_rejects_javascript_scheme() -> None:
 
 
 def test_calibration_url_rejects_data_scheme() -> None:
-    """‌⁠‍``data:`` URLs equally rejected — common XSS smuggle vector."""
+    """``data:`` URLs equally rejected — common XSS smuggle vector."""
     with pytest.raises(ValidationError):
         CalibrationCreate(
             instrument_id="i-2",
@@ -149,7 +149,7 @@ def test_calibration_url_rejects_data_scheme() -> None:
 
 
 def test_calibration_url_rejects_file_scheme() -> None:
-    """‌⁠‍``file://`` URLs would let a renderer SSRF the host filesystem."""
+    """``file://`` URLs would let a renderer SSRF the host filesystem."""
     with pytest.raises(ValidationError):
         CalibrationCreate(
             instrument_id="i-3",
@@ -162,7 +162,7 @@ def test_calibration_url_rejects_file_scheme() -> None:
 
 
 def test_calibration_url_accepts_https() -> None:
-    """‌⁠‍Sanity: a real https URL still parses through."""
+    """Sanity: a real https URL still parses through."""
     cal = CalibrationCreate(
         instrument_id="i-4",
         instrument_name="Wrench",
@@ -175,7 +175,7 @@ def test_calibration_url_accepts_https() -> None:
 
 
 def test_calibration_update_url_validator_also_active() -> None:
-    """‌⁠‍The same validator must guard the PATCH path."""
+    """The same validator must guard the PATCH path."""
     with pytest.raises(ValidationError):
         CalibrationUpdate(certificate_url="javascript:bad()")
 
@@ -187,7 +187,7 @@ def test_calibration_update_url_validator_also_active() -> None:
 async def test_inspection_fsm_rejects_passed_to_in_progress(
     svc: QMSService,
 ) -> None:
-    """‌⁠‍Once an inspection is ``passed`` it cannot drop back to in_progress."""
+    """Once an inspection is ``passed`` it cannot drop back to in_progress."""
     project_id = uuid.uuid4()
     plan = await svc.create_itp_plan(
         ITPPlanCreate(project_id=project_id, name="P1", work_type="concrete"),
@@ -231,7 +231,7 @@ async def test_inspection_fsm_rejects_passed_to_in_progress(
 
 @pytest.mark.asyncio
 async def test_ncr_fsm_rejects_closed_to_open(svc: QMSService) -> None:
-    """‌⁠‍A closed NCR cannot regress to open via plain PATCH."""
+    """A closed NCR cannot regress to open via plain PATCH."""
     project_id = uuid.uuid4()
     ncr = await svc.raise_ncr(
         NCRCreate(
@@ -258,7 +258,7 @@ async def test_ncr_fsm_rejects_closed_to_open(svc: QMSService) -> None:
 
 @pytest.mark.asyncio
 async def test_ncr_escalate_requires_cost_impact(svc: QMSService) -> None:
-    """‌⁠‍Escalation without a non-zero cost_impact is rejected with ValueError."""
+    """Escalation without a non-zero cost_impact is rejected with ValueError."""
     project_id = uuid.uuid4()
     ncr = await svc.raise_ncr(
         NCRCreate(
@@ -279,7 +279,7 @@ async def test_ncr_escalate_requires_cost_impact(svc: QMSService) -> None:
 async def test_itp_plan_lookup_returns_none_cross_project(
     svc: QMSService,
 ) -> None:
-    """‌⁠‍``get_itp_plan`` against an unknown id returns None — the router
+    """``get_itp_plan`` against an unknown id returns None — the router
     then surfaces 404. There is no per-project gate inside the repo
     because the router enforces ``verify_project_access`` on the loaded
     plan's project_id before mutating it.
@@ -293,7 +293,7 @@ async def test_itp_plan_lookup_returns_none_cross_project(
 async def test_calibration_lookup_returns_none_for_missing(
     svc: QMSService,
 ) -> None:
-    """‌⁠‍Missing calibration -> None, which becomes 404 at the router."""
+    """Missing calibration -> None, which becomes 404 at the router."""
     unknown_id = uuid.uuid4()
     cal = await svc.repo.get_calibration(unknown_id)
     assert cal is None
@@ -303,7 +303,7 @@ async def test_calibration_lookup_returns_none_for_missing(
 async def test_inspection_cross_project_isolation(
     session: AsyncSession,
 ) -> None:
-    """‌⁠‍list_inspections is project-scoped; tenant A cannot see tenant B's."""
+    """list_inspections is project-scoped; tenant A cannot see tenant B's."""
     svc = QMSService(session)
     proj_a = uuid.uuid4()
     proj_b = uuid.uuid4()
@@ -354,7 +354,7 @@ async def test_inspection_cross_project_isolation(
 async def test_ncr_cost_impact_persists_as_decimal(
     svc: QMSService,
 ) -> None:
-    """‌⁠‍cost_impact_amount round-trips as Decimal (no float drift)."""
+    """cost_impact_amount round-trips as Decimal (no float drift)."""
     project_id = uuid.uuid4()
     # 199.99 is the classic R7 round-trip canary — would drift to
     # 199.99000000000002 if coerced through float.
@@ -376,7 +376,7 @@ async def test_ncr_cost_impact_persists_as_decimal(
 
 
 def test_ncr_create_requires_currency_with_amount() -> None:
-    """‌⁠‍A non-zero cost_impact_amount without a currency is a validation error."""
+    """A non-zero cost_impact_amount without a currency is a validation error."""
     # Construction succeeds (Pydantic does not enforce the cross-field
     # check) but ``raise_ncr`` rejects at the service boundary. The
     # contract: never accept a currency-blind amount.
@@ -385,7 +385,7 @@ def test_ncr_create_requires_currency_with_amount() -> None:
 
 @pytest.mark.asyncio
 async def test_ncr_amount_without_currency_rejected(svc: QMSService) -> None:
-    """‌⁠‍Service-level guard: amount > 0 without currency raises ValueError."""
+    """Service-level guard: amount > 0 without currency raises ValueError."""
     project_id = uuid.uuid4()
     with pytest.raises(ValueError, match="cost_impact_currency"):
         await svc.raise_ncr(
@@ -405,7 +405,7 @@ async def test_ncr_amount_without_currency_rejected(svc: QMSService) -> None:
 
 @pytest.mark.asyncio
 async def test_punch_fsm_rejects_closed_to_assigned(svc: QMSService) -> None:
-    """‌⁠‍A closed punch item cannot be re-assigned."""
+    """A closed punch item cannot be re-assigned."""
     project_id = uuid.uuid4()
     punch = await svc.add_punch_item(
         PunchItemCreate(project_id=project_id, title="paint scratch"),
@@ -419,7 +419,7 @@ async def test_punch_fsm_rejects_closed_to_assigned(svc: QMSService) -> None:
 async def test_audit_fsm_rejects_closed_to_in_progress(
     svc: QMSService,
 ) -> None:
-    """‌⁠‍A closed audit must not regress to in_progress."""
+    """A closed audit must not regress to in_progress."""
     project_id = uuid.uuid4()
     audit = await svc.plan_audit(
         AuditCreate(project_id=project_id, audit_type="internal"),
@@ -439,7 +439,7 @@ async def test_audit_fsm_rejects_closed_to_in_progress(
 
 @pytest.mark.asyncio
 async def test_itp_template_clone_404_on_missing(svc: QMSService) -> None:
-    """‌⁠‍Cloning a non-existent template raises ValueError → 404."""
+    """Cloning a non-existent template raises ValueError → 404."""
     from app.modules.qms.schemas import ITPTemplateCloneRequest
 
     project_id = uuid.uuid4()
@@ -455,7 +455,7 @@ async def test_itp_template_clone_404_on_missing(svc: QMSService) -> None:
 
 
 def test_calibration_create_permission_for_tenant_wide_needs_manager() -> None:
-    """‌⁠‍Permission registry: tenant_write is MANAGER+, write is EDITOR+."""
+    """Permission registry: tenant_write is MANAGER+, write is EDITOR+."""
     register_qms_permissions()
     # Per-project create: editor is sufficient.
     assert permission_registry.role_has_permission(

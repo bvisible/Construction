@@ -54,8 +54,9 @@ import {
 } from './components/RecentlyViewedStrip';
 import { ShortcutsCheatsheet } from './components/ShortcutsCheatsheet';
 import { useFileShortcuts } from './useFileShortcuts';
-import { primaryModule, isInlinePreviewRow } from './kindModule';
+import { primaryModule, isInlinePreviewRow, isLightboxRow } from './kindModule';
 import { InlinePdfPreviewModal } from '@/features/file-references/InlinePdfPreviewModal';
+import { MediaLightbox, type MediaLightboxItem } from './components/MediaLightbox';
 import type { FileFilters, FileKind, FileRow } from './types';
 
 const VIEW_MODE_KEY = 'file-manager:view-mode';
@@ -144,6 +145,11 @@ export function FileManagerPage() {
   // instead of jumping to PDF Takeoff. This holds the row whose bytes the
   // InlinePdfPreviewModal is showing (null = closed).
   const [inlinePdfRow, setInlinePdfRow] = useState<FileRow | null>(null);
+  // #284 follow-up (ITEM 10): an image / video opens in the MediaLightbox
+  // instead of falling through to PDF Takeoff. We track the active media file
+  // by id (null = closed) so prev/next can page through the visible media rows
+  // even as the underlying list re-renders.
+  const [lightboxId, setLightboxId] = useState<string | null>(null);
   const [showExport, setShowExport] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [emailRow, setEmailRow] = useState<FileRow | null>(null);
@@ -355,6 +361,27 @@ export function FileManagerPage() {
     );
   }, [showFavoritesOnly, tagFilteredItems, favorites.keys]);
 
+  // #284 follow-up (ITEM 10): the set of visible image/video rows the
+  // MediaLightbox pages through, plus the active one's index. Derived from the
+  // already-filtered ``displayItems`` so prev/next walks exactly what the user
+  // sees. Trimmed to the MediaLightbox shape so the overlay stays decoupled
+  // from the full FileRow type.
+  const mediaItems = useMemo<MediaLightboxItem[]>(
+    () =>
+      displayItems.filter(isLightboxRow).map((r) => ({
+        id: r.id,
+        kind: r.kind,
+        name: r.name,
+        extension: r.extension,
+        mime_type: r.mime_type,
+        download_url: r.download_url,
+      })),
+    [displayItems],
+  );
+  const lightboxIndex = lightboxId
+    ? mediaItems.findIndex((m) => m.id === lightboxId)
+    : -1;
+
   // Whenever filters change, drop selection that no longer matches the
   // visible result set so the preview pane never shows a stale row.
   useEffect(() => {
@@ -433,6 +460,12 @@ export function FileManagerPage() {
       setInlinePdfRow(row);
       return;
     }
+    // ITEM 10: images / videos open in the MediaLightbox, never PDF Takeoff.
+    if (isLightboxRow(row)) {
+      recordRecentlyViewed(row);
+      setLightboxId(row.id);
+      return;
+    }
     const target = primaryModule(row.kind, row.extension);
     // Destinations that resolve the project from the global context
     // store (Clash, BI Explorer) need it bound first or they land on
@@ -459,6 +492,12 @@ export function FileManagerPage() {
     const recentRow: FileRow | undefined = list?.items.find((r) => r.id === item.id);
     if (recentRow && isInlinePreviewRow(recentRow)) {
       setInlinePdfRow(recentRow);
+      return;
+    }
+    // ITEM 10: a recent image / video that is in the loaded list opens in the
+    // MediaLightbox (paging through the other visible media rows).
+    if (recentRow && isLightboxRow(recentRow)) {
+      setLightboxId(recentRow.id);
       return;
     }
     const ext = (item.extension ?? '').toLowerCase().replace(/^\./, '');
@@ -816,6 +855,19 @@ export function FileManagerPage() {
         downloadUrl={inlinePdfRow?.download_url ?? null}
         title={inlinePdfRow?.name ?? ''}
         onClose={() => setInlinePdfRow(null)}
+      />
+      {/* ITEM 10 - image viewer / video player. Opened by handleOpen for an
+          image or video document so it no longer falls through to the takeoff
+          tool. Pages through every visible media row via prev/next. */}
+      <MediaLightbox
+        open={lightboxId !== null && lightboxIndex >= 0}
+        items={mediaItems}
+        index={lightboxIndex >= 0 ? lightboxIndex : 0}
+        onClose={() => setLightboxId(null)}
+        onIndexChange={(next) => {
+          const item = mediaItems[next];
+          if (item) setLightboxId(item.id);
+        }}
       />
     </div>
   );

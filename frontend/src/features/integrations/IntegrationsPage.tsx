@@ -782,7 +782,15 @@ function ConnectModal({
         integration_type: connector.type,
         name: name.trim() || connector.defaultName,
         config: fieldValues,
-        events: connector.eventOptions ? selectedEvents : ['*'],
+        // When every listed option is kept selected (the default for chat
+        // connectors), send the wildcard so EVERY notification type is
+        // forwarded - including event types not in the curated option list
+        // (portal invites, change orders, contracts, and so on). Only when the
+        // user deliberately narrows the selection do we send the explicit set.
+        events:
+          connector.eventOptions && selectedEvents.length < connector.eventOptions.length
+            ? selectedEvents
+            : ['*'],
       });
       addToast({
         type: 'success',

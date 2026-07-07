@@ -1,5 +1,5 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
-"""‌⁠‍Smart Views module manifest."""
+"""Smart Views module manifest."""
 
 from app.core.module_loader import ModuleManifest
 

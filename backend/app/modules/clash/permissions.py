@@ -1,11 +1,11 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
-"""‌⁠‍Clash detection module permission definitions."""
+"""Clash detection module permission definitions."""
 
 from app.core.permissions import Role, permission_registry
 
 
 def register_clash_permissions() -> None:
-    """‌⁠‍Register RBAC permissions for the clash module.
+    """Register RBAC permissions for the clash module.
 
     Mirrors the sibling ``bcf`` / ``validation`` verb set: viewers read
     runs & results; editors trigger runs and triage results; managers can

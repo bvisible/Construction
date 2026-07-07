@@ -1,11 +1,11 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
-"""‌⁠‍Project Controls permission definitions."""
+"""Project Controls permission definitions."""
 
 from app.core.permissions import Role, permission_registry
 
 
 def register_project_controls_permissions() -> None:
-    """‌⁠‍Register permissions for the Project Controls module."""
+    """Register permissions for the Project Controls module."""
     permission_registry.register_module_permissions(
         "project_controls",
         {

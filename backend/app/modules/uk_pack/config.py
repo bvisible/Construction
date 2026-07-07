@@ -1,4 +1,4 @@
-"""‌⁠‍Regional configuration for the United Kingdom."""
+"""Regional configuration for the United Kingdom."""
 
 from decimal import Decimal
 from typing import Any

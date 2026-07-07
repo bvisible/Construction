@@ -1,4 +1,4 @@
-"""‌⁠‍Warm pool for sentence-transformer / fastembed inference.
+"""Warm pool for sentence-transformer / fastembed inference.
 
 Background
 ==========
@@ -69,12 +69,12 @@ _inflight: int = 0
 
 
 def inflight() -> int:
-    """‌⁠‍Number of encode calls currently pending in the dispatcher."""
+    """Number of encode calls currently pending in the dispatcher."""
     return _inflight
 
 
 def _resolve_pool_size() -> int:
-    """‌⁠‍Decide how many workers to spin up.
+    """Decide how many workers to spin up.
 
     Resolution order:
         1. Explicit ``OE_VECTOR_POOL_WORKERS=N`` env var (0 disables).

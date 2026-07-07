@@ -1,4 +1,4 @@
-"""‌⁠‍Custom column types (PostgreSQL-only).
+"""Custom column types (PostgreSQL-only).
 
 The app runs on PostgreSQL exclusively, so money and dates are stored in
 their native SQL types (``NUMERIC`` / ``DATE``) and aggregation, range
@@ -40,7 +40,7 @@ from sqlalchemy import Date, DateTime, Numeric, String, TypeDecorator
 
 
 class MoneyType(TypeDecorator):
-    """‌⁠‍Money / signed-decimal column.
+    """Money / signed-decimal column.
 
     Stored as ``NUMERIC(precision, scale)`` (default 18, 2) on PostgreSQL.
 
@@ -87,7 +87,7 @@ class MoneyType(TypeDecorator):
 
 
 class SafeDate(TypeDecorator):
-    """‌⁠‍Calendar-date column (no time component, no timezone).
+    """Calendar-date column (no time component, no timezone).
 
     Stored as ``DATE`` on PostgreSQL.
 
@@ -131,7 +131,7 @@ class SafeDate(TypeDecorator):
 
 
 class AwareDateTime(TypeDecorator):
-    """‌⁠‍Timezone-aware timestamp column that tolerates loose inputs.
+    """Timezone-aware timestamp column that tolerates loose inputs.
 
     Stores ``TIMESTAMP WITH TIME ZONE`` (``DateTime(timezone=True)``) on both
     backends, but coerces the bound value to a timezone-aware ``datetime`` first:

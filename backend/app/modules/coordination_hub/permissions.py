@@ -1,5 +1,5 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
-"""‌⁠‍Coordination Hub module permission definitions.
+"""Coordination Hub module permission definitions.
 
 The hub is a read-only aggregator; everything it surfaces is already
 gated by the underlying module's own permissions (``clash.read``,
@@ -13,7 +13,7 @@ from app.core.permissions import Role, permission_registry
 
 
 def register_coordination_hub_permissions() -> None:
-    """‌⁠‍Register RBAC permissions for the coordination hub module."""
+    """Register RBAC permissions for the coordination hub module."""
     permission_registry.register_module_permissions(
         "coordination",
         {

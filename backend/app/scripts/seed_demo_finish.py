@@ -1,4 +1,4 @@
-"""‌⁠‍Continuation script - finish seeding BOQs + BIM links for the 3 demo
+"""Continuation script - finish seeding BOQs + BIM links for the 3 demo
 projects that the main seeder already created.
 
 Run this after the main seeder created the projects + started uploads.

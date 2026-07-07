@@ -1,5 +1,5 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
-"""‌⁠‍Read-only aggregator for the Coordination Hub dashboard.
+"""Read-only aggregator for the Coordination Hub dashboard.
 
 The service issues lightweight per-category SELECT-COUNT statements (one
 per data point) against the existing sibling-module tables. There is
@@ -30,6 +30,7 @@ from sqlalchemy import and_, func, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.coordination_hub.intl import normalise_trade
 from app.modules.coordination_hub.models import (
     DEFAULT_THRESHOLDS,
     KNOWN_METRICS,
@@ -85,34 +86,16 @@ _BCF_ACTIVITY_WINDOW_DAYS = 30
 def _normalise_trade(value: str | None) -> str:
     """Collapse a free-text discipline label to one of CANONICAL_TRADES.
 
-    Mirrors :func:`clash_cost_impact.service._normalise_discipline` but
-    keeps the bucket vocabulary at the 6 canonical names the dashboard
-    needs (the cost-impact module rolls up to 7+ vocabularies for its
-    own lookup table). Unknown labels fall through to ``"other"`` - the
-    matrix never silently drops a clash.
+    Thin wrapper over :func:`app.modules.coordination_hub.intl.normalise_trade`,
+    which folds case and accents and recognises the common discipline
+    labels in English, German, French, Spanish, Italian and Russian. The
+    six canonical buckets the dashboard needs are unchanged; a BIM export
+    labelled in any of those languages now resolves instead of falling to
+    ``"other"``. Unknown labels still land on ``"other"`` so the matrix
+    never silently drops a clash. The signature is kept so existing
+    callers and tests are unaffected.
     """
-    if not value:
-        return "other"
-    raw = value.strip().lower()
-    if raw in CANONICAL_TRADES:
-        return raw
-    aliases: dict[str, str] = {
-        "architectural": "arch",
-        "architecture": "arch",
-        "structural": "struct",
-        "structure": "struct",
-        "mechanical": "mep",
-        "hvac": "mep",
-        "mech": "mep",
-        "electrical": "mep",
-        "elec": "mep",
-        "elect": "mep",
-        "plumbing": "mep",
-        "pl": "mep",
-        "plumb": "mep",
-        "site": "civil",
-    }
-    return aliases.get(raw, "other")
+    return normalise_trade(value)
 
 
 # ── Defensive aggregation primitives ────────────────────────────────────────

@@ -1,5 +1,5 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
-"""‌⁠‍Compliance documents data-access layer."""
+"""Compliance documents data-access layer."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from app.modules.compliance_docs.models import ComplianceDoc
 
 
 class ComplianceDocRepository:
-    """‌⁠‍Data access for :class:`ComplianceDoc` rows."""
+    """Data access for :class:`ComplianceDoc` rows."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session

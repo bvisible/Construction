@@ -1,4 +1,4 @@
-"""‌⁠‍Tendering ORM models.
+"""Tendering ORM models.
 
 Tables:
     oe_tendering_package - tender/bid packages linked to a project and BOQ
@@ -14,7 +14,7 @@ from app.database import GUID, Base
 
 
 class TenderPackage(Base):
-    """‌⁠‍A tender package groups BOQ positions for subcontractor bidding."""
+    """A tender package groups BOQ positions for subcontractor bidding."""
 
     __tablename__ = "oe_tendering_package"
 
@@ -52,7 +52,7 @@ class TenderPackage(Base):
 
 
 class TenderBid(Base):
-    """‌⁠‍A bid submitted by a company for a tender package."""
+    """A bid submitted by a company for a tender package."""
 
     __tablename__ = "oe_tendering_bid"
 

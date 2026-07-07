@@ -1,4 +1,4 @@
-"""‌⁠‍Document share-link ORM models.
+"""Document share-link ORM models.
 
 Tables:
     oe_documents_share_link - public, optionally password-protected
@@ -40,7 +40,7 @@ from app.database import GUID, Base
 
 
 class DocumentShareLink(Base):
-    """‌⁠‍Public download token for a single :class:`Document`.
+    """Public download token for a single :class:`Document`.
 
     ``token`` is the URL segment recipients use (32-char URL-safe
     base64 from :func:`secrets.token_urlsafe`). It is indexed

@@ -1,4 +1,4 @@
-"""‌⁠‍BCF (BIM Collaboration Format) ORM models.
+"""BCF (BIM Collaboration Format) ORM models.
 
 Tables:
     oe_bcf_topic      - a BCF Topic (issue) scoped to a project
@@ -37,7 +37,7 @@ from app.database import GUID, Base
 
 
 class BCFTopic(Base):
-    """‌⁠‍A BCF Topic (issue) attached to a project.
+    """A BCF Topic (issue) attached to a project.
 
     Maps to ``<Topic>`` inside ``markup.bcf``. ``guid`` is the canonical
     BCF ``Topic/@Guid``; we keep it distinct from the surrogate ``id`` so
@@ -110,7 +110,7 @@ class BCFTopic(Base):
 
 
 class BCFComment(Base):
-    """‌⁠‍A comment on a BCF topic.
+    """A comment on a BCF topic.
 
     Maps to ``<Comment>`` inside ``markup.bcf``. ``viewpoint_guid``
     optionally references a sibling :class:`BCFViewpoint`'s ``guid``.

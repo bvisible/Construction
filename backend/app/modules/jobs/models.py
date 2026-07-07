@@ -1,4 +1,4 @@
-"""‌⁠‍Re-export the core JobRun ORM model for module-loader registration.
+"""Re-export the core JobRun ORM model for module-loader registration.
 
 The actual table lives in :mod:`app.core.job_run` so the runner code
 doesn't have to import a module-package to access its own row type.

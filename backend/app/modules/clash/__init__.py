@@ -1,5 +1,5 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
-"""‌⁠‍Clash / interference detection module.
+"""Clash / interference detection module.
 
 Geometric AABB (axis-aligned bounding box) coordination over the
 **canonical** BIM element store (``oe_bim_element.bounding_box``). It is
@@ -16,7 +16,7 @@ BIM coordination viewers without vendor lock-in.
 
 
 async def on_startup() -> None:
-    """‌⁠‍Module startup hook - register RBAC permissions."""
+    """Module startup hook - register RBAC permissions."""
     from app.modules.clash.permissions import register_clash_permissions
 
     register_clash_permissions()

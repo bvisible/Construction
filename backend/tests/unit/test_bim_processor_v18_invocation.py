@@ -1,4 +1,4 @@
-"""‌⁠‍Tests that ``_try_cad2data`` builds v18 flag-CLI invocations when the
+"""Tests that ``_try_cad2data`` builds v18 flag-CLI invocations when the
 capability probe identifies a v18 binary.
 
 Mirrors ``test_bim_converter_cli_tolerance`` (which exercises the v17 /
@@ -43,7 +43,7 @@ def _fake_converter(tmp_path: Path) -> Path:
 
 
 class _V18SubprocessRecorder:
-    """‌⁠‍Records subprocess calls + materialises output files at the path
+    """Records subprocess calls + materialises output files at the path
     that follows the ``-x`` / ``-d`` flag (v18 shape)."""
 
     def __init__(
@@ -111,7 +111,7 @@ def _install_minimal_dependencies(monkeypatch: pytest.MonkeyPatch, *, converter:
 
 
 def test_v18_capability_drives_flag_based_invocation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """‌⁠‍End-to-end: cache the v18 capability profile, run ``_try_cad2data``,
+    """End-to-end: cache the v18 capability profile, run ``_try_cad2data``,
     assert both the XLSX pass and the DAE pass use the v18 flag CLI
     (``-x out.xlsx --no-dae -m standard --force-path`` and
     ``-d out.dae --no-xlsx -m standard --force-path``)."""
@@ -158,7 +158,7 @@ def test_v18_capability_drives_flag_based_invocation(tmp_path: Path, monkeypatch
 
 
 def test_v18_complete_depth_emits_mode_complete(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """‌⁠‍``conversion_depth="complete"`` must surface as ``-m complete`` on
+    """``conversion_depth="complete"`` must surface as ``-m complete`` on
     the v18 flag CLI (the v18 ``-m`` enum is
     ``{basic,standard,complete,custom}``)."""
     rvt = _fake_rvt(tmp_path)
@@ -182,7 +182,7 @@ def test_v18_complete_depth_emits_mode_complete(tmp_path: Path, monkeypatch: pyt
 
 
 def test_v18_exit_15_retries_with_reduced_v18_invocation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """‌⁠‍If v18 itself rejects something (e.g. user has a partial v18 build
+    """If v18 itself rejects something (e.g. user has a partial v18 build
     that doesn't grok --no-dae yet), the retry path must stay on the v18
     shape — never fall back to the v17 positional bare form that v18
     also can't parse.

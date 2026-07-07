@@ -1,4 +1,4 @@
-"""‌⁠‍Marketplace registry - static catalog of installable OpenConstructionERP modules.
+"""Marketplace registry - static catalog of installable OpenConstructionERP modules.
 
 Provides a browsable catalog of add-ons: cost databases, vector indices,
 language packs, CAD converters, analytics, and integrations. Each entry
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class MarketplaceModule:
-    """‌⁠‍Metadata for a single marketplace entry."""
+    """Metadata for a single marketplace entry."""
 
     id: str  # e.g. "cwicr-de-berlin"
     name: str  # "CWICR Germany (Berlin)"
@@ -35,7 +35,7 @@ class MarketplaceModule:
     price: str = "Free"  # "Free" | "Pro" | "$9.99/mo"
 
     def to_dict(self, *, installed: bool, coming_soon: bool = False) -> dict:
-        """‌⁠‍Serialize to a JSON-friendly dict with runtime ``installed`` flag."""
+        """Serialize to a JSON-friendly dict with runtime ``installed`` flag."""
         return {
             "id": self.id,
             "name": self.name,

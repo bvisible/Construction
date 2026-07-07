@@ -1,4 +1,4 @@
-"""‌⁠‍Submittals API routes.
+"""Submittals API routes.
 
 Endpoints:
     GET    /                          - List submittals for a project
@@ -258,7 +258,7 @@ async def submit_submittal(
     _perm: None = Depends(RequirePermission("submittals.update")),
     service: SubmittalService = Depends(_get_service),
 ) -> SubmittalResponse:
-    """‌⁠‍Move a submittal from draft to submitted."""
+    """Move a submittal from draft to submitted."""
     existing = await service.get_submittal(submittal_id)
     await verify_project_access(existing.project_id, str(user_id), session)
     submittal = await service.submit_submittal(submittal_id)
@@ -283,7 +283,7 @@ async def review_submittal(
     _perm: None = Depends(RequirePermission("submittals.update")),
     service: SubmittalService = Depends(_get_service),
 ) -> SubmittalResponse:
-    """‌⁠‍Review a submittal (approve, reject, revise and resubmit, etc.).
+    """Review a submittal (approve, reject, revise and resubmit, etc.).
 
     Requires the ``manager`` role (or higher). The base
     ``submittals.update`` permission alone is not sufficient.

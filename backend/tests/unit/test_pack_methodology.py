@@ -38,6 +38,7 @@ PACK_METHODOLOGY: dict[str, tuple[str, str]] = {
     "bimhessen-de": ("openconstructionerp_bimhessen_de", "germany"),
     "aus": ("openconstructionerp_aus", "australia"),
     "retail-grocery-dach": ("openconstructionerp_retail_grocery_dach", "germany"),
+    "mexico-mx": ("openconstructionerp_mexico_mx", "mexico"),
 }
 
 

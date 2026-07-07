@@ -1,4 +1,4 @@
-"""‌⁠‍Forecast service for Project Intelligence (TOP-30 #19).
+"""Forecast service for Project Intelligence (TOP-30 #19).
 
 Assembles the predictive cost + schedule + risk analytics for a project by
 reading from already-committed sibling modules **read-only**:
@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 
 
 class ForecastService:
-    """‌⁠‍Read-only predictive analytics assembler for a single project.
+    """Read-only predictive analytics assembler for a single project.
 
     Stateless apart from the injected session. All public methods are safe to
     call without mutating any sibling module's data.
@@ -53,7 +53,7 @@ class ForecastService:
         self.session = session
 
     async def get_project_forecast(self, project_id: uuid.UUID) -> ProjectForecast:
-        """‌⁠‍Compute the full predictive forecast for a project.
+        """Compute the full predictive forecast for a project.
 
         Reads the latest EVM snapshot, the schedule progress and the open
         high-severity risks, then composes the deterministic cost forecast,
@@ -106,7 +106,7 @@ class ForecastService:
     # ── Cost forecast ───────────────────────────────────────────────────────
 
     async def _cost_forecast(self, project_id: uuid.UUID, currency: str) -> CostForecast:
-        """‌⁠‍Compute the EVM cost forecast from the latest finance snapshot.
+        """Compute the EVM cost forecast from the latest finance snapshot.
 
         Degrades gracefully (``available=False`` + reason) when the project has
         no EVM snapshot yet, which is the common case for an early-stage
@@ -148,7 +148,7 @@ class ForecastService:
     # ── Schedule slip ───────────────────────────────────────────────────────
 
     async def _schedule_slip(self, project_id: uuid.UUID) -> ScheduleSlip:
-        """‌⁠‍Project the schedule finish-date variance from activity progress.
+        """Project the schedule finish-date variance from activity progress.
 
         Reads the project's first schedule, its activities (planned finish +
         actual progress percent) and the active baseline finish. Planned
@@ -209,7 +209,7 @@ class ForecastService:
 
     @staticmethod
     def _planned_pct(start: str | None, end: str | None, data_date: str | None) -> float:
-        """‌⁠‍Deterministic planned percent-complete at the data date.
+        """Deterministic planned percent-complete at the data date.
 
         Linear time-elapsed model: 0% before the activity starts, 100% after
         its planned finish, linearly interpolated in between. With no dates we
@@ -234,7 +234,7 @@ class ForecastService:
         schedule_id: str,
         schedule_end: str | None,
     ) -> str | None:
-        """‌⁠‍Resolve the baseline finish date.
+        """Resolve the baseline finish date.
 
         Prefers an active :class:`ScheduleBaseline` for the schedule; falls
         back to the schedule's own ``end_date`` when no baseline is set (a
@@ -261,7 +261,7 @@ class ForecastService:
     # ── Risk ────────────────────────────────────────────────────────────────
 
     async def _open_high_severity_risks(self, project_id: uuid.UUID) -> int:
-        """‌⁠‍Count open, high-severity, unmitigated risks for the project.
+        """Count open, high-severity, unmitigated risks for the project.
 
         "Open" means not closed/retired; "high severity" matches the same set
         the collector flags; "unmitigated" means no mitigation strategy text.

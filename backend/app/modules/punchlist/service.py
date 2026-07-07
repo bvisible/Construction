@@ -1,4 +1,4 @@
-"""‌⁠‍Punch List service - business logic for punch list management.
+"""Punch List service - business logic for punch list management.
 
 Stateless service layer. Handles:
 - Punch item CRUD
@@ -62,7 +62,7 @@ _PHOTOS_BASE = Path("uploads")
 
 
 async def _safe_publish(name: str, data: dict, source_module: str = "oe_punchlist") -> None:
-    """‌⁠‍Best-effort event publish - never blocks the caller on failure."""
+    """Best-effort event publish - never blocks the caller on failure."""
     try:
         event_bus.publish_detached(name, data, source_module=source_module)
     except Exception:
@@ -90,7 +90,7 @@ VALID_TRANSITIONS: dict[str, list[str]] = {
 
 
 class PunchListService:
-    """‌⁠‍Business logic for punch list operations."""
+    """Business logic for punch list operations."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session

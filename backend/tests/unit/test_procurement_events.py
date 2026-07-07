@@ -1,4 +1,4 @@
-"""‌⁠‍Reconciliation tests for procurement auto-PO event handlers (Lane C).
+"""Reconciliation tests for procurement auto-PO event handlers (Lane C).
 
 A project may run BOTH ``oe_tendering`` and ``oe_bid_management``. Each
 publishes its own award event and procurement auto-creates a draft

@@ -1,5 +1,5 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
-"""‌⁠‍BI Dashboards cross-module subscribers (Wave M4 deep-pass).
+"""BI Dashboards cross-module subscribers (Wave M4 deep-pass).
 
 BI Dashboards is a *read-only* module - it consumes events from every
 other module and feeds them into a lightweight projection layer. The
@@ -135,7 +135,7 @@ _PROJECTION_INVALIDATING_EVENTS: tuple[str, ...] = (
 
 
 async def _on_invalidation_event(event: Event) -> None:
-    """‌⁠‍Generic handler: forward the event into ``bi_dashboards.kpi_recompute``.
+    """Generic handler: forward the event into ``bi_dashboards.kpi_recompute``.
 
     The real persistence work is deferred to the next dashboard render;
     this handler is a thin re-broadcaster that keeps the BI projection
@@ -168,7 +168,7 @@ async def _on_invalidation_event(event: Event) -> None:
 
 
 async def _on_kpi_recompute(event: Event) -> None:
-    """‌⁠‍``bi_dashboards.kpi_recompute`` → log + (future) snapshot bump.
+    """``bi_dashboards.kpi_recompute`` → log + (future) snapshot bump.
 
     Today this is observability-only; the recompute is lazy on render.
     Once a persistent ``KPIValue`` materialised-view exists, this handler

@@ -61,16 +61,34 @@ def upgrade() -> None:
     # Back-fill: prefer the metadata-stored hint, fall back to a small
     # heuristic on description so legacy assemblies stop showing every
     # row as "material" once the UI starts filtering by type.
-    bind.execute(
-        sa.text(
-            """
-            UPDATE oe_assemblies_component
-               SET resource_type = json_extract(metadata, '$.resource_type')
-             WHERE resource_type IS NULL
-               AND json_extract(metadata, '$.resource_type') IS NOT NULL
-            """
+    # JSON extraction differs by backend: SQLite (dev) uses json_extract
+    # with a JSON path, PostgreSQL (prod) uses the ->> text operator.
+    dialect = bind.dialect.name
+    if dialect == "sqlite":
+        bind.execute(
+            sa.text(
+                """
+                UPDATE oe_assemblies_component
+                   SET resource_type = json_extract(metadata, '$.resource_type')
+                 WHERE resource_type IS NULL
+                   AND json_extract(metadata, '$.resource_type') IS NOT NULL
+                """
+            )
         )
-    )
+    elif dialect in ("postgresql", "postgres"):
+        bind.execute(
+            sa.text(
+                """
+                UPDATE oe_assemblies_component
+                   SET resource_type = metadata ->> 'resource_type'
+                 WHERE resource_type IS NULL
+                   AND metadata ->> 'resource_type' IS NOT NULL
+                """
+            )
+        )
+    # Unknown dialect: skip the metadata-based back-fill and let the
+    # description heuristic below assign a type. This avoids emitting a
+    # JSON accessor we cannot guarantee the backend supports.
 
     # Heuristic for the rest — avoid making it too clever; the user can
     # re-type any row once the new editor lands.

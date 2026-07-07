@@ -1,4 +1,4 @@
-"""‌⁠‍Transmittals data access layer.
+"""Transmittals data access layer.
 
 All database queries for transmittals live here.
 No business logic - pure data access.
@@ -10,6 +10,11 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.modules.transmittals.logic import (
+    DEFAULT_NUMBER_PAD,
+    DEFAULT_NUMBER_PREFIX,
+    next_transmittal_number,
+)
 from app.modules.transmittals.models import (
     Transmittal,
     TransmittalItem,
@@ -18,7 +23,7 @@ from app.modules.transmittals.models import (
 
 
 class TransmittalRepository:
-    """‌⁠‍Data access for Transmittal, TransmittalRecipient, TransmittalItem models."""
+    """Data access for Transmittal, TransmittalRecipient, TransmittalItem models."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -26,7 +31,7 @@ class TransmittalRepository:
     # ── Transmittal CRUD ─────────────────────────────────────────────────
 
     async def get(self, transmittal_id: uuid.UUID) -> Transmittal | None:
-        """‌⁠‍Get transmittal by ID (with recipients and items eager-loaded)."""
+        """Get transmittal by ID (with recipients and items eager-loaded)."""
         stmt = (
             select(Transmittal)
             .where(Transmittal.id == transmittal_id)
@@ -77,21 +82,24 @@ class TransmittalRepository:
         await self.session.flush()
         self.session.expire_all()
 
-    async def next_number(self, project_id: uuid.UUID) -> str:
+    async def next_number(
+        self,
+        project_id: uuid.UUID,
+        *,
+        prefix: str = DEFAULT_NUMBER_PREFIX,
+        pad: int = DEFAULT_NUMBER_PAD,
+    ) -> str:
         """Generate the next transmittal number for a project (TR-001, TR-002, ...).
 
-        Uses MAX-based extraction to avoid collisions after deletions.
+        Reads the highest existing number (MAX-based so gaps left by deleted
+        drafts do not cause collisions) and hands it to the pure
+        ``next_transmittal_number`` helper, which increments the trailing
+        counter. ``prefix`` and ``pad`` let a project follow its own
+        document-control convention.
         """
         stmt = select(func.max(Transmittal.transmittal_number)).where(Transmittal.project_id == project_id)
         max_number = (await self.session.execute(stmt)).scalar_one()
-        if max_number is None:
-            return "TR-001"
-        # Extract numeric part from e.g. "TR-007"
-        try:
-            numeric = int(max_number.split("-", 1)[1])
-        except (IndexError, ValueError):
-            numeric = 0
-        return f"TR-{numeric + 1:03d}"
+        return next_transmittal_number(max_number, prefix=prefix, pad=pad)
 
     # ── Recipient operations ─────────────────────────────────────────────
 

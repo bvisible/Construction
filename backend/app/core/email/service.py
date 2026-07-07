@@ -1,4 +1,4 @@
-"""‌⁠‍Email service facade - the public seam the rest of the app talks to.
+"""Email service facade - the public seam the rest of the app talks to.
 
 Responsibilities:
 
@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 
 
 def _resolve_backend(settings: Settings) -> EmailBackend:
-    """‌⁠‍Instantiate the backend named in settings.
+    """Instantiate the backend named in settings.
 
     ``smtp`` falls back to ``console`` when ``smtp_host`` is empty so a
     developer who ticked ``EMAIL_BACKEND=smtp`` in .env but forgot to
@@ -70,7 +70,7 @@ def _resolve_backend(settings: Settings) -> EmailBackend:
 
 
 class EmailService:
-    """‌⁠‍High-level email operations used by feature modules."""
+    """High-level email operations used by feature modules."""
 
     def __init__(self, backend: EmailBackend) -> None:
         self._backend = backend

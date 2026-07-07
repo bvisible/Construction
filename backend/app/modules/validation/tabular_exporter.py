@@ -1,4 +1,4 @@
-"""‌⁠‍CSV / XLSX exporters for OpenConstructionERP validation reports.
+"""CSV / XLSX exporters for OpenConstructionERP validation reports.
 
 Sibling to :mod:`app.modules.validation.sarif_exporter`. Where SARIF targets
 code-scanning pipelines, these two formats target the people who live in

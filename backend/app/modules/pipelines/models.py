@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍Pipeline Builder ORM models.
+"""Pipeline Builder ORM models.
 
 Three tables, following the match-elements conventions (§3.4):
 
@@ -40,7 +40,7 @@ from app.database import GUID, Base
 
 
 class Pipeline(Base):
-    """‌⁠‍A saved, versioned node-graph automation.
+    """A saved, versioned node-graph automation.
 
     ``graph`` is the editor's source of truth: ``{"nodes": [...],
     "edges": [...]}``. ``policy`` holds run-as / scheduling / retry knobs
@@ -83,7 +83,7 @@ class Pipeline(Base):
 
 
 class PipelineRun(Base):
-    """‌⁠‍One execution of a pipeline - a thin pointer to an ``oe_job_run``.
+    """One execution of a pipeline - a thin pointer to an ``oe_job_run``.
 
     The heavy lifecycle (submit / progress / retry / cancel / idempotency)
     lives on the ``JobRun`` row identified by ``job_run_id``. This table

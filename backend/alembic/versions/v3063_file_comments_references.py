@@ -131,7 +131,7 @@ def upgrade() -> None:
                 "resolved",
                 sa.Boolean(),
                 nullable=False,
-                server_default=sa.text("0"),
+                server_default=sa.text("0") if bind.dialect.name == "sqlite" else sa.text("false"),
             ),
             sa.Column("resolved_at", sa.DateTime(timezone=True), nullable=True),
             sa.Column(

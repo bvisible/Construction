@@ -40,6 +40,7 @@ from app.modules.file_comments.service import (
     get_comment,
     list_threads,
     list_unread_mentions,
+    resolve_author_name,
     soft_delete_comment,
     update_comment,
 )
@@ -123,6 +124,7 @@ async def create_file_comment(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
+    author_name = await resolve_author_name(session, comment.author_id)
     return FileCommentResponse(
         id=comment.id,
         project_id=comment.project_id,
@@ -132,6 +134,7 @@ async def create_file_comment(
         file_version_id=comment.file_version_id,
         parent_id=comment.parent_id,
         author_id=comment.author_id,
+        author_name=author_name,
         body=comment.body,
         page_number=comment.page_number,
         anchor_x=comment.anchor_x,
@@ -213,6 +216,7 @@ async def patch_file_comment(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Comment not found")
     comment, mentions = result
 
+    author_name = await resolve_author_name(session, comment.author_id)
     return FileCommentResponse(
         id=comment.id,
         project_id=comment.project_id,
@@ -222,6 +226,7 @@ async def patch_file_comment(
         file_version_id=comment.file_version_id,
         parent_id=comment.parent_id,
         author_id=comment.author_id,
+        author_name=author_name,
         body=comment.body,
         page_number=comment.page_number,
         anchor_x=comment.anchor_x,

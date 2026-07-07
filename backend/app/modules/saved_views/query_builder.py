@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍The safe query builder and SAFETY PRIMITIVE 3 (the result budget).
+"""The safe query builder and SAFETY PRIMITIVE 3 (the result budget).
 
 ``SafeQueryBuilder`` compiles an already-scoped base statement plus a bound,
 whitelisted spec into a bounded parameterized ``Select``. It NEVER opens a

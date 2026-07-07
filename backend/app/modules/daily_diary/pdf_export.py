@@ -48,6 +48,7 @@ from reportlab.platypus import (
     TableStyle,
 )
 
+from app.core.pdf_branding import branded_cover_brand, branded_doc_metadata, branded_header_logo
 from app.core.pdf_fonts import BODY_FONT, BOLD_FONT, register_pdf_fonts
 
 # Register the bundled Unicode (DejaVu) faces so Cyrillic / Greek / accented
@@ -234,11 +235,18 @@ def _make_footer(author_line: str, generated_date: str) -> Any:
         canvas.line(MARGIN_LEFT, 13 * mm, PAGE_WIDTH - MARGIN_RIGHT, 13 * mm)
         canvas.setFont(BODY_FONT, 7)
         canvas.setFillColor(colors.HexColor("#999999"))
-        left_text = author_line or "OpenConstructionERP"
+        # Footer carries the workspace brand (issue #284) plus the supervisor
+        # line; the brand falls back to the default name when none is set.
+        brand = branded_cover_brand()
+        left_text = author_line or brand
         canvas.drawString(MARGIN_LEFT, 9 * mm, left_text[:120])
-        canvas.drawString(MARGIN_LEFT, 6 * mm, f"Generated: {generated_date}")
+        canvas.drawString(MARGIN_LEFT, 6 * mm, f"{brand}  |  Generated: {generated_date}")
         canvas.drawRightString(PAGE_WIDTH - MARGIN_RIGHT, 9 * mm, f"Page {doc.page}")
         canvas.restoreState()
+        # The uploaded white-label logo (if any) appears top-right in the header
+        # margin on every page; the dark title band stays inside the content
+        # frame, so they do not overlap. Issue #284 follow-up.
+        branded_header_logo(canvas, doc)
 
     return _footer
 
@@ -539,11 +547,11 @@ def generate_diary_pdf(
         topMargin=MARGIN_TOP,
         bottomMargin=MARGIN_BOTTOM,
         title=f"Daily Site Diary - {diary_date}",
-        author="OpenConstructionERP",
+        author=branded_doc_metadata()["author"],
         subject="Daily Site Diary",
-        creator="OpenConstructionERP - DataDrivenConstruction",
-        producer="OpenConstructionERP / reportlab - datadrivenconstruction.io",
-        keywords="OpenConstructionERP,DailyDiary,DataDrivenConstruction",
+        creator=branded_doc_metadata()["creator"],
+        producer=branded_doc_metadata()["producer"],
+        keywords=branded_doc_metadata()["keywords"],
     )
     doc.addPageTemplates([template])
 

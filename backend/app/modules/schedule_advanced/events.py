@@ -1,4 +1,4 @@
-"""‌⁠‍Schedule Advanced event handlers - takt / line-of-balance.
+"""Schedule Advanced event handlers - takt / line-of-balance.
 
 Subscribes to the ``schedule_advanced.takt.*`` event family published by
 :class:`~app.modules.schedule_advanced.service.TaktScheduleService` and

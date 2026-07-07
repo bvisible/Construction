@@ -1,4 +1,4 @@
-"""‌⁠‍Safety API routes.
+"""Safety API routes.
 
 Endpoints:
     GET    /stats                       - Project safety KPI dashboard
@@ -111,7 +111,7 @@ async def safety_stats(
     _perm: None = Depends(RequirePermission("safety.read")),
     service: SafetyService = Depends(_get_service),
 ) -> SafetyStatsResponse:
-    """‌⁠‍Return dashboard KPIs: incident counts, days without incident,
+    """Return dashboard KPIs: incident counts, days without incident,
     observations by risk tier, open corrective actions, etc.
     """
     await verify_project_access(project_id, user_id, session)
@@ -127,7 +127,7 @@ async def safety_trends(
     _perm: None = Depends(RequirePermission("safety.read")),
     service: SafetyService = Depends(_get_service),
 ) -> SafetyTrendsResponse:
-    """‌⁠‍Return time-series incident and observation data grouped by period."""
+    """Return time-series incident and observation data grouped by period."""
     await verify_project_access(project_id, user_id, session)
     return await service.get_trends(project_id, period=period)
 
@@ -141,7 +141,7 @@ async def safety_trends_extended(
     _perm: None = Depends(RequirePermission("safety.read")),
     service: SafetyService = Depends(_get_service),
 ) -> SafetyTrendsExtendedResponse:
-    """‌⁠‍Return a rolling LTIFR/TRIR time series and the trend direction."""
+    """Return a rolling LTIFR/TRIR time series and the trend direction."""
     await verify_project_access(project_id, user_id, session)
     return await service.get_trends_extended(project_id, period=period)
 
@@ -156,7 +156,7 @@ async def safety_threshold_alert(
     _perm: None = Depends(RequirePermission("safety.read")),
     service: SafetyService = Depends(_get_service),
 ) -> SafetyThresholdAlertResponse:
-    """‌⁠‍Check current LTIFR/TRIR against safe-baselines; return a status band."""
+    """Check current LTIFR/TRIR against safe-baselines; return a status band."""
     await verify_project_access(project_id, user_id, session)
     return await service.get_threshold_alert(
         project_id,

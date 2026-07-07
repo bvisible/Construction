@@ -445,6 +445,15 @@ export function CreateProjectModal({
   // Free-text query for the Nominatim autocomplete row that sits above
   // the 4 structured inputs. Selecting a result fills the parts below.
   const [addressSearchQuery, setAddressSearchQuery] = useState('');
+  // Coordinates resolved by the autocomplete pick. Persisting these into
+  // the saved project address (as ``lat``/``lng``) lets the Geo Hub derive
+  // the project anchor with zero extra geocoding - the reporter's project
+  // never appeared on the map because the form dropped these and saved only
+  // the address text (#284). null when the user typed an address by hand
+  // without picking a suggestion (then the existing once-per-project
+  // geocode in ProjectGeoPage still anchors it - backward compatible).
+  const [addressLat, setAddressLat] = useState<number | null>(null);
+  const [addressLon, setAddressLon] = useState<number | null>(null);
 
   function applyAutocompleteSelection(sel: AddressAutocompleteSelection) {
     const parts = sel.address_parts ?? {};
@@ -459,6 +468,23 @@ export function CreateProjectModal({
     if (city) setAddressCity(city);
     if (parts.country) setAddressCountry(parts.country);
     if (parts.postcode) setAddressPostal(parts.postcode);
+    // Stash the geocoded point so the saved address carries coordinates and
+    // the map anchors without a second round-trip. Guard against NaN/out of
+    // range so we never persist a pin on null island.
+    if (
+      Number.isFinite(sel.lat) &&
+      Number.isFinite(sel.lon) &&
+      sel.lat >= -90 &&
+      sel.lat <= 90 &&
+      sel.lon >= -180 &&
+      sel.lon <= 180
+    ) {
+      setAddressLat(sel.lat);
+      setAddressLon(sel.lon);
+    } else {
+      setAddressLat(null);
+      setAddressLon(null);
+    }
     // Keep the search field in sync with the picked display name so the
     // dropdown closes cleanly and the user sees what they accepted.
     setAddressSearchQuery(sel.display_name);
@@ -738,8 +764,23 @@ export function CreateProjectModal({
         city: addressCity.trim() || null,
         country: addressCountry.trim() || null,
         postal_code: addressPostal.trim() || null,
+        // Geocoded coordinates from the address autocomplete pick. The Geo
+        // Hub derives the project map anchor straight from these (keys
+        // ``lat``/``lng``) so a located project shows on the map with no
+        // extra geocoding (#284). Omitted (null) for hand-typed addresses.
+        lat: addressLat,
+        lng: addressLon,
       };
-      const hasAnyAddress = Object.values(addressParts).some((v) => !!v);
+      // Coordinates alone shouldn't count as "has an address" for the
+      // null-vs-object decision; only the text parts do. (Coords are never
+      // present without a picked suggestion, which also fills the text, but
+      // keep the guard explicit so the contract is obvious.)
+      const hasAnyAddress = [
+        addressParts.street,
+        addressParts.city,
+        addressParts.country,
+        addressParts.postal_code,
+      ].some((v) => !!v);
 
       // Custom picks send the normalized effective values (trimmed, and
       // uppercased for the currency code) instead of the raw input text.

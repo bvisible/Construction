@@ -1,5 +1,5 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
-"""‌⁠‍Clash AI Triage module permission definitions.
+"""Clash AI Triage module permission definitions.
 
 Three verbs:
 
@@ -19,7 +19,7 @@ from app.core.permissions import Role, permission_registry
 
 
 def register_clash_ai_triage_permissions() -> None:
-    """‌⁠‍Register RBAC permissions for the clash AI triage module."""
+    """Register RBAC permissions for the clash AI triage module."""
     permission_registry.register_module_permissions(
         "clash_ai_triage",
         {

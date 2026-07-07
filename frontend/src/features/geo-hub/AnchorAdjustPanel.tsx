@@ -14,10 +14,12 @@
  * and so the panel can be unit-tested independently.
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
 import {
+  ChevronDown,
+  ChevronUp,
   Crosshair,
   Loader2,
   MapPinned,
@@ -64,6 +66,24 @@ const PRECISION_TONE: Record<Precision, string> = {
   country: 'bg-red-500/15 text-red-200 ring-red-400/30',
 };
 
+// Persisted across reloads so the user's preferred chrome density survives
+// navigation. Versioned (`v1`) so a future incompatible rename never
+// resurrects with stale boolean semantics. Mirrors the OverlayPanel /
+// TilesetSidebar collapse-persistence pattern.
+const ANCHOR_PANEL_COLLAPSED_LS_KEY =
+  'oe.geo_hub.anchor_panel_collapsed.v1';
+
+function readAnchorPanelCollapsed(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    return (
+      window.localStorage.getItem(ANCHOR_PANEL_COLLAPSED_LS_KEY) === '1'
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function AnchorAdjustPanel({
   projectId,
   anchor,
@@ -75,6 +95,23 @@ export function AnchorAdjustPanel({
   const queryClient = useQueryClient();
   const addToast = useToastStore((s) => s.addToast);
   const [isRegeocoding, setIsRegeocoding] = useState(false);
+  // Collapsible so the panel never permanently masks the map. It shares
+  // the canvas corner with the HUD scale/coordinate pods, so the user can
+  // tuck it away to a small pill and still read the live cursor readout.
+  const [collapsed, setCollapsed] = useState<boolean>(
+    readAnchorPanelCollapsed,
+  );
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem(
+        ANCHOR_PANEL_COLLAPSED_LS_KEY,
+        collapsed ? '1' : '0',
+      );
+    } catch {
+      /* localStorage disabled / quota full - UX still works in-memory */
+    }
+  }, [collapsed]);
 
   const metadata = anchor.metadata as Record<string, unknown> | undefined;
   const rawPrecision =
@@ -148,10 +185,39 @@ export function AnchorAdjustPanel({
     }
   }
 
+  // Collapsed: a small pill in the same (relocated) corner that the user
+  // taps to bring the panel back. Mirrors OverlayPanel's collapsed pill.
+  if (collapsed) {
+    return (
+      <button
+        type="button"
+        onClick={() => setCollapsed(false)}
+        className={[
+          'pointer-events-auto absolute bottom-20 left-3 z-20 inline-flex items-center gap-2',
+          'rounded-full border border-white/15 bg-slate-900/85 px-3 py-1.5',
+          'text-xs font-medium text-white shadow-lg shadow-black/20 backdrop-blur-md',
+          'ring-1 ring-white/5 transition hover:bg-slate-800/90',
+          'focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300',
+        ].join(' ')}
+        aria-expanded={false}
+        aria-label={t('geo_hub.adjust.expand', {
+          defaultValue: 'Show project anchor',
+        })}
+        data-testid="geo-anchor-adjust-pill"
+      >
+        <MapPinned size={13} strokeWidth={2} className="text-emerald-300" />
+        <ChevronUp size={13} strokeWidth={2.25} className="text-white/70" />
+      </button>
+    );
+  }
+
   return (
     <aside
       className={[
-        'pointer-events-auto absolute right-3 top-3 z-20',
+        // Relocated off the top-right corner (which OverlayPanel owns) to the
+        // free left side, lifted above the bottom-left HUD pods so the two
+        // chrome panels stop overlapping (#284 follow-up items 7+8).
+        'pointer-events-auto absolute bottom-20 left-3 z-20',
         'flex w-64 max-w-[calc(100vw-1.5rem)] flex-col gap-2',
         'rounded-lg border border-white/15 bg-slate-900/85 p-3',
         'text-xs text-slate-100 shadow-lg shadow-black/30 backdrop-blur-md',
@@ -179,6 +245,22 @@ export function AnchorAdjustPanel({
             {Number(anchor.lat).toFixed(5)}, {Number(anchor.lon).toFixed(5)}
           </div>
         </div>
+        <button
+          type="button"
+          onClick={() => setCollapsed(true)}
+          className={[
+            'inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md',
+            'text-slate-400 hover:bg-white/10 hover:text-slate-100',
+            'focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300',
+          ].join(' ')}
+          aria-expanded
+          aria-label={t('geo_hub.adjust.collapse', {
+            defaultValue: 'Hide project anchor',
+          })}
+          data-testid="geo-anchor-adjust-collapse"
+        >
+          <ChevronDown size={14} strokeWidth={2} />
+        </button>
       </div>
 
       {precision && (

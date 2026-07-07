@@ -1,4 +1,4 @@
-"""‌⁠‍PDF / CSV / XLSX report builder for the BI Dashboards module.
+"""PDF / CSV / XLSX report builder for the BI Dashboards module.
 
 A single :class:`ReportBuilder` covers all output formats so the service
 layer treats them uniformly. Files are written to a per-tenant tmpdir
@@ -28,14 +28,14 @@ logger = logging.getLogger(__name__)
 
 
 def _safe_filename(stem: str, ext: str) -> str:
-    """‌⁠‍Make a filesystem-safe report filename."""
+    """Make a filesystem-safe report filename."""
     keep = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_."
     safe = "".join(c if c in keep else "_" for c in stem)
     return f"{safe[:64]}_{uuid.uuid4().hex[:8]}.{ext}"
 
 
 def _reports_dir() -> str:
-    """‌⁠‍Return the directory where reports are persisted.
+    """Return the directory where reports are persisted.
 
     Honours ``BI_REPORTS_DIR`` env var; falls back to a subdir of the
     OS temp dir.

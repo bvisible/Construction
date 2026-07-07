@@ -1,4 +1,4 @@
-"""‌⁠‍Correspondence API routes.
+"""Correspondence API routes.
 
 Endpoints:
     GET    /                                            - List correspondence for a project
@@ -170,7 +170,7 @@ async def upload_attachment(
     _perm: None = Depends(RequirePermission("correspondence.update")),
     service: CorrespondenceService = Depends(_get_service),
 ) -> CorrespondenceResponse:
-    """‌⁠‍Upload an attachment for a correspondence record.
+    """Upload an attachment for a correspondence record.
 
     The ``Content-Type`` header is fully attacker-controlled, so we
     inspect the raw magic bytes via :func:`require_signature` and reject
@@ -277,7 +277,7 @@ async def download_attachment(
     _perm: None = Depends(RequirePermission("correspondence.read")),
     service: CorrespondenceService = Depends(_get_service),
 ) -> FileResponse:
-    """‌⁠‍Serve a stored correspondence attachment by its list index.
+    """Serve a stored correspondence attachment by its list index.
 
     The attachment list holds server-derived relative paths only; the index
     addresses an entry rather than letting the client name a path. We still

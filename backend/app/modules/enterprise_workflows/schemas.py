@@ -1,4 +1,4 @@
-"""‌⁠‍Enterprise Workflows Pydantic schemas - request/response models."""
+"""Enterprise Workflows Pydantic schemas - request/response models."""
 
 from datetime import datetime
 from typing import Any
@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class WorkflowCreate(BaseModel):
-    """‌⁠‍Create a new approval workflow."""
+    """Create a new approval workflow."""
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
@@ -24,7 +24,7 @@ class WorkflowCreate(BaseModel):
 
 
 class WorkflowUpdate(BaseModel):
-    """‌⁠‍Partial update for a workflow."""
+    """Partial update for a workflow."""
 
     model_config = ConfigDict(str_strip_whitespace=True)
 

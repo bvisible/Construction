@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍Magnet-candidate suppressor - post-retrieval, pre-rerank.
+"""Magnet-candidate suppressor - post-retrieval, pre-rerank.
 
 Background
 ==========
@@ -99,7 +99,7 @@ logger = logging.getLogger(__name__)
 
 
 def is_enabled() -> bool:
-    """‌⁠‍Return ``True`` when ``OE_MATCH_MAGNET_FILTER`` is truthy.
+    """Return ``True`` when ``OE_MATCH_MAGNET_FILTER`` is truthy.
 
     Cheap probe - read once per call. Off by default so production
     traffic keeps the legacy behaviour until the bench validates the
@@ -131,7 +131,7 @@ def _env_float(name: str, default: float) -> float:
 
 
 def _thresholds() -> tuple[float, float, float]:
-    """‌⁠‍(hard_drop_floor, soft_penalty_floor, soft_penalty)."""
+    """(hard_drop_floor, soft_penalty_floor, soft_penalty)."""
     return (
         _env_float("OE_MATCH_MAGNET_HARD_FLOOR", _HARD_DROP_FLOOR),
         _env_float("OE_MATCH_MAGNET_SOFT_FLOOR", _SOFT_PENALTY_FLOOR),

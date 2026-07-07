@@ -1,5 +1,5 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
-"""‌⁠‍BCF 3.0 zip writer - high-level builder API.
+"""BCF 3.0 zip writer - high-level builder API.
 
 This module provides :class:`BCFWriter`, an instance-style builder that
 assembles a valid BCF 3.0 ``.bcfzip`` from clash topics + viewpoints
@@ -80,7 +80,7 @@ _HEX_SIG_RE = re.compile(r"^[0-9a-fA-F]{8,64}$")
 
 @dataclass
 class BCFViewpoint:
-    """‌⁠‍Viewpoint DTO ready for BCF 3.0 serialisation.
+    """Viewpoint DTO ready for BCF 3.0 serialisation.
 
     A viewpoint must declare exactly one of perspective / orthogonal
     camera, plus its component visibility model. ``visible`` /
@@ -106,7 +106,7 @@ class BCFViewpoint:
 
 @dataclass
 class BCFComment:
-    """‌⁠‍Comment DTO (the four BCF 3.0 required fields)."""
+    """Comment DTO (the four BCF 3.0 required fields)."""
 
     guid: str
     date: datetime
@@ -119,7 +119,7 @@ class BCFComment:
 
 @dataclass
 class BCFTopic:
-    """‌⁠‍Topic DTO - only the BCF 3.0 mandatory fields are required.
+    """Topic DTO - only the BCF 3.0 mandatory fields are required.
 
     See https://github.com/buildingSMART/BCF-XML/blob/release_3_0/Schemas/markup.xsd
     for the authoritative schema. Anything not modelled here (custom
@@ -383,7 +383,7 @@ def build_visinfo_xml(vp: BCFViewpoint) -> bytes:
 
 
 class BCFWriter:
-    """‌⁠‍Fluent builder for a BCF 3.0 ``.bcfzip`` archive.
+    """Fluent builder for a BCF 3.0 ``.bcfzip`` archive.
 
     Usage
     -----

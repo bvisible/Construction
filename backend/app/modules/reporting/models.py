@@ -1,4 +1,4 @@
-"""‌⁠‍Reporting & Dashboards ORM models.
+"""Reporting & Dashboards ORM models.
 
 Tables:
     oe_reporting_kpi_snapshot - periodic KPI snapshots per project
@@ -15,7 +15,7 @@ from app.database import GUID, Base
 
 
 class KPISnapshot(Base):
-    """‌⁠‍Periodic KPI snapshot for a project.
+    """Periodic KPI snapshot for a project.
 
     Stores cost, schedule, quality, and risk indicators at a point in time.
     String types are used for numeric fields to avoid float precision issues
@@ -72,7 +72,7 @@ class KPISnapshot(Base):
 
 
 class ReportTemplate(Base):
-    """‌⁠‍Reusable report template (system or custom).
+    """Reusable report template (system or custom).
 
     System templates (is_system=True) are seeded on first startup and
     cannot be deleted by users.

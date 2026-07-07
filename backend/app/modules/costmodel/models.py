@@ -1,4 +1,4 @@
-"""‌⁠‍5D Cost Model ORM models.
+"""5D Cost Model ORM models.
 
 Tables:
     oe_costmodel_snapshot - monthly EVM snapshots (planned, earned, actual)
@@ -29,7 +29,7 @@ from app.database import GUID, Base
 
 
 class CostSnapshot(Base):
-    """‌⁠‍Monthly cost snapshot for earned value analysis (EVM).
+    """Monthly cost snapshot for earned value analysis (EVM).
 
     Stores BCWS (planned), BCWP (earned), and ACWP (actual) per period,
     along with derived performance indices (SPI, CPI) and forecast EAC.
@@ -79,7 +79,7 @@ class CostSnapshot(Base):
 
 
 class BudgetLine(Base):
-    """‌⁠‍Budget tracking per BOQ position or cost category.
+    """Budget tracking per BOQ position or cost category.
 
     Links planned budgets to committed contracts, actual invoices,
     and forecast amounts. Optionally tied to a BOQ position or 4D activity.
@@ -212,7 +212,7 @@ class CashFlow(Base):
 
 
 class ControlAccount(Base):
-    """‌⁠‍A control account in the project Cost Breakdown Structure (CBS).
+    """A control account in the project Cost Breakdown Structure (CBS).
 
     Control accounts form a tree (``parent_id`` self-reference) that mirrors
     the chosen classification standard (DIN 276 cost groups, NRM elements,
@@ -257,7 +257,7 @@ class ControlAccount(Base):
 
 
 class CostLine(Base):
-    """‌⁠‍A single cost line in the Cost Spine - the canonical scope item.
+    """A single cost line in the Cost Spine - the canonical scope item.
 
     Each cost line is the single source of truth a BOQ position, budget line,
     purchase-order item, contract line, and RFQ all point at, so estimate,

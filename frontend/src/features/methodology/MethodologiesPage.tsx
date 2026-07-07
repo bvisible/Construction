@@ -1,7 +1,7 @@
 // DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 // Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
 //
-// Methodologies hub: a templates gallery (the 10 built-ins, grouped) plus the
+// Methodologies hub: a templates gallery (the built-in catalogue, grouped) plus the
 // list of methodologies installed into the active project. Built-in templates
 // install an editable project clone; installed clones open in the editor.
 // Read-only built-ins (project_id === null) cannot be edited - the UI offers

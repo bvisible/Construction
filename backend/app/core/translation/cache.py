@@ -1,4 +1,4 @@
-"""‌⁠‍Translation-memory cache backed by the main PostgreSQL database.
+"""Translation-memory cache backed by the main PostgreSQL database.
 
 Past translations are persisted in the ``oe_translation_cache`` table of
 the main application database (embedded PostgreSQL 16 by default, or an
@@ -110,7 +110,7 @@ _lru_lock = threading.Lock()
 
 
 def _lru_get(key: _LRUKey) -> tuple[bool, dict[str, Any] | None]:
-    """‌⁠‍Return ``(hit, value)`` - caller distinguishes "miss" from "known None"."""
+    """Return ``(hit, value)`` - caller distinguishes "miss" from "known None"."""
     with _lru_lock:
         if key not in _lru:
             return False, None
@@ -135,7 +135,7 @@ def _lru_put(key: _LRUKey, value: dict[str, Any] | None) -> None:
 
 
 def _lru_invalidate(key: _LRUKey | None = None) -> None:
-    """‌⁠‍Drop one or all entries from the in-process LRU.
+    """Drop one or all entries from the in-process LRU.
 
     Called on every ``upsert()`` so a write is visible on the next
     ``get()`` from any other coroutine - without this, a freshly cached

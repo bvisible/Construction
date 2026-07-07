@@ -1,4 +1,4 @@
-"""‌⁠‍Contacts Directory module manifest."""
+"""Contacts Directory module manifest."""
 
 from app.core.module_loader import ModuleManifest
 

@@ -33,6 +33,17 @@ interface Measurement {
   color?: string;
   width?: number;
   height?: number;
+  /** Per-measurement fill opacity override (issue #311, 0..1). Round-trips via
+   *  metadata; falls back to the per-type default alpha when unset. */
+  fillAlpha?: number;
+  /** Per-measurement stroke width override in CSS px (issue #312). Round-trips
+   *  via metadata; falls back to the 2px hairline when unset. */
+  strokeWidth?: number;
+  /** Custom colour of this measurement's GROUP (issue #313), distinct from the
+   *  per-measurement `color` override. Round-trips via the metadata blob the
+   *  same way `fillAlpha` / `strokeWidth` do, so a re-coloured group survives a
+   *  server sync and is visible to other users (not localStorage-only). */
+  groupColor?: string;
   /** Opening deduction (area void). Stored as positive gross area; the
    *  rollup subtracts it. Round-trips so a void survives a server sync. */
   isDeduction?: boolean;
@@ -275,7 +286,12 @@ function toApiFormat(
     page: m.page,
     type: m.type,
     group_name: m.group || 'General',
-    group_color: m.color || '#d68a59',
+    // Persist a colour ONLY when the user actually chose one (issue #299).
+    // Injecting a default here used to make every reloaded measurement carry a
+    // colour, which - now that the renderers honour `m.color` over the group
+    // default - would wrongly override the group colour on a measurement the
+    // user never recoloured.
+    group_color: m.color || undefined,
     annotation: m.annotation || m.label || null,
     points: m.points,
     measurement_value: m.value || null,
@@ -296,6 +312,13 @@ function toApiFormat(
       text: m.text,
       width: m.width,
       height: m.height,
+      // Per-measurement appearance overrides (issues #311/#312); round-trip so
+      // a re-styled measurement survives a server sync.
+      fill_alpha: m.fillAlpha,
+      stroke_width: m.strokeWidth,
+      // Group colour (issue #313): mirrored onto each measurement so the group
+      // colour scheme round-trips server-side like the per-measurement styles.
+      group_custom_color: m.groupColor,
       area: areaValue ?? undefined,
       frontend_id: m.id,
       // Per-page calibration intent (issue #277): distinguishes a real
@@ -344,6 +367,13 @@ function syncSignature(m: Measurement): string {
     // group / colour / annotation / notes edit re-syncs.
     g: m.group || 'General',
     col: m.color || '#3B82F6',
+    // Appearance overrides (issues #311/#312): an opacity or stroke-width edit
+    // must re-sync so the server copy carries it.
+    fa: m.fillAlpha ?? null,
+    sw: m.strokeWidth ?? null,
+    // Group colour (issue #313): a group re-colour restyles every measurement
+    // in the group, so include it here to trigger the PATCH that persists it.
+    gc: m.groupColor ?? null,
     a: m.annotation || m.label || null,
     n: m.text ?? null,
   });
@@ -376,13 +406,21 @@ function toApiUpdate(
     is_deduction: m.type === 'area' ? Boolean(m.isDeduction) : false,
     // Non-geometry properties (issue #282).
     group_name: m.group || 'General',
-    group_color: m.color || '#3B82F6',
+    // Only persist a user-chosen colour (issue #299); see toApiFormat.
+    group_color: m.color || undefined,
     annotation: m.annotation || m.label || null,
     linked_boq_position_id: m.linkedPositionId ?? null,
     metadata: {
       text: m.text,
       width: m.width,
       height: m.height,
+      // Per-measurement appearance overrides (issues #311/#312); re-sent on
+      // PATCH because the server replaces the metadata blob wholesale.
+      fill_alpha: m.fillAlpha,
+      stroke_width: m.strokeWidth,
+      // Group colour (issue #313): re-sent on PATCH so a group re-colour /
+      // rename persists server-side (the server replaces metadata wholesale).
+      group_custom_color: m.groupColor,
       area: areaValue ?? undefined,
       frontend_id: m.id,
       // Preserve the per-page calibration intent (issue #277): the server
@@ -420,6 +458,9 @@ function fromApiFormat(r: MeasurementResponse): Measurement {
     color: r.group_color || undefined,
     width: (meta.width as number) ?? undefined,
     height: (meta.height as number) ?? undefined,
+    fillAlpha: (meta.fill_alpha as number) ?? undefined,
+    strokeWidth: (meta.stroke_width as number) ?? undefined,
+    groupColor: (meta.group_custom_color as string) ?? undefined,
     isDeduction: r.is_deduction ?? undefined,
     linkedPositionId: r.linked_boq_position_id ?? undefined,
     linkedBoqId: (meta.linked_boq_id as string) ?? undefined,

@@ -1,4 +1,4 @@
-"""‌⁠‍Submittals service - business logic for submittal management."""
+"""Submittals service - business logic for submittal management."""
 
 import logging
 import uuid
@@ -29,7 +29,7 @@ _PATCH_ALLOWED_STATUSES: frozenset[str] = frozenset({"draft", "submitted", "unde
 
 
 async def _safe_publish(name: str, data: dict, source_module: str = "oe_submittals") -> None:
-    """‌⁠‍Publish an event, swallowing errors so business logic continues."""
+    """Publish an event, swallowing errors so business logic continues."""
     try:
         from app.core.events import event_bus
 
@@ -88,7 +88,7 @@ _SUBMITTAL_STATUS_TRANSITIONS: dict[str, set[str]] = {
 
 
 class SubmittalService:
-    """‌⁠‍Business logic for submittal operations."""
+    """Business logic for submittal operations."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session

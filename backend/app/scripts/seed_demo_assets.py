@@ -1,5 +1,5 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
-"""‌⁠‍Attach the full visible CAD/BIM file set (RVT + IFC + DWG + PDF) to demos.
+"""Attach the full visible CAD/BIM file set (RVT + IFC + DWG + PDF) to demos.
 
 The flagship installer (:mod:`app.scripts.seed_flagship`) is the only working
 ORM byte-attachment path; it restores a single reference project from committed

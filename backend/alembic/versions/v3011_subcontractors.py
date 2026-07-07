@@ -123,7 +123,7 @@ _INDEXES: tuple[tuple[str, str, tuple[str, ...], bool], ...] = (
         False,
     ),
     (
-        "ix_oe_subcontractors_payment_application_line_payment_application_id",
+        "ix_oe_subcontractors_pa_line_payment_application_id",
         _TABLE_PA_LINE,
         ("payment_application_id",),
         False,

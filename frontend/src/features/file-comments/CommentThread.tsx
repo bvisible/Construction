@@ -139,21 +139,35 @@ function relativeTime(iso: string, now: Date = new Date()): string {
 
 // ── Avatar ─────────────────────────────────────────────────────────────
 
-function initials(seedId: string): string {
-  // Stable 2-char initial from the UUID so the user gets the same
-  // pill on every reload until full-name lookups are wired.
-  const hex = seedId.replace(/[^a-z0-9]/gi, '').toUpperCase();
-  return hex.slice(0, 2) || '??';
+/** Display label for a comment author: the server-resolved name, with a
+ *  short-id fallback for legacy payloads that predate the enrichment. */
+function authorLabel(authorName: string | null, authorId: string): string {
+  const name = (authorName ?? '').trim();
+  return name || authorId.slice(0, 8);
 }
 
-function Avatar({ userId, size = 28 }: { userId: string; size?: number }) {
+function initials(label: string): string {
+  // Two-letter monogram from the resolved label: first letters of the
+  // first two words (e.g. "Alice Smith" -> "AS"), else the first two
+  // characters of a single token.
+  const words = label.trim().split(/\s+/).filter(Boolean);
+  if (words.length >= 2) {
+    const a = words[0]?.[0] ?? '';
+    const b = words[1]?.[0] ?? '';
+    return (a + b).toUpperCase() || '??';
+  }
+  return label.replace(/[^a-z0-9]/gi, '').slice(0, 2).toUpperCase() || '??';
+}
+
+function Avatar({ label, size = 28 }: { label: string; size?: number }) {
   return (
     <div
       style={{ width: size, height: size }}
       className="flex shrink-0 items-center justify-center rounded-full bg-oe-blue/15 text-[10px] font-semibold text-oe-blue"
+      title={label}
       aria-hidden="true"
     >
-      {initials(userId)}
+      {initials(label)}
     </div>
   );
 }
@@ -190,6 +204,7 @@ function CommentNode({
   const isAuthor = currentUserId !== null && node.author_id === currentUserId;
   const indent = Math.min(depth, 4) * 16;
   const showResolveToggle = canResolve && depth === 0 && !isTombstone;
+  const displayName = authorLabel(node.author_name, node.author_id);
 
   const body = useMemo(() => {
     if (isTombstone) {
@@ -211,10 +226,15 @@ function CommentNode({
       )}
       data-testid={`comment-node-${node.id}`}
     >
-      <Avatar userId={node.author_id} />
+      <Avatar label={displayName} />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2 text-xs text-content-tertiary">
-          <span className="font-mono">{node.author_id.slice(0, 8)}</span>
+          <span
+            className="max-w-[180px] truncate font-medium text-content-secondary"
+            title={displayName}
+          >
+            {displayName}
+          </span>
           <span>·</span>
           <span>{relativeTime(node.created_at)}</span>
           {node.resolved && (

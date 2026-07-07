@@ -149,6 +149,9 @@ const InboxPage = lazy(() =>
 const FieldReportsPage = lazy(() =>
   import('@/features/fieldreports/FieldReportsPage').then((m) => ({ default: m.FieldReportsPage }))
 );
+const FieldTimePage = lazy(() =>
+  import('@/features/field-time').then((m) => ({ default: m.FieldTimePage }))
+);
 const FinancePage = lazy(() =>
   import('@/features/finance/FinancePage').then((m) => ({ default: m.FinancePage }))
 );
@@ -314,6 +317,9 @@ const PortalPage = lazy(() =>
 );
 const PortalPaymentsPage = lazy(() =>
   import('@/features/portal').then((m) => ({ default: m.PortalPaymentsPage }))
+);
+const PortalHomePage = lazy(() =>
+  import('@/features/portal').then((m) => ({ default: m.PortalHomePage }))
 );
 const ResourcesPage = lazy(() =>
   import('@/features/resources').then((m) => ({ default: m.ResourcesPage }))
@@ -522,6 +528,9 @@ const AiEstimatorPage = lazy(() =>
 const CostsPage = lazy(() =>
   import('@/features/costs').then((m) => ({ default: m.CostsPage }))
 );
+const CostExplorerPage = lazy(() =>
+  import('@/features/cost-explorer').then((m) => ({ default: m.CostExplorerPage }))
+);
 const ValidationPage = lazy(() =>
   import('@/features/validation').then((m) => ({ default: m.ValidationPage }))
 );
@@ -536,6 +545,16 @@ const IntegrationsPage = lazy(() =>
 // requires the source-level licence/copyright notices, which we keep; a discreet
 // attribution line lives in Settings instead.
 const HowItWorksPage = lazy(() => import('@/features/help/HowItWorksPage'));
+// Cases (playbooks) - cross-module, end-to-end guided scenarios. Lazy so the
+// playbook data + runner stay out of the boot bundle.
+const CasesPage = lazy(() =>
+  import('@/features/cases').then((m) => ({ default: m.CasesPage }))
+);
+// Inside track - backers-only early-look panel (donation perk). Lazy so the
+// changelog it reuses does not weigh down the boot bundle.
+const InsidePage = lazy(() =>
+  import('@/features/inside').then((m) => ({ default: m.InsidePage }))
+);
 
 // CPMView is keyed by the schedule it analyses, so the route reads :id and
 // forwards it through. Kept as a tiny inline component to avoid bloating
@@ -878,6 +897,13 @@ export default function App() {
             after auth; a return visit reuses the stored session token. */}
         <Route path="/portal/payments" element={<PortalPaymentsPage />} />
 
+        {/* Public generic client / partner portal landing - magic-link
+            session, no app shell. The default landing for every non-payment
+            role; honours an inviter-chosen redirect_path, else shows a
+            role-aware view (projects + progress reports, plus change orders /
+            tickets per role). */}
+        <Route path="/portal/home" element={<PortalHomePage />} />
+
         {/* Field-worker mobile shell — bottom-nav layout, no desktop sidebar.
             `/field/{token}` is the SMS magic-link PIN-redemption screen; it
             consumes the link and routes to `/field`, the four-tab shell.
@@ -986,6 +1012,7 @@ export default function App() {
         <Route path="/costs/import" element={<P title="Import Cost Database"><ImportDatabasePage /></P>} />
 
         <Route path="/catalog" element={<P title="Resource Catalog"><CatalogPage /></P>} />
+        <Route path="/cost-explorer" element={<P title="Cost Explorer"><CostExplorerPage /></P>} />
 
         <Route path="/assemblies" element={<P title="Assemblies"><AssembliesPage /></P>} />
         <Route path="/assemblies/library" element={<P title="Assembly Library"><AssemblyLibraryPage /></P>} />
@@ -1121,6 +1148,15 @@ export default function App() {
         <Route path="/integrations" element={<P title="Integrations"><IntegrationsPage /></P>} />
         {/* //// NEOFFICE PATCH — /about route removed (white-label, see lazy-import note) */}
         <Route path="/how-it-works" element={<P title="How it works"><HowItWorksPage /></P>} />
+        {/* Cases (playbooks) - list at /cases, the stepper at /cases/:playbookId
+            (one component serves both so it stays a single lazy chunk). */}
+        <Route path="/cases" element={<P title="Cases"><CasesPage /></P>} />
+        <Route path="/cases/:playbookId" element={<P title="Cases"><CasesPage /></P>} />
+        {/* Inside track - backers-only early-look panel (donation perk):
+            recent releases (reused from the /about changelog) + a short
+            coming-next list. Gated client-side by a supporter access code
+            remembered in localStorage; never gates the AGPL code itself. */}
+        <Route path="/inside" element={<P title="Inside track"><InsidePage /></P>} />
         <Route path="/project-intelligence" element={<P title="Project Intelligence"><ProjectIntelligencePage /></P>} />
         {/* Architecture Map — internal tool, admin-only. Surfaces module
             dependency graph + DDC integrity audit; not for day-to-day use. */}
@@ -1174,6 +1210,8 @@ export default function App() {
         <Route path="/projects/:projectId/payroll" element={<P title="Payroll"><PayrollPage /></P>} />
         <Route path="/daily-diary" element={<P title="Daily Diary"><DailyDiaryPage /></P>} />
         <Route path="/projects/:projectId/daily-diary" element={<P title="Daily Diary"><DailyDiaryPage /></P>} />
+        <Route path="/field-time" element={<P title="Field Time"><FieldTimePage /></P>} />
+        <Route path="/projects/:projectId/field-time" element={<P title="Field Time"><FieldTimePage /></P>} />
         <Route path="/portal" element={<P title="Client & Partner Portal"><PortalPage /></P>} />
         <Route path="/projects/:projectId/portal" element={<P title="Client & Partner Portal"><PortalPage /></P>} />
         <Route path="/resources" element={<P title="Resources & Crew"><ResourcesPage /></P>} />

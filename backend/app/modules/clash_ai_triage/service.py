@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍LLM-assisted clash triage service.
+"""LLM-assisted clash triage service.
 
 Public surface
 --------------
@@ -235,7 +235,7 @@ async def _resolve_provider_settings(
 
 
 class ClashTriageService:
-    """‌⁠‍Business logic for LLM-assisted clash triage."""
+    """Business logic for LLM-assisted clash triage."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -334,7 +334,7 @@ class ClashTriageService:
         force_refresh: bool = False,
         allowed_project_ids: set[uuid.UUID] | None = None,
     ) -> ClashTriageResult:
-        """‌⁠‍Triage one clash. Cached unless ``force_refresh=True``.
+        """Triage one clash. Cached unless ``force_refresh=True``.
 
         Args:
             clash_id: The ``ClashResult.id`` to triage.
@@ -469,7 +469,7 @@ class ClashTriageService:
         force_refresh: bool = False,
         allowed_project_ids: set[uuid.UUID] | None = None,
     ) -> list[ClashTriageResult]:
-        """‌⁠‍Triage ``clash_ids`` with bounded concurrency.
+        """Triage ``clash_ids`` with bounded concurrency.
 
         The semaphore caps in-flight LLM calls at ``max_concurrent`` so a
         large batch cannot stampede the provider. Per-clash failures are
@@ -542,7 +542,7 @@ class ClashTriageService:
         *,
         user_id: uuid.UUID,
     ) -> ClashTriageResult:
-        """‌⁠‍Re-triage the clash behind an existing result row.
+        """Re-triage the clash behind an existing result row.
 
         Always writes a NEW row - the original audit trail is preserved.
         ``new_prompt_version`` defaults to the current ``PROMPT_VERSION``

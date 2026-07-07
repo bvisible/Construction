@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍Saved-views module permission definitions.
+"""Saved-views module permission definitions.
 
 RBAC gates WHETHER you may use the feature; the scoper gates WHICH rows. Both
 always run: holding ``saved_views.read`` does not let a viewer read an entity

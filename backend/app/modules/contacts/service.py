@@ -1,4 +1,4 @@
-"""‌⁠‍Contacts service - business logic for contact management.
+"""Contacts service - business logic for contact management.
 
 Stateless service layer. Handles:
 - Contact CRUD
@@ -67,7 +67,7 @@ async def _safe_audit(
     user_id: str | None = None,
     details: dict | None = None,
 ) -> None:
-    """‌⁠‍Best-effort audit log - never blocks the caller on failure."""
+    """Best-effort audit log - never blocks the caller on failure."""
     try:
         from app.core.audit import audit_log
 
@@ -84,7 +84,7 @@ async def _safe_audit(
 
 
 def _validate_email_format(email: str | None) -> None:
-    """‌⁠‍Validate email format. Raises 400 if invalid."""
+    """Validate email format. Raises 400 if invalid."""
     if email is not None and not _EMAIL_RE.match(email):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

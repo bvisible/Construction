@@ -1,4 +1,4 @@
-"""‌⁠‍Self-contained i18n bundle for the BCF module.
+"""Self-contained i18n bundle for the BCF module.
 
 OpenEstimate principle #2: i18n EVERYWHERE - zero hardcoded user-facing
 strings. This mirrors the design of
@@ -31,7 +31,7 @@ _LOCK = Lock()
 
 
 class _Bundle:
-    """‌⁠‍In-memory, lazily-loaded flattened message table keyed by locale."""
+    """In-memory, lazily-loaded flattened message table keyed by locale."""
 
     def __init__(self) -> None:
         self._loaded: dict[str, dict[str, str]] = {}
@@ -109,7 +109,7 @@ _default = _Bundle()
 
 
 def translate(key: str, locale: str = DEFAULT_LOCALE, **params: Any) -> str:
-    """‌⁠‍Resolve a BCF message key for ``locale`` with ``str.format`` params."""
+    """Resolve a BCF message key for ``locale`` with ``str.format`` params."""
     return _default.translate(key, locale, **params)
 
 

@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍Pydantic DTOs for the compliance DSL API."""
+"""Pydantic DTOs for the compliance DSL API."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class DSLValidateRequest(BaseModel):
-    """‌⁠‍Body for ``POST /dsl/validate-syntax``.
+    """Body for ``POST /dsl/validate-syntax``.
 
     Either ``definition_yaml`` (raw text) or ``definition`` (already
     parsed mapping) - exactly one must be supplied.
@@ -34,7 +34,7 @@ class DSLValidateResponse(BaseModel):
 
 
 class DSLCompileRequest(BaseModel):
-    """‌⁠‍Body for ``POST /dsl/compile`` - persists + registers."""
+    """Body for ``POST /dsl/compile`` - persists + registers."""
 
     definition_yaml: str = Field(..., min_length=1, max_length=64_000)
     activate: bool = True

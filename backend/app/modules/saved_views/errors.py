@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍Typed exceptions for the saved-views engine.
+"""Typed exceptions for the saved-views engine.
 
 Each safety primitive raises its own exception so the router can map it to the
 correct HTTP status and so a reviewer can trace a refusal back to the gate that

@@ -47,6 +47,7 @@ __all__ = [
     "ConversionResult",
     "convert",
     "conversion_factor",
+    "convert_between",
     "display_rate",
     "display_unit_for",
 ]
@@ -239,3 +240,124 @@ def display_rate(
     if factor == 0:
         return amount
     return amount / factor
+
+
+# Dimension-grouped conversion factors, mirroring _DIMENSION_FACTORS in
+# unitConversion.ts. Each inner value is "how many of this unit equal ONE
+# metric base unit of the dimension" (base: m for length, m2 for area, m3 for
+# volume, kg for mass, one item for count). Factors are strings so they convert
+# to an exact Decimal. This table is what lets a quantity move between two units
+# of the SAME dimension (m3 -> cu yd, m2 -> roofing square), which the plain
+# metric -> imperial display path above deliberately does not do (it only ever
+# picks one imperial label per metric unit). It also carries the US construction
+# trade units (GitHub #320): cubic yards, board feet and roofing squares.
+_DIMENSION_FACTORS: Final[dict[str, dict[str, str]]] = {
+    "length": {
+        "m": "1",
+        "lm": "1",
+        "cm": "100",
+        "mm": "1000",
+        "km": "0.001",
+        "ft": "3.2808399",
+        "lft": "3.2808399",
+        "in": "39.3700787",
+        "yd": "1.0936133",
+        "mi": "0.000621371",
+    },
+    "area": {
+        "m2": "1",
+        "dm2": "100",
+        "cm2": "10000",
+        "mm2": "1000000",
+        "ha": "0.0001",
+        "ft2": "10.7639",
+        "sft": "10.7639",
+        "sqft": "10.7639",
+        "in2": "1550.0031",
+        "yd2": "1.19599",
+        "sqyd": "1.19599",
+        "ac": "0.000247105",
+        # Roofing square: 1 square = 100 sq ft = 9.290304 m2 (GitHub #320).
+        "sq": "0.107639",
+    },
+    "volume": {
+        "m3": "1",
+        "l": "1000",
+        "ft3": "35.3147",
+        "cft": "35.3147",
+        # Cubic yard and its common spellings (GitHub #320).
+        "cy": "1.30795",
+        "cuyd": "1.30795",
+        "yd3": "1.30795",
+        # Board foot: 1 m3 = 423.776 board feet (GitHub #320).
+        "bdft": "423.776",
+        "bf": "423.776",
+        "gal": "264.172052",
+    },
+    "mass": {
+        "kg": "1",
+        "g": "1000",
+        "t": "0.001",
+        "lb": "2.20462",
+        "ton": "0.00110231",
+    },
+    "count": {
+        "pcs": "1",
+        "ea": "1",
+        "nr": "1",
+        "no": "1",
+        "stk": "1",
+        "unit": "1",
+        "count": "1",
+    },
+}
+
+# Reverse index: unit code -> its dimension. Built once from the table above.
+_UNIT_DIMENSION: Final[dict[str, str]] = {
+    unit: dimension for dimension, units in _DIMENSION_FACTORS.items() for unit in units
+}
+
+
+def _dimension_key(unit: str | None) -> str:
+    """Fold a unit code to its dimension-table key (superscripts -> 2 / 3)."""
+    key = _normalise_key(unit).lower()
+    return key.replace("²", "2").replace("³", "3")
+
+
+def convert_between(
+    value: Decimal | float | int | str,
+    from_unit: str | None,
+    to_unit: str | None,
+) -> Decimal | None:
+    """Convert a quantity from one unit into another of the SAME dimension.
+
+    Returns the converted Decimal, or ``None`` when the conversion is not
+    defined and the caller must refuse rather than guess. Used when a takeoff
+    measurement is linked to a BOQ position priced in a different unit (GitHub
+    #319): a value measured in ``m3`` linked to a position priced per ``cy`` is
+    converted to cubic yards before it is stored, so an already-priced position
+    is not silently mis-priced.
+
+    Rules:
+
+    * ``None`` / empty on either side, or the same unit both sides, returns the
+      value unchanged (nothing to convert).
+    * Both units known and in the same dimension: the value is converted exactly
+      via the metric base of that dimension.
+    * Different dimensions, or a unit this table does not know: returns ``None``
+      so the caller flags the mismatch instead of writing a wrong number.
+    """
+    amount = _to_decimal(value)
+    src = _dimension_key(from_unit)
+    dst = _dimension_key(to_unit)
+    if not src or not dst or src == dst:
+        return amount
+    dim_src = _UNIT_DIMENSION.get(src)
+    dim_dst = _UNIT_DIMENSION.get(dst)
+    if dim_src is None or dim_dst is None or dim_src != dim_dst:
+        return None
+    per_base_src = Decimal(_DIMENSION_FACTORS[dim_src][src])
+    per_base_dst = Decimal(_DIMENSION_FACTORS[dim_dst][dst])
+    if per_base_src == 0:
+        return None
+    return amount * per_base_dst / per_base_src

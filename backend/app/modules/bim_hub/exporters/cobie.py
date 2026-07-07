@@ -1,4 +1,4 @@
-"""‌⁠‍COBie (UK 2.4) workbook builder.
+"""COBie (UK 2.4) workbook builder.
 
 COBie - Construction Operations Building Information Exchange - is the
 ISO-19650 handover format. An XLSX with one sheet per concept, the
@@ -224,7 +224,7 @@ SPACE_TYPE_TOKENS = {"space", "room", "ifcspace", "rooms"}
 
 @dataclass(frozen=True)
 class CobieOptions:
-    """‌⁠‍Builder configuration. Immutable so we can hash it into cache keys."""
+    """Builder configuration. Immutable so we can hash it into cache keys."""
 
     spec: str = "UK_2.4"
     default_contact_email: str = DEFAULT_CONTACT_EMAIL
@@ -253,7 +253,7 @@ def build_cobie_workbook(
     documents: list[Any] | None = None,
     options: CobieOptions | None = None,
 ) -> bytes:
-    """‌⁠‍Build a COBie.UK.2.4 workbook for the supplied model.
+    """Build a COBie.UK.2.4 workbook for the supplied model.
 
     Args:
         model: BIMModel-like object. Must expose ``name``, ``project_id``,

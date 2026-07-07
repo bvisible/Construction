@@ -1,4 +1,4 @@
-"""‌⁠‍Document Management ORM models.
+"""Document Management ORM models.
 
 Tables:
     oe_documents_document - uploaded project documents with metadata
@@ -29,7 +29,7 @@ from app.database import GUID, Base
 
 
 class Document(Base):
-    """‌⁠‍Uploaded project document with metadata and categorization."""
+    """Uploaded project document with metadata and categorization."""
 
     __tablename__ = "oe_documents_document"
 
@@ -117,7 +117,7 @@ class Document(Base):
 
 
 class ProjectPhoto(Base):
-    """‌⁠‍Project photo with EXIF/GPS metadata for site documentation gallery."""
+    """Project photo with EXIF/GPS metadata for site documentation gallery."""
 
     __tablename__ = "oe_documents_photo"
 

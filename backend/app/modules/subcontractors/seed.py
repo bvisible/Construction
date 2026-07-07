@@ -1,4 +1,4 @@
-"""‌⁠‍Deterministic demo seed for the subcontractors module.
+"""Deterministic demo seed for the subcontractors module.
 
 Generates 50 subcontractors with varied trades / statuses, 2-3 certificates
 each (mix of valid / expiring / expired), 20 active agreements, 80 payment
@@ -85,7 +85,7 @@ async def seed_subcontractors_demo(
     project_id: uuid.UUID | None = None,
     seed: int = 42,
 ) -> dict[str, int]:
-    """‌⁠‍Seed demo subcontractor data.
+    """Seed demo subcontractor data.
 
     Args:
         session: Async DB session (caller commits).

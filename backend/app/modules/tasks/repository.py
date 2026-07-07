@@ -1,4 +1,4 @@
-"""‌⁠‍Tasks data access layer."""
+"""Tasks data access layer."""
 
 import uuid
 
@@ -9,7 +9,7 @@ from app.modules.tasks.models import Task
 
 
 class TaskRepository:
-    """‌⁠‍Data access for Task models."""
+    """Data access for Task models."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -82,7 +82,7 @@ class TaskRepository:
         limit: int = 50,
         status: str | None = None,
     ) -> tuple[list[Task], int]:
-        """‌⁠‍List tasks assigned to or created by a specific user.
+        """List tasks assigned to or created by a specific user.
 
         Private tasks are included only when the requesting user is the creator.
         """

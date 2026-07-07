@@ -1,4 +1,4 @@
-"""‌⁠‍Teams data access layer.
+"""Teams data access layer.
 
 All database queries for teams, memberships, and visibility live here.
 No business logic - pure data access.
@@ -14,13 +14,13 @@ from app.modules.teams.models import EntityVisibility, Team, TeamMembership
 
 
 class TeamRepository:
-    """‌⁠‍Data access for Team model."""
+    """Data access for Team model."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
     async def get(self, team_id: uuid.UUID) -> Team | None:
-        """‌⁠‍Get team by ID (with memberships eager-loaded)."""
+        """Get team by ID (with memberships eager-loaded)."""
         stmt = select(Team).where(Team.id == team_id).options(selectinload(Team.memberships))
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()

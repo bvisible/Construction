@@ -1,4 +1,4 @@
-"""‌⁠‍Variations service - business logic for the variations lifecycle.
+"""Variations service - business logic for the variations lifecycle.
 
 Pure helpers (top-level functions) are unit-tested directly. The
 :class:`VariationsService` class wires repositories together and emits
@@ -148,12 +148,12 @@ FA_TRANSITIONS: dict[str, list[str]] = {
 
 
 def allowed_notice_transitions(current: str) -> list[str]:
-    """‌⁠‍Pure: return list of statuses Notice may move to from ``current``."""
+    """Pure: return list of statuses Notice may move to from ``current``."""
     return list(NOTICE_TRANSITIONS.get(current, []))
 
 
 def allowed_vr_transitions(current: str) -> list[str]:
-    """‌⁠‍Pure: return list of statuses VariationRequest may move to."""
+    """Pure: return list of statuses VariationRequest may move to."""
     return list(VR_TRANSITIONS.get(current, []))
 
 
@@ -745,6 +745,356 @@ def recommend_rerate(
         "rerate_required": rerate,
         "direction": direction,
         "reason": reason,
+    }
+
+
+# --- International variation value roll-ups (pure, additive) -----------------
+#
+# These helpers turn a set of variations (any mix of requests, orders,
+# claims) into plain, currency-safe figures for the revised contract sum.
+# They are deliberately currency-agnostic: no ISO code, tax rate, unit or
+# locale is hardcoded. Money stays Decimal-exact and is never summed across
+# different currency codes. Every division is guarded, and empty inputs
+# yield well-defined zeros rather than a 500 or a NaN.
+
+
+# Value buckets group lifecycle status codes by their commercial meaning.
+# "agreed" money has been accepted and moves the contract sum. "pending"
+# money is proposed but not yet accepted, so it is still at risk. "rejected"
+# money has been declined or voided and must never move the contract sum.
+AGREED_VALUE_STATUSES: frozenset[str] = frozenset(
+    {
+        "approved",
+        "converted_to_vo",
+        "issued",
+        "in_progress",
+        "completed",
+        "agreed",
+        "granted",
+        "signed",
+        "billed",
+    }
+)
+PENDING_VALUE_STATUSES: frozenset[str] = frozenset(
+    {
+        "draft",
+        "submitted",
+        "under_review",
+        "acknowledged",
+        "responded",
+        "disputed",
+        "pending",
+    }
+)
+REJECTED_VALUE_STATUSES: frozenset[str] = frozenset({"rejected", "voided"})
+
+
+def variation_value_bucket(status: str | None) -> str:
+    """Classify a lifecycle status into a value bucket.
+
+    Returns one of ``"agreed"``, ``"pending"``, ``"rejected"`` or
+    ``"other"``. Case-insensitive. An unknown or blank status falls back to
+    ``"other"`` so an unexpected code is never silently counted as agreed
+    money that moves the contract sum.
+    """
+    code = (status or "").strip().lower()
+    if code in AGREED_VALUE_STATUSES:
+        return "agreed"
+    if code in PENDING_VALUE_STATUSES:
+        return "pending"
+    if code in REJECTED_VALUE_STATUSES:
+        return "rejected"
+    return "other"
+
+
+_STATUS_PLAIN_LABELS: dict[str, str] = {
+    "draft": "Draft, not yet submitted",
+    "submitted": "Submitted, awaiting review",
+    "under_review": "Under review",
+    "acknowledged": "Acknowledged by the other party",
+    "responded": "Responded to",
+    "approved": "Approved",
+    "agreed": "Agreed",
+    "granted": "Granted",
+    "signed": "Signed",
+    "billed": "Billed",
+    "issued": "Issued",
+    "in_progress": "In progress",
+    "completed": "Completed",
+    "converted_to_vo": "Converted to a variation order",
+    "rejected": "Rejected",
+    "voided": "Voided, carries no value",
+    "disputed": "Disputed",
+    "closed": "Closed",
+}
+
+
+def plain_status_label(status: str | None) -> str:
+    """Return a short plain-language label for a status code.
+
+    Falls back to the raw code with underscores replaced by spaces so an
+    unmapped status still reads cleanly. A blank status returns
+    ``"Unknown"``.
+    """
+    code = (status or "").strip().lower()
+    if not code:
+        return "Unknown"
+    return _STATUS_PLAIN_LABELS.get(code, code.replace("_", " ").capitalize())
+
+
+_CONCEPT_EXPLANATIONS: dict[str, str] = {
+    "agreed_value": ("Agreed value is the total of variations both parties have accepted; it moves the contract sum."),
+    "pending_value": (
+        "Pending value is proposed but not yet accepted, so it is still at risk and does not move the contract sum yet."
+    ),
+    "rejected_value": ("Rejected value has been declined or voided and never moves the contract sum."),
+    "time_impact": (
+        "Time impact is the number of days a variation adds to the completion date, measured along the critical path."
+    ),
+    "contract_sum_movement": (
+        "Contract sum movement is the net change to the original contract sum from all agreed variations."
+    ),
+    "revised_contract_sum": (
+        "Revised contract sum is the original contract sum plus the net movement from agreed variations."
+    ),
+    "percent_of_contract": ("Percent of contract shows a value as a share of the original contract sum."),
+    "final_account": (
+        "The final account is the settled total of the original contract sum plus every agreed "
+        "variation, daywork and claim, less retention held."
+    ),
+}
+
+
+def explain_variation_concept(concept: str) -> str:
+    """Return a one-line plain-language explanation of a variation concept.
+
+    Recognised concepts: ``agreed_value``, ``pending_value``,
+    ``rejected_value``, ``time_impact``, ``contract_sum_movement``,
+    ``revised_contract_sum``, ``percent_of_contract`` and
+    ``final_account``. An unknown concept returns an empty string so the
+    caller can decide whether to show a fallback.
+    """
+    return _CONCEPT_EXPLANATIONS.get((concept or "").strip().lower(), "")
+
+
+# Amount fields we understand, tried in priority order. This lets one set of
+# roll-up helpers work over variation orders, requests and claims without
+# reshaping the rows first.
+_AMOUNT_FIELDS: tuple[str, ...] = (
+    "amount",
+    "final_cost_impact",
+    "approved_cost_impact",
+    "decided_amount",
+    "estimated_cost_impact",
+    "total",
+)
+
+
+def _item_field(item: Any, name: str) -> Any:
+    """Read ``name`` from an ORM row or a dict, returning ``None`` if absent."""
+    if isinstance(item, dict):
+        return item.get(name)
+    return getattr(item, name, None)
+
+
+def _item_amount(item: Any) -> Decimal:
+    """Return the money amount of an item as an exact Decimal (0 if none)."""
+    for field_name in _AMOUNT_FIELDS:
+        raw = _item_field(item, field_name)
+        if raw is not None:
+            return _to_decimal(raw)
+    return Decimal("0")
+
+
+def _item_status(item: Any) -> str:
+    """Return the lowercased status code of an item (blank if none)."""
+    return str(_item_field(item, "status") or "").strip().lower()
+
+
+def _item_currency(item: Any) -> str:
+    """Return the uppercased currency code of an item (blank if none)."""
+    return str(_item_field(item, "currency") or "").strip().upper()
+
+
+def assert_single_currency(items: Iterable[Any]) -> str:
+    """Return the one shared currency across items, or raise ``ValueError``.
+
+    Blank currency codes mean "inherit" and are ignored. Money must never be
+    summed across different ISO currency codes, so two or more distinct
+    non-blank codes is a clean input error, never a silently wrong total.
+    Returns ``""`` when every item has a blank currency.
+    """
+    codes = {code for i in items if (code := _item_currency(i))}
+    if len(codes) > 1:
+        raise ValueError(
+            "Cannot roll up money across mixed currencies: "
+            + ", ".join(sorted(codes))
+            + ". Normalise to one currency first."
+        )
+    return next(iter(codes), "")
+
+
+def rollup_by_value_status(items: Iterable[Any]) -> dict[str, Any]:
+    """Group variation money into agreed / pending / rejected / other buckets.
+
+    Each item may be an ORM row or a dict carrying a ``status`` and an
+    amount (first present of ``amount``, ``final_cost_impact``,
+    ``approved_cost_impact``, ``decided_amount``, ``estimated_cost_impact``,
+    ``total``). All non-blank currencies must match or a ``ValueError`` is
+    raised; money is never blended across currencies.
+
+    Returns a dict with per-bucket Decimal ``totals``, per-bucket ``counts``,
+    the shared ``currency`` and the overall ``count``. Empty input yields
+    all-zero totals, never a division or a 500.
+    """
+    rows = [i for i in items if i is not None]
+    currency = assert_single_currency(rows)
+    totals: dict[str, Decimal] = {
+        "agreed": Decimal("0"),
+        "pending": Decimal("0"),
+        "rejected": Decimal("0"),
+        "other": Decimal("0"),
+    }
+    counts: dict[str, int] = {"agreed": 0, "pending": 0, "rejected": 0, "other": 0}
+    for row in rows:
+        bucket = variation_value_bucket(_item_status(row))
+        totals[bucket] += _item_amount(row)
+        counts[bucket] += 1
+    return {
+        "currency": currency,
+        "count": len(rows),
+        "totals": totals,
+        "counts": counts,
+    }
+
+
+def cumulative_contract_sum_movement(items: Iterable[Any]) -> Decimal:
+    """Net movement of the contract sum from AGREED variations only.
+
+    Sums the amounts of agreed-bucket items so positive additions and
+    negative omissions (credits) net out. Pending and rejected money is
+    excluded because it has not moved the contract sum. Raises
+    ``ValueError`` on a genuine currency mix. Empty input returns
+    ``Decimal("0")``.
+    """
+    rows = [i for i in items if i is not None]
+    assert_single_currency(rows)
+    total = Decimal("0")
+    for row in rows:
+        if variation_value_bucket(_item_status(row)) == "agreed":
+            total += _item_amount(row)
+    return total
+
+
+def percent_of_contract(
+    amount: Decimal | float | int | str | None,
+    contract_sum: Decimal | float | int | str | None,
+    *,
+    quantize_to: str = "0.01",
+) -> Decimal:
+    """Express ``amount`` as a percentage of ``contract_sum``.
+
+    Guards division by zero: a zero or missing contract sum raises
+    ``ValueError`` rather than returning NaN or infinity. The result is a
+    Decimal quantized to two decimals by default.
+    """
+    base = _to_decimal(contract_sum)
+    if base == 0:
+        raise ValueError("Contract sum is zero; percent of contract is undefined.")
+    pct = (_to_decimal(amount) / base) * Decimal("100")
+    return pct.quantize(Decimal(quantize_to), rounding=ROUND_HALF_UP)
+
+
+def _summarise_contract_sum_movement(
+    original: Decimal,
+    net_movement: Decimal,
+    revised: Decimal,
+    currency: str,
+    percent_movement: Decimal | None,
+) -> str:
+    """One-line plain-language summary of how the contract sum moved."""
+    unit = f" {currency}" if currency else ""
+    pct = "" if percent_movement is None else f" ({percent_movement}%)"
+    if net_movement > 0:
+        movement_phrase = f"rises by {net_movement}{unit}{pct}"
+    elif net_movement < 0:
+        movement_phrase = f"falls by {abs(net_movement)}{unit}{pct}"
+    else:
+        movement_phrase = "does not change"
+    return f"Agreed variations mean the contract sum {movement_phrase}, from {original}{unit} to {revised}{unit}."
+
+
+def build_contract_sum_rollup(
+    original_contract_value: Decimal | float | int | str | None,
+    items: Iterable[Any],
+    *,
+    currency: str | None = None,
+) -> dict[str, Any]:
+    """Build an explainable revised-contract-sum roll-up from variations.
+
+    Components (all exact Decimals, all in one currency):
+
+    * ``original`` - the starting contract sum.
+    * ``agreed_additions`` - agreed variations that increase the sum (>= 0).
+    * ``agreed_omissions`` - agreed credits that decrease the sum (< 0).
+    * ``net_movement`` - additions plus omissions (the contract sum movement).
+    * ``pending`` - proposed value not yet agreed (at risk, excluded).
+    * ``rejected`` - declined or voided value (excluded).
+    * ``revised_contract_sum`` - original plus net_movement.
+    * ``percent_movement`` - net_movement as a percent of the original, or
+      ``None`` when the original is zero so there is no division by zero.
+    * ``summary`` - a one-line plain-language explanation.
+
+    Pass ``currency`` to assert the expected unit; if given it must match the
+    items' own currency. Raises ``ValueError`` on a currency mix. Empty input
+    just echoes the original with a zero movement.
+    """
+    rows = [i for i in items if i is not None]
+    detected = assert_single_currency(rows)
+    expected = (currency or "").strip().upper()
+    if expected and detected and expected != detected:
+        raise ValueError(f"Items are denominated in {detected} but {expected} was expected.")
+    resolved_currency = expected or detected
+
+    original = _to_decimal(original_contract_value)
+    agreed_additions = Decimal("0")
+    agreed_omissions = Decimal("0")
+    pending = Decimal("0")
+    rejected = Decimal("0")
+    for row in rows:
+        bucket = variation_value_bucket(_item_status(row))
+        amount = _item_amount(row)
+        if bucket == "agreed":
+            if amount >= 0:
+                agreed_additions += amount
+            else:
+                agreed_omissions += amount
+        elif bucket == "pending":
+            pending += amount
+        elif bucket == "rejected":
+            rejected += amount
+        # "other" contributes nothing to the contract sum.
+
+    net_movement = agreed_additions + agreed_omissions
+    revised = original + net_movement
+    if original == 0:
+        percent_movement: Decimal | None = None
+    else:
+        percent_movement = (net_movement / original * Decimal("100")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    return {
+        "currency": resolved_currency,
+        "original": original,
+        "agreed_additions": agreed_additions,
+        "agreed_omissions": agreed_omissions,
+        "net_movement": net_movement,
+        "pending": pending,
+        "rejected": rejected,
+        "revised_contract_sum": revised,
+        "percent_movement": percent_movement,
+        "summary": _summarise_contract_sum_movement(
+            original, net_movement, revised, resolved_currency, percent_movement
+        ),
     }
 
 

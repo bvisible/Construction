@@ -1,4 +1,4 @@
-"""‌⁠‍Risk auto-escalation engine (TOP-30 #24).
+"""Risk auto-escalation engine (TOP-30 #24).
 
 When a risk's severity product (``probability_score`` x ``impact_score``)
 crosses a configurable threshold, OR its next-review date has lapsed, the

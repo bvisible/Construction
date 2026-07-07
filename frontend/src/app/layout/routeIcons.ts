@@ -26,6 +26,7 @@ import {
   BrainCircuit,
   Database,
   Boxes,
+  Compass,
   Layers,
   BarChart3,
   FileBarChart,
@@ -55,6 +56,7 @@ import {
   FileEdit,
   BookOpen,
   Wrench,
+  Timer,
   Truck,
   Users,
   Wallet,
@@ -103,6 +105,7 @@ const ROUTE_ICON_MAP: Record<string, LucideIcon> = {
   // ── 3. Cost Data ──────────────────────────────────────────────────
   '/costs': Database,
   '/catalog': Boxes,
+  '/cost-explorer': Compass,
   '/assemblies': Layers,
   '/benchmarks': BarChart3,
   // ── 4. Takeoff ────────────────────────────────────────────────────
@@ -143,6 +146,7 @@ const ROUTE_ICON_MAP: Record<string, LucideIcon> = {
   // ── 10. Field Operations ──────────────────────────────────────────
   '/daily-diary': BookOpen,
   '/field-reports': ClipboardList,
+  '/field-time': Timer,
   '/service': Wrench,
   '/portal': Globe,
   '/portal/payments': FileText,

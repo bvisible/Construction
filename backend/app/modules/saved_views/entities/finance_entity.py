@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍Built-in queryable entity: ``ledger_entry``.
+"""Built-in queryable entity: ``ledger_entry``.
 
 This is the starting-point adapter for the append-only finance ledger
 (``oe_finance_ledger``). When the Chart of Accounts lands, finance owns the final

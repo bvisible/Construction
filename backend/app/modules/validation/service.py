@@ -1,4 +1,4 @@
-"""‌⁠‍Validation module business logic.
+"""Validation module business logic.
 
 Orchestrates validation runs against BOQs, persists reports, and provides
 access to available rule sets. This is the bridge between the core validation
@@ -47,7 +47,7 @@ RULE_SET_DESCRIPTIONS: dict[str, str] = {
 
 
 class ValidationModuleService:
-    """‌⁠‍Service for running validation, managing reports, and querying rule sets."""
+    """Service for running validation, managing reports, and querying rule sets."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -63,7 +63,7 @@ class ValidationModuleService:
         *,
         user_id: uuid.UUID | None = None,
     ) -> dict[str, Any]:
-        """‌⁠‍Run validation rules against a BOQ and persist the report.
+        """Run validation rules against a BOQ and persist the report.
 
         1. Load BOQ positions from database.
         2. Convert to the dict format expected by validation rules.

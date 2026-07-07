@@ -1,4 +1,4 @@
-"""‌⁠‍Unit tests for ``detect_converter_capabilities`` — the CLI capability
+"""Unit tests for ``detect_converter_capabilities`` — the CLI capability
 matrix probe added in v4.6.2 to fix the user-reported "arguments were not
 expected" failure on older DDC RvtExporter / IfcExporter binaries.
 
@@ -22,7 +22,7 @@ from app.modules.boq import cad_import
 
 @pytest.fixture(autouse=True)
 def _reset_caches() -> None:
-    """‌⁠‍Module-level caches must be empty at the start of each test so the
+    """Module-level caches must be empty at the start of each test so the
     capability matrix doesn't leak between cases. The fixture runs both
     before and after via try/yield."""
     cad_import._CONVERTER_CAPABILITIES.clear()
@@ -38,7 +38,7 @@ def _stub_subprocess(
     returncode: int = 0,
     side_effect: Exception | None = None,
 ) -> dict[str, int]:
-    """‌⁠‍Replace ``subprocess.run`` and return a hit counter so tests can
+    """Replace ``subprocess.run`` and return a hit counter so tests can
     assert the cache short-circuits the second probe."""
     import subprocess as _subprocess
 
@@ -61,14 +61,14 @@ def _stub_subprocess(
 
 
 def _fake_binary(tmp_path: Path, name: str = "RvtExporter") -> Path:
-    """‌⁠‍Materialise a non-empty file so ``find_converter`` size guard passes."""
+    """Materialise a non-empty file so ``find_converter`` size guard passes."""
     binary = tmp_path / name
     binary.write_bytes(b"x" * 4096)
     return binary
 
 
 def test_modern_cli_marker_enables_full_argument_set(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """‌⁠‍A binary whose ``--help`` mentions ``-no-collada`` is treated as a
+    """A binary whose ``--help`` mentions ``-no-collada`` is treated as a
     modern CLI: both depth-mode and ``-no-collada`` capabilities flip to
     True so ``_run_ddc`` builds the full v18+ command line."""
     binary = _fake_binary(tmp_path)
@@ -88,7 +88,7 @@ def test_modern_cli_marker_enables_full_argument_set(tmp_path: Path, monkeypatch
 
 
 def test_legacy_banner_falls_back_to_bare_invocation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """‌⁠‍A binary whose ``--help`` succeeds but lacks any modern marker is
+    """A binary whose ``--help`` succeeds but lacks any modern marker is
     treated as legacy — capability flags stay False so the runtime never
     appends ``standard`` or ``-no-collada`` (the user-reported exit-15
     cause)."""
@@ -104,7 +104,7 @@ def test_legacy_banner_falls_back_to_bare_invocation(tmp_path: Path, monkeypatch
 
 
 def test_probe_subprocess_never_starts_falls_back_to_legacy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """‌⁠‍If every probe attempt raises (FileNotFoundError / PermissionError /
+    """If every probe attempt raises (FileNotFoundError / PermissionError /
     timeout), the conservative legacy profile is cached. The conversion
     path is then guaranteed to emit a bare CLI that the user's binary
     actually accepts."""
@@ -123,7 +123,7 @@ def test_probe_subprocess_never_starts_falls_back_to_legacy(tmp_path: Path, monk
 def test_no_binary_installed_returns_unprobed_sentinel(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """‌⁠‍With no converter installed, ``probed`` is False so a later install
+    """With no converter installed, ``probed`` is False so a later install
     triggers a fresh probe instead of reading a stale "old CLI" entry.
 
     The capability dict gained v18-era keys in task #164 (``accepts_flag_*``,
@@ -148,7 +148,7 @@ def test_no_binary_installed_returns_unprobed_sentinel(
 
 
 def test_capability_cache_short_circuits_second_call(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """‌⁠‍The second probe of the same binary must not spawn a subprocess —
+    """The second probe of the same binary must not spawn a subprocess —
     the cache is keyed by binary path so two extensions sharing a dir
     cost one probe between them."""
     binary = _fake_binary(tmp_path)
@@ -162,7 +162,7 @@ def test_capability_cache_short_circuits_second_call(tmp_path: Path, monkeypatch
 
 
 def test_invalidate_capabilities_forces_reprobe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """‌⁠‍Reinstall workflow: after the binary on disk is replaced,
+    """Reinstall workflow: after the binary on disk is replaced,
     ``invalidate_converter_capabilities`` must drop the cached entry so
     the next conversion sees the new CLI shape immediately (no service
     restart required)."""
@@ -178,7 +178,7 @@ def test_invalidate_capabilities_forces_reprobe(tmp_path: Path, monkeypatch: pyt
 
 
 def test_invalidate_health_also_drops_capabilities(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """‌⁠‍``invalidate_converter_health`` is called from the install router
+    """``invalidate_converter_health`` is called from the install router
     on every successful install — it must drop the capability cache in
     lock-step so an upgraded binary doesn't keep using the old CLI
     profile. Otherwise the v4.6.2 fix would silently regress whenever

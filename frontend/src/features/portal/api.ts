@@ -13,6 +13,7 @@
  */
 
 import { apiGet, apiPost, apiPatch, apiDelete } from '@/shared/lib/api';
+import type { BIMElementData } from '@/shared/ui/BIMViewer';
 
 /* ── Types ─────────────────────────────────────────────────────────────── */
 
@@ -490,10 +491,280 @@ export async function fetchMyProgressReportHtml(
   return res.text();
 }
 
+export interface PortalConsumeResult {
+  session_token: string;
+  expires_at: string;
+  /**
+   * Inviter-chosen in-app path to open after sign-in. ``null`` when the
+   * invite did not set one, in which case the caller falls back to a
+   * role-appropriate landing. Optional in the type so an older backend that
+   * does not yet return the field degrades cleanly.
+   */
+  redirect_path?: string | null;
+}
+
+/* ── Portal-user-facing (session-token) profile ────────────────────────────
+ *
+ * The signed-in portal user's own profile (role drives which landing tabs the
+ * generic /portal/home shows). Rides the session token, never the internal JWT.
+ */
+
+export interface PortalProfile {
+  id: string;
+  email: string;
+  full_name: string;
+  portal_role: PortalRole | string;
+  language: string;
+  timezone: string;
+  status: string;
+}
+
+/** Return the signed-in portal user's own profile. */
+export function getMyPortalProfile(): Promise<PortalProfile> {
+  return portalFetch<PortalProfile>(`${PORTAL_ME_BASE}`);
+}
+
+/* ── Portal-user-facing (session-token) change orders ──────────────────────
+ *
+ * Read-only buyer view of executed change orders the caller can see, either by
+ * a per-CO grant or via a `project` grant. RLS is server-side; the response is
+ * the redacted projection (no internal notes / markup / submission trail).
+ */
+
+export interface PortalChangeOrder {
+  id: string;
+  code: string;
+  title: string;
+  description: string;
+  status: string;
+  approved_amount: string | null;
+  approved_time_days: number | null;
+  currency: string;
+  approved_at: string | null;
+}
+
+export interface PortalChangeOrderList {
+  items: PortalChangeOrder[];
+  total: number;
+}
+
+/** List the executed change orders the portal caller can see. */
+export function listMyChangeOrders(params?: {
+  project_id?: string;
+  offset?: number;
+  limit?: number;
+}): Promise<PortalChangeOrderList> {
+  const qs = new URLSearchParams();
+  if (params?.project_id) qs.set('project_id', params.project_id);
+  if (params?.offset !== undefined) qs.set('offset', String(params.offset));
+  if (params?.limit !== undefined) qs.set('limit', String(params.limit));
+  const q = qs.toString();
+  return portalFetch<PortalChangeOrderList>(
+    `${PORTAL_ME_BASE}/change-orders${q ? `?${q}` : ''}`,
+  );
+}
+
+export interface PortalInvoice {
+  id: string;
+  project_id: string;
+  invoice_number: string;
+  invoice_date: string;
+  due_date: string | null;
+  currency_code: string;
+  amount_total: string | null;
+  status: string;
+}
+
+export interface PortalInvoiceList {
+  items: PortalInvoice[];
+  total: number;
+}
+
+/** List the issued invoices the portal caller can see. */
+export function listMyInvoices(params?: {
+  project_id?: string;
+  offset?: number;
+  limit?: number;
+}): Promise<PortalInvoiceList> {
+  const qs = new URLSearchParams();
+  if (params?.project_id) qs.set('project_id', params.project_id);
+  if (params?.offset !== undefined) qs.set('offset', String(params.offset));
+  if (params?.limit !== undefined) qs.set('limit', String(params.limit));
+  const q = qs.toString();
+  return portalFetch<PortalInvoiceList>(`${PORTAL_ME_BASE}/invoices${q ? `?${q}` : ''}`);
+}
+
+/* ── Portal-user-facing (session-token) BIM/CAD model sharing (view-only) ──
+ *
+ * An admin grants a portal user a `bim` (or `project`) access rule; the
+ * client then opens the model read-only in the portal's view-only 3D
+ * viewer (no editing / measure / authoring tools - see the `readOnly` prop
+ * on shared/ui/BIMViewer). List + skeleton elements ride the session token
+ * through `portalFetch`. Geometry is served by a dedicated endpoint that
+ * also accepts the session token as a `?token=` query param, because the
+ * browser's glTF/COLLADA loader used by the viewer cannot attach an
+ * Authorization header - mirrors how the internal BIM viewer authenticates
+ * its geometry requests (see features/bim/BIMPage.tsx `geometryUrl`).
+ */
+
+export interface PortalBimModel {
+  id: string;
+  project_id: string;
+  name: string;
+  discipline: string;
+  model_format: string;
+  element_count: number;
+  status: string;
+}
+
+export interface PortalBimModelList {
+  items: PortalBimModel[];
+  total: number;
+}
+
+/** List the BIM/CAD models shared with the portal caller (view-only). */
+export function listMyBimModels(params?: {
+  project_id?: string;
+  offset?: number;
+  limit?: number;
+}): Promise<PortalBimModelList> {
+  const qs = new URLSearchParams();
+  if (params?.project_id) qs.set('project_id', params.project_id);
+  if (params?.offset !== undefined) qs.set('offset', String(params.offset));
+  if (params?.limit !== undefined) qs.set('limit', String(params.limit));
+  const q = qs.toString();
+  return portalFetch<PortalBimModelList>(`${PORTAL_ME_BASE}/bim-models${q ? `?${q}` : ''}`);
+}
+
+export interface PortalBimElementsResponse {
+  items: BIMElementData[];
+  total: number;
+}
+
+/** Fetch the skeleton element list (id/mesh_ref/name/element_type/bounding_box
+ *  only - no BOQ links, no cost data) for a shared BIM model, for mesh
+ *  matching in the read-only viewer. */
+export function fetchMyBimElements(modelId: string): Promise<PortalBimElementsResponse> {
+  return portalFetch<PortalBimElementsResponse>(
+    `${PORTAL_ME_BASE}/bim-models/${encodeURIComponent(modelId)}/elements?limit=50000`,
+  );
+}
+
+/**
+ * Build the absolute geometry URL for a shared BIM model, with the portal
+ * session token attached as `?token=` so the Three.js geometry loader (which
+ * cannot set an Authorization header) can authenticate the request directly.
+ * Returns `null` when no portal session token is present.
+ */
+export function myBimGeometryUrl(modelId: string): string | null {
+  const token = getPortalSessionToken();
+  if (!token) return null;
+  const base = `${PORTAL_ME_BASE}/bim-models/${encodeURIComponent(modelId)}/geometry`;
+  const params = new URLSearchParams({ token });
+  return `${base}?${params.toString()}`;
+}
+
+/* ── Portal-user-facing (session-token) service tickets ────────────────────
+ *
+ * The tickets the portal caller filed (source="portal", reported_by=self) on
+ * any service contract they still hold access to. List-only here; the file-a-
+ * ticket flow is its own surface.
+ */
+
+export interface PortalTicket {
+  id: string;
+  contract_id: string;
+  ticket_number: string;
+  title: string;
+  description: string;
+  priority: string;
+  status: string;
+  reported_at: string;
+  sla_due_at: string | null;
+  resolved_at: string | null;
+  closed_at: string | null;
+}
+
+export interface PortalTicketList {
+  items: PortalTicket[];
+  total: number;
+}
+
+/** List the service tickets the portal caller filed. */
+export function listMyTickets(params?: {
+  offset?: number;
+  limit?: number;
+}): Promise<PortalTicketList> {
+  const qs = new URLSearchParams();
+  if (params?.offset !== undefined) qs.set('offset', String(params.offset));
+  if (params?.limit !== undefined) qs.set('limit', String(params.limit));
+  const q = qs.toString();
+  return portalFetch<PortalTicketList>(
+    `${PORTAL_ME_BASE}/tickets${q ? `?${q}` : ''}`,
+  );
+}
+
+/* ── Portal-user-facing (session-token) shared documents ───────────────────
+ *
+ * Documents an internal admin has shared with the caller through a `document`
+ * access rule. The list is metadata only; the bytes are streamed by a separate
+ * content endpoint that re-checks the grant. Both ride the magic-link session
+ * token (never the internal JWT). The content endpoint is bearer-gated, so a
+ * plain link / window.open cannot carry the Authorization header - the bytes
+ * are fetched as a Blob and handed back for the caller to open or download
+ * through an object URL.
+ */
+
+export interface PortalSharedDocument {
+  id: string;
+  name: string;
+  file_size: number;
+  mime_type: string;
+  project_id: string;
+}
+
+export interface PortalSharedDocumentList {
+  items: PortalSharedDocument[];
+  total: number;
+}
+
+/** List the documents shared with the portal caller. */
+export function listMyDocuments(): Promise<PortalSharedDocumentList> {
+  return portalFetch<PortalSharedDocumentList>(`${PORTAL_ME_BASE}/documents`);
+}
+
+/**
+ * Fetch one shared document's bytes with the session token. Returns the Blob,
+ * or null when the file is gone from disk (410) - mirrors
+ * fetchMyProgressReportHtml. The content endpoint is bearer-gated, so the bytes
+ * must be fetched (not linked) and handed to the caller as a Blob it can open
+ * or download through a short-lived object URL.
+ */
+export async function fetchMyDocumentBlob(documentId: string): Promise<Blob | null> {
+  const token = getPortalSessionToken();
+  if (!token) throw new PortalUnauthorizedError('No portal session');
+  const res = await fetch(
+    `${PORTAL_ME_BASE}/documents/${encodeURIComponent(documentId)}/content`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+  if (res.status === 401) {
+    clearPortalSessionToken();
+    throw new PortalUnauthorizedError();
+  }
+  if (res.status === 410) return null;
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { detail?: unknown };
+    const detail =
+      typeof body.detail === 'string' ? body.detail : `Could not open document (${res.status})`;
+    throw new Error(detail);
+  }
+  return res.blob();
+}
+
 /** Consume a magic-link token, persist the session, and return it. */
 export async function consumePortalMagicLink(
   token: string,
-): Promise<{ session_token: string; expires_at: string }> {
+): Promise<PortalConsumeResult> {
   const res = await fetch('/api/v1/portal/auth/consume', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
@@ -505,7 +776,7 @@ export async function consumePortalMagicLink(
       typeof body.detail === 'string' ? body.detail : `Sign-in failed (${res.status})`;
     throw new Error(detail);
   }
-  const data = (await res.json()) as { session_token: string; expires_at: string };
+  const data = (await res.json()) as PortalConsumeResult;
   setPortalSessionToken(data.session_token);
   return data;
 }

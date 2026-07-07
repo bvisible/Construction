@@ -1,4 +1,4 @@
-"""‌⁠‍Demo project templates that can be installed from the marketplace.
+"""Demo project templates that can be installed from the marketplace.
 
 Provides 5 complete demo projects with BOQ, Schedule, Budget, and Tendering data:
   1. residential-berlin  - Wohnanlage Berlin-Mitte (existing seed, re-created)
@@ -50,7 +50,7 @@ logger = logging.getLogger(__name__)
 
 
 def _money(value: float) -> str:
-    """‌⁠‍Format a float to 2-decimal string."""
+    """Format a float to 2-decimal string."""
     return str(Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
 
@@ -181,7 +181,7 @@ DocumentDef = tuple[str, str, str, str, int, list[str]]
 
 @dataclass
 class DemoTemplate:
-    """‌⁠‍Full specification of a demo project."""
+    """Full specification of a demo project."""
 
     demo_id: str
     project_name: str
@@ -2417,6 +2417,7 @@ PACK_DEMO_PROJECT: dict[str, str] = {
     "china-gbt50500": "office-shanghai",
     "doker-formwork": "rc-structure-formwork",
     "india-cpwd": "govt-building-delhi",
+    "mexico-mx": "mixed-use-mexico-city",
     "modular-prefab": "modular-housing",
     "renewables-epc": "solar-bess-epc",
     "retail-grocery-dach": "retail-market-heilbronn",
@@ -2436,6 +2437,7 @@ _COUNTRY_ISO2: dict[str, str] = {
     "China": "CN",
     "Brazil": "BR",
     "India": "IN",
+    "Mexico": "MX",
     "Netherlands": "NL",
     "Saudi Arabia": "SA",
     "South Africa": "ZA",
@@ -2459,6 +2461,8 @@ _PACK_DEMO_TYPE: dict[str, str] = {
     "solar-bess-epc": "Energy",
     "mixed-use-riyadh": "Mixed-use",
     "mixed-use-johannesburg": "Mixed-use",
+    "mixed-use-mexico-city": "Mixed-use",
+    "residential-monterrey": "Residential",
     "infrastructure-capetown": "Infrastructure",
     "commercial-london": "Commercial",
     "commercial-denver": "Commercial",

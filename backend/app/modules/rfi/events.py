@@ -1,4 +1,4 @@
-"""‌⁠‍RFI event handlers - vector indexing subscribers.
+"""RFI event handlers - vector indexing subscribers.
 
 Subscribes to ``rfi.created`` / ``rfi.updated`` / ``rfi.deleted``
 lifecycle events and keeps the ``oe_rfi_rfis`` vector collection in sync
@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 
 async def _index_rfi(event: Event) -> None:
-    """‌⁠‍Re-embed a single RFI row after create / update."""
+    """Re-embed a single RFI row after create / update."""
     rid_raw = (event.data or {}).get("rfi_id")
     if not rid_raw:
         return
@@ -62,7 +62,7 @@ async def _index_rfi(event: Event) -> None:
 
 
 async def _delete_rfi_vector(event: Event) -> None:
-    """‌⁠‍Remove a deleted RFI row from the vector store."""
+    """Remove a deleted RFI row from the vector store."""
     rid_raw = (event.data or {}).get("rfi_id")
     if not rid_raw:
         return

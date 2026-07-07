@@ -1,4 +1,4 @@
-"""‌⁠‍Pydantic DTOs for the dashboards module.
+"""Pydantic DTOs for the dashboards module.
 
 Each schema here is a direct mapping between an API request/response
 and a domain-level concept. ``from_attributes=True`` lets FastAPI build
@@ -32,7 +32,7 @@ class SnapshotSourceFileOut(BaseModel):
 
 
 class SnapshotSummaryOut(BaseModel):
-    """‌⁠‍List-row shape. No ``source_files`` - list views don't need them."""
+    """List-row shape. No ``source_files`` - list views don't need them."""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -47,7 +47,7 @@ class SnapshotSummaryOut(BaseModel):
 
 
 class SnapshotOut(SnapshotSummaryOut):
-    """‌⁠‍Detail-view shape including source-file descriptors."""
+    """Detail-view shape including source-file descriptors."""
 
     parquet_dir: str
     parent_snapshot_id: uuid.UUID | None = None

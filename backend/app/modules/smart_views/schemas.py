@@ -1,5 +1,5 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
-"""‌⁠‍Smart Views Pydantic schemas - request / response models.
+"""Smart Views Pydantic schemas - request / response models.
 
 The :class:`SmartViewRule` is the heart of the API surface: a single
 rule has a *selector* (which elements does it match?) and an *action*
@@ -76,7 +76,7 @@ MAX_IN_LIST_SIZE: int = 1024
 
 
 class SmartViewSelector(BaseModel):
-    """‌⁠‍Predicate describing which elements a rule applies to.
+    """Predicate describing which elements a rule applies to.
 
     All four fields are optional individually so the schema can express
     "match every IfcWall regardless of property" (``ifc_class`` only),
@@ -176,7 +176,7 @@ class SmartViewSelector(BaseModel):
 
 
 class SmartViewActionArgs(BaseModel):
-    """‌⁠‍Optional per-action arguments.
+    """Optional per-action arguments.
 
     Only the keys relevant to the chosen action are read by the
     evaluator; the others are tolerated so authors can edit a rule in
@@ -222,7 +222,7 @@ class SmartViewActionArgs(BaseModel):
 
 
 class SmartViewRule(BaseModel):
-    """‌⁠‍A single rule: (selector → action).
+    """A single rule: (selector → action).
 
     ``order`` decides the evaluation order - lower runs first; later
     rules overwrite earlier ones (last-write-wins). Two rules with the
@@ -243,7 +243,7 @@ class SmartViewRule(BaseModel):
 
 
 class SmartViewBase(BaseModel):
-    """‌⁠‍Shared fields between create/update payloads + response."""
+    """Shared fields between create/update payloads + response."""
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
@@ -364,7 +364,7 @@ class SmartViewShareInfo(BaseModel):
 
 
 class ElementState(BaseModel):
-    """‌⁠‍Resolved per-element visual state produced by the evaluator."""
+    """Resolved per-element visual state produced by the evaluator."""
 
     model_config = ConfigDict(extra="forbid")
 

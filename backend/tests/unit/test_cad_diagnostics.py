@@ -17,7 +17,7 @@ from app.modules.boq import cad_import
 
 
 def _write_ole_with_basicfileinfo(path: Path, *, format_year: str, build: str) -> None:
-    """‌⁠‍Write a minimal stub that looks like an OLE Compound File and
+    """Write a minimal stub that looks like an OLE Compound File and
     contains a BasicFileInfo-style UTF-16-LE blob the version reader can
     find.
 

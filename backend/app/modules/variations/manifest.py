@@ -1,4 +1,4 @@
-"""‌⁠‍Variations module manifest."""
+"""Variations module manifest."""
 
 from app.core.module_loader import ModuleManifest
 

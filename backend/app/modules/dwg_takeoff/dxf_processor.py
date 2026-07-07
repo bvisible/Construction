@@ -1,4 +1,4 @@
-"""‌⁠‍DWG/DXF file processor - ezdxf wrapper.
+"""DWG/DXF file processor - ezdxf wrapper.
 
 Parses DXF files to extract layers, entities, extents, and units.
 Generates SVG thumbnail previews and calculates entity measurements.
@@ -25,13 +25,13 @@ except ImportError:
 
 
 def _require_ezdxf() -> None:
-    """‌⁠‍Raise ImportError with a helpful message if ezdxf is not available."""
+    """Raise ImportError with a helpful message if ezdxf is not available."""
     if not HAS_EZDXF:
         raise ImportError("ezdxf is required for DXF processing. Install it with: pip install 'ezdxf>=0.18.0'")
 
 
 def _aci_to_hex(aci: int) -> str:
-    """‌⁠‍Convert AutoCAD Color Index (ACI) to hex color string.
+    """Convert AutoCAD Color Index (ACI) to hex color string.
 
     Returns a hex color for common ACI values, falls back to #ffffff.
     """

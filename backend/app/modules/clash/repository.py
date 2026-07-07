@@ -1,5 +1,5 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
-"""‌⁠‍Data access for the clash detection module."""
+"""Data access for the clash detection module."""
 
 from __future__ import annotations
 
@@ -43,7 +43,7 @@ _PROPERTY_MAX_KEYS = 60  # cap the selector to the top-N by coverage
 
 
 class ClashRepository:
-    """‌⁠‍CRUD for clash runs/results + the BIM element feed for the engine."""
+    """CRUD for clash runs/results + the BIM element feed for the engine."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -51,7 +51,7 @@ class ClashRepository:
     # ── BIM element feed (broad-phase input) ───────────────────────────
 
     async def models_for_project(self, project_id: uuid.UUID) -> list[BIMModel]:
-        """‌⁠‍Every BIM model belonging to ``project_id`` (newest first)."""
+        """Every BIM model belonging to ``project_id`` (newest first)."""
         stmt = select(BIMModel).where(BIMModel.project_id == project_id).order_by(BIMModel.created_at.desc())
         return list((await self.session.execute(stmt)).scalars().all())
 

@@ -1,4 +1,4 @@
-"""‌⁠‍Unit tests for version-tolerant RvtExporter / IfcExporter invocation.
+"""Unit tests for version-tolerant RvtExporter / IfcExporter invocation.
 
 Pins the v4.6.2 fix for the user-reported bug:
 
@@ -46,7 +46,7 @@ USER_REPORTED_STDERR = (
 
 @pytest.fixture(autouse=True)
 def _reset_module_state() -> None:
-    """‌⁠‍Capability + failure caches must be empty per test so cases don't
+    """Capability + failure caches must be empty per test so cases don't
     leak state into each other."""
     cad_import._CONVERTER_CAPABILITIES.clear()
     ifc_processor._LAST_DDC_FAILURE.clear()
@@ -56,7 +56,7 @@ def _reset_module_state() -> None:
 
 
 def _fake_rvt(tmp_path: Path, name: str = "input.rvt") -> Path:
-    """‌⁠‍Materialise a non-empty input file. The processor never reads its
+    """Materialise a non-empty input file. The processor never reads its
     bytes (the converter would), so the contents don't matter."""
     p = tmp_path / name
     p.write_bytes(b"x" * 256)
@@ -64,7 +64,7 @@ def _fake_rvt(tmp_path: Path, name: str = "input.rvt") -> Path:
 
 
 def _fake_converter(tmp_path: Path) -> Path:
-    """‌⁠‍Materialise a non-empty binary so ``find_converter``'s size guard
+    """Materialise a non-empty binary so ``find_converter``'s size guard
     accepts it."""
     bin_dir = tmp_path / "converter_dir"
     bin_dir.mkdir()
@@ -74,7 +74,7 @@ def _fake_converter(tmp_path: Path) -> Path:
 
 
 class _SubprocessRecorder:
-    """‌⁠‍Records every subprocess.run call and answers each one according
+    """Records every subprocess.run call and answers each one according
     to a per-output-target rule.
 
     Why per-output instead of FIFO: ``_try_cad2data`` runs the XLSX and
@@ -118,7 +118,7 @@ class _SubprocessRecorder:
         return subprocess.CompletedProcess(args=args, returncode=rc, stdout=stdout, stderr=stderr)
 
     def calls_for(self, suffix: str) -> list[list[str]]:
-        """‌⁠‍Filter recorded calls by output suffix (``.xlsx`` / ``.dae``)."""
+        """Filter recorded calls by output suffix (``.xlsx`` / ``.dae``)."""
         out: list[list[str]] = []
         for call in self.calls:
             if len(call) >= 3 and Path(call[2]).suffix.lower() == suffix.lower():
@@ -127,7 +127,7 @@ class _SubprocessRecorder:
 
 
 def _install_minimal_dependencies(monkeypatch: pytest.MonkeyPatch, *, converter: Path) -> None:
-    """‌⁠‍Patch the cad_import helpers consumed by ``_try_cad2data`` so the
+    """Patch the cad_import helpers consumed by ``_try_cad2data`` so the
     test focuses on the CLI-tolerance code path and ignores Excel parsing,
     converter discovery, etc."""
     monkeypatch.setattr(cad_import, "find_converter", lambda _ext: converter)
@@ -161,7 +161,7 @@ def _install_minimal_dependencies(monkeypatch: pytest.MonkeyPatch, *, converter:
 def test_exit_15_with_unknown_arg_stderr_retries_with_bare_invocation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """‌⁠‍User-reported bug: exit 15 + 'arguments were not expected' on the
+    """User-reported bug: exit 15 + 'arguments were not expected' on the
     first call. The retry path must fire and pass bare
     ``[converter, in, out]`` (no depth-mode, no -no-collada). On retry
     success the result carries ``converter_cli_outdated=True``."""
@@ -221,7 +221,7 @@ def test_exit_15_with_unknown_arg_stderr_retries_with_bare_invocation(
 
 
 def test_capability_matrix_strips_tokens_up_front(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """‌⁠‍When the probe has already flagged the binary as legacy, the very
+    """When the probe has already flagged the binary as legacy, the very
     first XLSX call must omit ``standard`` and ``-no-collada`` — no
     retry needed. ``converter_cli_outdated`` is still set on the result
     so the UI can warn the user to reinstall."""
@@ -253,7 +253,7 @@ def test_capability_matrix_strips_tokens_up_front(tmp_path: Path, monkeypatch: p
 
 
 def test_genuine_failure_with_unrelated_stderr_does_not_retry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """‌⁠‍A non-zero exit whose stderr doesn't mention 'unknown argument'
+    """A non-zero exit whose stderr doesn't mention 'unknown argument'
     must NOT trigger the retry path — otherwise we'd silently re-run a
     crashing converter with stripped flags and produce misleading
     success/failure pairs. Records cause != ``converter_outdated``."""
@@ -287,7 +287,7 @@ def test_genuine_failure_with_unrelated_stderr_does_not_retry(tmp_path: Path, mo
 
 
 def test_both_attempts_fail_records_converter_outdated_cause(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """‌⁠‍Both the original and the bare-retry invocations fail with the
+    """Both the original and the bare-retry invocations fail with the
     user-reported stderr. The router consumes the recorded cause to
     decide whether to show the Reinstall CTA; that cause must be
     ``converter_outdated`` so the user sees the right fix path."""
@@ -320,7 +320,7 @@ def test_both_attempts_fail_records_converter_outdated_cause(tmp_path: Path, mon
 
 
 def test_infer_failure_cause_handles_each_input_class() -> None:
-    """‌⁠‍Direct unit test for the heuristic — pins each branch of the
+    """Direct unit test for the heuristic — pins each branch of the
     decision tree so future stderr phrasings can be added safely."""
     # Direct stderr marker → converter_outdated regardless of exit code
     assert (
@@ -352,7 +352,7 @@ def test_infer_failure_cause_handles_each_input_class() -> None:
 def test_record_ddc_failure_accepts_explicit_cause(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """‌⁠‍The retry path passes ``cause="converter_outdated"`` explicitly
+    """The retry path passes ``cause="converter_outdated"`` explicitly
     so the heuristic doesn't override it. Confirms the override path."""
     # Stub away the version helpers so the test doesn't depend on disk.
     monkeypatch.setattr(

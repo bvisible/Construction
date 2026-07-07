@@ -1,4 +1,4 @@
-"""‌⁠‍CRM ORM models.
+"""CRM ORM models.
 
 Tables:
     oe_crm_account                    - customer / prospect accounts
@@ -44,7 +44,7 @@ from app.database import GUID, Base
 
 
 class PipelineStage(Base):
-    """‌⁠‍A configurable stage in the sales pipeline (Lead → Won/Lost)."""
+    """A configurable stage in the sales pipeline (Lead → Won/Lost)."""
 
     __tablename__ = "oe_crm_pipeline_stage"
 
@@ -62,7 +62,7 @@ class PipelineStage(Base):
 
 
 class WinLossReason(Base):
-    """‌⁠‍Catalogue entry for the reason an opportunity was won or lost."""
+    """Catalogue entry for the reason an opportunity was won or lost."""
 
     __tablename__ = "oe_crm_win_loss_reason"
 

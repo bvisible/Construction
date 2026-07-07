@@ -1,5 +1,5 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
-"""‌⁠‍Clash detection ORM models.
+"""Clash detection ORM models.
 
 Tables:
     oe_clash_run          - one interference/clearance analysis over N models
@@ -41,7 +41,7 @@ from app.database import GUID, Base
 
 
 class ClashRun(Base):
-    """‌⁠‍A single clash-detection analysis scoped to one project.
+    """A single clash-detection analysis scoped to one project.
 
     ``model_ids`` is the set of BIM models fed into the broad phase. With
     one model it is an *internal* (intra-model) clash; with two or more it
@@ -143,7 +143,7 @@ class ClashRun(Base):
 
 
 class ClashResult(Base):
-    """‌⁠‍One clashing element pair (A↔B) inside a :class:`ClashRun`.
+    """One clashing element pair (A↔B) inside a :class:`ClashRun`.
 
     ``status`` drives the review workflow:
     ``new`` → ``active`` → ``reviewed`` → ``approved`` / ``resolved`` /
@@ -300,7 +300,7 @@ class ClashResult(Base):
 
 
 class ClashCluster(Base):
-    """‌⁠‍AI-derived label for a run-scoped spatial cluster of clashes.
+    """AI-derived label for a run-scoped spatial cluster of clashes.
 
     The DBSCAN pass groups clash centroids that sit within ``eps_m`` of
     each other into ``cluster_id`` buckets (per :class:`ClashRun`); this
@@ -338,7 +338,7 @@ class ClashCluster(Base):
 
 
 class ClashIssue(Base):
-    """‌⁠‍Smart-issue identity of a clash across re-runs.
+    """Smart-issue identity of a clash across re-runs.
 
     A :class:`ClashResult` is *run-scoped* - the same physical interference
     re-appears as a fresh row on every re-run. The ``ClashIssue`` is the
@@ -431,7 +431,7 @@ class ClashIssue(Base):
 
 
 class ClashSuppression(Base):
-    """‌⁠‍A per-project "ignore this signature" rule.
+    """A per-project "ignore this signature" rule.
 
     Suppressing a signature flips every matching :class:`ClashIssue` to
     ``ignored`` and prevents the same signature from re-surfacing as
@@ -470,7 +470,7 @@ class ClashSuppression(Base):
 
 
 class ClashProfile(Base):
-    """‌⁠‍A reusable clash-run configuration template, scoped to one project.
+    """A reusable clash-run configuration template, scoped to one project.
 
     Table: ``oe_clash_profile``.
 

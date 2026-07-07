@@ -1,4 +1,4 @@
-"""‌⁠‍Cost Intelligence service (v3.12.0 - Stream B).
+"""Cost Intelligence service (v3.12.0 - Stream B).
 
 Implements three small, independent services that share the same module:
 
@@ -60,7 +60,7 @@ CertaintyBand = Literal["green", "yellow", "red"]
 
 
 def classify_certainty(frequency: int, age_days: int) -> CertaintyBand:
-    """‌⁠‍Map (frequency, age_days) onto a green / yellow / red band.
+    """Map (frequency, age_days) onto a green / yellow / red band.
 
     Pure function - exposed so the integration tests can pin the
     boundary behaviour without going through the DB. Matches the
@@ -99,7 +99,7 @@ def classify_certainty(frequency: int, age_days: int) -> CertaintyBand:
 
 
 class RegionalIndexService:
-    """‌⁠‍Region × category cost-factor lookup."""
+    """Region × category cost-factor lookup."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -208,7 +208,7 @@ class RegionalIndexService:
 
 
 class CostUsageRecorder:
-    """‌⁠‍Append-only writer for the per-item usage ledger."""
+    """Append-only writer for the per-item usage ledger."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -243,7 +243,7 @@ class CostUsageRecorder:
 
 
 class CostCertaintyService:
-    """‌⁠‍Frequency + recency analysis backing the certainty badge."""
+    """Frequency + recency analysis backing the certainty badge."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session

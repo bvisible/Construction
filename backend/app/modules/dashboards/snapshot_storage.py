@@ -1,4 +1,4 @@
-"""‌⁠‍Snapshot-file layout helpers.
+"""Snapshot-file layout helpers.
 
 Parquet blobs for each snapshot live under a deterministic key prefix on
 the configured :class:`~app.core.storage.StorageBackend`:
@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 # ── Constants ───────────────────────────────────────────────────────────────
 
 SNAPSHOT_ROOT: Final = "dashboards"
-"""‌⁠‍Storage key prefix for every snapshot blob."""
+"""Storage key prefix for every snapshot blob."""
 
 ParquetKind = Literal[
     "entities",
@@ -48,7 +48,7 @@ ParquetKind = Literal[
     "source_files",
     "attribute_value_index",
 ]
-"""‌⁠‍The fixed set of Parquet files a snapshot can contain. Adding a new
+"""The fixed set of Parquet files a snapshot can contain. Adding a new
 kind requires updating this literal + the migration path in T01."""
 
 MANIFEST_FILENAME: Final = "manifest.json"

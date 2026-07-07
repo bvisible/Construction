@@ -1,4 +1,4 @@
-"""‌⁠‍Cost item service - business logic for cost database management.
+"""Cost item service - business logic for cost database management.
 
 Stateless service layer. Handles:
 - Cost item CRUD
@@ -62,13 +62,13 @@ logger = logging.getLogger(__name__)
 
 
 def encode_cursor(code: str, item_id: str) -> str:
-    """‌⁠‍Pack ``(code, id)`` into a URL-safe base64 cursor token."""
+    """Pack ``(code, id)`` into a URL-safe base64 cursor token."""
     payload = _json.dumps({"code": code, "id": item_id}, separators=(",", ":"))
     return base64.urlsafe_b64encode(payload.encode("utf-8")).decode("ascii")
 
 
 def decode_cursor(token: str) -> tuple[str, str] | None:
-    """‌⁠‍Decode a cursor back to ``(code, id)``.
+    """Decode a cursor back to ``(code, id)``.
 
     Returns ``None`` for any malformed input - empty / wrong base64 /
     non-JSON / missing keys - so callers can map the failure to a 400
@@ -558,15 +558,22 @@ class CostItemService:
         if created:
             created = await self.repo.bulk_create(created)
 
-        await _safe_publish(
-            "costs.items.bulk_imported",
-            {
-                "created_count": len(created),
-                "skipped_count": len(skipped_codes),
-                "skipped_codes": skipped_codes[:20],  # Limit for event payload size
-            },
-            source_module="oe_costs",
-        )
+        payload: dict[str, object] = {
+            "created_count": len(created),
+            "skipped_count": len(skipped_codes),
+            "skipped_codes": skipped_codes[:20],  # Limit for event payload size
+        }
+        # A price-base import loads one region at a time; when every created row
+        # shares a single non-null region, pass it so the Cost Explorer reverse
+        # index can rebuild just that region (bounded by the region, and not
+        # blocked by the global auto-rebuild size cap the way a whole-catalog
+        # pass would be for a second large base).
+        created_regions = {item.region for item in created}
+        if len(created_regions) == 1:
+            only_region = next(iter(created_regions))
+            if only_region is not None:
+                payload["region"] = only_region
+        await _safe_publish("costs.items.bulk_imported", payload, source_module="oe_costs")
 
         logger.info(
             "Bulk import: %d created, %d skipped (duplicate codes)",

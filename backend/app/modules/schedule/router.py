@@ -1,4 +1,4 @@
-"""‌⁠‍Schedule API routes.
+"""Schedule API routes.
 
 Endpoints:
     POST   /schedules/                          - Create a new schedule
@@ -98,7 +98,7 @@ async def _verify_schedule_project_owner(
     user_id: str,
     payload: dict | None = None,  # noqa: ARG001 - kept for API compat; verify_project_access reads role from DB
 ) -> None:
-    """‌⁠‍Verify the current user owns the project. Admins bypass.
+    """Verify the current user owns the project. Admins bypass.
 
     Returns HTTP 404 on both "project missing" and "access denied" so the
     endpoint can't be turned into a UUID-existence oracle - matches the
@@ -115,7 +115,7 @@ async def _verify_schedule_owner(
     user_id: str,
     payload: dict | None = None,  # noqa: ARG001 - kept for API compat
 ) -> object:
-    """‌⁠‍Load a schedule and verify the user owns its project. Admins bypass.
+    """Load a schedule and verify the user owns its project. Admins bypass.
 
     Returns HTTP 404 on cross-tenant access (existence-oracle safe) so the
     schedule_id can't be enumerated by a foreign tenant. Matches the

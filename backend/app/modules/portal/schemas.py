@@ -1,5 +1,5 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
-"""‌⁠‍Customer & Partner Portal Pydantic schemas - request / response models."""
+"""Customer & Partner Portal Pydantic schemas - request / response models."""
 
 from __future__ import annotations
 
@@ -27,11 +27,32 @@ NOTIFICATION_KINDS = (
 )
 
 
+# ── Shared documents (portal-user facing) ─────────────────────────────────
+
+
+class PortalSharedDocument(BaseModel):
+    """A document shared with the portal user through a ``document`` access
+    rule. Metadata only - the bytes are streamed by the content endpoint."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    name: str
+    file_size: int = 0
+    mime_type: str = ""
+    project_id: UUID
+
+
+class PortalSharedDocumentList(BaseModel):
+    items: list[PortalSharedDocument]
+    total: int
+
+
 # ── Users ─────────────────────────────────────────────────────────────────
 
 
 class PortalUserInvite(BaseModel):
-    """‌⁠‍Body for POST /admin/users/invite."""
+    """Body for POST /admin/users/invite."""
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
@@ -44,7 +65,7 @@ class PortalUserInvite(BaseModel):
 
 
 class PortalUserResponse(BaseModel):
-    """‌⁠‍Portal user as returned to internal admins."""
+    """Portal user as returned to internal admins."""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -143,6 +164,13 @@ class SessionResponse(BaseModel):
     )
     expires_at: datetime
     portal_user: PortalUserResponse
+    redirect_path: str | None = Field(
+        default=None,
+        description=(
+            "Optional in-app path the inviter chose for this link - the "
+            "landing page navigates here after sign-in when present."
+        ),
+    )
 
 
 # ── Access rules ──────────────────────────────────────────────────────────
@@ -312,6 +340,60 @@ class PortalChangeOrderList(BaseModel):
     """List of executed change orders the caller can see."""
 
     items: list[PortalChangeOrderEntry] = Field(default_factory=list)
+    total: int = 0
+
+
+class PortalInvoiceEntry(BaseModel):
+    """Read-only client view of an issued invoice.
+
+    Only the fields a client needs to recognise and reconcile an invoice:
+    number, dates, total amount + currency, status and its project. Internal
+    line items, tax configuration, retention breakdown and draft rows are
+    deliberately omitted.
+    """
+
+    id: UUID
+    project_id: UUID
+    invoice_number: str
+    invoice_date: str = ""
+    due_date: str | None = None
+    currency_code: str = ""
+    amount_total: Decimal | None = None
+    status: str = ""
+
+
+class PortalInvoiceList(BaseModel):
+    """List of issued invoices the caller can see."""
+
+    items: list[PortalInvoiceEntry] = Field(default_factory=list)
+    total: int = 0
+
+
+# ── Portal-side BIM/CAD model visibility (view-only) ──────────────────────
+
+
+class PortalBimModelEntry(BaseModel):
+    """Read-only client view of a BIM/CAD model shared through the portal.
+
+    Only what the client needs to pick a model from a list and open it in
+    the view-only 3D viewer. No file paths, no conversion internals, no
+    BOQ/cost linkage - the geometry and element endpoints enforce the same
+    grant separately.
+    """
+
+    id: UUID
+    project_id: UUID
+    name: str
+    discipline: str = ""
+    model_format: str = ""
+    element_count: int = 0
+    status: str = ""
+
+
+class PortalBimModelList(BaseModel):
+    """List of BIM/CAD models the caller can see, view-only."""
+
+    items: list[PortalBimModelEntry] = Field(default_factory=list)
     total: int = 0
 
 
@@ -519,6 +601,8 @@ __all__ = [
     "PaymentApplicationSubmitPayload",
     "PortalAgreementSummary",
     "PortalAgreementSummaryList",
+    "PortalBimModelEntry",
+    "PortalBimModelList",
     "PortalChangeOrderEntry",
     "PortalChangeOrderList",
     "PortalProgressReportEntry",

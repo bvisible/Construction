@@ -1,4 +1,4 @@
-"""‌⁠‍Security response headers middleware.
+"""Security response headers middleware.
 
 Adds the standard set of defensive HTTP response headers:
   - X-Frame-Options: SAMEORIGIN      (clickjacking; allows same-origin PDF preview)
@@ -18,7 +18,7 @@ from starlette.responses import Response
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
-    """‌⁠‍Adds defensive HTTP headers to every response.
+    """Adds defensive HTTP headers to every response.
 
     Most headers are set unconditionally; HSTS is only emitted when the
     request comes in over HTTPS to avoid breaking local dev.
@@ -83,7 +83,12 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "https://fonts.googleapis.com https://fonts.gstatic.com "
             "https://tiles.openfreemap.org https://*.openfreemap.org "
             "https://nominatim.openstreetmap.org "
-            "https://tile.openstreetmap.org https://*.tile.openstreetmap.org; "
+            "https://tile.openstreetmap.org https://*.tile.openstreetmap.org "
+            # The dashboard site cards and the project weather card fetch
+            # Open-Meteo (keyless, no vendor lock-in) straight from the
+            # browser. Without these hosts on connect-src the fetch is
+            # CSP-blocked and the weather silently renders nothing.
+            "https://api.open-meteo.com https://archive-api.open-meteo.com; "
             "frame-ancestors 'self'; "
             "base-uri 'self'; "
             "form-action 'self'"

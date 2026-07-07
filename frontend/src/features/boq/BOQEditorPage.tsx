@@ -15,6 +15,7 @@ import { useAuthStore } from '@/stores/useAuthStore';
 import { useBIMLinkSelectionStore } from '@/stores/useBIMLinkSelectionStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { usePreferencesStore } from '@/stores/usePreferencesStore';
+import { useDisplayQuantity } from '@/shared/hooks/useDisplayQuantity';
 import {
   boqApi,
   groupPositionsIntoSections,
@@ -32,7 +33,7 @@ import {
   type CopilotResource,
   DEFAULT_MAX_NESTING_DEPTH,
 } from './api';
-import { resourceSplitMoneyTotals } from './grid/columnDefs';
+import { resourceSplitMoneyTotals, nextResourceSplitMode, type ResourceSplitMode } from './grid/columnDefs';
 import { ApiError } from '@/shared/lib/api';
 import { projectsApi, type Project, type ProjectFxRate } from '@/features/projects/api';
 import { fetchBIMModels } from '@/features/bim/api';
@@ -106,6 +107,7 @@ import { CostDatabaseSearchModal, AssemblyPickerModal } from './BOQModals';
 import { CatalogPickerModal, type CatalogResource } from './CatalogPickerModal';
 import { CustomColumnsDialog } from './CustomColumnsDialog';
 import { BOQVariablesDialog } from './BOQVariablesDialog';
+import { CostPerAreaBenchmark } from './CostPerAreaBenchmark';
 import { RenumberDialog } from './RenumberDialog';
 import { LinkedPositionsModal } from './LinkedPositionsModal';
 
@@ -211,6 +213,10 @@ export function BOQEditorPage() {
   // chosen system (storage stays metric-canonical; only the export boundary
   // converts).
   const measurementSystem = usePreferencesStore((s) => s.measurementSystem);
+  // Issue #287: display<->metric conversion seam for batch write actions. The
+  // grid renders/edits in the chosen system while storage stays canonical, so
+  // absolute batch values typed by the user must be reversed to metric here.
+  const displayQuantity = useDisplayQuantity();
   /**
    * Project FX template (RFC 37 / Issue #93) — flatten to the shape BOQGrid
    * expects (`currency` + numeric `rate`). The API returns `code` and a
@@ -247,6 +253,16 @@ export function BOQEditorPage() {
     if (!Array.isArray(vs)) return [];
     return vs as import('./api').BOQVariable[];
   }, [boq]);
+
+  // Gross floor area from the BOQ $GFA variable - drives the cost-per-m2
+  // benchmark strip. Null (no numeric $GFA set) hides the strip entirely, so
+  // it never shows a figure divided by an unknown area.
+  const grossFloorArea = useMemo<number | null>(() => {
+    const v = boqVariables.find((x) => x.name.trim().toUpperCase() === 'GFA');
+    if (!v) return null;
+    const n = typeof v.value === 'number' ? v.value : parseFloat(String(v.value));
+    return Number.isFinite(n) && n > 0 ? n : null;
+  }, [boqVariables]);
   const fmt = useMemo(
     () => createFormatter(locale),
     [locale],
@@ -1160,6 +1176,14 @@ export function BOQEditorPage() {
   const [excelPasteOpen, setExcelPasteOpen] = useState(false);
   const [customColumnsOpen, setCustomColumnsOpen] = useState(false);
   const [variablesOpen, setVariablesOpen] = useState(false);
+  // Issue #292 - one-shot seed for the variables dialog when a position
+  // quantity is captured from the grid context menu. A fresh object per
+  // capture doubles as the dialog's apply-once token.
+  const [variableSeed, setVariableSeed] = useState<{ value: number; label?: string } | null>(null);
+  const handleSaveQuantityAsVariable = useCallback((quantity: number, label: string) => {
+    setVariableSeed({ value: quantity, label });
+    setVariablesOpen(true);
+  }, []);
   const [isExcelPasteImporting, setIsExcelPasteImporting] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
   /** When set, the cost DB modal adds a resource to this position instead of creating a new position. */
@@ -1567,10 +1591,19 @@ export function BOQEditorPage() {
       for (const id of ids) {
         const pos = boq.positions.find((p) => p.id === id);
         if (!pos || isSection(pos)) continue;
+        // Issue #287: the batch value is typed in the DISPLAYED measurement
+        // system. Convert it to metric-canonical storage against each
+        // position's own unit before writing. Identity for the metric system /
+        // unmapped units, so metric users get the exact value they typed.
+        const unit = (pos.unit as string | undefined) ?? '';
+        const metricValue =
+          field === 'unit_rate'
+            ? displayQuantity.toMetricRate(value, unit)
+            : displayQuantity.toMetric(value, unit);
         const oldData: UpdatePositionData =
           field === 'unit_rate' ? { unit_rate: pos.unit_rate } : { quantity: pos.quantity };
         const newData: UpdatePositionData =
-          field === 'unit_rate' ? { unit_rate: value } : { quantity: value };
+          field === 'unit_rate' ? { unit_rate: metricValue } : { quantity: metricValue };
         trackedUpdate(id, newData, oldData);
         count++;
       }
@@ -1584,7 +1617,7 @@ export function BOQEditorPage() {
         } as Record<string, string>),
       });
     },
-    [boq, trackedUpdate, addToast, t],
+    [boq, trackedUpdate, addToast, t, displayQuantity],
   );
 
   /**
@@ -2249,24 +2282,34 @@ export function BOQEditorPage() {
    *  keeps their chosen layout across BOQs. Off by default - the three
    *  percentage columns only appear once the user enables them from the
    *  toolbar's Grid Settings menu. */
-  const RESOURCE_SPLIT_KEY = 'oe_boq_show_resource_split';
-  const [showResourceSplit, setShowResourceSplit] = useState<boolean>(() => {
+  const RESOURCE_SPLIT_KEY = 'oe_boq_resource_split_mode';
+  const LEGACY_RESOURCE_SPLIT_KEY = 'oe_boq_show_resource_split';
+  const [resourceSplitMode, setResourceSplitMode] = useState<ResourceSplitMode>(() => {
     try {
-      return localStorage.getItem(RESOURCE_SPLIT_KEY) === '1';
+      const v = localStorage.getItem(RESOURCE_SPLIT_KEY);
+      if (v === 'pill' || v === 'columns' || v === 'off') return v;
+      // Migrate the old boolean preference: "on" meant the % columns.
+      if (localStorage.getItem(LEGACY_RESOURCE_SPLIT_KEY) === '1') return 'columns';
+      return 'pill';
     } catch {
-      return false;
+      return 'pill';
     }
   });
-  const toggleResourceSplit = useCallback(() => {
-    setShowResourceSplit((prev) => {
-      const next = !prev;
+  const cycleResourceSplit = useCallback(() => {
+    setResourceSplitMode((prev) => {
+      const next = nextResourceSplitMode(prev);
       try {
-        if (next) localStorage.setItem(RESOURCE_SPLIT_KEY, '1');
-        else localStorage.removeItem(RESOURCE_SPLIT_KEY);
+        localStorage.setItem(RESOURCE_SPLIT_KEY, next);
+        localStorage.removeItem(LEGACY_RESOURCE_SPLIT_KEY);
       } catch { /* localStorage unavailable / quota — silently ignore */ }
       return next;
     });
   }, []);
+  // Derived view flags: the grid reads `showResourceSplit` (columns) and the
+  // description cell reads `showResourceSplitPill` (inline badge). At most one
+  // is true; both false when the user cycled the button to `off`.
+  const showResourceSplit = resourceSplitMode === 'columns';
+  const showResourceSplitPill = resourceSplitMode === 'pill';
 
   const displayCurrencyMeta = useMemo(() => {
     if (!displayCurrency) return null;
@@ -4898,8 +4941,8 @@ export function BOQEditorPage() {
           onAcceptAllAnomalies={anomalyMap.size > 0 ? handleAcceptAllAnomalies : undefined}
           onManageColumns={() => setCustomColumnsOpen(true)}
           customColumnCount={boqCustomColumns.length}
-          showResourceSplit={showResourceSplit}
-          onToggleResourceSplit={toggleResourceSplit}
+          resourceSplitMode={resourceSplitMode}
+          onCycleResourceSplit={cycleResourceSplit}
           onManageVariables={() => setVariablesOpen(true)}
           onRenumber={handleRenumber}
           isRenumbering={renumberMutation.isPending}
@@ -4983,6 +5026,7 @@ export function BOQEditorPage() {
               ? { code: displayCurrencyMeta.currency, rate: displayCurrencyMeta.rate }
               : null
           }
+          sectionTotalBasis={directCost}
           onOpenFxRateSettings={
             boq?.project_id
               ? () => navigate(`/projects/${boq.project_id}/settings#fx-rates`)
@@ -5022,8 +5066,10 @@ export function BOQEditorPage() {
           anomalyMap={anomalyMap}
           onApplyAnomalySuggestion={handleApplyAnomalySuggestion}
           onSaveAsAssembly={handleSaveAsAssembly}
+          onSaveQuantityAsVariable={handleSaveQuantityAsVariable}
           customColumns={boqCustomColumns}
           showResourceSplit={showResourceSplit}
+          showResourceSplitPill={showResourceSplitPill}
           boqVariables={boqVariables}
           bimModelId={bimModelId}
           onHighlightBIMElements={(elementIds) => {
@@ -5075,6 +5121,17 @@ export function BOQEditorPage() {
             openSignal={markupOpenSignal}
           />
         </div>
+      )}
+
+      {/* ── Cost per m2 benchmark strip ──────────────────────────────────
+          Self-hides when the BOQ has no $GFA variable to divide by. */}
+      {boqId && hasPositions && (
+        <CostPerAreaBenchmark
+          directCost={directCost}
+          currencyCode={currencyCode}
+          grossFloorArea={grossFloorArea}
+          locale={locale}
+        />
       )}
 
       {/* ── Resource Summary ──────────────────────────────────────────── */}
@@ -5442,8 +5499,9 @@ export function BOQEditorPage() {
       {boqId && (
         <BOQVariablesDialog
           open={variablesOpen}
-          onClose={() => setVariablesOpen(false)}
+          onClose={() => { setVariablesOpen(false); setVariableSeed(null); }}
           boqId={boqId}
+          seed={variableSeed}
         />
       )}
 

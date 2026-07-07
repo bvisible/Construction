@@ -1,4 +1,4 @@
-"""‌⁠‍Audit log API routes (admin-only).
+"""Audit log API routes (admin-only).
 
 Endpoints:
     GET    /api/v1/audit                            - list audit entries with filters
@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 
 
 def _entry_to_dict(entry: AuditEntry) -> dict[str, Any]:
-    """‌⁠‍Serialise an ``AuditEntry`` to a plain dict for JSON response."""
+    """Serialise an ``AuditEntry`` to a plain dict for JSON response."""
     return {
         "id": str(entry.id),
         "action": entry.action,
@@ -71,7 +71,7 @@ async def list_audit_entries(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> list[dict[str, Any]]:
-    """‌⁠‍List audit log entries with optional filters (admin only)."""
+    """List audit log entries with optional filters (admin only)."""
     entries = await get_audit_entries(
         session,
         entity_type=entity_type,
@@ -99,7 +99,7 @@ async def count_audit(
     date_from: str | None = Query(default=None),
     date_to: str | None = Query(default=None),
 ) -> dict[str, int]:
-    """‌⁠‍Total rows matching the current filter (used by the admin pager)."""
+    """Total rows matching the current filter (used by the admin pager)."""
     total = await count_audit_entries(
         session,
         entity_type=entity_type,

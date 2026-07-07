@@ -106,6 +106,15 @@ class FileCommentResponse(BaseModel):
     file_version_id: UUID | None = None
     parent_id: UUID | None = None
     author_id: UUID
+    # Pre-resolved display label for ``author_id`` (full name, falling back
+    # to email, then a short id). Server-side enrichment keeps a single
+    # source of truth so every consumer renders the same name without an
+    # N-lookup on the client. Both the bulk thread path and the create /
+    # patch endpoints resolve this server-side and never blank the byline -
+    # a missing or deleted author row falls back to a short id - so in
+    # practice it is always populated; ``None`` is only the schema default
+    # before enrichment runs.
+    author_name: str | None = None
     body: str
     page_number: int | None = None
     anchor_x: float | None = None

@@ -1,10 +1,10 @@
-"""‌⁠‍Finance module permission definitions."""
+"""Finance module permission definitions."""
 
 from app.core.permissions import Role, permission_registry
 
 
 def register_finance_permissions() -> None:
-    """‌⁠‍Register permissions for the finance module.
+    """Register permissions for the finance module.
 
     R7 audit (2026-05-24):
         Three new permission keys split off from the generic

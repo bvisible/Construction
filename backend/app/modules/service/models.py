@@ -1,4 +1,4 @@
-"""‌⁠‍Service & Maintenance ORM models.
+"""Service & Maintenance ORM models.
 
 Tables:
     oe_service_contract               - customer-scoped service agreement
@@ -34,7 +34,7 @@ from app.database import GUID, Base
 
 
 class ServiceContract(Base):
-    """‌⁠‍Service agreement between us (provider) and a customer (Contact).
+    """Service agreement between us (provider) and a customer (Contact).
 
     A contract scopes assets, tickets and work orders. It is *not* required
     to be linked to a project - service work routinely spans many projects
@@ -119,7 +119,7 @@ class ServiceContract(Base):
 
 
 class ServiceAsset(Base):
-    """‌⁠‍A serviceable customer asset (boiler, AHU, lift, generator, etc.)."""
+    """A serviceable customer asset (boiler, AHU, lift, generator, etc.)."""
 
     __tablename__ = "oe_service_asset"
 
@@ -497,7 +497,7 @@ class AssetInspectionChecklist(Base):
 
 
 class ServiceRecurringSchedule(Base):
-    """‌⁠‍RRULE-driven schedule that materialises ServiceTicket rows on a cadence.
+    """RRULE-driven schedule that materialises ServiceTicket rows on a cadence.
 
     Distinct from ``ServiceSchedule`` (asset-scoped PPM with a fixed frequency
     enum) - this row is project-scoped and uses iCalendar RFC 5545 RRULE

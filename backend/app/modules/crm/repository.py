@@ -1,4 +1,4 @@
-"""‌⁠‍CRM data access layer."""
+"""CRM data access layer."""
 
 from __future__ import annotations
 
@@ -230,7 +230,7 @@ class OpportunityRepository:
         return list(result.scalars().all())
 
     async def pipeline_value_by_owner(self) -> dict[uuid.UUID | None, Decimal]:
-        """‌⁠‍Aggregate sum(estimated_value) for open opportunities grouped by owner.
+        """Aggregate sum(estimated_value) for open opportunities grouped by owner.
 
         Returns Decimal - Round-5 audit closed the legacy float coercion
         that silently drifted cents per million-dollar pipeline. Money
@@ -246,7 +246,7 @@ class OpportunityRepository:
         return {row[0]: Decimal(str(row[1] or 0)) for row in result.all()}
 
     async def opportunities_closing_within_days(self, days: int) -> list[Opportunity]:
-        """‌⁠‍Return open opportunities with expected_close_date within ``days`` from today."""
+        """Return open opportunities with expected_close_date within ``days`` from today."""
         from datetime import timedelta as _td
 
         today = _date.today()

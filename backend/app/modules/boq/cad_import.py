@@ -2,7 +2,7 @@
 # CAD2DATA Pipeline · CWICR Cost Database Engine
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
 # AGPL-3.0 License · DDC-CWICR-OE-2026
-"""‌⁠‍CAD/BIM file import via DDC Community converters.
+"""CAD/BIM file import via DDC Community converters.
 
 Workflow:
 1. User uploads .rvt/.ifc/.dwg/.dgn file
@@ -119,7 +119,7 @@ CONVERTER_SEARCH_PATHS: list[Path] = [
 
 
 def _find_ddc_toolkit_bin() -> Path | None:
-    """‌⁠‍Auto-detect DDC toolkit converters/bin from editable install or known paths.
+    """Auto-detect DDC toolkit converters/bin from editable install or known paths.
 
     Search order, in priority:
 
@@ -202,7 +202,7 @@ if _ddc_bin:
 
 
 def find_converter(extension: str) -> Path | None:
-    """‌⁠‍Find the converter executable for a given file extension.
+    """Find the converter executable for a given file extension.
 
     Searches through ``CONVERTER_SEARCH_PATHS`` in order and returns the
     first existing executable path, or ``None`` if no converter is found.
@@ -889,7 +889,7 @@ def smoke_test_converter(extension: str, force: bool = False) -> ConverterHealth
 
 
 def read_rvt_revit_version(path: Path, *, max_scan_bytes: int = 262144) -> dict[str, str | None]:
-    """‌⁠‍Extract Revit version metadata from a .rvt file header.
+    """Extract Revit version metadata from a .rvt file header.
 
     RVT files are OLE Compound Documents. The ``BasicFileInfo`` stream
     near the start contains UTF-16-LE text like ``Format: 2024`` and
@@ -946,7 +946,7 @@ def read_rvt_revit_version(path: Path, *, max_scan_bytes: int = 262144) -> dict[
 
 
 def detect_converter_version(extension: str) -> dict[str, str | None]:
-    """‌⁠‍Detect the installed DDC converter's version.
+    """Detect the installed DDC converter's version.
 
     On Linux: uses ``dpkg-query -f '${Version}\\n' -W ddc-<ext>converter``
     to read the apt-installed package version.
@@ -1049,7 +1049,7 @@ CLI_PROFILE_UNKNOWN = "unknown"
 
 
 def _default_capabilities() -> dict[str, Any]:
-    """‌⁠‍Conservative defaults for an unknown/old binary.
+    """Conservative defaults for an unknown/old binary.
 
     Old DDC CLIs only accept ``[converter, input, output]`` - they reject
     the depth-mode positional and the ``-no-collada`` flag.  When the probe
@@ -1074,7 +1074,7 @@ def _default_capabilities() -> dict[str, Any]:
 
 
 def _modern_capabilities(version_text: str | None = None) -> dict[str, Any]:
-    """‌⁠‍Capability profile for a confirmed v17-era DDC binary.
+    """Capability profile for a confirmed v17-era DDC binary.
 
     "Modern" historically meant v17.x (positional CLI that DID accept
     ``standard`` and ``-no-collada``). v18+ uses a different shape - see
@@ -1103,7 +1103,7 @@ def _v18_capabilities(
     *,
     help_tokens: set[str] | None = None,
 ) -> dict[str, Any]:
-    """‌⁠‍Capability profile for a confirmed DDC v18.x flag-driven binary.
+    """Capability profile for a confirmed DDC v18.x flag-driven binary.
 
     v18 dropped the legacy positional output path AND the ``-no-collada``
     flag in favour of:
@@ -1205,7 +1205,7 @@ _V18_GEOMETRY_TOKENS = ("-d", "--dae", "-m", "--mode")
 
 
 def _tokenize_help(text: str) -> set[str]:
-    """‌⁠‍Split DDC --help output into a set of whitespace-delimited tokens.
+    """Split DDC --help output into a set of whitespace-delimited tokens.
 
     Strips trailing punctuation that the CLI11 / Qt help formatter
     sometimes appends (``,`` / ``.`` / ``;``) so an exact-match lookup
@@ -1223,7 +1223,7 @@ def _tokenize_help(text: str) -> set[str]:
 
 
 def _classify_help_text(text: str) -> str:
-    """‌⁠‍Pick the CLI profile from a probed --help / --version blob.
+    """Pick the CLI profile from a probed --help / --version blob.
 
     Returns one of the ``CLI_PROFILE_*`` constants. Resolution order:
 
@@ -1270,7 +1270,7 @@ def build_ddc_args(
     include_no_dae: bool = False,
     include_no_xlsx: bool = False,
 ) -> list[str]:
-    """‌⁠‍Compose a DDC converter command line that matches the binary's CLI shape.
+    """Compose a DDC converter command line that matches the binary's CLI shape.
 
     Single source of truth for the v18-flag / v17-positional split. The
     caller picks which outputs it wants by passing ``xlsx_out`` / ``dae_out``;
@@ -1329,7 +1329,7 @@ def build_ddc_args(
 
 
 def detect_converter_capabilities(extension: str) -> dict[str, Any]:
-    """‌⁠‍Probe the installed DDC converter to learn which CLI args it accepts.
+    """Probe the installed DDC converter to learn which CLI args it accepts.
 
     The probe runs the binary with ``--help`` (and falls back to
     ``--version``); both calls are cheap (sub-second, no file IO).
@@ -1482,7 +1482,7 @@ def detect_converter_capabilities(extension: str) -> dict[str, Any]:
 
 
 def invalidate_converter_capabilities(extension: str | None = None) -> None:
-    """‌⁠‍Drop the cached capability profile so the next conversion re-probes.
+    """Drop the cached capability profile so the next conversion re-probes.
 
     Call this after a reinstall / update so an upgraded binary's new
     argument shape is picked up without a service restart.  Matches the

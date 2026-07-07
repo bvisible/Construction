@@ -1,5 +1,5 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
-"""‌⁠‍Clash AI Triage module manifest."""
+"""Clash AI Triage module manifest."""
 
 from app.core.module_loader import ModuleManifest
 

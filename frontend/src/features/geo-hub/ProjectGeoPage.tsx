@@ -474,9 +474,22 @@ export function ProjectGeoPage() {
         });
       } catch {
         // 422 (address missing a country), 502 (geocoder down), 409 (raced
-        // a concurrent anchor) - all leave the empty state in place, which
-        // already explains the manual fallbacks. No toast: this ran on its
-        // own, not from a user click.
+        // a concurrent anchor) - all leave the empty state in place. This ran
+        // on its own, so show a single non-blocking hint (not an error) that
+        // explains why nothing was placed and points at the manual pin, rather
+        // than leaving the user staring at an empty map wondering what to do.
+        if (!cancelled) {
+          addToast({
+            type: 'info',
+            title: t('geo_hub.auto_anchor_hint_title', {
+              defaultValue: 'Could not place this project automatically',
+            }),
+            message: t('geo_hub.auto_anchor_hint_msg', {
+              defaultValue:
+                'Its address could not be located. Use "Place a pin on the map" below to set the location by hand.',
+            }),
+          });
+        }
       } finally {
         if (!cancelled) setAutoAnchorRunning(false);
       }
@@ -492,6 +505,8 @@ export function ProjectGeoPage() {
     projectQuery.data,
     projectHasCountry,
     queryClient,
+    addToast,
+    t,
   ]);
 
   // Apply optional ?phase / ?block / ?dev_id deep-link filters to the

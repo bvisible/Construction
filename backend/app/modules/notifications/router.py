@@ -1,4 +1,4 @@
-"""‌⁠‍Notification API routes.
+"""Notification API routes.
 
 Endpoints:
     GET    /                              - list current user's notifications
@@ -74,7 +74,7 @@ def _get_service(session: SessionDep) -> NotificationService:
 
 
 def _to_response(n: object) -> NotificationResponse:
-    """‌⁠‍Build a NotificationResponse from a Notification ORM object."""
+    """Build a NotificationResponse from a Notification ORM object."""
     return NotificationResponse(
         id=n.id,  # type: ignore[attr-defined]
         user_id=n.user_id,  # type: ignore[attr-defined]
@@ -105,7 +105,7 @@ async def list_notifications(
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
 ) -> NotificationListResponse:
-    """‌⁠‍List current user's notifications (paginated)."""
+    """List current user's notifications (paginated)."""
     items, total = await service.list_for_user(user_id, is_read=is_read, limit=limit, offset=offset)
     unread = await service.count_unread(user_id)
     return NotificationListResponse(
@@ -196,7 +196,7 @@ async def list_preferences(
     user_id: CurrentUserId,
     service: NotificationService = Depends(_get_service),
 ) -> list[PreferenceResponse]:
-    """‌⁠‍Return all notification preferences for the current user."""
+    """Return all notification preferences for the current user."""
     prefs = await service.get_preferences(user_id)
     return [_pref_to_response(p) for p in prefs]
 
@@ -207,7 +207,7 @@ async def upsert_preference(
     user_id: CurrentUserId,
     service: NotificationService = Depends(_get_service),
 ) -> PreferenceResponse:
-    """‌⁠‍Upsert a single (event_type, channel) preference for the current user."""
+    """Upsert a single (event_type, channel) preference for the current user."""
     pref = await service.set_preference(
         user_id,
         event_type=body.event_type,
@@ -222,7 +222,7 @@ async def upsert_preference(
 async def list_event_types(
     user_id: CurrentUserId,  # noqa: ARG001 - auth gate only
 ) -> list[EventTypeCatalogEntry]:
-    """‌⁠‍Return the catalogue of known event-types the platform may emit."""
+    """Return the catalogue of known event-types the platform may emit."""
     return [EventTypeCatalogEntry(**entry) for entry in KNOWN_EVENT_TYPES]
 
 
@@ -231,7 +231,7 @@ async def flush_digest(
     payload: CurrentUserPayload,
     channel: str = Query(default="email", pattern=r"^(email|inapp|webhook)$"),
 ) -> dict[str, int | str]:
-    """‌⁠‍Manually trigger a digest flush for the given channel.
+    """Manually trigger a digest flush for the given channel.
 
     Admin-only - guarded inline because ``notifications.admin`` is not yet
     registered with the global permission registry; falling back to the
@@ -254,7 +254,7 @@ async def flush_digest(
 
 
 async def _authenticate_ws(token: str | None) -> dict[str, Any] | None:
-    """‌⁠‍Decode a JWT passed as ``?token=`` on a WebSocket upgrade.
+    """Decode a JWT passed as ``?token=`` on a WebSocket upgrade.
 
     Matches the collab-locks pattern: returns the payload on success,
     or ``None`` on any failure (the caller closes the socket with
@@ -381,7 +381,7 @@ async def list_webhook_targets(
     payload: CurrentUserPayload,
     session: SessionDep,
 ) -> list[WebhookTargetResponse]:
-    """‌⁠‍Admin-only: list every registered webhook target."""
+    """Admin-only: list every registered webhook target."""
     _require_admin(payload)
     stmt = select(WebhookTarget).order_by(WebhookTarget.created_at.desc())
     rows = list((await session.execute(stmt)).scalars().all())
@@ -399,7 +399,7 @@ async def create_webhook_target(
     session: SessionDep,
     _perm: None = Depends(RequirePermission("notifications.admin.webhooks")),
 ) -> WebhookTargetResponse:
-    """‌⁠‍Admin-only: register a new webhook target."""
+    """Admin-only: register a new webhook target."""
     _require_admin(payload)
     target = WebhookTarget(
         name=body.name,
@@ -422,7 +422,7 @@ async def update_webhook_target(
     session: SessionDep,
     _perm: None = Depends(RequirePermission("notifications.admin.webhooks")),
 ) -> WebhookTargetResponse:
-    """‌⁠‍Admin-only: partial update on an existing webhook target."""
+    """Admin-only: partial update on an existing webhook target."""
     _require_admin(payload)
     target = await session.get(WebhookTarget, target_id)
     if target is None:
@@ -458,7 +458,7 @@ async def delete_webhook_target(
     session: SessionDep,
     _perm: None = Depends(RequirePermission("notifications.admin.webhooks")),
 ) -> None:
-    """‌⁠‍Admin-only: delete a webhook target."""
+    """Admin-only: delete a webhook target."""
     _require_admin(payload)
     target = await session.get(WebhookTarget, target_id)
     if target is None:

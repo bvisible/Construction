@@ -1,4 +1,4 @@
-"""‌⁠‍BOQ data access layer.
+"""BOQ data access layer.
 
 All database queries for BOQs, positions, markups, and activity logs live here.
 No business logic - pure data access.
@@ -34,13 +34,13 @@ _POSITION_NOLOAD_TREE = (noload(Position.children), noload(Position.parent))
 
 
 class BOQRepository:
-    """‌⁠‍Data access for BOQ model."""
+    """Data access for BOQ model."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
     async def get_by_id(self, boq_id: uuid.UUID) -> BOQ | None:
-        """‌⁠‍Get BOQ by ID."""
+        """Get BOQ by ID."""
         return await self.session.get(BOQ, boq_id)
 
     async def list_for_project(

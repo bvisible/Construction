@@ -1,4 +1,4 @@
-"""‌⁠‍Module manifest for oe_latam_pack."""
+"""Module manifest for oe_latam_pack."""
 
 from app.core.module_loader import ModuleManifest
 

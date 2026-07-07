@@ -1,4 +1,4 @@
-"""‌⁠‍Risk Register Pydantic schemas - request/response models.
+"""Risk Register Pydantic schemas - request/response models.
 
 Defines create, update, and response schemas for risk register items.
 Numeric values (probability, impact_cost, risk_score, response_cost) are stored
@@ -105,7 +105,7 @@ _STATUS_PATTERN = r"^(?:" + "|".join(STATUS_VALUES) + r")$"
 
 
 class RiskCreate(BaseModel):
-    """‌⁠‍Create a new risk item."""
+    """Create a new risk item."""
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
@@ -152,7 +152,7 @@ class RiskCreate(BaseModel):
 
 
 class RiskUpdate(BaseModel):
-    """‌⁠‍Partial update for a risk item."""
+    """Partial update for a risk item."""
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
@@ -320,7 +320,7 @@ class RiskEscalationSweepResult(BaseModel):
 
 
 class RiskSimulateRequest(BaseModel):
-    """‌⁠‍Request body for ``POST /v1/risk/projects/{id}/simulate``.
+    """Request body for ``POST /v1/risk/projects/{id}/simulate``.
 
     ``iterations`` is bounded so a misconfigured client can't accidentally
     DoS the worker; 100 000 samples per risk is plenty for stable

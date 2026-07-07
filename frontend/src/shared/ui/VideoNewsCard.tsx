@@ -18,7 +18,7 @@ import { Play, ExternalLink, X } from 'lucide-react';
  */
 
 const VIDEO_URL = 'https://youtu.be/R_PQQHXY-rQ';
-const THUMBNAIL = '/brand/uberization-construction.jpg';
+const THUMBNAIL = '/brand/artem-boiko-avatar.png';
 
 type CardView = 'full' | 'mini' | 'gone';
 

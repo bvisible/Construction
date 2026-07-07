@@ -35,6 +35,7 @@ import { PageHeader } from '@/shared/ui/PageHeader';
 import { projectsApi } from '@/features/projects/api';
 import { fetchDocuments } from '@/features/documents/api';
 import { listTickets } from '@/features/service/api';
+import { fetchBIMModels } from '@/features/bim/api';
 import { copyToClipboard } from '@/shared/lib/browser';
 import { DateDisplay } from '@/shared/ui/DateDisplay';
 import { useToastStore } from '@/stores/useToastStore';
@@ -58,6 +59,7 @@ import {
 } from './api';
 import { ProgressReportsTab } from './ProgressReportsTab';
 import { portalGuide } from './portalGuide';
+import { buildMagicLinkUrl, resolveLandingPath } from './portalLanding';
 
 type Tab = 'users' | 'access_rules' | 'audit_log' | 'progress_reports';
 
@@ -107,6 +109,8 @@ function portalResourceLink(type: string, id: string): string | null {
       return '/property-dev';
     case 'document':
       return '/files';
+    case 'bim':
+      return '/bim';
     case 'ticket':
       return '/service';
     case 'invoice':
@@ -165,6 +169,12 @@ export function PortalPage() {
     token: string;
     expires_at: string;
     email: string;
+    // Role + inviter-chosen redirect drive which landing the generated magic
+    // URL points at (generic /portal/home vs the subcontractor /portal/payments
+    // vs an explicit redirect_path). Without these the URL was hard-coded to
+    // the payment portal for every role.
+    portal_role: PortalRole | string;
+    redirect_path: string | null;
   } | null>(null);
 
   const usersQ = useQuery({
@@ -311,6 +321,8 @@ export function PortalPage() {
           email={lastInviteLink.email}
           token={lastInviteLink.token}
           expiresAt={lastInviteLink.expires_at}
+          portalRole={lastInviteLink.portal_role}
+          redirectPath={lastInviteLink.redirect_path}
           onDismiss={() => setLastInviteLink(null)}
         />
       )}
@@ -458,6 +470,11 @@ export function PortalPage() {
               email: selectedUser.email,
               token: link.token,
               expires_at: link.expires_at,
+              // Resend keeps the user's existing role; it does not carry an
+              // explicit redirect, so the banner falls back to the role
+              // default.
+              portal_role: selectedUser.portal_role,
+              redirect_path: null,
             });
           }}
         />
@@ -471,8 +488,14 @@ export function PortalPage() {
             setInviteOpen(false);
             setInvitePrefill(null);
           }}
-          onInvited={(email, token, expires_at) => {
-            setLastInviteLink({ email, token, expires_at });
+          onInvited={(email, token, expires_at, portal_role, redirect_path) => {
+            setLastInviteLink({
+              email,
+              token,
+              expires_at,
+              portal_role,
+              redirect_path,
+            });
           }}
         />
       )}
@@ -494,11 +517,15 @@ function MagicLinkBanner({
   email,
   token,
   expiresAt,
+  portalRole,
+  redirectPath,
   onDismiss,
 }: {
   email: string;
   token: string;
   expiresAt: string;
+  portalRole: PortalRole | string;
+  redirectPath: string | null;
   onDismiss: () => void;
 }) {
   const { t } = useTranslation();
@@ -506,9 +533,12 @@ function MagicLinkBanner({
   // Build the full, ready-to-send sign-in URL from the one-time token. The
   // backend returns only the token (it cannot know the public origin behind a
   // reverse proxy), so the admin's current origin is the correct base for a
-  // self-hosted deployment. ``/portal/payments`` is the portal-session landing
-  // that consumes the token, opens the session, then strips it from the URL.
-  const magicUrl = `${window.location.origin}/portal/payments?token=${encodeURIComponent(token)}`;
+  // self-hosted deployment. The URL targets the role's consume-capable landing
+  // (/portal/home or /portal/payments); the inviter's redirect_path is NOT in
+  // the URL - only those landings consume the one-time token, so a deep path
+  // would bounce to /login. The redirect_path is stored with the invite and the
+  // landing forwards the signed-in user there (shown below for the admin).
+  const magicUrl = buildMagicLinkUrl(window.location.origin, token, portalRole);
   const copy = async () => {
     try {
       await copyToClipboard(magicUrl);
@@ -541,6 +571,12 @@ function MagicLinkBanner({
             {t('portal.expires_at', { defaultValue: 'Expires' })}{' '}
             <DateDisplay value={expiresAt} />
           </p>
+          {redirectPath?.trim() ? (
+            <p className="mt-0.5 text-xs text-content-tertiary">
+              {t('portal.magic_link_opens', { defaultValue: 'After sign-in, opens:' })}{' '}
+              <span className="font-mono">{resolveLandingPath(portalRole, redirectPath)}</span>
+            </p>
+          ) : null}
           <code className="mt-2 block w-full truncate rounded bg-surface-secondary px-2 py-1.5 font-mono text-xs">
             {magicUrl}
           </code>
@@ -1099,7 +1135,13 @@ function InviteModal({
 }: {
   initial?: { email?: string; full_name?: string; portal_role?: PortalRole };
   onClose: () => void;
-  onInvited: (email: string, token: string, expires_at: string) => void;
+  onInvited: (
+    email: string,
+    token: string,
+    expires_at: string,
+    portal_role: PortalRole,
+    redirect_path: string | null,
+  ) => void;
 }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
@@ -1135,7 +1177,13 @@ function InviteModal({
         type: 'success',
         title: t('portal.invited_ok', { defaultValue: 'User invited' }),
       });
-      onInvited(form.email, data.magic_link_token, data.magic_link_expires_at);
+      onInvited(
+        form.email,
+        data.magic_link_token,
+        data.magic_link_expires_at,
+        form.portal_role,
+        form.redirect_path || null,
+      );
       qc.invalidateQueries({ queryKey: ['portal', 'users'] });
       onClose();
     },
@@ -1294,7 +1342,9 @@ function GrantAccessModal({
   // CONN-53: when granting access to a document we first need a project to
   // scope the document list (documents are project-scoped). Tickets are listed
   // org-wide. Both pickers submit the selected UUID to the backend so the
-  // inviter never pastes a raw id.
+  // inviter never pastes a raw id. Also reused by the BIM model picker below
+  // (models are project-scoped the same way documents are, and only one of
+  // the two resource types is ever active at a time).
   const [docProjectId, setDocProjectId] = useState('');
 
   const grantMut = useMutation({
@@ -1328,9 +1378,12 @@ function GrantAccessModal({
   const projectsQ = useQuery({
     queryKey: ['portal-grant', 'projects'],
     queryFn: () => projectsApi.list(),
-    // Load projects for the project picker AND the document picker (which needs
-    // a project to scope its list).
-    enabled: form.resource_type === 'project' || form.resource_type === 'document',
+    // Load projects for the project picker AND the document / BIM model
+    // pickers (both need a project to scope their list).
+    enabled:
+      form.resource_type === 'project' ||
+      form.resource_type === 'document' ||
+      form.resource_type === 'bim',
     staleTime: 60_000,
   });
 
@@ -1339,6 +1392,15 @@ function GrantAccessModal({
     queryKey: ['portal-grant', 'documents', docProjectId],
     queryFn: () => fetchDocuments(docProjectId),
     enabled: form.resource_type === 'document' && !!docProjectId,
+    staleTime: 60_000,
+  });
+
+  // BIM model picker - scoped to the chosen project, same pattern as the
+  // document picker above (project first, then the resource within it).
+  const bimModelsQ = useQuery({
+    queryKey: ['portal-grant', 'bim-models', docProjectId],
+    queryFn: () => fetchBIMModels(docProjectId),
+    enabled: form.resource_type === 'bim' && !!docProjectId,
     staleTime: 60_000,
   });
 
@@ -1443,6 +1505,7 @@ function GrantAccessModal({
             <option value="project">{t('portal.rt_project', { defaultValue: 'Project' })}</option>
             <option value="development">{t('portal.rt_development', { defaultValue: 'Development' })}</option>
             <option value="document">{t('portal.rt_document', { defaultValue: 'Document' })}</option>
+            <option value="bim">{t('portal.rt_bim', { defaultValue: 'BIM model' })}</option>
             <option value="ticket">{t('portal.rt_ticket', { defaultValue: 'Service ticket' })}</option>
             <option value="invoice">{t('portal.rt_invoice', { defaultValue: 'Invoice' })}</option>
           </select>
@@ -1542,6 +1605,63 @@ function GrantAccessModal({
                 {(documentsQ.data ?? []).map((d) => (
                   <option key={d.id} value={d.id}>
                     {d.name}
+                  </option>
+                ))}
+              </select>
+            </WideModalField>
+          </>
+        ) : form.resource_type === 'bim' ? (
+          <>
+            <WideModalField
+              label={t('portal.bim_project', { defaultValue: 'Project' })}
+              required
+              hint={t('portal.bim_project_hint', {
+                defaultValue: 'Pick the project that holds the BIM model.',
+              })}
+              span={2}
+            >
+              <select
+                value={docProjectId}
+                onChange={(e) => {
+                  setDocProjectId(e.target.value);
+                  setForm({ ...form, resource_id: '' });
+                }}
+                className={inputCls}
+                disabled={projectsQ.isLoading}
+              >
+                <option value="">— {t('common.select', { defaultValue: 'Select' })} —</option>
+                {(projectsQ.data ?? []).map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            </WideModalField>
+            <WideModalField
+              label={t('portal.bim_model', { defaultValue: 'BIM model' })}
+              required
+              hint={t('portal.bim_model_hint', {
+                defaultValue:
+                  'The portal user opens this model read-only - no editing, measuring or authoring tools.',
+              })}
+              span={2}
+            >
+              <select
+                value={form.resource_id}
+                onChange={(e) => setForm({ ...form, resource_id: e.target.value })}
+                className={inputCls}
+                disabled={!docProjectId || bimModelsQ.isLoading}
+              >
+                <option value="">
+                  {!docProjectId
+                    ? t('portal.pick_project_first', {
+                        defaultValue: 'Pick a project first',
+                      })
+                    : `— ${t('common.select', { defaultValue: 'Select' })} —`}
+                </option>
+                {(bimModelsQ.data?.items ?? []).map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.name}
                   </option>
                 ))}
               </select>

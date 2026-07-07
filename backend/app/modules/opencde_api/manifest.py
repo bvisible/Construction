@@ -1,4 +1,4 @@
-"""‌⁠‍OpenCDE API module manifest.
+"""OpenCDE API module manifest.
 
 Exposes project data in BuildingSMART-compliant OpenCDE Foundation API 1.1
 and BCF API 3.0 format for interoperability with external BIM tools.

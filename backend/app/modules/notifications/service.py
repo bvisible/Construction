@@ -1,4 +1,4 @@
-"""‌⁠‍Notification service - business logic for in-app notifications.
+"""Notification service - business logic for in-app notifications.
 
 Stateless service layer.  Wraps the repository and provides convenience
 helpers like ``notify_users`` for bulk delivery.
@@ -36,7 +36,7 @@ _logger_ev = logging.getLogger(__name__ + ".events")
 
 
 async def _safe_publish(name: str, data: dict, source_module: str = "oe_notifications") -> None:
-    """‌⁠‍Best-effort event publish - never blocks the caller on failure."""
+    """Best-effort event publish - never blocks the caller on failure."""
     try:
         event_bus.publish_detached(name, data, source_module=source_module)
     except Exception:
@@ -44,7 +44,7 @@ async def _safe_publish(name: str, data: dict, source_module: str = "oe_notifica
 
 
 class NotificationService:
-    """‌⁠‍Business logic for notification operations."""
+    """Business logic for notification operations."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -89,6 +89,14 @@ class NotificationService:
                 "entity_type": entity_type,
                 "entity_id": entity_id,
                 "title_key": title_key,
+                # Mirror the fields the in-app NotificationResponse carries so
+                # connector sinks (Telegram/Slack/Teams/Discord/WhatsApp) can
+                # render the SAME interpolated title + body. Without body_key /
+                # body_context the bridge rendered placeholders raw and dropped
+                # the body entirely.
+                "body_key": body_key,
+                "body_context": body_context or {},
+                "action_url": action_url,
             },
         )
 

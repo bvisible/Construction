@@ -1,4 +1,4 @@
-"""‌⁠‍Event bus​‌‍⁠​‌‍⁠​‌‍⁠​‌‍⁠ for inter-module communication.
+"""Event bus​‌‍⁠​‌‍⁠​‌‍⁠​‌‍⁠ for inter-module communication.
 
 Modules publish events; other modules subscribe to them.
 Supports both sync and async handlers.
@@ -39,7 +39,7 @@ def _log_failures(
     *,
     name: str,
 ) -> asyncio.Task[Any]:
-    """‌⁠‍Schedule *coro* as a detached task that logs failures at WARNING.
+    """Schedule *coro* as a detached task that logs failures at WARNING.
 
     Without this wrapper, ``asyncio.create_task`` will swallow exceptions
     silently if no one awaits the resulting task - leaving event-driven
@@ -89,7 +89,7 @@ EventHandler = Callable[..., Any]
 
 @dataclass
 class Event:
-    """‌⁠‍Represents a published event."""
+    """Represents a published event."""
 
     name: str
     data: dict[str, Any]
@@ -100,7 +100,7 @@ class Event:
 
 @dataclass
 class EventResult:
-    """‌⁠‍Result of processing an event through all handlers."""
+    """Result of processing an event through all handlers."""
 
     event: Event
     handler_results: list[dict[str, Any]] = field(default_factory=list)

@@ -191,8 +191,9 @@ def upgrade() -> None:
     existing_preset_count = (
         bind.execute(
             sa.text(
-                "SELECT COUNT(*) FROM oe_property_dev_house_type_catalogue WHERE is_preset = 1 AND project_id IS NULL"
-            )
+                "SELECT COUNT(*) FROM oe_property_dev_house_type_catalogue "
+                "WHERE is_preset = :is_preset AND project_id IS NULL"
+            ).bindparams(is_preset=True)
         ).scalar()
         or 0
     )

@@ -1,4 +1,4 @@
-"""‌⁠‍Wave-5 cross-module subscribers - Resources / Contracts / CRM / Carbon.
+"""Wave-5 cross-module subscribers - Resources / Contracts / CRM / Carbon.
 
 Wires real cross-module side-effects emitted by the wave-5 deep-dive:
 
@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 
 async def _can_open_isolated_session() -> bool:
-    """‌⁠‍Always True post-Epic-B - see :mod:`app.modules.notifications.events`."""
+    """Always True post-Epic-B - see :mod:`app.modules.notifications.events`."""
     return True
 
 
@@ -40,7 +40,7 @@ async def _can_open_isolated_session() -> bool:
 
 
 async def _on_cert_expiring(event: Event) -> None:
-    """‌⁠‍``resources.cert_expiring`` → notify the resource owner."""
+    """``resources.cert_expiring`` → notify the resource owner."""
     if not await _can_open_isolated_session():
         return
     data = event.data or {}
@@ -833,7 +833,7 @@ async def _on_changeorder_approved_contract(event: Event) -> None:
 
 
 async def _on_qms_ncr_mirrored_from_hse(event: Event) -> None:
-    """‌⁠‍``qms.ncr.mirrored_from_hse`` → notify HSE incident owner + QMS owner.
+    """``qms.ncr.mirrored_from_hse`` → notify HSE incident owner + QMS owner.
 
     Closes the visibility gap: when an HSE incident's CAPA spawns a
     mirrored QMS NCR (see ``qms/events.py::_on_hse_incident_root_cause``),

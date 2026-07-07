@@ -1,4 +1,4 @@
-"""‌⁠‍Change Order data access layer.
+"""Change Order data access layer.
 
 All database queries for change orders live here.
 No business logic - pure data access.
@@ -58,7 +58,7 @@ def _project_fx_map(project: object | None) -> dict[str, Decimal]:
 
 
 class ChangeOrderRepository:
-    """‌⁠‍Data access for ChangeOrder and ChangeOrderItem models."""
+    """Data access for ChangeOrder and ChangeOrderItem models."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -66,7 +66,7 @@ class ChangeOrderRepository:
     # ── ChangeOrder ──────────────────────────────────────────────────────
 
     async def get_by_id(self, order_id: uuid.UUID) -> ChangeOrder | None:
-        """‌⁠‍Get change order by ID (includes items via selectin)."""
+        """Get change order by ID (includes items via selectin)."""
         return await self.session.get(ChangeOrder, order_id)
 
     async def list_for_project(

@@ -32,7 +32,7 @@ const BASE_UNITS = [
   'mg', 'g', 'kg', 't',
   // ── Imperial / US ──
   'in', 'ft', 'yd', 'mi',
-  'sqft', 'sqyd', 'acre',
+  'sqft', 'sqyd', 'acre', 'sq',
   'cuft', 'cuyd', 'gal', 'oz', 'lb', 'cwt', 'ton',
   'cy', 'lf', 'msf', 'mbf', 'bdft',
   // ── Counts / packaging ──

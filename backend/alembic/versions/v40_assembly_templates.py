@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍Assembly Library: platform-wide canonical templates (v4.0 / Slice 1).
+"""Assembly Library: platform-wide canonical templates (v4.0 / Slice 1).
 
 Adds a single strictly-additive table ``oe_assemblies_template`` that
 holds catalogue-agnostic, read-only recipe templates (concrete walls,

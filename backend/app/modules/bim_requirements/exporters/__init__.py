@@ -1,1 +1,1 @@
-"""‌⁠‍BIM Requirements exporters -- one module per target format."""
+"""BIM Requirements exporters -- one module per target format."""

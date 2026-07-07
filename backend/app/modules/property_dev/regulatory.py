@@ -1,4 +1,4 @@
-"""‌⁠‍Regulator-report generators for property_dev (task #139).
+"""Regulator-report generators for property_dev (task #139).
 
 Four jurisdictions are supported out of the box:
 

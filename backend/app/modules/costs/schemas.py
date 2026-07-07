@@ -1,4 +1,4 @@
-"""‌⁠‍Cost item Pydantic schemas for request/response validation."""
+"""Cost item Pydantic schemas for request/response validation."""
 
 from __future__ import annotations
 
@@ -128,7 +128,7 @@ def _normalize_mass_per_unit(value: Decimal | str | float | None) -> str:
 
 
 class CostItemCreate(BaseModel):
-    """‌⁠‍Create a new cost item."""
+    """Create a new cost item."""
 
     code: str = Field(..., min_length=1, max_length=100, description="Unique cost item code / rate code")
     description: str = Field(default="", description="Cost item description text")
@@ -188,7 +188,7 @@ class CostItemCreate(BaseModel):
 
 
 class CostItemUpdate(BaseModel):
-    """‌⁠‍Update a cost item (all fields optional)."""
+    """Update a cost item (all fields optional)."""
 
     code: str | None = Field(default=None, min_length=1, max_length=100)
     description: str | None = Field(default=None)

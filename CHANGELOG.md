@@ -7,6 +7,207 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [10.5.0] - 2026-07-06
+
+Every step of every case now shows a small drawing of what it does. Open a case and each step carries a piece of line art, an RFI sheet for a question, a balance for a comparison, a hard hat for a permit, a calendar for a programme, so you can see what a step is about before you read a word. The drawings are chosen from the step itself, so all 85 cases got them at once, and where a specific drawing has not been made yet the step falls back to a clean framed icon rather than a blank. The same drawings now appear in the How it works hub, so expanding a module there shows its illustration too.
+
+The Project lifecycle timeline on the Cases hub is bigger and sits better with the rest of the page. The stage markers are larger, the labels clearer, and each stage carries a count styled like the company and role pickers below it.
+
+Twenty two new worked cases were added, taking the catalogue from 63 to 85. They fill in the everyday work and the modules that did not have a case yet. On site you can issue a permit to work, manage the plant and equipment register, mark up and compare a drawing revision, and record a verbal instruction for the record. In planning you can run a progress meeting and drive the actions, plan repetitive work with takt and line of balance, and balance the portfolio and level resources. In estimating you can draft an estimate with AI element matching, build the resource library and rates, build a 5D cost-loaded model, and appraise a development scheme. On the commercial side you can track an opportunity from enquiry to tender, turn field time into payroll and labour cost, build a delay and disruption claim with evidence, and give the client a project portal. In BIM you can set up the common data environment, set up BIM requirements and coordination, and verify the as-built against the model with a scan. There are also cases to maintain supplier catalogs and buy from them, run the submittals register, manage an engineering change, and run reactive facilities service after handover.
+
+## [10.4.0] - 2026-07-06
+
+The Cases hub gets a hand-drawn look. Every case, professional role and company type now carries a light line-art illustration. The hub pickers became picture-left chips, each case card shows a full illustration banner with a single discipline colour and an overlapping stack of the role avatars, and the case runner puts the illustration beside a bigger title with a clearer meta row and a primary action that names the module it opens. Where an illustration has not been drawn yet the card falls back to a plain glyph, so nothing breaks and there are no broken images.
+
+The two inbound capture webhooks, the email drop and the provider webhook, now also accept an X-API-Key header. An external system can post to them with a shared key instead of a signed-in user session. Permission based access keeps working exactly as before, the key is simply an additional way in, and the new path is covered by tests.
+
+## [10.3.0] - 2026-07-06
+
+This release reworks the Cases hub around the people who use it and the shape of a real project. On top of the company type, you can now pick your own professional role, estimator, quantity surveyor, site manager, project manager, BIM coordinator, procurement, planner, health and safety officer, design lead, document controller, commercial manager or foreman, each shown as its own illustrated persona avatar so the choice is obvious. A case keeps a sensible set of roles even when it does not name them, they are derived from its discipline and the company types it serves.
+
+The hub also lays the whole catalogue out along the project lifecycle, from Define and brief through Design, Estimate, Procurement, Plan, Build, Handover and Operate. A timeline across the top shows the eight stages with a count on each and filters the list when you pick one. Every case now carries its stage and a sequential number, and the grid reads in the order a real project runs, so you can see where each case sits from the first budget to running the finished building. Eleven more worked cases were added for the roles that had the fewest, a toolbox talk and a method statement and risk assessment, a baseline programme and a progress reforecast, a buying schedule, a variation assessment and an interim payment application, a model clash coordination round, an operation and maintenance handover manual, an asset register for facilities and a drawing register. The catalogue grows from 52 to 63 cases.
+
+The dashboard gets a stronger Cases block too. Instead of a single link it now offers quick launch into a few cases, anything you left half finished comes first so you can resume it, then cases that match the role and company you picked.
+
+## [10.2.0] - 2026-07-06
+
+This release reorganizes the Cases hub around who you are. A new "I work as" selector lets you pick your company type, general contractor, specialist subcontractor, cost consultant, designer, developer, project manager, BIM consultant or owner and operator, and the list narrows to the cases that kind of company actually runs, so you see your own set instead of the whole catalogue. Discipline stays as a secondary filter, you can pin the cases that matter to a project and switch to a project only shortlist, and the catalogue grew from 40 to 52 worked examples. Cases also moved above Project files in the menu.
+
+Custom cost catalogues are now easy to fill. Creating a catalogue selects it and opens the add position form straight away, every custom catalogue gets an add position button and a clear empty state, and editing or deleting positions stays limited to your own catalogues while the built in regional data stays read only.
+
+Supporters get a new Inside track panel at /inside, unlocked with a supporter code, showing an early view of what shipped and a short list of what is coming next. The Fund development message now explains that backers get early access, a say in the roadmap and priority handling of their reports, and the platform stays free either way. The client portal gains an Invoices tab so a client sees the invoices shared with them, and view only BIM and CAD sharing so a client can open a shared model in a read only 3D viewer with no editing tools and no cost figures.
+
+It also fixes a start up failure. A source build could fail to boot because four routes declared a streaming or json return type that FastAPI tried to turn into a response model. Those routes now opt out and the app starts cleanly. Creating or listing cost items by catalogue now checks catalogue ownership so private rates stay private, and a takeoff volume depth entered in imperial units is converted correctly instead of being read as metres. This covers issues 322, 323 and 318.
+
+## [10.1.0] - 2026-07-05
+
+This release makes the main dashboard and the estimate far clearer to read. The dashboard gains five cards that surface delivery and quality work for the active project: upcoming schedule milestones with days remaining or overdue, RFI turnaround with open and overdue counts and the average response time, submittals split into pending review, approved and overdue, inspection pass rate with open and failed counts, and punch list items open and overdue with the average time to close. Each card appears only when its module has data, so a fresh install stays clean, and each carries a short How it works note explaining what the numbers mean.
+
+The estimate grid now explains itself. The line total shows on hover how it was reached, quantity times unit rate in your own units, with a note when a line is priced in a foreign currency or shown in a display currency. A unit rate built from resources breaks down into labour, material and plant that add up to the rate. Lines missing a quantity or a price are tinted so they are easy to spot, section headers show their share of the project total, AI suggested lines carry a confidence percentage, and catalogued or imported lines show where their price came from. Under the totals a cost per square metre strip positions the estimate against your own past projects whenever the bill carries a gross floor area.
+
+It also fixes three takeoff issues reported by the community. Linking a measurement now converts it into the target position unit instead of copying the raw measured number and silently mis-pricing the line. US construction trade units such as cubic yards, roofing squares and board feet are available as convertible measurement targets. A per-measurement stroke width now scales with the drawing instead of staying fixed on screen.
+
+## [10.0.1] - 2026-07-04
+
+A follow-up that fixes a Windows startup crash and finishes several items from the 10.0.0 wave. On a machine where localhost resolves to IPv6 first, which commonly happens after a Windows 11 upgrade, the desktop app could reach "Starting the application server" and then stop with a connection refused error even though the embedded PostgreSQL had reported ready. The app now connects to the embedded database on the exact IPv4 loopback it listens on, so it starts cleanly. The left menu again lists every module whatever onboarding profile you picked, since a profile is meant to pre-select modules, not hide them. A shared video in document management now plays and seeks in the viewer instead of downloading. The methodologies catalogue grows from 10 to 37, adding sixteen more countries and ten industry packs across roads, bridges, tunnelling, earthworks, water and wastewater, power transmission, industrial plant, residential and commercial buildings and MEP. A dropped drone or point cloud file is now filterable as a reality-capture asset in the Documents hub. In PDF takeoff, a custom group colour now persists to the server and is visible to other users, renaming a group keeps its hidden or collapsed state, and the name-a-count shortcut opens the panel first when it is folded away. Case steps show their proper icons instead of a generic one, and the lock-estimate dialog reads on two lines again.
+
+## [10.0.0] - 2026-07-04
+
+A milestone release that reworks onboarding, grows the worked-example library and finishes the PDF takeoff quality wave. Onboarding now offers 22 company profiles instead of 9, each mapped to a deliberate set of modules, spanning general contracting, estimating, architecture and engineering, project and construction management, developers and home builders, subcontractors, civil and infrastructure, MEP and building services, design-build, commercial and contracts, procurement, planning, site management, quality, health and safety, sustainability, facility and asset management, owners and the public sector. The ready-made pack picker no longer dead-ends on a clean install: it falls back to the curated country packs, so one click sets the language and loads that market's cost database. The Cases hub grows from 4 to 14 worked examples across estimating, tendering, planning, BIM and takeoff, site, quality, commercial and handover, with a category filter and a search box, and both the list and the open case now use the same full width as the rest of the app. The PDF takeoff viewer gets its drawing ergonomics, per-measurement styling and user-defined measurement groups. A point cloud or drone-survey file dropped into project files is now recognised and filed as a reality-capture asset instead of a generic document. The Spanish interface now calls a bill of quantities a presupuesto rather than an estimacion, keeping estimacion for progress payments, and the new onboarding and cases strings are translated across all 27 other languages.
+
+## [9.9.3] - 2026-07-04
+
+Cost Benchmarks grew a lot. It now covers eleven markets, adding France, Netherlands, Spain, Italy, Australia and Canada next to Germany, Austria, Switzerland, the United Kingdom and the United States, each with its own named public source and currency. Five more building types come with it: data center, laboratory, car park, sports and leisure, and senior care home, so more of a real portfolio maps onto a reference. Every region carries a short plain-language note on what drives its cost, and a new on-page "How these benchmarks work" section explains what the figures mean, how the percentile and quartiles read, what the DIN 276 split shows and how confidence is judged, with the full list of sources per region.
+
+## [9.9.2] - 2026-07-04
+
+A short follow-up that polishes the Cost Explorer and closes a compliance gap. The workspace now keeps what you were doing on each tab when you move between By resources, Find work, Compare bases and Substitute, so a quick look at another tab no longer clears your input and results. Substitute warns you when the resource you swap in is priced per a different unit than the line it replaces, since the kept quantity may not line up with that price. Projects in Mexico now resolve their contract compliance rules through a dedicated Mexico pack.
+
+### Added
+
+- A Mexico contract-compliance pack covering APU unit-price completeness, IVA and CFDI invoicing and subcontract retention for LOPSRM public works, selected by default for a project in Mexico.
+- A warning in Substitute when the replacement resource is priced per a different unit than the line being re-priced.
+
+### Fixed
+
+- Cost Explorer keeps each tab's input and results when you switch tabs instead of resetting them.
+
+## [9.9.1] - 2026-07-04
+
+A quality release that sharpens the Cost Explorer. Search now understands construction vocabulary, so looking for "rebar" also finds work priced against "reinforcement", and the same applies to the catalog search and to finding work by description. A descriptive, multi-word search returns the closest partial matches instead of dead-ending on zero results when no single line carries every word. Substitute is steadier: it will not blend in a replacement that is only priced in another currency, it treats a blank replacement rate as a request to use the catalog price, and it stays well-behaved on extreme catalog figures. The workspace now tells you when a loaded price base is not yet in the resource index and offers to rebuild it, and it keeps that index in step base by base as you import.
+
+### Added
+
+- Construction synonyms across By resources, Find work and the catalog search, so a search finds the work whatever term the data used for it.
+- A prompt in the workspace when a loaded price base is not yet indexed for resource search, with a one-click rebuild for just that base.
+- Translations for the new Cost Explorer messages across all locales.
+
+### Fixed
+
+- Substitute no longer blends a resource priced in a different currency into a work's rate; it asks for a same-currency price instead.
+- Substitute treats a blank replacement rate as "use the catalog price" and stays well-behaved on extreme catalog figures instead of failing.
+- Works that have been removed no longer appear in By resources results.
+
+### Changed
+
+- Find work ranks and returns the best partial matches for a multi-word query rather than only exact all-word hits.
+- On import the resource index is rebuilt for just the price base that changed, so a large catalogue becomes searchable without a full rebuild.
+
+## [9.9.0] - 2026-07-03
+
+A features release. It adds Cost Explorer, a search-first workspace over the cost and resource databases. You can start from the resources you have, a material, a trade or a piece of plant, and find the priced work that uses them, ranked by how well each work is covered by what you named. You can search the catalogs for a work by description across every loaded price base, compare the same rate code across regional price bases side by side with a clear warning when the currencies differ, and substitute one resource inside a work to see the effect on its rate, with a read-out of where that resource is priced across your data. It is built on a resource-to-work reverse index over each cost item's resource composition that stays in sync as cost items change.
+
+### Added
+
+- Cost Explorer, a search-first workspace over the cost and resource databases, reachable from the sidebar under Cost Data.
+- By resources, find priced work from the materials, labour and plant it consumes, ranked by coverage with a per-work breakdown of what matched and what is missing.
+- Find work, search every loaded price base for a work by description.
+- Compare bases, the same rate code priced across regions side by side, with a warning when the regions price in different currencies so the amounts are not misread as directly comparable.
+- Substitute, re-price a single resource line inside a work and see the effect on the rate, with a read-out of where that resource is priced across the loaded bases.
+- The starter cost items shipped on a fresh install now carry resource recipes, so By resources and Substitute return real results out of the box before any regional catalogue is imported.
+- Translations for the Cost Explorer across all locales.
+
+## [9.8.0] - 2026-07-03
+
+A features and fixes release. It adds a Field Time and Daywork module for capturing labour and plant time on site against a project, its resources and its equipment, with cost-code assist, an approval workflow, and a feed into payroll and earned value. It brings a wave of PDF takeoff improvements, so measurements survive a page change or zoom, keep their own colour on screen and in the export, can snap to the corners of existing measurements, and can be duplicated in one step. The About page now shows contributors' photos on the community thank-you wall, saved and served from the platform itself. It also fixes a header and photo-filter overlap, a date that could shift a day at negative time zones, a project photos tab that did not open from a link, and database migrations that assumed SQLite syntax and could fail on PostgreSQL.
+
+### Added
+
+- Field Time and Daywork module, capture labour and plant time on site against a project, its resources and its equipment, with labour-or-plant lines, cost-code assist, an approval workflow, and a feed into payroll and earned value.
+- Contributor photos on the About page community thank-you wall, saved and served from the platform rather than fetched from an outside site.
+- Import LWO (LightWave) mesh files in the in-browser 3D importer, completing the mesh-format set alongside glTF, GLB, OBJ, DAE, 3DS, FBX, STL, PLY and USD (#296).
+- Duplicate a PDF takeoff measurement, from a right-click menu or with Ctrl/Cmd+D, cloning its shape, group, colour and label as a new independent measurement (#302).
+- Snap new PDF takeoff points to the corners of existing measurements, an opt-in magnet toggle next to ortho lock, with a cue on the vertex being snapped to (#303).
+
+### Fixed
+
+- The header project switcher no longer overlaps the search on narrow widths, and the photo gallery filter card no longer overlaps the content below it (#293).
+- Date-only values no longer move back a day when shown in a negative time zone, and the project photos tab now opens directly from a link (#294).
+- Database migrations no longer assume SQLite-only syntax, so they run cleanly on PostgreSQL (#295).
+- PDF takeoff measurements no longer disappear after you change page or zoom with the select tool, and the current-page thumbnail now loads instead of spinning forever (#297, #301).
+- A per-measurement colour in PDF takeoff now applies on the canvas and in the exported PDF, rather than being overridden by the group colour (#299).
+- A Count measurement now shows its running tally, and finishing a shape by double-click or right-click no longer drops a stray vertex or skips the area tool (#298, #300).
+
+## [9.7.0] - 2026-07-02
+
+A features release. You can compare two independent DWG drawings side by side, import a 3D mesh directly in the browser with a quantity read-out, and read the project dashboard from a redesigned map with a side panel of sites and local weather. You can support the project through PayPal or GitHub Sponsors, and contributors are credited on a community thank-you wall. It also loads large BIM models without running out of memory, gives the client portal a Documents area so a shared client can see and open their files, and makes Bill of Quantities quantity cells accept imperial feet-and-inches and resolve variable and cross-position references correctly in both metric and imperial.
+
+### Added
+
+- Compare two independent DWG drawings side by side, not only two versions of the same file (#289).
+- Import 3D meshes (glTF, GLB, OBJ, DAE, 3DS, FBX, STL, PLY, USD) with in-browser quantity extraction.
+- A redesigned project dashboard map, a compact map with a side panel of sites and local weather.
+- Support for the project through PayPal and GitHub Sponsors, with a community thank-you wall for contributors.
+- A Documents area in the client portal, so a shared client can see and open the files shared with them (#288).
+- Translations for the new screens across all locales.
+
+### Fixed
+
+- The BIM 3D viewer loads large models without running out of memory, which previously surfaced as a parsing error (#291).
+- Bill of Quantities quantity cells accept imperial feet-and-inches input (for example 10'6", 3/4") and no longer store an unparseable entry as zero (#290).
+- Bill of Quantities quantity cells resolve $variables and pos() references, correctly in both metric and imperial, so a measured quantity can be reused across positions (#292).
+
+## [9.6.1] - 2026-07-02
+
+A fix and hardening release. A photo uploaded from a project's Photos tab now becomes a real site picture and shows up everywhere site pictures appear, a shared video streams and seeks in the file viewer instead of getting stuck, a field report can no longer link a document that belongs to another project, and the whole-life cost engine now models ISO 15686-5 residual value. It also completes the Spanish and Mexican Spanish translations on the newest screens.
+
+### Added
+
+- ISO 15686-5 residual value in the whole-life cost engine, so an asset that outlives the study period is credited at its unexpired service life rather than written off as scrap.
+- Spanish (es) and Mexican Spanish (es-MX) translations for the newest screens (the 6D whole-life dashboard, the Bill of Quantities resource split, the client portal and cost benchmarks) that had been falling back to English, along with a few setup-screen strings that only existed as English defaults in the code.
+
+### Fixed
+
+- A photo uploaded from a project's Photos tab was stored as a generic document, so it never appeared as a site picture. Such an upload now goes through the photo pipeline and shows in the Photos tab, the Site Photos gallery, the site diary, the dashboard and the photo strip.
+- A shared video in the file viewer downloaded the whole file before playing and often stalled on the loading spinner. Shared media now streams with HTTP range requests, so a video plays and seeks right away.
+- A field report could link a document that belonged to another project, exposing that document's metadata. The link now rejects a foreign-project document and the linked-documents read is scoped to the report's own project.
+
+## [9.6.0] - 2026-07-01
+
+A change intelligence and 6D lifecycle release. Change Intelligence gains a contractual notice and time-bar register that tracks every claim and extension-of-time notice against the project's contract standard so an entitlement is not lost to a missed deadline, a cross-source register of who owes the next action, a change-driver Pareto that ranks change cost by cause and by responsible party, and a change run-rate with a burn-rate forecast. The 6D carbon module adds a whole-life dashboard that reports embodied and operational carbon by EN 15978 stage alongside ISO 15686-5 whole-life cost and computes both from your BIM model with a dry-run preview you accept or reject line by line. It also closes a cross-project read gap on shared saved views and tightens who may edit workspace-level ledger accounts.
+
+### Added
+
+- A contractual notice and time-bar register on the Change Intelligence page. It derives every open notice and response clock from the dates already on your change orders, variation notices and extension-of-time claims, applies the notice period for the project's contract standard (FIDIC, NEC, JCT, AIA, ConsensusDocs, or a standard-neutral fallback), classifies each clock as met, upcoming, due soon or overdue, and flags a required notice with no proof on file or a lapsed bar so an entitlement is not quietly lost.
+- A cross-source commitment register that consolidates open meeting action items, risk mitigation actions, change orders and RFIs and submittals awaiting a response into one owe-list, ranked overdue first, with per-owner load and per-source counts.
+- A change-driver Pareto that ranks the cost and count of change by originating cause and by responsible party, with a running cumulative percentage, a per-currency split and a month-over-month trend.
+- A change run-rate that tracks the cumulative approved and pending change value against the contract over time, reports the intake rate, and projects a simple linear burn-rate forecast of the final change percentage at completion.
+- A 6D whole-life dashboard in the carbon module. It reports embodied and operational carbon by EN 15978 stage (A, B including B6 operational, and C, with module D shown separately and never added to the total) alongside ISO 15686-5 whole-life cost, computes operational carbon and life-cycle cost from the BIM model behind a dry-run preview, and lets you accept or reject each computed line before it counts.
+
+### Fixed
+
+- A project-shared saved view could be read by a manager from another project by passing the view's own project id back to the read. The read now enforces project access, so only the owner, a member of the view's project or an admin can open a shared view definition.
+- Editing a workspace-level general-ledger account, one not tied to a single project, now requires the consolidated-ledger admin scope, matching how those accounts are created and seeded.
+
+## [9.5.0] - 2026-07-01
+
+A localization, contracts and construction-control release. The interface is now available in Mexican Spanish with local construction terminology, a new Contracts workspace tracks parties, guarantees, extension-of-time claims and milestones, and a Mexico pack adds unit-price analysis, IMSS site safety and IVA, retention and CFDI billing checks. Cross-module Cases playbooks walk you through real scenarios end to end, every remaining module gains a built-in How-It-Works guide, and 6D links embodied carbon to BIM model elements. The Bill of Quantities resource split becomes a three-way toggle, the main PDF exports carry your logo and details, the client portal opens the right page from its sign-in link, the file manager gains a media viewer with keyboard access, and new projects take their currency from your regional preference.
+
+### Added
+
+- A Mexican Spanish (es-MX) interface option with Latin American construction terminology, falling back to Spanish and then English for anything not localized.
+- A Contracts workspace for counterparties, security and guarantees, extension-of-time claims and contract milestones, reachable from the Simple view navigation.
+- A Mexico regional pack with unit-price analysis (APU), IMSS and NOM site safety, IVA, retention and CFDI billing, public works (LOPSRM) and social housing (Infonavit) rule sets.
+- Two worked Mexican demo projects that install with the Mexico pack: a Ciudad de Mexico mixed-use tower (deep foundation and seismic RC frame for the lacustrine Zona III) and a Monterrey residential complex, both priced by unit-price analysis in pesos.
+- Cross-module Cases playbooks that guide you through end-to-end scenarios across the modules involved.
+- A built-in How-It-Works guide for every remaining module, short guided tours on the change intelligence, construction control, value and compliance screens, and a readable module developer guide.
+- 6D carbon links embodied carbon to BIM model elements and enriches it automatically from the model.
+
+### Changed
+
+- The Bill of Quantities resource split is now a three-way toggle (compact, columns, off).
+- The main PDF exports carry your logo and project details.
+- The client portal sign-in link opens the right page with proper loading and error states.
+- The file manager shows media in a viewer with context-menu actions and keyboard access.
+- New projects and forms take their currency from your regional preference instead of a fixed default.
+- Project status history now records who changed the status and when, with the interim waiting state removed, and daily diary, field reports and GeoHub anchoring were improved.
+
+### Fixed
+
+- The Imperial editable Bill of Quantities grid no longer changes a stored value when you edit it. A quantity or unit-rate cell now opens showing the value in your measurement system and converts back to metric only on commit, so opening a cell and saving it unchanged leaves storage untouched. Pasting, the bulk set-value action and copy round-trips convert the same way, and the metric system is a strict no-op throughout, so this works correctly for every country (issue #287).
+- The PDF takeoff panel now shows the measurement label, the transfer preview and the create-position quantity in your measurement system, matching the on-canvas readout, while the value stored on the created position stays metric.
+- The demo sign-in can be turned back on after it was disabled. A new "serve --demo" flag re-enables the demo accounts and showcase projects and clears any earlier opt-out, whether it came from "serve --no-demo", a "no" answer on first run, or removing the demo data in the app.
+
 ## [9.4.0] - 2026-06-30
 
 An end-to-end Imperial release. The measurement-system preference now follows the whole estimating workflow, including the editable Bill of Quantities grid, and a display rule that earlier releases applied unevenly is now applied everywhere: when a quantity is shown converted to Imperial, the paired per-unit rate is restated against the same unit so the line reconciles. Line and project totals stay invariant, and the machine-readable exports stay canonical metric so no stored figure is ever changed by a display unit.

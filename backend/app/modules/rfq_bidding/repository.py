@@ -1,4 +1,4 @@
-"""‌⁠‍RFQ Bidding data access layer.
+"""RFQ Bidding data access layer.
 
 All database queries for RFQ and bid entities live here.
 No business logic - pure data access.
@@ -13,13 +13,13 @@ from app.modules.rfq_bidding.models import RFQ, RFQBid
 
 
 class RFQRepository:
-    """‌⁠‍Data access for RFQ model."""
+    """Data access for RFQ model."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
     async def get(self, rfq_id: uuid.UUID) -> RFQ | None:
-        """‌⁠‍Get RFQ by ID (with bids via selectin)."""
+        """Get RFQ by ID (with bids via selectin)."""
         return await self.session.get(RFQ, rfq_id)
 
     async def list(

@@ -1,4 +1,4 @@
-"""‌⁠‍Bid Management module manifest."""
+"""Bid Management module manifest."""
 
 from app.core.module_loader import ModuleManifest
 

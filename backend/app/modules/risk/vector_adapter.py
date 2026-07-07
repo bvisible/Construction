@@ -1,4 +1,4 @@
-"""‌⁠‍Risk item vector adapter - feeds the ``oe_risks`` collection.
+"""Risk item vector adapter - feeds the ``oe_risks`` collection.
 
 Each :class:`~app.modules.risk.models.RiskItem` row is embedded as a rich
 concatenation of its title, description, mitigation strategy, contingency
@@ -22,13 +22,13 @@ from app.modules.risk.models import RiskItem
 
 
 class RiskVectorAdapter:
-    """‌⁠‍Embed risk register entries into the unified vector store."""
+    """Embed risk register entries into the unified vector store."""
 
     collection_name: str = COLLECTION_RISKS
     module_name: str = "risks"
 
     def to_text(self, row: RiskItem) -> str:
-        """‌⁠‍Build the canonical text that gets embedded.
+        """Build the canonical text that gets embedded.
 
         Risks benefit from a *rich* text representation because most of
         their value - the "how we handled it" knowledge - lives in the

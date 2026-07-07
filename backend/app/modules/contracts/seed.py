@@ -1,4 +1,4 @@
-"""‌⁠‍Deterministic seed data for the contracts module.
+"""Deterministic seed data for the contracts module.
 
 Generates 10 contracts spanning all primary types:
     * 3 lump-sum
@@ -80,6 +80,12 @@ _TYPE_CONFIG_CATALOG: list[dict[str, object]] = [
         "allowed_fields": ["component_breakdown"],
         "default_fee_structure": {},
     },
+    {
+        "contract_type": "remeasurement",
+        "display_name": "Remeasurement",
+        "allowed_fields": ["measurement_method", "qty_variance_threshold"],
+        "default_fee_structure": {},
+    },
 ]
 
 
@@ -98,7 +104,7 @@ _TYPE_DISTRIBUTION: list[str] = [
 
 
 async def seed_type_configurations(session: AsyncSession) -> int:
-    """‌⁠‍Insert ContractTypeConfiguration catalog rows if missing."""
+    """Insert ContractTypeConfiguration catalog rows if missing."""
     from sqlalchemy import select
 
     existing = (await session.execute(select(ContractTypeConfiguration.contract_type))).scalars().all()
@@ -124,7 +130,7 @@ async def seed_contracts_demo(
     session: AsyncSession,
     project_ids: list[uuid.UUID],
 ) -> dict[str, int]:
-    """‌⁠‍Generate 10 demo contracts across all primary types.
+    """Generate 10 demo contracts across all primary types.
 
     Args:
         session: Open async DB session (the caller commits).

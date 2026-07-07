@@ -31,7 +31,7 @@ const CACHE_TTL_MS = 1000 * 60 * 60 * 24 * 30;
 // Map and all Markers in a single pass with the cached components.
 type MapLibreModule = typeof import('react-map-gl/maplibre');
 
-interface ProjectPin {
+export interface ProjectPin {
   id: string;
   name: string;
   lat?: number | null;
@@ -45,6 +45,9 @@ interface ProjectPin {
 interface DashboardProjectsMapProps {
   projects: ProjectPin[];
   className?: string;
+  /** Override the count-scaled default height (e.g. the dashboard
+   *  side-by-side layout wants a taller map than a bare full-width row). */
+  heightClass?: string;
 }
 
 interface ResolvedMarker {
@@ -165,7 +168,21 @@ function regionFallback(region?: string | null): { lat: number; lng: number } | 
   return REGION_FALLBACK[key] ?? null;
 }
 
-export function DashboardProjectsMap({ projects, className }: DashboardProjectsMapProps) {
+// Synchronous best-effort coordinate resolution shared with the dashboard
+// sites panel: explicit lat/lng, then a cached geocode, then the coarse
+// region centroid. No network call here - the map component's async
+// geocoder fills the shared cache, which this reads on the next render.
+export function resolveProjectCoords(p: ProjectPin): { lat: number; lng: number } | null {
+  if (Number.isFinite(p.lat) && Number.isFinite(p.lng)) {
+    return { lat: p.lat as number, lng: p.lng as number };
+  }
+  const q = buildGeocodeQuery(p.address, p.city, p.country);
+  const cached = q ? readCache(q) : null;
+  if (cached) return cached;
+  return regionFallback(p.region);
+}
+
+export function DashboardProjectsMap({ projects, className, heightClass: heightClassProp }: DashboardProjectsMapProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const [resolved, setResolved] = useState<ResolvedMarker[]>([]);
@@ -306,7 +323,9 @@ export function DashboardProjectsMap({ projects, className }: DashboardProjectsM
 
   // Map height scales with project count — a 1-2 project workspace doesn't
   // need 256px of map real estate. Saves vertical space on small portfolios.
-  const heightClass = projects.length <= 3 ? 'h-48' : projects.length <= 6 ? 'h-56' : 'h-64';
+  const heightClass =
+    heightClassProp ??
+    (projects.length <= 3 ? 'h-48' : projects.length <= 6 ? 'h-56' : 'h-64');
 
   return (
     <div

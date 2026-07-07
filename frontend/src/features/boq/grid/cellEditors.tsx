@@ -13,14 +13,17 @@ import { useTranslation } from 'react-i18next';
 import { AlertTriangle, X as XIcon } from 'lucide-react';
 import type { ICellEditorParams } from 'ag-grid-community';
 import { AutocompleteInput } from '../AutocompleteInput';
-import type { CostAutocompleteItem } from '../api';
+import type { CostAutocompleteItem, Position } from '../api';
 import { getUnitsForLocale, saveCustomUnit } from '../boqHelpers';
 import type { DisplayQuantityApi } from '@/shared/hooks/useDisplayQuantity';
 import {
   evaluateFormula as evalFormulaImpl,
   isFormula as isFormulaImpl,
   normaliseFormula as normaliseFormulaImpl,
+  buildFormulaContext,
+  extractReferences,
   type FormulaContext,
+  type FormulaVariable,
 } from './formula';
 
 /* ── Formula Cell Editor ──────────────────────────────────────────── */
@@ -96,11 +99,146 @@ function toMetricQty(params: ICellEditorParams, displayValue: number): number {
   return dq.toMetric(displayValue, unit);
 }
 
+/**
+ * Issue #287: the reverse of ``toMetricQty``, converting a metric-canonical Qty
+ * into the DISPLAYED measurement system so the editor opens on the value the
+ * user actually sees. Without it the editor seeds from the raw metric value
+ * while the commit path (``toMetricQty``) converts display→metric, so opening
+ * and committing a cell unchanged double-converts and silently corrupts
+ * storage. Identity for the metric system and for units with no imperial
+ * mapping, so this never changes what a metric user sees.
+ */
+function toDisplayQty(params: ICellEditorParams, metricValue: number): number {
+  const dq = (params.context as { displayQuantity?: DisplayQuantityApi } | undefined)?.displayQuantity;
+  if (!dq) return metricValue;
+  const unit = (params.data?.unit as string | undefined) ?? '';
+  return dq.convert(metricValue, unit).value;
+}
+
 /** Check whether an input string looks like a formula (Excel-style `=` prefix,
  * any math operator, named constant, or function call). Pure numbers like
  * "12.5" are NOT formulas — they go through the normal numeric path. */
 export function isFormula(input: string): boolean {
   return isFormulaImpl(input);
+}
+
+/* ── Feet-and-inches input (Issue #290) ─────────────────────────────── */
+
+/**
+ * Vulgar-fraction glyphs mapped to a plain "numerator/denominator" string.
+ * US estimators paste dimensions using these single-character fractions
+ * (e.g. `3/4"` written as `¾"`); expanding them to `3/4` lets the same
+ * inch parser handle both notations.
+ */
+const VULGAR_FRACTIONS: Record<string, string> = {
+  '¼': '1/4', // vulgar one quarter
+  '½': '1/2', // vulgar one half
+  '¾': '3/4', // vulgar three quarters
+  '⅓': '1/3', // vulgar one third
+  '⅔': '2/3', // vulgar two thirds
+  '⅕': '1/5', // vulgar one fifth
+  '⅖': '2/5', // vulgar two fifths
+  '⅗': '3/5', // vulgar three fifths
+  '⅘': '4/5', // vulgar four fifths
+  '⅙': '1/6', // vulgar one sixth
+  '⅚': '5/6', // vulgar five sixths
+  '⅛': '1/8', // vulgar one eighth
+  '⅜': '3/8', // vulgar three eighths
+  '⅝': '5/8', // vulgar five eighths
+  '⅞': '7/8', // vulgar seven eighths
+};
+
+/**
+ * Parse the inches portion of a feet-and-inches string into a number of
+ * inches. Accepts a whole number (`6`), a decimal (`6.5`), a fraction
+ * (`3/4`, `11/16`) or a whole-plus-fraction (`6 3/4`). Returns `null` when a
+ * token is not a non-negative number / fraction, or a denominator is 0.
+ */
+function parseInchValue(str: string): number | null {
+  const s = str.trim();
+  if (s === '') return null;
+  let total = 0;
+  for (const part of s.split(/\s+/)) {
+    const frac = /^(\d+)\/(\d+)$/.exec(part);
+    if (frac) {
+      const den = Number(frac[2]);
+      if (den === 0) return null;
+      total += Number(frac[1]) / den;
+      continue;
+    }
+    if (/^\d+(?:\.\d+)?$/.test(part)) {
+      total += Number(part);
+      continue;
+    }
+    return null;
+  }
+  return total;
+}
+
+/**
+ * Parse a feet-and-inches string into DECIMAL FEET, or `null` when the input
+ * is not feet-and-inches notation (Issue #290).
+ *
+ * An explicit foot (`'`) or inch (`"`) mark is required - smart quotes and
+ * primes are accepted too - so a bare number or a real formula is never
+ * misread as ft-in. Accepts: `10'6"`, `10' 6"`, `10'-6"`, `10'`, `6"`,
+ * `10' 3/4"`, `11/16"` and vulgar-fraction glyphs (`¾"`). Feet contribute
+ * directly, inches divide by 12, a bare fraction is inches. Negatives and
+ * zero denominators are rejected.
+ */
+export function parseFeetInches(raw: string): number | null {
+  if (!raw) return null;
+  let s = raw.trim();
+  if (s === '') return null;
+  // Normalise smart single/double quotes and primes to ASCII ' and ".
+  s = s.replace(/[‘’′]/g, "'").replace(/[“”″]/g, '"');
+  // Expand vulgar-fraction glyphs to " 3/4" (leading space detaches them
+  // from any preceding whole number or foot mark).
+  s = s.replace(/[¼-¾⅓-⅞]/g, (m) =>
+    m in VULGAR_FRACTIONS ? ` ${VULGAR_FRACTIONS[m]}` : m,
+  );
+  // Require an explicit foot or inch mark.
+  if (!s.includes("'") && !s.includes('"')) return null;
+
+  let feet = 0;
+  let inchPart: string;
+  const footIdx = s.indexOf("'");
+  if (footIdx >= 0) {
+    const feetStr = s.slice(0, footIdx).trim();
+    if (feetStr === '' || !/^\d+(?:\.\d+)?$/.test(feetStr)) return null;
+    feet = Number(feetStr);
+    // The remainder holds the inches; drop a single "-" separator (10'-6").
+    inchPart = s.slice(footIdx + 1).trim().replace(/^-\s*/, '').trim();
+  } else {
+    inchPart = s.trim();
+  }
+
+  let inches = 0;
+  if (inchPart !== '') {
+    // When inches are present they must be closed by an inch mark.
+    if (!inchPart.endsWith('"')) return null;
+    const parsed = parseInchValue(inchPart.slice(0, -1).trim());
+    if (parsed === null) return null;
+    inches = parsed;
+  }
+
+  const totalFeet = feet + inches / 12;
+  if (!Number.isFinite(totalFeet) || totalFeet < 0) return null;
+  return totalFeet;
+}
+
+/**
+ * Strict plain-number parse: the ENTIRE trimmed string must be a finite
+ * number (comma accepted as a decimal point for es/de locales). Unlike
+ * `parseFloat` this returns `null` - not a truncated value - for `"abc"` /
+ * `"10.5x"` / a malformed ft-in string, so those never commit silently as
+ * garbage (Issue #290).
+ */
+function parsePlainNumber(raw: string): number | null {
+  const t = raw.trim();
+  if (t === '') return null;
+  const n = Number(t.replace(',', '.'));
+  return Number.isFinite(n) ? n : null;
 }
 
 /**
@@ -116,17 +254,41 @@ type FormulaPreview =
   | { kind: 'ok'; v: number }
   | { kind: 'err'; m: string };
 
-function previewFor(input: string, ctx?: FormulaContext): FormulaPreview {
+/**
+ * Discriminated result of parsing the editor's raw text (Issue #290).
+ * `ok:false` means the input is neither a plain finite number, nor a valid
+ * feet-and-inches value (in imperial foot cells), nor a formula that
+ * evaluates - so the commit path must refuse to write instead of coercing to
+ * `parseFloat || 0` and silently storing garbage.
+ *
+ * `canonical` (H2 fix) marks whether `parsed` is already a metric-canonical
+ * value: true for a formula that referenced a canonical symbol ($VAR / pos() /
+ * section(), whose stored values are all metric), false for a displayed value
+ * (a plain number, a feet-and-inches entry, or a pure-literal formula) that the
+ * commit path still converts display->metric exactly once.
+ */
+type ParseResult =
+  | { ok: true; parsed: number; formulaSrc: string; canonical: boolean }
+  | { ok: false };
+
+function previewFor(input: string, ctx?: FormulaContext, ftInActive = false): FormulaPreview {
   const t = input.trim();
   if (!t) return { kind: 'idle' };
-  if (!isFormula(t)) {
-    const n = parseFloat(t.replace(',', '.'));
-    return isFinite(n) ? { kind: 'number', v: n } : { kind: 'err', m: 'Not a number' };
+  // Issue #290: in imperial foot cells a feet-and-inches entry (10'6") is a
+  // valid numeric input; show it as a number, not a formula error.
+  if (ftInActive) {
+    const ft = parseFeetInches(t);
+    if (ft !== null) return { kind: 'number', v: ft };
   }
-  // //// NEOFFICE PATCH — pass the FormulaContext (live positions + BOQ
-  // $VARIABLES, supplied via gridContext.formulaContext) so a $VAR or
-  // pos()/section() reference RESOLVES in the preview instead of erroring
-  // "unresolved reference". Upstream evaluated context-less here.
+  if (!isFormula(t)) {
+    // Strict numeric check (matches parseInput) so "abc" / a malformed ft-in
+    // surfaces as an error instead of a silently truncated number.
+    const n = parsePlainNumber(t);
+    return n !== null ? { kind: 'number', v: n } : { kind: 'err', m: 'Not a number' };
+  }
+  // Issue #292: evaluate with the FormulaContext threaded from the grid so
+  // $VAR / pos(...) / section(...) resolve in the live preview instead of
+  // always erroring for a lack of context.
   const r = evalFormulaImpl(t, ctx);
   if (r === null) return { kind: 'err', m: 'Syntax error or unresolved reference' };
   return { kind: 'ok', v: r };
@@ -139,9 +301,18 @@ export const FormulaCellEditor = forwardRef(
     // Pre-fill with the previously-saved formula if there is one — this
     // means re-editing a "formula" cell takes the user back to the source
     // expression, not just the resolved number (Issue #90 round-trip UX).
-    const [value, setValue] = useState<string>(
-      formula ? String(formula) : String(props.value ?? ''),
-    );
+    const [value, setValue] = useState<string>(() => {
+      if (formula) return String(formula);
+      // Issue #287: seed the numeric branch with the value in the DISPLAYED
+      // measurement system. The commit path (toMetricQty) converts
+      // display→metric, so without this an open+commit with no change would
+      // double-convert and corrupt the stored quantity. Identity for metric /
+      // unmapped units, so metric users see exactly the value as before.
+      const raw = props.value;
+      return typeof raw === 'number' && isFinite(raw)
+        ? String(toDisplayQty(props, raw))
+        : String(raw ?? '');
+    });
     const [showHelp, setShowHelp] = useState(false);
     // Single source of truth — what numeric value we will hand back to AG
     // Grid. Updated only by commitFromInput / getValue so the formula
@@ -150,26 +321,60 @@ export const FormulaCellEditor = forwardRef(
     const lastParsedRef = useRef<number | null>(null);
     const lastFormulaRef = useRef<string>('');
 
-    // //// NEOFFICE PATCH — the FormulaContext (live positions + BOQ $VARIABLES)
-    // is supplied on gridContext.formulaContext; stamp it with the current
-    // position id for self-reference detection. This is what lets $GAZON etc.
-    // resolve in a quantity formula (previously context-less → "unresolved").
-    const formulaCtx = useMemo<FormulaContext | undefined>(() => {
-      const base = (props.context as { formulaContext?: FormulaContext } | undefined)
-        ?.formulaContext;
-      return base ? { ...base, currentPositionId: props.data?.id } : undefined;
-    }, [props.context, props.data?.id]);
+    // Issue #292 (upstream): build a FormulaContext from the grid context so
+    // $VAR / pos(...) / section(...) resolve in this cell's parse + live preview.
+    // props.context is BOQGrid's gridContext; every field is optional so plain
+    // numeric editing still works when the grid doesn't supply them (e.g. an
+    // isolated unit test that only passes displayQuantity).
+    const gridCtx = props.context as
+      | {
+          positions?: Position[];
+          boqVariablesMap?: Map<string, FormulaVariable>;
+          displayQuantity?: DisplayQuantityApi;
+        }
+      | undefined;
+    const ctxPositions = gridCtx?.positions;
+    const ctxVariables = gridCtx?.boqVariablesMap;
+    // Read the display seam once: it both gates the feet-and-inches parser
+    // (#290) and projects the formula context into display space (#292).
+    const dq = gridCtx?.displayQuantity;
+    const formulaCtx = useMemo(() => {
+      // Issue #292 / H2 fix: evaluate the quantity formula in METRIC-canonical
+      // space. Every symbol a formula can reference - pos()/section() positions,
+      // $VAR variables, and pos().rate/.total - is stored metric-canonical, and
+      // BOQ variables carry no unit, so there is no single display factor that
+      // could project them all consistently. We therefore keep positions raw
+      // (metric) here; when a formula actually references one of these canonical
+      // symbols the commit path treats the whole result as already-canonical and
+      // skips toMetricQty (see parseInput), while a pure-literal formula (=10+6)
+      // or a plain typed number is still read in the displayed unit and
+      // converted once. This removes the earlier split - positions projected but
+      // variables passed raw - which double-converted a dimensional $VAR in
+      // imperial mode and stored ~10.76x the metric quantity.
+      return buildFormulaContext({
+        positions: ctxPositions ?? [],
+        variables: ctxVariables ?? new Map<string, FormulaVariable>(),
+        currentPositionId: props.data?.id,
+      });
+    }, [ctxPositions, ctxVariables, props.data?.id]);
 
-    const preview = useMemo(() => previewFor(value, formulaCtx), [value, formulaCtx]);
+    // Issue #290: engage feet-and-inches parsing ONLY in imperial cells whose
+    // unit displays as feet (metric users and every other unit are untouched).
+    const ftInActive = dq?.system === 'imperial' && dq.unitFor(props.data?.unit ?? '') === 'ft';
+
+    const preview = useMemo(
+      () => previewFor(value, formulaCtx, ftInActive),
+      [value, formulaCtx, ftInActive],
+    );
 
     // //// NEOFFICE PATCH — Excel-style variable autocomplete. While the user is
     // typing a $token, suggest the BOQ variables so they don't have to memorise
-    // names (the #1 reason the feature "didn't work" in practice). Matches the
+    // names (the #1 reason the feature "didn't work" in practice). Reads the
+    // variables Map off the (upstream) buildFormulaContext result. Matches the
     // partial $token at the end of the input.
     const varSuggestions = useMemo(() => {
-      if (!formulaCtx) return [] as Array<{ name: string; value: unknown }>;
       const m = value.match(/\$([A-Za-z_][A-Za-z0-9_]*)?$/);
-      if (!m) return [];
+      if (!m) return [] as Array<{ name: string; value: unknown }>;
       const partial = (m[1] ?? '').toUpperCase();
       // Hide once the token already spells a full variable name exactly.
       if (partial && formulaCtx.variables.has(partial)) return [];
@@ -193,6 +398,7 @@ export const FormulaCellEditor = forwardRef(
       }
       setValue(next);
     };
+    // //// END NEOFFICE PATCH
 
     useEffect(() => {
       inputRef.current?.focus();
@@ -232,22 +438,38 @@ export const FormulaCellEditor = forwardRef(
     // result, one with the editor's raw text after the parser fell back
     // to oldValue). Single source of truth via ``lastParsedRef`` keeps it
     // to one PATCH per commit.
-    const parseInput = (live: string): { parsed: number; formulaSrc: string } => {
+    const parseInput = (live: string): ParseResult => {
       const trimmed = live.trim();
-      let parsed: number;
-      let formulaSrc = '';
-      if (isFormula(trimmed)) {
-        const result = evaluateFormula(trimmed, formulaCtx); // //// NEOFFICE: with $VAR context
-        if (result !== null) {
-          parsed = result;
-          formulaSrc = trimmed;
-        } else {
-          parsed = parseFloat(trimmed.replace(',', '.')) || 0;
-        }
-      } else {
-        parsed = parseFloat(trimmed.replace(',', '.')) || 0;
+      // Issue #290: feet-and-inches, imperial foot cells only. The result is a
+      // DISPLAY quantity in feet; the commit path (toMetricQty) converts it to
+      // metres, so it is NOT canonical yet.
+      if (ftInActive) {
+        const ft = parseFeetInches(trimmed);
+        if (ft !== null) return { ok: true, parsed: ft, formulaSrc: '', canonical: false };
       }
-      return { parsed, formulaSrc };
+      // Plain finite number (strict - never truncate "abc" / "10.5x" to a
+      // partial value the way parseFloat did). A plain number is read in the
+      // displayed unit, so it still needs display->metric conversion.
+      const plain = parsePlainNumber(trimmed);
+      if (plain !== null) return { ok: true, parsed: plain, formulaSrc: '', canonical: false };
+      // Formula - context-aware so $VAR / pos(...) resolve (Issue #292). H2 fix:
+      // when the formula references a canonical symbol ($VAR / pos() / section(),
+      // which also covers pos().rate / .total), the resolved value is already in
+      // metric-canonical space and must NOT run through toMetricQty again; a
+      // pure-literal formula (=10+6) carries no reference, so it is read in the
+      // displayed unit like a plain number and converted once.
+      if (isFormula(trimmed)) {
+        const result = evaluateFormula(trimmed, formulaCtx);
+        if (result !== null) {
+          const refs = extractReferences(trimmed);
+          const canonical =
+            refs.variables.size > 0 ||
+            refs.positionOrdinals.size > 0 ||
+            refs.sectionNames.size > 0;
+          return { ok: true, parsed: result, formulaSrc: trimmed, canonical };
+        }
+      }
+      return { ok: false };
     };
 
     // Idempotency guard: Enter→commitFromInput→stopEditing destroys the
@@ -256,19 +478,40 @@ export const FormulaCellEditor = forwardRef(
     // already committed and short-circuit subsequent calls.
     const committedRef = useRef(false);
 
-    const commitFromInput = (cancelNavigation: boolean) => {
-      if (committedRef.current) return;
+    const commitFromInput = (cancelNavigation: boolean, fromBlur = false): boolean => {
+      if (committedRef.current) return true;
       committedRef.current = true;
 
       const live = inputRef.current?.value ?? value;
-      const { parsed, formulaSrc } = parseInput(live);
-      // Issue #285: the Qty cell DISPLAYS the value converted into the user's
-      // measurement system, so a formula typed here resolves in the displayed
-      // unit. Convert the resolved value back to metric-canonical storage
-      // BEFORE writing via setDataValue (which bypasses the column
-      // valueParser). Identity for metric / unmapped units. We store the
-      // metric value in lastParsedRef so getValue() returns the same number.
-      const metricParsed = toMetricQty(props, parsed);
+      const res = parseInput(live);
+      // Issue #290: refuse to commit garbage. Never fall back to
+      // ``parseFloat || 0`` - that silently stored 0 (or a truncated number)
+      // for "abc" / a malformed ft-in / an unresolved formula. When the input
+      // can't be classified as a plain number, a valid ft-in value or a
+      // formula that evaluates, keep the user's text so they can fix it
+      // (Enter/Tab) or revert to the stored value (blur = Escape-cancel).
+      if (!res.ok) {
+        if (fromBlur) {
+          // Cancel: preserve the previously stored value.
+          props.api.stopEditing(true);
+          return true;
+        }
+        // Keep the editor open so the user can correct the entry, and clear
+        // the idempotency guard so a corrected retry still commits.
+        committedRef.current = false;
+        return false;
+      }
+      const { parsed, formulaSrc, canonical } = res;
+      // Issue #285 / H2 fix: the Qty cell DISPLAYS the value converted into the
+      // user's measurement system, so a displayed value (a plain number, a
+      // feet-and-inches entry, or a pure-literal formula) resolves in the
+      // displayed unit and is converted back to metric-canonical storage here,
+      // before writing via setDataValue (which bypasses the column valueParser).
+      // A formula that referenced a canonical symbol ($VAR / pos() / section())
+      // already resolved to a metric-canonical value, so it is stored as-is and
+      // must NOT be converted again. Identity for metric / unmapped units. The
+      // metric value goes into lastParsedRef so getValue() returns the same one.
+      const metricParsed = canonical ? parsed : toMetricQty(props, parsed);
       const hadStoredFormula = !!formula;
       lastParsedRef.current = metricParsed;
       lastFormulaRef.current = formulaSrc;
@@ -317,6 +560,7 @@ export const FormulaCellEditor = forwardRef(
       // If we already wrote the value, cancel AG Grid's secondary commit
       // path; otherwise honour the caller's intent (commit-then-navigate).
       props.api.stopEditing(wroteViaSetDataValue ? true : cancelNavigation);
+      return true;
     };
 
     useEffect(() => {
@@ -345,14 +589,18 @@ export const FormulaCellEditor = forwardRef(
         if (ev.key === 'Tab') {
           ev.preventDefault();
           ev.stopPropagation();
-          commitFromInput(false);
-          props.api.tabToNextCell();
+          // Only advance the focus when the value actually committed; on an
+          // invalid entry commitFromInput keeps the editor open (Issue #290).
+          if (commitFromInput(false)) {
+            props.api.tabToNextCell();
+          }
         }
       };
       const handleBlur = () => {
-        // Blur (clicking outside the popup) should also commit, matching
-        // how AG Grid's native editors behave.
-        commitFromInput(false);
+        // Blur (clicking outside the popup) should also commit, matching how
+        // AG Grid's native editors behave. On an invalid entry this cancels
+        // the edit so the previously stored value is preserved (Issue #290).
+        commitFromInput(false, true);
       };
 
       el.addEventListener('input', handleInput);
@@ -387,7 +635,14 @@ export const FormulaCellEditor = forwardRef(
         // back to metric-canonical storage so getValue() can never leak an
         // imperial number into the quantity field.
         const live = inputRef.current?.value ?? value;
-        return toMetricQty(props, parseInput(live).parsed);
+        const res = parseInput(live);
+        // Issue #290: on invalid input never coerce to 0 - hand AG Grid back
+        // the original stored (metric) value so a stray cold-path getValue
+        // can't corrupt it.
+        if (!res.ok) return props.value;
+        // H2 fix: mirror commitFromInput - a formula that referenced a canonical
+        // symbol is already metric-canonical and must not be converted again.
+        return res.canonical ? res.parsed : toMetricQty(props, res.parsed);
       },
       isCancelAfterEnd() {
         return false;
@@ -551,6 +806,73 @@ export const FormulaCellEditor = forwardRef(
   },
 );
 FormulaCellEditor.displayName = 'FormulaCellEditor';
+
+/* ── Rate Cell Editor (Issue #287) ────────────────────────────────── */
+
+/**
+ * Display-aware editor for the Unit Rate column.
+ *
+ * The rate cell DISPLAYS a reciprocal per-unit rate when the quantity is shown
+ * converted (a 50/m rate reads 15.24/ft) so the line total reconciles. The
+ * stock ``agNumberCellEditor`` opens on the RAW METRIC rate while the column
+ * ``valueParser`` (``toMetricRate``) converts display→metric on commit, so
+ * opening and committing a cell unchanged multiplied the stored rate by the
+ * unit factor and silently corrupted storage (Issue #287).
+ *
+ * This editor OPENS on the displayed rate (``convertRate``) and returns the
+ * typed display value; the column ``valueParser`` reverses it back to
+ * metric-canonical storage. Both conversions are identity for the metric
+ * system and for units with no imperial mapping, so metric users are
+ * unaffected and imperial edits round-trip exactly. Inline (non-popup)
+ * editor, so a plain controlled input is safe here.
+ */
+export const RateCellEditor = forwardRef((props: ICellEditorParams, ref) => {
+  const dq = (props.context as { displayQuantity?: DisplayQuantityApi } | undefined)?.displayQuantity;
+  const unit = (props.data?.unit as string | undefined) ?? '';
+  const inputRef = useRef<HTMLInputElement>(null);
+  // The rate the editor OPENS on, in the displayed system. Kept as the
+  // unchanged-commit fallback: valueParser applies toMetricRate to whatever we
+  // return, so on a blank / invalid entry we must hand back a DISPLAY value
+  // (never the raw metric one) for it to reverse to the original stored rate.
+  const displaySeed = useMemo(() => {
+    const raw = props.value;
+    if (typeof raw !== 'number' || !isFinite(raw)) return null;
+    return dq ? dq.convertRate(raw, unit) : raw;
+  }, [props.value, dq, unit]);
+
+  const [value, setValue] = useState<string>(displaySeed != null ? String(displaySeed) : '');
+
+  useEffect(() => {
+    inputRef.current?.focus();
+    inputRef.current?.select();
+  }, []);
+
+  useImperativeHandle(ref, () => ({
+    getValue() {
+      const n = parseFloat(value.replace(',', '.'));
+      if (isFinite(n)) return n; // typed display value -> valueParser -> metric
+      if (displaySeed != null) return displaySeed; // unchanged -> reverses to original
+      return props.value; // non-numeric original -> valueParser returns oldValue
+    },
+    isCancelAfterEnd() {
+      return false;
+    },
+  }));
+
+  return (
+    <input
+      ref={inputRef}
+      type="number"
+      min={0}
+      step="any"
+      inputMode="decimal"
+      className="w-full h-full bg-surface-elevated border border-oe-blue/40 rounded ring-2 ring-oe-blue/20 outline-none text-sm text-content-primary tabular-nums text-right px-1"
+      value={value}
+      onChange={(e) => setValue(e.target.value)}
+    />
+  );
+});
+RateCellEditor.displayName = 'RateCellEditor';
 
 /* ── Autocomplete Cell Editor ─────────────────────────────────────── */
 

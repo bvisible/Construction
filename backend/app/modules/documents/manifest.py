@@ -1,4 +1,4 @@
-"""‌⁠‍Document Management module manifest."""
+"""Document Management module manifest."""
 
 from app.core.module_loader import ModuleManifest
 

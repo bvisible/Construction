@@ -1,11 +1,11 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
-"""‌⁠‍Smart Views module permission definitions."""
+"""Smart Views module permission definitions."""
 
 from app.core.permissions import Role, permission_registry
 
 
 def register_smart_views_permissions() -> None:
-    """‌⁠‍Register RBAC permissions for the smart_views module.
+    """Register RBAC permissions for the smart_views module.
 
     Mirrors the canonical viewer/editor split used by the sibling
     ``clash`` / ``bcf`` / ``validation`` modules:

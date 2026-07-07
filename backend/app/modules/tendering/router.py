@@ -1,4 +1,4 @@
-"""‌⁠‍Tendering API routes.
+"""Tendering API routes.
 
 Endpoints:
     POST   /packages/                       - Create a tender package

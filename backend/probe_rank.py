@@ -1,4 +1,4 @@
-"""‌⁠‍In-process rank trace — sits in backend/ so import resolution matches the live server."""
+"""In-process rank trace — sits in backend/ so import resolution matches the live server."""
 
 import asyncio
 import io

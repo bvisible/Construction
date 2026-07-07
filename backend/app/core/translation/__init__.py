@@ -1,4 +1,4 @@
-"""‌⁠‍Translation service - element → catalog cross-lingual normalisation.
+"""Translation service - element → catalog cross-lingual normalisation.
 
 Public entrypoint:
 

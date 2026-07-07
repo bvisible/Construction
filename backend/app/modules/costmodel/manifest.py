@@ -1,4 +1,4 @@
-"""‌⁠‍5D Cost Model module manifest."""
+"""5D Cost Model module manifest."""
 
 from app.core.module_loader import ModuleManifest
 

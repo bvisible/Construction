@@ -1,4 +1,4 @@
-"""‌⁠‍Admin module manifest.
+"""Admin module manifest.
 
 Houses operator-only endpoints that bypass normal auth via shared-secret +
 env-gate (e.g. qa-reset for crawler-driven test pipelines). Not loaded

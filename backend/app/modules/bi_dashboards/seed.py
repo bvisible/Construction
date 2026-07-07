@@ -1,5 +1,5 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
-"""‌⁠‍Seed data for the BI Dashboards module.
+"""Seed data for the BI Dashboards module.
 
 * All registered system KPIs as :class:`KPIDefinition` rows
 * 5 role-based default dashboards (CEO / CFO / PM / Site Manager /
@@ -364,7 +364,7 @@ async def _seed_alerts(session: AsyncSession) -> list[AlertRule]:
 
 
 async def _seed_kpi_history(session: AsyncSession) -> int:
-    """‌⁠‍Persist one REAL portfolio-level snapshot per registered system KPI.
+    """Persist one REAL portfolio-level snapshot per registered system KPI.
 
     Earlier revisions fabricated an 8-week trend of ``0.85 + offset*0.02``
     for every KPI regardless of unit, so currency/days/ratio KPIs all showed
@@ -411,7 +411,7 @@ async def _seed_kpi_history(session: AsyncSession) -> int:
 
 
 async def seed_all(session: AsyncSession) -> dict[str, int]:
-    """‌⁠‍Run every seed step in dependency order and return counts."""
+    """Run every seed step in dependency order and return counts."""
     service = BIDashboardsService(session)
     kpi_count = await _seed_kpi_definitions(session, service)
     dashboards = await _seed_dashboards(session)

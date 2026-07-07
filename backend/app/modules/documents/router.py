@@ -1,4 +1,4 @@
-"""‌⁠‍Document Management API routes.
+"""Document Management API routes.
 
 Endpoints:
     POST   /upload                  - Upload a document
@@ -20,6 +20,7 @@ Endpoints:
 """
 
 import logging
+import mimetypes
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -143,7 +144,7 @@ async def _verify_project_membership_or_404(
 
 
 def _doc_to_response(doc: object) -> DocumentResponse:
-    """‌⁠‍Build a DocumentResponse from a Document ORM object."""
+    """Build a DocumentResponse from a Document ORM object."""
     return DocumentResponse(
         id=doc.id,  # type: ignore[attr-defined]
         project_id=doc.project_id,  # type: ignore[attr-defined]
@@ -180,7 +181,7 @@ async def get_summary(
     user_id: CurrentUserId = None,  # type: ignore[assignment]
     service: DocumentService = Depends(_get_service),
 ) -> DocumentSummary:
-    """‌⁠‍Aggregated document stats for a project."""
+    """Aggregated document stats for a project."""
     await verify_project_access(project_id, user_id, session)
     data = await service.get_summary(project_id)
     return DocumentSummary(**data)
@@ -1362,8 +1363,27 @@ async def serve_share_link_file(
     return FileResponse(
         path=str(file_path),
         filename=doc.name,
-        media_type=doc.mime_type or "application/octet-stream",
+        media_type=_serve_media_type(doc.name, doc.mime_type),
     )
+
+
+def _serve_media_type(name: str | None, stored_mime: str | None) -> str:
+    """Resolve the Content-Type to serve a stored file with.
+
+    A specific stored MIME wins. When it is missing or the generic
+    ``application/octet-stream`` (what a browser sends when it uploads a video
+    or other blob without a type, so that is what we recorded), fall back to a
+    guess from the filename extension. Without this a ``.mp4`` served as
+    ``application/octet-stream`` will not play in a ``<video>`` element and an
+    image will not render inline - the browser treats it as an opaque
+    download. Covers already-stored files too, since playback keys off the
+    served type, not the recorded one.
+    """
+    generic = "application/octet-stream"
+    if stored_mime and stored_mime.lower() != generic:
+        return stored_mime
+    guessed, _ = mimetypes.guess_type(name or "")
+    return guessed or generic
 
 
 def _link_to_response(link: object, public_url: str) -> ShareLinkResponse:
@@ -1522,7 +1542,7 @@ async def download_document(
     return FileResponse(
         path=str(file_path),
         filename=doc.name,
-        media_type=doc.mime_type or "application/octet-stream",
+        media_type=_serve_media_type(doc.name, doc.mime_type),
     )
 
 

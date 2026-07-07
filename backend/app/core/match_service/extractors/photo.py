@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍Photo element → envelope adapter + EXIF GPS extraction.
+"""Photo element → envelope adapter + EXIF GPS extraction.
 
 The envelope adapter exercises the matcher interface end-to-end with a
 partial-quality envelope so the rest of the system doesn't block waiting
@@ -301,14 +301,14 @@ def extract_exif_datetime(image_bytes: bytes) -> datetime | None:
 
 
 def _description_from_tags(tags: list[Any]) -> str:
-    """‌⁠‍Stringify CV-extracted tags into a description blob."""
+    """Stringify CV-extracted tags into a description blob."""
     if not tags:
         return ""
     return ", ".join(str(t).strip() for t in tags if str(t).strip())
 
 
 def extract(raw: dict[str, Any]) -> ElementEnvelope:
-    """‌⁠‍Build an :class:`ElementEnvelope` from a photo-element dict.
+    """Build an :class:`ElementEnvelope` from a photo-element dict.
 
     Pulls description from either ``description`` (direct) or
     ``ai_extracted_tags`` (rendered as ``"tag1, tag2, tag3"``).

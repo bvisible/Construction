@@ -1,4 +1,4 @@
-"""‌⁠‍Compatibility shim - delegates to ``app.core.email``.
+"""Compatibility shim - delegates to ``app.core.email``.
 
 The real implementation was moved to ``app.core.email`` in v2.3.1 so the
 rest of the app can plug in new transports (SES, SendGrid, …) without
@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 
 async def send_email(to: str, subject: str, html_body: str) -> bool:
-    """‌⁠‍Backwards-compatible wrapper around ``EmailService.send``.
+    """Backwards-compatible wrapper around ``EmailService.send``.
 
     Returns a plain ``bool`` to match the pre-2.3.1 signature; callers
     that want the structured ``DeliveryResult`` should use

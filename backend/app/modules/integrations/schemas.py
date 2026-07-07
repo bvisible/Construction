@@ -1,4 +1,4 @@
-"""‌⁠‍Integrations Pydantic schemas -- request/response models."""
+"""Integrations Pydantic schemas -- request/response models."""
 
 from datetime import datetime
 from typing import Any, Literal
@@ -88,7 +88,7 @@ def _validate_config_urls(
 
 
 class IntegrationConfigCreate(BaseModel):
-    """‌⁠‍Create a new integration config (Teams, Slack, Telegram, etc.)."""
+    """Create a new integration config (Teams, Slack, Telegram, etc.)."""
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
@@ -118,7 +118,7 @@ class IntegrationConfigCreate(BaseModel):
 
 
 class IntegrationConfigUpdate(BaseModel):
-    """‌⁠‍Partial update for an integration config."""
+    """Partial update for an integration config."""
 
     model_config = ConfigDict(str_strip_whitespace=True)
 

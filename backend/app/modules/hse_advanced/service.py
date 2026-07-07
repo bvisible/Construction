@@ -1,4 +1,4 @@
-"""‌⁠‍HSE Advanced service - pure helpers + workflows for JSA / PTW / audits / CAPA / KPI."""
+"""HSE Advanced service - pure helpers + workflows for JSA / PTW / audits / CAPA / KPI."""
 
 from __future__ import annotations
 
@@ -123,12 +123,12 @@ _PTW_PREREQUISITES: dict[str, tuple[str, ...]] = {
 
 
 def ptw_required_prerequisites(permit_type: str) -> tuple[str, ...]:
-    """‌⁠‍Pure: return the required prerequisite flag names for a permit type."""
+    """Pure: return the required prerequisite flag names for a permit type."""
     return _PTW_PREREQUISITES.get(permit_type, ("prereq_jsa_approved",))
 
 
 def check_ptw_prerequisites(permit: Any) -> tuple[list[str], list[str]]:
-    """‌⁠‍Pure: return (met, missing) prerequisite lists for a permit.
+    """Pure: return (met, missing) prerequisite lists for a permit.
 
     A flag is "met" when its boolean attribute on ``permit`` is truthy.
     Anything not in the requirement list is ignored.
@@ -498,7 +498,7 @@ def allowed_capa_transitions(current: str) -> list[str]:
 
 
 def allowed_corrective_action_transitions(current: str) -> list[str]:
-    """‌⁠‍Pure slim CorrectiveAction FSM (incident-scoped).
+    """Pure slim CorrectiveAction FSM (incident-scoped).
 
     Strict linear lifecycle modelled on mainstream construction quality
     and EHS suites: ``pending → in_progress → verified → closed``. Any other
@@ -546,7 +546,7 @@ async def _safe_audit(
     to_status: str | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> None:
-    """‌⁠‍Best-effort write to ``activity_log`` for HSE audit-trail coverage.
+    """Best-effort write to ``activity_log`` for HSE audit-trail coverage.
 
     Round-3 Wave F flagged 21 HSE PATCH/DELETE / FSM-transition endpoints
     as silent on the audit trail. We funnel every state change and
@@ -1809,7 +1809,7 @@ class HSEAdvancedService:
         project_id: uuid.UUID,
         year: int,
     ) -> str:
-        """‌⁠‍Render the OSHA 300 incident log for one project + year.
+        """Render the OSHA 300 incident log for one project + year.
 
         Filters to ``SafetyIncident.osha_recordable=True`` and incidents
         whose ``incident_date`` (stored as ``YYYY-MM-DD`` string) starts
@@ -1868,7 +1868,7 @@ class HSEAdvancedService:
         assigned_to_user_id: uuid.UUID | None = None,
         due_date: date | None = None,
     ) -> HSECorrectiveAction:
-        """‌⁠‍Open a new corrective action on an incident in status=pending."""
+        """Open a new corrective action on an incident in status=pending."""
         obj = HSECorrectiveAction(
             incident_id=incident_id,
             description=description,
@@ -1914,7 +1914,7 @@ class HSEAdvancedService:
         user_id: uuid.UUID | str | None,
         verification_notes: str | None = None,
     ) -> HSECorrectiveAction:
-        """‌⁠‍Strict FSM transition.
+        """Strict FSM transition.
 
         Allowed: ``pending → in_progress → verified → closed``. Any other
         target raises HTTP 409 with a message naming the rejected hop, so

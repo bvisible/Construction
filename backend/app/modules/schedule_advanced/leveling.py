@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍Resource leveling - serial-greedy heuristic (Slice 1).
+"""Resource leveling - serial-greedy heuristic (Slice 1).
 
 Given a CPM-scheduled network and a per-resource ceiling, shift activity
 start times forward (never backward) so that at no point in time the

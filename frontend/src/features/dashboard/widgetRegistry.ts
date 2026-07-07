@@ -29,6 +29,12 @@ import {
   Camera,
   Wallet,
   Inbox,
+  // Delivery & quality (added 2026-07-05)
+  Flag,
+  HelpCircle,
+  FileCheck2,
+  ClipboardCheck,
+  ListChecks,
 } from 'lucide-react';
 
 export interface DashboardWidgetMeta {
@@ -172,6 +178,51 @@ export const DASHBOARD_WIDGETS: readonly DashboardWidgetMeta[] = [
     descKey: 'dashboard.layout.w_operations_snapshot_desc',
     descDefault: 'BOQ · Validation · Clash · Schedule · Risks · HSE · Procurement · Budget · Change orders',
     icon: ClipboardList,
+  },
+
+  // ── Delivery & quality (added 2026-07-05) ────────────────────────────────
+  // Each card self-hides when its module has no data for the active project,
+  // so a fresh install never shows an empty card. They surface the delivery
+  // and quality work that the operations snapshot does not consolidate.
+  {
+    id: 'upcoming_milestones',
+    labelKey: 'dashboard.layout.w_upcoming_milestones',
+    labelDefault: 'Upcoming milestones',
+    descKey: 'dashboard.layout.w_upcoming_milestones_desc',
+    descDefault: 'The next key schedule dates, with days remaining or overdue',
+    icon: Flag,
+  },
+  {
+    id: 'rfi_turnaround',
+    labelKey: 'dashboard.layout.w_rfi_turnaround',
+    labelDefault: 'RFI turnaround',
+    descKey: 'dashboard.layout.w_rfi_turnaround_desc',
+    descDefault: 'Open and overdue requests for information, plus average response time',
+    icon: HelpCircle,
+  },
+  {
+    id: 'submittals_pending',
+    labelKey: 'dashboard.layout.w_submittals_pending',
+    labelDefault: 'Submittals',
+    descKey: 'dashboard.layout.w_submittals_pending_desc',
+    descDefault: 'Submittals pending review, approved and overdue',
+    icon: FileCheck2,
+  },
+  {
+    id: 'inspections_quality',
+    labelKey: 'dashboard.layout.w_inspections_quality',
+    labelDefault: 'Inspections',
+    descKey: 'dashboard.layout.w_inspections_quality_desc',
+    descDefault: 'Inspection pass rate with open and failed counts',
+    icon: ClipboardCheck,
+  },
+  {
+    id: 'punch_quality',
+    labelKey: 'dashboard.layout.w_punch_quality',
+    labelDefault: 'Punch list',
+    descKey: 'dashboard.layout.w_punch_quality_desc',
+    descDefault: 'Open and overdue punch items with average time to close',
+    icon: ListChecks,
   },
 
   // ── Field ──────────────────────────────────────────────────────────────

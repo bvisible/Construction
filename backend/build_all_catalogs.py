@@ -1,4 +1,4 @@
-"""‌⁠‍Build resource catalogs for ALL 11 CWICR regions."""
+"""Build resource catalogs for ALL 11 CWICR regions."""
 
 import glob
 import math
@@ -128,7 +128,7 @@ def categorize(name, typ):
 
 
 def process_region(region_code, parquet_path, region_info):
-    """‌⁠‍Process one region and return summary."""
+    """Process one region and return summary."""
     df = pd.read_parquet(parquet_path)
     df.columns = [str(c).strip().lower() for c in df.columns]
 

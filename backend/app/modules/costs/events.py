@@ -1,4 +1,4 @@
-"""‌⁠‍Costs event handlers - vector indexing.
+"""Costs event handlers - vector indexing.
 
 Subscribes to the existing ``costs.item.*`` and ``costs.items.*`` event
 families published by :class:`~app.modules.costs.service.CostItemService`
@@ -60,7 +60,7 @@ _BULK_DEBOUNCE_SECONDS = 1.5
 
 
 async def _index_one_by_id(item_id: uuid.UUID) -> None:
-    """‌⁠‍Resolve one CostItem by id and push it to the vector store.
+    """Resolve one CostItem by id and push it to the vector store.
 
     Opens its own short-lived session - the calling event-bus handler
     is decoupled from the request transaction and must not reuse the
@@ -93,7 +93,7 @@ async def _index_one_by_id(item_id: uuid.UUID) -> None:
 
 
 def _extract_item_id(event: Event) -> uuid.UUID | None:
-    """‌⁠‍Pull ``item_id`` out of the event payload as a UUID.
+    """Pull ``item_id`` out of the event payload as a UUID.
 
     Returns ``None`` for non-UUID values so the handler can no-op
     rather than crash on a malformed publish.

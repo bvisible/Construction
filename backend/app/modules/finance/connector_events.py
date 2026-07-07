@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍Auto-push wiring for finance connectors.
+"""Auto-push wiring for finance connectors.
 
 When an invoice is approved or paid, any active connector configured with
 ``auto_push`` for that event is pushed - but NOT inline in the detached

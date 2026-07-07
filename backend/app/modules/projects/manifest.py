@@ -1,4 +1,4 @@
-"""‌⁠‍Projects module manifest."""
+"""Projects module manifest."""
 
 from app.core.module_loader import ModuleManifest
 

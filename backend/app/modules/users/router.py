@@ -1,4 +1,4 @@
-"""‌⁠‍Users & authentication API routes.
+"""Users & authentication API routes.
 
 Endpoints:
     POST /auth/register         - Register new user
@@ -71,13 +71,13 @@ from app.modules.users.service import UserService
 
 
 class ModulePreferencesPayload(BaseModel):
-    """‌⁠‍Request/response body for module preferences."""
+    """Request/response body for module preferences."""
 
     modules: dict[str, bool]
 
 
 class CustomUnitsPayload(BaseModel):
-    """‌⁠‍Request/response body for the user's per-tenant custom-unit catalogue.
+    """Request/response body for the user's per-tenant custom-unit catalogue.
 
     The unit dropdown in BOQ position / resource rows merges these with the
     locale-baseline units. Persisted in user metadata so the catalogue is

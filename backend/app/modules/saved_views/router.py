@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍HTTP routes for the saved-views module.
+"""HTTP routes for the saved-views module.
 
 Auto-mounted by the module loader at ``/api/v1/saved-views`` (kebab) with a
 legacy mirror at ``/api/v1/saved_views``. Every data endpoint takes a

@@ -1,4 +1,4 @@
-"""‌⁠‍Universal per-element BIM validation rules.
+"""Universal per-element BIM validation rules.
 
 This module declares a small library of :class:`BIMElementRule` instances
 that apply to any BIM/IFC model regardless of jurisdiction. They are the
@@ -180,11 +180,11 @@ BIM_UNIVERSAL_RULES: list[BIMElementRule] = [
     ELEMENT_HAS_STOREY,
     ELEMENT_NAME_NOT_NONE,
 ]
-"""‌⁠‍Ordered list of enabled universal BIM element rules."""
+"""Ordered list of enabled universal BIM element rules."""
 
 
 def get_rules_by_ids(rule_ids: list[str] | None) -> list[BIMElementRule]:
-    """‌⁠‍Return the subset of ``BIM_UNIVERSAL_RULES`` matching ``rule_ids``.
+    """Return the subset of ``BIM_UNIVERSAL_RULES`` matching ``rule_ids``.
 
     If ``rule_ids`` is ``None`` or empty, the full enabled set is returned.
     Unknown ids are silently skipped - callers can verify by comparing

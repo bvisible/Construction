@@ -1,4 +1,4 @@
-"""‌⁠‍Property Development & Buyer Portal module.
+"""Property Development & Buyer Portal module.
 
 Tracks property developments, plots, house types, buyer option catalogues,
 buyer registrations + selections (with freeze deadlines), handovers + snag
@@ -8,7 +8,7 @@ business logic for a downstream 3D configurator + portal frontend.
 
 
 async def on_startup() -> None:
-    """‌⁠‍Module startup hook - register permissions + event subscribers."""
+    """Module startup hook - register permissions + event subscribers."""
     from app.modules.property_dev.events import (
         register_portal_message_subscribers,
         register_property_dev_event_subscribers,

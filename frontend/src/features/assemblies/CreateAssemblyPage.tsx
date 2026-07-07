@@ -4,6 +4,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { X, Layers } from 'lucide-react';
 import { Button, Input } from '@/shared/ui';
+import { CurrencyPicker } from '@/shared/ui/CurrencyPicker';
 import { useToastStore } from '@/stores/useToastStore';
 import { usePreferencesStore } from '@/stores/usePreferencesStore';
 import { assembliesApi, type CreateAssemblyData } from './api';
@@ -30,27 +31,6 @@ const UNITS = [
   { value: 'h', key: 'units.hour', defaultLabel: 'h -- Hour' },
   { value: 'set', key: 'units.set', defaultLabel: 'set -- Set' },
   { value: 'lm', key: 'units.linear_meter', defaultLabel: 'lm -- Linear meter' },
-];
-
-const CURRENCIES = [
-  { value: 'EUR', label: 'EUR' },
-  { value: 'USD', label: 'USD' },
-  { value: 'GBP', label: 'GBP' },
-  { value: 'CHF', label: 'CHF' },
-  { value: 'SEK', label: 'SEK' },
-  { value: 'NOK', label: 'NOK' },
-  { value: 'DKK', label: 'DKK' },
-  { value: 'PLN', label: 'PLN' },
-  { value: 'CZK', label: 'CZK' },
-  { value: 'CAD', label: 'CAD' },
-  { value: 'AUD', label: 'AUD' },
-  { value: 'CNY', label: 'CNY' },
-  { value: 'JPY', label: 'JPY' },
-  { value: 'INR', label: 'INR' },
-  { value: 'AED', label: 'AED' },
-  { value: 'SAR', label: 'SAR' },
-  { value: 'BRL', label: 'BRL' },
-  { value: 'ZAR', label: 'ZAR' },
 ];
 
 const STANDARDS = [
@@ -101,13 +81,6 @@ export function CreateAssemblyModal({ open, onClose }: CreateAssemblyModalProps)
     }
   }, [open, preferredCurrency]);
 
-  // Ensure the preferred currency is always an available option, even when it
-  // isn't one of the common presets (e.g. KES/THB), so the dropdown reflects
-  // the actual default rather than showing a different first entry.
-  const currencyOptions = CURRENCIES.some((c) => c.value === preferredCurrency)
-    ? CURRENCIES
-    : [{ value: preferredCurrency, label: preferredCurrency }, ...CURRENCIES];
-
   const mutation = useMutation({
     mutationFn: (data: CreateAssemblyData) => assembliesApi.create(data),
     onSuccess: (assembly) => {
@@ -135,7 +108,9 @@ export function CreateAssemblyModal({ open, onClose }: CreateAssemblyModalProps)
       unit: form.unit,
       category: form.category,
       classification: Object.keys(classification).length > 0 ? classification : undefined,
-      currency: form.currency,
+      // Fall back to the preferred currency if the custom field was left
+      // blank, so an assembly never lands with an empty currency.
+      currency: form.currency.trim() || preferredCurrency,
       bid_factor: parseFloat(form.bid_factor) || 1.0,
     });
   };
@@ -248,14 +223,13 @@ export function CreateAssemblyModal({ open, onClose }: CreateAssemblyModalProps)
 
             {/* Currency & Bid Factor */}
             <div className="grid grid-cols-2 gap-4">
-              <div className="flex flex-col gap-1.5">
-                <label className="text-sm font-medium text-content-primary">{t('assemblies.currency', { defaultValue: 'Currency' })}</label>
-                <select value={form.currency} onChange={(e) => set('currency', e.target.value)} className={selectClass}>
-                  {currencyOptions.map((c) => (
-                    <option key={c.value} value={c.value}>{c.label}</option>
-                  ))}
-                </select>
-              </div>
+              <CurrencyPicker
+                id="create-assembly-currency"
+                label={t('assemblies.currency', { defaultValue: 'Currency' })}
+                value={form.currency}
+                onChange={(code) => set('currency', code)}
+                selectClassName={selectClass}
+              />
               <Input
                 label={t('assemblies.bid_factor', { defaultValue: 'Bid Factor' })}
                 type="number"

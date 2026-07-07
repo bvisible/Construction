@@ -1,4 +1,4 @@
-"""‌⁠‍BOQ unit normaliser.
+"""BOQ unit normaliser.
 
 Estimators globally use thousands of locale-specific units that no curated
 allowlist can ever cover: Romanian ``Bucat``, Bulgarian ``бр``, Russian
@@ -48,12 +48,18 @@ APPROVED_UNITS: Final[frozenset[str]] = frozenset(
         "m2",
         "cm2",
         "ft2",
+        "yd2",
+        # US roofing square (100 sq ft) - GitHub #320
+        "sq",
         # volume
         "m3",
         "cm3",
         "l",
         "ft3",
         "gal",
+        # US trade volume units - GitHub #320
+        "cy",
+        "bdft",
         # mass / weight
         "kg",
         "g",
@@ -108,6 +114,21 @@ _UNIT_ALIASES: Final[dict[str, str]] = {
     "cu.m": "m3",
     "cuft": "ft3",
     "cu.ft": "ft3",
+    # US trade units - GitHub #320
+    "cuyd": "cy",
+    "cu.yd": "cy",
+    "yd3": "cy",
+    "cubicyard": "cy",
+    "bf": "bdft",
+    "fbm": "bdft",
+    "boardfoot": "bdft",
+    "boardfeet": "bdft",
+    "board foot": "bdft",
+    "board feet": "bdft",
+    "sqyd": "yd2",
+    "sq.yd": "yd2",
+    "square": "sq",
+    "squares": "sq",
     # counts / lump synonyms
     "piece": "pcs",
     "pieces": "pcs",
@@ -148,7 +169,7 @@ _FORBIDDEN_CHARS: Final[frozenset[str]] = frozenset(
 
 
 def _is_safe_unit_shape(unit: str) -> bool:
-    """‌⁠‍Return True iff ``unit`` is non-empty, ≤ ``_MAX_UNIT_LEN``, and free
+    """Return True iff ``unit`` is non-empty, ≤ ``_MAX_UNIT_LEN``, and free
     of forbidden characters.  The first character must be a letter or a
     digit (so "100 ea" / "lin.m" / "м3" / "個" all pass; ";rm" / "<x>" do
     not).
@@ -172,7 +193,7 @@ def _is_safe_unit_shape(unit: str) -> bool:
 
 
 def normalise_unit(unit: str | None) -> str | None:
-    """‌⁠‍Return the canonical form of ``unit`` if it has a safe shape, else
+    """Return the canonical form of ``unit`` if it has a safe shape, else
     None.
 
     Resolution order:

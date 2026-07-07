@@ -15,6 +15,11 @@ import { Card, CardHeader, CardContent } from '@/shared/ui';
 import { apiGet, apiPatch } from '@/shared/lib/api';
 import { usePreferencesStore, type MeasurementSystem, type DateFormat, type NumberLocale } from '@/stores/usePreferencesStore';
 import { useToastStore } from '@/stores/useToastStore';
+import {
+  CUSTOM_CURRENCY_SENTINEL,
+  normalizeCurrencyCode,
+  isValidCurrencyCode,
+} from '@/features/projects/currencyGroups';
 
 // ── Static data ──────────────────────────────────────────────────────────────
 
@@ -78,6 +83,7 @@ const NUMBER_FORMATS: NumberFormatOption[] = [
   { locale: 'fr-FR', label: '1 234,56', example: '1 234,56' },
   { locale: 'en-GB', label: '1,234.56', example: '1,234.56' },
   { locale: 'ru-RU', label: '1 234,56', example: '1 234,56' },
+  { locale: 'es-MX', label: '1,234.56', example: '1,234.56' },
 ];
 
 const CURRENCIES = [
@@ -376,15 +382,45 @@ export function RegionalSettings({ animationDelay = '0ms' }: { animationDelay?: 
     [patchMutation, setPreference],
   );
 
-  // Build currency options for SearchableSelect
+  // Build currency options for SearchableSelect, ending with a "Custom..."
+  // entry so an operator whose currency is not in the curated list can still
+  // set it as the global default (the backend currency column is free-form).
   const currencyOptions = useMemo(
-    () =>
-      CURRENCIES.map((c) => ({
-        value: c.code,
+    () => [
+      ...CURRENCIES.map((c) => ({
+        value: c.code as string,
         label: `${c.symbol} ${c.code} - ${c.name}`,
       })),
-    [],
+      {
+        value: CUSTOM_CURRENCY_SENTINEL,
+        label: t('currency_picker.custom_option', { defaultValue: 'Custom...' }),
+      },
+    ],
+    [t],
   );
+
+  // A persisted currency that is not one of the curated codes means the user
+  // is on a custom default; reflect that by selecting "Custom..." and seeding
+  // the free-text input. Local state keeps the input visible while the field
+  // is mid-edit (so an in-progress empty value does not snap back to a preset).
+  const currencyIsCustom =
+    currency !== '' && !CURRENCIES.some((c) => c.code === currency);
+  const [customCurrencyMode, setCustomCurrencyMode] = useState(currencyIsCustom);
+  const showCustomCurrency = customCurrencyMode || currencyIsCustom;
+  // Edit the free-text code in a local draft and only persist (one PATCH +
+  // one toast) on blur / Enter, instead of firing a request per keystroke.
+  // While the user has not yet typed (draft is null) the input mirrors the
+  // persisted custom currency, so a server-loaded custom code shows correctly
+  // even though `currency` arrives after first render.
+  const [customCurrencyDraft, setCustomCurrencyDraft] = useState<string | null>(null);
+  const customCurrencyValue = customCurrencyDraft ?? (currencyIsCustom ? currency : '');
+  const customCurrencyInvalid =
+    customCurrencyValue.trim().length > 0 && !isValidCurrencyCode(customCurrencyValue);
+
+  const commitCustomCurrency = useCallback(() => {
+    const code = normalizeCurrencyCode(customCurrencyValue);
+    if (code && code !== currency) handleChange('currency_code', code);
+  }, [customCurrencyValue, currency, handleChange]);
 
   return (
     <Card className="animate-card-in" style={{ animationDelay }}>
@@ -489,11 +525,57 @@ export function RegionalSettings({ animationDelay = '0ms' }: { animationDelay?: 
               {t('settings.currency', { defaultValue: 'Currency' })}
             </label>
             <SearchableSelect
-              value={currency}
+              value={showCustomCurrency ? CUSTOM_CURRENCY_SENTINEL : currency}
               options={currencyOptions}
-              onChange={(val) => handleChange('currency_code', val)}
+              onChange={(val) => {
+                if (val === CUSTOM_CURRENCY_SENTINEL) {
+                  // Reveal the free-text input; only persist once the user types
+                  // a code (avoid writing the literal sentinel to the backend).
+                  setCustomCurrencyMode(true);
+                  setCustomCurrencyDraft(currencyIsCustom ? currency : '');
+                  return;
+                }
+                setCustomCurrencyMode(false);
+                setCustomCurrencyDraft(null);
+                handleChange('currency_code', val);
+              }}
               placeholder={t('common.search', { defaultValue: 'Search...' })}
             />
+            {showCustomCurrency && (
+              <>
+                <input
+                  type="text"
+                  value={customCurrencyValue}
+                  onChange={(e) => setCustomCurrencyDraft(normalizeCurrencyCode(e.target.value))}
+                  onBlur={commitCustomCurrency}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      commitCustomCurrency();
+                    }
+                  }}
+                  placeholder={t('currency_picker.custom_placeholder', { defaultValue: 'e.g. XAF' })}
+                  maxLength={10}
+                  aria-label={t('currency_picker.custom_aria', {
+                    defaultValue: 'Custom currency code',
+                  })}
+                  aria-invalid={customCurrencyInvalid}
+                  className={clsx(
+                    'mt-2 h-10 w-full rounded-lg border bg-surface-primary px-3 text-sm text-content-primary uppercase placeholder:normal-case placeholder:text-content-tertiary focus:outline-none focus:ring-2 focus:border-transparent',
+                    customCurrencyInvalid
+                      ? 'border-amber-400 focus:ring-amber-400'
+                      : 'border-border focus:ring-oe-blue',
+                  )}
+                />
+                {customCurrencyInvalid && (
+                  <p className="mt-1 text-[11px] text-amber-700 dark:text-amber-400">
+                    {t('currency_picker.custom_hint', {
+                      defaultValue: 'Use a 3-letter ISO code (e.g. XAF) so amounts format correctly.',
+                    })}
+                  </p>
+                )}
+              </>
+            )}
           </div>
         </div>
       </CardContent>

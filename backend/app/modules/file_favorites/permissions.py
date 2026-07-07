@@ -1,10 +1,10 @@
-"""‌⁠‍File Favourites module permission definitions."""
+"""File Favourites module permission definitions."""
 
 from app.core.permissions import Role, permission_registry
 
 
 def register_file_favorites_permissions() -> None:
-    """‌⁠‍Register RBAC permissions for the file_favorites module.
+    """Register RBAC permissions for the file_favorites module.
 
     Favourites + pins are personal per-user bookmarks, so the policy is
     simple: any user that can VIEW a file can also star/pin it for

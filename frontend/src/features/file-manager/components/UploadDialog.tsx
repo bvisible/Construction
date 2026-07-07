@@ -69,6 +69,14 @@ export function UploadDialog({
       if (kind === 'dwg_drawing') {
         return `/api/v1/dwg/drawings/upload/?project_id=${projectId}`;
       }
+      if (kind === 'photo') {
+        // Site photos go to the photo pipeline so a real ProjectPhoto is
+        // created (single-shot, server-side; category defaults to "site").
+        // Uploading via the generic documents endpoint only made a
+        // category="photo" Document, which never surfaced as a site picture
+        // in the Photos tab, gallery, site diary, dashboard or photo strip.
+        return `/api/v1/documents/photos/upload/?project_id=${projectId}`;
+      }
       return null;
     },
     [projectId],
@@ -140,6 +148,17 @@ export function UploadDialog({
             });
             queryClient.invalidateQueries({ queryKey: [fileManagerKeys.tree, projectId] });
             queryClient.invalidateQueries({ queryKey: [fileManagerKeys.list, projectId] });
+            if (defaultKind === 'photo') {
+              // A site photo also feeds the ProjectPhoto-backed surfaces (photo
+              // strip, Site Photos gallery, site diary, dashboard). Refresh any
+              // query keyed on photos so the picture shows without a reload.
+              queryClient.invalidateQueries({
+                predicate: (q) =>
+                  q.queryKey.some(
+                    (k) => typeof k === 'string' && k.toLowerCase().includes('photo'),
+                  ),
+              });
+            }
           };
           const markError = (detail: string) => {
             updateQueueTask(taskId, {

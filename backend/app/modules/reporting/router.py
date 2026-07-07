@@ -1,4 +1,4 @@
-"""‌⁠‍Reporting & Dashboards API routes.
+"""Reporting & Dashboards API routes.
 
 Endpoints:
     GET    /kpi?project_id=X                     - Latest KPI snapshot
@@ -53,7 +53,7 @@ async def get_latest_kpi(
     _perm: None = Depends(RequirePermission("reporting.read")),
     service: ReportingService = Depends(_get_service),
 ) -> KPISnapshotResponse | None:
-    """‌⁠‍Get the latest KPI snapshot for a project."""
+    """Get the latest KPI snapshot for a project."""
     await verify_project_access(project_id, user_id, session)
     snapshot = await service.get_latest_kpi(project_id)
     if snapshot is None:
@@ -71,7 +71,7 @@ async def list_kpi_history(
     _perm: None = Depends(RequirePermission("reporting.read")),
     service: ReportingService = Depends(_get_service),
 ) -> list[KPISnapshotResponse]:
-    """‌⁠‍List KPI snapshots for a project over time."""
+    """List KPI snapshots for a project over time."""
     await verify_project_access(project_id, user_id, session)
     snapshots, _ = await service.list_kpi_history(
         project_id,

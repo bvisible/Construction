@@ -149,9 +149,16 @@ export function measurementLabel(
       return `V = ${volStr} (A: ${baseStr} × D: ${depthStr})`;
     }
 
+    case 'count':
+      // Counts render as the annotation plus a live tally of placed points,
+      // mirroring the on-canvas and PDF / Excel export renderers. The tally
+      // lives in m.points.length (kept in sync with m.value); the stored label
+      // is the static group label and would show no tally (issue #300).
+      return `${m.annotation} (${m.points.length})`;
+
     default:
-      // Count + annotation types (cloud / arrow / text / rectangle /
-      // highlight): no convertible quantity - keep the stored label.
+      // Annotation markups (cloud / arrow / text / rectangle / highlight): no
+      // convertible quantity - keep the stored label.
       return m.label;
   }
 }

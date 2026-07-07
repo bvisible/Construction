@@ -1,4 +1,4 @@
-"""‌⁠‍BCF (BIM Collaboration Format) module manifest."""
+"""BCF (BIM Collaboration Format) module manifest."""
 
 from app.core.module_loader import ModuleManifest
 

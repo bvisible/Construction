@@ -1,4 +1,4 @@
-"""‌⁠‍Daily Site Diary ORM models.
+"""Daily Site Diary ORM models.
 
 Tables (all prefixed ``oe_daily_diary_``):
     oe_daily_diary_diary               - daily diary header with status/sign-off
@@ -41,7 +41,7 @@ from app.database import GUID, Base
 
 
 class DailyDiary(Base):
-    """‌⁠‍Daily site diary header - one per project per calendar day."""
+    """Daily site diary header - one per project per calendar day."""
 
     __tablename__ = "oe_daily_diary_diary"
     __table_args__ = (
@@ -103,7 +103,7 @@ class DailyDiary(Base):
 
 
 class WeatherRecord(Base):
-    """‌⁠‍Granular weather record. Multiple per day per project."""
+    """Granular weather record. Multiple per day per project."""
 
     __tablename__ = "oe_daily_diary_weather"
     __table_args__ = (

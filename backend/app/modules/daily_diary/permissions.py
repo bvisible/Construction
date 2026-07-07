@@ -1,10 +1,10 @@
-"""‌⁠‍Daily Site Diary module permission definitions."""
+"""Daily Site Diary module permission definitions."""
 
 from app.core.permissions import Role, permission_registry
 
 
 def register_daily_diary_permissions() -> None:
-    """‌⁠‍Register all RBAC permissions for the daily_diary module."""
+    """Register all RBAC permissions for the daily_diary module."""
     permission_registry.register_module_permissions(
         "daily_diary",
         {

@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍PDF BoQ ingest for the match-elements module.
+"""PDF BoQ ingest for the match-elements module.
 
 Implements MAPPING_PROCESS.md §4.1.x - the "PDF" source. The estimator
 uploads a tender PDF (a printed bill of quantities, a priced schedule,
@@ -94,7 +94,7 @@ _MIN_DESCRIPTION_ALPHA = 3
 
 
 def _clean_cell(value: Any) -> str:
-    """‌⁠‍Normalise a raw table cell to a trimmed single-line string."""
+    """Normalise a raw table cell to a trimmed single-line string."""
     if value is None:
         return ""
     text = str(value).replace("\n", " ").strip()
@@ -102,7 +102,7 @@ def _clean_cell(value: Any) -> str:
 
 
 def _looks_like_description(text: str) -> bool:
-    """‌⁠‍Return True when ``text`` carries enough alphabetic signal.
+    """Return True when ``text`` carries enough alphabetic signal.
 
     A real BoQ description has letters; a stray "1,234.50" or a row of
     dashes does not. We also reject pure page-furniture lines.
@@ -116,7 +116,7 @@ def _looks_like_description(text: str) -> bool:
 
 
 def _split_qty_unit_tail(text: str) -> tuple[str, float | None, str | None]:
-    """‌⁠‍Peel a trailing ``<qty> <unit>`` pair off a free-text line.
+    """Peel a trailing ``<qty> <unit>`` pair off a free-text line.
 
     Returns ``(remaining_description, qty, unit)``. When no recognised
     tail is present, ``qty`` and ``unit`` are ``None`` and the
@@ -137,7 +137,7 @@ def _split_qty_unit_tail(text: str) -> tuple[str, float | None, str | None]:
 
 
 def _peel_leading_code(text: str) -> tuple[str | None, str]:
-    """‌⁠‍Peel a leading position code off a line. Returns ``(code, rest)``."""
+    """Peel a leading position code off a line. Returns ``(code, rest)``."""
     match = _LEADING_CODE_RE.match(text)
     if not match:
         return None, text.strip()
@@ -151,7 +151,7 @@ def _peel_leading_code(text: str) -> tuple[str | None, str]:
 
 
 def _row_from_text_line(line: str) -> dict[str, Any] | None:
-    """‌⁠‍Parse a single free-text line into a BoQ row dict, or ``None``.
+    """Parse a single free-text line into a BoQ row dict, or ``None``.
 
     Shape: ``{description, qty?, unit?, code?}``. Returns ``None`` for
     blank lines, page furniture, and lines without a usable description.
@@ -174,7 +174,7 @@ def _row_from_text_line(line: str) -> dict[str, Any] | None:
 
 
 def _column_map_from_header(header: list[Any]) -> dict[int, str]:
-    """‌⁠‍Detect canonical columns in a table header row.
+    """Detect canonical columns in a table header row.
 
     Reuses the Excel importer's :func:`_match_column` alias table so PDF
     and Excel agree on header spellings across all supported locales.
@@ -192,7 +192,7 @@ def _rows_from_structured_table(
     table: list[list[Any]],
     column_map: dict[int, str],
 ) -> list[dict[str, Any]]:
-    """‌⁠‍Read data rows from a table whose header columns were detected."""
+    """Read data rows from a table whose header columns were detected."""
     out: list[dict[str, Any]] = []
     for raw_row in table[1:]:
         entry: dict[str, Any] = {}
@@ -216,7 +216,7 @@ def _rows_from_structured_table(
 
 
 def _rows_from_positional_table(table: list[list[Any]]) -> list[dict[str, Any]]:
-    """‌⁠‍Read a header-less table by positional heuristics.
+    """Read a header-less table by positional heuristics.
 
     Strategy: the widest textual column is the description. A column that
     parses fully numeric is the quantity; a short alpha column to its
@@ -268,7 +268,7 @@ def _rows_from_positional_table(table: list[list[Any]]) -> list[dict[str, Any]]:
 
 
 def _rows_from_tables(tables: list[list[list[Any]]]) -> list[dict[str, Any]]:
-    """‌⁠‍Extract rows from all tables on one page."""
+    """Extract rows from all tables on one page."""
     out: list[dict[str, Any]] = []
     for table in tables:
         if not table or len(table) < 2:
@@ -282,7 +282,7 @@ def _rows_from_tables(tables: list[list[list[Any]]]) -> list[dict[str, Any]]:
 
 
 def _rows_from_text(text: str) -> list[dict[str, Any]]:
-    """‌⁠‍Parse plain page text into rows, one per usable line."""
+    """Parse plain page text into rows, one per usable line."""
     out: list[dict[str, Any]] = []
     for line in text.splitlines():
         row = _row_from_text_line(line)
@@ -292,7 +292,7 @@ def _rows_from_text(text: str) -> list[dict[str, Any]]:
 
 
 def _extract_with_pdfplumber(content: bytes) -> list[dict[str, Any]]:
-    """‌⁠‍Primary extractor - tables first, per-page text fallback."""
+    """Primary extractor - tables first, per-page text fallback."""
     import pdfplumber
 
     rows: list[dict[str, Any]] = []
@@ -310,7 +310,7 @@ def _extract_with_pdfplumber(content: bytes) -> list[dict[str, Any]]:
 
 
 def _extract_with_pymupdf(content: bytes) -> list[dict[str, Any]]:
-    """‌⁠‍Fallback extractor - plain text per page via pymupdf."""
+    """Fallback extractor - plain text per page via pymupdf."""
     import pymupdf
 
     rows: list[dict[str, Any]] = []
@@ -325,7 +325,7 @@ def _extract_with_pymupdf(content: bytes) -> list[dict[str, Any]]:
 
 
 def parse_boq_pdf(content: bytes) -> list[dict[str, Any]]:
-    """‌⁠‍Parse a PDF upload into a list of BoQ row dicts.
+    """Parse a PDF upload into a list of BoQ row dicts.
 
     Tries ``pdfplumber`` (tables + text), then ``pymupdf`` (text only)
     when pdfplumber cannot open the file. Returns rows ready to feed

@@ -443,3 +443,135 @@ async def test_owner_can_still_update_equipment(http_client, two_fr_tenants):
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["hours_operational"] == "7"
+
+
+# ── Cross-project document-link vectors ─────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_link_documents_rejects_foreign_project_document(http_client, two_fr_tenants):
+    """``POST /reports/{id}/link-documents/`` must reject a foreign-project doc.
+
+    A field report's ``document_ids`` array is a cross-module reference into
+    the documents table. Pre-fix ``link_documents`` stored any UUID verbatim,
+    so a user who can edit a report in their own project could attach a
+    document_id that resolves to a document in another project, and
+    ``GET /reports/{id}/documents/`` would then echo that foreign document's
+    name and metadata back. The fix rejects any document_id that does not
+    belong to the report's project with 422; the rule is symmetric, so even a
+    second project of the same owner cannot cross-link.
+    """
+    a = two_fr_tenants["a"]
+
+    proj2 = await http_client.post(
+        "/api/v1/projects/",
+        json={
+            "name": f"FR-A-2 {uuid.uuid4().hex[:6]}",
+            "description": "second project of A - used for the cross-project link test",
+            "currency": "EUR",
+        },
+        headers=a["headers"],
+    )
+    assert proj2.status_code == 201, proj2.text
+    other_project = proj2.json()["id"]
+
+    from sqlalchemy import select
+
+    from app.database import async_session_factory
+    from app.modules.documents.models import Document
+
+    async with async_session_factory() as s:
+        s.add(
+            Document(
+                project_id=uuid.UUID(other_project),
+                name="confidential-in-other-project.pdf",
+                description="must not be linkable from a report in project A",
+                category="correspondence",
+                file_size=123,
+                mime_type="application/pdf",
+                file_path="/tmp/never-read.pdf",
+                version=1,
+                uploaded_by="",
+                tags=[],
+            )
+        )
+        await s.commit()
+        row = (
+            (await s.execute(select(Document).where(Document.project_id == uuid.UUID(other_project)))).scalars().first()
+        )
+        foreign_document_id = str(row.id)
+
+    resp = await http_client.post(
+        f"/api/v1/fieldreports/reports/{a['report_id']}/link-documents/",
+        json={"document_ids": [foreign_document_id]},
+        headers=a["headers"],
+    )
+    assert resp.status_code in (400, 404, 422), (
+        f"LEAK: report accepted a foreign-project document_id: {resp.status_code} {resp.text!r}"
+    )
+
+    listing = await http_client.get(
+        f"/api/v1/fieldreports/reports/{a['report_id']}/documents/",
+        headers=a["headers"],
+    )
+    assert listing.status_code == 200, listing.text
+    assert "confidential-in-other-project" not in listing.text, (
+        f"LEAK: foreign document metadata surfaced: {listing.text!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_owner_can_link_and_read_same_project_document(http_client, two_fr_tenants):
+    """Regression: linking a document from the report's own project still works."""
+    a = two_fr_tenants["a"]
+
+    from sqlalchemy import select
+
+    from app.database import async_session_factory
+    from app.modules.documents.models import Document
+
+    async with async_session_factory() as s:
+        s.add(
+            Document(
+                project_id=uuid.UUID(a["project_id"]),
+                name="site-plan-in-own-project.pdf",
+                description="lives in the report's project - linking must work",
+                category="correspondence",
+                file_size=456,
+                mime_type="application/pdf",
+                file_path="/tmp/own.pdf",
+                version=1,
+                uploaded_by="",
+                tags=[],
+            )
+        )
+        await s.commit()
+        row = (
+            (
+                await s.execute(
+                    select(Document).where(
+                        Document.project_id == uuid.UUID(a["project_id"]),
+                        Document.name == "site-plan-in-own-project.pdf",
+                    )
+                )
+            )
+            .scalars()
+            .first()
+        )
+        own_document_id = str(row.id)
+
+    link = await http_client.post(
+        f"/api/v1/fieldreports/reports/{a['report_id']}/link-documents/",
+        json={"document_ids": [own_document_id]},
+        headers=a["headers"],
+    )
+    assert link.status_code == 200, f"REGRESSION: owner blocked from linking own-project doc: {link.text}"
+
+    listing = await http_client.get(
+        f"/api/v1/fieldreports/reports/{a['report_id']}/documents/",
+        headers=a["headers"],
+    )
+    assert listing.status_code == 200, listing.text
+    assert "site-plan-in-own-project" in listing.text, (
+        f"REGRESSION: own-project document missing from linked list: {listing.text!r}"
+    )

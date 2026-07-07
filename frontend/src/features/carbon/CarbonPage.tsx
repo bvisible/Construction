@@ -20,6 +20,9 @@ import {
   Trash2,
   FileSpreadsheet,
   Search,
+  Sparkles,
+  Box,
+  Recycle,
 } from 'lucide-react';
 import {
   Button,
@@ -32,9 +35,15 @@ import {
   DismissibleInfo,
   IntroRichText,
   ModuleGuideButton,
+  AITrustNote,
+  ConfidenceBadge,
 } from '@/shared/ui';
 import { PageHeader } from '@/shared/ui/PageHeader';
+import { BIMModelPicker, type BIMModelOption } from '@/shared/ui/BIMModelPicker';
+import { fetchBIMModels } from '@/features/bim/api';
 import { carbonGuide } from './carbonGuide';
+import { summarizeEnrich, sourceLabel, sourcePillVariant } from './sixd';
+import { WholeLifePanel } from './WholeLifePanel';
 import { useConfirm } from '@/shared/hooks/useConfirm';
 import { useDisplayQuantity } from '@/shared/hooks/useDisplayQuantity';
 import { DateDisplay } from '@/shared/ui/DateDisplay';
@@ -79,6 +88,8 @@ import {
   deleteEPD,
   listMaterialFactors,
   assignBoqPosition,
+  autoEnrichFromBim,
+  type AutoEnrichBimResult,
   type CarbonInventory,
   type InventoryStatus,
   type EPDRecord,
@@ -94,7 +105,7 @@ import {
   type MaterialCarbonFactor,
 } from './api';
 
-type Tab = 'inventory' | 'epds' | 'targets' | 'reports';
+type Tab = 'inventory' | 'wholelife' | 'epds' | 'targets' | 'reports';
 
 interface Project {
   id: string;
@@ -275,6 +286,11 @@ export function CarbonPage() {
                 label: t('carbon.tab_inventory', { defaultValue: 'Inventory' }),
                 icon: Leaf,
               },
+              {
+                id: 'wholelife',
+                label: t('carbon.sixd.wl_tab', { defaultValue: 'Whole-life (6D)' }),
+                icon: Recycle,
+              },
               { id: 'epds', label: t('carbon.tab_epds', { defaultValue: 'EPDs' }), icon: Database },
               {
                 id: 'targets',
@@ -324,6 +340,12 @@ export function CarbonPage() {
         <InventoryTab
           projectId={effectiveProjectId}
           onOpenDrawer={(id) => setInventoryDrawerId(id)}
+        />
+      )}
+      {tab === 'wholelife' && effectiveProjectId && (
+        <WholeLifePanel
+          projectId={effectiveProjectId}
+          currency={effectiveProject?.currency}
         />
       )}
       {tab === 'epds' && <EPDsTab />}
@@ -1127,6 +1149,8 @@ function InventoryDrawer({
   >(null);
   // CONN-60: assign a BOQ position to this inventory via a material factor.
   const [assignBoqOpen, setAssignBoqOpen] = useState(false);
+  // 6D: one-click auto-enrich embodied carbon from a BIM model.
+  const [autoEnrichOpen, setAutoEnrichOpen] = useState(false);
   const [scopeModal, setScopeModal] = useState<
     | { kind: ScopeKind; mode: 'create' }
     | {
@@ -1381,7 +1405,18 @@ function InventoryDrawer({
                         defaultValue: 'Embodied entries',
                       })}
                     </h3>
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        icon={<Sparkles size={13} />}
+                        onClick={() => setAutoEnrichOpen(true)}
+                        disabled={!inventoryProjectId}
+                      >
+                        {t('carbon.sixd.action', {
+                          defaultValue: 'Auto-enrich from BIM',
+                        })}
+                      </Button>
                       <Button
                         variant="secondary"
                         size="sm"
@@ -1422,6 +1457,7 @@ function InventoryDrawer({
                               {toNum(e.quantity)} {e.unit} · {e.stage} ·{' '}
                               {formatKg(toNum(e.carbon_kg))}
                             </span>
+                            <EmbodiedProvenance entry={e} />
                           </span>
                           <RowActions
                             onEdit={() =>
@@ -1511,6 +1547,14 @@ function InventoryDrawer({
           inventoryId={inventoryId}
           projectId={inventoryProjectId}
           onClose={() => setAssignBoqOpen(false)}
+          onSaved={invalidateAll}
+        />
+      )}
+      {autoEnrichOpen && (
+        <AutoEnrichBimModal
+          inventoryId={inventoryId}
+          projectId={inventoryProjectId}
+          onClose={() => setAutoEnrichOpen(false)}
           onSaved={invalidateAll}
         />
       )}
@@ -1757,6 +1801,42 @@ function StageTile({ label, kg }: { label: string; kg: number }) {
       <p className="text-xs uppercase tracking-wide text-content-tertiary">{label}</p>
       <p className="mt-0.5 font-medium tabular-nums">{formatKg(kg)}</p>
     </div>
+  );
+}
+
+/**
+ * Provenance line under an embodied entry: a source pill (Manual / Auto from
+ * BIM / From BOQ), the AI match confidence when the row was auto-enriched from
+ * BIM, and a chip linking to the BIM element it came from. Legacy rows with no
+ * `source` fall back to "Manual" and render just the one quiet pill.
+ */
+function EmbodiedProvenance({ entry }: { entry: EmbodiedEntry }) {
+  const { t } = useTranslation();
+  const label = sourceLabel(entry.source);
+  const showConfidence = entry.source === 'auto_enriched' && !!entry.match_confidence;
+  // Only treat element_ref as a live BIM link when an element id backs it.
+  const elementName = entry.element_id ? entry.element_ref : null;
+  return (
+    <span className="mt-1 flex flex-wrap items-center gap-1.5">
+      <Badge variant={sourcePillVariant(entry.source)} size="sm">
+        {t(label.key, { defaultValue: label.defaultValue })}
+      </Badge>
+      {showConfidence && (
+        <ConfidenceBadge level={entry.match_confidence as 'high' | 'medium' | 'low'} />
+      )}
+      {elementName && (
+        <span
+          className="inline-flex max-w-[20ch] items-center gap-1 truncate text-xs text-content-tertiary"
+          title={t('carbon.sixd.from_element', {
+            defaultValue: 'BIM element: {{name}}',
+            name: elementName,
+          })}
+        >
+          <Box size={11} className="shrink-0" />
+          <span className="truncate">{elementName}</span>
+        </span>
+      )}
+    </span>
   );
 }
 
@@ -2877,6 +2957,268 @@ function AssignBoqModal({
         >
           {t('carbon.assign_to_inventory', { defaultValue: 'Add to inventory' })}
         </Button>
+      </div>
+    </ModalShell>
+  );
+}
+
+/* ─── Auto-enrich embodied carbon from a BIM model (6D) ─── */
+
+/** Compact, read-only preview row for one proposed embodied entry. */
+function ProposalRow({ entry }: { entry: EmbodiedEntry }) {
+  return (
+    <li className="flex items-center justify-between gap-2 px-3 py-2">
+      <span className="min-w-0">
+        <span className="block truncate text-content-primary">
+          {entry.element_ref || entry.description || '-'}
+        </span>
+        <span className="text-xs text-content-tertiary">
+          {toNum(entry.quantity)} {entry.unit} · {entry.stage} ·{' '}
+          {formatKg(toNum(entry.carbon_kg))}
+        </span>
+      </span>
+      {entry.match_confidence && (
+        <ConfidenceBadge level={entry.match_confidence} className="shrink-0" />
+      )}
+    </li>
+  );
+}
+
+/** How many proposals to render before collapsing to a "+N more" note. */
+const PROPOSAL_PREVIEW_CAP = 80;
+
+function AutoEnrichBimModal({
+  inventoryId,
+  projectId,
+  onClose,
+  onSaved,
+}: {
+  inventoryId: string;
+  projectId: string;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const { t } = useTranslation();
+  const addToast = useToastStore((s) => s.addToast);
+  const [modelId, setModelId] = useState('');
+  // The dry-run proposal set. Cleared whenever the chosen model changes so the
+  // footer reverts from "Add N" back to "Preview".
+  const [preview, setPreview] = useState<AutoEnrichBimResult | null>(null);
+
+  const modelsQ = useQuery({
+    queryKey: ['carbon', 'bim-models', projectId],
+    queryFn: () => fetchBIMModels(projectId),
+    enabled: !!projectId,
+    staleTime: 60_000,
+  });
+
+  const models: BIMModelOption[] = useMemo(
+    () =>
+      (modelsQ.data?.items ?? []).map((m) => ({
+        id: m.id,
+        name: m.name,
+        model_format: m.model_format ?? m.format ?? null,
+        element_count: m.element_count ?? 0,
+        storey_count: m.storey_count ?? 0,
+        status: m.status,
+        created_at: m.created_at ?? null,
+      })),
+    [modelsQ.data],
+  );
+
+  const previewMut = useMutation({
+    mutationFn: () => autoEnrichFromBim(inventoryId, { model_id: modelId, dry_run: true }),
+    onSuccess: (res) => setPreview(res),
+    onError: (err) => addToast({ type: 'error', title: getErrorMessage(err) }),
+  });
+
+  const confirmMut = useMutation({
+    mutationFn: () => autoEnrichFromBim(inventoryId, { model_id: modelId, dry_run: false }),
+    onSuccess: (res) => {
+      const done = summarizeEnrich(res);
+      addToast({
+        type: 'success',
+        title: t('carbon.sixd.added', {
+          defaultValue: 'Added {{count}} embodied entries from BIM',
+          count: done.created,
+        }),
+      });
+      onSaved();
+      onClose();
+    },
+    onError: (err) => addToast({ type: 'error', title: getErrorMessage(err) }),
+  });
+
+  function selectModel(id: string) {
+    setModelId(id);
+    setPreview(null);
+  }
+
+  const summary = preview ? summarizeEnrich(preview) : null;
+  const proposals = preview?.entries ?? [];
+  const busy = previewMut.isPending || confirmMut.isPending;
+
+  return (
+    <ModalShell
+      title={t('carbon.sixd.title', {
+        defaultValue: 'Auto-enrich embodied carbon from BIM',
+      })}
+      onClose={onClose}
+    >
+      {!projectId ? (
+        <p className="rounded-md bg-surface-secondary/60 p-3 text-sm text-content-tertiary">
+          {t('carbon.boq_no_project', {
+            defaultValue: 'This inventory has no project, so no BOQ is available.',
+          })}
+        </p>
+      ) : (
+        <div className="space-y-3">
+          <p className="text-xs text-content-tertiary">
+            {t('carbon.sixd.intro', {
+              defaultValue:
+                'Match the materials and quantities on a BIM model to your carbon factors. Preview the proposed embodied entries first, then confirm to add them. Nothing is written until you confirm.',
+            })}
+          </p>
+
+          <AITrustNote
+            surface="carbon_auto_enrich_bim"
+            projectId={projectId}
+            refId={modelId || null}
+            producedBy={t('carbon.sixd.produced_by', {
+              defaultValue:
+                'AI matched BIM element materials to your carbon factors. Review the matches before you add them.',
+            })}
+            showFeedback={false}
+          />
+
+          {/* Model picker */}
+          <div>
+            <label className={labelCls}>
+              {t('carbon.sixd.pick_model', { defaultValue: 'Pick a BIM model' })}
+            </label>
+            <BIMModelPicker
+              models={models}
+              activeModelId={modelId || null}
+              onSelect={selectModel}
+              isLoading={modelsQ.isLoading}
+              uploadHref={`/bim?project=${projectId}`}
+              emptyMessage={t('carbon.sixd.no_models', {
+                defaultValue:
+                  'No converted BIM models in this project yet. Upload one to enrich its embodied carbon.',
+              })}
+            />
+          </div>
+
+          {/* Preview outcome */}
+          {previewMut.isPending ? (
+            <div className="flex items-center gap-2 rounded-md bg-surface-secondary/60 p-3 text-sm text-content-tertiary">
+              <Loader2 size={14} className="animate-spin" />
+              {t('carbon.sixd.previewing', {
+                defaultValue: 'Scanning model elements…',
+              })}
+            </div>
+          ) : summary ? (
+            <div className="space-y-2">
+              {/* Summary chips: matched / no-match / no-quantity */}
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <Badge variant={summary.created > 0 ? 'success' : 'neutral'} size="sm">
+                  {t('carbon.sixd.matched', {
+                    defaultValue: '{{count}} matched',
+                    count: summary.created,
+                  })}
+                </Badge>
+                <Badge variant={summary.skippedNoMatch > 0 ? 'warning' : 'neutral'} size="sm">
+                  {t('carbon.sixd.skipped_no_match', {
+                    defaultValue: '{{count}} no factor match',
+                    count: summary.skippedNoMatch,
+                  })}
+                </Badge>
+                <Badge variant={summary.skippedNoQuantity > 0 ? 'warning' : 'neutral'} size="sm">
+                  {t('carbon.sixd.skipped_no_quantity', {
+                    defaultValue: '{{count}} no quantity',
+                    count: summary.skippedNoQuantity,
+                  })}
+                </Badge>
+                {summary.skippedExisting > 0 && (
+                  <Badge variant="neutral" size="sm">
+                    {t('carbon.sixd.skipped_existing', {
+                      defaultValue: '{{count}} already linked',
+                      count: summary.skippedExisting,
+                    })}
+                  </Badge>
+                )}
+              </div>
+
+              {summary.hasProposals ? (
+                <>
+                  <p className="text-xs text-content-tertiary">
+                    {t('carbon.sixd.review_hint', {
+                      defaultValue:
+                        'These are proposals. Review them, then add them to the inventory.',
+                    })}
+                  </p>
+                  <ul className="max-h-72 divide-y divide-border-light overflow-y-auto rounded border border-border-light text-sm">
+                    {proposals.slice(0, PROPOSAL_PREVIEW_CAP).map((e, i) => (
+                      <ProposalRow key={e.id || `${e.element_id ?? 'row'}-${i}`} entry={e} />
+                    ))}
+                  </ul>
+                  {proposals.length > PROPOSAL_PREVIEW_CAP && (
+                    <p className="text-xs text-content-tertiary">
+                      {t('carbon.sixd.more_proposals', {
+                        defaultValue: '+{{count}} more will be added',
+                        count: proposals.length - PROPOSAL_PREVIEW_CAP,
+                      })}
+                    </p>
+                  )}
+                </>
+              ) : (
+                <p className="rounded-md bg-surface-secondary/60 p-3 text-xs text-content-tertiary">
+                  {t('carbon.sixd.empty', {
+                    defaultValue:
+                      'No elements could be matched to a carbon factor. Check the model carries materials and quantities, and that matching material factors exist.',
+                  })}
+                </p>
+              )}
+            </div>
+          ) : (
+            <p className="text-xs text-content-tertiary">
+              {t('carbon.sixd.preview_hint', {
+                defaultValue:
+                  'Pick a model and preview the matches before anything is added.',
+              })}
+            </p>
+          )}
+        </div>
+      )}
+
+      <div className="mt-5 flex justify-end gap-2">
+        <Button variant="ghost" onClick={onClose}>
+          {t('common.cancel', { defaultValue: 'Cancel' })}
+        </Button>
+        {summary && summary.hasProposals ? (
+          <Button
+            variant="primary"
+            onClick={() => confirmMut.mutate()}
+            loading={confirmMut.isPending}
+            disabled={busy}
+            icon={<Plus size={14} />}
+          >
+            {t('carbon.sixd.confirm', {
+              defaultValue: 'Add {{count}} entries',
+              count: summary.created,
+            })}
+          </Button>
+        ) : (
+          <Button
+            variant="primary"
+            onClick={() => previewMut.mutate()}
+            loading={previewMut.isPending}
+            disabled={!modelId || busy}
+            icon={<Sparkles size={14} />}
+          >
+            {t('carbon.sixd.preview', { defaultValue: 'Preview matches' })}
+          </Button>
+        )}
       </div>
     </ModalShell>
   );

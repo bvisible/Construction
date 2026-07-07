@@ -1,4 +1,4 @@
-"""‌⁠‍Integrations module permission definitions.
+"""Integrations module permission definitions.
 
 Registered at module startup via ``app.modules.integrations.on_startup``.
 Without this, every ``RequirePermission("integrations.*")`` gate in
@@ -29,7 +29,7 @@ from app.core.permissions import Role, permission_registry
 
 
 def register_integrations_permissions() -> None:
-    """‌⁠‍Register permissions for the integrations module."""
+    """Register permissions for the integrations module."""
     permission_registry.register_module_permissions(
         "integrations",
         {

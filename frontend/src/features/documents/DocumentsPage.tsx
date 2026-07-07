@@ -47,7 +47,7 @@ interface DocItem {
 
 type SortField = 'date' | 'name' | 'size';
 
-const CATEGORIES = ['all', 'drawing', 'contract', 'specification', 'photo', 'correspondence', 'other'] as const;
+const CATEGORIES = ['all', 'drawing', 'contract', 'specification', 'photo', 'correspondence', 'reality_capture', 'other'] as const;
 
 const CDE_STATE_COLORS: Record<string, 'warning' | 'blue' | 'success' | 'neutral'> = {
   wip: 'warning',
@@ -132,9 +132,11 @@ function fileIconBg(mime: string, name?: string): string {
   return 'bg-surface-secondary';
 }
 
-function isPreviewable(mime: string): 'pdf' | 'image' | null {
+function isPreviewable(mime: string): 'pdf' | 'image' | 'video' | 'audio' | null {
   if (mime.includes('pdf')) return 'pdf';
   if (mime.startsWith('image/')) return 'image';
+  if (mime.startsWith('video/')) return 'video';
+  if (mime.startsWith('audio/')) return 'audio';
   return null;
 }
 
@@ -199,6 +201,13 @@ function routeForDocument(doc: DocItem): { path: string; module: 'takeoff' | 'dw
     };
   }
   if (doc.mime_type.includes('pdf') || lower.endsWith('.pdf')) {
+    return { path: '', module: 'preview' };
+  }
+  // Images, video and audio open in the in-app preview modal (which renders
+  // <img>/<video controls>/<audio controls>). Without this, a video card fell
+  // through to a full-page navigation to the download endpoint, which serves
+  // the file as an attachment - so the video downloaded instead of playing.
+  if (isPreviewable(doc.mime_type)) {
     return { path: '', module: 'preview' };
   }
   return { path: `/api/v1/documents/${doc.id}/download`, module: 'download' };
@@ -334,6 +343,27 @@ function PreviewModal({
               alt={doc.name}
               className="max-w-full max-h-[80vh] object-contain"
             />
+          ) : kind === 'video' ? (
+            <video
+              src={`/api/v1/documents/${doc.id}/download`}
+              controls
+              autoPlay
+              className="max-w-full max-h-[80vh] bg-black"
+            >
+              {t('documents.video_unsupported', {
+                defaultValue: 'Your browser cannot play this video.',
+              })}
+            </video>
+          ) : kind === 'audio' ? (
+            <audio
+              src={`/api/v1/documents/${doc.id}/download`}
+              controls
+              className="w-full max-w-xl"
+            >
+              {t('documents.audio_unsupported', {
+                defaultValue: 'Your browser cannot play this audio file.',
+              })}
+            </audio>
           ) : null}
         </div>
 

@@ -1,4 +1,4 @@
-"""‌⁠‍Subcontractor ORM models.
+"""Subcontractor ORM models.
 
 Tables:
     oe_subcontractors_subcontractor              - legal entity
@@ -38,7 +38,7 @@ from app.database import GUID, Base
 
 
 class Subcontractor(Base):
-    """‌⁠‍Legal subcontractor entity (may be linked to a Contact row)."""
+    """Legal subcontractor entity (may be linked to a Contact row)."""
 
     __tablename__ = "oe_subcontractors_subcontractor"
 
@@ -116,7 +116,7 @@ class Subcontractor(Base):
 
 
 class SubcontractorContact(Base):
-    """‌⁠‍Point of contact for a subcontractor."""
+    """Point of contact for a subcontractor."""
 
     __tablename__ = "oe_subcontractors_subcontractor_contact"
 

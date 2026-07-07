@@ -1,4 +1,4 @@
-"""‌⁠‍Finance module.
+"""Finance module.
 
 Provides invoicing, payments, budgets, and Earned Value Management (EVM)
 workflows for construction projects.
@@ -6,7 +6,7 @@ workflows for construction projects.
 
 
 async def on_startup() -> None:
-    """‌⁠‍Module startup hook - register permissions and cross-module subscribers."""
+    """Module startup hook - register permissions and cross-module subscribers."""
     from app.modules.finance.connector_events import (
         register_connector_job_handler,
         register_connector_subscribers,

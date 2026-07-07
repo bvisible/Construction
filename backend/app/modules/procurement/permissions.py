@@ -1,10 +1,10 @@
-"""‌⁠‍Procurement module permission definitions."""
+"""Procurement module permission definitions."""
 
 from app.core.permissions import Role, permission_registry
 
 
 def register_procurement_permissions() -> None:
-    """‌⁠‍Register permissions for the procurement module.
+    """Register permissions for the procurement module.
 
     R7 audit (2026-05-24):
         ``procurement.create_invoice`` is split off from the generic

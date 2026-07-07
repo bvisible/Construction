@@ -147,6 +147,13 @@ export interface SectionGroupContext {
    * BOQ (per-position totals, footer rows, grand total). View-only.
    */
   displayCurrency?: { code: string; rate: number } | null;
+  /**
+   * Base-currency direct cost of the whole estimate (sum of every line
+   * total). Used only to show each section's share of the project total as
+   * a small "X% of total" chip. A ratio, so it is currency-invariant and
+   * needs no display-currency conversion. Undefined / 0 hides the chip.
+   */
+  sectionTotalBasis?: number;
 }
 
 export function SectionFullWidthRenderer(params: ICellRendererParams) {
@@ -446,6 +453,26 @@ export function SectionFullWidthRenderer(params: ICellRendererParams) {
           </button>
         )}
 
+      {/* Share of the whole estimate - helps the estimator see at a glance
+          which sections carry the money. Ratio of the section subtotal to
+          the project direct cost, so it is currency-invariant. Hidden when
+          the basis is unknown or zero. */}
+      {typeof ctx.sectionTotalBasis === 'number' &&
+        ctx.sectionTotalBasis > 0 &&
+        Number.isFinite(subtotal) && (
+          <span
+            className="shrink-0 inline-flex items-center h-4 px-1.5 rounded-full
+                       bg-oe-blue-subtle text-oe-blue-text text-[10px] font-semibold
+                       tabular-nums cursor-help"
+            title={t('boq.section_pct_of_total_tip', {
+              defaultValue: 'This section is {{pct}}% of the project direct cost.',
+              pct: Math.round((subtotal / ctx.sectionTotalBasis) * 100),
+            })}
+          >
+            {Math.round((subtotal / ctx.sectionTotalBasis) * 100)}%
+          </span>
+        )}
+
       <span className="shrink-0 text-xs font-bold text-content-primary tabular-nums pl-2">
         {formattedSubtotal}
       </span>
@@ -553,6 +580,9 @@ export type FullGridContext = ActionsContext & ResourceGridContext & SectionGrou
    *  description cell hides its inline cost-driver split pill to avoid
    *  showing the same figures twice. */
   showResourceSplit?: boolean;
+  /** Show the compact inline cost-driver split pill in the description cell.
+   *  Set by the toolbar's tri-state button only in its `pill` position. */
+  showResourceSplitPill?: boolean;
   /**
    * Render the inline AI copilot panel for a position id. Supplied by the host
    * (BOQEditorPage) so this renderer stays decoupled from the copilot
@@ -1119,7 +1149,7 @@ export function DescriptionCellRenderer(params: ICellRendererParams) {
     }
   }
   const breakdownPill =
-    breakdownEntries.length > 0 && !ctx?.showResourceSplit ? (
+    breakdownEntries.length > 0 && ctx?.showResourceSplitPill ? (
       <span
         className="shrink-0 inline-flex items-center gap-0.5 rounded text-[10px] font-medium px-1 py-0.5 bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 cursor-help"
         title={t('boq.resource_breakdown_tip', {
@@ -1134,8 +1164,59 @@ export function DescriptionCellRenderer(params: ICellRendererParams) {
       </span>
     ) : null;
 
+  // ── Price provenance chip ───────────────────────────────────────────
+  // Where this line's price came from, so the estimator can trust it or go
+  // check the source. Catalogue applies stamp `metadata.cost_item_code` and
+  // set source to 'cost_database'; GAEB and CAD imports set their own source.
+  // Manual lines carry no provenance, so no chip renders for them (the most
+  // common case stays clean). AI-sourced lines are covered by the confidence
+  // badge on the ordinal, so they are not repeated here.
+  const posSource = typeof data.source === 'string' ? data.source : '';
+  const costItemCode =
+    (typeof (meta as { cost_item_code?: unknown }).cost_item_code === 'string'
+      ? ((meta as { cost_item_code?: string }).cost_item_code as string)
+      : '') ||
+    (typeof data.reference_code === 'string' ? (data.reference_code as string) : '');
+  let provenance: { label: string; tip: string } | null = null;
+  if (posSource === 'cost_database') {
+    provenance = costItemCode
+      ? {
+          label: costItemCode,
+          tip: t('boq.provenance_catalogue_code', {
+            defaultValue: 'Priced from catalogue item {{code}}.',
+            code: costItemCode,
+          }),
+        }
+      : {
+          label: t('boq.provenance_catalogue_short', { defaultValue: 'Catalogue' }),
+          tip: t('boq.provenance_catalogue', { defaultValue: 'Priced from a cost catalogue.' }),
+        };
+  } else if (posSource === 'gaeb_import') {
+    provenance = {
+      label: t('boq.provenance_gaeb_short', { defaultValue: 'GAEB' }),
+      tip: t('boq.provenance_gaeb', { defaultValue: 'Imported from a GAEB tender file.' }),
+    };
+  } else if (posSource === 'cad_import') {
+    provenance = {
+      label: t('boq.provenance_cad_short', { defaultValue: 'CAD' }),
+      tip: t('boq.provenance_cad', { defaultValue: 'Imported from a CAD or BIM model.' }),
+    };
+  }
+  const provenanceChip = provenance ? (
+    <span
+      className="shrink-0 inline-flex items-center gap-0.5 rounded text-[10px] font-medium px-1 py-0.5
+                 bg-surface-tertiary text-content-tertiary cursor-help max-w-[140px] truncate"
+      title={provenance.tip}
+      aria-label={provenance.tip}
+      data-testid="boq-provenance-chip"
+    >
+      <FileText size={10} strokeWidth={2} className="shrink-0" />
+      <span className="truncate">{provenance.label}</span>
+    </span>
+  ) : null;
+
   if (!hasVariant && !hasDefault) {
-    if (!variantIconButton && !scopeHint && !breakdownPill && !drivenBySubline) {
+    if (!variantIconButton && !scopeHint && !breakdownPill && !drivenBySubline && !provenanceChip) {
       return descMultiline ? (
         <span className="block w-full whitespace-pre-wrap break-words leading-snug overflow-y-auto max-h-full">
           {displayValue}
@@ -1150,6 +1231,7 @@ export function DescriptionCellRenderer(params: ICellRendererParams) {
         <span className={descTextCls}>{displayValue}</span>
         {scopeHint}
         {breakdownPill}
+        {provenanceChip}
       </span>,
     );
   }
@@ -1175,6 +1257,7 @@ export function DescriptionCellRenderer(params: ICellRendererParams) {
         <span className={descTextCls}>{displayValue}</span>
         {scopeHint}
         {breakdownPill}
+        {provenanceChip}
       </span>,
     );
   }
@@ -1204,6 +1287,7 @@ export function DescriptionCellRenderer(params: ICellRendererParams) {
       <span className="truncate min-w-0">{displayValue}</span>
       {scopeHint}
       {breakdownPill}
+      {provenanceChip}
       <span
         className="shrink-0 inline-flex items-center gap-1 rounded
                    bg-amber-100 dark:bg-amber-900/40
@@ -1264,6 +1348,33 @@ export function OrdinalCellRenderer(params: ICellRendererParams) {
           code: refCode || (value as string),
         });
 
+  // ── AI-confidence badge ─────────────────────────────────────────────
+  // AI-sourced positions carry a confidence in [0, 1]. Surface it as a
+  // small percent chip so the estimator can see, without opening anything,
+  // how sure the AI was and knows to confirm the line. Manual / imported
+  // lines carry no confidence, so the chip simply does not render for them
+  // (the "AI proposes, human confirms" principle made visible).
+  const rawConfidence = data.confidence;
+  const source = typeof data.source === 'string' ? data.source : '';
+  const isAiSourced = source.includes('ai') || source.includes('takeoff');
+  const confidence =
+    typeof rawConfidence === 'number' && Number.isFinite(rawConfidence)
+      ? Math.max(0, Math.min(1, rawConfidence))
+      : null;
+  const showConfidence = confidence !== null && (isAiSourced || rawConfidence !== undefined);
+  const confidencePct = confidence !== null ? Math.round(confidence * 100) : 0;
+  const confidenceTone =
+    confidencePct >= 80
+      ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
+      : confidencePct >= 50
+        ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
+        : 'bg-red-500/15 text-red-600 dark:text-red-400';
+  const confidenceTooltip = t('boq.ai_confidence_tooltip', {
+    defaultValue:
+      'AI suggested this line with {{pct}}% confidence. Review the quantity and rate, then confirm.',
+    pct: confidencePct,
+  });
+
   return (
     <div className="flex items-center justify-end gap-1 overflow-hidden w-full">
       {(linkRole === 'master' || linkRole === 'instance') && (
@@ -1281,6 +1392,16 @@ export function OrdinalCellRenderer(params: ICellRendererParams) {
         </span>
       )}
       <span className="text-xs font-mono truncate min-w-0">{value}</span>
+      {showConfidence && (
+        <span
+          className={`inline-flex h-4 shrink-0 items-center rounded px-1 text-[9px] font-semibold tabular-nums ${confidenceTone} cursor-help`}
+          title={confidenceTooltip}
+          aria-label={confidenceTooltip}
+          data-testid="boq-ai-confidence-badge"
+        >
+          {confidencePct}%
+        </span>
+      )}
       <span
         className={`inline-block h-2.5 w-2.5 shrink-0 rounded-full ${dotColor} cursor-help`}
         title={getValidationTooltip(status, t)}

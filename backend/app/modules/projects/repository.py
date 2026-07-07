@@ -1,4 +1,4 @@
-"""‌⁠‍Project data access layer.
+"""Project data access layer.
 
 All database queries for projects live here.
 No business logic - pure data access.
@@ -15,13 +15,13 @@ from app.modules.projects.models import Project
 
 
 class ProjectRepository:
-    """‌⁠‍Data access for Project model."""
+    """Data access for Project model."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
     async def get_by_id(self, project_id: uuid.UUID) -> Project | None:
-        """‌⁠‍Get project by ID."""
+        """Get project by ID."""
         return await self.session.get(Project, project_id)
 
     async def list_for_user(

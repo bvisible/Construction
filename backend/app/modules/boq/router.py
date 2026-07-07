@@ -1,4 +1,4 @@
-"""‌⁠‍BOQ API routes.
+"""BOQ API routes.
 
 Endpoints:
     POST   /boqs/                              - Create a new BOQ
@@ -205,7 +205,7 @@ async def _verify_boq_owner(
     user_id: str,
     payload: dict | None = None,
 ) -> None:
-    """‌⁠‍Load a BOQ, then its project, and verify the user has access.
+    """Load a BOQ, then its project, and verify the user has access.
 
     Admins bypass the check. Grants access to the project owner and to
     any user who is a team member of the project (added via add_project_member).
@@ -248,7 +248,7 @@ async def _verify_project_owner_for_boq(
     user_id: str,
     payload: dict | None = None,
 ) -> None:
-    """‌⁠‍Verify the current user has access to the given project.
+    """Verify the current user has access to the given project.
 
     Grants access to: admins, the project owner, and team members.
     Treats archived (soft-deleted) projects as 404 - no operations on
@@ -2803,7 +2803,7 @@ async def _run_import_validation(
     service: BOQService,
     session: Any,
 ) -> dict[str, Any] | None:
-    """‌⁠‍Run the configured validation rule packs against a freshly-imported BOQ.
+    """Run the configured validation rule packs against a freshly-imported BOQ.
 
     Wired into every import path (Excel / CSV / GAEB X83/X84) so DIN276 +
     NRM + GAEB + MasterFormat + DPGF + boq_quality rules fire AT import
@@ -7542,6 +7542,215 @@ async def get_cost_breakdown(
     """
     await _verify_boq_owner(session, boq_id, _user_id, payload)
     return await service.get_cost_breakdown(boq_id)
+
+
+@router.get(
+    "/positions/{position_id}/price-analysis/",
+    summary="Unit-price breakdown for a position",
+    dependencies=[Depends(RequirePermission("boq.read"))],
+    response_model=None,
+)
+async def get_position_price_analysis(
+    position_id: uuid.UUID,
+    user_id: CurrentUserId,
+    payload: CurrentUserPayload,
+    session: SessionDep,
+    fmt: str = Query(default="json", alias="format"),
+    preset: str = Query(default="international"),
+    service: BOQService = Depends(_get_service),
+) -> StreamingResponse | dict[str, Any]:
+    """Return the detailed unit-price breakdown (price analysis) of a position.
+
+    Splits the unit rate into labour, material, machinery, equipment,
+    subcontract and other, then stacks the BoQ overhead and profit markups, so
+    an estimator can see and justify how the rate is built. This is the
+    international core; ``preset=efb`` also returns the German EFB 221/222/223
+    style grouping. ``format=markdown`` streams a readable table.
+
+    Reads the resource split already stored on the position
+    (``metadata.resources``); positions without one show the whole rate as a
+    single line so the sheet always renders.
+    """
+    from app.modules.price_breakdown import efb_221_view, from_position, render_markdown
+
+    existing = await service.position_repo.get_by_id(position_id)
+    if existing is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=translate("errors.position_not_found", locale=get_locale()),
+        )
+    await _verify_boq_owner(session, existing.boq_id, user_id, payload)
+
+    markups = await service.markup_repo.list_for_boq(existing.boq_id)
+    markup_dicts = [{"category": m.category, "markup_type": m.markup_type, "percentage": m.percentage} for m in markups]
+    position_dict = {
+        "ordinal": existing.ordinal,
+        "reference_code": getattr(existing, "reference_code", None),
+        "description": existing.description,
+        "unit": existing.unit,
+        "quantity": existing.quantity,
+        "unit_rate": existing.unit_rate,
+        "metadata_": existing.metadata_ or {},
+    }
+    breakdown = from_position(position_dict, markups=markup_dicts)
+
+    if fmt == "markdown":
+        text = render_markdown(breakdown, preset=preset)
+        safe = str(existing.ordinal or "position").replace("/", "-").replace(" ", "_")
+        return StreamingResponse(
+            io.BytesIO(text.encode("utf-8")),
+            media_type="text/markdown",
+            headers={"Content-Disposition": f'attachment; filename="price_analysis_{safe}.md"'},
+        )
+
+    result = breakdown.to_dict()
+    if preset == "efb":
+        result["efb"] = efb_221_view(breakdown)
+    return result
+
+
+def _measurement_stream(sheet: Any, fmt: str, preset: str, item_ref: str) -> StreamingResponse | None:
+    """Return a Markdown or CSV download of a measurement sheet, or None for JSON."""
+    from app.modules.measurement import render_csv, render_markdown
+
+    safe = str(item_ref or "measurement").replace("/", "-").replace(" ", "_")
+    if fmt == "markdown":
+        body = render_markdown(sheet, preset=preset)
+        return StreamingResponse(
+            io.BytesIO(body.encode("utf-8")),
+            media_type="text/markdown",
+            headers={"Content-Disposition": f'attachment; filename="measurement_{safe}.md"'},
+        )
+    if fmt == "csv":
+        body = render_csv(sheet, preset=preset)
+        return StreamingResponse(
+            io.BytesIO(body.encode("utf-8")),
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="measurement_{safe}.csv"'},
+        )
+    return None
+
+
+@router.post(
+    "/positions/{position_id}/measurement/compute/",
+    summary="Compute a measurement sheet for a position (does not save)",
+    dependencies=[Depends(RequirePermission("boq.read"))],
+    response_model=None,
+)
+async def compute_position_measurement(
+    position_id: uuid.UUID,
+    user_id: CurrentUserId,
+    payload: CurrentUserPayload,
+    session: SessionDep,
+    data: dict = Body(...),
+    fmt: str = Query(default="json", alias="format"),
+    preset: str = Query(default="international"),
+    service: BOQService = Depends(_get_service),
+) -> StreamingResponse | dict[str, Any]:
+    """Compute a quantity from formula-based take-off lines without saving.
+
+    Body: ``{"lines": [{"description", "formula", "variables", "factor",
+    "sign"}], "unit"?, "strict"?}``. Each line's formula (for example
+    ``3.50 * 2.40`` or ``L * B * H``) is evaluated safely and the signed
+    partial quantities are totalled, so the number is auditable. The UI can then
+    persist the accepted quantity and the lines with a normal position update
+    (PATCH the position with ``quantity`` and ``metadata.measurement``).
+
+    ``format=markdown`` or ``format=csv`` streams a readable sheet; otherwise
+    JSON. ``preset`` labels the output (international, reb, oenorm).
+    """
+    from app.modules.measurement import build_sheet, reconcile
+    from app.modules.measurement.formula import MeasurementError
+
+    existing = await service.position_repo.get_by_id(position_id)
+    if existing is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=translate("errors.position_not_found", locale=get_locale()),
+        )
+    await _verify_boq_owner(session, existing.boq_id, user_id, payload)
+
+    try:
+        sheet = build_sheet(
+            item_ref=str(existing.ordinal or ""),
+            description=str(existing.description or ""),
+            unit=str(data.get("unit") or existing.unit or ""),
+            lines=list(data.get("lines") or []),
+            strict=bool(data.get("strict", False)),
+        )
+    except MeasurementError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"measurement error: {exc}",
+        ) from exc
+
+    streamed = _measurement_stream(sheet, fmt, preset, existing.ordinal or "")
+    if streamed is not None:
+        return streamed
+    result = sheet.to_dict()
+    # Show whether the measured total matches the position's current quantity.
+    result["reconciliation"] = reconcile(sheet, existing.quantity)
+    return result
+
+
+@router.get(
+    "/positions/{position_id}/measurement/",
+    summary="Read the saved measurement sheet of a position",
+    dependencies=[Depends(RequirePermission("boq.read"))],
+    response_model=None,
+)
+async def get_position_measurement(
+    position_id: uuid.UUID,
+    user_id: CurrentUserId,
+    payload: CurrentUserPayload,
+    session: SessionDep,
+    fmt: str = Query(default="json", alias="format"),
+    preset: str = Query(default="international"),
+    service: BOQService = Depends(_get_service),
+) -> StreamingResponse | dict[str, Any]:
+    """Return the measurement sheet stored on a position (``metadata.measurement``).
+
+    Bad stored formulas are kept as per-line errors (quantity 0) rather than
+    failing the whole read, so a saved sheet always renders.
+    """
+    from app.modules.measurement import build_sheet, reconcile
+
+    existing = await service.position_repo.get_by_id(position_id)
+    if existing is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=translate("errors.position_not_found", locale=get_locale()),
+        )
+    await _verify_boq_owner(session, existing.boq_id, user_id, payload)
+
+    meta = existing.metadata_ or {}
+    stored = meta.get("measurement") or {}
+    lines = list(stored.get("lines") or [])
+    if not lines:
+        return {
+            "item_ref": existing.ordinal or "",
+            "description": existing.description or "",
+            "unit": existing.unit or "",
+            "lines": [],
+            "total_quantity": "0.000",
+            "line_count": 0,
+            "has_errors": False,
+            "stored": False,
+        }
+    sheet = build_sheet(
+        item_ref=str(existing.ordinal or ""),
+        description=str(existing.description or ""),
+        unit=str(stored.get("unit") or existing.unit or ""),
+        lines=lines,
+        strict=False,
+    )
+    streamed = _measurement_stream(sheet, fmt, preset, existing.ordinal or "")
+    if streamed is not None:
+        return streamed
+    result = sheet.to_dict()
+    result["stored"] = True
+    result["reconciliation"] = reconcile(sheet, existing.quantity)
+    return result
 
 
 # ── Statistics ──────────────────────────────────────────────────────────────

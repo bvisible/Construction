@@ -1,4 +1,4 @@
-"""‌⁠‍Actor / capture-context middleware for Epic H universal audit trail.
+"""Actor / capture-context middleware for Epic H universal audit trail.
 
 Sets the per-request :class:`~app.core.audit_log.AuditContext` on a
 ContextVar so :func:`app.core.audit_log.log_activity` can persist the

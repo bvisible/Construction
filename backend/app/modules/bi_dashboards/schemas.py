@@ -1,5 +1,5 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
-"""‌⁠‍Pydantic v2 schemas for the BI Dashboards module."""
+"""Pydantic v2 schemas for the BI Dashboards module."""
 
 from __future__ import annotations
 

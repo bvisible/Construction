@@ -1,4 +1,4 @@
-"""‌⁠‍Property Development module permission definitions.
+"""Property Development module permission definitions.
 
 R6 (task #137) extends the original coarse set with fine-grained
 permissions for the Lead / Reservation / SalesContract /
@@ -86,7 +86,7 @@ PROPERTY_DEV_PERMISSIONS: dict[str, Role] = {
 
 
 def register_property_dev_permissions() -> None:
-    """‌⁠‍Register permissions for the property_dev module."""
+    """Register permissions for the property_dev module."""
     permission_registry.register_module_permissions(
         "property_dev",
         PROPERTY_DEV_PERMISSIONS,

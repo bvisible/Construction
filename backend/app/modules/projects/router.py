@@ -1,4 +1,4 @@
-"""‌⁠‍Projects API routes.
+"""Projects API routes.
 
 Endpoints:
     POST /                   - Create project (auth required)
@@ -107,7 +107,7 @@ async def _verify_project_owner(
     user_id: str,
     payload: dict | None = None,
 ) -> object:
-    """‌⁠‍Load a project and verify the current user is the owner.
+    """Load a project and verify the current user is the owner.
 
     Admins (role=admin in JWT payload) bypass the ownership check.
     Returns the project object on success, raises 403 if not owner.
@@ -132,7 +132,7 @@ async def _verify_project_access(
     session: AsyncSession,
     payload: dict | None = None,
 ) -> object:
-    """‌⁠‍Load a project and verify the current user has read access.
+    """Load a project and verify the current user has read access.
 
     Grants access to: admins, the project owner, and any team member
     added via add_project_member (i.e. a TeamMembership row exists).
@@ -185,7 +185,7 @@ async def create_project(
     user_id: CurrentUserId,
     service: ProjectService = Depends(_get_service),
 ) -> ProjectResponse:
-    """‌⁠‍Create a new project."""
+    """Create a new project."""
     try:
         project = await service.create_project(data, uuid.UUID(user_id))
         return ProjectResponse.model_validate(project)
@@ -220,13 +220,13 @@ async def list_projects(
     limit: int = Query(default=50, ge=1, le=500),
     status: str | None = Query(
         default=None,
-        pattern=r"^(active|archived|template|waiting|on_hold|finished|all)$",
+        pattern=r"^(active|archived|template|on_hold|finished|all)$",
     ),
 ) -> list[ProjectResponse]:
     """List projects. Admins see all, others see only own projects.
 
-    ``status`` accepts the curated project-status set (active, waiting,
-    on_hold, finished, archived) plus ``template`` and an ``all`` sentinel.
+    ``status`` accepts the curated project-status set (active, on_hold,
+    finished, archived) plus ``template`` and an ``all`` sentinel.
     ``all`` returns every project including archived ones; any other value
     filters to that exact status. Omitting ``status`` keeps the default
     behaviour: archived projects are excluded.
@@ -3052,23 +3052,26 @@ async def get_share_file(
 
     fname = getattr(row, name_attr, None) or os.path.basename(path)
 
-    def _iter_file(p: str):
-        with open(p, "rb") as fh:
-            while True:
-                chunk = fh.read(64 * 1024)
-                if not chunk:
-                    break
-                yield chunk
+    # Serve straight from disk with FileResponse so the browser can stream and
+    # seek via HTTP Range requests (206 Partial Content + Accept-Ranges). The
+    # previous hand-rolled StreamingResponse ignored Range and forced
+    # application/octet-stream, so a shared video sat on the loading spinner and
+    # never played. Media (video/audio/image) is served inline with its real
+    # content type so the native player/viewer can load it; every other kind
+    # keeps downloading as an attachment exactly as before.
+    import mimetypes
 
-    from fastapi.responses import StreamingResponse
+    from fastapi.responses import FileResponse
 
-    return StreamingResponse(
-        _iter_file(path),
-        media_type="application/octet-stream",
-        headers={
-            "Content-Disposition": f'attachment; filename="{fname}"',
-            "X-Bundle-Format": "share-link",
-        },
+    guessed, _ = mimetypes.guess_type(fname)
+    media_type = guessed or "application/octet-stream"
+    inline = media_type.split("/", 1)[0] in {"video", "audio", "image"}
+    return FileResponse(
+        path,
+        media_type=media_type,
+        filename=fname,
+        content_disposition_type="inline" if inline else "attachment",
+        headers={"X-Bundle-Format": "share-link"},
     )
 
 

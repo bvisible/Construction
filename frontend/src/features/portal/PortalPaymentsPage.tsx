@@ -16,7 +16,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import clsx from 'clsx';
 import { Loader2, AlertCircle, KeyRound, Receipt, FileText, ArrowLeft } from 'lucide-react';
 import { Card, EmptyState } from '@/shared/ui';
@@ -32,6 +32,7 @@ type Tab = 'payments' | 'progress';
 
 export function PortalPaymentsPage() {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
   const magicToken = params.get('token');
   // An internal staff member can land here without a magic link (e.g. via a
@@ -71,8 +72,16 @@ export function PortalPaymentsPage() {
     setConsuming(true);
     setAuthError(null);
     consumePortalMagicLink(magicToken)
-      .then(() => {
+      .then((res) => {
         setAuthed(true);
+        // An explicit, inviter-chosen redirect wins: forward the now-signed-in
+        // user to it. Guard against an open redirect by only honouring a
+        // same-origin app path ("/..." but not "//host" or a full URL); the
+        // token is stripped from the URL in the finally below.
+        const target = res.redirect_path?.trim();
+        if (target && target.startsWith('/') && !target.startsWith('//')) {
+          navigate(target, { replace: true });
+        }
       })
       .catch((err: unknown) => {
         // If a valid session token already landed (e.g. a duplicated consume

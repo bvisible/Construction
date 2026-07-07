@@ -148,8 +148,9 @@ async def test_manual_item_inherits_catalog_currency(session: AsyncSession) -> N
     item_service = CostItemService(session)
     response = await create_cost_item(
         CostItemCreate(code="M-1", description="Masonry", unit="m2", rate=55, catalog_id=catalog.id),
-        _USER_ID,
+        _USER_PAYLOAD,
         service=item_service,
+        catalog_service=catalog_service,
     )
     assert response.currency == "CHF"
     assert response.catalog_id == catalog.id
@@ -159,8 +160,9 @@ async def test_manual_item_inherits_catalog_currency(session: AsyncSession) -> N
         CostItemCreate(
             code="M-2", description="Masonry imported", unit="m2", rate=60, currency="USD", catalog_id=catalog.id
         ),
-        _USER_ID,
+        _USER_PAYLOAD,
         service=item_service,
+        catalog_service=catalog_service,
     )
     assert response2.currency == "USD"
 

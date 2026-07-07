@@ -1,4 +1,4 @@
-"""‌⁠‍Business logic for the Service & Maintenance module.
+"""Business logic for the Service & Maintenance module.
 
 Houses:
     - State-machine helpers (pure functions, independently testable).
@@ -126,12 +126,12 @@ _CONTRACT_TRANSITIONS: dict[str, set[str]] = {
 
 
 def allowed_ticket_transitions(current: str) -> set[str]:
-    """‌⁠‍Return the set of legal next statuses for a ticket in ``current`` state."""
+    """Return the set of legal next statuses for a ticket in ``current`` state."""
     return _TICKET_TRANSITIONS.get(current, set())
 
 
 def allowed_work_order_transitions(current: str) -> set[str]:
-    """‌⁠‍Return the set of legal next statuses for a work order in ``current`` state."""
+    """Return the set of legal next statuses for a work order in ``current`` state."""
     return _WORK_ORDER_TRANSITIONS.get(current, set())
 
 

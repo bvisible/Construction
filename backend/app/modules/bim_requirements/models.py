@@ -1,4 +1,4 @@
-"""‌⁠‍BIM Requirements ORM models.
+"""BIM Requirements ORM models.
 
 Tables:
     oe_bim_requirement_set -- container for an imported requirement file
@@ -14,7 +14,7 @@ from app.database import GUID, Base
 
 
 class BIMRequirementSet(Base):
-    """‌⁠‍Container for a group of BIM requirements from a single import."""
+    """Container for a group of BIM requirements from a single import."""
 
     __tablename__ = "oe_bim_requirement_set"
 
@@ -50,7 +50,7 @@ class BIMRequirementSet(Base):
 
 
 class BIMRequirement(Base):
-    """‌⁠‍Individual BIM requirement -- 5-column universal model.
+    """Individual BIM requirement -- 5-column universal model.
 
     Columns:
         element_filter  -- which element (JSONB: ifc_class, classification, ...)

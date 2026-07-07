@@ -1,4 +1,4 @@
-"""‌⁠‍Submittals ORM models.
+"""Submittals ORM models.
 
 Tables:
     oe_submittals_submittal - construction submittals with review/approval workflow
@@ -13,7 +13,7 @@ from app.database import GUID, Base
 
 
 class Submittal(Base):
-    """‌⁠‍A construction submittal with multi-stage review and approval workflow."""
+    """A construction submittal with multi-stage review and approval workflow."""
 
     __tablename__ = "oe_submittals_submittal"
     # ``submittal_number`` must be unique per project - the auto-generator

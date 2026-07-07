@@ -1,4 +1,4 @@
-"""‌⁠‍Collaboration API routes.
+"""Collaboration API routes.
 
 Endpoints:
     GET    /comments              - List comments for entity (threaded)
@@ -68,7 +68,7 @@ def _get_service(session: SessionDep) -> CollaborationService:
 
 
 def _validate_entity_type(entity_type: str) -> None:
-    """‌⁠‍Reject entity_type values that are not in the allowlist.
+    """Reject entity_type values that are not in the allowlist.
 
     Without this check the router persists comments against arbitrary
     entity_type strings (``"unicorn"``, ``"foo"``, etc.) which become
@@ -258,7 +258,7 @@ async def list_comments(
     _perm: None = Depends(RequirePermission("collaboration.read")),
     service: CollaborationService = Depends(_get_service),
 ) -> CommentListResponse:
-    """‌⁠‍List top-level comments for an entity (replies loaded as nested)."""
+    """List top-level comments for an entity (replies loaded as nested)."""
     _validate_entity_type(entity_type)
     await _verify_entity_access(entity_type, entity_id, str(user_id), session)
     comments, total = await service.list_comments(

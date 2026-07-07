@@ -1,4 +1,4 @@
-"""‌⁠‍System-wide audit log for tracking important entity changes.
+"""System-wide audit log for tracking important entity changes.
 
 Usage:
     from app.core.audit import audit_log
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 class AuditEntry(Base):
-    """‌⁠‍Audit log entry tracking important entity changes.
+    """Audit log entry tracking important entity changes.
 
     Stores who did what, to which entity, and when.  The ``details``
     column holds arbitrary JSON context (old/new values, extra info).
@@ -51,7 +51,7 @@ async def audit_log(
     ip_address: str | None = None,
     details: dict | None = None,
 ) -> AuditEntry:
-    """‌⁠‍Write a single audit log entry.
+    """Write a single audit log entry.
 
     Parameters:
         session: Active async database session (will be flushed but NOT committed).

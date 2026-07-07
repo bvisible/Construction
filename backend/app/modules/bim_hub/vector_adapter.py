@@ -1,4 +1,4 @@
-"""‌⁠‍BIM element vector adapter - feeds the ``oe_bim_elements`` collection.
+"""BIM element vector adapter - feeds the ``oe_bim_elements`` collection.
 
 Each :class:`~app.modules.bim_hub.models.BIMElement` row is embedded as
 its display name plus element type, category, discipline, storey,
@@ -21,13 +21,13 @@ from app.modules.bim_hub.models import BIMElement
 
 
 class BIMElementVectorAdapter:
-    """‌⁠‍Embed BIM elements into the unified vector store."""
+    """Embed BIM elements into the unified vector store."""
 
     collection_name: str = COLLECTION_BIM_ELEMENTS
     module_name: str = "bim_elements"
 
     def to_text(self, row: BIMElement) -> str:
-        """‌⁠‍Build the canonical text that gets embedded.
+        """Build the canonical text that gets embedded.
 
         Concatenates the element's name, type, category, discipline,
         storey, material plus any classification codes and Revit

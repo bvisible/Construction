@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍Pipeline Builder REST API.
+"""Pipeline Builder REST API.
 
 Auto-mounted by the module loader at ``/api/v1/pipelines`` (kebab-case of
 the ``pipelines`` directory). The wire contract is PINNED - the frontend
@@ -77,7 +77,7 @@ async def _load(service: PipelineService, pipeline_id: str, user_id: str) -> Pip
 
 @router.get("/node-types/", response_model=list[NodeTypeOut])
 async def list_node_types(_user: CurrentUserId) -> list[NodeTypeOut]:
-    """‌⁠‍Return every registered node type (the palette catalog)."""
+    """Return every registered node type (the palette catalog)."""
     return [NodeTypeOut(**spec.public_dict()) for spec in list_node_specs()]
 
 
@@ -86,7 +86,7 @@ async def list_node_types(_user: CurrentUserId) -> list[NodeTypeOut]:
 
 @router.get("/runs/{run_id}", response_model=RunDetail)
 async def get_run(run_id: str, session: SessionDep, user_id: CurrentUserId) -> RunDetail:
-    """‌⁠‍Return a run with its per-node states."""
+    """Return a run with its per-node states."""
     service = PipelineService(session)
     try:
         rid = uuid.UUID(run_id)

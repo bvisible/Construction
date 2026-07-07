@@ -1,4 +1,4 @@
-"""‌⁠‍Locale-scoped message bundle for the cost_match module.
+"""Locale-scoped message bundle for the cost_match module.
 
 Populated as T12 lands. Shares the
 :class:`~app.core.validation.messages.MessageBundle` implementation -

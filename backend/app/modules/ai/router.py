@@ -1,4 +1,4 @@
-"""‌⁠‍AI Estimation API routes.
+"""AI Estimation API routes.
 
 Endpoints:
     GET    /ai/settings                          - Get user's AI settings
@@ -171,7 +171,7 @@ _AI_PROVIDERS: list[dict[str, Any]] = [
     "hard-coding the list.",
 )
 async def list_ai_providers() -> list[dict[str, Any]]:
-    """‌⁠‍Return the list of supported AI providers."""
+    """Return the list of supported AI providers."""
     return _AI_PROVIDERS
 
 
@@ -187,7 +187,7 @@ async def get_ai_settings(
     user_id: CurrentUserId,
     service: AIService = Depends(_get_service),
 ) -> AISettingsResponse:
-    """‌⁠‍Get the current user's AI settings.
+    """Get the current user's AI settings.
 
     Returns the configured providers and preferred model.
     API keys are masked - the response only indicates whether each key is set.

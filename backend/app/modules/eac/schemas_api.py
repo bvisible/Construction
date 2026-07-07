@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍Request/response schemas for the EAC v2 CRUD API.
+"""Request/response schemas for the EAC v2 CRUD API.
 
 Kept separate from :mod:`app.modules.eac.schemas` (which mirrors the
 canonical ``EacRuleDefinition`` JSON Schema) so transport concerns -
@@ -29,7 +29,7 @@ class _ApiBase(BaseModel):
 
 
 class EacRuleCreate(BaseModel):
-    """‌⁠‍Payload for ``POST /rules``."""
+    """Payload for ``POST /rules``."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -45,7 +45,7 @@ class EacRuleCreate(BaseModel):
 
 
 class EacRuleUpdate(BaseModel):
-    """‌⁠‍Payload for ``PUT /rules/{id}``. All fields optional."""
+    """Payload for ``PUT /rules/{id}``. All fields optional."""
 
     model_config = ConfigDict(extra="forbid")
 

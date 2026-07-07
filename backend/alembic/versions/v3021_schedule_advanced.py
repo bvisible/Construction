@@ -643,7 +643,7 @@ def upgrade() -> None:
                 "is_default",
                 sa.Boolean(),
                 nullable=False,
-                server_default=sa.text("0"),
+                server_default=sa.text("0") if is_sqlite else sa.text("false"),
             ),
         )
 

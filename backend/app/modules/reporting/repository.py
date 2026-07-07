@@ -1,4 +1,4 @@
-"""‌⁠‍Reporting data access layer."""
+"""Reporting data access layer."""
 
 import uuid
 
@@ -9,13 +9,13 @@ from app.modules.reporting.models import GeneratedReport, KPISnapshot, ReportTem
 
 
 class KPISnapshotRepository:
-    """‌⁠‍Data access for KPISnapshot models."""
+    """Data access for KPISnapshot models."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
     async def get_latest(self, project_id: uuid.UUID) -> KPISnapshot | None:
-        """‌⁠‍Get the most recent KPI snapshot for a project."""
+        """Get the most recent KPI snapshot for a project."""
         stmt = (
             select(KPISnapshot)
             .where(KPISnapshot.project_id == project_id)

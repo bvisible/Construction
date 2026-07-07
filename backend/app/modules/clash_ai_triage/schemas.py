@@ -1,5 +1,5 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
-"""‌⁠‍Pydantic schemas for the clash AI triage module."""
+"""Pydantic schemas for the clash AI triage module."""
 
 from __future__ import annotations
 

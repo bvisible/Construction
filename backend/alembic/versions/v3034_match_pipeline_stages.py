@@ -291,7 +291,7 @@ def upgrade() -> None:
                 "is_system",
                 sa.Boolean(),
                 nullable=False,
-                server_default=sa.text("0"),
+                server_default=sa.text("0") if bind.dialect.name == "sqlite" else sa.text("false"),
             ),
             sa.Column("created_by", sa.String(length=36), nullable=True),
             sa.Column(
@@ -345,7 +345,9 @@ def upgrade() -> None:
                 "system_prompt, user_template, allowed_providers, "
                 "version, is_system, created_by, forked_from_id, metadata) "
                 "VALUES (:id, :ts, :ts, :k, :n, :d, :sp, :ut, NULL, "
-                "1, 1, NULL, NULL, :meta)"
+                # version stays an integer literal (Integer column); is_system is
+                # bound as a real Python bool so PostgreSQL gets a boolean, not int.
+                "1, :is_system, NULL, NULL, :meta)"
             ).bindparams(
                 id=str(uuid.uuid4()),
                 ts=now,
@@ -354,6 +356,7 @@ def upgrade() -> None:
                 d=spec["description"],
                 sp=spec["system_prompt"],
                 ut=spec["user_template"],
+                is_system=True,
                 meta=json.dumps({"source": "n8n_workflow_v6"}),
             )
         )

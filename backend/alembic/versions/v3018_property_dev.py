@@ -502,7 +502,7 @@ def upgrade() -> None:
                 "allow_multiple",
                 sa.Boolean(),
                 nullable=False,
-                server_default=sa.text("0"),
+                server_default=sa.text("0") if is_sqlite else sa.text("false"),
             ),
             sa.Column("max_count", sa.Integer(), nullable=True),
             sa.Column(
@@ -561,7 +561,7 @@ def upgrade() -> None:
                 "is_active",
                 sa.Boolean(),
                 nullable=False,
-                server_default=sa.text("1"),
+                server_default=sa.text("1") if is_sqlite else sa.text("true"),
             ),
             sa.Column(
                 "compatibility_rules",
@@ -710,7 +710,7 @@ def upgrade() -> None:
                 "included_in_production",
                 sa.Boolean(),
                 nullable=False,
-                server_default=sa.text("0"),
+                server_default=sa.text("0") if is_sqlite else sa.text("false"),
             ),
             sa.Column(
                 "metadata",
@@ -744,7 +744,7 @@ def upgrade() -> None:
                 "final_check_passed",
                 sa.Boolean(),
                 nullable=False,
-                server_default=sa.text("0"),
+                server_default=sa.text("0") if is_sqlite else sa.text("false"),
             ),
             sa.Column("keys_handed_over_at", sa.String(20), nullable=True),
             sa.Column("customer_signature_ref", sa.String(255), nullable=True),

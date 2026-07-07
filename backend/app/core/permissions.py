@@ -1,4 +1,4 @@
-"""‌⁠‍RBAC permission engine.
+"""RBAC permission engine.
 
 Role-Based Access Control with permission inheritance.
 Roles are hierarchical: admin > manager > editor > viewer.
@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 
 class Role(StrEnum):
-    """‌⁠‍Built-in roles with hierarchical permissions."""
+    """Built-in roles with hierarchical permissions."""
 
     ADMIN = "admin"  # Full access to everything
     MANAGER = "manager"  # Project management, team management
@@ -79,7 +79,7 @@ ROLE_ALIASES: dict[str, Role] = {
 
 
 def _resolve_role(role: "Role | str") -> "Role | None":
-    """‌⁠‍Resolve any role string (including aliases) to a canonical Role, or None."""
+    """Resolve any role string (including aliases) to a canonical Role, or None."""
     if isinstance(role, Role):
         return role
     if not role:

@@ -1,10 +1,10 @@
-"""‌⁠‍Contacts module permission definitions."""
+"""Contacts module permission definitions."""
 
 from app.core.permissions import Role, permission_registry
 
 
 def register_contacts_permissions() -> None:
-    """‌⁠‍Register permissions for the contacts module."""
+    """Register permissions for the contacts module."""
     permission_registry.register_module_permissions(
         "contacts",
         {

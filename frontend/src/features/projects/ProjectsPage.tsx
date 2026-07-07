@@ -20,7 +20,7 @@ import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { useLocalStorage } from '@/shared/hooks/useLocalStorage';
 import { CreateProjectModal } from './CreateProjectPage';
 import { projectsGuide } from './projectsGuide';
-import { ProjectStatusBadge } from './ProjectStatusBadge';
+import { ProjectStatusBadge, CURATED_PROJECT_STATUSES, useProjectStatusLabel } from './ProjectStatusBadge';
 import { BIMConverterStatusBanner } from '../bim/BIMConverterStatusBanner';
 
 interface ProjectBOQStats {
@@ -31,9 +31,51 @@ interface ProjectBOQStats {
 }
 
 type SortOption = 'name_asc' | 'newest' | 'oldest' | 'value';
-type StatusFilter = 'all' | 'active' | 'archived';
+// The status filter accepts two view sentinels plus any concrete project
+// status string: 'all' (every project, archived included), 'active' (every
+// non-archived working project), 'archived', or an exact status token
+// (on_hold / finished / cancelled / a custom status). It is a free string
+// because project.status is free-form on the backend, so the option list is
+// built from the curated set UNION whatever statuses the fetched projects
+// actually carry (see availableStatuses).
+type StatusFilter = string;
 
 const ITEMS_PER_PAGE = 12;
+
+// Concrete statuses the backend GET /projects?status= filter accepts as an
+// exact-match server-side filter (its regex). Anything outside this set
+// (e.g. 'cancelled' or a custom status) is fetched with the lighter default
+// list() - which returns every non-archived project - and narrowed to the
+// exact status client-side, so we never trip a 422 on an unrecognised value.
+const SERVER_FILTERABLE_STATUSES = new Set(['on_hold', 'finished']);
+
+/**
+ * Build the status-filter option list shown in the toolbar dropdown.
+ *
+ * Mirrors the availableRegions pattern: start from the curated recommended
+ * statuses, then UNION any distinct statuses actually present on the fetched
+ * projects so a custom/legacy status (set elsewhere) is always selectable and
+ * never silently hidden. 'all' + 'active' are the two leading view sentinels;
+ * 'archived' keeps its curated slot. Returns the option VALUES only; the
+ * caller resolves each to a translated label.
+ */
+export function buildStatusFilterOptions(
+  projectStatuses: Iterable<string | null | undefined>,
+): string[] {
+  // 'all' and 'active' are view sentinels, not stored statuses. The curated
+  // set already carries 'active'/'archived'; keep their lifecycle order and
+  // de-duplicate while preserving insertion order.
+  const ordered: string[] = ['all', ...CURATED_PROJECT_STATUSES];
+  const seen = new Set(ordered);
+  for (const s of projectStatuses) {
+    const status = (s ?? '').trim();
+    if (status && !seen.has(status)) {
+      seen.add(status);
+      ordered.push(status);
+    }
+  }
+  return ordered;
+}
 
 /**
  * Whether any non-default filter or search is currently applied.
@@ -120,13 +162,18 @@ export function ProjectsPage() {
     // Fetch by status so archived projects are actually retrieved: the default
     // list endpoint excludes archived, so 'archived' and 'all' must ask for
     // them explicitly. 'active' keeps the lighter default fetch (every
-    // non-archived project, custom statuses included).
-    queryFn: () =>
-      statusFilter === 'archived'
-        ? projectsApi.listByStatus('archived')
-        : statusFilter === 'all'
-          ? projectsApi.listByStatus('all')
-          : projectsApi.list(),
+    // non-archived project, custom statuses included). A concrete status the
+    // backend filter recognises (on_hold / finished) is fetched server-side;
+    // any other concrete status (cancelled / custom) falls back to the default
+    // non-archived list and is narrowed client-side, avoiding a 422.
+    queryFn: () => {
+      if (statusFilter === 'archived') return projectsApi.listByStatus('archived');
+      if (statusFilter === 'all') return projectsApi.listByStatus('all');
+      if (statusFilter !== 'active' && SERVER_FILTERABLE_STATUSES.has(statusFilter)) {
+        return projectsApi.listByStatus(statusFilter);
+      }
+      return projectsApi.list();
+    },
     staleTime: 5 * 60_000,
   });
 
@@ -266,13 +313,15 @@ export function ProjectsPage() {
     }
 
     // Status filter. 'active' shows every working (non-archived) project so
-    // custom statuses (waiting / on hold / finished) stay visible; 'archived'
-    // shows only archived; 'all' shows everything. The list is already fetched
-    // by status above, so this just guards against a stale cache.
+    // custom statuses (on hold / finished) stay visible; 'archived' shows only
+    // archived; 'all' shows everything; any other value narrows to that exact
+    // status. The list is already fetched by status above (server-side where
+    // the backend supports it), so this also guards against a stale cache and
+    // covers concrete statuses fetched via the broader non-archived list.
     if (statusFilter === 'active') {
       list = list.filter((p) => p.status !== 'archived');
-    } else if (statusFilter === 'archived') {
-      list = list.filter((p) => p.status === 'archived');
+    } else if (statusFilter !== 'all') {
+      list = list.filter((p) => p.status === statusFilter);
     }
 
     // Region filter
@@ -451,6 +500,16 @@ export function ProjectsPage() {
     for (const p of projects) if (p.region) set.add(p.region);
     return ['all', ...Array.from(set).sort()];
   }, [projects]);
+
+  // Available status filter values - the curated recommended set UNION any
+  // distinct statuses actually present on the fetched projects (mirrors the
+  // availableRegions pattern). This is what lets the dropdown offer every
+  // status, including a custom/legacy one, instead of just All/Active/Archived.
+  const statusLabel = useProjectStatusLabel();
+  const availableStatuses = useMemo(
+    () => buildStatusFilterOptions((projects ?? []).map((p) => p.status)),
+    [projects],
+  );
 
   /* ── Sort labels ──────────────────────────────────────────────────── */
 
@@ -760,7 +819,11 @@ export function ProjectsPage() {
               />
             </div>
 
-            {/* Status filter */}
+            {/* Status filter. Options = curated statuses UNION any custom
+                status present on the fetched projects (availableStatuses).
+                'all'/'active' are view sentinels with their own labels;
+                'archived' keeps its existing filter label; every other
+                concrete status resolves through the shared status label. */}
             <div className="relative">
               <select
                 value={statusFilter}
@@ -770,15 +833,17 @@ export function ProjectsPage() {
                 })}
                 className="h-10 appearance-none rounded-lg border border-border bg-surface-primary pl-3 pr-9 text-sm text-content-primary focus:outline-none focus:ring-2 focus:ring-oe-blue sm:w-36"
               >
-                <option value="all">
-                  {t('projects.filter_all', { defaultValue: 'All' })}
-                </option>
-                <option value="active">
-                  {t('projects.filter_active', { defaultValue: 'Active' })}
-                </option>
-                <option value="archived">
-                  {t('projects.filter_archived', { defaultValue: 'Archived' })}
-                </option>
+                {availableStatuses.map((s) => (
+                  <option key={s} value={s}>
+                    {s === 'all'
+                      ? t('projects.filter_all', { defaultValue: 'All' })
+                      : s === 'active'
+                        ? t('projects.filter_active', { defaultValue: 'Active' })
+                        : s === 'archived'
+                          ? t('projects.filter_archived', { defaultValue: 'Archived' })
+                          : statusLabel(s)}
+                  </option>
+                ))}
               </select>
               <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-2.5 text-content-tertiary">
                 <ChevronDown size={14} />
@@ -1250,7 +1315,7 @@ function ProjectCard({
             {project.name.charAt(0).toUpperCase()}
           </div>
           <div className="flex items-center gap-1.5">
-            {/* Surface any non-active status (waiting / on hold / finished /
+            {/* Surface any non-active status (on hold / finished / cancelled /
                 archived) as a coloured pill. Active is the implied default,
                 so we omit its badge to keep the common case uncluttered. */}
             {project.status && project.status !== 'active' && (

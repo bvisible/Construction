@@ -1,4 +1,4 @@
-"""‌⁠‍File-manager aggregation service (Issue #109).
+"""File-manager aggregation service (Issue #109).
 
 The file manager surfaces every binary that belongs to a project - across
 multiple modules - under a single API. Each module owns its own table /
@@ -96,7 +96,7 @@ _MIME_BY_EXT: dict[str, str] = {
 
 
 def _ext_of(name: str | None) -> str | None:
-    """‌⁠‍Lower-cased extension without the leading dot, or None."""
+    """Lower-cased extension without the leading dot, or None."""
     if not name:
         return None
     _, _, ext = name.rpartition(".")
@@ -113,7 +113,7 @@ def _mime_of(name: str | None, fallback: str | None = None) -> str | None:
 
 
 def _file_size(path: str | None) -> int:
-    """‌⁠‍Size in bytes; 0 if path is missing or unreadable.
+    """Size in bytes; 0 if path is missing or unreadable.
 
     Stat-failures are silently absorbed so a single deleted file never
     breaks the whole listing - the row still appears with ``size=0`` and

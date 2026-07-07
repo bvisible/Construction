@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍Safe formula evaluator (RFC 34 L14, EAC-1.3 §4).
+"""Safe formula evaluator (RFC 34 L14, EAC-1.3 §4).
 
 The evaluator is a thin wrapper over :class:`simpleeval.SimpleEval`:
 
@@ -38,11 +38,11 @@ from simpleeval import (
 
 
 class FormulaSyntaxError(Exception):
-    """‌⁠‍Formula does not parse as a valid Python expression."""
+    """Formula does not parse as a valid Python expression."""
 
 
 class FormulaUnsafeError(Exception):
-    """‌⁠‍Formula references an unsafe construct (dunder, eval, exec, ...)."""
+    """Formula references an unsafe construct (dunder, eval, exec, ...)."""
 
 
 class FormulaTimeoutError(Exception):

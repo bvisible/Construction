@@ -38,6 +38,7 @@ import { PageHeader } from '@/shared/ui/PageHeader';
 import { DismissibleInfo } from '@/shared/ui/DismissibleInfo';
 import { RequiresProject } from '@/shared/auth/RequiresProject';
 import { apiGet } from '@/shared/lib/api';
+import { hasFieldTag, nextFieldTags } from './FieldImageToggle';
 import { useConfirm } from '@/shared/hooks/useConfirm';
 import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
@@ -63,7 +64,7 @@ import {
 /* ── Constants ────────────────────────────────────────────────────────── */
 
 const PHOTO_CATEGORIES: PhotoCategory[] = [
-  'site', 'progress', 'defect', 'delivery', 'safety', 'other',
+  'site', 'progress', 'defect', 'delivery', 'safety', 'aerial', 'other',
 ];
 
 const CATEGORY_COLORS: Record<PhotoCategory, string> = {
@@ -72,6 +73,7 @@ const CATEGORY_COLORS: Record<PhotoCategory, string> = {
   defect: 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300',
   delivery: 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300',
   safety: 'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300',
+  aerial: 'bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-300',
   other: 'bg-gray-100 text-gray-700 dark:bg-gray-800/60 dark:text-gray-300',
 };
 
@@ -474,6 +476,15 @@ function EditPhotoModal({
                 </option>
               ))}
             </select>
+            {/* Site photos are field/site evidence by definition; the
+                category classifies WHAT kind of site photo it is. This is
+                the canonical "field" signal the project Photo strip reads. */}
+            <p className="mt-1 text-2xs text-content-quaternary">
+              {t('photos.field_category_hint', {
+                defaultValue:
+                  'Site photos are field evidence - the category sets how it is filed.',
+              })}
+            </p>
           </div>
 
           {/* Tags */}
@@ -494,6 +505,20 @@ function EditPhotoModal({
                 {t('common.add', { defaultValue: 'Add' })}
               </Button>
             </div>
+            {/* Quick-add the shared "field" tag. Harmless on a dedicated
+                site photo (it is already field) but keeps the taxonomy
+                consistent with general images, which rely on this exact
+                tag to opt INTO the site Photo strip. */}
+            {!hasFieldTag(tags) && (
+              <button
+                type="button"
+                onClick={() => setTags((prev) => nextFieldTags(prev, true))}
+                className="mt-2 inline-flex items-center gap-1 rounded-full border border-dashed border-border-light px-2 py-0.5 text-2xs text-content-tertiary hover:border-oe-blue/40 hover:text-oe-blue transition-colors"
+              >
+                <Tag size={10} />
+                {t('photos.quick_tag_field', { defaultValue: '+ field' })}
+              </button>
+            )}
             {tags.length > 0 && (
               <div className="flex flex-wrap gap-1 mt-2">
                 {tags.map((tag) => (
@@ -1474,8 +1499,8 @@ export function PhotoGalleryPage() {
         <UploadZone projectId={projectId} onUploaded={handleUploaded} />
       )}
 
-      {/* Filters bar */}
-      <Card className="p-3">
+      {/* Filters bar - relative z-20 keeps the category dropdown above the list cards below */}
+      <Card className="relative z-20 p-3">
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
           {/* Search */}
           <div className="relative flex-1">

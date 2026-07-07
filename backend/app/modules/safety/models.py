@@ -1,4 +1,4 @@
-"""‌⁠‍Safety ORM models.
+"""Safety ORM models.
 
 Tables:
     oe_safety_incident    - safety incident reports (injuries, near misses, etc.)
@@ -26,7 +26,7 @@ from app.database import GUID, Base
 
 
 class SafetyIncident(Base):
-    """‌⁠‍A safety incident report tracking injuries, near misses, and property damage."""
+    """A safety incident report tracking injuries, near misses, and property damage."""
 
     __tablename__ = "oe_safety_incident"
     # Per-project uniqueness of the human-facing INC-NNN number. MAX(suffix)+1
@@ -129,7 +129,7 @@ class SafetyIncident(Base):
 
 
 class HSECorrectiveAction(Base):
-    """‌⁠‍Slim incident-scoped corrective action with a strict FSM.
+    """Slim incident-scoped corrective action with a strict FSM.
 
     Distinct from :class:`app.modules.hse_advanced.models.CorrectiveAction`
     (which is the audit/JSA/observation-scoped CAPA carrying 5-Whys and
@@ -176,7 +176,7 @@ class HSECorrectiveAction(Base):
 
 
 class SafetyObservation(Base):
-    """‌⁠‍A proactive safety observation with risk scoring."""
+    """A proactive safety observation with risk scoring."""
 
     __tablename__ = "oe_safety_observation"
     # Per-project uniqueness of the human-facing OBS-NNN number. MAX(suffix)+1

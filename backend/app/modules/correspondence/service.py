@@ -1,4 +1,4 @@
-"""‌⁠‍Correspondence service - business logic for correspondence management."""
+"""Correspondence service - business logic for correspondence management."""
 
 import logging
 import uuid
@@ -22,7 +22,7 @@ _MAX_NUMBER_RETRIES = 5
 
 
 async def _safe_publish(name: str, data: dict, source_module: str = "oe_correspondence") -> None:
-    """‌⁠‍Publish an event, swallowing errors so business logic continues.
+    """Publish an event, swallowing errors so business logic continues.
 
     Used to drive the ``oe_correspondence_correspondence`` vector indexer
     (item 16) on create / update / delete without ever letting an
@@ -37,7 +37,7 @@ async def _safe_publish(name: str, data: dict, source_module: str = "oe_correspo
 
 
 class CorrespondenceService:
-    """‌⁠‍Business logic for correspondence operations."""
+    """Business logic for correspondence operations."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -48,7 +48,7 @@ class CorrespondenceService:
         data: CorrespondenceCreate,
         user_id: str | None = None,
     ) -> Correspondence:
-        """‌⁠‍Create a new correspondence record with auto-generated reference number.
+        """Create a new correspondence record with auto-generated reference number.
 
         Concurrent-create race: ``next_reference_number`` computes the next
         ordinal from ``MAX(suffix)+1`` which has TOCTOU semantics. Two parallel
@@ -211,7 +211,7 @@ class CorrespondenceService:
         correspondence_id: uuid.UUID,
         attachment_path: str,
     ) -> Correspondence:
-        """‌⁠‍Append a validated attachment path to the correspondence.
+        """Append a validated attachment path to the correspondence.
 
         The caller (router) is responsible for magic-byte validation and
         for choosing the server-side filename; this method only mutates

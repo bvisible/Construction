@@ -1,5 +1,5 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
-"""‌⁠‍Pydantic schemas for the clash detection module."""
+"""Pydantic schemas for the clash detection module."""
 
 from __future__ import annotations
 
@@ -163,7 +163,7 @@ class ClashRuleSuggestion(BaseModel):
 
 
 class ClashRunCreate(BaseModel):
-    """‌⁠‍Configure + launch a clash run."""
+    """Configure + launch a clash run."""
 
     name: str | None = Field(default=None, max_length=255)
     description: str | None = Field(
@@ -347,7 +347,7 @@ class ClashHistoryEntry(BaseModel):
 
 
 class ClashResultResponse(BaseModel):
-    """‌⁠‍A single clashing pair."""
+    """A single clashing pair."""
 
     model_config = ConfigDict(from_attributes=True)
 

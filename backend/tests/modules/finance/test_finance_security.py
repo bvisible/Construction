@@ -54,6 +54,8 @@ from app.modules.finance.schemas import (
     EVMSnapshotCreate,
     InvoiceCreate,
     InvoiceResponse,
+    LedgerAccountResponse,
+    LedgerAccountUpdate,
     PaymentCreate,
     PaymentResponse,
 )
@@ -799,3 +801,190 @@ async def test_evm_snapshot_uses_decimal_arithmetic() -> None:
     # VAC = BAC - EAC must mirror EAC's sign convention exactly.
     vac = Decimal(snap.vac)
     assert vac == Decimal("1000000") - eac
+
+
+# -- 6. Workspace-level GL account writes are admin-gated (create/update parity) --
+#
+# Creating or seeding a workspace-level (project_id is None) chart-of-accounts
+# row is admin-gated through ``_require_gl_consolidated_scope``. The PATCH
+# handler used ``_require_project_access``, which no-ops on a null project, so
+# any ``finance.gl.manage_accounts`` holder could rewrite the company-wide
+# chart while only an admin could create/seed it. ``update_ledger_account`` now
+# mirrors the create/seed guard: workspace scope -> admin only; a project-scoped
+# account keeps the per-project owner check (owner 200, cross-tenant 404).
+
+
+def _make_ledger_account(*, project_id: uuid.UUID | None) -> SimpleNamespace:
+    """A full chart-of-accounts row stub that ``LedgerAccountResponse`` accepts."""
+    now = datetime.now(UTC)
+    return SimpleNamespace(
+        id=uuid.uuid4(),
+        project_id=project_id,
+        account_code="1000",
+        name="Cash and Cash Equivalents",
+        account_type="asset",
+        normal_balance="debit",
+        parent_id=None,
+        statement_section="current_asset",
+        is_cash=True,
+        is_active=True,
+        currency_code="",
+        created_at=now,
+        updated_at=now,
+    )
+
+
+class _StubAccountService:
+    """Minimal FinanceService shim exposing only the two calls the handler makes."""
+
+    def __init__(self, account: SimpleNamespace) -> None:
+        self._account = account
+        self.update_called = False
+
+    async def get_account(self, _account_id: uuid.UUID) -> SimpleNamespace:
+        return self._account
+
+    async def update_account(self, _account_id: uuid.UUID, _data: Any) -> SimpleNamespace:
+        self.update_called = True
+        return self._account
+
+
+def _install_user_repo(monkeypatch: pytest.MonkeyPatch, roles: dict[str, str]) -> None:
+    """Monkeypatch ``UserRepository`` so ``get_by_id(uid)`` returns the mapped role.
+
+    Unmapped ids fall back to a plain (non-admin) ``user`` role.
+    """
+
+    class _StubUserRepo:
+        def __init__(self, _session: Any) -> None:
+            pass
+
+        async def get_by_id(self, user_id: Any):
+            return SimpleNamespace(id=user_id, role=roles.get(str(user_id), "user"))
+
+    monkeypatch.setattr("app.modules.users.repository.UserRepository", _StubUserRepo)
+
+
+@pytest.mark.asyncio
+async def test_update_ledger_account_workspace_requires_admin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A workspace-level (project_id is None) account may only be edited by an
+    admin, matching the create/seed admin gate. Before the fix the null-project
+    owner check no-oped and let any ``finance.gl.manage_accounts`` holder rewrite
+    the company-wide chart.
+    """
+    admin_id = str(uuid.uuid4())
+    manager_id = str(uuid.uuid4())
+    _install_user_repo(monkeypatch, {admin_id: "admin", manager_id: "user"})
+
+    # Non-admin manager -> denied, and the write never runs.
+    denied_account = _make_ledger_account(project_id=None)
+    denied_svc = _StubAccountService(denied_account)
+    with pytest.raises(HTTPException) as exc_info:
+        await finance_router.update_ledger_account(
+            account_id=denied_account.id,
+            data=LedgerAccountUpdate(name="Renamed by a non-admin"),
+            session=None,
+            user_id=manager_id,  # type: ignore[arg-type]
+            _perm=None,
+            service=denied_svc,  # type: ignore[arg-type]
+        )
+    # The shared consolidated-scope guard answers 400 (a project_id / admin is
+    # required); 403 is accepted too so a future tightening of that guard to an
+    # explicit Forbidden does not break this pin. Either way it is a denial, not
+    # a 404 (would leak nothing here) or a silent 200.
+    assert exc_info.value.status_code in (400, 403), (
+        f"non-admin editing a workspace GL account must be denied, got {exc_info.value.status_code}"
+    )
+    assert denied_svc.update_called is False, "the admin gate must fire before the write"
+
+    # Admin -> allowed.
+    ok_account = _make_ledger_account(project_id=None)
+    ok_svc = _StubAccountService(ok_account)
+    resp = await finance_router.update_ledger_account(
+        account_id=ok_account.id,
+        data=LedgerAccountUpdate(name="Renamed by an admin"),
+        session=None,
+        user_id=admin_id,  # type: ignore[arg-type]
+        _perm=None,
+        service=ok_svc,  # type: ignore[arg-type]
+    )
+    assert isinstance(resp, LedgerAccountResponse)
+    assert resp.id == ok_account.id
+    assert ok_svc.update_called is True
+
+
+@pytest.mark.asyncio
+async def test_update_ledger_account_project_scoped_follows_project_access(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A project-scoped account (project_id set) keeps the per-project owner
+    check unchanged: the owner succeeds, and a cross-tenant caller gets 404 (R7 -
+    never confirm a project UUID exists to a caller without access).
+    """
+    owner_id = str(uuid.uuid4())
+    other_id = str(uuid.uuid4())
+    _install_user_repo(monkeypatch, {})  # everyone non-admin
+
+    class _StubProjectRepo:
+        def __init__(self, _session: Any) -> None:
+            pass
+
+        async def get_by_id(self, project_id: uuid.UUID):
+            return SimpleNamespace(id=PROJECT_A, owner_id=owner_id) if project_id == PROJECT_A else None
+
+    async def _not_member(*_args: Any, **_kwargs: Any) -> bool:
+        return False
+
+    monkeypatch.setattr("app.modules.projects.repository.ProjectRepository", _StubProjectRepo)
+    monkeypatch.setattr("app.modules.teams.access.is_project_member", _not_member)
+
+    # Owner -> allowed.
+    owned_account = _make_ledger_account(project_id=PROJECT_A)
+    owner_svc = _StubAccountService(owned_account)
+    resp = await finance_router.update_ledger_account(
+        account_id=owned_account.id,
+        data=LedgerAccountUpdate(name="Owner edit"),
+        session=None,
+        user_id=owner_id,  # type: ignore[arg-type]
+        _perm=None,
+        service=owner_svc,  # type: ignore[arg-type]
+    )
+    assert isinstance(resp, LedgerAccountResponse)
+    assert owner_svc.update_called is True
+
+    # Cross-tenant -> 404, and the write never runs.
+    xt_account = _make_ledger_account(project_id=PROJECT_A)
+    xt_svc = _StubAccountService(xt_account)
+    with pytest.raises(HTTPException) as exc_info:
+        await finance_router.update_ledger_account(
+            account_id=xt_account.id,
+            data=LedgerAccountUpdate(name="Cross-tenant edit"),
+            session=None,
+            user_id=other_id,  # type: ignore[arg-type]
+            _perm=None,
+            service=xt_svc,  # type: ignore[arg-type]
+        )
+    assert exc_info.value.status_code == 404
+    assert xt_svc.update_called is False
+
+
+def test_router_update_ledger_account_admin_gates_workspace_scope() -> None:
+    """Static pin: the PATCH handler routes the workspace (null-project) scope
+    through the consolidated-scope admin gate, exactly like create and seed. A
+    refactor back to a bare ``_require_project_access`` (which no-ops on None)
+    would re-open the asymmetry and trip here.
+    """
+    src = inspect.getsource(finance_router.update_ledger_account)
+    assert "_require_gl_consolidated_scope" in src, (
+        "update_ledger_account no longer admin-gates the workspace-level chart - "
+        "any finance.gl.manage_accounts holder can edit company-wide GL accounts."
+    )
+    # Create and seed use the same guard - keep the write side symmetric.
+    for handler_name in ("create_ledger_account", "seed_default_chart"):
+        handler_src = inspect.getsource(getattr(finance_router, handler_name))
+        assert "_require_gl_consolidated_scope" in handler_src, (
+            f"{handler_name} is expected to admin-gate its workspace scope via "
+            "_require_gl_consolidated_scope (the pattern update mirrors)."
+        )

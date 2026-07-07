@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍Build a structured CWICR Qdrant query from an :class:`ElementEnvelope`.
+"""Build a structured CWICR Qdrant query from an :class:`ElementEnvelope`.
 
 The legacy ranker concatenates everything (description + unit + DIN 276
 + region) into a single string and embeds it as one passage. BGE-M3 is
@@ -111,7 +111,7 @@ _UNIT_TYPE: dict[str, str] = {
 
 
 def unit_type_for(unit_hint: str | None) -> str | None:
-    """‌⁠‍Capitalised ``unit_type`` bucket for a CWICR unit, or ``None`` to skip.
+    """Capitalised ``unit_type`` bucket for a CWICR unit, or ``None`` to skip.
 
     Matches the DDC v3 snapshot payload's ``unit_type`` field - one of
     ``Area`` / ``Volume`` / ``Linear`` / ``Mass`` / ``Count`` / ``Time``.
@@ -171,7 +171,7 @@ _UNIT_DIM: dict[str, str] = {
 
 
 def unit_dim_for(unit_hint: str | None) -> str | None:
-    """‌⁠‍Legacy lowercase ``unit_dim`` for back-compat. Prefer :func:`unit_type_for`.
+    """Legacy lowercase ``unit_dim`` for back-compat. Prefer :func:`unit_type_for`.
 
     Returns ``None`` when the unit is unknown or a lump-sum - the caller
     should drop the ``unit_dim`` predicate so the search doesn't

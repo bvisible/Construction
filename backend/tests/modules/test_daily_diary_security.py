@@ -106,7 +106,7 @@ def _yesterday_iso() -> str:
 
 
 def test_daily_diary_unlock_is_manager() -> None:
-    """‌⁠‍The new unlock permission must be MANAGER+; EDITOR rejected."""
+    """The new unlock permission must be MANAGER+; EDITOR rejected."""
     register_daily_diary_permissions()
     assert permission_registry.role_has_permission(
         Role.MANAGER,
@@ -123,7 +123,7 @@ def test_daily_diary_unlock_is_manager() -> None:
 
 
 def test_daily_diary_sign_is_manager() -> None:
-    """‌⁠‍Sign-off remains MANAGER+ (per foreman-class roles)."""
+    """Sign-off remains MANAGER+ (per foreman-class roles)."""
     register_daily_diary_permissions()
     assert permission_registry.role_has_permission(
         Role.MANAGER,
@@ -139,7 +139,7 @@ def test_daily_diary_sign_is_manager() -> None:
 
 
 def test_photo_url_rejects_javascript_scheme() -> None:
-    """‌⁠‍``javascript:`` in file_url must 422 at schema parse."""
+    """``javascript:`` in file_url must 422 at schema parse."""
     with pytest.raises(ValidationError) as exc_info:
         DiaryPhotoCreate(
             project_id=uuid.uuid4(),
@@ -150,7 +150,7 @@ def test_photo_url_rejects_javascript_scheme() -> None:
 
 
 def test_photo_url_rejects_data_scheme() -> None:
-    """‌⁠‍``data:`` URLs equally blocked."""
+    """``data:`` URLs equally blocked."""
     with pytest.raises(ValidationError):
         DiaryPhotoCreate(
             project_id=uuid.uuid4(),
@@ -160,13 +160,13 @@ def test_photo_url_rejects_data_scheme() -> None:
 
 
 def test_photo_thumbnail_url_validator_active_on_update() -> None:
-    """‌⁠‍PATCH path also runs the URL validator on thumbnail_url."""
+    """PATCH path also runs the URL validator on thumbnail_url."""
     with pytest.raises(ValidationError):
         DiaryPhotoUpdate(thumbnail_url="javascript:bad()")
 
 
 def test_photo_url_accepts_https() -> None:
-    """‌⁠‍Sanity: a valid https URL passes through unchanged."""
+    """Sanity: a valid https URL passes through unchanged."""
     photo = DiaryPhotoCreate(
         project_id=uuid.uuid4(),
         taken_at=datetime.now(UTC),
@@ -176,7 +176,7 @@ def test_photo_url_accepts_https() -> None:
 
 
 def test_photo_url_accepts_relative_minio_path() -> None:
-    """‌⁠‍Relative ``/files/...`` paths are allowed (local MinIO mount)."""
+    """Relative ``/files/...`` paths are allowed (local MinIO mount)."""
     photo = DiaryPhotoCreate(
         project_id=uuid.uuid4(),
         taken_at=datetime.now(UTC),
@@ -186,7 +186,7 @@ def test_photo_url_accepts_relative_minio_path() -> None:
 
 
 def test_drone_ortho_url_validator_active() -> None:
-    """‌⁠‍Drone survey ortho_file_url also subject to XSS gate."""
+    """Drone survey ortho_file_url also subject to XSS gate."""
     with pytest.raises(ValidationError):
         DroneSurveyCreate(
             project_id=uuid.uuid4(),
@@ -196,7 +196,7 @@ def test_drone_ortho_url_validator_active() -> None:
 
 
 def test_reality_capture_file_url_validator_active() -> None:
-    """‌⁠‍Reality-capture file_url cannot be a script URL."""
+    """Reality-capture file_url cannot be a script URL."""
     with pytest.raises(ValidationError):
         RealityCaptureCreate(
             project_id=uuid.uuid4(),
@@ -210,7 +210,7 @@ def test_reality_capture_file_url_validator_active() -> None:
 
 
 def test_photo_lat_rejects_out_of_range() -> None:
-    """‌⁠‍|lat| > 90 must 422 — schema-enforced."""
+    """|lat| > 90 must 422 — schema-enforced."""
     with pytest.raises(ValidationError):
         DiaryPhotoCreate(
             project_id=uuid.uuid4(),
@@ -222,7 +222,7 @@ def test_photo_lat_rejects_out_of_range() -> None:
 
 
 def test_photo_lng_rejects_out_of_range() -> None:
-    """‌⁠‍|lng| > 180 must 422 — schema-enforced."""
+    """|lng| > 180 must 422 — schema-enforced."""
     with pytest.raises(ValidationError):
         DiaryPhotoCreate(
             project_id=uuid.uuid4(),
@@ -234,7 +234,7 @@ def test_photo_lng_rejects_out_of_range() -> None:
 
 
 def test_weather_lat_lng_clamped() -> None:
-    """‌⁠‍Weather records also clamp lat/lng to WGS-84 bounds."""
+    """Weather records also clamp lat/lng to WGS-84 bounds."""
     with pytest.raises(ValidationError):
         WeatherRecordCreate(
             project_id=uuid.uuid4(),
@@ -251,7 +251,7 @@ def test_weather_lat_lng_clamped() -> None:
 async def test_update_diary_signed_returns_409_with_i18n_code(
     svc: DailyDiaryService,
 ) -> None:
-    """‌⁠‍Updating a signed diary -> 409 with structured ``code`` body."""
+    """Updating a signed diary -> 409 with structured ``code`` body."""
     project_id = uuid.uuid4()
     diary = await svc.create_diary(
         DailyDiaryCreate(project_id=project_id, diary_date=_yesterday_iso()),
@@ -273,7 +273,7 @@ async def test_update_diary_signed_returns_409_with_i18n_code(
 async def test_create_entry_on_signed_diary_returns_409(
     svc: DailyDiaryService,
 ) -> None:
-    """‌⁠‍Adding an entry to a signed diary -> 409 ``entry_signed_immutable``."""
+    """Adding an entry to a signed diary -> 409 ``entry_signed_immutable``."""
     project_id = uuid.uuid4()
     diary = await svc.create_diary(
         DailyDiaryCreate(project_id=project_id, diary_date=_yesterday_iso()),
@@ -300,7 +300,7 @@ async def test_create_entry_on_signed_diary_returns_409(
 async def test_register_photo_on_signed_diary_returns_409(
     svc: DailyDiaryService,
 ) -> None:
-    """‌⁠‍Attaching a photo to a signed diary breaks the hash → 409 immutable."""
+    """Attaching a photo to a signed diary breaks the hash → 409 immutable."""
     project_id = uuid.uuid4()
     diary = await svc.create_diary(
         DailyDiaryCreate(project_id=project_id, diary_date=_yesterday_iso()),
@@ -327,7 +327,7 @@ async def test_register_photo_on_signed_diary_returns_409(
 async def test_delete_photo_on_signed_diary_returns_409(
     svc: DailyDiaryService,
 ) -> None:
-    """‌⁠‍Deleting a photo from a signed diary is also a hash-breaking edit."""
+    """Deleting a photo from a signed diary is also a hash-breaking edit."""
     project_id = uuid.uuid4()
     diary = await svc.create_diary(
         DailyDiaryCreate(project_id=project_id, diary_date=_yesterday_iso()),
@@ -357,7 +357,7 @@ async def test_delete_photo_on_signed_diary_returns_409(
 async def test_bulk_entries_on_signed_diary_returns_409(
     svc: DailyDiaryService,
 ) -> None:
-    """‌⁠‍Bulk insert is also gated by the signed-immutable invariant."""
+    """Bulk insert is also gated by the signed-immutable invariant."""
     project_id = uuid.uuid4()
     diary = await svc.create_diary(
         DailyDiaryCreate(project_id=project_id, diary_date=_yesterday_iso()),
@@ -379,7 +379,7 @@ async def test_bulk_entries_on_signed_diary_returns_409(
 async def test_unlock_signed_diary_reopens_to_open(
     svc: DailyDiaryService,
 ) -> None:
-    """‌⁠‍Manager unlock returns the diary to ``open`` while preserving sig."""
+    """Manager unlock returns the diary to ``open`` while preserving sig."""
     project_id = uuid.uuid4()
     diary = await svc.create_diary(
         DailyDiaryCreate(project_id=project_id, diary_date=_yesterday_iso()),
@@ -413,7 +413,7 @@ async def test_unlock_signed_diary_reopens_to_open(
 async def test_unlock_archived_diary_returns_409(
     svc: DailyDiaryService,
 ) -> None:
-    """‌⁠‍Archived diaries cannot be unlocked — terminal state."""
+    """Archived diaries cannot be unlocked — terminal state."""
     project_id = uuid.uuid4()
     diary = await svc.create_diary(
         DailyDiaryCreate(project_id=project_id, diary_date=_yesterday_iso()),
@@ -434,7 +434,7 @@ async def test_unlock_archived_diary_returns_409(
 async def test_unlock_open_diary_is_idempotent(
     svc: DailyDiaryService,
 ) -> None:
-    """‌⁠‍Unlocking an already-open diary is a no-op (idempotent)."""
+    """Unlocking an already-open diary is a no-op (idempotent)."""
     project_id = uuid.uuid4()
     diary = await svc.create_diary(
         DailyDiaryCreate(project_id=project_id, diary_date=_yesterday_iso()),
@@ -448,7 +448,7 @@ async def test_unlock_open_diary_is_idempotent(
 
 @pytest.mark.asyncio
 async def test_exif_gps_rejects_non_image_payload() -> None:
-    """‌⁠‍Random bytes posing as base64 photo -> 415 from the magic-byte gate.
+    """Random bytes posing as base64 photo -> 415 from the magic-byte gate.
 
     This is the only daily_diary endpoint that takes inline binary
     data; the guard is essential because the downstream parser (Pillow)
@@ -468,7 +468,7 @@ async def test_exif_gps_rejects_non_image_payload() -> None:
 
 @pytest.mark.asyncio
 async def test_exif_gps_rejects_pe_executable() -> None:
-    """‌⁠‍A PE-header (Windows .exe) must NOT trick the EXIF endpoint."""
+    """A PE-header (Windows .exe) must NOT trick the EXIF endpoint."""
     from app.modules.daily_diary import router as dd_router
 
     # MZ header + filler.
@@ -483,7 +483,7 @@ async def test_exif_gps_rejects_pe_executable() -> None:
 
 @pytest.mark.asyncio
 async def test_exif_gps_accepts_minimal_png() -> None:
-    """‌⁠‍Sanity: a real PNG header passes the magic-byte gate.
+    """Sanity: a real PNG header passes the magic-byte gate.
 
     The PNG is too small to actually have GPS EXIF; the endpoint
     returns ``found=False`` — but the important thing is that it gets
@@ -506,7 +506,7 @@ async def test_exif_gps_accepts_minimal_png() -> None:
 async def test_diary_repo_is_project_scoped(
     svc: DailyDiaryService,
 ) -> None:
-    """‌⁠‍Listing diaries for project A returns 0 of project B's diaries."""
+    """Listing diaries for project A returns 0 of project B's diaries."""
     proj_a = uuid.uuid4()
     proj_b = uuid.uuid4()
     await svc.create_diary(
@@ -526,7 +526,7 @@ async def test_diary_repo_is_project_scoped(
 
 @pytest.mark.asyncio
 async def test_get_diary_missing_raises_404(svc: DailyDiaryService) -> None:
-    """‌⁠‍Unknown diary id -> 404 (not 403, not 500)."""
+    """Unknown diary id -> 404 (not 403, not 500)."""
     with pytest.raises(HTTPException) as exc_info:
         await svc.get_diary(uuid.uuid4())
     assert exc_info.value.status_code == 404
@@ -536,7 +536,7 @@ async def test_get_diary_missing_raises_404(svc: DailyDiaryService) -> None:
 
 
 def test_diary_labour_count_clamped_at_10k() -> None:
-    """‌⁠‍A single-site daily diary cannot record > 10 000 workers."""
+    """A single-site daily diary cannot record > 10 000 workers."""
     with pytest.raises(ValidationError):
         DailyDiaryCreate(
             project_id=uuid.uuid4(),
@@ -546,7 +546,7 @@ def test_diary_labour_count_clamped_at_10k() -> None:
 
 
 def test_diary_equipment_count_clamped_at_5k() -> None:
-    """‌⁠‍Same clamp for equipment — protects analytics from unit-mistakes."""
+    """Same clamp for equipment — protects analytics from unit-mistakes."""
     with pytest.raises(ValidationError):
         DailyDiaryCreate(
             project_id=uuid.uuid4(),
@@ -562,7 +562,7 @@ def test_diary_equipment_count_clamped_at_5k() -> None:
 async def test_unlock_restores_entry_mutability(
     svc: DailyDiaryService,
 ) -> None:
-    """‌⁠‍After unlock, the diary is open again and entries can be added."""
+    """After unlock, the diary is open again and entries can be added."""
     project_id = uuid.uuid4()
     diary = await svc.create_diary(
         DailyDiaryCreate(project_id=project_id, diary_date=_yesterday_iso()),

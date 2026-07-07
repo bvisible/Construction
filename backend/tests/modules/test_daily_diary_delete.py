@@ -39,7 +39,7 @@ from tests._pg import transactional_session
 
 @pytest_asyncio.fixture
 async def session() -> AsyncIterator[AsyncSession]:
-    """‌⁠‍Per-test PostgreSQL session, isolated in a rolled-back transaction.
+    """Per-test PostgreSQL session, isolated in a rolled-back transaction.
 
     Foreign keys are disabled on the connection (``session_replication_role
     = replica``) so the tests can insert diary rows without materialising the
@@ -66,7 +66,7 @@ def _yesterday_iso() -> str:
 async def test_delete_diary_then_get_raises_404(
     svc: DailyDiaryService,
 ) -> None:
-    """‌⁠‍Open diary deletes cleanly; a subsequent fetch is 404."""
+    """Open diary deletes cleanly; a subsequent fetch is 404."""
     project_id = uuid.uuid4()
     diary = await svc.create_diary(
         DailyDiaryCreate(project_id=project_id, diary_date=_yesterday_iso()),
@@ -96,7 +96,7 @@ async def test_delete_diary_then_get_raises_404(
 async def test_delete_signed_diary_returns_409(
     svc: DailyDiaryService,
 ) -> None:
-    """‌⁠‍Signed diaries cannot be deleted — same immutability shield as PATCH."""
+    """Signed diaries cannot be deleted — same immutability shield as PATCH."""
     project_id = uuid.uuid4()
     diary = await svc.create_diary(
         DailyDiaryCreate(project_id=project_id, diary_date=_yesterday_iso()),
@@ -123,7 +123,7 @@ async def test_delete_signed_diary_returns_409(
 async def test_delete_archived_diary_returns_409(
     svc: DailyDiaryService,
 ) -> None:
-    """‌⁠‍Archived (terminal) diaries also rejected from delete."""
+    """Archived (terminal) diaries also rejected from delete."""
     project_id = uuid.uuid4()
     diary = await svc.create_diary(
         DailyDiaryCreate(project_id=project_id, diary_date=_yesterday_iso()),
@@ -149,7 +149,7 @@ async def test_delete_archived_diary_returns_409(
 async def test_delete_unknown_diary_returns_404(
     svc: DailyDiaryService,
 ) -> None:
-    """‌⁠‍Deleting a non-existent diary surfaces 404, not a 500."""
+    """Deleting a non-existent diary surfaces 404, not a 500."""
     with pytest.raises(HTTPException) as exc_info:
         await svc.delete_diary(uuid.uuid4())
     assert exc_info.value.status_code == 404

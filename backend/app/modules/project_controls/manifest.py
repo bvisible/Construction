@@ -1,5 +1,5 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
-"""‌⁠‍Project Controls module manifest.
+"""Project Controls module manifest.
 
 A thin, read-only consumer module (connective-tissue feature 09). It joins
 the cost spine, schedule, quality, safety, risk and change data into one

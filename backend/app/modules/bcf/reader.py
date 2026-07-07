@@ -1,5 +1,5 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
-"""‌⁠‍BCF 3.0 zip reader - mirror of :mod:`app.modules.bcf.writer`.
+"""BCF 3.0 zip reader - mirror of :mod:`app.modules.bcf.writer`.
 
 Why a second parser?
 --------------------
@@ -93,15 +93,15 @@ _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 
 
 class BCFReaderError(Exception):
-    """‌⁠‍Base class for all reader-emitted errors."""
+    """Base class for all reader-emitted errors."""
 
 
 class BCFSecurityError(BCFReaderError):
-    """‌⁠‍A zip-bomb, path-traversal or absurd member size was detected."""
+    """A zip-bomb, path-traversal or absurd member size was detected."""
 
 
 class BCFFormatError(BCFReaderError):
-    """‌⁠‍The bytes are not a BCF ``.bcfzip`` (no ``bcf.version``, bad zip)."""
+    """The bytes are not a BCF ``.bcfzip`` (no ``bcf.version``, bad zip)."""
 
 
 # ── DTOs (all frozen, all tuples) ──────────────────────────────────────────
@@ -334,7 +334,7 @@ def _is_safe_guid(guid: str) -> bool:
 
 
 class BCFReader:
-    """‌⁠‍Read a BCF 3.0 ``.bcfzip`` into immutable :class:`ParsedBCF` DTOs.
+    """Read a BCF 3.0 ``.bcfzip`` into immutable :class:`ParsedBCF` DTOs.
 
     Usage
     -----

@@ -1,10 +1,10 @@
-"""‌⁠‍Bid Management module permission definitions."""
+"""Bid Management module permission definitions."""
 
 from app.core.permissions import Role, permission_registry
 
 
 def register_bid_management_permissions() -> None:
-    """‌⁠‍Register permissions for the bid_management module."""
+    """Register permissions for the bid_management module."""
     permission_registry.register_module_permissions(
         "bid_management",
         {

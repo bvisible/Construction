@@ -1,4 +1,4 @@
-"""‌⁠‍Schedule Advanced data access layer.
+"""Schedule Advanced data access layer.
 
 One repository per entity, mirroring the pattern used by ``safety/repository.py``.
 """
@@ -30,7 +30,7 @@ from app.modules.schedule_advanced.models import (
 
 
 class _BaseRepo:
-    """‌⁠‍Generic CRUD helpers shared by all repositories."""
+    """Generic CRUD helpers shared by all repositories."""
 
     model: type
 
@@ -63,7 +63,7 @@ class _BaseRepo:
 
 
 class MasterScheduleRepository(_BaseRepo):
-    """‌⁠‍CRUD for :class:`MasterSchedule`."""
+    """CRUD for :class:`MasterSchedule`."""
 
     model = MasterSchedule
 

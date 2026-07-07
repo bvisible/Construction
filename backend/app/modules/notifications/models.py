@@ -1,4 +1,4 @@
-"""‌⁠‍Notification ORM models.
+"""Notification ORM models.
 
 Tables:
     oe_notifications_notification - per-user in-app notifications
@@ -26,7 +26,7 @@ from app.database import GUID, Base
 
 
 class Notification(Base):
-    """‌⁠‍In-app notification for a single user.
+    """In-app notification for a single user.
 
     Notifications use i18n keys (``title_key``, ``body_key``) so the frontend
     can render them in the user's locale.  ``body_context`` carries interpolation
@@ -77,7 +77,7 @@ class Notification(Base):
 
 
 class NotificationPreference(Base):
-    """‌⁠‍Per-user, per-event-type, per-channel notification routing.
+    """Per-user, per-event-type, per-channel notification routing.
 
     Looked up by :func:`NotificationService.enqueue_or_dispatch` to decide
     whether to dispatch an event to the in-app sink immediately, route it
@@ -124,7 +124,7 @@ class NotificationPreference(Base):
 
 
 class NotificationDigestQueue(Base):
-    """‌⁠‍Queued notification payload waiting for the next digest flush.
+    """Queued notification payload waiting for the next digest flush.
 
     ``scheduled_for`` is set when the row is created - ``now() + interval``
     where the interval depends on the user's chosen digest cadence
@@ -172,7 +172,7 @@ class NotificationDigestQueue(Base):
 
 
 class WebhookTarget(Base):
-    """‌⁠‍Admin-managed webhook endpoint that consumes ``notifications.dispatch.webhook``.
+    """Admin-managed webhook endpoint that consumes ``notifications.dispatch.webhook``.
 
     Each row is one outbound POST destination.  When the notification
     dispatcher fires a ``webhook`` channel, every active target whose

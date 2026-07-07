@@ -1,4 +1,4 @@
-"""‌⁠‍Security & audit-trail hardening tests for the hse_advanced module.
+"""Security & audit-trail hardening tests for the hse_advanced module.
 
 Covers Round-3 Wave F sweep findings:
 

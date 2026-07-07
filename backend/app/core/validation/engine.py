@@ -1,4 +1,4 @@
-"""‌⁠‍Validation engine - configurable rule-based data validation.
+"""Validation engine - configurable rule-based data validation.
 
 This is a FIRST-CLASS component of OpenEstimate. Every data import and
 modification passes through validation. Rules are organized into rule sets
@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 
 class Severity(StrEnum):
-    """‌⁠‍Validation result severity."""
+    """Validation result severity."""
 
     ERROR = "error"  # Blocks workflow - must be resolved
     WARNING = "warning"  # Flags issue - can proceed with acknowledgment
@@ -36,7 +36,7 @@ class Severity(StrEnum):
 
 
 class ValidationStatus(StrEnum):
-    """‌⁠‍Overall validation status."""
+    """Overall validation status."""
 
     PASSED = "passed"  # No errors, no warnings, no failing info
     WARNINGS = "warnings"  # Warnings only, no errors

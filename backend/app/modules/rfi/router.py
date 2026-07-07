@@ -1,4 +1,4 @@
-"""‌⁠‍RFI API routes.
+"""RFI API routes.
 
 Endpoints:
     GET    /                              - List RFIs for a project
@@ -82,7 +82,7 @@ def _get_service(session: SessionDep) -> RFIService:
 
 
 def _compute_rfi_fields(item: object) -> tuple[bool, int]:
-    """‌⁠‍Compute is_overdue and days_open for an RFI item."""
+    """Compute is_overdue and days_open for an RFI item."""
     now = datetime.now(UTC)
 
     # days_open: from created_at to now (or responded_at if answered/closed)
@@ -187,7 +187,7 @@ async def list_rfis(
     ),
     service: RFIService = Depends(_get_service),
 ) -> list[RFIResponse]:
-    """‌⁠‍List RFIs for a project."""
+    """List RFIs for a project."""
     await verify_project_access(project_id, user_id, session)
     # PERF: this endpoint returns a bare ``list[RFIResponse]`` and discards
     # the total, so skip the extra ``COUNT(*)`` scan the repository would
@@ -787,7 +787,7 @@ async def upload_rfi_attachment(
     _perm: None = Depends(RequirePermission("rfi.update")),
     service: RFIService = Depends(_get_service),
 ) -> RFIResponse:
-    """‌⁠‍Upload a reply attachment for an RFI (magic-byte gated).
+    """Upload a reply attachment for an RFI (magic-byte gated).
 
     The ``Content-Type`` header is attacker-controlled, so we ignore it
     and inspect the raw magic bytes via :func:`require_signature`
@@ -901,7 +901,7 @@ async def download_rfi_attachment(
     user_id: CurrentUserId = None,  # type: ignore[assignment]
     service: RFIService = Depends(_get_service),
 ) -> FileResponse:
-    """‌⁠‍Serve a stored RFI reply attachment by its list index.
+    """Serve a stored RFI reply attachment by its list index.
 
     The ``attachments`` column holds server-derived relative paths only;
     the index addresses an entry rather than letting the client name a

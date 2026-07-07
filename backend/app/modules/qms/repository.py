@@ -1,4 +1,4 @@
-"""‌⁠‍QMS data-access layer.
+"""QMS data-access layer.
 
 Thin wrapper around :class:`AsyncSession` providing CRUD helpers per
 entity. All update writes use ``UPDATE ... WHERE id = :id`` to avoid
@@ -35,7 +35,7 @@ from app.modules.qms.models import (
 
 
 class QMSRepository:
-    """‌⁠‍Async CRUD for every QMS model."""
+    """Async CRUD for every QMS model."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -455,7 +455,7 @@ class QMSRepository:
     # ── Analytics helpers ──────────────────────────────────────────────
 
     async def sum_ncr_cost_impact(self, project_id: uuid.UUID) -> Any:
-        """‌⁠‍Sum cost_impact_amount for non-cancelled NCRs in a project.
+        """Sum cost_impact_amount for non-cancelled NCRs in a project.
 
         .. deprecated::
             Sums across mixed currencies - callers that build a COPQ total
@@ -472,7 +472,7 @@ class QMSRepository:
         self,
         project_id: uuid.UUID,
     ) -> dict[str, Decimal]:
-        """‌⁠‍Sum cost_impact_amount per currency for non-cancelled NCRs.
+        """Sum cost_impact_amount per currency for non-cancelled NCRs.
 
         Keeps currencies separate so the service can FX-convert each bucket
         into the project base currency rather than blindly coalesce-summing

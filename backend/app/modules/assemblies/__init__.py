@@ -1,4 +1,4 @@
-"""‌⁠‍Assemblies & Calculations module.
+"""Assemblies & Calculations module.
 
 Provides composite cost items (assemblies / calculations) built from
 cost database entries with factors. Supports templates, regional factors,
@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 
 async def on_startup() -> None:
-    """‌⁠‍Module startup hook - register permissions, subscribers, and seed
+    """Module startup hook - register permissions, subscribers, and seed
     the platform-wide Assembly Library templates (idempotent)."""
     from app.modules.assemblies.events import register_assemblies_subscribers
     from app.modules.assemblies.permissions import register_assemblies_permissions

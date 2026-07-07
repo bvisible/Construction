@@ -34,12 +34,14 @@ import logging
 import os
 import re
 import uuid
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from app.dependencies import (
     CurrentUserId,
     RequirePermission,
+    RequirePermissionOrApiKey,
     SessionDep,
     verify_project_access,
 )
@@ -190,15 +192,11 @@ def _parse_project_id(value: str) -> uuid.UUID:
 # --- Endpoints --------------------------------------------------------------
 
 
-@router.post(
-    "/email",
-    response_model=InboundMessageOut,
-    dependencies=[Depends(RequirePermission("inbound.write"))],
-)
+@router.post("/email", response_model=InboundMessageOut)
 async def capture_inbound_email(
     payload: InboundEmailRequest,
     session: SessionDep,
-    user_id: CurrentUserId = None,  # type: ignore[assignment]
+    user_id: Annotated[str, Depends(RequirePermissionOrApiKey("inbound.write"))],
 ) -> InboundMessageOut:
     """Capture an already-parsed inbound email as incoming correspondence.
 
@@ -207,6 +205,9 @@ async def capture_inbound_email(
     ``correspondence.created``. Capturing the same email again (same message id)
     returns the existing row with ``deduplicated=true`` instead of creating a
     duplicate.
+
+    Auth accepts either an interactive JWT bearer or an ``X-API-Key`` for a
+    headless caller; both must resolve to a role that holds ``inbound.write``.
     """
     project_id = _parse_project_id(payload.project_id)
     await verify_project_access(project_id, user_id or "", session)
@@ -215,16 +216,12 @@ async def capture_inbound_email(
     return _serialize(row, deduplicated=deduplicated)
 
 
-@router.post(
-    "/{provider}/webhook",
-    response_model=InboundMessageOut,
-    dependencies=[Depends(RequirePermission("inbound.write"))],
-)
+@router.post("/{provider}/webhook", response_model=InboundMessageOut)
 async def capture_inbound_webhook(
     provider: str,
     request: Request,
     session: SessionDep,
-    user_id: CurrentUserId = None,  # type: ignore[assignment]
+    user_id: Annotated[str, Depends(RequirePermissionOrApiKey("inbound.write"))],
 ) -> InboundMessageOut:
     """Capture a provider chat / SMS webhook delivery as incoming correspondence.
 

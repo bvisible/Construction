@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍Smart Value Autocomplete (T03).
+"""Smart Value Autocomplete (T03).
 
 Given a snapshot and a column name, return distinct values matching a
 substring query - fast enough for snapshots with 100k+ rows.
@@ -48,7 +48,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class ValueMatch:
-    """‌⁠‍One autocomplete suggestion."""
+    """One autocomplete suggestion."""
 
     value: str
     count: int
@@ -59,7 +59,7 @@ class ValueMatch:
 
 
 class ColumnNotFoundError(LookupError):
-    """‌⁠‍Raised when ``column`` does not exist in the snapshot's schema."""
+    """Raised when ``column`` does not exist in the snapshot's schema."""
 
 
 # ── Constants ──────────────────────────────────────────────────────────────

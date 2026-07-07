@@ -100,6 +100,12 @@ const IMPERIAL_DISPLAY: Record<string, string> = {
   lft: 'l.ft',
   ac: 'ac',
   gal: 'gal',
+  // US construction trade units (GitHub #320).
+  cy: 'cu yd',
+  yd3: 'cu yd',
+  bdft: 'bd ft',
+  yd2: 'sq yd',
+  sq: 'sq',
 };
 
 /**
@@ -286,4 +292,118 @@ export function fromDisplayRate(
   system: 'metric' | 'imperial',
 ): number {
   return rate * conversionFactorFor(metricUnit, system);
+}
+
+/**
+ * Dimension-grouped conversion factors, the twin of `_DIMENSION_FACTORS` in
+ * the backend `unit_conversion.py`. Each inner value is "how many of this unit
+ * equal ONE metric base unit of the dimension" (base: m for length, m2 for
+ * area, m3 for volume, kg for mass, one item for count). This is what lets a
+ * quantity move between two units of the SAME dimension (m3 -> cu yd, m2 ->
+ * roofing square), which the metric<->imperial path above deliberately does not
+ * do. It also carries the US construction trade units (GitHub #320): cubic
+ * yards, board feet and roofing squares. Factors are kept byte-identical to the
+ * backend table so a browser conversion and a server conversion agree.
+ */
+const DIMENSION_FACTORS: Record<string, Record<string, number>> = {
+  length: {
+    m: 1,
+    lm: 1,
+    cm: 100,
+    mm: 1000,
+    km: 0.001,
+    ft: 3.2808399,
+    lft: 3.2808399,
+    in: 39.3700787,
+    yd: 1.0936133,
+    mi: 0.000621371,
+  },
+  area: {
+    m2: 1,
+    dm2: 100,
+    cm2: 10000,
+    mm2: 1000000,
+    ha: 0.0001,
+    ft2: 10.7639,
+    sft: 10.7639,
+    sqft: 10.7639,
+    in2: 1550.0031,
+    yd2: 1.19599,
+    sqyd: 1.19599,
+    ac: 0.000247105,
+    // Roofing square: 1 square = 100 sq ft = 9.290304 m2 (GitHub #320).
+    sq: 0.107639,
+  },
+  volume: {
+    m3: 1,
+    l: 1000,
+    ft3: 35.3147,
+    cft: 35.3147,
+    // Cubic yard and its common spellings (GitHub #320).
+    cy: 1.30795,
+    cuyd: 1.30795,
+    yd3: 1.30795,
+    // Board foot: 1 m3 = 423.776 board feet (GitHub #320).
+    bdft: 423.776,
+    bf: 423.776,
+    gal: 264.172052,
+  },
+  mass: {
+    kg: 1,
+    g: 1000,
+    t: 0.001,
+    lb: 2.20462,
+    ton: 0.00110231,
+  },
+  count: {
+    pcs: 1,
+    ea: 1,
+    nr: 1,
+    no: 1,
+    stk: 1,
+    unit: 1,
+    count: 1,
+  },
+};
+
+/** Reverse index: unit code -> its dimension, built once from the table. */
+const UNIT_DIMENSION: Record<string, string> = Object.fromEntries(
+  Object.entries(DIMENSION_FACTORS).flatMap(([dimension, units]) =>
+    Object.keys(units).map((unit) => [unit, dimension]),
+  ),
+);
+
+/** Fold a unit code to its dimension-table key (superscripts -> 2 / 3). */
+function dimensionKey(unit: string | null | undefined): string {
+  return (unit ?? '').trim().toLowerCase().replace('²', '2').replace('³', '3');
+}
+
+/**
+ * Convert a quantity from one unit into another of the SAME dimension. Returns
+ * `null` when the conversion is not defined and the caller must refuse rather
+ * than guess (the twin of the backend `convert_between`). Used when a takeoff
+ * measurement is linked to a BOQ position priced in a different unit (GitHub
+ * #319): a value measured in m3 linked to a position priced per cubic yard is
+ * converted to cubic yards before it is stored, so an already-priced position
+ * is not silently mis-priced.
+ *
+ * A missing unit on either side, or the same unit both sides, returns the value
+ * unchanged. Different dimensions, or a unit the table does not know, return
+ * `null` so the caller flags the mismatch instead of writing a wrong number.
+ */
+export function convertBetween(
+  value: number,
+  fromUnit: string | null | undefined,
+  toUnit: string | null | undefined,
+): number | null {
+  const src = dimensionKey(fromUnit);
+  const dst = dimensionKey(toUnit);
+  if (!src || !dst || src === dst) return value;
+  const dimSrc = UNIT_DIMENSION[src];
+  const dimDst = UNIT_DIMENSION[dst];
+  if (!dimSrc || !dimDst || dimSrc !== dimDst) return null;
+  const perBaseSrc = DIMENSION_FACTORS[dimSrc]?.[src];
+  const perBaseDst = DIMENSION_FACTORS[dimDst]?.[dst];
+  if (!perBaseSrc || perBaseDst === undefined) return null;
+  return (value * perBaseDst) / perBaseSrc;
 }

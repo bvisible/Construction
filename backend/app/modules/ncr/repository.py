@@ -1,4 +1,4 @@
-"""‌⁠‍NCR data access layer."""
+"""NCR data access layer."""
 
 import uuid
 
@@ -15,7 +15,7 @@ _NUMBER_RETRY_LIMIT = 5
 
 
 class NCRRepository:
-    """‌⁠‍Data access for NCR models."""
+    """Data access for NCR models."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -49,7 +49,7 @@ class NCRRepository:
         return list(result.scalars().all()), total
 
     async def next_ncr_number(self, project_id: uuid.UUID) -> str:
-        """‌⁠‍Generate the next ``NCR-NNN`` number using MAX to avoid duplicates.
+        """Generate the next ``NCR-NNN`` number using MAX to avoid duplicates.
 
         Only rows whose number matches the canonical ``NCR-<digits>`` shape are
         considered. PostgreSQL casts an empty or non-numeric string to integer

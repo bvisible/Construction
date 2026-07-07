@@ -1,10 +1,10 @@
-"""‌⁠‍Validation module permission definitions."""
+"""Validation module permission definitions."""
 
 from app.core.permissions import Role, permission_registry
 
 
 def register_validation_permissions() -> None:
-    """‌⁠‍Register permissions for the Validation module.
+    """Register permissions for the Validation module.
 
     Validation reports are read-often/write-rarely artifacts tied to a
     project. Reads follow the standard VIEWER tier while delete is

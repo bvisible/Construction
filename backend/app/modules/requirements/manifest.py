@@ -1,4 +1,4 @@
-"""‌⁠‍Requirements & Quality Gates module manifest."""
+"""Requirements & Quality Gates module manifest."""
 
 from app.core.module_loader import ModuleManifest
 

@@ -1,4 +1,4 @@
-"""‌⁠‍DWG Takeoff ORM models.
+"""DWG Takeoff ORM models.
 
 Tables:
     oe_dwg_takeoff_drawing          - uploaded DWG/DXF drawing files
@@ -26,7 +26,7 @@ _SCALE_NUMERIC = Numeric(10, 6)
 
 
 class DwgDrawing(Base):
-    """‌⁠‍Uploaded DWG/DXF drawing file."""
+    """Uploaded DWG/DXF drawing file."""
 
     __tablename__ = "oe_dwg_takeoff_drawing"
 
@@ -81,7 +81,7 @@ class DwgDrawing(Base):
 
 
 class DwgDrawingVersion(Base):
-    """‌⁠‍Parsed version of a DWG/DXF drawing with extracted layers and entities."""
+    """Parsed version of a DWG/DXF drawing with extracted layers and entities."""
 
     __tablename__ = "oe_dwg_takeoff_drawing_version"
 

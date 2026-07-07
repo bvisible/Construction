@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍Connector contracts for the finance ERP / accounting integration surface.
+"""Connector contracts for the finance ERP / accounting integration surface.
 
 Design rules baked into the contract:
 
@@ -40,7 +40,7 @@ class ConnectorConfigError(ConnectorError):
 
 
 def to_decimal(value: Any, default: Decimal = Decimal("0")) -> Decimal:
-    """‌⁠‍Best-effort coercion of a cell value to ``Decimal`` - never raises.
+    """Best-effort coercion of a cell value to ``Decimal`` - never raises.
 
     Tolerates the thousands/decimal-separator noise that real accounting
     exports carry (``"1,234.50"``, ``"1 234,50"``) by stripping spaces and,

@@ -1,4 +1,4 @@
-"""‌⁠‍Periodic predictive-forecast batch job (TOP-30 #19).
+"""Periodic predictive-forecast batch job (TOP-30 #19).
 
 Registers a ``full_evm.forecast_batch`` handler with the platform job
 runner. The handler recomputes the EVM forecast for every project that
@@ -72,7 +72,7 @@ async def _projects_with_snapshots(session: Any) -> list[uuid.UUID]:
 
 
 async def run_forecast_batch_job(job_run: JobRun, payload: dict[str, Any]) -> dict[str, Any]:
-    """‌⁠‍Job handler: recompute forecasts + fire alerts for a set of projects.
+    """Job handler: recompute forecasts + fire alerts for a set of projects.
 
     Payload:
         project_ids: list[str] | None - explicit project scope, or null/absent
@@ -124,6 +124,6 @@ async def run_forecast_batch_job(job_run: JobRun, payload: dict[str, Any]) -> di
 
 
 def register_forecast_job_handler() -> None:
-    """‌⁠‍Register the forecast-batch handler with the job runner (idempotent)."""
+    """Register the forecast-batch handler with the job runner (idempotent)."""
     register_handler(JOB_KIND, run_forecast_batch_job)
     logger.info("Full EVM: forecast batch job handler registered (kind=%s)", JOB_KIND)

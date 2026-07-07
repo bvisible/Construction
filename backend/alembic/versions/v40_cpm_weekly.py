@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍CPM Slice 1: WeeklyCommitment table for Last-Planner percent-plan-complete.
+"""CPM Slice 1: WeeklyCommitment table for Last-Planner percent-plan-complete.
 
 Adds a single strictly-additive table
 ``oe_schedule_advanced_weekly_commitment`` that stores a per-activity,

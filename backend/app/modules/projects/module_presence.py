@@ -1,5 +1,5 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
-"""‌⁠‍Project module-presence probe.
+"""Project module-presence probe.
 
 A lightweight scanner that answers: *"does project X have any data in
 module Y?"* - one boolean per sidebar module. The frontend uses the

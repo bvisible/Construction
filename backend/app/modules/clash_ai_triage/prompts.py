@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍Prompt templates for LLM-assisted clash triage.
+"""Prompt templates for LLM-assisted clash triage.
 
 WHY THIS FILE IS IN THE REPO
 ============================
@@ -256,7 +256,7 @@ def build_user_prompt(
     clash: Mapping[str, Any],
     prior: Mapping[str, Any] | None = None,
 ) -> str:
-    """‌⁠‍Render ``USER_PROMPT_V1`` with the supplied clash evidence.
+    """Render ``USER_PROMPT_V1`` with the supplied clash evidence.
 
     Args:
         clash: Mapping of clash fields. Required keys are documented

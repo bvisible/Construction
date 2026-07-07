@@ -1,4 +1,4 @@
-"""‌⁠‍Risk Register service - business logic for risk management.
+"""Risk Register service - business logic for risk management.
 
 Stateless service layer. Handles:
 - Risk CRUD with auto-generated codes (R-001, R-002, ...)
@@ -35,7 +35,7 @@ async def _safe_publish(
     data: dict[str, Any],
     source_module: str = "oe_risk",
 ) -> None:
-    """‌⁠‍Publish event safely - best-effort, never blocks the caller."""
+    """Publish event safely - best-effort, never blocks the caller."""
     try:
         event_bus.publish_detached(name, data, source_module=source_module)
     except Exception:
@@ -67,7 +67,7 @@ IMPACT_SCORE_MAP: dict[str, int] = dict(SEVERITY_NUMERIC)
 
 
 def _probability_to_score(probability: float) -> int:
-    """‌⁠‍Map probability (0.0-1.0) to a 1-5 score for the 5x5 matrix."""
+    """Map probability (0.0-1.0) to a 1-5 score for the 5x5 matrix."""
     for threshold, score in PROBABILITY_SCORE_MAP:
         if probability <= threshold:
             return score
@@ -782,7 +782,7 @@ class RiskService:
 
 
 def _safe_float(value: object, default: float = 0.0) -> float:
-    """‌⁠‍Coerce a stored string/Decimal/None numeric to a finite float safely."""
+    """Coerce a stored string/Decimal/None numeric to a finite float safely."""
     if value is None or value == "":
         return default
     try:

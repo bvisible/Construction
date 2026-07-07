@@ -1,4 +1,4 @@
-"""‌⁠‍Safety module event registry and cross-module subscribers.
+"""Safety module event registry and cross-module subscribers.
 
 Events the safety module *publishes* (canonical names, payload shapes):
 
@@ -33,7 +33,7 @@ _SUBSCRIBED_FLAG = "_safety_subscribers_registered"
 
 
 async def _on_threshold_alert(event: Event) -> None:
-    """‌⁠‍``safety.threshold_alert_triggered`` → BI KPI recompute nudge.
+    """``safety.threshold_alert_triggered`` → BI KPI recompute nudge.
 
     A non-green LTIFR/TRIR is the signal BI dashboards watch to refresh the
     safety-rate gauges. We forward a narrow KPI code list so the recompute
@@ -62,7 +62,7 @@ async def _on_threshold_alert(event: Event) -> None:
 
 
 def register_subscribers() -> None:
-    """‌⁠‍Idempotently subscribe the safety module's cross-module handlers."""
+    """Idempotently subscribe the safety module's cross-module handlers."""
     if getattr(event_bus, _SUBSCRIBED_FLAG, False):
         return
     event_bus.subscribe("safety.threshold_alert_triggered", _on_threshold_alert)

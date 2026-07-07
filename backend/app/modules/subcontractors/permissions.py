@@ -1,4 +1,4 @@
-"""‌⁠‍Subcontractor module permission definitions.
+"""Subcontractor module permission definitions.
 
 Round 5 hardening (v4.3.0): ``rate`` and ``block`` carved out into their
 own permissions because conflating them with the generic ``update`` gate
@@ -10,7 +10,7 @@ from app.core.permissions import Role, permission_registry
 
 
 def register_subcontractors_permissions() -> None:
-    """‌⁠‍Register permissions for the subcontractors module."""
+    """Register permissions for the subcontractors module."""
     permission_registry.register_module_permissions(
         "subcontractors",
         {

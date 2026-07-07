@@ -35,6 +35,11 @@ export interface FileCommentResponse {
   file_version_id: string | null;
   parent_id: string | null;
   author_id: string;
+  /** Pre-resolved display label for ``author_id`` (full name, falling
+   *  back to email, then a short id). Server-side enrichment - render
+   *  this instead of slicing the raw id. NULL only for legacy payloads
+   *  predating the enrichment; fall back to a short id then. */
+  author_name: string | null;
   body: string;
   page_number: number | null;
   anchor_x: number | null;

@@ -1,4 +1,4 @@
-"""‌⁠‍Hand-rolled BCF-XML codec for BCF **2.1** and **3.0**.
+"""Hand-rolled BCF-XML codec for BCF **2.1** and **3.0**.
 
 Why hand-rolled?
     the architecture guide §3 forbids an IfcOpenShell / xBIM runtime dependency. BCF is
@@ -82,7 +82,7 @@ _MAX_SINGLE_ENTRY_BYTES = 256 * 1024 * 1024  # 256 MiB per member
 
 
 class BCFParseError(Exception):
-    """‌⁠‍Raised for an irrecoverably malformed ``.bcfzip``.
+    """Raised for an irrecoverably malformed ``.bcfzip``.
 
     The router catches this and turns it into a structured 422 report - it
     must never surface as a 500.
@@ -91,7 +91,7 @@ class BCFParseError(Exception):
 
 @dataclass
 class ParsedViewpoint:
-    """‌⁠‍Codec-level viewpoint DTO (decoupled from the ORM model)."""
+    """Codec-level viewpoint DTO (decoupled from the ORM model)."""
 
     guid: str
     camera_type: str = ""  # "perspective" | "orthogonal" | ""

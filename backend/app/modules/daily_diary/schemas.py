@@ -1,4 +1,4 @@
-"""‌⁠‍Daily Site Diary Pydantic schemas - request/response models (Pydantic v2)."""
+"""Daily Site Diary Pydantic schemas - request/response models (Pydantic v2)."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 
 def _validate_storage_url(value: str | None) -> str | None:
-    """‌⁠‍Reject non-http(s) URLs for stored asset references.
+    """Reject non-http(s) URLs for stored asset references.
 
     Photo / video / drone-ortho / point-cloud URLs are rendered by the
     diary UI as ``<img>`` / ``<a href>`` links. Allowing
@@ -76,7 +76,7 @@ _MAX_EQUIPMENT_COUNT = 5_000
 
 
 class DailyDiaryCreate(BaseModel):
-    """‌⁠‍Create a new daily diary."""
+    """Create a new daily diary."""
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
@@ -91,7 +91,7 @@ class DailyDiaryCreate(BaseModel):
 
 
 class DailyDiaryUpdate(BaseModel):
-    """‌⁠‍Partial update for a daily diary."""
+    """Partial update for a daily diary."""
 
     model_config = ConfigDict(str_strip_whitespace=True)
 

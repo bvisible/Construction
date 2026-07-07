@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍Saved-views event names.
+"""Saved-views event names.
 
 Thin event identifiers other modules can subscribe to (the dashboards /
 automation layers later consume these). The event bus publish/subscribe lives in

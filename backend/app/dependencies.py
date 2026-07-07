@@ -1,4 +1,4 @@
-"""‌⁠‍Dependency injection container​‌‍⁠​‌‍⁠​‌‍⁠​‌‍⁠.
+"""Dependency injection container​‌‍⁠​‌‍⁠​‌‍⁠​‌‍⁠.
 
 Provides FastAPI dependencies for database sessions, current user,
 permission checks, and validation engine access.
@@ -45,7 +45,7 @@ bearer_scheme = HTTPBearer(auto_error=False)
 
 
 async def get_session() -> AsyncSession:  # type: ignore[misc]
-    """‌⁠‍Yield an async database session with auto-commit/rollback."""
+    """Yield an async database session with auto-commit/rollback."""
     async with async_session_factory() as session:
         try:
             yield session  # type: ignore[misc]
@@ -69,7 +69,7 @@ def decode_access_token(
     *,
     expected_type: str | None = "access",
 ) -> dict[str, Any]:
-    """‌⁠‍Decode and validate a JWT access token.
+    """Decode and validate a JWT access token.
 
     Args:
         token: JWT string.
@@ -407,6 +407,73 @@ class RequirePermission:
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Missing permission: {self.permission}",
             )
+
+
+class RequirePermissionOrApiKey:
+    """Permission gate that accepts either a JWT bearer or an ``X-API-Key``.
+
+    For an interactive caller that presents a bearer token it behaves exactly
+    like :class:`RequirePermission`: the ``admin`` role bypasses, and a stale JWT
+    issued before a role->permission change still passes through the live
+    registry (issue #101). For a headless caller that presents no usable bearer
+    token it authenticates with the ``X-API-Key`` mechanism
+    (:func:`get_user_from_api_key`) and applies the identical role->permission
+    check to the key's owning user. Either way the same permission is required,
+    so opening a route to machine callers never lowers its authorization bar.
+
+    Unlike :class:`RequirePermission` (which returns ``None`` and is used in a
+    route's ``dependencies=[...]``), this resolves and RETURNS the caller's user
+    id, so a handler can attribute the rows it creates to whoever called, JWT
+    user or API-key owner alike. Wire it as a normal parameter dependency::
+
+        async def capture(
+            ...,
+            user_id: Annotated[str, Depends(RequirePermissionOrApiKey("inbound.write"))],
+        ): ...
+
+    This is the first route-level use of the ``X-API-Key`` mechanism, which was
+    defined in this module but previously wired into no permission-gated route.
+    """
+
+    def __init__(self, permission: str) -> None:
+        self.permission = permission
+
+    async def __call__(
+        self,
+        request: Request,
+        payload: Annotated[dict[str, Any] | None, Depends(get_optional_user_payload)],
+    ) -> str:
+        # Interactive caller: a valid bearer token was presented. Attribute the
+        # work to the JWT subject, exactly as RequirePermission would gate it.
+        if payload is not None:
+            self._authorize(payload.get("role", "") or "", payload.get("permissions", []))
+            return str(payload["sub"])
+        # Headless caller: no usable bearer token, so require a valid X-API-Key.
+        # Its own 401 (missing / unknown / expired key, or inactive owner)
+        # propagates unchanged; a valid key resolves to its owning user.
+        user = await get_user_from_api_key(request)
+        self._authorize(getattr(user, "role", "") or "", None)
+        return str(user.id)
+
+    def _authorize(self, role: str, permissions: list[str] | None) -> None:
+        """Apply the shared role->permission check; raise 403 when it fails.
+
+        ``permissions`` is the JWT's baked-in permission list for a bearer
+        caller, or ``None`` for an API-key caller (whose token carries no such
+        list), in which case the decision rests entirely on the live registry.
+        """
+        if role == "admin":
+            return
+        if permissions is not None and self.permission in permissions:
+            return
+        from app.core.permissions import permission_registry as _reg
+
+        if _reg.role_has_permission(role, self.permission):
+            return
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Missing permission: {self.permission}",
+        )
 
 
 class RequireRole:

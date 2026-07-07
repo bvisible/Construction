@@ -1,5 +1,5 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
-"""‌⁠‍BI Dashboards & Reporting module manifest.
+"""BI Dashboards & Reporting module manifest.
 
 Read-only module that consumes data from every other module and produces:
 

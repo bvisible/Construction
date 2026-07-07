@@ -1,4 +1,4 @@
-"""‌⁠‍Contacts data access layer.
+"""Contacts data access layer.
 
 All database queries for contacts live here.
 No business logic - pure data access.
@@ -15,7 +15,7 @@ from app.modules.contacts.models import Contact
 
 
 def _tenant_scope(owner_id: str):  # type: ignore[no-untyped-def]
-    """‌⁠‍Produce the WHERE clause that scopes contacts to ``owner_id``.
+    """Produce the WHERE clause that scopes contacts to ``owner_id``.
 
     Prefers the ``tenant_id`` column (populated from v2.3.1 onwards) and
     falls back to ``created_by`` so rows inserted before the migration
@@ -26,7 +26,7 @@ def _tenant_scope(owner_id: str):  # type: ignore[no-untyped-def]
 
 
 class ContactRepository:
-    """‌⁠‍Data access for Contact model."""
+    """Data access for Contact model."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session

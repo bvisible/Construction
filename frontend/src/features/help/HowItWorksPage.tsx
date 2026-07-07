@@ -79,6 +79,7 @@ import {
 } from 'lucide-react';
 
 import { ModuleGuide, type ModuleGuideContent } from '@/shared/ui';
+import { StepScene } from '@/features/cases/StepScene';
 import {
   MODULE_EXPLANATIONS,
   groupByCategory,
@@ -221,6 +222,13 @@ function ModuleCard({ module, expanded, onToggle, onLocate, onOpen }: CardProps)
       {/* Detail panel. */}
       {expanded && (
         <div id={panelId} className="px-4 pb-4">
+          {/* Line-art visual of what this module does (reuses the cases scenes). */}
+          <StepScene
+            icon={module.icon}
+            fallbackIcon={Icon}
+            title={title}
+            className="mb-3 h-28 w-full"
+          />
           <div className="rounded-xl bg-surface-secondary/50 p-3.5">
             <p className="text-[13px] leading-relaxed text-content-secondary">{what}</p>
 
@@ -351,7 +359,7 @@ export function HowItWorksPage() {
           titleDefault: 'Where to find it',
           bodyKey: locate.summaryKey,
           bodyDefault: locate.summaryDefault,
-          spotlightSelector: `[data-testid="app-sidebar"] a[href="${locate.route}"]`,
+          spotlightSelector: `[data-testid="app-sidebar"] a[href="${locate.spotlightRoute ?? locate.route}"]`,
         },
       ],
       ctaKey: 'howto.locate.open',

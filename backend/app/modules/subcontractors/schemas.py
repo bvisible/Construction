@@ -1,4 +1,4 @@
-"""‌⁠‍Pydantic schemas for the subcontractors module."""
+"""Pydantic schemas for the subcontractors module."""
 
 from __future__ import annotations
 
@@ -66,7 +66,7 @@ def _safe_document_url(value: str | None) -> str | None:
 
 
 class SubcontractorBase(BaseModel):
-    """‌⁠‍Shared subcontractor fields."""
+    """Shared subcontractor fields."""
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
@@ -82,7 +82,7 @@ class SubcontractorBase(BaseModel):
 
 
 class SubcontractorCreate(SubcontractorBase):
-    """‌⁠‍Create payload for Subcontractor."""
+    """Create payload for Subcontractor."""
 
     prequalification_status: str = Field(
         default="pending",

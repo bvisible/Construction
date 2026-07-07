@@ -44,6 +44,7 @@ import {
   Link2,
   Link2Off,
   Banknote,
+  Variable,
 } from 'lucide-react';
 
 import {
@@ -66,6 +67,7 @@ import type { FormulaVariable } from './grid/formula';
 import { buildFormulaContext } from './grid/formula';
 import {
   FormulaCellEditor,
+  RateCellEditor,
   AutocompleteCellEditor,
   UnitCellEditor,
 } from './grid/cellEditors';
@@ -369,6 +371,12 @@ export interface BOQGridProps {
    */
   displayCurrency?: { code: string; rate: number } | null;
   /**
+   * Base-currency direct cost of the whole estimate. Passed straight into
+   * the grid context so each section header can show its share of the
+   * project total as a small "X% of total" chip.
+   */
+  sectionTotalBasis?: number;
+  /**
    * Issue #105 — open-handler for the Project Settings → FX Rates page.
    * Wired by BOQEditorPage to `navigate('/projects/:id/settings#fx-rates')`.
    * When omitted, the warning badge stays a non-clickable info chip.
@@ -483,13 +491,23 @@ export interface BOQGridProps {
   onApplyAnomalySuggestion?: (positionId: string, suggestedRate: number) => void;
   /** Save a BOQ position as a reusable assembly */
   onSaveAsAssembly?: (positionId: string) => void;
+  /**
+   * Issue #292 - capture this position's quantity as a reusable named BOQ
+   * variable. The quantity is metric-canonical (the same convention the
+   * formula engine and variables share), so it is handed over as-is; the
+   * variables dialog seeds a pre-filled row. ``label`` is a human hint
+   * (ordinal + description) stored as the variable description.
+   */
+  onSaveQuantityAsVariable?: (quantity: number, label: string) => void;
   /** Custom column definitions from BOQ metadata */
   customColumns?: import('./grid/columnDefs').CustomColumnDef[];
   /**
-   * Show the Material/Labor/Equipment % cost-driver split columns. Toggled
-   * from the BOQ toolbar's Grid Settings menu; off by default.
+   * Show the Material/Labor/Equipment % cost-driver split columns (tri-state
+   * `columns` position). Toggled from the BOQ toolbar; off by default.
    */
   showResourceSplit?: boolean;
+  /** Show the compact inline split pill (tri-state `pill` position). */
+  showResourceSplitPill?: boolean;
   /**
    * BOQ-scoped named variables ($GFA, $LABOR_RATE, …). Used by `calculated`
    * custom columns; safe to omit when no calculated columns are defined.
@@ -544,6 +562,7 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
   fxRates,
   onUpsertProjectFxRate,
   displayCurrency,
+  sectionTotalBasis,
   onOpenFxRateSettings,
   locale,
   footerRows,
@@ -567,6 +586,7 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
   onReuseCode,
   onLinkQuantity,
   onDrivePositions,
+  onSaveQuantityAsVariable,
   onAddChildPosition,
   onAddSubSection,
   maxNestingDepth = DEFAULT_MAX_NESTING_DEPTH,
@@ -581,6 +601,7 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
   onSaveAsAssembly,
   customColumns,
   showResourceSplit,
+  showResourceSplitPill,
   boqVariables,
   bimModelId,
   onHighlightBIMElements,
@@ -1107,6 +1128,22 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
   // when the user flips metric <-> imperial.
   const displayQuantity = useDisplayQuantity();
 
+  // Issue #292: project the BOQ-scoped variables into the formula engine's
+  // FormulaVariable shape (UPPER_SNAKE keyed), memoised on the raw prop so its
+  // identity is stable across renders. Shared by the calculated-column defs
+  // AND the Quantity formula cell editor (threaded through gridContext) so
+  // $GFA-style references resolve when the user types them into a quantity
+  // cell, not just in calculated columns.
+  const boqVariablesMap = useMemo(() => {
+    const m = new Map<string, FormulaVariable>();
+    if (boqVariables) {
+      for (const v of boqVariables) {
+        m.set(v.name.toUpperCase(), { type: v.type, value: v.value });
+      }
+    }
+    return m;
+  }, [boqVariables]);
+
   /* ── Context for column formatters + section group + resources + actions */
   // //// NEOFFICE PATCH — a FormulaContext (live positions + BOQ variables) for
   // the quantity cell editor. Upstream only built one for calculated columns, so
@@ -1133,10 +1170,11 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
       // through the configured rate. Null when the user is on base.
       displayCurrency: displayCurrency ?? null,
       onOpenFxRateSettings,
-      // When the dedicated Material/Labor/Equipment % columns are on, the
-      // description cell suppresses its inline split pill so the figure is
-      // not shown twice.
+      // The tri-state resource-split button drives the grid: `columns` shows
+      // the dedicated % columns, `pill` shows the inline split badge in the
+      // description cell, `off` shows neither. At most one flag is true.
       showResourceSplit: showResourceSplit ?? false,
+      showResourceSplitPill: showResourceSplitPill ?? false,
       locale,
       fmt,
       t,
@@ -1190,11 +1228,17 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
       // `positions` lets the renderer surface per-resource custom_fields
       // values without a network round-trip.
       positions,
+      // Issue #292: the BOQ variables map ($GFA etc.), consumed by the
+      // Quantity FormulaCellEditor so typed $VAR / pos(...) references resolve.
+      boqVariablesMap,
       customColumns,
       descDensity,
       // Issue #285: imperial-units display seam consumed by the Qty / Unit /
       // Unit-rate renderers and the inline resource / variant editors.
       displayQuantity,
+      // Base-currency direct cost, used only to show each section's share of
+      // the project total as a small chip on the section header.
+      sectionTotalBasis,
     }) as FullGridContext,
     [descDensity, currencySymbol, currencyCode, fxRates, onUpsertProjectFxRate, displayCurrency, onOpenFxRateSettings, locale, fmt, t, collapsedSections, onToggleSection, onAddPosition, onAddSubSection,
      expandedPositions, toggleResources, onRemoveResource, onUpdateResource, onUpdateResourceFields,
@@ -1203,7 +1247,8 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
      onDeletePosition, onSaveToDatabase, onAddComment,
      onDuplicatePosition, showContextMenu, anomalyMap, onApplyAnomalySuggestion, bimModelId,
      onUpdatePosition, onHighlightBIMElements, onDeleteSection, onReorderSections, onFormulaApplied,
-     positions, customColumns, showResourceSplit, renderInlineCopilot, displayQuantity, formulaContext],
+     positions, boqVariablesMap, customColumns, showResourceSplit, showResourceSplitPill, renderInlineCopilot, displayQuantity, formulaContext,
+     sectionTotalBasis],
   );
 
   /* ── Column defs (standard + custom) ─────────────────────────────── */
@@ -1222,21 +1267,15 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
     if (customColumns && customColumns.length > 0) {
       const actionsIdx = defs.findIndex((c) => c.field === '_actions');
       // v2.7.0/E — `calculated` columns evaluate user-authored formulas
-      // against the live positions list + BOQ variables. We project the
-      // BOQ-level variables map (UPPER_SNAKE keyed) into the engine's
-      // FormulaVariable shape on every column-defs rebuild; AG Grid then
+      // against the live positions list + BOQ variables. Reuse the shared
+      // `boqVariablesMap` (UPPER_SNAKE keyed) so the calculated columns and
+      // the Quantity formula editor project variables identically; AG Grid
       // calls our valueGetter on every refresh, so changing a position
       // automatically re-runs the calculation (we trigger refreshes via
       // the effect below).
-      const variablesMap = new Map<string, FormulaVariable>();
-      if (boqVariables) {
-        for (const v of boqVariables) {
-          variablesMap.set(v.name.toUpperCase(), { type: v.type, value: v.value });
-        }
-      }
       const customDefs = getCustomColumnDefs(customColumns, {
         positions,
-        variables: variablesMap,
+        variables: boqVariablesMap,
       });
       if (actionsIdx >= 0) {
         defs.splice(actionsIdx, 0, ...customDefs);
@@ -1245,7 +1284,7 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
       }
     }
     return defs;
-  }, [currencySymbol, currencyCode, locale, fmt, i18n.language, customColumns, positions, boqVariables, displayCurrency, showResourceSplit, displayQuantity]);
+  }, [currencySymbol, currencyCode, locale, fmt, i18n.language, customColumns, positions, boqVariablesMap, displayCurrency, showResourceSplit, displayQuantity]);
 
   /* ── Calculated-column refresh on positions change ──────────────────
    * AG Grid re-runs `valueGetter` on every refresh; for cross-position
@@ -2136,6 +2175,7 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
   const components = useMemo(
     () => ({
       formulaCellEditor: FormulaCellEditor,
+      rateCellEditor: RateCellEditor,
       autocompleteCellEditor: AutocompleteCellEditor,
       unitCellEditor: UnitCellEditor,
       actionsCellRenderer: ActionsCellRenderer,
@@ -2270,7 +2310,16 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
       if (NUMERIC_FIELDS.has(colId)) {
         const parsed = parseClipboardNumber(rawClipboard);
         if (isNaN(parsed) || !isFinite(parsed) || parsed < 0) return false;
-        newValue = Math.round(parsed * 100) / 100;
+        // Issue #287: a pasted number is typed against the DISPLAYED measurement
+        // system, so round it as the user sees it and then convert back to
+        // metric-canonical storage. Identity for the metric system / unmapped
+        // units, so metric pastes are byte-for-byte unchanged. Numeric columns
+        // that do not carry a unit (custom fields) are stored as typed.
+        const roundedDisplay = Math.round(parsed * 100) / 100;
+        const unit = (data.unit as string | undefined) ?? '';
+        if (colId === 'quantity') newValue = displayQuantity.toMetric(roundedDisplay, unit);
+        else if (colId === 'unit_rate') newValue = displayQuantity.toMetricRate(roundedDisplay, unit);
+        else newValue = roundedDisplay;
       }
 
       // Skip if value is unchanged
@@ -2281,7 +2330,7 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
       onUpdatePosition(data.id as string, update, old);
       return true;
     },
-    [onUpdatePosition, isCellPasteable],
+    [onUpdatePosition, isCellPasteable, displayQuantity],
   );
 
   useEffect(() => {
@@ -2305,7 +2354,18 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
         if (!focusedCell) return;
 
         const colId = focusedCell.column.getColId();
-        const value = getCellRawValue(api, focusedCell.rowIndex, colId);
+        let value = getCellRawValue(api, focusedCell.rowIndex, colId);
+        // Issue #287: export the value in the DISPLAYED measurement system so a
+        // copy -> paste round-trips (paste converts display -> metric). Identity
+        // for the metric system / unmapped units. Fill-down (Ctrl+D) still reads
+        // raw metric via getCellRawValue, so it copies canonical -> canonical.
+        if (typeof value === 'number') {
+          const unit =
+            (api.getDisplayedRowAtIndex(focusedCell.rowIndex)?.data?.unit as string | undefined) ??
+            '';
+          if (colId === 'quantity') value = displayQuantity.convert(value, unit).value;
+          else if (colId === 'unit_rate') value = displayQuantity.convertRate(value, unit);
+        }
         const text = formatCellForClipboard(value, colId);
 
         try {
@@ -2509,6 +2569,7 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
     t,
     isCellPasteable,
     onUpdatePosition,
+    displayQuantity,
   ]);
 
   /* ── Right-click on AG Grid cells → context menu ──────────────── */
@@ -2918,6 +2979,17 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
                     onClick={() => { onSaveAsAssembly(d.id as string); closeContextMenu(); }}
                   />
                 )}
+                {onSaveQuantityAsVariable && (() => {
+                  const qty = Number(d.quantity);
+                  if (!Number.isFinite(qty)) return null;
+                  const label = `${String(d.ordinal ?? '')} ${String(d.description ?? '')}`.trim().slice(0, 80);
+                  return (
+                    <CtxItem icon={<Variable size={14} className="text-oe-blue"/>}
+                      label={t('boq.save_qty_as_variable', { defaultValue: 'Save quantity as variable…' })}
+                      onClick={() => { onSaveQuantityAsVariable(qty, label); closeContextMenu(); }}
+                    />
+                  );
+                })()}
                 {costItemId && (
                   <CtxItem icon={<ExternalLink size={14}/>}
                     label={t('boq.view_in_cost_db', { defaultValue: 'View in Cost Database' })}

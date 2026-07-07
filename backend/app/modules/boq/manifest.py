@@ -1,4 +1,4 @@
-"""‌⁠‍Bill of Quantities module manifest."""
+"""Bill of Quantities module manifest."""
 
 from app.core.module_loader import ModuleManifest
 

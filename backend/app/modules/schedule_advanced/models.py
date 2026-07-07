@@ -1,4 +1,4 @@
-"""‌⁠‍Schedule Advanced ORM models - Last Planner System (LPS) + baselines.
+"""Schedule Advanced ORM models - Last Planner System (LPS) + baselines.
 
 Tables:
     oe_schedule_advanced_master_schedule
@@ -43,7 +43,7 @@ from app.database import GUID, Base
 
 
 class MasterSchedule(Base):
-    """‌⁠‍Top-level project schedule container for the LPS workflow.
+    """Top-level project schedule container for the LPS workflow.
 
     Each project may have many master schedules (e.g. baseline, current
     rev-B, etc.). Phase plans, look-aheads, weekly plans, and baselines
@@ -79,7 +79,7 @@ class MasterSchedule(Base):
 
 
 class PhasePlan(Base):
-    """‌⁠‍A pull-planning phase (e.g. "Foundations", "Tower Crane Phase").
+    """A pull-planning phase (e.g. "Foundations", "Tower Crane Phase").
 
     Created collaboratively in a pull session. ``milestone_target_id``
     references a task UUID - kept as a plain UUID (NOT FK at ORM level)
@@ -773,7 +773,7 @@ class TaktActivity(Base):
 
 
 class DelayAnalysis(Base):
-    """‌⁠‍One forensic delay-analysis run (frozen on issue).
+    """One forensic delay-analysis run (frozen on issue).
 
     ``method`` is the forensic method (``tia | windows | as_planned_vs_as_built
     | impacted_as_planned | collapsed_as_built``); ``oos_mode`` records the
@@ -826,7 +826,7 @@ class DelayAnalysis(Base):
 
 
 class DelayEvent(Base):
-    """‌⁠‍A discrete causative delay event within an analysis.
+    """A discrete causative delay event within an analysis.
 
     ``start_workday`` / ``end_workday`` are the engine-facing work-day offsets
     (used for concurrency overlap); ``event_start`` / ``event_end`` are the
@@ -868,7 +868,7 @@ class DelayEvent(Base):
 
 
 class Fragnet(Base):
-    """‌⁠‍The schedule fragment representing one event's network impact.
+    """The schedule fragment representing one event's network impact.
 
     ``fragnet_activities`` are activity dicts in the exact ``cpm.Activity``
     shape; ``rewires`` record the edge redirections so removal (Collapsed
@@ -904,7 +904,7 @@ class Fragnet(Base):
 
 
 class DelayWindow(Base):
-    """‌⁠‍One analysis window in a Windows / Watershed run (computed result)."""
+    """One analysis window in a Windows / Watershed run (computed result)."""
 
     __tablename__ = "oe_schedule_advanced_delay_window"
 

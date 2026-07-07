@@ -1,4 +1,4 @@
-"""‌⁠‍Background Jobs API routes - RFC 34 §4 W0.1.
+"""Background Jobs API routes - RFC 34 §4 W0.1.
 
 Endpoints (all prefixed at ``/api/v1/jobs`` by the module loader):
 
@@ -54,7 +54,7 @@ _require_admin = Depends(RequireRole("admin"))
 
 
 def _get_session_factory() -> async_sessionmaker[AsyncSession]:
-    """‌⁠‍Resolve the platform's default async session factory.
+    """Resolve the platform's default async session factory.
 
     Wrapped in a function so tests can patch this symbol to swap in an
     in-memory SQLite factory without touching the global engine.
@@ -71,7 +71,7 @@ def _get_session_factory() -> async_sessionmaker[AsyncSession]:
 # non-admin must not be able to read another tenant's job result/error blob.
 @router.get("/{job_id}", response_model=JobRunRead, dependencies=[_require_admin])
 async def get_job(job_id: uuid.UUID, _user_id: CurrentUserId) -> JobRunRead:
-    """‌⁠‍Return the current state of a JobRun by id.
+    """Return the current state of a JobRun by id.
 
     Returns:
         404 when the id is unknown.

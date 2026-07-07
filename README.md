@@ -19,6 +19,10 @@ Professional BOQ, 4D scheduling, 5D cost model, and tendering - all in one open-
 [![Last commit](https://img.shields.io/github/last-commit/datadrivenconstruction/OpenConstructionERP?color=informational)](https://github.com/datadrivenconstruction/OpenConstructionERP/commits/main)
 ![Languages](https://img.shields.io/badge/languages-27-orange)
 ![Cost Items](https://img.shields.io/badge/cost_items-55%2C000%2B-red)
+<br/>
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/datadrivenconstruction/OpenConstructionERP/badge)](https://securityscorecards.dev/viewer/?uri=github.com/datadrivenconstruction/OpenConstructionERP)
+[![CodeQL](https://github.com/datadrivenconstruction/OpenConstructionERP/actions/workflows/codeql.yml/badge.svg)](https://github.com/datadrivenconstruction/OpenConstructionERP/actions/workflows/codeql.yml)
+[![Signed releases](https://img.shields.io/badge/releases-Sigstore_signed-8250df)](SECURITY.md)
 
 <img src="docs/screenshots/hero-overview.png" alt="OpenConstructionERP - open-source construction ERP for BOQ, BIM takeoff, DWG/PDF quantification and 5D cost modeling" width="800" />
 
@@ -162,22 +166,6 @@ Star OpenConstructionERP on GitHub and be instantly notified of new releases.
   <img src="https://github.com/datadrivenconstruction/cad2data-Revit-IFC-DWG-DGN-pipeline-with-conversion-validation-qto/blob/main/DDC_in_additon/DDC_readme_content/OCE%20star%20GitHub.gif" width="100%"/>
   <br></br>
 </p>
-
----
-
-## <picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/sparkle-fill-dark.svg"><img src="docs/readme-icons/sparkle-fill-light.svg" width="14" align="center" alt=""></picture> What's New in v6
-
-v6 is the version where setup stops being a chore. Install the wheel, run one command, and the app boots into a full PostgreSQL database with the demo data already loaded. No Docker, no connection strings, no migration step. The whole platform now ships as 117 modules out of the box.
-
-- **Embedded PostgreSQL 16 is the default runtime.** The first run brings up a local PostgreSQL server bundled with the wheel, so there is nothing to install and nothing to configure. It just boots. If you want the lightest possible local setup, set `OE_USE_SQLITE=1` and the app falls back to plain SQLite.
-- **117 modules out of the box, 27 languages, 55,000+ cost items.** Everything is on by default, the full UI is translated, and the CWICR pricing data covers every major trade across 11 regional price sets.
-- **Partner packs.** Preset bundles you can `pip install`, drop into a folder as a zip, or upload right in the app. They apply live with no restart, so a partner deployment is one step.
-- **Cost spine.** Control accounts and cost lines give you a proper budget structure with FX-correct rollups. Amounts are grouped by currency and never blended, so totals stay honest across regions.
-- **Geo hub.** Cesium 3D Tiles in the browser plus a one-click "place project on the map", so every job site has real coordinates and shows up on the globe.
-- **One-click country packs.** Pick a country and the language, the local cost database and a couple of demo projects all install together in a single step.
-- **Cross-platform CAD converters.** The DDC cad2data converters auto-download on Windows, Linux and macOS, so RVT, IFC, DWG and DGN takeoff works the same everywhere.
-
-See the [latest release](https://github.com/datadrivenconstruction/OpenConstructionERP/releases/latest) and the [CHANGELOG](CHANGELOG.md) for the per-release breakdown.
 
 ---
 

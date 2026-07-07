@@ -1,10 +1,10 @@
-"""‌⁠‍Inspections module permission definitions."""
+"""Inspections module permission definitions."""
 
 from app.core.permissions import Role, permission_registry
 
 
 def register_inspections_permissions() -> None:
-    """‌⁠‍Register permissions for the inspections module."""
+    """Register permissions for the inspections module."""
     permission_registry.register_module_permissions(
         "inspections",
         {

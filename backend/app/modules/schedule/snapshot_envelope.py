@@ -1,4 +1,4 @@
-"""‌⁠‍Adapters between schedule data and the pure diff-engine envelope.
+"""Adapters between schedule data and the pure diff-engine envelope.
 
 :mod:`app.modules.schedule.diff_engine` compares two *normalized envelopes*
 (plain dicts) and is deliberately ignorant of the ORM and of how baselines are

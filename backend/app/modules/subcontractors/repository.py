@@ -1,4 +1,4 @@
-"""‌⁠‍Data-access layer for the subcontractors module."""
+"""Data-access layer for the subcontractors module."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ from app.modules.subcontractors.models import (
 
 
 class _BaseRepo:
-    """‌⁠‍Shared CRUD primitives - keeps the per-entity repos compact."""
+    """Shared CRUD primitives - keeps the per-entity repos compact."""
 
     model: type[Any]
 
@@ -55,7 +55,7 @@ class _BaseRepo:
 
 
 class SubcontractorRepository(_BaseRepo):
-    """‌⁠‍CRUD + filters for Subcontractor."""
+    """CRUD + filters for Subcontractor."""
 
     model = Subcontractor
 

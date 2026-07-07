@@ -1,4 +1,4 @@
-"""‌⁠‍Markups & Annotations service - business logic.
+"""Markups & Annotations service - business logic.
 
 Stateless service layer. Handles:
 - Markup CRUD, bulk creation, and text search
@@ -82,7 +82,7 @@ DEFAULT_STAMPS: list[dict[str, Any]] = [
 
 
 def _validate_geometry(geometry: dict[str, Any], markup_type: str) -> None:
-    """‌⁠‍Validate that geometry coordinates are reasonable for the given markup type.
+    """Validate that geometry coordinates are reasonable for the given markup type.
 
     Checks that coordinate values are finite numbers. Does not enforce strict
     ranges because coordinate systems vary per viewer/document.
@@ -112,7 +112,7 @@ def _validate_geometry(geometry: dict[str, Any], markup_type: str) -> None:
 
 
 class MarkupsService:
-    """‌⁠‍Business logic for markups, scales, and stamp templates."""
+    """Business logic for markups, scales, and stamp templates."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session

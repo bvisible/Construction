@@ -116,3 +116,32 @@ describe('GeoEmptyState - manual anchoring (#284)', () => {
     );
   });
 });
+
+describe('GeoEmptyState - dismiss to a pill (#284 masked-map fix)', () => {
+  it('no_anchor card can be tucked away to a corner pill and brought back', async () => {
+    renderEmpty(<GeoEmptyState kind="no_anchor" projectId={PROJECT} />);
+
+    // The full card is shown with a dismiss control.
+    const dismiss = screen.getByTestId('geo-empty-dismiss');
+    expect(dismiss).toBeInTheDocument();
+
+    await userEvent.click(dismiss);
+
+    // Card gone, pill shown (the map is no longer masked).
+    expect(screen.queryByTestId('geo-empty-auto-anchor')).toBeNull();
+    const pill = screen.getByTestId('geo-empty-pill');
+    expect(pill).toBeInTheDocument();
+
+    // Restoring brings the full prompt back.
+    await userEvent.click(pill);
+    expect(screen.getByTestId('geo-empty-dismiss')).toBeInTheDocument();
+    expect(screen.queryByTestId('geo-empty-pill')).toBeNull();
+  });
+
+  it('non-anchor states are NOT dismissible (always show their card)', () => {
+    renderEmpty(<GeoEmptyState kind="no_tilesets" projectId={PROJECT} />);
+    // no_tilesets must keep its guidance card - no dismiss affordance.
+    expect(screen.queryByTestId('geo-empty-dismiss')).toBeNull();
+    expect(screen.queryByTestId('geo-empty-pill')).toBeNull();
+  });
+});

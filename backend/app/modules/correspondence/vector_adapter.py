@@ -1,4 +1,4 @@
-"""‌⁠‍Correspondence vector adapter - feeds the ``oe_correspondence_correspondence`` collection.
+"""Correspondence vector adapter - feeds the ``oe_correspondence_correspondence`` collection.
 
 Each :class:`~app.modules.correspondence.models.Correspondence` row is
 embedded as the reference number, subject, direction, type and notes so
@@ -20,13 +20,13 @@ from app.modules.correspondence.models import Correspondence
 
 
 class CorrespondenceVectorAdapter:
-    """‌⁠‍Embed correspondence rows into the unified vector store."""
+    """Embed correspondence rows into the unified vector store."""
 
     collection_name: str = COLLECTION_CORRESPONDENCE
     module_name: str = "correspondence"
 
     def to_text(self, row: Correspondence) -> str:
-        """‌⁠‍Build the canonical text that gets embedded.
+        """Build the canonical text that gets embedded.
 
         Concatenates the reference number, subject, direction, type and
         free-text notes so semantic queries match the substance of the

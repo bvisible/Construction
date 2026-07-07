@@ -1,4 +1,4 @@
-"""‌⁠‍Catalog resource Pydantic schemas for request/response validation.
+"""Catalog resource Pydantic schemas for request/response validation.
 
 The catalog stores **resources** - single material / labour / equipment /
 operator items with one price per region. Each resource can be referenced
@@ -43,7 +43,7 @@ def _serialise_money(v: Decimal | None) -> str | None:
 
 
 class CatalogResourceCreate(BaseModel):
-    """‌⁠‍Create a new catalog resource."""
+    """Create a new catalog resource."""
 
     resource_code: str = Field(..., min_length=1, max_length=100)
     name: str = Field(..., min_length=1, max_length=500)
@@ -95,7 +95,7 @@ class CatalogResourceCreate(BaseModel):
 
 
 class CatalogResourceResponse(BaseModel):
-    """‌⁠‍Catalog resource in API responses.
+    """Catalog resource in API responses.
 
     A *resource* is one leaf input - a single material, labour, equipment,
     or operator entry with one price per region. Each resource can be

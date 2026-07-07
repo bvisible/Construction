@@ -1,4 +1,4 @@
-"""‌⁠‍Procurement Pydantic schemas - request/response models."""
+"""Procurement Pydantic schemas - request/response models."""
 
 import re
 from datetime import datetime
@@ -15,7 +15,7 @@ _ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 def _validate_non_negative_decimal(v: str) -> str:
-    """‌⁠‍Validate that a string is a valid non-negative decimal number."""
+    """Validate that a string is a valid non-negative decimal number."""
     try:
         d = Decimal(v)
     except (InvalidOperation, ValueError, TypeError) as exc:
@@ -29,7 +29,7 @@ def _validate_non_negative_decimal(v: str) -> str:
 
 
 class POItemCreate(BaseModel):
-    """‌⁠‍Create a line item within a purchase order."""
+    """Create a line item within a purchase order."""
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
@@ -468,7 +468,7 @@ POLineMatchTag = Literal[
 
 
 class POLineMatchStatus(BaseModel):
-    """‌⁠‍Per-PO-line 3-way match summary.
+    """Per-PO-line 3-way match summary.
 
     ``match_status`` collapses the PO/GR/Invoice quantity comparison into
     one tag the UI badge consumes:

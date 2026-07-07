@@ -1,4 +1,4 @@
-"""‌⁠‍Event taxonomy for the dashboards module.
+"""Event taxonomy for the dashboards module.
 
 Events are published via :func:`app.core.events.publish` from service
 methods on state changes. Consumers (activity feed, audit, integrity
@@ -17,12 +17,12 @@ from typing import Final
 # ── Snapshot lifecycle ──────────────────────────────────────────────────────
 
 SNAPSHOT_CREATED: Final = "snapshot.created"
-"""‌⁠‍Published after a new snapshot row + its Parquet files are durably
+"""Published after a new snapshot row + its Parquet files are durably
 written. Payload: ``{snapshot_id, project_id, label, total_entities,
 total_categories, tenant_id}``."""
 
 SNAPSHOT_DELETED: Final = "snapshot.deleted"
-"""‌⁠‍Published after a snapshot row is removed (Parquet cleanup may still
+"""Published after a snapshot row is removed (Parquet cleanup may still
 be in flight - see ``SnapshotService.delete`` for orphan handling).
 Payload: ``{snapshot_id, project_id, tenant_id}``."""
 

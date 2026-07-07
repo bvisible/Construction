@@ -1,4 +1,4 @@
-import { BarChart3, Box, Eye, FileBarChart, FileText, Image as ImageIcon, MapPin, Package, Pencil, PenTool, Radar, Ruler, type LucideIcon } from 'lucide-react';
+import { BarChart3, Box, Eye, FileBarChart, FileText, Image as ImageIcon, MapPin, Package, Pencil, PenTool, PlayCircle, Radar, Ruler, type LucideIcon } from 'lucide-react';
 import type { FileKind } from './types';
 
 // Single source of truth for per-kind accent colours. Both the landing
@@ -132,6 +132,19 @@ export interface ModuleTarget {
    * offered as an explicit, separate choice the user opts into.
    */
   inlinePreview?: boolean;
+  /**
+   * Like ``inlinePreview`` but for an image or video: the file opens in the
+   * shared ``MediaLightbox`` overlay (an authed ``<img>`` for images, an
+   * authed ``<video controls>`` for clips) on the current screen instead of
+   * navigating to a module. Consumers must check this flag and open the
+   * lightbox instead of calling ``navigate(route(...))``; the ``route`` is a
+   * harmless fallback that keeps the file selected in /files.
+   *
+   * Why this exists (issue #284 follow-up, ITEM 10): image and video uploads
+   * used to fall through to PDF Takeoff (the document kind's default module),
+   * which cannot render them. They now open in a proper viewer/player.
+   */
+  mediaPreview?: boolean;
 }
 
 const PROJECT = (p: string, sub: string) => `/projects/${p}/${sub}`;
@@ -375,6 +388,60 @@ const DOC_PDF_INLINE_VIEW: ModuleTarget = {
 // chooses which PDFs are takeoff plans. Mirrors KIND_MODULES.document[0].
 const DOC_PDF_TAKEOFF: ModuleTarget = KIND_MODULES.document[0]!;
 
+// Image extensions that should open in the MediaLightbox image viewer rather
+// than fall through to PDF Takeoff (#284 follow-up, ITEM 10). Generic uploads
+// land as kind="document" with one of these extensions, so primaryModule used
+// to hand them to PDF Takeoff (the document kind's first module), which cannot
+// render a raster image. Kept lower-case and bare (no leading dot).
+const IMAGE_EXTS = new Set([
+  'jpg',
+  'jpeg',
+  'png',
+  'gif',
+  'webp',
+  'heic',
+  'heif',
+  'avif',
+  'bmp',
+  'svg',
+  'tiff',
+  'tif',
+]);
+
+// Video extensions that should open in the MediaLightbox player (#284
+// follow-up, ITEM 10). Same rationale as IMAGE_EXTS: a .mp4 upload under the
+// document kind must play, not open a takeoff viewer it can never satisfy.
+const VIDEO_EXTS = new Set(['mp4', 'mov', 'webm', 'avi', 'mkv', 'm4v']);
+
+// Inline "view it here" image viewer for an image file. The PRIMARY open
+// action for an image (#284 follow-up, ITEM 10): it opens the shared
+// MediaLightbox overlay (an authed <img>) over the current screen rather than
+// navigating away. The ``route`` is a harmless fallback that keeps the file
+// selected in /files for any consumer that does not yet honour the flag.
+const DOC_IMAGE_VIEW: ModuleTarget = {
+  label: 'View',
+  i18nKey: 'files.module.view_image',
+  description: 'View this image here without leaving the page',
+  descriptionI18nKey: 'files.module.view_image_desc',
+  icon: ImageIcon,
+  mediaPreview: true,
+  route: (p, f) => withParam(PROJECT(p, 'files'), 'file', f),
+};
+
+// Inline player for a video file - the PRIMARY open action for a clip (#284
+// follow-up, ITEM 10). Opens the shared MediaLightbox overlay (an authed
+// <video controls>). The ``route`` keeps the file selected in /files as a
+// harmless fallback for any consumer that does not yet honour the flag.
+const DOC_VIDEO_VIEW: ModuleTarget = {
+  label: 'Play',
+  i18nKey: 'files.module.play_video',
+  description: 'Play this video here without leaving the page',
+  descriptionI18nKey: 'files.module.play_video_desc',
+  icon: PlayCircle,
+  mediaPreview: true,
+  route: (p, f) => withParam(PROJECT(p, 'files'), 'file', f),
+};
+
 // Extensions that live under the `document` kind but are really BIM source
 // files needing on-demand conversion when opened from the File Manager.
 const DOC_BIM_EXTS = new Set(['ifc', 'rvt', 'dgn', 'glb', 'gltf']);
@@ -396,6 +463,11 @@ const EXT_PRIMARY_OVERRIDE: Record<string, ModuleTarget> = {
   gltf: DOC_BIM_VIEWER,
   dwg: DOC_DWG_TAKEOFF,
   dxf: DOC_DWG_TAKEOFF,
+  // #284 follow-up (ITEM 10): images view, videos play - never PDF Takeoff.
+  // Generated from the extension sets so the two stay the single source of
+  // truth for both the primary-action override and the predicates below.
+  ...Object.fromEntries([...IMAGE_EXTS].map((ext) => [ext, DOC_IMAGE_VIEW])),
+  ...Object.fromEntries([...VIDEO_EXTS].map((ext) => [ext, DOC_VIDEO_VIEW])),
 };
 
 // Module list for a `document`-kind DWG/DXF file. Only the DWG Takeoff
@@ -423,6 +495,17 @@ const DOC_PDF_MODULES: ModuleTarget[] = [
   KIND_MODULES.document[1]!, // File Manager (keep file selected in /files)
 ];
 
+// Module list for a `document`-kind image. Only the lightbox viewer is
+// offered: PDF Takeoff is deliberately ABSENT (it cannot render a raster
+// image), which is the whole point of ITEM 10. The File Manager target is
+// dropped too since the file is already open in /files. Plain Download stays
+// available from the preview pane / context menu independent of this list.
+const DOC_IMAGE_MODULES: ModuleTarget[] = [DOC_IMAGE_VIEW];
+
+// Module list for a `document`-kind video - the lightbox player only, with
+// PDF Takeoff removed for the same reason as images (ITEM 10).
+const DOC_VIDEO_MODULES: ModuleTarget[] = [DOC_VIDEO_VIEW];
+
 export function primaryModule(kind: FileKind, extension?: string | null): ModuleTarget {
   // The per-extension overrides import a document on demand via ``?docId=``,
   // so they apply ONLY to the `document` kind (whose id is a Document id).
@@ -446,6 +529,9 @@ export function modulesForKind(kind: FileKind, extension?: string | null): Modul
     if (ext === 'dwg' || ext === 'dxf') return DOC_DWG_MODULES;
     if (DOC_BIM_EXTS.has(ext)) return DOC_BIM_MODULES;
     if (ext === 'pdf') return DOC_PDF_MODULES;
+    // ITEM 10: images / videos open in the lightbox; PDF Takeoff is removed.
+    if (IMAGE_EXTS.has(ext)) return DOC_IMAGE_MODULES;
+    if (VIDEO_EXTS.has(ext)) return DOC_VIDEO_MODULES;
   }
   return KIND_MODULES[kind] ?? [];
 }
@@ -482,6 +568,53 @@ export function isInlinePreviewRow(row: {
   // primaryModule sees the document-PDF inline override instead of falling
   // back to the non-inline default (which keys off the extension alone).
   return Boolean(primaryModule(row.kind, 'pdf').inlinePreview);
+}
+
+/** The minimal row shape the media predicates need to classify a file. */
+export interface MediaRowLike {
+  kind: FileKind;
+  extension?: string | null;
+  mime_type?: string | null;
+  download_url?: string | null;
+}
+
+/**
+ * True when a file is a raster/vector image, keyed on its extension first and
+ * the ``image/*`` mime type as a fallback for uploads stored without a useful
+ * extension. Pure classifier - it does NOT consider the download URL, so it is
+ * safe to call for icon/label decisions on rows that may not be downloadable.
+ */
+export function isImageRow(row: MediaRowLike): boolean {
+  if (IMAGE_EXTS.has(_normExt(row.extension))) return true;
+  return (row.mime_type ?? '').toLowerCase().startsWith('image/');
+}
+
+/**
+ * True when a file is a video clip, keyed on its extension first and the
+ * ``video/*`` mime type as a fallback. Same pure-classifier contract as
+ * ``isImageRow``.
+ */
+export function isVideoRow(row: MediaRowLike): boolean {
+  if (VIDEO_EXTS.has(_normExt(row.extension))) return true;
+  return (row.mime_type ?? '').toLowerCase().startsWith('video/');
+}
+
+/**
+ * True when a row should open in the shared ``MediaLightbox`` overlay (an
+ * authed <img> for images, an authed <video controls> for clips) rather than
+ * navigate to a module. Drives the open handlers across the File Manager
+ * surfaces so an image is viewed and a video is played in place, never routed
+ * to PDF Takeoff (#284 follow-up, ITEM 10).
+ *
+ * A row qualifies when it is an image or video AND has a download URL to fetch
+ * the bytes from. The ``photo`` kind is intentionally excluded here even
+ * though it is an image: it already has a dedicated Site Photos viewer as its
+ * primary module, so it is not a takeoff mis-route and keeps its own flow.
+ */
+export function isLightboxRow(row: MediaRowLike): boolean {
+  if (!row.download_url) return false;
+  if (row.kind !== 'document') return false;
+  return isImageRow(row) || isVideoRow(row);
 }
 
 /**

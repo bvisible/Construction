@@ -1,4 +1,4 @@
-"""‌⁠‍Project Member API schemas.
+"""Project Member API schemas.
 
 The Team Strip on ProjectDetailPage works at the project level rather than the
 fine-grained ``Team`` level. Internally each project gets a "Default Team"
@@ -19,7 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class ProjectMemberResponse(BaseModel):
-    """‌⁠‍A single project member.
+    """A single project member.
 
     ``user_id`` is the canonical join key; ``email`` and ``full_name`` are
     pre-joined for the avatar tooltip + initials. ``role`` mirrors the team
@@ -38,7 +38,7 @@ class ProjectMemberResponse(BaseModel):
 
 
 class AddProjectMemberRequest(BaseModel):
-    """‌⁠‍Add a user to the project's default team."""
+    """Add a user to the project's default team."""
 
     model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
 

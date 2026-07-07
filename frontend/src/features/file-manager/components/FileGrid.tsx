@@ -94,13 +94,19 @@ export function FileGrid({
         const moduleLabel = t(target.i18nKey, { defaultValue: target.label });
         // #284 - a PDF document's primary action reads it inline rather than
         // routing to a module, so the tile shows a plain "View" affordance
-        // instead of "Open in <module>".
+        // instead of "Open in <module>". ITEM 10 - an image / video shows
+        // "View" / "Play" (the target label) for the same in-place reason.
         const openLabel = target.inlinePreview
           ? t('files.actions.view_file', { defaultValue: 'View' })
-          : t('files.actions.open_in_short', {
-              defaultValue: 'Open in {{module}}',
-              module: moduleLabel,
-            });
+          : target.mediaPreview
+            ? t(target.i18nKey, { defaultValue: target.label })
+            : t('files.actions.open_in_short', {
+                defaultValue: 'Open in {{module}}',
+                module: moduleLabel,
+              });
+        // A plain in-place viewer (PDF reader / media lightbox) is not a
+        // navigation, so the tile tooltip says "view" rather than "open in".
+        const opensInPlace = Boolean(target.inlinePreview || target.mediaPreview);
         const isFavorite = favoriteKeys?.has(favoriteKey(row.kind, row.id)) ?? false;
         return (
           <div
@@ -113,7 +119,7 @@ export function FileGrid({
                 : 'border-border-light hover:border-border hover:shadow-sm',
             )}
             title={
-              target.inlinePreview
+              opensInPlace
                 ? t('files.tile.tooltip_view', {
                     defaultValue: '{{name}} - double-click to view',
                     name: row.name,

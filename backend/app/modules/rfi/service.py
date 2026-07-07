@@ -1,4 +1,4 @@
-"""‌⁠‍RFI service - business logic for RFI management.
+"""RFI service - business logic for RFI management.
 
 - Event publishing on create/update/delete
 - Structured state-change logs (R5: keys = rfi_id / project_id /
@@ -83,7 +83,7 @@ _RFI_STATUS_TRANSITIONS: dict[str, set[str]] = {
 
 
 def _add_business_days(start: datetime, days: int) -> str:
-    """‌⁠‍Return ISO date string after adding *days* business days to *start*."""
+    """Return ISO date string after adding *days* business days to *start*."""
     added = 0
     current = start
     while added < days:
@@ -94,7 +94,7 @@ def _add_business_days(start: datetime, days: int) -> str:
 
 
 class RFIService:
-    """‌⁠‍Business logic for RFI operations."""
+    """Business logic for RFI operations."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -266,7 +266,7 @@ class RFIService:
         actor_id: str | None = None,
         actor_role: str | None = None,
     ) -> RFI:
-        """‌⁠‍Patch fields on an RFI, enforcing the FSM + assigner role gate.
+        """Patch fields on an RFI, enforcing the FSM + assigner role gate.
 
         R5 / BUG-RFI-ROLE: only ``admin`` / ``manager`` / ``owner`` may
         change ``assigned_to``. An editor that attempts to reassign gets
@@ -784,7 +784,7 @@ class RFIService:
         rfi_id: uuid.UUID,
         attachment_path: str,
     ) -> RFI:
-        """‌⁠‍Append a validated attachment path to the RFI.
+        """Append a validated attachment path to the RFI.
 
         R5 / BUG-RFI-ATT: router is responsible for magic-byte validation
         and for picking a server-derived filename. This method only

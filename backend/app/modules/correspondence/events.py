@@ -1,4 +1,4 @@
-"""‌⁠‍Correspondence event handlers - vector indexing subscribers.
+"""Correspondence event handlers - vector indexing subscribers.
 
 Subscribes to ``correspondence.created`` / ``correspondence.updated`` /
 ``correspondence.deleted`` lifecycle events and keeps the
@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 
 
 async def _index_correspondence(event: Event) -> None:
-    """‌⁠‍Re-embed a single Correspondence row after create / update."""
+    """Re-embed a single Correspondence row after create / update."""
     cid_raw = (event.data or {}).get("correspondence_id")
     if not cid_raw:
         return
@@ -65,7 +65,7 @@ async def _index_correspondence(event: Event) -> None:
 
 
 async def _delete_correspondence_vector(event: Event) -> None:
-    """‌⁠‍Remove a deleted Correspondence row from the vector store."""
+    """Remove a deleted Correspondence row from the vector store."""
     cid_raw = (event.data or {}).get("correspondence_id")
     if not cid_raw:
         return

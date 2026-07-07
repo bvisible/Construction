@@ -1,4 +1,4 @@
-"""‌⁠‍Entry point for PyInstaller / standalone execution.
+"""Entry point for PyInstaller / standalone execution.
 
 Usage:
     python -m app                    # Dev mode
@@ -11,7 +11,7 @@ import sys
 
 
 def main() -> None:
-    """‌⁠‍Start the OpenConstructionERP backend server."""
+    """Start the OpenConstructionERP backend server."""
     import uvicorn
 
     # Parse CLI args: --host X --port Y

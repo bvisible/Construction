@@ -85,7 +85,7 @@ def upgrade() -> None:
             "auto_link_enabled",
             sa.Boolean(),
             nullable=False,
-            server_default=sa.text("0"),
+            server_default=sa.text("0") if bind.dialect.name == "sqlite" else sa.text("false"),
         ),
         sa.Column(
             "mode",

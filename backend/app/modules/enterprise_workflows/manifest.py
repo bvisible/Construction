@@ -1,4 +1,4 @@
-"""‌⁠‍Enterprise Workflows module manifest."""
+"""Enterprise Workflows module manifest."""
 
 from app.core.module_loader import ModuleManifest
 

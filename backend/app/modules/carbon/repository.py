@@ -1,4 +1,4 @@
-"""‌⁠‍Carbon & Sustainability data-access layer.
+"""Carbon & Sustainability data-access layer.
 
 One repository per entity. Methods follow the convention used elsewhere
 in the codebase: ``get_by_id``, ``list_for_*``, ``create``,
@@ -17,7 +17,9 @@ from app.modules.carbon.models import (
     CarbonTarget,
     EmbodiedCarbonEntry,
     EPDRecord,
+    LifeCycleCostEntry,
     MaterialCarbonFactor,
+    OperationalCarbonEntry,
     Scope1Entry,
     Scope2Entry,
     Scope3Entry,
@@ -26,7 +28,7 @@ from app.modules.carbon.models import (
 
 
 class _BaseRepo:
-    """‌⁠‍Shared CRUD primitives."""
+    """Shared CRUD primitives."""
 
     model: type
 
@@ -58,7 +60,7 @@ class _BaseRepo:
 
 
 class EPDRecordRepository(_BaseRepo):
-    """‌⁠‍Data access for EPDRecord."""
+    """Data access for EPDRecord."""
 
     model = EPDRecord
 
@@ -237,6 +239,76 @@ class Scope2EntryRepository(_ScopeRepoMixin, _BaseRepo):
 
 class Scope3EntryRepository(_ScopeRepoMixin, _BaseRepo):
     model = Scope3Entry
+
+
+# ── Operational carbon (B6 use-phase) ─────────────────────────────────────
+
+
+class OperationalCarbonEntryRepository(_BaseRepo):
+    """Data access for OperationalCarbonEntry (6D Phase 2 B6 lines)."""
+
+    model = OperationalCarbonEntry
+
+    async def list_for_inventory(
+        self,
+        inventory_id: uuid.UUID,
+    ) -> list[OperationalCarbonEntry]:
+        stmt = (
+            select(OperationalCarbonEntry)
+            .where(OperationalCarbonEntry.inventory_id == inventory_id)
+            .order_by(OperationalCarbonEntry.created_at.desc())
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def linked_element_ids(self, inventory_id: uuid.UUID) -> set[uuid.UUID]:
+        """Element ids already carrying an operational entry in this inventory."""
+        stmt = select(OperationalCarbonEntry.element_id).where(
+            OperationalCarbonEntry.inventory_id == inventory_id,
+            OperationalCarbonEntry.element_id.is_not(None),
+        )
+        rows = await self.session.execute(stmt)
+        return {row[0] for row in rows.all() if row[0] is not None}
+
+    async def has_whole_building(self, inventory_id: uuid.UUID) -> bool:
+        """Whether a modelled whole-building line already exists (idempotency)."""
+        stmt = select(OperationalCarbonEntry.id).where(
+            OperationalCarbonEntry.inventory_id == inventory_id,
+            OperationalCarbonEntry.system == "whole_building",
+            OperationalCarbonEntry.source == "modelled",
+        )
+        result = await self.session.execute(stmt.limit(1))
+        return result.scalars().first() is not None
+
+
+# ── Life-cycle cost (ISO 15686-5) ─────────────────────────────────────────
+
+
+class LifeCycleCostEntryRepository(_BaseRepo):
+    """Data access for LifeCycleCostEntry (6D Phase 2 whole-life cost lines)."""
+
+    model = LifeCycleCostEntry
+
+    async def list_for_inventory(
+        self,
+        inventory_id: uuid.UUID,
+    ) -> list[LifeCycleCostEntry]:
+        stmt = (
+            select(LifeCycleCostEntry)
+            .where(LifeCycleCostEntry.inventory_id == inventory_id)
+            .order_by(LifeCycleCostEntry.created_at.desc())
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def linked_element_ids(self, inventory_id: uuid.UUID) -> set[uuid.UUID]:
+        """Element ids already carrying an LCC entry in this inventory."""
+        stmt = select(LifeCycleCostEntry.element_id).where(
+            LifeCycleCostEntry.inventory_id == inventory_id,
+            LifeCycleCostEntry.element_id.is_not(None),
+        )
+        rows = await self.session.execute(stmt)
+        return {row[0] for row in rows.all() if row[0] is not None}
 
 
 # ── Targets ───────────────────────────────────────────────────────────────

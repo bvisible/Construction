@@ -1,4 +1,4 @@
-"""‌⁠‍Webhook dispatch service.
+"""Webhook dispatch service.
 
 Finds matching webhook endpoints for a given event, sends HTTP POST requests
 with JSON payloads, records delivery logs, and auto-disables endpoints after
@@ -28,12 +28,12 @@ _HTTP_TIMEOUT = 10.0  # seconds
 
 
 def _sign_payload(payload_bytes: bytes, secret: str) -> str:
-    """‌⁠‍Compute HMAC-SHA256 hex digest of *payload_bytes* using *secret*."""
+    """Compute HMAC-SHA256 hex digest of *payload_bytes* using *secret*."""
     return hmac.new(secret.encode(), payload_bytes, hashlib.sha256).hexdigest()
 
 
 class WebhookService:
-    """‌⁠‍Manages webhook CRUD and event dispatching."""
+    """Manages webhook CRUD and event dispatching."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session

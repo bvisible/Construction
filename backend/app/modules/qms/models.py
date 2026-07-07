@@ -1,4 +1,4 @@
-"""‌⁠‍QMS ORM models.
+"""QMS ORM models.
 
 Tables (all prefixed ``oe_qms_``):
     oe_qms_itp_plan              - Inspection & Test Plan header
@@ -45,7 +45,7 @@ from app.database import GUID, Base
 
 
 class ITPPlan(Base):
-    """‌⁠‍Inspection & Test Plan header.
+    """Inspection & Test Plan header.
 
     An ITP is the project's checklist of control points (hold points,
     witness points, document reviews) for a specific work type - e.g.
@@ -81,7 +81,7 @@ class ITPPlan(Base):
 
 
 class ITPItem(Base):
-    """‌⁠‍A control point inside an :class:`ITPPlan`."""
+    """A control point inside an :class:`ITPPlan`."""
 
     __tablename__ = "oe_qms_itp_item"
 

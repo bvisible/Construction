@@ -1,4 +1,4 @@
-"""‌⁠‍Bid Management service - business logic, state machines, pure helpers.
+"""Bid Management service - business logic, state machines, pure helpers.
 
 The pure helpers (``compute_*`` / ``validate_*`` / ``rank_*`` /
 ``recommend_*``) operate on plain dataclass-like objects (anything with
@@ -100,12 +100,12 @@ INVITATION_TRANSITIONS: dict[str, set[str]] = {
 
 
 def allowed_package_transitions(current: str) -> set[str]:
-    """‌⁠‍Return the set of legal next statuses for a package."""
+    """Return the set of legal next statuses for a package."""
     return PACKAGE_TRANSITIONS.get(current, set())
 
 
 def allowed_invitation_transitions(current: str) -> set[str]:
-    """‌⁠‍Return the set of legal next statuses for an invitation."""
+    """Return the set of legal next statuses for an invitation."""
     return INVITATION_TRANSITIONS.get(current, set())
 
 
@@ -431,6 +431,407 @@ def compute_bid_summary(submissions: list[Any]) -> dict[str, Any]:
         "excluded_off_currency": excluded_off_currency,
         "mixed_currency": excluded_off_currency > 0,
     }
+
+
+# ── International bid-comparison helpers (pure, no DB) ─────────────────────
+#
+# These helpers extend the analytics above with the side-by-side comparison
+# functions a bid reviewer needs anywhere in the world. Design rules that keep
+# them safe for every market:
+#   * No hardcoded currency, tax rate, unit or locale. The reporting currency
+#     is always the dominant one in the data, never assumed.
+#   * Money stays Decimal-exact and is never summed across different currency
+#     codes. Off-currency bids are excluded from price maths and counted so a
+#     mixed-currency field is visible, never silently blended.
+#   * Division by zero, empty and single-bid inputs return well-defined values
+#     (usually ``None`` fields with a zero count), never NaN, inf or a crash.
+#   * A negative bid total is impossible in the real world, so it is rejected
+#     up front as a clean ``ValueError`` rather than skewing an average.
+
+
+def _group_totals_by_currency(submissions: list[Any]) -> dict[str, list[tuple[Any, Decimal]]]:
+    """Group positive-total submissions by upper-cased currency code.
+
+    Returns ``{currency: [(submission, amount), ...]}``. Zero totals are
+    skipped (an un-priced bid carries no comparable amount). A negative total
+    is invalid input and raises :class:`ValueError` with a clear message.
+    """
+    grouped: dict[str, list[tuple[Any, Decimal]]] = {}
+    for s in submissions:
+        amt = _to_decimal(getattr(s, "total_amount", 0))
+        if amt < 0:
+            raise ValueError("bid total_amount cannot be negative")
+        if amt <= 0:
+            continue
+        cur = (getattr(s, "currency", "") or "").strip().upper()
+        grouped.setdefault(cur, []).append((s, amt))
+    return grouped
+
+
+def _dominant_currency(
+    grouped: dict[str, list[tuple[Any, Decimal]]],
+) -> tuple[str, list[tuple[Any, Decimal]], int]:
+    """Pick the reporting currency (most priced bids) and count the rest.
+
+    Returns ``(currency, kept_rows, excluded_off_currency)``. On empty input
+    returns ``("", [], 0)``. Ties resolve to the first maximal key, which is
+    stable over insertion order.
+    """
+    if not grouped:
+        return ("", [], 0)
+    report = max(grouped, key=lambda c: len(grouped[c]))
+    kept = grouped[report]
+    excluded = sum(len(v) for c, v in grouped.items() if c != report)
+    return (report, kept, excluded)
+
+
+def compute_price_spread(submissions: list[Any]) -> dict[str, Any]:
+    """Price spread of a bid field: lowest, median and highest in one currency.
+
+    "Price spread" is simply how far apart the bids are. A wide spread means
+    the bidders read the scope very differently and the numbers deserve a
+    second look. Stats are computed in the dominant currency only; bids in any
+    other currency are excluded and counted so the field is never blended.
+
+    Empty or all-off-currency input returns ``None`` price fields with a zero
+    count. ``spread_pct`` guards against a zero lowest bid.
+    """
+    q = Decimal("0.01")
+    _currency, kept, excluded = _dominant_currency(_group_totals_by_currency(submissions))
+    empty = {
+        "currency": _currency,
+        "count": len(kept),
+        "min": None,
+        "median": None,
+        "max": None,
+        "spread": None,
+        "spread_pct": None,
+        "excluded_off_currency": excluded,
+        "mixed_currency": excluded > 0,
+    }
+    if not kept:
+        return empty
+    amounts = sorted(amt for _, amt in kept)
+    n = len(amounts)
+    mid = n // 2
+    median = amounts[mid] if n % 2 == 1 else (amounts[mid - 1] + amounts[mid]) / Decimal("2")
+    low = amounts[0]
+    high = amounts[-1]
+    spread = high - low
+    spread_pct = (spread / low * Decimal("100")) if low > 0 else Decimal("0")
+    return {
+        "currency": _currency,
+        "count": n,
+        "min": low.quantize(q),
+        "median": median.quantize(q),
+        "max": high.quantize(q),
+        "spread": spread.quantize(q),
+        "spread_pct": spread_pct.quantize(q),
+        "excluded_off_currency": excluded,
+        "mixed_currency": excluded > 0,
+    }
+
+
+def normalize_bids_for_comparison(submissions: list[Any]) -> dict[str, Any]:
+    """Put every bid on the same footing against the lowest bid.
+
+    Each returned row shows the bid total, the amount it sits above the lowest
+    bid, the percent above the lowest, and an index where the lowest bid is
+    100. That makes a field of bids comparable at a glance without blending
+    currencies: only the dominant currency is normalized, the rest are counted
+    as excluded. Rows are sorted cheapest first.
+
+    Empty or all-off-currency input returns an empty ``rows`` list and a
+    ``None`` ``lowest``. All percentages guard against a zero lowest bid.
+    """
+    q = Decimal("0.01")
+    currency, kept, excluded = _dominant_currency(_group_totals_by_currency(submissions))
+    if not kept:
+        return {
+            "currency": currency,
+            "count": 0,
+            "lowest": None,
+            "rows": [],
+            "excluded_off_currency": excluded,
+            "mixed_currency": excluded > 0,
+        }
+    lowest = min(amt for _, amt in kept)
+    rows: list[dict[str, Any]] = []
+    for s, amt in kept:
+        above = amt - lowest
+        pct_above = (above / lowest * Decimal("100")) if lowest > 0 else Decimal("0")
+        index = (amt / lowest * Decimal("100")) if lowest > 0 else Decimal("100")
+        rows.append(
+            {
+                "submission_id": str(getattr(s, "id", "") or ""),
+                "bidder_id": getattr(s, "bidder_id", None),
+                "total_amount": amt.quantize(q),
+                "amount_above_lowest": above.quantize(q),
+                "pct_above_lowest": pct_above.quantize(q),
+                "index_vs_lowest": index.quantize(q),
+            }
+        )
+    rows.sort(key=lambda r: r["total_amount"])
+    return {
+        "currency": currency,
+        "count": len(rows),
+        "lowest": lowest.quantize(q),
+        "rows": rows,
+        "excluded_off_currency": excluded,
+        "mixed_currency": excluded > 0,
+    }
+
+
+def flag_abnormally_low_bids(
+    submissions: list[Any],
+    threshold_pct: Decimal | float | int | str = Decimal("15"),
+) -> dict[str, Any]:
+    """Flag bids that sit more than ``threshold_pct`` below the field average.
+
+    This is the abnormally-low-tender screen used across public procurement: a
+    bid far under the average of the field may signal a scope misunderstanding
+    and usually warrants a written explanation from the bidder before any
+    award. The threshold is a plain percentage of the average, so it fits any
+    market and currency. It differs from :func:`detect_bid_outliers`, which
+    uses a statistical sigma band; this one is the simpler, contract-style
+    "X percent below the average" rule.
+
+    Needs at least two priced bids in one currency to have a field to compare
+    against; fewer returns an empty ``flagged`` list. A negative threshold is
+    rejected as a clean ``ValueError``.
+    """
+    q = Decimal("0.01")
+    threshold = Decimal(str(threshold_pct or 0))
+    if threshold < 0:
+        raise ValueError("threshold_pct cannot be negative")
+    currency, kept, excluded = _dominant_currency(_group_totals_by_currency(submissions))
+    base = {
+        "currency": currency,
+        "count": len(kept),
+        "average": None,
+        "threshold_pct": threshold,
+        "threshold_amount": None,
+        "flagged": [],
+        "excluded_off_currency": excluded,
+        "mixed_currency": excluded > 0,
+    }
+    if len(kept) < 2:
+        return base
+    amounts = [amt for _, amt in kept]
+    average = sum(amounts, Decimal("0")) / Decimal(len(amounts))
+    threshold_amount = average * (Decimal("1") - threshold / Decimal("100"))
+    flagged: list[dict[str, Any]] = []
+    for s, amt in kept:
+        if amt < threshold_amount:
+            shortfall = average - amt
+            pct_below = (shortfall / average * Decimal("100")) if average > 0 else Decimal("0")
+            flagged.append(
+                {
+                    "submission_id": str(getattr(s, "id", "") or ""),
+                    "bidder_id": getattr(s, "bidder_id", None),
+                    "total_amount": amt.quantize(q),
+                    "pct_below_average": pct_below.quantize(q),
+                }
+            )
+    base["average"] = average.quantize(q)
+    base["threshold_amount"] = threshold_amount.quantize(q)
+    base["flagged"] = flagged
+    return base
+
+
+def compute_bid_coverage(package_lines: list[Any], submission_lines: list[Any]) -> dict[str, Any]:
+    """Coverage of one bid: which scope lines it actually priced, and the gap.
+
+    Coverage answers "did this bidder price everything we asked for?". A line
+    counts as priced when a matching submission line carries a non-zero unit or
+    total price. The result lists the codes of any un-priced lines (the
+    coverage gap) so a reviewer sees exactly what was left out, and flags
+    whether any missing line was mandatory.
+
+    A package with no lines returns 100 percent coverage with an empty gap
+    (there is nothing to price), which keeps the percentage well defined.
+    """
+    q = Decimal("0.01")
+    priced_ids: set[Any] = set()
+    for line in submission_lines:
+        unit = _to_decimal(getattr(line, "unit_price", 0))
+        total_price = _to_decimal(getattr(line, "total_price", 0))
+        if unit > 0 or total_price > 0:
+            lid = getattr(line, "line_item_id", None)
+            if lid is not None:
+                priced_ids.add(lid)
+
+    total = len(package_lines)
+    if total == 0:
+        return {
+            "total_lines": 0,
+            "priced_lines": 0,
+            "coverage_pct": Decimal("100.00"),
+            "missing_line_ids": [],
+            "missing_line_codes": [],
+            "mandatory_gap": False,
+        }
+
+    priced = 0
+    missing_ids: list[Any] = []
+    missing_codes: list[str] = []
+    mandatory_gap = False
+    for line in package_lines:
+        lid = getattr(line, "id", None)
+        if lid in priced_ids:
+            priced += 1
+            continue
+        missing_ids.append(lid)
+        missing_codes.append(getattr(line, "code", "") or str(lid))
+        if getattr(line, "is_mandatory", True):
+            mandatory_gap = True
+
+    coverage = (Decimal(priced) / Decimal(total) * Decimal("100")).quantize(q)
+    return {
+        "total_lines": total,
+        "priced_lines": priced,
+        "coverage_pct": coverage,
+        "missing_line_ids": missing_ids,
+        "missing_line_codes": missing_codes,
+        "mandatory_gap": mandatory_gap,
+    }
+
+
+def explain_award_recommendation(
+    recommended_bidder: Any,
+    levelings: list[Any],
+    bidders: list[Any],
+    *,
+    currency: str = "",
+) -> dict[str, Any]:
+    """Explain, numbers first, why one bidder is the recommended award.
+
+    Returns the winner name, its rank and scores, the size of the field, and
+    the gap to the next-best normalized total, plus a one-paragraph plain
+    summary. Exposing these numbers keeps the decision auditable: a user can
+    see the winner really is rank 1 and by how much. Pure, no DB.
+
+    When there is no recommended bidder or no leveling rows, the summary says
+    so plainly and the numeric fields stay ``None``.
+    """
+    q = Decimal("0.01")
+    empty = {
+        "summary": "No bid meets the award criteria yet.",
+        "bidder_id": None,
+        "company_name": "",
+        "rank": None,
+        "total_score": None,
+        "normalized_total": None,
+        "field_size": len(levelings),
+        "gap_to_next": None,
+        "pct_ahead_of_next": None,
+        "currency": (currency or "").strip().upper(),
+    }
+    if recommended_bidder is None or not levelings:
+        return empty
+
+    bidder_id = getattr(recommended_bidder, "id", None)
+    company_name = getattr(recommended_bidder, "company_name", "") or ""
+    winner_row = next(
+        (r for r in levelings if getattr(r, "bidder_id", None) == bidder_id),
+        None,
+    )
+    if winner_row is None:
+        return {**empty, "bidder_id": bidder_id, "company_name": company_name}
+
+    rank = int(getattr(winner_row, "rank", 0) or 0)
+    total_score = _to_decimal(getattr(winner_row, "total_score", 0))
+    normalized_total = _to_decimal(getattr(winner_row, "normalized_total", 0))
+
+    # Next-best row = the one immediately behind the winner by normalized total
+    # (lower is better), so the gap reflects what the runner-up would have cost.
+    others = [
+        _to_decimal(getattr(r, "normalized_total", 0)) for r in levelings if getattr(r, "bidder_id", None) != bidder_id
+    ]
+    gap_to_next: Decimal | None = None
+    pct_ahead_of_next: Decimal | None = None
+    if others:
+        next_best = min(others)
+        gap_to_next = (next_best - normalized_total).quantize(q)
+        if normalized_total > 0:
+            pct_ahead_of_next = ((next_best - normalized_total) / normalized_total * Decimal("100")).quantize(q)
+
+    cur = (currency or "").strip().upper()
+    cur_label = f" {cur}" if cur else ""
+    parts = [
+        f"Recommended {company_name or 'this bidder'}: rank {rank} of {len(levelings)}",
+        f"total score {total_score.quantize(q)}",
+        f"normalized total {normalized_total.quantize(q)}{cur_label}",
+    ]
+    if gap_to_next is not None:
+        parts.append(f"ahead of the next bid by {gap_to_next}{cur_label}")
+    summary = ", ".join(parts) + "."
+
+    return {
+        "summary": summary,
+        "bidder_id": bidder_id,
+        "company_name": company_name,
+        "rank": rank,
+        "total_score": total_score.quantize(q),
+        "normalized_total": normalized_total.quantize(q),
+        "field_size": len(levelings),
+        "gap_to_next": gap_to_next,
+        "pct_ahead_of_next": pct_ahead_of_next,
+        "currency": cur,
+    }
+
+
+# One-line, plain-language definitions of the bid-analysis concepts this module
+# exposes. Kept deliberately short and jargon-free so a site engineer or
+# estimator anywhere can understand a result in a few seconds. World-applicable
+# wording: no currency, standard or region is assumed.
+_BID_CONCEPTS: dict[str, str] = {
+    "bid_leveling": (
+        "Bid leveling puts every bid on the same basis, adjusting for exclusions and "
+        "qualifications, so you compare like for like instead of raw headline prices."
+    ),
+    "coverage": (
+        "Coverage is the share of the scope lines a bidder actually priced. Full coverage "
+        "means nothing in the request was left blank."
+    ),
+    "coverage_gap": (
+        "A coverage gap is a scope line a bidder did not price. Each gap is a hidden cost "
+        "you may have to carry or re-tender later."
+    ),
+    "price_spread": (
+        "Price spread is how far apart the bids are, from lowest to highest. A wide spread "
+        "usually means the bidders understood the scope differently."
+    ),
+    "abnormally_low": (
+        "An abnormally low bid sits well below the average of the field. It can be a great "
+        "price or a misread of the scope, so it is worth a written explanation before award."
+    ),
+    "outlier": (
+        "An outlier is a bid that stands far away from the rest of the field, high or low, "
+        "beyond normal variation, and is worth checking before you rely on it."
+    ),
+    "normalized_comparison": (
+        "A normalized comparison indexes every bid against the lowest one, showing how much "
+        "more each bid costs in percent, so a mixed field is easy to read at a glance."
+    ),
+}
+
+
+def explain_bid_concept(concept: str) -> str:
+    """Return a one-line plain-language definition of a bid-analysis concept.
+
+    Known concepts: ``bid_leveling``, ``coverage``, ``coverage_gap``,
+    ``price_spread``, ``abnormally_low``, ``outlier``,
+    ``normalized_comparison``. Lookup is case-insensitive. An unknown concept
+    raises :class:`ValueError` listing the valid keys, so a caller never gets a
+    silent empty string.
+    """
+    key = (concept or "").strip().lower()
+    try:
+        return _BID_CONCEPTS[key]
+    except KeyError:
+        known = ", ".join(sorted(_BID_CONCEPTS))
+        raise ValueError(f"unknown bid concept {concept!r}; known concepts: {known}") from None
 
 
 # ── Orchestration service ─────────────────────────────────────────────────

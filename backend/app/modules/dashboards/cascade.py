@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍Cascade Filter Engine (T04).
+"""Cascade Filter Engine (T04).
 
 When a user picks a value for one filter (``category = "Concrete"``), the
 *other* filter pickers should narrow to only the values that co-occur
@@ -70,7 +70,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class CascadeMatch:
-    """‌⁠‍One distinct value plus its row count under the active selection."""
+    """One distinct value plus its row count under the active selection."""
 
     value: str
     count: int
@@ -80,7 +80,7 @@ class CascadeMatch:
 
 
 class InvalidSelectedColumnError(ValueError):
-    """‌⁠‍Raised when one of the ``selected`` keys is not in the snapshot.
+    """Raised when one of the ``selected`` keys is not in the snapshot.
 
     Distinct from :class:`ColumnNotFoundError` so the router can map it
     to a 422 (the request body referenced an unknown column) while

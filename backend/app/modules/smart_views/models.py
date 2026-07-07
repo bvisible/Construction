@@ -1,5 +1,5 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
-"""‌⁠‍Smart Views ORM models.
+"""Smart Views ORM models.
 
 A :class:`SmartView` carries an ordered list of *rules* in a JSON
 column - the rules themselves are validated by Pydantic in
@@ -31,7 +31,7 @@ from app.database import GUID, Base
 
 
 class SmartView(Base):
-    """‌⁠‍A named, re-evaluating BIM visibility / colour preset.
+    """A named, re-evaluating BIM visibility / colour preset.
 
     Scoping is encoded by the ``scope_type`` + ``scope_id`` pair:
 

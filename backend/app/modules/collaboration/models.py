@@ -1,4 +1,4 @@
-"""‌⁠‍Collaboration ORM models.
+"""Collaboration ORM models.
 
 Tables:
     oe_collaboration_comment   - threaded comments on any entity
@@ -16,7 +16,7 @@ from app.database import GUID, Base
 
 
 class Comment(Base):
-    """‌⁠‍Threaded comment attached to any entity."""
+    """Threaded comment attached to any entity."""
 
     __tablename__ = "oe_collaboration_comment"
     __table_args__ = (Index("ix_collab_comment_entity", "entity_type", "entity_id"),)
@@ -74,7 +74,7 @@ class Comment(Base):
 
 
 class CommentMention(Base):
-    """‌⁠‍An @mention of a user within a comment."""
+    """An @mention of a user within a comment."""
 
     __tablename__ = "oe_collaboration_mention"
 

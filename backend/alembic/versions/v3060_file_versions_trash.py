@@ -93,7 +93,7 @@ def upgrade() -> None:
                 "is_current",
                 sa.Boolean(),
                 nullable=False,
-                server_default=sa.text("1"),
+                server_default=sa.text("1") if bind.dialect.name == "sqlite" else sa.text("true"),
             ),
             sa.Column("superseded_at", sa.DateTime(timezone=True), nullable=True),
             sa.Column("superseded_by_id", sa.String(length=36), nullable=True),

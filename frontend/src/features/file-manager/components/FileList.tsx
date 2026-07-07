@@ -141,7 +141,9 @@ export function FileList({
               const target = primaryModule(row.kind, row.extension);
               const TargetIcon = target.icon;
               // #284 - a PDF document reads inline; show "View" in the Open-in
-              // column rather than "Open in <module>".
+              // column rather than "Open in <module>". ITEM 10 - an image /
+              // video shows its target label ("View" / "Play") for the same
+              // in-place reason.
               const moduleLabel = target.inlinePreview
                 ? t('files.actions.view_file', { defaultValue: 'View' })
                 : t(target.i18nKey, { defaultValue: target.label });

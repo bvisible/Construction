@@ -31,12 +31,14 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { Button, Card, Badge, ConfirmDialog, EmptyState, Skeleton, DismissibleInfo, IntroRichText, CountryFlag, CountryFlagBackdrop, Breadcrumb, ModuleGuideButton } from '@/shared/ui';
+import { CurrencyPicker } from '@/shared/ui/CurrencyPicker';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { catalogGuide } from './catalogGuide';
 import { useConfirm } from '@/shared/hooks/useConfirm';
 import { apiGet, apiPost, apiPatch, apiDelete } from '@/shared/lib/api';
 import { getIntlLocale } from '@/shared/lib/formatters';
 import { useToastStore } from '@/stores/useToastStore';
+import { usePreferencesStore } from '@/stores/usePreferencesStore';
 import { REGION_MAP } from '@/stores/useCostDatabaseStore';
 import {
   assembliesApi,
@@ -1715,6 +1717,7 @@ export function CatalogPage() {
         title={t('catalog.intro_title', { defaultValue: 'Keep the building blocks priced right' })}
         more={t('catalog.intro_more', { defaultValue: '' }) ? <IntroRichText text={t('catalog.intro_more')} /> : undefined}
         links={[
+          { label: t('nav.cost_explorer', { defaultValue: 'Cost Explorer' }), onClick: () => navigate('/cost-explorer') },
           { label: t('nav.assemblies', { defaultValue: 'Assemblies' }), onClick: () => navigate('/assemblies') },
           { label: t('nav.costs', { defaultValue: 'Cost Database' }), onClick: () => navigate('/costs') },
           { label: t('nav.boq', { defaultValue: 'Bill of Quantities' }), onClick: () => navigate('/boq') },
@@ -2734,6 +2737,12 @@ function CreateResourceModal({
 }) {
   const { t } = useTranslation();
   const addToast = useToastStore((s) => s.addToast);
+  // Seed the currency from the user's preferred (Regional Settings) currency
+  // instead of a hardcoded 'EUR' - a user working in USD/GBP/BRL who does not
+  // open the dropdown would otherwise silently stamp their catalog resource
+  // as EUR. Falls back to 'EUR' if the stored preference is malformed.
+  const rawPreferredCurrency = usePreferencesStore((s) => s.currency);
+  const preferredCurrency = /^[A-Z]{3}$/.test(rawPreferredCurrency) ? rawPreferredCurrency : 'EUR';
   const [submitting, setSubmitting] = useState(false);
   const [form, setForm] = useState({
     name: '',
@@ -2741,12 +2750,11 @@ function CreateResourceModal({
     category: '',
     unit: 'm2',
     base_price: '',
-    currency: 'EUR',
+    currency: preferredCurrency,
   });
 
   const TYPES = ['material', 'equipment', 'labor', 'operator'];
   const UNITS = ['m', 'm2', 'm3', 'kg', 't', 'pcs', 'lsum', 'hrs', 'Machine hours', 'set', 'l', 'kWh'];
-  const CURRENCIES = ['EUR', 'USD', 'GBP', 'CHF', 'CAD', 'AUD', 'AED', 'RUB', 'CNY', 'INR', 'BRL'];
 
   const handleSubmit = useCallback(async () => {
     if (!form.name.trim()) return;
@@ -2761,7 +2769,8 @@ function CreateResourceModal({
         base_price: parseFloat(form.base_price) || 0,
         min_price: parseFloat(form.base_price) || 0,
         max_price: parseFloat(form.base_price) || 0,
-        currency: form.currency,
+        // Fall back to the preferred currency if a custom code was left blank.
+        currency: form.currency.trim() || preferredCurrency,
         usage_count: 0,
         source: 'manual',
         region: 'CUSTOM',
@@ -2850,11 +2859,13 @@ function CreateResourceModal({
               />
             </div>
             <div>
-              <label className="text-xs font-medium text-content-secondary mb-1 block">{t('catalog.currency', { defaultValue: 'Currency' })}</label>
-              <select value={form.currency} onChange={(e) => setForm({ ...form, currency: e.target.value })}
-                className="h-9 w-full rounded-lg border border-border bg-surface-primary px-2 text-sm focus:outline-none focus:ring-2 focus:ring-oe-blue">
-                {CURRENCIES.map((c) => <option key={c} value={c}>{c}</option>)}
-              </select>
+              <label htmlFor="catalog-resource-currency" className="text-xs font-medium text-content-secondary mb-1 block">{t('catalog.currency', { defaultValue: 'Currency' })}</label>
+              <CurrencyPicker
+                id="catalog-resource-currency"
+                value={form.currency}
+                onChange={(code) => setForm({ ...form, currency: code })}
+                selectClassName="h-9 w-full rounded-lg border border-border bg-surface-primary px-2 text-sm focus:outline-none focus:ring-2 focus:ring-oe-blue appearance-none cursor-pointer"
+              />
             </div>
           </div>
         </div>

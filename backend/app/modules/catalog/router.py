@@ -1,4 +1,4 @@
-"""‌⁠‍Catalog API routes.
+"""Catalog API routes.
 
 The catalog stores **resources** - single-input items (one material, one
 labour rate, one machine, etc.) with one price per region. Resources do
@@ -369,7 +369,7 @@ async def import_catalog_from_github(
 async def list_catalog_regions(
     session: SessionDep,
 ) -> list[dict[str, Any]]:
-    """‌⁠‍List loaded catalog regions with resource counts."""
+    """List loaded catalog regions with resource counts."""
     from app.modules.catalog.repository import CatalogResourceRepository
 
     repo = CatalogResourceRepository(session)

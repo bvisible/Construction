@@ -33,6 +33,7 @@ import {
   Import,
   Gauge,
   FileSearch,
+  AlarmClock,
   Plus,
   Pencil,
   Trash2,
@@ -49,6 +50,7 @@ import {
   WideModal,
   WideModalSection,
   WideModalField,
+  ModuleGuideButton,
 } from '@/shared/ui';
 import { MoneyDisplay } from '@/shared/ui/MoneyDisplay';
 import { apiGet, getErrorMessage } from '@/shared/lib/api';
@@ -80,6 +82,7 @@ import {
   previewIntake,
   getDelayRiskBoard,
   getScopeAmbiguity,
+  getNoticeRegister,
   type Urgency,
   type Awaiting,
   type BackCharge,
@@ -90,7 +93,10 @@ import {
   type DelayBand,
   type ScopeBand,
   type IntakePreview,
+  type NoticeClock,
+  type NoticeStatus,
 } from './api';
+import { changeIntelligenceGuide } from './change_intelligenceGuide';
 
 type BadgeVariant = 'neutral' | 'blue' | 'success' | 'warning' | 'error';
 
@@ -111,7 +117,8 @@ type Tab =
   | 'clarifier'
   | 'intake'
   | 'delay'
-  | 'scope';
+  | 'scope'
+  | 'notice';
 
 const URGENCY_VARIANT: Record<Urgency, BadgeVariant> = {
   overdue: 'error',
@@ -2505,6 +2512,240 @@ function ScopeRiskTab({ projectId }: { projectId: string }) {
   );
 }
 
+// --- Tab: contractual notice / time-bar register ---------------------------
+
+const NOTICE_STATUS_VARIANT: Record<NoticeStatus, BadgeVariant> = {
+  overdue: 'error',
+  due_soon: 'warning',
+  upcoming: 'success',
+  met: 'success',
+  unknown: 'neutral',
+};
+
+// Traffic-light chip labels. Explicit wording (not the raw humanized token) so
+// "due_soon" reads "Due soon"; keyed per status for i18n like the scope reasons.
+const NOTICE_STATUS_LABELS: Record<NoticeStatus, string> = {
+  overdue: 'Overdue',
+  due_soon: 'Due soon',
+  upcoming: 'Upcoming',
+  met: 'Met',
+  unknown: 'Unknown',
+};
+
+function noticeStatusLabel(status: string, t: TFunction): string {
+  const fallback = NOTICE_STATUS_LABELS[status as NoticeStatus];
+  if (fallback) {
+    return t(`change_intelligence.notice.status.${status}`, { defaultValue: fallback });
+  }
+  return humanize(status);
+}
+
+// The clock kinds the register derives. EOT stays the well-known acronym.
+const NOTICE_TYPE_LABELS: Record<string, string> = {
+  claim_notice: 'Claim notice',
+  eot_notice: 'EOT notice',
+  quotation: 'Quotation',
+  assessment: 'Assessment',
+  response: 'Response',
+};
+
+function noticeTypeLabel(noticeType: string, t: TFunction): string {
+  const fallback = NOTICE_TYPE_LABELS[noticeType];
+  if (fallback) {
+    return t(`change_intelligence.notice.type.${noticeType}`, { defaultValue: fallback });
+  }
+  return humanize(noticeType);
+}
+
+// Standards the register can resolve periods against; '' means "use the project's
+// own contract standard". These map cleanly onto the engine's standard normaliser
+// (a free-text hint such as "NEC4" also resolves, but these are the clean tokens).
+const NOTICE_STANDARDS = ['', 'FIDIC', 'NEC', 'JCT', 'AIA', 'ConsensusDocs'];
+
+// Canonical resolved-standard token -> display label for the resolved badge.
+const NOTICE_STANDARD_DISPLAY: Record<string, string> = {
+  FIDIC: 'FIDIC',
+  NEC: 'NEC',
+  JCT: 'JCT',
+  AIA: 'AIA',
+  CONSENSUSDOCS: 'ConsensusDocs',
+};
+
+/** Colour the signed countdown by urgency: overdue red, due-soon amber, else calm. */
+function noticeCountdownTone(c: NoticeClock): string {
+  if (c.status === 'overdue') return 'text-semantic-error';
+  if (c.status === 'due_soon') return 'text-semantic-warning';
+  return 'text-content-secondary';
+}
+
+/**
+ * Render the signed countdown. days_remaining is a pure day count (negative once
+ * overdue), null once the clock is stopped or undatable; when stopped we show the
+ * date the action was served instead. Whole days are enough for the register.
+ */
+function noticeCountdown(c: NoticeClock, t: TFunction): string {
+  if (c.days_remaining === null) {
+    if (c.satisfied_at) {
+      return t('change_intelligence.notice.served', {
+        defaultValue: 'Served {{date}}',
+        date: dateOnly(c.satisfied_at),
+      });
+    }
+    return t('change_intelligence.notice.no_deadline', { defaultValue: 'No deadline' });
+  }
+  const days = Math.abs(Math.round(c.days_remaining));
+  if (c.days_remaining < 0) {
+    return t('change_intelligence.notice.days_overdue', { defaultValue: '{{days}}d overdue', days });
+  }
+  return t('change_intelligence.notice.days_left', { defaultValue: '{{days}}d left', days });
+}
+
+function NoticeRegisterTab({ projectId }: { projectId: string }) {
+  const { t } = useTranslation();
+  const [standard, setStandard] = useState('');
+  const q = useQuery({
+    queryKey: ['change-intelligence', 'notice-register', projectId, standard],
+    queryFn: () => getNoticeRegister(projectId, { standard: standard || undefined }),
+    enabled: !!projectId,
+    retry: false,
+    staleTime: 30_000,
+  });
+  const register = q.data;
+  const summary = register?.summary;
+  const clocks = register?.clocks ?? [];
+  const resolvedStandard = register?.contract_standard ?? '';
+  const standardLabel =
+    resolvedStandard && resolvedStandard !== 'UNKNOWN'
+      ? (NOTICE_STANDARD_DISPLAY[resolvedStandard] ?? humanize(resolvedStandard))
+      : t('change_intelligence.notice.standard_neutral', { defaultValue: 'Standard-neutral' });
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <StatTile
+          label={t('change_intelligence.notice.tile.overdue', { defaultValue: 'Overdue' })}
+          value={summary?.overdue ?? 0}
+          tone="error"
+        />
+        <StatTile
+          label={t('change_intelligence.notice.tile.due_soon', { defaultValue: 'Due soon' })}
+          value={summary?.due_soon ?? 0}
+          tone="warning"
+        />
+        <StatTile
+          label={t('change_intelligence.notice.tile.at_risk', { defaultValue: 'At risk' })}
+          value={summary?.at_risk ?? 0}
+          tone="error"
+        />
+        <StatTile
+          label={t('change_intelligence.notice.tile.proof_missing', { defaultValue: 'Proof missing' })}
+          value={summary?.proof_missing ?? 0}
+          tone="warning"
+        />
+      </div>
+
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        <label className="flex items-center gap-2 text-sm text-content-secondary">
+          <span>{t('change_intelligence.notice.filter_label', { defaultValue: 'Contract standard' })}</span>
+          <select
+            value={standard}
+            onChange={(e) => setStandard(e.target.value)}
+            className="rounded-md border border-border-light bg-surface-primary px-2 py-1.5 text-sm"
+            aria-label={t('change_intelligence.notice.filter_label', { defaultValue: 'Contract standard' })}
+          >
+            {NOTICE_STANDARDS.map((s) => (
+              <option key={s || 'auto'} value={s}>
+                {s || t('change_intelligence.notice.filter_auto', { defaultValue: 'Project default' })}
+              </option>
+            ))}
+          </select>
+        </label>
+        {register && (
+          <span className="inline-flex items-center gap-2 text-xs text-content-tertiary">
+            <Badge variant="neutral">{standardLabel}</Badge>
+            <span>
+              {t('change_intelligence.notice.amber_window', {
+                defaultValue: 'Amber window {{days}}d',
+                days: register.due_soon_days,
+              })}
+            </span>
+          </span>
+        )}
+      </div>
+
+      <PanelState
+        loading={q.isLoading}
+        error={q.isError ? q.error : null}
+        empty={clocks.length === 0}
+        emptyIcon={<AlarmClock className="h-6 w-6" />}
+        emptyTitle={t('change_intelligence.notice.empty_title', { defaultValue: 'No notice clocks' })}
+        emptyDescription={t('change_intelligence.notice.empty_desc', {
+          defaultValue:
+            'There are no open changes with a notice or response deadline to track right now.',
+        })}
+      >
+        <div className="space-y-2">
+          {clocks.map((c) => (
+            <Card key={`${c.source_kind}:${c.source_id}:${c.notice_type}`} className="p-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge variant={NOTICE_STATUS_VARIANT[c.status]}>{noticeStatusLabel(c.status, t)}</Badge>
+                <span className="font-medium text-content-primary">
+                  {c.source_ref || humanize(c.source_kind)}
+                </span>
+                <span className="text-xs text-content-tertiary">{noticeTypeLabel(c.notice_type, t)}</span>
+                {c.entitlement_at_risk && (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-semantic-error/10 px-2 py-0.5 text-2xs font-medium text-semantic-error">
+                    <AlertTriangle className="h-3 w-3" />
+                    {t('change_intelligence.notice.at_risk', { defaultValue: 'Entitlement at risk' })}
+                  </span>
+                )}
+                <span className={`ml-auto text-sm font-medium ${noticeCountdownTone(c)}`}>
+                  {noticeCountdown(c, t)}
+                </span>
+              </div>
+              {c.title && <div className="mt-1 text-sm text-content-secondary">{c.title}</div>}
+              <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-content-tertiary">
+                <span>{humanize(c.source_kind)}</span>
+                {c.clause_ref && (
+                  <span>
+                    {t('change_intelligence.notice.clause', {
+                      defaultValue: 'Clause {{ref}}',
+                      ref: c.clause_ref,
+                    })}
+                  </span>
+                )}
+                {c.deadline && (
+                  <span>
+                    {t('change_intelligence.notice.deadline', {
+                      defaultValue: 'Deadline {{date}}',
+                      date: dateOnly(c.deadline),
+                    })}
+                  </span>
+                )}
+                {c.requires_notice &&
+                  (c.proof_on_file ? (
+                    <span className="text-semantic-success">
+                      {t('change_intelligence.notice.proof_on_file', { defaultValue: 'Notice on file' })}
+                    </span>
+                  ) : (
+                    <span className="font-medium text-semantic-error">
+                      {t('change_intelligence.notice.proof_off_file', { defaultValue: 'No notice on file' })}
+                    </span>
+                  ))}
+                {c.served_late && (
+                  <span className="text-semantic-error">
+                    {t('change_intelligence.notice.served_late', { defaultValue: 'Served late' })}
+                  </span>
+                )}
+              </div>
+            </Card>
+          ))}
+        </div>
+      </PanelState>
+    </div>
+  );
+}
+
 // --- Page -------------------------------------------------------------------
 
 export function ChangeIntelligencePage() {
@@ -2537,6 +2778,7 @@ export function ChangeIntelligencePage() {
             })}
           </p>
         </div>
+        <ModuleGuideButton content={changeIntelligenceGuide} className="ml-auto" />
       </header>
 
       <DismissibleInfo
@@ -2625,6 +2867,11 @@ export function ChangeIntelligencePage() {
                 label: t('change_intelligence.tab.scope', { defaultValue: 'Scope risk' }),
                 icon: <FileSearch className="h-4 w-4" />,
               },
+              {
+                id: 'notice',
+                label: t('change_intelligence.tab.notice', { defaultValue: 'Time bar' }),
+                icon: <AlarmClock className="h-4 w-4" />,
+              },
             ]}
           />
           <div role="tabpanel" id={ids.panelId(tab)} aria-labelledby={ids.tabId(tab)}>
@@ -2640,6 +2887,7 @@ export function ChangeIntelligencePage() {
             {tab === 'intake' && <IntakeTab projectId={projectId} />}
             {tab === 'delay' && <DelayRiskTab projectId={projectId} />}
             {tab === 'scope' && <ScopeRiskTab projectId={projectId} />}
+            {tab === 'notice' && <NoticeRegisterTab projectId={projectId} />}
           </div>
         </>
       )}

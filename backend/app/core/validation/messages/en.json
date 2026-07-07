@@ -2,6 +2,35 @@
   "common": {
     "ok": "OK"
   },
+  "field_time": {
+    "hours_per_day_max": {
+      "fail": "Worker {worker} is booked {hours} h on this day, over the {max} h limit",
+      "suggestion": "Split the hours onto the correct day or worker before submitting"
+    },
+    "line_complete": {
+      "fail": "Line {line} is incomplete: {reason}",
+      "labour_xor_plant": "must book either labour or plant, not both or neither",
+      "hours_positive": "hours must be greater than zero",
+      "cost_code_required": "a cost code is required",
+      "suggestion": "Complete the line before submitting the timesheet"
+    },
+    "cost_code_resolves": {
+      "fail": "Line {line} code '{code}' matches no BOQ position or WBS in this project",
+      "suggestion": "Pick a cost code or WBS that exists in the project BOQ"
+    },
+    "daywork_needs_variation": {
+      "fail": "Daywork line {line} is not linked to an open variation",
+      "suggestion": "Link the daywork to the variation it was instructed under"
+    },
+    "plant_needs_equipment": {
+      "fail": "Plant line {line} names no equipment item",
+      "suggestion": "Attach the machine so plant hours can be costed"
+    },
+    "approved_immutable": {
+      "fail": "This timesheet is {status} and cannot be edited",
+      "suggestion": "Post a reversing timesheet to correct approved hours"
+    }
+  },
   "ai_takeoff": {
     "scale_sanity": {
       "fail": "The AI-detected scale implies an implausible page span of {span} m",
@@ -247,6 +276,25 @@
     "valid_code": {
       "fail": "Invalid FIEBDC-3 code '{code}' in position {ordinal}",
       "suggestion": "Use FIEBDC-3 alphanumeric format (e.g., E04CM040, 01.02.01, CAP01#)"
+    }
+  },
+  "mexico": {
+    "apu_completeness": {
+      "fail": "Position {ordinal} has an incomplete APU; missing cost components: {missing}",
+      "suggestion": "Add the missing costo directo components (mano de obra, materiales, maquinaria) to the unit-price analysis"
+    },
+    "iva_rate_valid": {
+      "fail": "Position {ordinal} has an invalid IVA rate {rate}; Mexican IVA is 16, 8 (border region) or 0 percent",
+      "suggestion": "Set the IVA rate to 16 percent (standard), 8 percent (border region) or 0 percent"
+    },
+    "subcontract_retencion": {
+      "fail": "Subcontract position {ordinal} does not record whether IVA/ISR retenciones apply",
+      "suggestion": "Record the IVA and ISR retenciones for the subcontract line, or mark that none apply"
+    },
+    "cfdi_rfc_present": {
+      "missing": "CFDI issuer data is incomplete for tender export; missing: {missing}",
+      "invalid_rfc": "RFC '{rfc}' is not a valid CFDI RFC (12 characters for a company, 13 for an individual)",
+      "suggestion": "Set the issuer RFC, regimen fiscal and uso CFDI in the project profile for CFDI 4.0 invoicing"
     }
   },
   "pipeline": {

@@ -1,10 +1,10 @@
-"""‌⁠‍Contracts module permission definitions."""
+"""Contracts module permission definitions."""
 
 from app.core.permissions import Role, permission_registry
 
 
 def register_contracts_permissions() -> None:
-    """‌⁠‍Register permissions for the contracts module."""
+    """Register permissions for the contracts module."""
     permission_registry.register_module_permissions(
         "contracts",
         {
@@ -20,5 +20,9 @@ def register_contracts_permissions() -> None:
             "contracts.certify_claim": Role.MANAGER,
             "contracts.mark_paid": Role.MANAGER,
             "contracts.close": Role.MANAGER,
+            # Extension-of-time claims: raising / withdrawing is an editor
+            # action, while deciding (grant / reject) is reserved to managers.
+            "contracts.submit_eot": Role.EDITOR,
+            "contracts.decide_eot": Role.MANAGER,
         },
     )

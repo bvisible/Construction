@@ -1,4 +1,4 @@
-"""‌⁠‍CAD import/conversion module manifest."""
+"""CAD import/conversion module manifest."""
 
 from app.core.module_loader import ModuleManifest
 

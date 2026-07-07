@@ -1,4 +1,4 @@
-"""‌⁠‍BIM Hub module manifest - BIM data management backend."""
+"""BIM Hub module manifest - BIM data management backend."""
 
 from app.core.module_loader import ModuleManifest
 

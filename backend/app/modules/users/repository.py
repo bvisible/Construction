@@ -1,4 +1,4 @@
-"""‌⁠‍User data access layer.
+"""User data access layer.
 
 All database queries for users and API keys live here.
 No business logic - pure data access.
@@ -21,13 +21,13 @@ LOCAL_DESKTOP_OWNER_EMAIL = "owner@openestimate.local"
 
 
 class UserRepository:
-    """‌⁠‍Data access for User model."""
+    """Data access for User model."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
     async def get_by_id(self, user_id: uuid.UUID) -> User | None:
-        """‌⁠‍Get user by ID."""
+        """Get user by ID."""
         return await self.session.get(User, user_id)
 
     async def get_by_email(self, email: str) -> User | None:

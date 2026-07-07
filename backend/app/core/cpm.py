@@ -1,4 +1,4 @@
-"""‌⁠‍Critical Path Method (CPM) calculation engine.
+"""Critical Path Method (CPM) calculation engine.
 
 Forward pass -> early dates. Backward pass -> late dates. Float -> critical path.
 Calendar-aware (skips weekends/holidays via work_calendar).
@@ -23,7 +23,7 @@ _DEFAULT_CALENDAR: dict = {
 
 
 def _parse_work_days(calendar: dict | None) -> set[int]:
-    """‌⁠‍Extract working day indices from a calendar dict."""
+    """Extract working day indices from a calendar dict."""
     if not calendar:
         return _DEFAULT_CALENDAR["work_days"]
     raw = calendar.get("work_days")
@@ -33,7 +33,7 @@ def _parse_work_days(calendar: dict | None) -> set[int]:
 
 
 def _parse_exceptions(calendar: dict | None) -> set[date]:
-    """‌⁠‍Extract exception dates (holidays) from a calendar dict."""
+    """Extract exception dates (holidays) from a calendar dict."""
     if not calendar:
         return set()
     exceptions = calendar.get("exceptions", [])

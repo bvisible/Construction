@@ -1,4 +1,4 @@
-"""‌⁠‍Admin - permissions matrix endpoint.
+"""Admin - permissions matrix endpoint.
 
 Exposes a view + edit surface for the live ``PermissionRegistry`` so the
 frontend can render and tune the roles × modules matrix without re-
@@ -144,7 +144,7 @@ def _build_matrix_payload() -> dict[str, Any]:
 async def permissions_matrix(
     _perm: None = Depends(RequirePermission("audit.view")),
 ) -> dict[str, Any]:
-    """‌⁠‍Return the full permissions matrix for the admin UI."""
+    """Return the full permissions matrix for the admin UI."""
     return _build_matrix_payload()
 
 

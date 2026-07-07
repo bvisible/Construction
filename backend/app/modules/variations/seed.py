@@ -1,4 +1,4 @@
-"""‌⁠‍Deterministic seed data for the variations module."""
+"""Deterministic seed data for the variations module."""
 
 from __future__ import annotations
 
@@ -66,7 +66,7 @@ async def seed_variations_demo(
     session: AsyncSession,
     project_ids: Iterable[uuid.UUID],
 ) -> dict[str, int]:
-    """‌⁠‍Populate variations tables with deterministic demo data.
+    """Populate variations tables with deterministic demo data.
 
     Distribution (per spec):
       * 30 Notices

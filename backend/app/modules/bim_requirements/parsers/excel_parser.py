@@ -1,4 +1,4 @@
-"""‌⁠‍Generic Excel/CSV parser for BIM requirements.
+"""Generic Excel/CSV parser for BIM requirements.
 
 Handles arbitrary spreadsheets by auto-detecting column roles via synonym
 matching. No AI mapping in this implementation -- pure heuristic approach.
@@ -139,7 +139,7 @@ _DATATYPE_MAP: dict[str, str] = {
 
 
 def _normalize_datatype(raw: str) -> str:
-    """‌⁠‍Normalize a raw datatype string to IFC datatype."""
+    """Normalize a raw datatype string to IFC datatype."""
     clean = raw.strip().lower()
     if clean in _DATATYPE_MAP:
         return _DATATYPE_MAP[clean]
@@ -173,7 +173,7 @@ def _to_float(token: str) -> float | None:
 
 
 def _parse_constraint_value(raw: str) -> dict[str, Any]:
-    """‌⁠‍Parse a constraint value string into structured constraint_def fields.
+    """Parse a constraint value string into structured constraint_def fields.
 
     Handles patterns like:
         "REI60; REI90; REI120"   -> enum

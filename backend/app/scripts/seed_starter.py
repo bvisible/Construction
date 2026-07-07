@@ -1,4 +1,4 @@
-"""‌⁠‍Starter seed for cost items + assemblies.
+"""Starter seed for cost items + assemblies.
 
 Goal: a freshly-installed OpenConstructionERP (no CWICR import yet) should
 not show "0 cost items / 0 assemblies" in the BOQ editor and Resource
@@ -87,7 +87,7 @@ async def _seed_cost_items(session: AsyncSession, rows: list[dict]) -> int:
             currency=row.get("currency", "EUR"),
             source=_SOURCE,
             classification={},
-            components=[],
+            components=row.get("components", []),
             tags=row.get("tags", []),
             region=_REGION,
             is_active=True,
@@ -177,7 +177,7 @@ async def _seed_assemblies(session: AsyncSession, rows: list[dict]) -> int:
 
 
 async def seed_starter_data(session: AsyncSession) -> dict[str, int]:
-    """‌⁠‍Idempotently seed baseline cost items + assemblies if the tables are empty.
+    """Idempotently seed baseline cost items + assemblies if the tables are empty.
 
     Returns counts of newly inserted rows (zero when the tables already had
     data - meaning a regional CWICR catalogue or prior seed run won).

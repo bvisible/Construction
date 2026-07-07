@@ -1,4 +1,4 @@
-"""‌⁠‍Demo seed data for supplier_catalogs.
+"""Demo seed data for supplier_catalogs.
 
 Loaded on demand via ``await seed_supplier_catalogs(session)``.
 Safe to call repeatedly: existing vendors/items/warehouses are skipped.
@@ -38,7 +38,7 @@ async def seed_supplier_catalogs(
     session: AsyncSession,
     project_id: uuid.UUID | None = None,
 ) -> dict[str, int]:
-    """‌⁠‍Seed demo vendors, catalog, price lists, PRs, POs, GRs, invoices.
+    """Seed demo vendors, catalog, price lists, PRs, POs, GRs, invoices.
 
     Returns a summary dict with row counts inserted per entity. Existing
     vendors / catalog items (matched by code/sku) are skipped silently.

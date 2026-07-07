@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍Project-profile service - apply / read / recompute / retrofit.
+"""Project-profile service - apply / read / recompute / retrofit.
 
 Stateless; every method takes the AsyncSession explicitly. Presentation
 -only gating: writing :class:`ProjectModule` rows never unloads a module
@@ -28,7 +28,7 @@ from app.modules.projects.profile_scoring import (
 
 @lru_cache(maxsize=1)
 def discover_module_names() -> tuple[str, ...]:
-    """‌⁠‍All real module folder ids (every ``app/modules/<id>/manifest.py``).
+    """All real module folder ids (every ``app/modules/<id>/manifest.py``).
 
     Cached - the module set is fixed for a process lifetime. Falls back
     to the preset/always-on universe if the directory can't be read
@@ -78,7 +78,7 @@ def _to_module_read(row: ProjectModule) -> schemas.ProjectModuleRead:
 
 
 def _as_str_list(value: object) -> list[str]:
-    """‌⁠‍Coerce a JSON column back to its declared ``list[str]`` shape.
+    """Coerce a JSON column back to its declared ``list[str]`` shape.
 
     The ``activity`` / ``phases`` / ``extensions_enabled`` columns are
     declared ``Mapped[list]`` but a profile can be persisted with a
@@ -99,7 +99,7 @@ def _as_str_list(value: object) -> list[str]:
 
 
 def _as_dict(value: object) -> dict:
-    """‌⁠‍Coerce a JSON column back to its declared ``dict`` shape.
+    """Coerce a JSON column back to its declared ``dict`` shape.
 
     ``setup_completion`` is declared ``Mapped[dict]`` but a profile can
     be persisted with a scalar there (gap-fill seeds wrote ``1``).
@@ -167,7 +167,7 @@ async def apply_profile(
     spec: schemas.ProfileSpec,
     user_id: uuid.UUID | None,
 ) -> schemas.ProjectProfileResult:
-    """‌⁠‍Upsert the profile and replace the project's module assignments."""
+    """Upsert the profile and replace the project's module assignments."""
 
     prof = (
         await db.execute(

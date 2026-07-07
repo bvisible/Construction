@@ -1,4 +1,4 @@
-"""‌⁠‍5D Cost Model API routes.
+"""5D Cost Model API routes.
 
 Endpoints:
     GET    /projects/{project_id}/5d/dashboard          - aggregated KPIs
@@ -101,7 +101,7 @@ async def _distinct_budget_currencies(
 
 
 def _snapshot_to_response(snap: object) -> SnapshotResponse:
-    """‌⁠‍Convert a CostSnapshot ORM model to a SnapshotResponse."""
+    """Convert a CostSnapshot ORM model to a SnapshotResponse."""
     return SnapshotResponse(
         id=snap.id,  # type: ignore[attr-defined]
         project_id=snap.project_id,  # type: ignore[attr-defined]

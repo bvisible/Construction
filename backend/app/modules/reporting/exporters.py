@@ -458,6 +458,7 @@ def _export_pdf(
         TableStyle,
     )
 
+    from app.core.pdf_branding import branded_doc_metadata, branded_header_footer
     from app.core.pdf_fonts import BODY_FONT, BOLD_FONT, register_pdf_fonts
 
     register_pdf_fonts()
@@ -602,6 +603,10 @@ def _export_pdf(
         )
 
     buffer = io.BytesIO()
+    # Metadata + the brand header/footer follow the workspace white-label
+    # (issue #284); author/creator come from the shared helper while the
+    # report's own title/subject stay as set here.
+    meta = branded_doc_metadata()
     doc = SimpleDocTemplate(
         buffer,
         pagesize=A4,
@@ -610,11 +615,11 @@ def _export_pdf(
         topMargin=20 * mm,
         bottomMargin=18 * mm,
         title=title,
-        author="OpenConstructionERP",
+        author=meta["author"],
         subject="Project Report",
-        creator="OpenConstructionERP - DataDrivenConstruction",
+        creator=meta["creator"],
     )
-    doc.build(flowables)
+    doc.build(flowables, onFirstPage=branded_header_footer, onLaterPages=branded_header_footer)
     return buffer.getvalue()
 
 

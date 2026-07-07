@@ -1,5 +1,5 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
-"""‌⁠‍Clash → BOQ Cost Impact module.
+"""Clash → BOQ Cost Impact module.
 
 Bridges the clash detection module (BIM coordination) with the BOQ module
 (construction estimation) to surface a defensible monetary rework
@@ -21,7 +21,7 @@ killer-feature column.
 
 
 async def on_startup() -> None:
-    """‌⁠‍Module startup hook - register RBAC permissions."""
+    """Module startup hook - register RBAC permissions."""
     from app.modules.clash_cost_impact.permissions import (
         register_clash_cost_impact_permissions,
     )

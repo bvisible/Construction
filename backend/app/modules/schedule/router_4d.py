@@ -1,4 +1,4 @@
-"""‌⁠‍4D module HTTP API (Section 6 - MVP slice).
+"""4D module HTTP API (Section 6 - MVP slice).
 
 Two routers are exported here so :mod:`app.main` can mount them under the
 ``/api/v2/`` surface called out in the spec:
@@ -50,7 +50,7 @@ eac_schedule_links_router = APIRouter(prefix="/eac/schedule-links", tags=["4D EA
 
 
 class EacScheduleLinkCreate(BaseModel):
-    """‌⁠‍Body for POST /api/v2/eac/schedule-links."""
+    """Body for POST /api/v2/eac/schedule-links."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -70,7 +70,7 @@ class EacScheduleLinkCreate(BaseModel):
 
 
 class EacScheduleLinkResponse(BaseModel):
-    """‌⁠‍Slim response payload for an :class:`EacScheduleLink`."""
+    """Slim response payload for an :class:`EacScheduleLink`."""
 
     model_config = ConfigDict(from_attributes=True)
 

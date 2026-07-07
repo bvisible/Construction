@@ -1,4 +1,4 @@
-"""‌⁠‍Supplier Catalogs event names + cross-module subscribers.
+"""Supplier Catalogs event names + cross-module subscribers.
 
 All events are best-effort published via ``event_bus.publish_detached``
 inside the service layer. Subscribers in notifications + finance can
@@ -79,7 +79,7 @@ _SUBSCRIBED_FLAG = "_supplier_catalogs_subscribers_registered"
 
 
 async def _on_material_added(event: Event) -> None:
-    """‌⁠‍``supplier_catalogs.material.added`` → match_elements re-index + BI tick."""
+    """``supplier_catalogs.material.added`` → match_elements re-index + BI tick."""
     data = event.data or {}
     catalog_item_id = data.get("catalog_item_id")
     if not catalog_item_id:
@@ -132,7 +132,7 @@ async def _on_material_added(event: Event) -> None:
 
 
 async def _on_vendor_rated(event: Event) -> None:
-    """‌⁠‍``supplier_catalogs.vendor.rated`` → BI supplier-performance recompute."""
+    """``supplier_catalogs.vendor.rated`` → BI supplier-performance recompute."""
     data = event.data or {}
     vendor_id = data.get("vendor_id")
     if not vendor_id:

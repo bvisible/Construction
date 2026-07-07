@@ -1,4 +1,4 @@
-"""‌⁠‍Full EVM API routes.
+"""Full EVM API routes.
 
 Endpoints:
     GET    /forecasts              - List EVM forecasts
@@ -37,7 +37,7 @@ async def _verify_project_access(
     project_id: uuid.UUID | None,
     user_id: str | None,
 ) -> None:
-    """‌⁠‍Verify the user owns (or is admin on) the referenced project.
+    """Verify the user owns (or is admin on) the referenced project.
 
     Every project-scoped EVM endpoint must call this - the service layer
     trusts the project_id and will gladly return cross-tenant data
@@ -103,7 +103,7 @@ async def list_forecasts(
     project_id: uuid.UUID | None = Query(default=None),
     service: EVMService = Depends(_get_service),
 ) -> EVMForecastListResponse:
-    """‌⁠‍List EVM forecasts with optional project filter.
+    """List EVM forecasts with optional project filter.
 
     When ``project_id`` is provided we verify ownership before returning
     data. When omitted the list is intentionally empty for non-admin

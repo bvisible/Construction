@@ -1,4 +1,4 @@
-"""‌⁠‍AI Estimation ORM models.
+"""AI Estimation ORM models.
 
 Tables:
     oe_ai_settings - per-user AI provider configuration (API keys, preferred model)
@@ -14,7 +14,7 @@ from app.database import GUID, Base
 
 
 class AISettings(Base):
-    """‌⁠‍Per-user AI configuration - API keys and model preferences."""
+    """Per-user AI configuration - API keys and model preferences."""
 
     __tablename__ = "oe_ai_settings"
 
@@ -56,7 +56,7 @@ class AISettings(Base):
 
 
 class AIEstimateJob(Base):
-    """‌⁠‍Tracks an AI estimation request - input, status, and result."""
+    """Tracks an AI estimation request - input, status, and result."""
 
     __tablename__ = "oe_ai_estimate_job"
 

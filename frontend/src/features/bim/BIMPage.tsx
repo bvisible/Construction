@@ -86,6 +86,8 @@ import CreateTaskFromBIMModal from './CreateTaskFromBIMModal';
 import LinkDocumentToBIMModal from './LinkDocumentToBIMModal';
 import LinkActivityToBIMModal from './LinkActivityToBIMModal';
 import LinkRequirementToBIMModal from './LinkRequirementToBIMModal';
+import MeshImportDialog from './meshImport/MeshImportDialog';
+import { isMeshImportFile } from './meshImport/loaders';
 import type { BIMGroupFilterCriteria } from './api';
 import { Filter, Search } from 'lucide-react';
 import { SmartViewsPanel } from '@/features/smart_views/SmartViewsPanel';
@@ -120,6 +122,11 @@ const CAD_EXTENSIONS = new Set(['.rvt', '.ifc']);
 const DATA_EXTENSIONS = new Set(['.csv', '.xlsx', '.xls']);
 /** Extensions handled by the DWG Takeoff module - not accepted in BIM Hub. */
 const DWG_EXTENSIONS = new Set(['.dwg', '.dxf']);
+/** Mesh geometry formats parsed in-browser by the mesh importer. */
+const MESH_IMPORT_ACCEPT = '.obj,.3ds,.dae,.gltf,.glb,.fbx,.lwo,.stl,.ply,.usd,.usdz';
+/** Geometry formats the backend accepts raw alongside a data file (advanced
+ *  mode). Anything else in the geometry slot is routed to the mesh importer. */
+const RAW_GEOMETRY_EXTENSIONS = new Set(['.dae', '.glb', '.gltf']);
 
 function getFileExtension(filename: string): string {
   const dot = filename.lastIndexOf('.');
@@ -482,6 +489,7 @@ function UploadPanel({
   const [advancedMode, setAdvancedMode] = useState(initialAdvancedMode || false);
   const [dataFile, setDataFile] = useState<File | null>(null);
   const [geometryFile, setGeometryFile] = useState<File | null>(null);
+  const [meshImportFile, setMeshImportFile] = useState<File | null>(null);
   const [installPromptState, setInstallPromptState] =
     useState<InstallPromptState | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -515,6 +523,15 @@ function UploadPanel({
           : t('bim.dwg_redirect_msg', { defaultValue: 'Opening DWG Takeoff...' }),
       });
       navigate('/dwg-takeoff');
+      return;
+    }
+    // Common mesh formats (glTF/GLB/OBJ/DAE/3DS/FBX/LWO/STL/PLY/USD) are parsed
+    // in-browser by the mesh importer, which extracts quantities and hands a
+    // normalized GLB + element table to the same bim_hub upload.
+    if (isMeshImportFile(f.name)) {
+      setUploadError(null);
+      setMeshImportFile(f);
+      if (!modelName) setModelName(f.name.replace(/\.[^.]+$/, ''));
       return;
     }
     // Simple picker accepts native 3D BIM only (RVT/IFC). Tabular data
@@ -796,7 +813,7 @@ function UploadPanel({
             htmlFor="bim-upload-file-input"
             role="button"
             tabIndex={0}
-            aria-label={t('bim.upload_dropzone_aria', { defaultValue: 'Upload BIM file (RVT, IFC, DWG)' })}
+            aria-label={t('bim.upload_dropzone_aria_mesh', { defaultValue: 'Upload BIM or 3D mesh file (RVT, IFC, DWG, glTF, GLB, OBJ, DAE, 3DS, FBX, LWO, STL, PLY, USD)' })}
             onKeyDown={(e) => {
               if (e.key === 'Enter' || e.key === ' ') {
                 e.preventDefault();
@@ -822,14 +839,18 @@ function UploadPanel({
                 <div className="w-12 h-12 rounded-xl bg-surface-secondary border border-border-light flex items-center justify-center"><FileUp size={22} className="text-content-quaternary" /></div>
                 <p className="text-sm font-medium text-content-primary">{t('bim.upload_drop_here')}</p>
                 <p className="text-[10px] text-content-quaternary">{t('bim.upload_size_hint')}</p>
-                <div className="flex items-center gap-1.5 mt-1">
+                <div className="flex flex-wrap items-center justify-center gap-1.5 mt-1">
                   <span className="text-[9px] font-mono px-1 py-0.5 rounded bg-oe-blue/10 text-oe-blue border border-oe-blue/20">.rvt</span>
                   <span className="text-[9px] font-mono px-1 py-0.5 rounded bg-oe-blue/10 text-oe-blue border border-oe-blue/20">.ifc</span>
                   <span className="text-[9px] font-mono px-1 py-0.5 rounded bg-oe-blue/10 text-oe-blue border border-oe-blue/20">.dwg</span>
+                  <span className="text-[9px] font-mono px-1 py-0.5 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">.glb</span>
+                  <span className="text-[9px] font-mono px-1 py-0.5 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">.obj</span>
+                  <span className="text-[9px] font-mono px-1 py-0.5 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">.stl</span>
+                  <span className="text-[9px] font-mono px-1 py-0.5 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">{t('bim.mesh_import.more_formats', { defaultValue: '+ more' })}</span>
                 </div>
               </>
             )}
-            <input id="bim-upload-file-input" ref={fileInputRef} type="file" accept=".rvt,.ifc,.dwg,.dxf" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFileSelect(f); }} />
+            <input id="bim-upload-file-input" ref={fileInputRef} type="file" accept={`.rvt,.ifc,.dwg,.dxf,${MESH_IMPORT_ACCEPT}`} className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFileSelect(f); }} />
           </label>
         ) : (
           <div className="grid grid-cols-2 gap-3">
@@ -845,7 +866,20 @@ function UploadPanel({
               <span className="text-[11px] font-medium text-content-primary">{t('bim.upload_advanced_geometry')}</span>
               <span className="text-[9px] text-content-quaternary">{t('bim.upload_advanced_geometry_hint')}</span>
               {geometryFile && <Badge variant="blue" size="sm">{geometryFile.name}</Badge>}
-              <input ref={geoInputRef} type="file" accept=".dae,.glb,.gltf" className="hidden" onChange={(e) => setGeometryFile(e.target.files?.[0] ?? null)} />
+              <input ref={geoInputRef} type="file" accept={MESH_IMPORT_ACCEPT} className="hidden" onChange={(e) => {
+                const f = e.target.files?.[0] ?? null;
+                // .dae/.glb/.gltf are accepted raw by the backend as an
+                // accompanying geometry file (existing advanced workflow).
+                // Any other mesh format is routed to the in-browser mesh
+                // importer, which normalizes it before upload.
+                if (f && isMeshImportFile(f.name) && !RAW_GEOMETRY_EXTENSIONS.has(getFileExtension(f.name))) {
+                  setMeshImportFile(f);
+                  if (!modelName) setModelName(f.name.replace(/\.[^.]+$/, ''));
+                  if (geoInputRef.current) geoInputRef.current.value = '';
+                  return;
+                }
+                setGeometryFile(f);
+              }} />
             </label>
           </div>
         )}
@@ -942,6 +976,17 @@ function UploadPanel({
           const pending = installPromptState;
           setInstallPromptState(null);
           void retryUploadAfterInstall(pending);
+        }}
+      />
+    )}
+    {meshImportFile && projectId && (
+      <MeshImportDialog
+        projectId={projectId}
+        file={meshImportFile}
+        onClose={() => setMeshImportFile(null)}
+        onUploadComplete={(modelId) => {
+          setMeshImportFile(null);
+          onUploadComplete(modelId);
         }}
       />
     )}
@@ -1307,6 +1352,7 @@ function LandingPage({ projectId, onUploadComplete: _onUploadComplete, breadcrum
   const { t } = useTranslation();
   const navigate = useNavigate();
   const [file, setFile] = useState<File | null>(null);
+  const [meshImportFile, setMeshImportFile] = useState<File | null>(null);
   const [modelName, setModelName] = useState('');
   const [conversionDepth, setConversionDepth] = useState<'standard' | 'medium' | 'complete'>('standard');
   const [generatePdfSheets, setGeneratePdfSheets] = useState(false);
@@ -1404,6 +1450,7 @@ function LandingPage({ projectId, onUploadComplete: _onUploadComplete, breadcrum
   ];
 
   return (
+    <>
     <div className="flex flex-col -mx-4 sm:-mx-7 -mt-6 -mb-6 border-s border-border-light" style={{ height: 'calc(100vh - 56px)' }}>
       <div className="px-6 pt-4 pb-3 border-b border-border-light"><Breadcrumb items={breadcrumbItems} /></div>
       {/* Soft modern background - calm base gradient plus two muted
@@ -1483,6 +1530,11 @@ function LandingPage({ projectId, onUploadComplete: _onUploadComplete, breadcrum
                     if (f) {
                       const ext = getFileExtension(f.name);
                       if (DWG_EXTENSIONS.has(ext)) { handleLandingDwg(f); return; }
+                      if (isMeshImportFile(f.name)) {
+                        setMeshImportFile(f);
+                        if (!modelName) setModelName(f.name.replace(/\.[^.]+$/, ''));
+                        return;
+                      }
                       if (!CAD_EXTENSIONS.has(ext)) {
                         addToast({ type: 'error', title: t('bim.upload_unsupported_format', { defaultValue: 'Unsupported file format. Please upload RVT, IFC or DWG files.' }) });
                         return;
@@ -1522,7 +1574,7 @@ function LandingPage({ projectId, onUploadComplete: _onUploadComplete, breadcrum
                       </p>
                     </>
                   )}
-                  <input ref={fileInputRef} type="file" accept=".rvt,.ifc,.dwg,.dxf" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (!f) return; if (DWG_EXTENSIONS.has(getFileExtension(f.name))) { handleLandingDwg(f); return; } setFile(f); if (!modelName) setModelName(f.name.replace(/\.[^.]+$/, '')); }} />
+                  <input ref={fileInputRef} type="file" accept={`.rvt,.ifc,.dwg,.dxf,${MESH_IMPORT_ACCEPT}`} className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (!f) return; if (DWG_EXTENSIONS.has(getFileExtension(f.name))) { handleLandingDwg(f); return; } if (isMeshImportFile(f.name)) { setMeshImportFile(f); if (!modelName) setModelName(f.name.replace(/\.[^.]+$/, '')); return; } setFile(f); if (!modelName) setModelName(f.name.replace(/\.[^.]+$/, '')); }} />
                 </label>
                 {file && (
                   <div className="mt-4 space-y-3">
@@ -1873,6 +1925,18 @@ function LandingPage({ projectId, onUploadComplete: _onUploadComplete, breadcrum
           </div>
         </div>
     </div>
+    {meshImportFile && projectId && (
+      <MeshImportDialog
+        projectId={projectId}
+        file={meshImportFile}
+        onClose={() => setMeshImportFile(null)}
+        onUploadComplete={(modelId) => {
+          setMeshImportFile(null);
+          _onUploadComplete(modelId);
+        }}
+      />
+    )}
+    </>
   );
 }
 

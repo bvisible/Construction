@@ -2,7 +2,7 @@
 # CWICR Cost Database Engine · CAD2DATA Pipeline
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
 # AGPL-3.0 License · DDC-CWICR-OE-2026
-"""‌⁠‍OpenEstimate​‌‍⁠​‌‍⁠​‌‍⁠​‌‍⁠ - FastAPI application factory.
+"""OpenEstimate​‌‍⁠​‌‍⁠​‌‍⁠​‌‍⁠ - FastAPI application factory.
 
 Usage:
     uvicorn app.main:create_app --factory --reload --port 8000
@@ -63,7 +63,7 @@ logger = logging.getLogger(__name__)
 
 
 def configure_logging(settings: Settings) -> None:
-    """‌⁠‍Configure structured logging."""
+    """Configure structured logging."""
     structlog.configure(
         processors=[
             structlog.contextvars.merge_contextvars,
@@ -102,7 +102,7 @@ def configure_logging(settings: Settings) -> None:
 
 
 def _init_vector_db() -> None:
-    """‌⁠‍Initialize vector database on startup (non-blocking, never fatal).
+    """Initialize vector database on startup (non-blocking, never fatal).
 
     Vector search is an important feature of OpenConstructionERP -
     it powers semantic cost-item matching, BOQ auto-classification,
@@ -2689,6 +2689,17 @@ def create_app() -> FastAPI:
                         counts["cost_items"],
                         counts["assemblies"],
                     )
+                # The Cost Explorer module's own startup index build ran during
+                # module load, before this seed, so on a first boot it saw an
+                # empty cost table. Build the resource->work reverse index now
+                # that the starter cost items (with their resource recipes) are
+                # in place, otherwise the By-resources and Substitute tabs would
+                # stay empty until the next restart. Self-contained, idempotent
+                # and size-capped; it swallows its own errors.
+                if counts["cost_items"]:
+                    from app.modules.cost_explorer.service import build_index_if_empty
+
+                    await build_index_if_empty()
         except Exception:
             logger.exception("Starter seed failed - /costs and /catalog may be empty")
 

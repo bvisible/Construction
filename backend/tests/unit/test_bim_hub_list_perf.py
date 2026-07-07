@@ -312,3 +312,25 @@ async def test_bulk_summary_separates_artifacts_from_originals(
     assert info["has_original"] is True
     assert ".glb" in info["geometry_exts"]  # type: ignore[operator]
     assert counting_backend.calls["list_prefix"] == 1
+
+
+def test_bim_model_elements_relationship_is_not_eager_loaded() -> None:
+    """ORM-side perf/crash contract - regression guard for issue #291.
+
+    ``BIMModel.elements`` MUST NOT be ``lazy="selectin"``. With selectin,
+    every ``session.get(BIMModel, id)`` (get_model -> geometry / schema /
+    single-model endpoints) silently hydrates ALL of a model's element rows
+    (with their full properties/quantities/bounding_box JSON) into memory.
+    That blew up the worker on large models and surfaced as a BIM 3D viewer
+    "parsing error" for a 6114-element HVAC model. No code reads
+    ``model.elements`` through this relationship - elements are queried
+    straight from oe_bim_element - so it must load lazily, not eagerly.
+    """
+    from app.modules.bim_hub.models import BIMModel
+
+    lazy = BIMModel.elements.property.lazy
+    assert lazy != "selectin", (
+        "BIMModel.elements regressed to lazy='selectin': this eager-loads "
+        "every element on any session.get(BIMModel) and crashes large models "
+        "(issue #291). Load elements explicitly (selectinload) where needed."
+    )

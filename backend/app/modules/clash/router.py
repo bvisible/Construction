@@ -1,5 +1,5 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
-"""‌⁠‍Clash detection API routes - mounted by the loader at ``/api/v1/clash``.
+"""Clash detection API routes - mounted by the loader at ``/api/v1/clash``.
 
 Endpoints
     GET    /projects/{project_id}/models                 → models picker
@@ -101,7 +101,7 @@ def _get_service(session: SessionDep) -> ClashService:
 
 
 async def _require_project_access(session: AsyncSession, project_id: uuid.UUID, user_id: str) -> None:
-    """‌⁠‍Verify the caller may access ``project_id`` (IDOR guard).
+    """Verify the caller may access ``project_id`` (IDOR guard).
 
     Delegates to the shared :func:`app.dependencies.verify_project_access`
     so the clash module agrees with ``clash_cost_impact`` and the rest of
@@ -125,7 +125,7 @@ async def list_models(
     session: SessionDep,
     service: ClashService = Depends(_get_service),
 ) -> list[ClashModelOption]:
-    """‌⁠‍Lightweight BIM-model list for the run-config picker."""
+    """Lightweight BIM-model list for the run-config picker."""
     await _require_project_access(session, project_id, user_id)
     models = await service.repo.models_for_project(project_id)
     return [

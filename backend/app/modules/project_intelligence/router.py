@@ -1,4 +1,4 @@
-"""‌⁠‍Project Intelligence API routes.
+"""Project Intelligence API routes.
 
 Endpoints:
     GET  /score/?project_id=X          - Project score with gaps and achievements
@@ -78,7 +78,7 @@ async def _verify_project_access(
     project_id: uuid.UUID | str,
     user_id: str | None,
 ) -> None:
-    """‌⁠‍Verify the caller may access the referenced project (owner / team / admin).
+    """Verify the caller may access the referenced project (owner / team / admin).
 
     Every project_intelligence endpoint must call this before touching
     collector / scorer / advisor - those helpers trust the project_id
@@ -121,7 +121,7 @@ _state_cache: "OrderedDict[tuple[str, str], tuple[float, Any]]" = OrderedDict()
 
 
 def _cache_key(user_id: str | None, project_id: str) -> tuple[str, str]:
-    """‌⁠‍Per-user cache key - prevents cross-user state leaks."""
+    """Per-user cache key - prevents cross-user state leaks."""
     return (str(user_id or "anon"), project_id)
 
 

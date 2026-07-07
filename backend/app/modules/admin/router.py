@@ -1,4 +1,4 @@
-"""‌⁠‍Admin API routes.
+"""Admin API routes.
 
 Endpoints:
     POST /qa-reset                   - reset the demo dataset (triple-gated)
@@ -44,7 +44,7 @@ _REINDEX_INLINE_LIMIT = 1000
 
 
 class QAResetRequest(BaseModel):
-    """‌⁠‍Body for POST /qa-reset.
+    """Body for POST /qa-reset.
 
     ``confirm_token`` must equal ``os.environ['QA_RESET_TOKEN']`` server-side.
     ``tenant`` must equal ``"demo"`` - the only resettable tenant.
@@ -125,7 +125,7 @@ async def qa_reset(
 
 
 class CostVectorReindexRequest(BaseModel):
-    """‌⁠‍Body for ``POST /cost-vector-reindex``.
+    """Body for ``POST /cost-vector-reindex``.
 
     Same triple-gate model as qa-reset:
         * ``QA_RESET_ALLOWED=1`` env var (the existing operator flag is

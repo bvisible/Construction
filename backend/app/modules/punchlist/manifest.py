@@ -1,4 +1,4 @@
-"""‌⁠‍Punch List module manifest."""
+"""Punch List module manifest."""
 
 from app.core.module_loader import ModuleManifest
 

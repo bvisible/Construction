@@ -1,4 +1,4 @@
-"""‌⁠‍BIMQ JSON parser for BIM requirements.
+"""BIMQ JSON parser for BIM requirements.
 
 Parses JSON exports from the BIMQ platform (bim-q.de) into
 UniversalRequirement rows.
@@ -19,13 +19,13 @@ logger = logging.getLogger(__name__)
 
 
 class BIMQParser(BaseRequirementParser):
-    """‌⁠‍Parser for BIMQ JSON exports."""
+    """Parser for BIMQ JSON exports."""
 
     FORMAT_NAME = "BIMQ"
     SUPPORTED_EXTENSIONS = [".json"]
 
     def parse(self, source: Path | str | bytes) -> ParseResult:
-        """‌⁠‍Parse a BIMQ JSON file into universal requirements."""
+        """Parse a BIMQ JSON file into universal requirements."""
         result = ParseResult()
         result.metadata["format"] = self.FORMAT_NAME
 

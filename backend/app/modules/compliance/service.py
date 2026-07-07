@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""‌⁠‍Service layer for the compliance DSL module.
+"""Service layer for the compliance DSL module.
 
 Owns:
 
@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 
 
 class ComplianceError(Exception):
-    """‌⁠‍Base class for compliance-module service errors."""
+    """Base class for compliance-module service errors."""
 
     http_status: int = 500
     message_key: str = "compliance.dsl.error"
@@ -88,7 +88,7 @@ class CompileArgs:
 
 
 class ComplianceDSLService:
-    """‌⁠‍High-level operations on compliance DSL rules."""
+    """High-level operations on compliance DSL rules."""
 
     MAX_DEFINITION_BYTES = 64_000
 

@@ -1,4 +1,4 @@
-"""‌⁠‍Inspections ORM models.
+"""Inspections ORM models.
 
 Tables:
     oe_inspections_inspection - quality inspections with checklists and pass/fail results
@@ -13,7 +13,7 @@ from app.database import GUID, Base
 
 
 class QualityInspection(Base):
-    """‌⁠‍A quality inspection record with checklist and pass/fail result."""
+    """A quality inspection record with checklist and pass/fail result."""
 
     __tablename__ = "oe_inspections_inspection"
     __table_args__ = (

@@ -1,4 +1,4 @@
-"""‌⁠‍Pydantic schemas for the project file manager (Issue #109).
+"""Pydantic schemas for the project file manager (Issue #109).
 
 The file manager surfaces every binary that belongs to a project - drawings,
 photos, BIM models, BOQ exports, takeoffs - alongside the *real* on-disk
@@ -29,7 +29,7 @@ FileKind = Literal[
 
 
 class FileRow(BaseModel):
-    """‌⁠‍Single file as shown in the file-manager grid/list."""
+    """Single file as shown in the file-manager grid/list."""
 
     id: str = Field(..., description="UUID of the underlying row (Document/Photo/...)")
     kind: FileKind = Field(..., description="Logical file type - drives UI icon and download URL")
@@ -69,7 +69,7 @@ class FileRow(BaseModel):
 
 
 class FileTreeNode(BaseModel):
-    """‌⁠‍Logical tree node - a category, kind, or virtual folder."""
+    """Logical tree node - a category, kind, or virtual folder."""
 
     id: str = Field(..., description="Stable identifier - used as React key")
     label: str = Field(..., description="Localised label fallback (UI re-translates if available)")

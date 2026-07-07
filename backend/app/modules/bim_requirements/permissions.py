@@ -1,11 +1,11 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
-"""‌⁠‍BIM Requirements module permission definitions."""
+"""BIM Requirements module permission definitions."""
 
 from app.core.permissions import Role, permission_registry
 
 
 def register_bim_requirements_permissions() -> None:
-    """‌⁠‍Register RBAC permissions for the bim_requirements module.
+    """Register RBAC permissions for the bim_requirements module.
 
     Mirrors the sibling ``clash`` / ``validation`` verb set: viewers read
     requirement sets and run model validations / exports; editors import

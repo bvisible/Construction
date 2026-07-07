@@ -1,4 +1,4 @@
-"""‌⁠‍QMS Pydantic schemas - request / response models.
+"""QMS Pydantic schemas - request / response models.
 
 All UUIDs are :class:`uuid.UUID`; cost amounts use :class:`Decimal`.
 Read schemas declare ``from_attributes=True`` so they hydrate directly
@@ -35,7 +35,7 @@ def _bound_money(v: Decimal | None) -> Decimal | None:
 
 
 def _validate_https_url(value: str | None) -> str | None:
-    """‌⁠‍Reject URLs that aren't http(s).
+    """Reject URLs that aren't http(s).
 
     Rationale: ``certificate_url`` is rendered as a clickable link in
     calibration detail UIs; ``javascript:`` / ``data:`` schemes would
@@ -59,7 +59,7 @@ def _validate_https_url(value: str | None) -> str | None:
 
 
 class ITPPlanCreate(BaseModel):
-    """‌⁠‍Create an Inspection & Test Plan."""
+    """Create an Inspection & Test Plan."""
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
@@ -75,7 +75,7 @@ class ITPPlanCreate(BaseModel):
 
 
 class ITPPlanUpdate(BaseModel):
-    """‌⁠‍Partial update for an ITP plan."""
+    """Partial update for an ITP plan."""
 
     model_config = ConfigDict(str_strip_whitespace=True)
 

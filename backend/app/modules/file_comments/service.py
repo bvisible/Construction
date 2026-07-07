@@ -68,7 +68,58 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
-def _to_response(comment: FileComment, mentions: list[FileCommentMention]) -> FileCommentResponse:
+def _short_id(author_id: uuid.UUID) -> str:
+    """The 8-char prefix the frontend used to render raw.
+
+    Kept as the last-resort label so a missing user row still produces a
+    stable, recognisable fallback rather than an empty cell.
+    """
+    return str(author_id)[:8]
+
+
+def _display_name(
+    author_id: uuid.UUID,
+    full_name: str | None,
+    email: str | None,
+) -> str:
+    """Resolve an author to a human label.
+
+    Mirrors the fallback chain used elsewhere in the file-* surface
+    (full name -> email -> short id). ``full_name`` is stripped so a row
+    carrying only whitespace does not win over the email. Pure function -
+    unit-tested without the DB.
+    """
+    name = (full_name or "").strip()
+    if name:
+        return name
+    mail = (email or "").strip()
+    if mail:
+        return mail
+    return _short_id(author_id)
+
+
+async def _resolve_author_names(
+    session: AsyncSession,
+    author_ids: set[uuid.UUID],
+) -> dict[uuid.UUID, str]:
+    """Bulk-resolve author ids to display labels in one query.
+
+    Ids without a matching ``User`` row (e.g. a deleted account) are
+    simply absent from the map; the caller falls back to a short id so a
+    tombstoned author never blanks out the byline.
+    """
+    if not author_ids:
+        return {}
+    stmt = select(User.id, User.full_name, User.email).where(User.id.in_(author_ids))
+    rows = (await session.execute(stmt)).all()
+    return {uid: _display_name(uid, full_name, email) for (uid, full_name, email) in rows}
+
+
+def _to_response(
+    comment: FileComment,
+    mentions: list[FileCommentMention],
+    author_name: str | None = None,
+) -> FileCommentResponse:
     """Build a flat response row out of an ORM object."""
     return FileCommentResponse(
         id=comment.id,
@@ -79,6 +130,7 @@ def _to_response(comment: FileComment, mentions: list[FileCommentMention]) -> Fi
         file_version_id=comment.file_version_id,
         parent_id=comment.parent_id,
         author_id=comment.author_id,
+        author_name=author_name or _short_id(comment.author_id),
         body=comment.body,
         page_number=comment.page_number,
         anchor_x=comment.anchor_x,
@@ -95,6 +147,7 @@ def _to_response(comment: FileComment, mentions: list[FileCommentMention]) -> Fi
 def _build_threads(
     comments: list[FileComment],
     mentions_by_comment: dict[uuid.UUID, list[FileCommentMention]],
+    names_by_author: dict[uuid.UUID, str] | None = None,
 ) -> list[FileCommentThread]:
     """Group a flat comment list into nested top-level threads.
 
@@ -103,10 +156,11 @@ def _build_threads(
     parent has been hard-pruned) are surfaced as top-level threads so
     they are never invisible.
     """
+    names = names_by_author or {}
     nodes: dict[uuid.UUID, FileCommentThread] = {}
     for c in comments:
         ms = mentions_by_comment.get(c.id, [])
-        resp = _to_response(c, ms)
+        resp = _to_response(c, ms, author_name=names.get(c.author_id))
         nodes[c.id] = FileCommentThread(**resp.model_dump(), replies=[])
 
     roots: list[FileCommentThread] = []
@@ -147,6 +201,27 @@ def _resolve_mentions(handles: list[str], users: list[User]) -> list[uuid.UUID]:
                     seen.add(u.id)
                 break
     return resolved
+
+
+# ── author label ───────────────────────────────────────────────────────
+
+
+async def resolve_author_name(
+    session: AsyncSession,
+    author_id: uuid.UUID,
+) -> str:
+    """Display label for a single author (full name -> email -> short id).
+
+    Used by the create / patch endpoints which return one freshly-written
+    comment and so don't go through the bulk thread path. A missing user
+    row falls back to the short id - never blanks the byline.
+    """
+    stmt = select(User.full_name, User.email).where(User.id == author_id)
+    row = (await session.execute(stmt)).first()
+    if row is None:
+        return _short_id(author_id)
+    full_name, email = row
+    return _display_name(author_id, full_name, email)
 
 
 # ── single-comment fetch ───────────────────────────────────────────────
@@ -204,7 +279,11 @@ async def list_threads(
     for m in mention_rows:
         mentions_by_comment.setdefault(m.comment_id, []).append(m)
 
-    threads = _build_threads(comments, mentions_by_comment)
+    # Bulk-resolve author labels in one query so every node renders a
+    # readable name instead of a raw id (issue #284 follow-up).
+    names_by_author = await _resolve_author_names(session, {c.author_id for c in comments})
+
+    threads = _build_threads(comments, mentions_by_comment, names_by_author)
     if not include_resolved:
         threads = [t for t in threads if not t.resolved]
     return threads, len(threads)
@@ -592,6 +671,7 @@ __all__ = [
     "get_comment",
     "list_threads",
     "list_unread_mentions",
+    "resolve_author_name",
     "soft_delete_comment",
     "update_comment",
 ]
