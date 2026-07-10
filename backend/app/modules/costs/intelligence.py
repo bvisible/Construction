@@ -283,7 +283,10 @@ class CostCertaintyService:
             last_used_iso = last_used
 
         band = classify_certainty(frequency, age_days)
-        return {
+        # Local import avoids a circular import (service imports intelligence).
+        from app.modules.costs.service import price_freshness
+
+        badge: dict[str, object] = {
             "cost_item_id": cost_item_id,
             "frequency": frequency,
             "age_days": age_days,
@@ -291,3 +294,8 @@ class CostCertaintyService:
             "confidence_badge": band,
             "last_used_at": last_used_iso,
         }
+        # Merge the price-date freshness signals so the badge flags a stale
+        # price independently of usage. The freshness keys are namespaced in
+        # ``price_freshness`` so they never collide with the usage fields above.
+        badge.update(price_freshness(item.price_as_of, item.rate))
+        return badge

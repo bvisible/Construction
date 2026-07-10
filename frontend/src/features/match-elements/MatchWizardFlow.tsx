@@ -87,6 +87,12 @@ import {
 import { EmbedderStatusCard } from './EmbedderStatusCard';
 import { MatchAnalyticsCard } from './MatchAnalyticsCard';
 import { TemplatesPanel } from './TemplatesPanel';
+import {
+  MATCH_LANE_ORDER,
+  confirmableKeys,
+  partitionLanes,
+  type MatchLaneId,
+} from './matchReasons';
 
 // ─────────────────────────────────────────────────────────────────────────
 //  Stage model — the single source of truth for the one-and-only rail
@@ -322,6 +328,188 @@ function StatTile({
       <div className="text-2xl font-semibold text-content-primary tabular-nums">{value}</div>
       <div className="text-xs text-content-secondary">{label}</div>
     </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+//  Review worklist — three confidence lanes
+// ─────────────────────────────────────────────────────────────────────────
+
+// Visual accent + copy per lane. Kept here (not in matchReasons.ts) because
+// it is pure presentation; the lane maths and ordering live in the tested
+// helper module.
+const LANE_ACCENT: Record<
+  MatchLaneId,
+  { dot: string; ring: string; count: string }
+> = {
+  needs_you: {
+    dot: 'bg-rose-500',
+    ring: 'border-rose-200 dark:border-rose-900/50',
+    count: 'bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-200',
+  },
+  quick_review: {
+    dot: 'bg-amber-500',
+    ring: 'border-amber-200 dark:border-amber-900/50',
+    count: 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200',
+  },
+  auto_confirmed: {
+    dot: 'bg-emerald-500',
+    ring: 'border-emerald-200 dark:border-emerald-900/50',
+    count:
+      'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200',
+  },
+};
+
+/** Small colour-coded chip for a group's confidence band. */
+function BandChip({ band }: { band: GroupSummary['confidence_band'] }) {
+  const { t } = useTranslation();
+  const cls =
+    band === 'high'
+      ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200'
+      : band === 'medium'
+        ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200'
+        : band === 'low'
+          ? 'bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-200'
+          : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300';
+  return (
+    <span className={clsx('rounded-full px-2 py-0.5 text-[11px] font-medium', cls)}>
+      {t(`match.confidence_band_${band}`, {
+        defaultValue:
+          band === 'high'
+            ? 'High'
+            : band === 'medium'
+              ? 'Medium'
+              : band === 'low'
+                ? 'Low'
+                : 'No match',
+      })}
+    </span>
+  );
+}
+
+/** One confidence lane: header (title, subtitle, count, per-lane accept) and
+ *  the worst-first list of its groups. Renders nothing when the lane is
+ *  empty so the worklist only shows lanes that have work. */
+function LaneSection({
+  laneId,
+  title,
+  subtitle,
+  groups,
+  confirmableCount,
+  accepting,
+  onAccept,
+  onInspect,
+}: {
+  laneId: MatchLaneId;
+  title: string;
+  subtitle: string;
+  groups: GroupSummary[];
+  confirmableCount: number;
+  accepting: boolean;
+  onAccept: () => void;
+  onInspect: (g: GroupSummary) => void;
+}) {
+  const { t } = useTranslation();
+  if (groups.length === 0) return null;
+  const accent = LANE_ACCENT[laneId];
+  return (
+    <section
+      className={clsx('rounded-xl border bg-surface-primary', accent.ring)}
+      aria-label={title}
+    >
+      <header className="flex flex-wrap items-center gap-3 border-b border-border-light px-4 py-3">
+        <span className={clsx('h-2.5 w-2.5 shrink-0 rounded-full', accent.dot)} />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <h3 className="text-sm font-semibold text-content-primary">{title}</h3>
+            <span
+              className={clsx(
+                'rounded-full px-2 py-0.5 text-[11px] font-semibold tabular-nums',
+                accent.count,
+              )}
+            >
+              {groups.length}
+            </span>
+          </div>
+          <p className="mt-0.5 text-xs text-content-secondary">{subtitle}</p>
+        </div>
+        {confirmableCount > 0 && (
+          <Button
+            variant={laneId === 'needs_you' ? 'ghost' : 'secondary'}
+            size="sm"
+            icon={<Check className="h-4 w-4" />}
+            loading={accepting}
+            onClick={onAccept}
+          >
+            {t('match.lanes.acceptAll', {
+              defaultValue: 'Accept all {{n}}',
+              n: confirmableCount,
+            })}
+          </Button>
+        )}
+      </header>
+      <ul className="divide-y divide-border-light/60">
+        {groups.map((g) => (
+          <li
+            key={g.id}
+            className="flex flex-wrap items-center gap-3 px-4 py-2.5 hover:bg-surface-muted"
+          >
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-sm font-medium text-content-primary">
+                {g.display_label}
+              </div>
+              <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-content-tertiary">
+                <span>
+                  {g.element_count}{' '}
+                  {t('match.wizard.elementsLc', { defaultValue: 'elements' })}
+                </span>
+                {g.suggested_code ? (
+                  <>
+                    <span aria-hidden>·</span>
+                    <span className="font-mono">{g.suggested_code}</span>
+                    {g.suggested_description && (
+                      <span className="truncate max-w-[220px]">
+                        {g.suggested_description}
+                      </span>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <span aria-hidden>·</span>
+                    <span>
+                      {t('match.lanes.noCandidate', {
+                        defaultValue: 'no candidate yet',
+                      })}
+                    </span>
+                  </>
+                )}
+              </div>
+            </div>
+            <BandChip band={g.confidence_band} />
+            <span
+              className={clsx(
+                'rounded-full px-2 py-0.5 text-[11px]',
+                g.status === 'confirmed' || g.status === 'applied'
+                  ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200'
+                  : g.status === 'suggested'
+                    ? 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'
+                    : 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400',
+              )}
+            >
+              {t(`match.group_status_${g.status}`, { defaultValue: g.status })}
+            </span>
+            <button
+              type="button"
+              className="inline-flex items-center gap-1 text-xs font-medium text-oe-blue hover:underline"
+              onClick={() => onInspect(g)}
+            >
+              {t('match.wizard.inspect', { defaultValue: 'Inspect' })}
+              <ChevronRight className="h-3.5 w-3.5" />
+            </button>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 
@@ -617,30 +805,32 @@ export function MatchWizardFlow() {
     // surfaced as a red "match failed".
   });
 
-  const bulkConfirmM = useMutation({
-    mutationFn: () =>
-      matchElementsApi.bulkConfirm(sessionId!, { threshold: autoThreshold }),
+  // Per-lane bulk accept. The lane's confirmable group_keys ARE the filter,
+  // so we pass threshold 0 - re-thresholding numerically here would drop the
+  // groups the backend promoted into a band via hard filters. The server
+  // only confirms `suggested` groups, so already-settled rows in the lane
+  // are never touched. ``variables.laneId`` lets each lane show its own
+  // spinner while a different lane accepts.
+  const acceptLaneM = useMutation({
+    mutationFn: (vars: { laneId: MatchLaneId; groupKeys: string[] }) =>
+      matchElementsApi.bulkConfirm(sessionId!, {
+        group_keys: vars.groupKeys,
+        threshold: 0,
+      }),
     onSuccess: (r) => {
-      // "0 confirmed" is not a success — it means nothing cleared the
-      // threshold. Surfacing it green is misleading; tell the user the
-      // actionable next step (lower the auto-confirm score) instead.
       if (r.confirmed_count > 0) {
         addToast({
           type: 'success',
-          title: t('match.wizard.bulkConfirmed', {
-            defaultValue: '{{n}} groups confirmed',
+          title: t('match.wizard.laneAccepted', {
+            defaultValue: '{{n}} matches accepted',
             n: r.confirmed_count,
           }),
         });
       } else {
         addToast({
           type: 'info',
-          title: t('match.wizard.bulkConfirmedNone', {
-            defaultValue: 'No groups met the auto-confirm score',
-          }),
-          message: t('match.wizard.bulkConfirmedNoneBody', {
-            defaultValue:
-              'Lower the auto-confirm score in Scope & rules, or confirm matches individually below.',
+          title: t('match.wizard.laneAcceptedNone', {
+            defaultValue: 'Nothing left to accept in this lane',
           }),
         });
       }
@@ -650,7 +840,7 @@ export function MatchWizardFlow() {
       addToast({
         type: 'error',
         title: t('match.wizard.confirmFailed', {
-          defaultValue: 'Bulk confirm failed',
+          defaultValue: 'Bulk accept failed',
         }),
         message: e.message,
       }),
@@ -831,6 +1021,15 @@ export function MatchWizardFlow() {
     (groupSummary.confirmed ?? 0) +
     (groupSummary.suggested ?? 0) +
     (groupSummary.applied ?? 0);
+
+  // Split the review worklist into the three confidence lanes (each sorted
+  // worst-first). Also the session's group signatures - fed to the template
+  // library so it can badge which saved mappings this session is reusing.
+  const reviewLanes = useMemo(() => partitionLanes(groups), [groups]);
+  const sessionSignatures = useMemo(
+    () => groups.map((g) => g.signature).filter((s): s is string => !!s),
+    [groups],
+  );
 
   const currentStageDef = STAGES.find((s) => s.id === stage)!;
 
@@ -1573,9 +1772,9 @@ export function MatchWizardFlow() {
               {stage === 'review' && (
                 <div className="space-y-4">
                   <p className="text-sm text-content-secondary">
-                    {t('match.wizard.reviewHelp', {
+                    {t('match.wizard.reviewHelpLanes', {
                       defaultValue:
-                        'Open any group to see ranked cost candidates with scores. Confirm the right one, or accept all high-confidence matches at once.',
+                        'Your matches are split into three lanes, worst first. Start with "Needs you", give "Quick review" a glance, and accept the safe "Auto-confirmed" pile in one click. Open any group to see why each candidate ranked.',
                     })}
                   </p>
                   <div className="grid gap-3 sm:grid-cols-4">
@@ -1606,97 +1805,71 @@ export function MatchWizardFlow() {
                     >
                       {t('common.refresh', { defaultValue: 'Refresh' })}
                     </Button>
-                    <Button
-                      variant="primary"
-                      size="sm"
-                      icon={<Check className="h-4 w-4" />}
-                      loading={bulkConfirmM.isPending}
-                      onClick={() => bulkConfirmM.mutate()}
-                    >
-                      {t('match.wizard.confirmAll', {
-                        defaultValue: 'Confirm all high-confidence',
+                  </div>
+
+                  {groups.length === 0 ? (
+                    <div className="rounded-lg border border-border-light bg-surface-muted p-4 text-sm text-content-secondary">
+                      {t('match.wizard.noGroupsReview', {
+                        defaultValue:
+                          'No groups to review yet. Run the match, or go back and adjust grouping.',
                       })}
-                    </Button>
-                  </div>
-                  <div className="max-h-[420px] overflow-auto rounded-lg border border-border-light">
-                    <table className="w-full text-sm">
-                      <thead className="sticky top-0 bg-surface-muted text-content-secondary">
-                        <tr>
-                          <th className="px-3 py-2 text-left font-medium">
-                            {t('match.wizard.group', { defaultValue: 'Group' })}
-                          </th>
-                          <th className="px-3 py-2 text-left font-medium">
-                            {t('match.wizard.suggestion', {
-                              defaultValue: 'Top suggestion',
-                            })}
-                          </th>
-                          <th className="px-3 py-2 text-left font-medium">
-                            {t('match.wizard.status', { defaultValue: 'Status' })}
-                          </th>
-                          <th className="px-3 py-2" />
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {groups.map((g) => (
-                          <tr key={g.id} className="border-t border-border-light/60">
-                            <td className="px-3 py-2">
-                              <div className="font-medium text-content-primary">
-                                {g.display_label}
-                              </div>
-                              <div className="text-xs text-content-tertiary">
-                                {g.element_count}{' '}
-                                {t('match.wizard.elementsLc', {
-                                  defaultValue: 'elements',
-                                })}
-                              </div>
-                            </td>
-                            <td className="px-3 py-2 text-content-secondary">
-                              {g.suggested_code ? (
-                                <>
-                                  <span className="font-mono text-xs">
-                                    {g.suggested_code}
-                                  </span>
-                                  <div className="truncate max-w-[260px] text-xs">
-                                    {g.suggested_description}
-                                  </div>
-                                </>
-                              ) : (
-                                <span className="text-content-tertiary">—</span>
-                              )}
-                            </td>
-                            <td className="px-3 py-2">
-                              <span
-                                className={clsx(
-                                  'inline-block rounded-full px-2 py-0.5 text-xs',
-                                  g.status === 'confirmed' || g.status === 'applied'
-                                    ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200'
-                                    : g.status === 'suggested'
-                                      ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200'
-                                      : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300',
-                                )}
-                              >
-                                {t(`match.group_status_${g.status}`, {
-                                  defaultValue: g.status,
-                                })}
-                              </span>
-                            </td>
-                            <td className="px-3 py-2 text-right">
-                              <button
-                                type="button"
-                                className="inline-flex items-center gap-1 text-xs font-medium text-oe-blue hover:underline"
-                                onClick={() => setDetailGroup(g)}
-                              >
-                                {t('match.wizard.inspect', {
-                                  defaultValue: 'Inspect',
-                                })}
-                                <ChevronRight className="h-3.5 w-3.5" />
-                              </button>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      {MATCH_LANE_ORDER.map((laneId) => {
+                        const laneGroups = reviewLanes[laneId];
+                        const keys = confirmableKeys(laneGroups);
+                        const meta =
+                          laneId === 'needs_you'
+                            ? {
+                                title: t('match.lanes.needs.title', {
+                                  defaultValue: 'Needs you',
+                                }),
+                                subtitle: t('match.lanes.needs.subtitle', {
+                                  defaultValue:
+                                    'Low or no confidence - decide each one before it becomes a rate.',
+                                }),
+                              }
+                            : laneId === 'quick_review'
+                              ? {
+                                  title: t('match.lanes.quick.title', {
+                                    defaultValue: 'Quick review',
+                                  }),
+                                  subtitle: t('match.lanes.quick.subtitle', {
+                                    defaultValue:
+                                      'Medium confidence - a quick glance each, then accept.',
+                                  }),
+                                }
+                              : {
+                                  title: t('match.lanes.auto.title', {
+                                    defaultValue: 'Auto-confirmed',
+                                  }),
+                                  subtitle: t('match.lanes.auto.subtitle', {
+                                    defaultValue:
+                                      'High confidence - safe to accept together.',
+                                  }),
+                                };
+                        return (
+                          <LaneSection
+                            key={laneId}
+                            laneId={laneId}
+                            title={meta.title}
+                            subtitle={meta.subtitle}
+                            groups={laneGroups}
+                            confirmableCount={keys.length}
+                            accepting={
+                              acceptLaneM.isPending &&
+                              acceptLaneM.variables?.laneId === laneId
+                            }
+                            onAccept={() =>
+                              acceptLaneM.mutate({ laneId, groupKeys: keys })
+                            }
+                            onInspect={(g) => setDetailGroup(g)}
+                          />
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -1972,7 +2145,12 @@ export function MatchWizardFlow() {
       {/* Template-library slide-over — dead_button fix: TemplatesPanel was
           orphaned (no route, no trigger). It is opened from the
           "Setup & tools" section and closes on Escape / backdrop. */}
-      {showTemplates && <TemplatesPanel onClose={() => setShowTemplates(false)} />}
+      {showTemplates && (
+        <TemplatesPanel
+          onClose={() => setShowTemplates(false)}
+          activeSignatures={sessionSignatures}
+        />
+      )}
     </div>
   );
 }

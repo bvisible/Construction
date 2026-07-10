@@ -29,7 +29,8 @@
 // All numbers from the CPM are integer work-day offsets on the shared portfolio
 // timeline (schedules are merged by start-date offset server-side), shown as-is.
 
-import { useMemo, useState } from 'react';
+import { Fragment, useMemo, useState, type ReactNode } from 'react';
+import { Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import {
@@ -45,6 +46,7 @@ import {
   ChevronRight,
   AlertTriangle,
   GitBranch,
+  ArrowRight,
 } from 'lucide-react';
 
 import { Button, Card, Badge, EmptyState, RecoveryCard, SkeletonTable } from '@/shared/ui';
@@ -84,6 +86,123 @@ function flattenTree(nodes: PortfolioTreeNode[], depth = 0, out: FlatNode[] = []
   return out;
 }
 
+/* ── How-it-works flow + module integrations ───────────────────────────── */
+
+/** A compact inline link to a sibling module (keeps the flow copy readable). */
+function ModLink({ to, children }: { to: string; children: ReactNode }) {
+  return (
+    <Link to={to} className="font-medium text-oe-blue-text hover:underline">
+      {children}
+    </Link>
+  );
+}
+
+/**
+ * One-glance explainer for the portfolio (a schedule-of-schedules): what it
+ * does and how it connects. Each project's 4D schedule rolls up here; a single
+ * cross-project CPM pass over a node's subtree finds the programme critical
+ * path, which then informs project controls and resource planning.
+ */
+function HowPortfolioWorks() {
+  const { t } = useTranslation();
+
+  const steps: { icon: ReactNode; title: string; desc: string }[] = [
+    {
+      icon: <FolderTree size={14} className="text-oe-blue" />,
+      title: t('portfolio.flow_1_title', { defaultValue: 'Build the tree' }),
+      desc: t('portfolio.flow_1_desc', {
+        defaultValue: 'Create portfolios and programmes, then file projects under each node.',
+      }),
+    },
+    {
+      icon: <Link2 size={14} className="text-oe-blue" />,
+      title: t('portfolio.flow_2_title', { defaultValue: 'Link across projects' }),
+      desc: t('portfolio.flow_2_desc', {
+        defaultValue: "Tie an activity in one project's schedule to an activity in another.",
+      }),
+    },
+    {
+      icon: <Network size={14} className="text-oe-blue" />,
+      title: t('portfolio.flow_3_title', { defaultValue: 'Roll up the CPM' }),
+      desc: t('portfolio.flow_3_desc', {
+        defaultValue: 'Run one critical-path pass across every schedule filed under a node.',
+      }),
+    },
+    {
+      icon: <GitBranch size={14} className="text-oe-blue" />,
+      title: t('portfolio.flow_4_title', { defaultValue: 'Read the critical path' }),
+      desc: t('portfolio.flow_4_desc', {
+        defaultValue: 'See the finish work-day and the longest chain of activities across projects.',
+      }),
+    },
+  ];
+
+  return (
+    <Card padding="md" className="mt-4">
+      <h2 className="flex items-center gap-1.5 text-sm font-semibold text-content-primary">
+        <Network size={15} className="text-oe-blue" />
+        {t('portfolio.flow_title', { defaultValue: 'How the portfolio fits together' })}
+      </h2>
+      <p className="mt-1 text-xs text-content-tertiary">
+        {t('portfolio.flow_intro', {
+          defaultValue:
+            'The portfolio rolls many project schedules into one programme view and runs a single critical-path pass across them, so you can see the finish date and the longest chain that spans projects.',
+        })}
+      </p>
+
+      <ol className="mt-3 flex flex-col gap-2 lg:flex-row lg:items-stretch">
+        {steps.map((s, i) => (
+          <Fragment key={s.title}>
+            <li className="flex-1 rounded-lg border border-border-light bg-surface-secondary/40 p-3">
+              <div className="flex items-center gap-2">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-oe-blue-subtle text-2xs font-bold text-oe-blue-text">
+                  {i + 1}
+                </span>
+                <span className="flex items-center gap-1 text-xs font-semibold text-content-primary">
+                  {s.icon}
+                  {s.title}
+                </span>
+              </div>
+              <p className="mt-1.5 text-2xs leading-relaxed text-content-tertiary">{s.desc}</p>
+            </li>
+            {i < steps.length - 1 && (
+              <li
+                aria-hidden="true"
+                className="hidden shrink-0 items-center self-center text-content-quaternary lg:flex"
+              >
+                <ArrowRight size={16} />
+              </li>
+            )}
+          </Fragment>
+        ))}
+      </ol>
+
+      <div className="mt-3 flex flex-col gap-1.5 border-t border-border-light pt-3 text-2xs text-content-tertiary sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-5 sm:gap-y-1">
+        <span>
+          <span className="font-medium text-content-secondary">
+            {t('portfolio.flow_pulls', { defaultValue: 'Pulls from:' })}
+          </span>{' '}
+          <ModLink to="/schedule">
+            {t('portfolio.mod_schedule', { defaultValue: '4D Schedule' })}
+          </ModLink>
+        </span>
+        <span>
+          <span className="font-medium text-content-secondary">
+            {t('portfolio.flow_feeds', { defaultValue: 'Feeds:' })}
+          </span>{' '}
+          <ModLink to="/project-controls">
+            {t('portfolio.mod_controls', { defaultValue: 'Project controls' })}
+          </ModLink>{' '}
+          ·{' '}
+          <ModLink to="/resources">
+            {t('portfolio.mod_resources', { defaultValue: 'Resources & crew' })}
+          </ModLink>
+        </span>
+      </div>
+    </Card>
+  );
+}
+
 export function PortfolioPage() {
   const { t } = useTranslation();
   const addToast = useToastStore((s) => s.addToast);
@@ -114,6 +233,9 @@ export function PortfolioPage() {
             'An enterprise schedule-of-schedules: organise projects into portfolios and programmes, then run one critical-path pass across every linked schedule under a node to see the cross-project critical path and finish date.',
         })}
       />
+
+      {/* How this module works + what it connects to */}
+      <HowPortfolioWorks />
 
       <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-[380px_1fr]">
         {/* Left: the portfolio / programme tree */}

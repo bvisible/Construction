@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useNavigate, Link, useLocation } from 'react-router-dom';
 import {
   Eye, EyeOff, Mail, Lock, Globe, ChevronDown, X, Github, Users, ArrowUpRight, Pencil,
-  ShieldCheck, Zap, Brain,
+  ShieldCheck, Zap, Brain, Info,
   FileSpreadsheet, CalendarClock, TrendingUp, Boxes, Database,
   BarChart3, Upload, FileCheck,
   Box, Ruler, Layers,
@@ -117,6 +117,7 @@ export function LoginPage() {
   const [showInfo, setShowInfo] = useState(false);
   const [brandOpen, setBrandOpen] = useState(false);
   const [demoOpen, setDemoOpen] = useState(true);
+  const [demoHint, setDemoHint] = useState(false);
   const [demoLoading, setDemoLoading] = useState<string | null>(null);
   // null = not probed yet; the demo block renders only once the server
   // confirms demo accounts are available (see the first-run effect below).
@@ -263,7 +264,7 @@ export function LoginPage() {
 
   const demoAccounts = [
     { email: 'demo@openconstructionerp.com', name: 'Admin', role: t('auth.demo_role_admin', 'Administrator'), color: 'bg-blue-500', letter: 'A' },
-    { email: 'manager@openconstructionerp.com', name: 'Thomas Müller', role: t('auth.demo_role_manager', 'Manager'), color: 'bg-[#7cd0ff]', letter: 'M' },
+    { email: 'manager@openconstructionerp.com', name: 'Michael Carter', role: t('auth.demo_role_manager', 'Manager'), color: 'bg-[#7cd0ff]', letter: 'M' },
   ];
 
   const handleDemoLogin = async (demoEmail: string) => {
@@ -857,7 +858,7 @@ export function LoginPage() {
           {/* Demo Access - shown only when the server confirms demo accounts
               exist (SEED_DEMO on). Production installs hide it entirely. */}
           {demoEnabled === true && (
-          <div className="mt-3 animate-stagger-in" style={{ animationDelay: '500ms' }}>
+          <div className="relative mt-3 animate-stagger-in" style={{ animationDelay: '500ms' }}>
             <div className="login-glass-pro relative rounded-2xl overflow-hidden">
               <div
                 aria-hidden
@@ -867,16 +868,18 @@ export function LoginPage() {
                     'linear-gradient(90deg, transparent, rgba(255,255,255,0.95), transparent)',
                 }}
               />
-              <button
-                type="button"
-                onClick={() => setDemoOpen(!demoOpen)}
-                aria-expanded={demoOpen}
-                className="flex w-full items-center justify-center gap-2 px-5 py-2.5 text-sm font-semibold text-oe-blue hover:bg-oe-blue/[0.04] transition-all"
-              >
-                <Zap size={14} className="text-oe-blue" />
-                <span>{t('auth.try_demo', { defaultValue: 'Try demo (no signup)' })}</span>
-                <ChevronDown size={14} className={`text-oe-blue/70 transition-transform duration-200 ${demoOpen ? 'rotate-180' : ''}`} />
-              </button>
+              <div className="relative flex w-full items-center">
+                <button
+                  type="button"
+                  onClick={() => setDemoOpen(!demoOpen)}
+                  aria-expanded={demoOpen}
+                  className="flex flex-1 items-center justify-center gap-2 px-5 py-2.5 text-sm font-semibold text-oe-blue hover:bg-oe-blue/[0.04] transition-all"
+                >
+                  <Zap size={14} className="text-oe-blue" />
+                  <span>{t('auth.try_demo', { defaultValue: 'Try demo (no signup)' })}</span>
+                  <ChevronDown size={14} className={`text-oe-blue/70 transition-transform duration-200 ${demoOpen ? 'rotate-180' : ''}`} />
+                </button>
+              </div>
 
               {demoOpen && (
                 <div className="border-t border-border-light/60 px-3 py-2.5 space-y-1.5 animate-stagger-in">
@@ -904,6 +907,31 @@ export function LoginPage() {
                   ))}
                 </div>
               )}
+            </div>
+            {/* Info affordance - kept OUTSIDE the overflow-hidden card above so
+                the hint popover is never clipped and always paints on top of the
+                demo accounts and the links below. Hover reveals it; click pins it
+                (touch / keyboard). Anchored to this relative wrapper at a fixed
+                top offset so it stays on the header row whether the demo list is
+                open or closed. */}
+            <div className="group absolute right-2 top-2 z-40">
+              <button
+                type="button"
+                aria-label={t('auth.demo_hint_aria', { defaultValue: 'About the demo sign-in block' })}
+                onClick={() => setDemoHint((v) => !v)}
+                className="flex h-6 w-6 items-center justify-center rounded-full text-oe-blue/50 hover:text-oe-blue hover:bg-oe-blue/[0.08] transition-colors"
+              >
+                <Info size={14} />
+              </button>
+              <div
+                role="tooltip"
+                className={`pointer-events-none absolute right-0 top-full mt-2 w-64 rounded-xl border border-border bg-surface-elevated backdrop-blur-md px-3.5 py-2.5 text-left text-xs leading-relaxed text-content-primary shadow-2xl transition-opacity duration-150 ${demoHint ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
+              >
+                {t('auth.demo_hint', {
+                  defaultValue:
+                    'Optional demo sign-in. It only appears while demo accounts are enabled, so an administrator can turn it off.',
+                })}
+              </div>
             </div>
           </div>
           )}

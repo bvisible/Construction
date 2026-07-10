@@ -17,6 +17,20 @@
 // the inline-default content keys up later.
 
 /**
+ * One item on the in -> out flow of a step: a short label for a piece of data or
+ * an artifact the step consumes (input) or produces (output). Rendered in the
+ * stage as chips on either side of the action so the user sees, at a glance,
+ * what goes IN to the step and what comes OUT. `label` is the English fallback;
+ * pass `labelKey` to localize it (same key + fallback pattern as `moduleLabel`).
+ */
+export interface StepFlowItem {
+  /** Short English label (the fallback). */
+  label: string;
+  /** Optional i18n key to localize the label. */
+  labelKey?: string;
+}
+
+/**
  * One step of a playbook: a single thing the user does, in one module.
  *
  * `to` is a real app route and MAY contain a `:projectId` slot
@@ -58,6 +72,18 @@ export interface PlaybookStep {
   to: string;
   /** Optional lucide-react icon name for the step (resolved by the runner). */
   icon?: string;
+  /** Optional bespoke process-scene id (see `processScenes.tsx`). When set, the
+   *  runner draws a step-specific before -> after process illustration in place
+   *  of the generic icon scene, and the case shows its step flow beside the
+   *  title. A case opts in step by step; steps without it keep the icon scene. */
+  scene?: string;
+  /** What this step starts from: the data / artifacts it consumes. Shown as the
+   *  "In" side of the in -> out flow on the stage, so the user sees what goes in.
+   *  Optional; when omitted the stage shows the action scene without the flow. */
+  inputs?: StepFlowItem[];
+  /** What this step produces: the data / artifacts it leaves behind. Shown as the
+   *  "Out" side of the flow, so the user sees what comes out of the step. */
+  outputs?: StepFlowItem[];
   /** Optional CSS selector for a future in-module spotlight highlight. */
   spotlightSelector?: string;
 }

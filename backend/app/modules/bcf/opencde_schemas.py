@@ -4,7 +4,7 @@ These shapes mirror the buildingSMART OpenCDE BCF-API 3.0 JSON schemas
 (``release_3_0/Schemas_draft-03``). Field NAMES use snake_case in Python
 but every model is configured with ``populate_by_name=True`` and accepts
 either snake_case or the spec's canonical names - so a BCF Manager
-plugin (Revit / Archicad / Navisworks) that sends the wire form ``topic_status``
+plugin (any BCF-compatible tool) that sends the wire form ``topic_status``
 and ``"creation_author"`` works without translation.
 
 Distinct from :mod:`app.modules.bcf.schemas` (the legacy native CRUD

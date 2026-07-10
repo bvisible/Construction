@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -34,17 +34,11 @@ import {
   fetchConverterVersionCheck,
   type ConverterVersionCheck,
 } from '../bim/api';
+import { takeoffApi, type TakeoffDocumentResponse } from '../takeoff/api';
+import { useProjectContextStore } from '@/stores/useProjectContextStore';
+import { QuantitySummaryPanel } from './QuantitySummaryPanel';
 
 // ── Types ────────────────────────────────────────────────────────────────
-
-interface TakeoffDocument {
-  id?: string;
-  name?: string;
-  filename?: string;
-  created_at?: string;
-  type?: string;
-  file_type?: string;
-}
 
 interface MethodCard {
   titleKey: string;
@@ -774,6 +768,18 @@ export function QuantitiesPage() {
   const queryClient = useQueryClient();
   const addToast = useToastStore((s) => s.addToast);
 
+  // Active project drives the measured-quantities rollup. The "View quantities"
+  // action on a recent document sets `focusDocId` and scrolls to the panel.
+  const activeProjectId = useProjectContextStore((s) => s.activeProjectId);
+  const activeProjectName = useProjectContextStore((s) => s.activeProjectName);
+  const [focusDocId, setFocusDocId] = useState<string | null>(null);
+  const summaryRef = useRef<HTMLDivElement>(null);
+
+  const focusDocumentQuantities = useCallback((docId: string) => {
+    setFocusDocId(docId);
+    summaryRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, []);
+
   // Probe whether the optional `oe_takeoff` backend module is loaded.
   // When disabled, the converters/documents endpoints 404; gating the
   // queries on this avoids the noisy network-panel logs.
@@ -807,11 +813,14 @@ export function QuantitiesPage() {
     versionByExt[v.id] = v;
   }
 
-  // Recent documents from API
+  // Recent documents from API. Scoped to the active project when one is set
+  // (falls back to the global list otherwise); the typed helper self-guards
+  // when `oe_takeoff` is disabled and shares its cache key with the summary
+  // panel's document filter so both read one request.
   const { data: documents } = useQuery({
-    queryKey: ['takeoff', 'documents'],
-    queryFn: () => apiGet<TakeoffDocument[]>('/v1/takeoff/documents/'),
-    enabled: takeoffLoaded === true,
+    queryKey: ['takeoff-documents', activeProjectId ?? 'all'],
+    queryFn: () => takeoffApi.listDocuments(activeProjectId ?? undefined),
+    staleTime: 30_000,
   });
 
   const converters = convertersData?.converters ?? [];
@@ -1041,6 +1050,17 @@ export function QuantitiesPage() {
         })}
       </div>
 
+      {/* Measured quantities register: a real client-side rollup of takeoff
+          and BOQ quantities for the active project. */}
+      <div ref={summaryRef} className="scroll-mt-4">
+        <QuantitySummaryPanel
+          projectId={activeProjectId}
+          projectName={activeProjectName}
+          documentId={focusDocId}
+          onDocumentChange={setFocusDocId}
+        />
+      </div>
+
       {/* How it works */}
       <div className="rounded-xl border border-border-light bg-surface-primary p-6">
         <h2 className="text-lg font-semibold text-content-primary">
@@ -1242,34 +1262,78 @@ export function QuantitiesPage() {
 
         {documents && documents.length > 0 ? (
           <div className="space-y-2">
-            {documents.slice(0, 10).map((doc, idx) => (
-              <div
-                key={doc.id ?? idx}
-                className="flex items-center justify-between rounded-lg border border-border-light px-4 py-3 hover:bg-surface-secondary transition-colors"
-              >
-                <div className="flex items-center gap-3 min-w-0">
-                  <FileText size={16} className="shrink-0 text-content-quaternary" />
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium text-content-primary truncate">
-                      {doc.name ?? doc.filename ?? t('quantities.unnamed_document', { defaultValue: 'Unnamed document' })}
-                    </p>
-                    <div className="flex items-center gap-2 text-2xs text-content-quaternary">
-                      {doc.created_at && (
-                        <span className="flex items-center gap-1">
-                          <Clock size={10} />
-                          {new Date(doc.created_at).toLocaleDateString()}
-                        </span>
-                      )}
-                      {(doc.type ?? doc.file_type) && (
-                        <span className="rounded bg-surface-tertiary px-1.5 py-0.5 font-mono uppercase">
-                          {doc.type ?? doc.file_type}
-                        </span>
-                      )}
+            {documents.slice(0, 10).map((doc: TakeoffDocumentResponse, idx) => {
+              const name =
+                doc.filename ||
+                t('quantities.unnamed_document', { defaultValue: 'Unnamed document' });
+              const openInTakeoff = () =>
+                navigate(
+                  `/takeoff?doc=${encodeURIComponent(doc.id)}&name=${encodeURIComponent(
+                    name,
+                  )}&tab=measurements`,
+                );
+              return (
+                <div
+                  key={doc.id ?? idx}
+                  className="flex items-center justify-between gap-3 rounded-lg border border-border-light px-4 py-3 hover:bg-surface-secondary transition-colors"
+                >
+                  <button
+                    onClick={openInTakeoff}
+                    className="flex items-center gap-3 min-w-0 text-left"
+                    title={t('quantities.open_in_takeoff', { defaultValue: 'Open in takeoff' })}
+                  >
+                    <FileText size={16} className="shrink-0 text-content-quaternary" />
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-content-primary truncate">{name}</p>
+                      <div className="flex items-center gap-2 text-2xs text-content-quaternary">
+                        {doc.uploaded_at && (
+                          <span className="flex items-center gap-1">
+                            <Clock size={10} />
+                            {new Date(doc.uploaded_at).toLocaleDateString()}
+                          </span>
+                        )}
+                        {doc.pages > 0 && (
+                          <span className="rounded bg-surface-tertiary px-1.5 py-0.5 font-mono">
+                            {t('quantities.doc_pages', {
+                              defaultValue: '{{count}} pp.',
+                              count: doc.pages,
+                            })}
+                          </span>
+                        )}
+                        {doc.status && (
+                          <span className="rounded bg-surface-tertiary px-1.5 py-0.5 uppercase">
+                            {doc.status}
+                          </span>
+                        )}
+                      </div>
                     </div>
+                  </button>
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    <button
+                      onClick={() => focusDocumentQuantities(doc.id)}
+                      className="inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-medium text-content-secondary hover:bg-surface-tertiary transition-colors"
+                      title={t('quantities.view_quantities_hint', {
+                        defaultValue: 'Show this document in the measured quantities panel',
+                      })}
+                    >
+                      <Layers3 size={14} />
+                      <span className="hidden sm:inline">
+                        {t('quantities.view_quantities', { defaultValue: 'View quantities' })}
+                      </span>
+                    </button>
+                    <button
+                      onClick={openInTakeoff}
+                      className="inline-flex items-center gap-1 rounded-lg bg-oe-blue/10 px-2.5 py-1.5 text-xs font-medium text-oe-blue hover:bg-oe-blue/20 transition-colors"
+                    >
+                      <Ruler size={14} />
+                      <span className="hidden sm:inline">
+                        {t('quantities.open_in_takeoff', { defaultValue: 'Open in takeoff' })}
+                      </span>
+                    </button>
                   </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         ) : (
           <div className="flex flex-col items-center justify-center py-8 text-center">

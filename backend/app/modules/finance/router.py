@@ -2206,3 +2206,12 @@ async def get_cash_flow(
 
 # Mount the GAAP sub-router onto the module router so the loader picks it up.
 router.include_router(gaap_router)
+
+
+# Mount the invoice-approval DMS sub-router. Imported at the bottom on purpose:
+# invoice_capture_router imports `_require_project_access` from this module, so
+# the import must happen after that helper (and `router`) are defined to avoid a
+# circular import at module load.
+from app.modules.finance.invoice_capture_router import capture_router  # noqa: E402
+
+router.include_router(capture_router)

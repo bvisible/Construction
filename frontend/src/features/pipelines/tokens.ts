@@ -51,6 +51,16 @@ export interface CategoryClassSet {
   text: string;
   textSubtle: string;
   icon: string;
+  /** Solid, category-colored header bar (rounded top of the node card). */
+  header: string;
+  /** Title/icon text color that clears WCAG-AA on the header bar. */
+  headerText: string;
+  /** Quiet secondary text (the category name) on the header bar. */
+  headerSubtle: string;
+  /** Hover wash for the icon buttons sitting on the header bar. */
+  headerHover: string;
+  /** Focus/selected ring color for the whole card. */
+  ring: string;
 }
 
 export interface CategoryTokenEntry {
@@ -77,6 +87,11 @@ export const NODE_CATEGORIES: Record<NodeCategory, CategoryTokenEntry> = {
       text: 'text-green-900 dark:text-green-100',
       textSubtle: 'text-green-700 dark:text-green-300',
       icon: 'text-green-700 dark:text-green-300',
+      header: 'bg-green-700 dark:bg-green-800',
+      headerText: 'text-white',
+      headerSubtle: 'text-white/75',
+      headerHover: 'hover:bg-white/20',
+      ring: 'ring-green-500',
     },
     Icon: PlayCircle,
     labelKey: 'pipeline.palette.cat_trigger',
@@ -91,6 +106,11 @@ export const NODE_CATEGORIES: Record<NodeCategory, CategoryTokenEntry> = {
       text: 'text-blue-900 dark:text-blue-100',
       textSubtle: 'text-blue-700 dark:text-blue-300',
       icon: 'text-blue-700 dark:text-blue-300',
+      header: 'bg-blue-600 dark:bg-blue-700',
+      headerText: 'text-white',
+      headerSubtle: 'text-white/75',
+      headerHover: 'hover:bg-white/20',
+      ring: 'ring-blue-500',
     },
     Icon: Database,
     labelKey: 'pipeline.palette.cat_source',
@@ -105,6 +125,11 @@ export const NODE_CATEGORIES: Record<NodeCategory, CategoryTokenEntry> = {
       text: 'text-purple-900 dark:text-purple-100',
       textSubtle: 'text-purple-700 dark:text-purple-300',
       icon: 'text-purple-700 dark:text-purple-300',
+      header: 'bg-purple-600 dark:bg-purple-700',
+      headerText: 'text-white',
+      headerSubtle: 'text-white/75',
+      headerHover: 'hover:bg-white/20',
+      ring: 'ring-purple-500',
     },
     Icon: Filter,
     labelKey: 'pipeline.palette.cat_transform',
@@ -119,6 +144,11 @@ export const NODE_CATEGORIES: Record<NodeCategory, CategoryTokenEntry> = {
       text: 'text-amber-900 dark:text-amber-100',
       textSubtle: 'text-amber-700 dark:text-amber-300',
       icon: 'text-amber-700 dark:text-amber-300',
+      header: 'bg-amber-300 dark:bg-amber-400',
+      headerText: 'text-amber-900',
+      headerSubtle: 'text-amber-900/75',
+      headerHover: 'hover:bg-black/10',
+      ring: 'ring-amber-500',
     },
     Icon: ShieldCheck,
     labelKey: 'pipeline.palette.cat_gate',
@@ -133,6 +163,11 @@ export const NODE_CATEGORIES: Record<NodeCategory, CategoryTokenEntry> = {
       text: 'text-violet-900 dark:text-violet-100',
       textSubtle: 'text-violet-700 dark:text-violet-300',
       icon: 'text-violet-700 dark:text-violet-300',
+      header: 'bg-violet-600 dark:bg-violet-700',
+      headerText: 'text-white',
+      headerSubtle: 'text-white/75',
+      headerHover: 'hover:bg-white/20',
+      ring: 'ring-violet-500',
     },
     Icon: Sparkles,
     labelKey: 'pipeline.palette.cat_ai',
@@ -147,6 +182,11 @@ export const NODE_CATEGORIES: Record<NodeCategory, CategoryTokenEntry> = {
       text: 'text-slate-900 dark:text-slate-100',
       textSubtle: 'text-slate-600 dark:text-slate-400',
       icon: 'text-slate-700 dark:text-slate-300',
+      header: 'bg-slate-600 dark:bg-slate-700',
+      headerText: 'text-white',
+      headerSubtle: 'text-white/75',
+      headerHover: 'hover:bg-white/20',
+      ring: 'ring-slate-400',
     },
     Icon: Download,
     labelKey: 'pipeline.palette.cat_action',
@@ -161,6 +201,11 @@ export const NODE_CATEGORIES: Record<NodeCategory, CategoryTokenEntry> = {
       text: 'text-gray-900 dark:text-gray-100',
       textSubtle: 'text-gray-600 dark:text-gray-400',
       icon: 'text-gray-700 dark:text-gray-300',
+      header: 'bg-gray-600 dark:bg-gray-700',
+      headerText: 'text-white',
+      headerSubtle: 'text-white/75',
+      headerHover: 'hover:bg-white/20',
+      ring: 'ring-gray-400',
     },
     Icon: Workflow,
     labelKey: 'pipeline.palette.cat_flow',
@@ -198,18 +243,17 @@ export const CATEGORY_MINIMAP_COLOR: Record<NodeCategory, string> = {
 // ── Typed-port map (triple-encoded: color + shape + dash) ───────────────────
 
 /**
- * The logical data type travelling along a wire. Kept narrow on purpose;
- * adding a type requires an entry in `PORT_TYPES` *and* `PORT_COMPATIBILITY`
- * so the matrix stays exhaustive.
+ * The logical data type travelling along a wire. These mirror the bare port
+ * names the backend advertises (see {@link inferPortType}). Kept narrow on
+ * purpose; adding a type requires an entry in `PORT_TYPES` *and*
+ * `PORT_COMPATIBILITY` so the matrix stays exhaustive.
  */
 export type PortDataType =
-  | 'table' // rows
+  | 'rows' // tabular data (BOQ rows, cost items, query results)
+  | 'project' // a project / context object
+  | 'trigger' // a control signal that starts a step
   | 'file' // document / export artefact
-  | 'bim' // BIM model
-  | 'number' // scalar
-  | 'boolean' // flag
-  | 'any' // passthrough / wildcard
-  | 'error'; // error branch
+  | 'any'; // passthrough / wildcard
 
 export type PortShape = 'circle' | 'square' | 'diamond' | 'triangle' | 'hexagon' | 'ring' | 'cross';
 
@@ -222,6 +266,9 @@ export interface PortTypeEntry {
   /** i18n key for the human-readable type label (used in tooltips / a11y). */
   labelKey: string;
   labelDefault: string;
+  /** i18n key for a compact one-word type label (shown inline on port rows). */
+  shortKey: string;
+  shortDefault: string;
 }
 
 /**
@@ -229,12 +276,32 @@ export interface PortTypeEntry {
  * Color + shape + dash = triple encoding → color-blind safe.
  */
 export const PORT_TYPES: Record<PortDataType, PortTypeEntry> = {
-  table: {
-    color: '#c2723f',
+  rows: {
+    color: '#2563eb',
     shape: 'circle',
     dash: undefined,
-    labelKey: 'pipeline.port.table',
-    labelDefault: 'Table / rows',
+    labelKey: 'pipeline.port.rows',
+    labelDefault: 'Table rows',
+    shortKey: 'pipeline.port.rows.short',
+    shortDefault: 'Rows',
+  },
+  project: {
+    color: '#ea580c',
+    shape: 'hexagon',
+    dash: undefined,
+    labelKey: 'pipeline.port.project',
+    labelDefault: 'Project',
+    shortKey: 'pipeline.port.project.short',
+    shortDefault: 'Project',
+  },
+  trigger: {
+    color: '#16a34a',
+    shape: 'triangle',
+    dash: undefined,
+    labelKey: 'pipeline.port.trigger',
+    labelDefault: 'Trigger signal',
+    shortKey: 'pipeline.port.trigger.short',
+    shortDefault: 'Trigger',
   },
   file: {
     color: '#475569',
@@ -242,27 +309,8 @@ export const PORT_TYPES: Record<PortDataType, PortTypeEntry> = {
     dash: undefined,
     labelKey: 'pipeline.port.file',
     labelDefault: 'File / document',
-  },
-  bim: {
-    color: '#9333ea',
-    shape: 'diamond',
-    dash: undefined,
-    labelKey: 'pipeline.port.bim',
-    labelDefault: 'BIM model',
-  },
-  number: {
-    color: '#0891b2',
-    shape: 'triangle',
-    dash: undefined,
-    labelKey: 'pipeline.port.number',
-    labelDefault: 'Number',
-  },
-  boolean: {
-    color: '#0d9488',
-    shape: 'hexagon',
-    dash: undefined,
-    labelKey: 'pipeline.port.boolean',
-    labelDefault: 'Boolean / flag',
+    shortKey: 'pipeline.port.file.short',
+    shortDefault: 'File',
   },
   any: {
     color: '#94a3b8',
@@ -270,41 +318,57 @@ export const PORT_TYPES: Record<PortDataType, PortTypeEntry> = {
     dash: '4 4',
     labelKey: 'pipeline.port.any',
     labelDefault: 'Any / passthrough',
-  },
-  error: {
-    color: '#dc2626',
-    shape: 'cross',
-    dash: '2 3',
-    labelKey: 'pipeline.port.error',
-    labelDefault: 'Error branch',
+    shortKey: 'pipeline.port.any.short',
+    shortDefault: 'Any',
   },
 };
+
+/** Order the port types are listed in the legend / help surfaces. */
+export const PORT_TYPE_ORDER: PortDataType[] = [
+  'rows',
+  'project',
+  'trigger',
+  'file',
+  'any',
+];
 
 /** Lookup helper — falls back to `any` for an unknown port type. */
 export function getPortTokens(type: string): PortTypeEntry {
   return PORT_TYPES[type as PortDataType] ?? PORT_TYPES.any;
 }
 
+/** Narrow an arbitrary string to a known {@link PortDataType}. */
+export function isPortDataType(value: string): value is PortDataType {
+  return Object.prototype.hasOwnProperty.call(PORT_TYPES, value);
+}
+
+/**
+ * Infer a port's data type from its bare name. The backend advertises ports as
+ * plain strings ("rows", "project", "trigger", "file", "rows_a", "rows_b"), so
+ * we map the name onto the typed-port palette: anything mentioning a row is
+ * tabular data, the well-known context names map 1:1, and everything else falls
+ * back to the permissive `any` passthrough. This is what lights up the port
+ * glyphs, edge colors and the legend.
+ */
+export function inferPortType(name: string): PortDataType {
+  const n = name.trim().toLowerCase();
+  if (n.includes('row')) return 'rows';
+  if (n === 'project') return 'project';
+  if (n === 'trigger') return 'trigger';
+  if (n === 'file') return 'file';
+  return 'any';
+}
+
 /**
  * Which output type may feed which input type. `any` is a wildcard on either
- * side; `error` only connects to `error`/`any` (a dedicated failure branch).
+ * side; every other type only connects to its own type or to `any`.
  */
 export const PORT_COMPATIBILITY: Record<PortDataType, ReadonlySet<PortDataType>> = {
-  table: new Set<PortDataType>(['table', 'any']),
+  rows: new Set<PortDataType>(['rows', 'any']),
+  project: new Set<PortDataType>(['project', 'any']),
+  trigger: new Set<PortDataType>(['trigger', 'any']),
   file: new Set<PortDataType>(['file', 'any']),
-  bim: new Set<PortDataType>(['bim', 'any']),
-  number: new Set<PortDataType>(['number', 'any']),
-  boolean: new Set<PortDataType>(['boolean', 'any']),
-  any: new Set<PortDataType>([
-    'table',
-    'file',
-    'bim',
-    'number',
-    'boolean',
-    'any',
-    'error',
-  ]),
-  error: new Set<PortDataType>(['error', 'any']),
+  any: new Set<PortDataType>(['rows', 'project', 'trigger', 'file', 'any']),
 };
 
 /** True when an output of `source` type may be wired into a `target` input. */

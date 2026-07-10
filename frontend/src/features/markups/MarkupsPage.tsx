@@ -31,6 +31,10 @@ import {
   FileText,
   TriangleRight,
   ExternalLink,
+  Flag,
+  CalendarClock,
+  AlertTriangle,
+  ClipboardCheck,
 } from 'lucide-react';
 import { Button, Card, Badge, EmptyState, Breadcrumb, ConfirmDialog, RecoveryCard, SkeletonTable, ModuleGuideButton } from '@/shared/ui';
 import { PageHeader } from '@/shared/ui/PageHeader';
@@ -61,7 +65,21 @@ import { InlinePdfAnnotator } from './InlinePdfAnnotator';
 import { UnifiedMarkupsList } from './UnifiedMarkupsList';
 import { EditMarkupModal } from './EditMarkupModal';
 import { markupsGuide } from './markupsGuide';
+import {
+  MARKUP_PRIORITIES,
+  PRIORITY_LABELS,
+  PRIORITY_CHIP_CLASSES,
+  getMarkupPriority,
+  getMarkupDueDate,
+  getMarkupPunchId,
+  isMarkupOverdue,
+  computeGeometryCentroid01,
+  type MarkupPriority,
+} from './issueTracking';
 import { ApprovalInstanceCard } from '@/features/approval-routes';
+// Read-only cross-module import: promoting a markup into a tracked site issue
+// reuses the punch-list create endpoint. We never mutate punch-list files.
+import { createPunchItem, type CreatePunchPayload, type PunchPriority } from '@/features/punchlist/api';
 
 /* ── Constants ─────────────────────────────────────────────────────────── */
 
@@ -234,6 +252,56 @@ function AssigneeChip({
   );
 }
 
+/* ── Priority chip ────────────────────────────────────────────────────── */
+
+function PriorityChip({ priority }: { priority: MarkupPriority }) {
+  const { t } = useTranslation();
+  return (
+    <span
+      className={clsx(
+        'inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-2xs font-medium border',
+        PRIORITY_CHIP_CLASSES[priority],
+      )}
+      title={t('markups.priority', { defaultValue: 'Priority' })}
+    >
+      <Flag size={9} />
+      {t(`markups.priority_${priority}`, { defaultValue: PRIORITY_LABELS[priority] })}
+    </span>
+  );
+}
+
+/* ── Due-date chip ────────────────────────────────────────────────────── */
+// Renders the due date with overdue styling. ``overdue`` is passed in rather
+// than recomputed so the caller can key it off the markup's live status.
+function DueChip({ due, overdue }: { due: string; overdue: boolean }) {
+  const { t } = useTranslation();
+  const formatted = useMemo(() => {
+    const ms = Date.parse(`${due}T00:00:00`);
+    if (!Number.isFinite(ms)) return due;
+    return new Date(ms).toLocaleDateString(undefined, {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+    });
+  }, [due]);
+  return (
+    <span
+      className={clsx(
+        'inline-flex items-center gap-1 text-2xs',
+        overdue ? 'text-semantic-error font-semibold' : 'text-content-tertiary',
+      )}
+      title={
+        overdue
+          ? t('markups.overdue_since', { defaultValue: 'Overdue since {{date}}', date: formatted })
+          : t('markups.due_date', { defaultValue: 'Due date' })
+      }
+    >
+      {overdue ? <AlertTriangle size={10} /> : <CalendarClock size={10} />}
+      {formatted}
+    </span>
+  );
+}
+
 /* ── Add Markup Modal ─────────────────────────────────────────────────── */
 
 function AddMarkupModal({
@@ -264,6 +332,8 @@ function AddMarkupModal({
   const [measurementValue, setMeasurementValue] = useState('');
   const [measurementUnit, setMeasurementUnit] = useState('m');
   const [assigneeId, setAssigneeId] = useState('');
+  const [priority, setPriority] = useState<MarkupPriority | ''>('');
+  const [dueDate, setDueDate] = useState('');
 
   // Reset form on open
   useEffect(() => {
@@ -277,6 +347,8 @@ function AddMarkupModal({
       setMeasurementValue('');
       setMeasurementUnit('m');
       setAssigneeId('');
+      setPriority('');
+      setDueDate('');
     }
   }, [open, documents]);
 
@@ -338,6 +410,14 @@ function AddMarkupModal({
           measurement_value: parseFloat(measurementValue),
           measurement_unit: measurementUnit,
         }),
+      // Priority / due date ride in metadata (no dedicated column). Only
+      // included when set, so a plain markup stores an empty metadata dict.
+      ...((priority || dueDate) && {
+        metadata: {
+          ...(priority && { priority }),
+          ...(dueDate && { due_date: dueDate }),
+        },
+      }),
     };
     createMut.mutate(payload);
   };
@@ -510,6 +590,42 @@ function AddMarkupModal({
             </select>
           </div>
 
+          {/* Priority + Due date - optional issue-tracking fields. */}
+          <div className="flex gap-3">
+            <div className="flex-1">
+              <label className="flex items-center gap-1 text-xs font-medium text-content-secondary mb-1.5">
+                <Flag size={12} />
+                {t('markups.priority', { defaultValue: 'Priority' })}
+              </label>
+              <select
+                value={priority}
+                onChange={(e) => setPriority(e.target.value as MarkupPriority | '')}
+                className={selectCls + ' w-full'}
+                data-testid="markup-form-priority"
+              >
+                <option value="">{t('markups.no_priority', { defaultValue: 'None' })}</option>
+                {MARKUP_PRIORITIES.map((p) => (
+                  <option key={p} value={p}>
+                    {t(`markups.priority_${p}`, { defaultValue: PRIORITY_LABELS[p] })}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="flex-1">
+              <label className="flex items-center gap-1 text-xs font-medium text-content-secondary mb-1.5">
+                <CalendarClock size={12} />
+                {t('markups.due_date', { defaultValue: 'Due date' })}
+              </label>
+              <input
+                type="date"
+                value={dueDate}
+                onChange={(e) => setDueDate(e.target.value)}
+                className={inputCls + ' w-full'}
+                data-testid="markup-form-due"
+              />
+            </div>
+          </div>
+
           {/* Measurement fields (only for distance/area/count) */}
           {isMeasurementType && (
             <div className="flex gap-3">
@@ -642,6 +758,9 @@ function MarkupDetail({
   onOpenInDocument,
   onOpenBoqPosition,
   onUseAsQuantity,
+  onConvertToIssue,
+  onOpenIssue,
+  isConverting,
 }: {
   markup: Markup;
   documentName?: string;
@@ -673,6 +792,17 @@ function MarkupDetail({
    * that carry a value.
    */
   onUseAsQuantity?: (markup: Markup) => void;
+  /**
+   * Promotes this markup into a tracked punch-list issue (document + page +
+   * geometry centroid + label/text + assignee + priority + due). Rendered
+   * until the markup already links to an issue, at which point ``onOpenIssue``
+   * takes over.
+   */
+  onConvertToIssue?: (markup: Markup) => void;
+  /** Deep-links to the punch-list issue this markup was promoted into. */
+  onOpenIssue?: (punchId: string) => void;
+  /** True while this markup's conversion request is in flight. */
+  isConverting?: boolean;
 }) {
   const { t } = useTranslation();
   const idx = siblings ? siblings.findIndex((m) => m.id === markup.id) : -1;
@@ -688,13 +818,19 @@ function MarkupDetail({
     markup.measurement_value != null &&
     !!onUseAsQuantity;
 
+  // Issue-tracking state for this markup.
+  const priority = getMarkupPriority(markup);
+  const due = getMarkupDueDate(markup);
+  const overdue = isMarkupOverdue(markup);
+  const punchId = getMarkupPunchId(markup);
+
   return (
     <div className="px-6 py-3 bg-surface-secondary/40 border-t border-border-light">
       {/* Deep-link CTAs — primary actions for the detail row. Sit above the
-          metadata grid so reviewers see them first when expanding a row.
-          Hidden for project-level (no-document) markups since there's
-          nothing to navigate to. */}
-      {((markup.document_id && onOpenInDocument) || canUseAsQuantity) && (
+          metadata grid so reviewers see them first when expanding a row. */}
+      {((markup.document_id && onOpenInDocument) ||
+        canUseAsQuantity ||
+        (punchId ? onOpenIssue : onConvertToIssue)) && (
         <div className="mb-3 flex flex-wrap items-center gap-2">
           {markup.document_id && onOpenInDocument && (
             <button
@@ -711,6 +847,42 @@ function MarkupDetail({
               <ExternalLink size={11} className="opacity-80" />
             </button>
           )}
+          {/* Convert to issue, or open the linked issue once promoted. This is
+              what upgrades a bare annotation into a tracked site issue. */}
+          {punchId
+            ? onOpenIssue && (
+                <button
+                  type="button"
+                  onClick={() => onOpenIssue(punchId)}
+                  title={t('markups.openIssueHint', {
+                    defaultValue: 'Open the tracked issue raised from this markup',
+                  })}
+                  data-testid="markup-open-issue"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-green-700 bg-green-50 border border-green-300 hover:bg-green-100 transition-colors dark:text-green-300 dark:bg-green-900/20 dark:border-green-700"
+                >
+                  <ClipboardCheck size={13} />
+                  {t('markups.openIssue', { defaultValue: 'Open issue' })}
+                  <ExternalLink size={11} className="opacity-80" />
+                </button>
+              )
+            : onConvertToIssue && (
+                <button
+                  type="button"
+                  onClick={() => onConvertToIssue(markup)}
+                  disabled={isConverting}
+                  title={t('markups.convertToIssueHint', {
+                    defaultValue:
+                      'Raise a tracked punch-list issue from this markup, keeping its drawing location, priority and due date',
+                  })}
+                  data-testid="markup-convert-to-issue"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-oe-blue bg-oe-blue-subtle border border-oe-blue/30 hover:bg-oe-blue/10 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  <ClipboardCheck size={13} />
+                  {isConverting
+                    ? t('markups.converting', { defaultValue: 'Converting...' })
+                    : t('markups.convertToIssue', { defaultValue: 'Convert to issue' })}
+                </button>
+              )}
           {canUseAsQuantity && (
             <button
               type="button"
@@ -843,6 +1015,21 @@ function MarkupDetail({
             </p>
           )}
         </div>
+        <div>
+          <p className="text-2xs font-medium text-content-tertiary uppercase tracking-wide mb-0.5">
+            {t('markups.issue_tracking', { defaultValue: 'Priority / Due' })}
+          </p>
+          {priority || due ? (
+            <div className="flex items-center gap-2 flex-wrap">
+              {priority && <PriorityChip priority={priority} />}
+              {due && <DueChip due={due} overdue={overdue} />}
+            </div>
+          ) : (
+            <p className="text-sm text-content-secondary">
+              {t('markups.no_priority_or_due', { defaultValue: 'None set' })}
+            </p>
+          )}
+        </div>
       </div>
       {markup.metadata && Object.keys(markup.metadata).length > 0 && (
         <div className="mt-2">
@@ -875,17 +1062,28 @@ function MarkupGridCard({
   onDelete,
   onEdit,
   userMap,
+  onConvertToIssue,
+  onOpenIssue,
+  isConverting,
 }: {
   markup: Markup;
   onChangeStatus: (status: MarkupStatus) => void;
   onDelete: () => void;
   onEdit: () => void;
   userMap: Map<string, AssigneeUser>;
+  onConvertToIssue?: (markup: Markup) => void;
+  onOpenIssue?: (punchId: string) => void;
+  isConverting?: boolean;
 }) {
   const { t } = useTranslation();
   const Icon = TYPE_ICONS[markup.type] ?? PenTool;
   const color = TYPE_COLORS[markup.type] ?? 'text-content-secondary';
   const bgColor = TYPE_BG_COLORS[markup.type] ?? '';
+
+  const priority = getMarkupPriority(markup);
+  const due = getMarkupDueDate(markup);
+  const overdue = isMarkupOverdue(markup);
+  const punchId = getMarkupPunchId(markup);
 
   const formattedDate = useMemo(() => {
     try {
@@ -940,15 +1138,40 @@ function MarkupGridCard({
         </p>
       )}
 
-      {/* Assignee chip */}
-      <div className="mt-2">
+      {/* Assignee + priority + due chips */}
+      <div className="mt-2 flex items-center gap-1.5 flex-wrap">
         <AssigneeChip assigneeId={markup.assignee_id} userMap={userMap} />
+        {priority && <PriorityChip priority={priority} />}
+        {due && <DueChip due={due} overdue={overdue} />}
       </div>
 
       {/* Footer: date + actions */}
       <div className="flex items-center justify-between mt-2.5 pt-2 border-t border-border-light/50">
         <span className="text-2xs text-content-tertiary">{formattedDate}</span>
         <div className="flex items-center gap-0.5">
+          {/* Convert to issue / open linked issue */}
+          {punchId
+            ? onOpenIssue && (
+                <button
+                  onClick={() => onOpenIssue(punchId)}
+                  title={t('markups.openIssue', { defaultValue: 'Open issue' })}
+                  data-testid="markup-grid-open-issue"
+                  className="p-1 rounded hover:bg-surface-secondary text-green-600 transition-colors"
+                >
+                  <ClipboardCheck size={13} />
+                </button>
+              )
+            : onConvertToIssue && (
+                <button
+                  onClick={() => onConvertToIssue(markup)}
+                  disabled={isConverting}
+                  title={t('markups.convertToIssue', { defaultValue: 'Convert to issue' })}
+                  data-testid="markup-grid-convert-to-issue"
+                  className="p-1 rounded hover:bg-surface-secondary text-content-tertiary hover:text-oe-blue transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  <ClipboardCheck size={13} />
+                </button>
+              )}
           <button
             onClick={onEdit}
             title={t('markups.edit', { defaultValue: 'Edit' })}
@@ -1003,6 +1226,9 @@ function MarkupTableRow({
   onOpenInDocument,
   onOpenBoqPosition,
   onUseAsQuantity,
+  onConvertToIssue,
+  onOpenIssue,
+  isConverting,
 }: {
   markup: Markup;
   isExpanded: boolean;
@@ -1017,10 +1243,17 @@ function MarkupTableRow({
   onOpenInDocument?: (markup: Markup) => void;
   onOpenBoqPosition?: (positionId: string) => void;
   onUseAsQuantity?: (markup: Markup) => void;
+  onConvertToIssue?: (markup: Markup) => void;
+  onOpenIssue?: (punchId: string) => void;
+  isConverting?: boolean;
 }) {
   const { t } = useTranslation();
   const TypeIcon = TYPE_ICONS[markup.type] ?? PenTool;
   const iconColor = TYPE_COLORS[markup.type] ?? 'text-content-secondary';
+
+  const priority = getMarkupPriority(markup);
+  const due = getMarkupDueDate(markup);
+  const overdue = isMarkupOverdue(markup);
 
   const formattedDate = useMemo(() => {
     try {
@@ -1093,6 +1326,19 @@ function MarkupTableRow({
             })}
           </Badge>
         </td>
+        {/* Priority / Due */}
+        <td className="px-3 py-2.5">
+          {priority || due ? (
+            <div className="flex flex-col gap-0.5 items-start">
+              {priority && <PriorityChip priority={priority} />}
+              {due && <DueChip due={due} overdue={overdue} />}
+            </div>
+          ) : (
+            <span className="text-2xs text-content-tertiary">
+              {t('markups.dash', { defaultValue: '-' })}
+            </span>
+          )}
+        </td>
         {/* Assignee */}
         <td className="px-3 py-2.5">
           <AssigneeChip assigneeId={markup.assignee_id} userMap={userMap} />
@@ -1146,7 +1392,7 @@ function MarkupTableRow({
       </tr>
       {isExpanded && (
         <tr>
-          <td colSpan={9}>
+          <td colSpan={10}>
             <MarkupDetail
               markup={markup}
               documentName={documentName}
@@ -1156,6 +1402,9 @@ function MarkupTableRow({
               onOpenInDocument={onOpenInDocument}
               onOpenBoqPosition={onOpenBoqPosition}
               onUseAsQuantity={onUseAsQuantity}
+              onConvertToIssue={onConvertToIssue}
+              onOpenIssue={onOpenIssue}
+              isConverting={isConverting}
             />
           </td>
         </tr>
@@ -1181,6 +1430,12 @@ export function MarkupsPage() {
   // M3 — assignee filter: "" = no filter, "__unassigned__" = NULL,
   // anything else = user id.
   const [filterAssignee, setFilterAssignee] = useState('');
+  // Issue-tracking filters. Priority + overdue live in metadata (not a
+  // server-side column), so these are applied client-side over the loaded
+  // page window - the same scope as the text search below. "" = no priority
+  // filter; ``overdueOnly`` narrows to markups past their due date.
+  const [filterPriority, setFilterPriority] = useState<MarkupPriority | ''>('');
+  const [overdueOnly, setOverdueOnly] = useState(false);
   // Pagination: how many markups to request. Grows by MARKUPS_PAGE_SIZE
   // each "Load more". Reset back to one page whenever the active filters
   // change so a narrower filter doesn't keep an over-large limit.
@@ -1422,17 +1677,25 @@ export function MarkupsPage() {
     return () => window.removeEventListener('keydown', handler);
   }, [expandedRowId, siblingsForExpanded, goToMarkup]);
 
-  // Client-side search filter
+  // Client-side filters: text search + priority + overdue. Priority and
+  // overdue are metadata-backed (no server column), so they are applied here
+  // over whatever page window is loaded, exactly like the text search.
   const filteredMarkups = useMemo(() => {
-    if (!searchQuery.trim()) return markups;
-    const q = searchQuery.toLowerCase();
-    return markups.filter(
-      (m) =>
-        (m.label ?? '').toLowerCase().includes(q) ||
-        (m.text ?? '').toLowerCase().includes(q) ||
-        m.type.toLowerCase().includes(q),
-    );
-  }, [markups, searchQuery]);
+    const q = searchQuery.trim().toLowerCase();
+    if (!q && !filterPriority && !overdueOnly) return markups;
+    return markups.filter((m) => {
+      if (q) {
+        const matchesText =
+          (m.label ?? '').toLowerCase().includes(q) ||
+          (m.text ?? '').toLowerCase().includes(q) ||
+          m.type.toLowerCase().includes(q);
+        if (!matchesText) return false;
+      }
+      if (filterPriority && getMarkupPriority(m) !== filterPriority) return false;
+      if (overdueOnly && !isMarkupOverdue(m)) return false;
+      return true;
+    });
+  }, [markups, searchQuery, filterPriority, overdueOnly]);
 
   // Opens the inline PDF annotator for a markup's source document and
   // tells the annotator to pulse-highlight the markup itself. Falls back
@@ -1506,6 +1769,97 @@ export function MarkupsPage() {
     qc.invalidateQueries({ queryKey: ['markups-summary'] });
     qc.invalidateQueries({ queryKey: ['unified-markups'] });
   }, [qc]);
+
+  // Deep-link to a tracked issue on the punch list. Used by the toast CTA
+  // after a conversion and by rows whose markup already links to an issue.
+  const handleOpenIssue = useCallback(
+    (punchId: string) => {
+      navigate(`/punchlist?highlight=${encodeURIComponent(punchId)}`);
+    },
+    [navigate],
+  );
+
+  // "Convert to issue" promotes a bare markup into a tracked punch-list
+  // item, carrying its drawing location (document + page + 0..1 centroid),
+  // label/text, assignee, priority and due date across. Priority uses the
+  // same vocabulary on both sides, so it maps 1:1. After the issue is
+  // created we stash its id back on the markup's metadata so the row flips
+  // to "Open issue" and a duplicate conversion is blocked.
+  const convertMut = useMutation({
+    mutationFn: async (markup: Markup) => {
+      const centroid = computeGeometryCentroid01(markup.geometry);
+      const priority = getMarkupPriority(markup);
+      const due = getMarkupDueDate(markup);
+      const typeLabel = t(`markups.type_${markup.type}`, {
+        defaultValue: TYPE_LABELS[markup.type] ?? markup.type,
+      });
+      const title = (
+        markup.label?.trim() ||
+        markup.text?.trim() ||
+        t('markups.issue_default_title', {
+          defaultValue: '{{type}} markup',
+          type: typeLabel,
+        })
+      ).slice(0, 255);
+      const payload: CreatePunchPayload = {
+        project_id: projectId,
+        title,
+        ...(markup.text?.trim() ? { description: markup.text.trim() } : {}),
+        // Markup priority uses the same vocabulary as PunchPriority, so it
+        // maps across 1:1 with no translation.
+        ...(priority ? { priority: priority as PunchPriority } : {}),
+        ...(markup.assignee_id ? { assigned_to: markup.assignee_id } : {}),
+        ...(due ? { due_date: due } : {}),
+        ...(markup.document_id ? { document_id: markup.document_id } : {}),
+        ...(markup.page ? { page: markup.page } : {}),
+        ...(centroid ? { location_x: centroid.x, location_y: centroid.y } : {}),
+      };
+      const punch = await createPunchItem(payload);
+      // Link-back is best-effort: the issue already exists, so a failed
+      // metadata patch must not surface as a conversion failure.
+      try {
+        await updateMarkup(markup.id, { metadata: { punch_item_id: punch.id } });
+      } catch {
+        /* non-fatal: punch created; link-back can be retried on next edit */
+      }
+      return punch;
+    },
+    onSuccess: (punch) => {
+      invalidateAll();
+      addToast(
+        {
+          type: 'success',
+          title: t('markups.issue_created', {
+            defaultValue: 'Issue created from markup',
+          }),
+          message: punch.title,
+          action: {
+            label: t('markups.openIssue', { defaultValue: 'Open issue' }),
+            onClick: () => handleOpenIssue(punch.id),
+          },
+        },
+        { duration: 8000 },
+      );
+    },
+    onError: (e: Error) =>
+      addToast({
+        type: 'error',
+        title: t('common.error', { defaultValue: 'Error' }),
+        message: e.message,
+      }),
+  });
+
+  const handleConvertToIssue = useCallback(
+    (markup: Markup) => {
+      if (!projectId || getMarkupPunchId(markup)) return;
+      convertMut.mutate(markup);
+    },
+    [projectId, convertMut],
+  );
+
+  // Id of the markup whose conversion is currently in flight (for per-row
+  // spinner / disabled state). ``variables`` is the markup passed to mutate.
+  const convertingId = convertMut.isPending ? convertMut.variables?.id ?? null : null;
 
   // Mutations
   const statusMut = useMutation({
@@ -1925,12 +2279,52 @@ export function MarkupsPage() {
                 ))}
               </select>
 
-              {(filterType || filterStatus || filterAssignee) && (
+              {/* Priority filter (client-side, metadata-backed) */}
+              <select
+                value={filterPriority}
+                onChange={(e) => setFilterPriority(e.target.value as MarkupPriority | '')}
+                className={selectCls + ' max-w-[150px]'}
+                aria-label={t('markups.filterByPriority', { defaultValue: 'Filter by priority' })}
+                data-testid="markups-filter-priority"
+              >
+                <option value="">
+                  {t('markups.all_priorities', { defaultValue: 'All Priorities' })}
+                </option>
+                {MARKUP_PRIORITIES.map((p) => (
+                  <option key={p} value={p}>
+                    {t(`markups.priority_${p}`, { defaultValue: PRIORITY_LABELS[p] })}
+                  </option>
+                ))}
+              </select>
+
+              {/* Overdue toggle (client-side, metadata-backed) */}
+              <button
+                type="button"
+                onClick={() => setOverdueOnly((v) => !v)}
+                aria-pressed={overdueOnly}
+                data-testid="markups-filter-overdue"
+                className={clsx(
+                  'inline-flex items-center gap-1 h-8 px-2.5 rounded-lg border text-xs font-medium transition-colors',
+                  overdueOnly
+                    ? 'border-semantic-error/40 bg-semantic-error/10 text-semantic-error'
+                    : 'border-border bg-surface-primary text-content-secondary hover:bg-surface-secondary',
+                )}
+                title={t('markups.overdueOnlyHint', {
+                  defaultValue: 'Show only markups past their due date',
+                })}
+              >
+                <AlertTriangle size={13} />
+                {t('markups.overdue_only', { defaultValue: 'Overdue' })}
+              </button>
+
+              {(filterType || filterStatus || filterAssignee || filterPriority || overdueOnly) && (
                 <button
                   onClick={() => {
                     setFilterType('');
                     setFilterStatus('');
                     setFilterAssignee('');
+                    setFilterPriority('');
+                    setOverdueOnly(false);
                   }}
                   className="text-xs text-oe-blue hover:underline"
                 >
@@ -1947,32 +2341,48 @@ export function MarkupsPage() {
             ) : isError ? (
               <RecoveryCard error={error} onRetry={() => refetch()} />
             ) : filteredMarkups.length === 0 ? (
-              <EmptyState
-                icon={<PenTool size={28} strokeWidth={1.5} />}
-                title={
-                  searchQuery || filterType || filterStatus
-                    ? t('markups.no_match_title', { defaultValue: 'No matching markups' })
-                    : t('markups.empty_title', { defaultValue: 'No markups yet' })
-                }
-                description={
-                  searchQuery || filterType || filterStatus
-                    ? t('markups.no_match_desc', {
-                        defaultValue: 'Try adjusting your search or filter criteria.',
-                      })
-                    : t('markups.empty_desc', {
-                        defaultValue:
-                          'Create your first markup to start annotating documents. Use clouds, arrows, text, and measurement tools to collaborate with your team.',
-                      })
-                }
-                action={
-                  searchQuery || filterType || filterStatus
-                    ? undefined
-                    : {
-                        label: t('markups.add_first', { defaultValue: 'Add First Markup' }),
-                        onClick: () => setShowAddModal(true),
-                      }
-                }
-              />
+              (() => {
+                // "No match" (a filter is narrowing the result) vs "empty"
+                // (nothing exists yet). Includes the client-side priority /
+                // overdue filters so a narrowed-to-zero view offers "adjust
+                // your criteria" rather than "add your first markup".
+                const narrowed = !!(
+                  searchQuery ||
+                  filterType ||
+                  filterStatus ||
+                  filterAssignee ||
+                  filterPriority ||
+                  overdueOnly
+                );
+                return (
+                  <EmptyState
+                    icon={<PenTool size={28} strokeWidth={1.5} />}
+                    title={
+                      narrowed
+                        ? t('markups.no_match_title', { defaultValue: 'No matching markups' })
+                        : t('markups.empty_title', { defaultValue: 'No markups yet' })
+                    }
+                    description={
+                      narrowed
+                        ? t('markups.no_match_desc', {
+                            defaultValue: 'Try adjusting your search or filter criteria.',
+                          })
+                        : t('markups.empty_desc', {
+                            defaultValue:
+                              'Create your first markup to start annotating documents. Use clouds, arrows, text, and measurement tools to collaborate with your team.',
+                          })
+                    }
+                    action={
+                      narrowed
+                        ? undefined
+                        : {
+                            label: t('markups.add_first', { defaultValue: 'Add First Markup' }),
+                            onClick: () => setShowAddModal(true),
+                          }
+                    }
+                  />
+                );
+              })()
             ) : viewMode === 'list' ? (
               /* ── List View (Table) ─────────────────────────────────────── */
               <Card padding="none" className="overflow-hidden">
@@ -1994,6 +2404,9 @@ export function MarkupsPage() {
                         </th>
                         <th className="px-3 py-2 text-left text-2xs font-semibold uppercase tracking-wider text-content-tertiary w-[90px]">
                           {t('markups.col_status', { defaultValue: 'Status' })}
+                        </th>
+                        <th className="px-3 py-2 text-left text-2xs font-semibold uppercase tracking-wider text-content-tertiary w-[120px]">
+                          {t('markups.col_priority', { defaultValue: 'Priority' })}
                         </th>
                         <th className="px-3 py-2 text-left text-2xs font-semibold uppercase tracking-wider text-content-tertiary w-[140px]">
                           {t('markups.col_assignee', { defaultValue: 'Assignee' })}
@@ -2040,6 +2453,9 @@ export function MarkupsPage() {
                           onOpenInDocument={handleOpenInDocument}
                           onOpenBoqPosition={handleOpenBoqPosition}
                           onUseAsQuantity={handleUseAsQuantity}
+                          onConvertToIssue={handleConvertToIssue}
+                          onOpenIssue={handleOpenIssue}
+                          isConverting={convertingId === markup.id}
                         />
                       ))}
                     </tbody>
@@ -2059,6 +2475,9 @@ export function MarkupsPage() {
                     onDelete={() => setDeleteTarget(markup.id)}
                     onEdit={() => setEditTarget(markup)}
                     userMap={userMap}
+                    onConvertToIssue={handleConvertToIssue}
+                    onOpenIssue={handleOpenIssue}
+                    isConverting={convertingId === markup.id}
                   />
                 ))}
               </div>

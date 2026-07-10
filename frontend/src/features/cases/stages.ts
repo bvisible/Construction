@@ -43,6 +43,8 @@ export interface StageMeta {
   /** One-word label for the compact timeline node. */
   shortKey: string;
   shortDefault: string;
+  /** i18n key for the one-line stage description. */
+  descKey: string;
   /** One plain line describing what happens in this stage. */
   descDefault: string;
   icon: ComponentType<LucideProps>;
@@ -59,6 +61,7 @@ export const STAGE_META: StageMeta[] = [
     labelDefault: 'Define & brief',
     shortKey: 'cases.stage_short.define',
     shortDefault: 'Define',
+    descKey: 'cases.stage_desc.define',
     descDefault: 'Set the project up and test the budget before design.',
     icon: Compass,
     tint: {
@@ -75,6 +78,7 @@ export const STAGE_META: StageMeta[] = [
     labelDefault: 'Design & BIM',
     shortKey: 'cases.stage_short.design',
     shortDefault: 'Design',
+    descKey: 'cases.stage_desc.design',
     descDefault: 'Develop and coordinate the design and the models.',
     icon: DraftingCompass,
     tint: {
@@ -91,6 +95,7 @@ export const STAGE_META: StageMeta[] = [
     labelDefault: 'Estimate & cost plan',
     shortKey: 'cases.stage_short.estimate',
     shortDefault: 'Estimate',
+    descKey: 'cases.stage_desc.estimate',
     descDefault: 'Measure, price and plan the cost of the work.',
     icon: Calculator,
     tint: {
@@ -107,6 +112,7 @@ export const STAGE_META: StageMeta[] = [
     labelDefault: 'Tender & procurement',
     shortKey: 'cases.stage_short.procure',
     shortDefault: 'Procure',
+    descKey: 'cases.stage_desc.procure',
     descDefault: 'Package, tender and buy the work.',
     icon: ShoppingCart,
     tint: {
@@ -123,6 +129,7 @@ export const STAGE_META: StageMeta[] = [
     labelDefault: 'Plan & mobilize',
     shortKey: 'cases.stage_short.plan',
     shortDefault: 'Plan',
+    descKey: 'cases.stage_desc.plan',
     descDefault: 'Build the programme and get ready to start on site.',
     icon: CalendarRange,
     tint: {
@@ -139,6 +146,7 @@ export const STAGE_META: StageMeta[] = [
     labelDefault: 'Build & control',
     shortKey: 'cases.stage_short.build',
     shortDefault: 'Build',
+    descKey: 'cases.stage_desc.build',
     descDefault: 'Run the work on site with quality, safety and cost under control.',
     icon: HardHat,
     tint: {
@@ -155,6 +163,7 @@ export const STAGE_META: StageMeta[] = [
     labelDefault: 'Handover & closeout',
     shortKey: 'cases.stage_short.handover',
     shortDefault: 'Handover',
+    descKey: 'cases.stage_desc.handover',
     descDefault: 'Inspect, complete and hand the building over.',
     icon: PackageCheck,
     tint: {
@@ -171,6 +180,7 @@ export const STAGE_META: StageMeta[] = [
     labelDefault: 'Operate & maintain',
     shortKey: 'cases.stage_short.operate',
     shortDefault: 'Operate',
+    descKey: 'cases.stage_desc.operate',
     descDefault: 'Run and maintain the finished building.',
     icon: Building2,
     tint: {

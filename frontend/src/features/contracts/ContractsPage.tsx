@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, Fragment } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
@@ -23,6 +23,8 @@ import {
   FilePlus2,
   Copy,
   BookOpen,
+  Network,
+  ArrowRight,
 } from 'lucide-react';
 import {
   Button,
@@ -302,6 +304,131 @@ function CounterpartyLink({
   );
 }
 
+/* ─── How it works + connects ─── */
+
+/** Compact inline link to a sibling module (keeps the flow copy readable). */
+function ModLink({ to, children }: { to: string; children: React.ReactNode }) {
+  return (
+    <Link to={to} className="font-medium text-oe-blue-text hover:underline">
+      {children}
+    </Link>
+  );
+}
+
+/**
+ * One-glance map of the contract lifecycle and how it connects: a won CRM deal
+ * or an awarded bid becomes a contract with a counterparty from Subcontractors,
+ * variations adjust the sum mid-flight, and certified claims reconcile against
+ * committed cost. Every connected module is a link.
+ */
+function HowContractsWork() {
+  const { t } = useTranslation();
+
+  const steps: { icon: React.ReactNode; title: string; desc: string }[] = [
+    {
+      icon: <FileText size={14} className="text-oe-blue" />,
+      title: t('contracts.flow_1_title', { defaultValue: 'Set up' }),
+      desc: t('contracts.flow_1_desc', {
+        defaultValue: 'Create a type-aware contract with its schedule of values and retention.',
+      }),
+    },
+    {
+      icon: <PenLine size={14} className="text-oe-blue" />,
+      title: t('contracts.flow_2_title', { defaultValue: 'Sign' }),
+      desc: t('contracts.flow_2_desc', {
+        defaultValue: 'Clear the compliance gate, then sign to make it active.',
+      }),
+    },
+    {
+      icon: <Receipt size={14} className="text-oe-blue" />,
+      title: t('contracts.flow_3_title', { defaultValue: 'Bill' }),
+      desc: t('contracts.flow_3_desc', {
+        defaultValue: 'Raise progress claims against the schedule to bill completed work.',
+      }),
+    },
+    {
+      icon: <FilePlus2 size={14} className="text-oe-blue" />,
+      title: t('contracts.flow_4_title', { defaultValue: 'Adjust' }),
+      desc: t('contracts.flow_4_desc', {
+        defaultValue: 'Variations change the contract sum as the scope moves.',
+      }),
+    },
+    {
+      icon: <Archive size={14} className="text-oe-blue" />,
+      title: t('contracts.flow_5_title', { defaultValue: 'Settle' }),
+      desc: t('contracts.flow_5_desc', {
+        defaultValue: 'Close out in the final account when the work is done.',
+      }),
+    },
+  ];
+
+  return (
+    <Card padding="md">
+      <h2 className="flex items-center gap-1.5 text-sm font-semibold text-content-primary">
+        <Network size={15} className="text-oe-blue" />
+        {t('contracts.flow_title', { defaultValue: 'How contracts fit together' })}
+      </h2>
+      <p className="mt-1 text-xs text-content-tertiary">
+        {t('contracts.flow_intro', {
+          defaultValue:
+            'A won deal or an awarded bid becomes a contract with a counterparty, billed through progress claims and settled in a final account. Variations keep the sum honest, and certified amounts reconcile against committed cost.',
+        })}
+      </p>
+
+      <ol className="mt-3 flex flex-col gap-2 lg:flex-row lg:items-stretch">
+        {steps.map((s, i) => (
+          <Fragment key={s.title}>
+            <li className="flex-1 rounded-lg border border-border-light bg-surface-secondary/40 p-3">
+              <div className="flex items-center gap-2">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-oe-blue-subtle text-2xs font-bold text-oe-blue-text">
+                  {i + 1}
+                </span>
+                <span className="flex items-center gap-1 text-xs font-semibold text-content-primary">
+                  {s.icon}
+                  {s.title}
+                </span>
+              </div>
+              <p className="mt-1.5 text-2xs leading-relaxed text-content-tertiary">{s.desc}</p>
+            </li>
+            {i < steps.length - 1 && (
+              <li
+                aria-hidden="true"
+                className="hidden shrink-0 items-center self-center text-content-quaternary lg:flex"
+              >
+                <ArrowRight size={16} />
+              </li>
+            )}
+          </Fragment>
+        ))}
+      </ol>
+
+      <div className="mt-3 flex flex-col gap-1.5 border-t border-border-light pt-3 text-2xs text-content-tertiary sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-5 sm:gap-y-1">
+        <span>
+          <span className="font-medium text-content-secondary">
+            {t('contracts.flow_pulls', { defaultValue: 'Pulls from:' })}
+          </span>{' '}
+          <ModLink to="/crm">{t('contracts.mod_crm', { defaultValue: 'CRM' })}</ModLink> ·{' '}
+          <ModLink to="/subcontractors">
+            {t('contracts.mod_subs', { defaultValue: 'Subcontractors' })}
+          </ModLink>
+        </span>
+        <span>
+          <span className="font-medium text-content-secondary">
+            {t('contracts.flow_feeds', { defaultValue: 'Feeds:' })}
+          </span>{' '}
+          <ModLink to="/variations">
+            {t('contracts.mod_variations', { defaultValue: 'Variations' })}
+          </ModLink>{' '}
+          ·{' '}
+          <ModLink to="/reconciliation">
+            {t('contracts.mod_reconciliation', { defaultValue: 'Reconciliation' })}
+          </ModLink>
+        </span>
+      </div>
+    </Card>
+  );
+}
+
 /* ─── Page ─── */
 
 export function ContractsPage() {
@@ -495,6 +622,8 @@ export function ContractsPage() {
             'Set up each commercial agreement with its type-aware schedule of values, retention and lifecycle, then bill the work through progress claims and settle in the final account. Variations adjust the contract sum mid-flight and approved claims push their net due into Finance, so what you signed and what you owe never drift apart.',
         })}
       </DismissibleInfo>
+
+      <HowContractsWork />
 
       {/* Tabs */}
       <div className="border-b border-border-light">

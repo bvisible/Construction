@@ -248,7 +248,7 @@ def _build_passage_text(payload: dict[str, Any]) -> str:
         parts.append(_split_camelcase(str(ifc_subtype)))
 
     # 5. OST category — same split treatment, drop the OST_ prefix
-    #    which is a Revit-internal artefact (no semantic value).
+    #    which is an authoring-tool-internal artefact (no semantic value).
     ost = payload.get("ost_category")
     if ost:
         ost_clean = str(ost).removeprefix("OST_")

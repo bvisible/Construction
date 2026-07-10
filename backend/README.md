@@ -74,7 +74,7 @@ openconstructionerp version                     # Show version
 - **BOQ editor** — hierarchical bill of quantities with assemblies, formulas, multi-currency
 - **Cost database** — import your own rates (Excel/CSV) or use the bundled example templates
 - **AI estimation** — vector search matches line items to historical cost data
-- **CAD/BIM takeoff** — quantities from DWG/DXF and IFC/Revit (via DDC, no IfcOpenShell)
+- **CAD/BIM takeoff** — quantities from DWG/DXF and IFC/RVT (via DDC, no IfcOpenShell)
 - **4D / 5D** — cost-loaded schedule, earned value (SPI/CPI), cash-flow, what-if scenarios
 - **Validation** — DIN 276, GAEB, NRM, MasterFormat rule packs flag issues at import
 - **Reporting** — PDF/Excel exports, dashboards, BCF issue exchange

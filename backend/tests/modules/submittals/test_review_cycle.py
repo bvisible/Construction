@@ -502,7 +502,7 @@ class TestMagicByteExtendedFormats:
     """OLE and DWG are in _ALLOWED_ATTACHMENT_TYPES but had no positive test.
 
     OLE magic: D0 CF 11 E0 A1 B1 1A E1 (legacy Office .doc/.xls).
-    DWG magic: 41 43 31 30 ("AC10xx" AutoCAD header).
+    DWG magic: 41 43 31 30 ("AC10xx" DWG format header).
     """
 
     @pytest.mark.asyncio
@@ -562,7 +562,7 @@ class TestMagicByteExtendedFormats:
         app = _build_app(db_session, caller_id=owner)
         client = TestClient(app)
 
-        # DWG magic: "AC10" (AutoCAD 2000+ format)
+        # DWG magic: "AC10" (DWG 2000+ format)
         dwg_magic = b"AC1015" + b"\x00" * 64
         resp = client.post(
             f"/v1/submittals/{sub_id}/attachments/upload/",

@@ -1,12 +1,12 @@
-import { useState, useMemo, useCallback, useEffect } from 'react';
+import { Fragment, useState, useMemo, useCallback, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useSearchParams, useNavigate } from 'react-router-dom';
+import { useSearchParams, useNavigate, Link } from 'react-router-dom';
 import { normalizeListResponse } from '@/shared/lib/apiHelpers';
 import {
   ShieldAlert, Plus, ChevronRight, ArrowLeft, DollarSign,
   AlertTriangle, Shield, Trash2, X, Search, Filter, CalendarDays, TrendingUp,
-  LayoutGrid, Activity,
+  LayoutGrid, Activity, Network, ArrowRight,
 } from 'lucide-react';
 import { Button, Card, Badge, EmptyState, Breadcrumb, ConfirmDialog, DismissibleInfo, IntroRichText, RecoveryCard, SkeletonTable, SkeletonCard, ModuleGuideButton } from '@/shared/ui';
 import { PageHeader } from '@/shared/ui/PageHeader';
@@ -517,6 +517,116 @@ function DetailView({ riskId, onBack }: { riskId: string; onBack: () => void }) 
 
 /* ── Main Page ─────────────────────────────────────────────────────────── */
 
+/* ── How it works + connects ─────────────────────────────────────────── */
+
+/** Compact inline link to a sibling module, keeping the flow copy readable. */
+function ModLink({ to, children }: { to: string; children: React.ReactNode }) {
+  return (
+    <Link to={to} className="font-medium text-oe-blue-text hover:underline">
+      {children}
+    </Link>
+  );
+}
+
+/**
+ * One-glance explainer: what the Risk Register does and how it connects. Risks
+ * are logged with probability and impact, read on a matrix, simulated with
+ * Monte Carlo, then their schedule and cost impacts flow into the 4D Schedule,
+ * Project Controls and Reports.
+ */
+function HowRiskWork() {
+  const { t } = useTranslation();
+
+  const steps: { icon: React.ReactNode; title: string; desc: string }[] = [
+    {
+      icon: <ShieldAlert size={14} className="text-oe-blue" />,
+      title: t('risk.flow_1_title', { defaultValue: 'Log risks' }),
+      desc: t('risk.flow_1_desc', {
+        defaultValue: 'Capture threats with probability, cost and schedule impact and an owner.',
+      }),
+    },
+    {
+      icon: <LayoutGrid size={14} className="text-oe-blue" />,
+      title: t('risk.flow_2_title', { defaultValue: 'Score and map' }),
+      desc: t('risk.flow_2_desc', {
+        defaultValue: 'Read exposure on a probability-by-impact matrix and 5x5 heatmap.',
+      }),
+    },
+    {
+      icon: <Activity size={14} className="text-oe-blue" />,
+      title: t('risk.flow_3_title', { defaultValue: 'Simulate' }),
+      desc: t('risk.flow_3_desc', {
+        defaultValue: 'Run a Monte Carlo over the register for P50, P80 and P95 confidence.',
+      }),
+    },
+    {
+      icon: <Shield size={14} className="text-oe-blue" />,
+      title: t('risk.flow_4_title', { defaultValue: 'Mitigate and connect' }),
+      desc: t('risk.flow_4_desc', {
+        defaultValue: 'Plan mitigations; schedule and cost impacts flow into planning and reporting.',
+      }),
+    },
+  ];
+
+  return (
+    <Card padding="md">
+      <h2 className="flex items-center gap-1.5 text-sm font-semibold text-content-primary">
+        <Network size={15} className="text-oe-blue" />
+        {t('risk.flow_title', { defaultValue: 'How the Risk Register fits together' })}
+      </h2>
+      <p className="mt-1 text-xs text-content-tertiary">
+        {t('risk.flow_intro', {
+          defaultValue:
+            'Surface project threats before they cost money: log them, score them on the matrix, simulate the range, then feed the impacts into planning and reporting.',
+        })}
+      </p>
+
+      <ol className="mt-3 flex flex-col gap-2 lg:flex-row lg:items-stretch">
+        {steps.map((s, i) => (
+          <Fragment key={s.title}>
+            <li className="flex-1 rounded-lg border border-border-light bg-surface-secondary/40 p-3">
+              <div className="flex items-center gap-2">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-oe-blue-subtle text-2xs font-bold text-oe-blue-text">
+                  {i + 1}
+                </span>
+                <span className="flex items-center gap-1 text-xs font-semibold text-content-primary">
+                  {s.icon}
+                  {s.title}
+                </span>
+              </div>
+              <p className="mt-1.5 text-2xs leading-relaxed text-content-tertiary">{s.desc}</p>
+            </li>
+            {i < steps.length - 1 && (
+              <li
+                aria-hidden="true"
+                className="hidden shrink-0 items-center self-center text-content-quaternary lg:flex"
+              >
+                <ArrowRight size={16} />
+              </li>
+            )}
+          </Fragment>
+        ))}
+      </ol>
+
+      <div className="mt-3 flex flex-col gap-1.5 border-t border-border-light pt-3 text-2xs text-content-tertiary sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-5 sm:gap-y-1">
+        <span>
+          <span className="font-medium text-content-secondary">
+            {t('risk.flow_connects', { defaultValue: 'Connects with:' })}
+          </span>{' '}
+          <ModLink to="/schedule">
+            {t('risk.mod_schedule', { defaultValue: '4D Schedule' })}
+          </ModLink>{' '}
+          ·{' '}
+          <ModLink to="/project-controls">
+            {t('risk.mod_controls', { defaultValue: 'Project Controls' })}
+          </ModLink>{' '}
+          · <ModLink to="/reports">{t('risk.mod_reports', { defaultValue: 'Reports' })}</ModLink>
+        </span>
+      </div>
+    </Card>
+  );
+}
+
 export function RiskRegisterPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -647,6 +757,8 @@ export function RiskRegisterPage() {
           </>
         }
       />
+
+      <HowRiskWork />
 
       <DismissibleInfo
         storageKey="risks"

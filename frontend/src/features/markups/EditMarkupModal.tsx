@@ -16,12 +16,19 @@ import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
-import { Edit3, X } from 'lucide-react';
+import { Edit3, X, Flag, CalendarClock } from 'lucide-react';
 import { Button } from '@/shared/ui';
 import { useToastStore } from '@/stores/useToastStore';
 import { fetchUsers, type User as AssigneeUser } from '@/features/users/api';
 import { updateMarkup } from './api';
 import type { Markup, UpdateMarkupPayload } from './api';
+import {
+  MARKUP_PRIORITIES,
+  PRIORITY_LABELS,
+  getMarkupPriority,
+  getMarkupDueDate,
+  type MarkupPriority,
+} from './issueTracking';
 
 const PRESET_COLORS = [
   { name: 'Red', value: '#EF4444' },
@@ -63,6 +70,10 @@ export function EditMarkupModal({
   // string = clear (NULL on the wire). Loaded lazily only while the
   // modal is open so closed-page renders don't pay the /v1/users/ cost.
   const [assigneeId, setAssigneeId] = useState<string>('');
+  // Issue-tracking fields, persisted in the markup's metadata. Empty string
+  // = clear that key. "" priority means "no priority".
+  const [priority, setPriority] = useState<MarkupPriority | ''>('');
+  const [dueDate, setDueDate] = useState<string>('');
 
   const { data: users = [] } = useQuery({
     queryKey: ['markups', 'users'],
@@ -81,6 +92,8 @@ export function EditMarkupModal({
       setText(markup.text ?? '');
       setColor(markup.color || PRESET_COLORS[4]!.value);
       setAssigneeId(markup.assignee_id ?? '');
+      setPriority(getMarkupPriority(markup) ?? '');
+      setDueDate(getMarkupDueDate(markup) ?? '');
     }
   }, [open, markup]);
 
@@ -168,6 +181,13 @@ export function EditMarkupModal({
       // M3 — re-assign (or clear) the markup owner. Empty select value ⇒
       // null on the wire (Unassigned); a UUID sets the assignee.
       assignee_id: assigneeId || null,
+      // Issue-tracking fields ride in metadata. The backend shallow-MERGES
+      // this, so we only send these two keys and any linked ``punch_item_id``
+      // survives. ``null`` clears a key; a value sets it.
+      metadata: {
+        priority: priority || null,
+        due_date: dueDate || null,
+      },
     };
     updateMut.mutate(payload);
   };
@@ -306,6 +326,51 @@ export function EditMarkupModal({
                 </option>
               ))}
             </select>
+          </div>
+
+          {/* Priority + Due date - turns a bare annotation into a tracked
+              issue. Both are optional and stored in the markup's metadata. */}
+          <div className="flex gap-3">
+            <div className="flex-1">
+              <label
+                htmlFor="edit-markup-priority"
+                className="flex items-center gap-1 text-xs font-medium text-content-secondary mb-1.5"
+              >
+                <Flag size={12} />
+                {t('markups.priority', { defaultValue: 'Priority' })}
+              </label>
+              <select
+                id="edit-markup-priority"
+                value={priority}
+                onChange={(e) => setPriority(e.target.value as MarkupPriority | '')}
+                className={inputCls + ' w-full'}
+              >
+                <option value="">
+                  {t('markups.no_priority', { defaultValue: 'None' })}
+                </option>
+                {MARKUP_PRIORITIES.map((p) => (
+                  <option key={p} value={p}>
+                    {t(`markups.priority_${p}`, { defaultValue: PRIORITY_LABELS[p] })}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="flex-1">
+              <label
+                htmlFor="edit-markup-due"
+                className="flex items-center gap-1 text-xs font-medium text-content-secondary mb-1.5"
+              >
+                <CalendarClock size={12} />
+                {t('markups.due_date', { defaultValue: 'Due date' })}
+              </label>
+              <input
+                id="edit-markup-due"
+                type="date"
+                value={dueDate}
+                onChange={(e) => setDueDate(e.target.value)}
+                className={inputCls + ' w-full'}
+              />
+            </div>
           </div>
         </div>
 

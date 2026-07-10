@@ -182,7 +182,7 @@ ai_extra = '''<h3 id="ai-setup">Setting Up AI</h3>
 <p>Upload a building photo and AI identifies structural elements, estimates dimensions from visible scale references (doors ~0.9m, floor height ~3m), and generates BOQ items. Works best with clear exterior photos showing the full building.</p>
 
 <h3 id="ai-cad-workflow">CAD/BIM Estimation</h3>
-<p>Upload a Revit, IFC, DWG, or DGN file. The system extracts elements with volumes and areas using DDC converters, then AI maps them to construction work items with pricing. This combines exact quantities from the model with AI-suggested rates.</p>
+<p>Upload an RVT, IFC, DWG, or DGN file. The system extracts elements with volumes and areas using DDC converters, then AI maps them to construction work items with pricing. This combines exact quantities from the model with AI-suggested rates.</p>
 
 ''' + ai_advisor_marker
 
@@ -200,9 +200,9 @@ takeoff_extra = '''<h3 id="takeoff-workflow">CAD/BIM Takeoff: Step by Step</h3>
 <li>Wait for the DDC converter to extract elements (30-60 seconds for typical files)</li>
 <li>The system shows available columns and suggests grouping presets:
   <ul>
-  <li><strong>Standard Revit QTO</strong> &mdash; Group by Category + Type Name, sum Volume/Area/Count</li>
+  <li><strong>Standard BIM QTO</strong> &mdash; Group by Category + Type Name, sum Volume/Area/Count</li>
   <li><strong>Detailed</strong> &mdash; Add Level for per-floor breakdown</li>
-  <li><strong>By Family</strong> &mdash; Group by Revit Family for procurement lists</li>
+  <li><strong>By Family</strong> &mdash; Group by Family for procurement lists</li>
   <li><strong>Custom</strong> &mdash; Choose any combination of the 1200+ extracted columns</li>
   </ul>
 </li>

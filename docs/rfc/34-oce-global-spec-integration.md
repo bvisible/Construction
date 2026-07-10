@@ -202,7 +202,7 @@ Largest gap (25 % → 100 %). Pure greenfield engine on top of canonical format.
 - **Files**: `bim_hub/diff/exporters/bcf.py`. Use `bcf-py` or hand-rolled XML — no IfcOpenShell dependency.
 - **Output**: ZIP with `bcf.version`, per-topic folders with `markup.bcf`, `viewpoint.bcfv`, `snapshot.png`.
 - **Snapshot**: rendered headless via the existing Three.js viewer (Puppeteer/Playwright). One topic = one screenshot of the changed element.
-- **Tests first**: round-trip — generated BCF parses back into a known set of topics; opens cleanly in BIMcollab Zoom (manual smoke once, automated XSD validation always).
+- **Tests first**: round-trip — generated BCF parses back into a known set of topics; opens cleanly in any BCF-compatible tool (manual smoke once, automated XSD validation always).
 - **Visual**: `bim-diff-bcf-export.png` (UI flow + downloaded file size badge).
 
 ### W2.3 — SARIF + Excel + PDF + JSON exporters
@@ -359,7 +359,7 @@ Largest gap (25 % → 100 %). Pure greenfield engine on top of canonical format.
 
 > Source-of-truth for sub-tickets: RFC 35 §10. Summary here for the dependency-graph view only.
 
-- **EAC-6.1** PMXML / MSPDI / MS Project / CSV import.
+- **EAC-6.1** PMXML / MSPDI / CSV import.
 - **EAC-6.2** `EacScheduleLink` schema — task ↔ EAC predicate.
 - **EAC-6.3** AI auto-link (uses RFC 34 W5.6 LLM provider abstraction).
 - **EAC-6.4** Simulation engine + 3D viewer integration + MP4/GIF export.

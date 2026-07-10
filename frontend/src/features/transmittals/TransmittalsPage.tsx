@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom';
 import clsx from 'clsx';
 import {
   Send,
@@ -17,6 +17,7 @@ import {
   Pencil,
   Trash2,
   AlertTriangle,
+  Network,
 } from 'lucide-react';
 import {
   Button,
@@ -869,6 +870,104 @@ function EditTransmittalModal({
 
 /* ── Main Page ─────────────────────────────────────────────────────────── */
 
+/** Compact inline link to a sibling module (keeps the connects row readable). */
+function ModLink({ to, children }: { to: string; children: React.ReactNode }) {
+  return (
+    <Link to={to} className="font-medium text-oe-blue-text hover:underline">
+      {children}
+    </Link>
+  );
+}
+
+/**
+ * One-glance orientation card: what a transmittal is for, the stages of issuing
+ * one, and the neighbouring modules it connects to. Every linked module is a
+ * real, clickable route.
+ */
+function TransmittalsHowItWorks() {
+  const { t } = useTranslation();
+
+  const steps: { icon: React.ReactNode; title: string; desc: string }[] = [
+    {
+      icon: <FileText size={14} className="text-oe-blue" />,
+      title: t('transmittals.flow_1_title', { defaultValue: 'Compile the package' }),
+      desc: t('transmittals.flow_1_desc', {
+        defaultValue: 'List the documents to send and link the exact CDE revisions.',
+      }),
+    },
+    {
+      icon: <Users size={14} className="text-oe-blue" />,
+      title: t('transmittals.flow_2_title', { defaultValue: 'Recipients & purpose' }),
+      desc: t('transmittals.flow_2_desc', {
+        defaultValue: 'Name who receives it and why: For Approval, Information, Construction or Review.',
+      }),
+    },
+    {
+      icon: <Send size={14} className="text-oe-blue" />,
+      title: t('transmittals.flow_3_title', { defaultValue: 'Issue' }),
+      desc: t('transmittals.flow_3_desc', {
+        defaultValue: 'Issuing locks the transmittal and stamps the dated distribution record.',
+      }),
+    },
+    {
+      icon: <CheckCircle2 size={14} className="text-oe-blue" />,
+      title: t('transmittals.flow_4_title', { defaultValue: 'Track acknowledgement' }),
+      desc: t('transmittals.flow_4_desc', {
+        defaultValue: 'See who has acknowledged receipt and chase what is still outstanding.',
+      }),
+    },
+  ];
+
+  return (
+    <div className="rounded-xl border border-border-light bg-surface-secondary/40 p-4">
+      <h2 className="flex items-center gap-1.5 text-sm font-semibold text-content-primary">
+        <Network size={15} className="text-oe-blue" />
+        {t('transmittals.flow_title', { defaultValue: 'How transmittals work and connect' })}
+      </h2>
+      <p className="mt-1 text-xs text-content-tertiary">
+        {t('transmittals.flow_intro', {
+          defaultValue:
+            'A transmittal is the dated proof of who received which documents. Start by compiling a package and linking the CDE revisions it carries.',
+        })}
+      </p>
+
+      <ol className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+        {steps.map((s) => (
+          <li
+            key={s.title}
+            className="rounded-lg border border-border-light bg-surface-primary/60 p-3"
+          >
+            <div className="flex items-center gap-2">
+              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-oe-blue-subtle">
+                {s.icon}
+              </span>
+              <span className="text-xs font-semibold text-content-primary">{s.title}</span>
+            </div>
+            <p className="mt-1.5 text-2xs leading-relaxed text-content-tertiary">{s.desc}</p>
+          </li>
+        ))}
+      </ol>
+
+      <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-border-light pt-3 text-2xs text-content-tertiary">
+        <span className="font-medium text-content-secondary">
+          {t('transmittals.flow_connects', { defaultValue: 'Connects with' })}
+        </span>
+        <ModLink to="/submittals">{t('submittals.title', { defaultValue: 'Submittals' })}</ModLink>
+        <span aria-hidden="true">·</span>
+        <ModLink to="/correspondence">
+          {t('correspondence.title', { defaultValue: 'Correspondence' })}
+        </ModLink>
+        <span aria-hidden="true">·</span>
+        <ModLink to="/cde">
+          {t('transmittals.link_cde', { defaultValue: 'Common Data Environment' })}
+        </ModLink>
+        <span aria-hidden="true">·</span>
+        <ModLink to="/rfi">{t('rfi.title', { defaultValue: 'RFIs' })}</ModLink>
+      </div>
+    </div>
+  );
+}
+
 export function TransmittalsPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -1197,6 +1296,8 @@ export function TransmittalsPage() {
             'Create a formal distribution record when you issue drawings or specifications to a subcontractor or consultant: what was sent, to whom, the purpose code (For Approval, For Information, For Construction, For Review) and whether they acknowledged receipt. The log becomes the dated evidence trail behind your submittals and correspondence.',
         })}
       </DismissibleInfo>
+
+      <TransmittalsHowItWorks />
 
       {/* No-project warning */}
       {!projectId && (

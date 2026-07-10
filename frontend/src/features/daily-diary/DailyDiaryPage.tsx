@@ -102,6 +102,7 @@ import {
   type SclBundleManifest,
 } from './api';
 import { dailyDiaryGuide } from './dailyDiaryGuide';
+import { VoiceEntry, getField } from '@/features/voice';
 import { Panorama360Viewer } from './Panorama360Viewer';
 import { is360Photo, panoramaImageUrl } from './panorama360';
 // Real file upload + "choose from already-uploaded" picker reuse the
@@ -1909,7 +1910,38 @@ function EntriesTimeline({
         <h3 className="text-sm font-semibold uppercase tracking-wide text-content-secondary">
           {t('daily_diary.entries', { defaultValue: 'Entries' })}
         </h3>
-        <span className="text-xs text-content-tertiary">{entries.length}</span>
+        <div className="flex items-center gap-2">
+          {!sealed && (
+            <VoiceEntry
+              projectId={projectId}
+              target="diary_note"
+              compact
+              triggerLabel={t('voice.trigger_diary', { defaultValue: 'Voice note' })}
+              onConfirm={async (d) => {
+                try {
+                  await createEntry({
+                    diary_id: diaryId,
+                    entry_type: (getField(d.fields, 'entry_type') || 'general') as EntryType,
+                    entry_time: nowLocalISO(),
+                    title:
+                      getField(d.fields, 'title') ||
+                      t('daily_diary.voice_note_title', { defaultValue: 'Voice note' }),
+                    description: getField(d.fields, 'description') || undefined,
+                  });
+                  void invalidateEntries();
+                  addToast({
+                    type: 'success',
+                    title: t('daily_diary.entry_created', { defaultValue: 'Entry added' }),
+                  });
+                } catch (err) {
+                  addToast({ type: 'error', title: getErrorMessage(err) });
+                  throw err;
+                }
+              }}
+            />
+          )}
+          <span className="text-xs text-content-tertiary">{entries.length}</span>
+        </div>
       </div>
 
       {!sealed && (

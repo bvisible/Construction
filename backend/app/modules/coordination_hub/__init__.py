@@ -8,7 +8,7 @@ It owns NO new tables - every count, delta and event-stream entry is
 sourced live from the upstream module's own ORM.
 
 Industry term for the surface this module renders is **"Model
-Coordination"**. The competitor analogues are BIM Track and BIMcollab
+Coordination"**. Comparable dedicated tools focus on BCF coordination
 Cloud; the unique-to-OCERP twist is the ``open_cost_impact_total`` KPI
 that ties coordination debt to live BOQ money via the
 ``oe_clash_cost_impact`` module.

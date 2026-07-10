@@ -337,8 +337,8 @@ OE_CONVERTER_BASE_URL_ENV = "OE_CONVERTER_BASE_URL"
 _CONVERTER_INSTALL_ROOT: Path = Path.home() / ".openestimator" / "converters"
 
 # Format-alias → converter-id map. Some upload extensions are handled by a
-# converter registered under a different id: Revit family files (.rfa) by
-# the RVT (RvtExporter) converter, AutoCAD .dxf by the DWG (DwgExporter)
+# converter registered under a different id: RVT family files (.rfa) by
+# the RVT (RvtExporter) converter, .dxf by the DWG (DwgExporter)
 # converter. ``ensure_converter`` resolves through this so an upload of an
 # alias provisions and runs the binary that actually reads it.
 _CONVERTER_FORMAT_ALIASES: dict[str, str] = {
@@ -881,7 +881,7 @@ def smoke_test_converter(extension: str, force: bool = False) -> ConverterHealth
 #
 # Why this exists: the smoke test verifies the binary LOADS, not that it can
 # parse the user's file. A user can have a perfectly installed converter that
-# is simply OLDER than the Revit version that saved their .rvt file - and the
+# is simply OLDER than the RVT version that saved their .rvt file - and the
 # DDC converter then silently writes an empty Excel. Detecting both versions
 # upfront lets us surface the actual reason ("Your RVT is from Revit 2025
 # but the installed converter only supports up to 2023") instead of the
@@ -889,14 +889,14 @@ def smoke_test_converter(extension: str, force: bool = False) -> ConverterHealth
 
 
 def read_rvt_revit_version(path: Path, *, max_scan_bytes: int = 262144) -> dict[str, str | None]:
-    """Extract Revit version metadata from a .rvt file header.
+    """Extract RVT version metadata from a .rvt file header.
 
     RVT files are OLE Compound Documents. The ``BasicFileInfo`` stream
     near the start contains UTF-16-LE text like ``Format: 2024`` and
     ``Revit Build: 24.0.11.21``. We don't parse the full OLE structure
     (would add a dependency) - we just scan the first 256 KB for the
     well-known marker strings, which are reliably present in the leading
-    sectors for files saved by Revit 2018+.
+    sectors for files saved by RVT 2018+.
 
     Returns a dict with optional ``format``, ``build``, ``app_name``
     fields. All values are strings or ``None`` if the marker wasn't found.
@@ -916,7 +916,7 @@ def read_rvt_revit_version(path: Path, *, max_scan_bytes: int = 262144) -> dict[
         logger.debug("File %s is not a valid OLE Compound File", path.name)
         return info
 
-    # Decode the scanned region as UTF-16-LE (Revit's chosen encoding for
+    # Decode the scanned region as UTF-16-LE (RVT's chosen encoding for
     # BasicFileInfo). errors='replace' so a stray byte doesn't kill the
     # whole scan.
     try:
@@ -1761,7 +1761,7 @@ def _to_float(val: object) -> float:
 
 # BUG-D-TKC-004b / D-TKC-NEW-05 - canonical quantity synonym map.
 #
-# DDC / Revit / IFC exporters emit the same physical quantity under a
+# DDC / RVT / IFC exporters emit the same physical quantity under a
 # wide range of spellings.  The old ``_norm_col`` only stripped a single
 # trailing ``(m2|m3)`` suffix when ``len > 4``, so IFC-standard names
 # like ``NetVolume`` / ``Qto_WallBaseQuantities.NetVolume`` /
@@ -1852,7 +1852,7 @@ def _instance_count(raw: object) -> float:
 def _norm_col(name: str) -> str:
     """Normalise a column name to a canonical quantity key.
 
-    Resolves the many DDC / Revit / IFC spellings of the same physical
+    Resolves the many DDC / RVT / IFC spellings of the same physical
     quantity to a single key so ``sum_columns=['volume'|'area'|'length']``
     works regardless of how the converter labelled the column.
 
@@ -2206,8 +2206,8 @@ def get_available_columns(elements: list[dict], file_format: str = "rvt") -> dic
     if file_format in ("rvt", "rfa"):
         presets = {
             "standard": {
-                "label": "Standard Revit QTO",
-                "description": "Category + Type Name - standard Revit breakdown",
+                "label": "Standard BIM QTO",
+                "description": "Category + Type Name - standard BIM breakdown",
                 "group_by": [c for c in ["category", "type name"] if c in grouping_cols],
                 "sum_columns": [c for c in ["volume", "area", "count"] if c in available_qty],
             },
@@ -2267,7 +2267,7 @@ def get_available_columns(elements: list[dict], file_format: str = "rvt") -> dic
         presets = {
             "standard": {
                 "label": "Standard DWG QTO",
-                "description": "Group by Layer - standard AutoCAD organization",
+                "description": "Group by Layer - standard CAD organization",
                 "group_by": [c for c in ["layer", "category"] if c in grouping_cols][:1],
                 "sum_columns": [c for c in ["count", "length", "area"] if c in available_qty],
             },

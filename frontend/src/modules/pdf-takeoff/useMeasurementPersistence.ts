@@ -6,6 +6,8 @@ import {
   defaultScaleConfig,
   hydratePageScales,
   pageIsCalibrated,
+  pageScalesHaveCalibration,
+  reconcilePageScales,
   scaleForPage,
 } from './data/page-scales';
 
@@ -39,6 +41,24 @@ interface Measurement {
   /** Per-measurement stroke width override in CSS px (issue #312). Round-trips
    *  via metadata; falls back to the 2px hairline when unset. */
   strokeWidth?: number;
+  /** Per-measurement stroke width in canonical METRES (issue #339). When set (and
+   *  the page is calibrated) the band renders at the element's true real-world
+   *  width via ``strokeWidthReal * pixelsPerUnit``, staying consistent across
+   *  pages calibrated at different scales. Round-trips via metadata as
+   *  ``stroke_width_real``; mutually exclusive with `strokeWidth`. */
+  strokeWidthReal?: number;
+  /** Per-measurement STROKE (line) opacity for linear types (issue #332).
+   *  Round-trips via metadata; falls back to fully opaque when unset. */
+  strokeAlpha?: number;
+  /** True-surface slope / pitch factor for an area measurement (issue #332
+   *  wave). Round-trips via metadata; falls back to 1 (flat) when unset. */
+  slopeFactor?: number;
+  /** Material wastage / allowance percent (issue #332 wave). Round-trips via
+   *  metadata; falls back to 0 when unset. */
+  wastagePct?: number;
+  /** Typical-multiplier count of repeats (issue #332 wave). Round-trips via
+   *  metadata; falls back to 1 when unset. */
+  multiplier?: number;
   /** Custom colour of this measurement's GROUP (issue #313), distinct from the
    *  per-measurement `color` override. Round-trips via the metadata blob the
    *  same way `fillAlpha` / `strokeWidth` do, so a re-coloured group survives a
@@ -312,10 +332,20 @@ function toApiFormat(
       text: m.text,
       width: m.width,
       height: m.height,
-      // Per-measurement appearance overrides (issues #311/#312); round-trip so
-      // a re-styled measurement survives a server sync.
+      // Per-measurement appearance overrides (issues #311/#312/#332); round-trip
+      // so a re-styled measurement survives a server sync.
       fill_alpha: m.fillAlpha,
       stroke_width: m.strokeWidth,
+      // Real-world stroke width in canonical metres (issue #339); round-trips so a
+      // true-width line survives a server sync and renders per each page's scale.
+      stroke_width_real: m.strokeWidthReal,
+      stroke_alpha: m.strokeAlpha,
+      // Reported-quantity adjustments (issue #332 wave): slope / wastage /
+      // typical-multiplier ride the metadata blob like the appearance overrides
+      // so the effective quantity is reproduced after a server sync.
+      slope_factor: m.slopeFactor,
+      wastage_pct: m.wastagePct,
+      multiplier: m.multiplier,
       // Group colour (issue #313): mirrored onto each measurement so the group
       // colour scheme round-trips server-side like the per-measurement styles.
       group_custom_color: m.groupColor,
@@ -367,15 +397,42 @@ function syncSignature(m: Measurement): string {
     // group / colour / annotation / notes edit re-syncs.
     g: m.group || 'General',
     col: m.color || '#3B82F6',
-    // Appearance overrides (issues #311/#312): an opacity or stroke-width edit
-    // must re-sync so the server copy carries it.
+    // Appearance overrides (issues #311/#312/#332): an opacity or stroke-width
+    // edit must re-sync so the server copy carries it.
     fa: m.fillAlpha ?? null,
     sw: m.strokeWidth ?? null,
+    // Real-world stroke width (issue #339): a true-width edit is appearance-only
+    // (no geometry move), so include it here or the PATCH would never fire.
+    swr: m.strokeWidthReal ?? null,
+    sa: m.strokeAlpha ?? null,
+    // Reported-quantity adjustments (issue #332 wave): a slope / wastage /
+    // multiplier edit changes the reported quantity, so it must re-sync.
+    sf: m.slopeFactor ?? null,
+    wp: m.wastagePct ?? null,
+    mul: m.multiplier ?? null,
     // Group colour (issue #313): a group re-colour restyles every measurement
     // in the group, so include it here to trigger the PATCH that persists it.
     gc: m.groupColor ?? null,
     a: m.annotation || m.label || null,
     n: m.text ?? null,
+  });
+}
+
+/**
+ * Geometry-only signature (issue #334): just the fields that feed the
+ * server-side value / volume / perimeter recompute (points, depth, count,
+ * type). When this is unchanged for a synced row, an edit touched only
+ * non-geometry properties (colour / label / opacity / group), so the PATCH must
+ * NOT re-send the page scale or the ``scale_calibrated`` flag - re-stamping the
+ * live view scale onto a row the user only recoloured is exactly how a real
+ * calibration used to get wiped.
+ */
+function geometrySignature(m: Measurement): string {
+  return JSON.stringify({
+    p: m.points,
+    d: m.depth ?? null,
+    c: m.type === 'count' ? Math.round(m.value) : null,
+    t: m.type,
   });
 }
 
@@ -393,45 +450,68 @@ function toApiUpdate(
   m: Measurement,
   scale?: ScaleConfig,
   scaleCalibrated = false,
+  geometryChanged = true,
 ): Partial<MeasurementCreate> {
   const ppu = scale && scale.pixelsPerUnit > 0 ? scale.pixelsPerUnit : null;
   const areaValue =
     m.type === 'area' ? m.value : m.type === 'volume' ? (m.area ?? null) : null;
-  return {
-    points: m.points,
-    type: m.type,
-    scale_pixels_per_unit: ppu,
-    depth: m.depth ?? null,
-    count_value: m.type === 'count' ? Math.round(m.value) : null,
-    is_deduction: m.type === 'area' ? Boolean(m.isDeduction) : false,
-    // Non-geometry properties (issue #282).
+  const metadata: Record<string, unknown> = {
+    text: m.text,
+    width: m.width,
+    height: m.height,
+    // Per-measurement appearance overrides (issues #311/#312/#332); re-sent on
+    // PATCH because the server replaces the metadata blob wholesale.
+    fill_alpha: m.fillAlpha,
+    stroke_width: m.strokeWidth,
+    // Real-world stroke width in canonical metres (issue #339); re-sent on PATCH
+    // because the server replaces the metadata blob wholesale.
+    stroke_width_real: m.strokeWidthReal,
+    stroke_alpha: m.strokeAlpha,
+    // Reported-quantity adjustments (issue #332 wave); re-sent on PATCH for
+    // the same reason (the server replaces the metadata blob wholesale).
+    slope_factor: m.slopeFactor,
+    wastage_pct: m.wastagePct,
+    multiplier: m.multiplier,
+    // Group colour (issue #313): re-sent on PATCH so a group re-colour /
+    // rename persists server-side (the server replaces metadata wholesale).
+    group_custom_color: m.groupColor,
+    area: areaValue ?? undefined,
+    frontend_id: m.id,
+    linked_boq_id: m.linkedBoqId,
+    linked_position_ordinal: m.linkedPositionOrdinal,
+    linked_position_label: m.linkedPositionLabel,
+  };
+  // Always-safe, non-geometry properties (issue #282). These never move the
+  // billed quantity and never touch the page scale.
+  const body: Partial<MeasurementCreate> = {
     group_name: m.group || 'General',
     // Only persist a user-chosen colour (issue #299); see toApiFormat.
     group_color: m.color || undefined,
     annotation: m.annotation || m.label || null,
     linked_boq_position_id: m.linkedPositionId ?? null,
-    metadata: {
-      text: m.text,
-      width: m.width,
-      height: m.height,
-      // Per-measurement appearance overrides (issues #311/#312); re-sent on
-      // PATCH because the server replaces the metadata blob wholesale.
-      fill_alpha: m.fillAlpha,
-      stroke_width: m.strokeWidth,
-      // Group colour (issue #313): re-sent on PATCH so a group re-colour /
-      // rename persists server-side (the server replaces metadata wholesale).
-      group_custom_color: m.groupColor,
-      area: areaValue ?? undefined,
-      frontend_id: m.id,
-      // Preserve the per-page calibration intent (issue #277): the server
-      // replaces the metadata blob wholesale on PATCH, so re-send it or a
-      // reshape would resurrect the phantom "calibrated 1:N" badge.
-      scale_calibrated: scaleCalibrated,
-      linked_boq_id: m.linkedBoqId,
-      linked_position_ordinal: m.linkedPositionOrdinal,
-      linked_position_label: m.linkedPositionLabel,
-    },
+    is_deduction: m.type === 'area' ? Boolean(m.isDeduction) : false,
+    metadata,
   };
+  // Geometry-bearing fields + the page-scale stamp are sent ONLY when the
+  // geometry actually moved (issue #334). On a pure colour / label / opacity
+  // edit we omit them so the PATCH cannot rewrite ``scale_pixels_per_unit`` /
+  // ``scale_calibrated`` (which used to wipe a real calibration by stamping the
+  // live view scale) or trigger a needless server-side value recompute. The
+  // calibration itself now lives at the document level, so the per-measurement
+  // stamp is capture provenance only.
+  if (geometryChanged) {
+    body.points = m.points;
+    body.type = m.type;
+    body.depth = m.depth ?? null;
+    body.count_value = m.type === 'count' ? Math.round(m.value) : null;
+    body.scale_pixels_per_unit = ppu;
+    // Per-page calibration intent (issue #277): re-sent with the geometry so a
+    // reshape keeps the row's calibration provenance, but never on a
+    // non-geometry edit (the server merges metadata, so omitting it preserves
+    // the stored flag instead of overwriting it).
+    metadata.scale_calibrated = scaleCalibrated;
+  }
+  return body;
 }
 
 function fromApiFormat(r: MeasurementResponse): Measurement {
@@ -460,6 +540,11 @@ function fromApiFormat(r: MeasurementResponse): Measurement {
     height: (meta.height as number) ?? undefined,
     fillAlpha: (meta.fill_alpha as number) ?? undefined,
     strokeWidth: (meta.stroke_width as number) ?? undefined,
+    strokeWidthReal: (meta.stroke_width_real as number) ?? undefined,
+    strokeAlpha: (meta.stroke_alpha as number) ?? undefined,
+    slopeFactor: (meta.slope_factor as number) ?? undefined,
+    wastagePct: (meta.wastage_pct as number) ?? undefined,
+    multiplier: (meta.multiplier as number) ?? undefined,
     groupColor: (meta.group_custom_color as string) ?? undefined,
     isDeduction: r.is_deduction ?? undefined,
     linkedPositionId: r.linked_boq_position_id ?? undefined,
@@ -610,6 +695,15 @@ interface UseMeasurementPersistenceResult {
    * the resurrection guard. Safe to call for clear-all (one call per row).
    */
   registerDeletion: (serverId: string | undefined) => void;
+  /**
+   * Live check (issue #336) for whether any local-or-server write is still
+   * pending: the debounced local-write / server-sync / edit-PATCH timers, the
+   * document page-scale PUT, the in-flight PATCH set, or the queued server
+   * deletes. A stable callback that reads the refs at call time so a
+   * beforeunload handler can gate its "leave site?" prompt on genuinely unsaved
+   * work instead of firing on every navigation.
+   */
+  hasUnsavedChanges: () => boolean;
 }
 
 export function useMeasurementPersistence({
@@ -655,6 +749,12 @@ export function useMeasurementPersistence({
   // coalesces rapid edits of the same row (last-write-wins) so mid-drag churn
   // never floods the network.
   const syncSigRef = useRef<Map<string, string>>(new Map());
+  // Geometry-only signature per serverId (issue #334). A PATCH re-stamps a
+  // row's ``scale_pixels_per_unit`` / calibration flag - and triggers the
+  // server-side value recompute - ONLY when the geometry actually moved. This
+  // baseline lets the edit-PATCH effect tell a geometry reshape from a pure
+  // colour / label / opacity edit so the latter never rewrites a calibration.
+  const geomSigRef = useRef<Map<string, string>>(new Map());
   const patchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inFlightPatchRef = useRef<Set<string>>(new Set());
   // Pending server-side deletions (issue #282): serverIds of rows deleted in
@@ -663,6 +763,15 @@ export function useMeasurementPersistence({
   // removes the row. Doubles as the load-reconciliation guard (a server row
   // whose id is in here is dropped instead of resurrected).
   const pendingDeletesRef = useRef<Set<string>>(new Set());
+  // Document-level page-scale persistence (issue #334). ``pageScalesSyncRef``
+  // holds the last serialisation we believe the server has, so a genuine
+  // recalibration PATCHes the document once while a no-op re-render does not.
+  // ``pageScalesPutTimerRef`` debounces that PUT. ``prevCanSyncRef`` catches a
+  // local drop gaining a server UUID so a calibration made before sync is
+  // persisted once the document becomes syncable.
+  const pageScalesSyncRef = useRef<string | null>(null);
+  const pageScalesPutTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const prevCanSyncRef = useRef(false);
   // Read the QueryClient directly from context — ``useContext`` returns
   // ``undefined`` instead of throwing when the provider is absent (e.g. in
   // unit tests that render the hook in isolation). When present, we use
@@ -735,7 +844,13 @@ export function useMeasurementPersistence({
       // UUID. Filename is never sent as the document key any more.
       if (canSync && projectId && documentId) {
         try {
-          const serverData = await takeoffApi.list(projectId, documentId);
+          // Fetch the measurements AND the document in parallel: the document
+          // carries the authoritative per-page calibration (issue #334). A
+          // failed document fetch degrades to the legacy per-measurement stamps.
+          const [serverData, doc] = await Promise.all([
+            takeoffApi.list(projectId, documentId),
+            takeoffApi.getDocument(documentId).catch(() => null),
+          ]);
           if (!cancelled && serverData.length > 0) {
             hasPersistedRef.current = true;
             setSyncedToServer(true);
@@ -758,16 +873,28 @@ export function useMeasurementPersistence({
                 .filter((m) => m.serverId)
                 .map((m) => [m.serverId as string, syncSignature(m)]),
             );
-            // Reconstruct the per-page scale from the per-measurement ratios
-            // the server stored. The localStorage copy (set below on next
-            // save) is authoritative when present, but for a project loaded
-            // on a fresh device this is the only place the calibration lives.
-            const fromServer = pageScalesFromServer(serverData);
-            if (local?.pageScales || local?.scale) {
-              setPageScalesRef.current(hydratePageScales(local.pageScales, local.scale));
-            } else if (fromServer) {
-              setPageScalesRef.current(fromServer);
-            }
+            // Geometry baseline (#334): remember each row's geometry so a later
+            // pure-appearance edit does NOT re-stamp its page scale.
+            geomSigRef.current = new Map(
+              mapped
+                .filter((m) => m.serverId)
+                .map((m) => [m.serverId as string, geometrySignature(m)]),
+            );
+            // Restore the per-page calibration (issue #334). The DOCUMENT
+            // page_scales column is the authoritative source; a document saved
+            // before that column existed falls back to the per-measurement
+            // scale stamps. Reconcile with the localStorage copy so a real
+            // calibration on either side survives while a stale local DEFAULT
+            // never overrides an explicit server one.
+            const serverScales = doc?.page_scales
+              ? hydratePageScales(doc.page_scales, null)
+              : pageScalesFromServer(serverData);
+            const localScales =
+              local?.pageScales || local?.scale
+                ? hydratePageScales(local.pageScales, local.scale)
+                : null;
+            const chosen = reconcilePageScales(localScales, serverScales);
+            if (chosen) setPageScalesRef.current(chosen);
             setMeasurementsRef.current(merged);
             return;
           }
@@ -806,6 +933,12 @@ export function useMeasurementPersistence({
             rows
               .filter((m) => m.serverId)
               .map((m) => [m.serverId as string, syncSignature(m)]),
+          );
+          // Geometry baseline (#334) alongside the full one.
+          geomSigRef.current = new Map(
+            rows
+              .filter((m) => m.serverId)
+              .map((m) => [m.serverId as string, geometrySignature(m)]),
           );
           setMeasurementsRef.current(rows);
           // Graceful migration: a document saved before per-page scale only
@@ -863,6 +996,9 @@ export function useMeasurementPersistence({
     if (!localKey) return;
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
+      // Debounce fired: the latest state is now in localStorage, so the local
+      // write is no longer pending (issue #336).
+      debounceRef.current = null;
       writeLocalNow();
     }, 500);
     return () => {
@@ -952,8 +1088,11 @@ export function useMeasurementPersistence({
             );
             if (!match) return m;
             // Seed the sync baseline for the freshly-synced row so a later
-            // edit PATCHes, but a no-op tick does not (#194/#282).
+            // edit PATCHes, but a no-op tick does not (#194/#282). Seed the
+            // geometry baseline too (#334) so the first appearance-only edit
+            // after a create does not re-stamp the page scale.
             syncSigRef.current.set(match.id, syncSignature(m));
+            geomSigRef.current.set(match.id, geometrySignature(m));
             return { ...m, serverId: match.id };
           }),
         );
@@ -981,6 +1120,9 @@ export function useMeasurementPersistence({
 
     if (serverSyncRef.current) clearTimeout(serverSyncRef.current);
     serverSyncRef.current = setTimeout(() => {
+      // Debounce fired: no longer pending (issue #336). The in-flight network
+      // phase is tracked separately (syncing + the PATCH/delete refs).
+      serverSyncRef.current = null;
       void runServerSync();
     }, 3000);
 
@@ -1013,6 +1155,7 @@ export function useMeasurementPersistence({
       // -> record the current signature without firing a PATCH.
       if (prevSig === undefined) {
         syncSigRef.current.set(m.serverId, syncSignature(m));
+        geomSigRef.current.set(m.serverId, geometrySignature(m));
         return false;
       }
       return prevSig !== syncSignature(m);
@@ -1021,6 +1164,8 @@ export function useMeasurementPersistence({
 
     if (patchTimerRef.current) clearTimeout(patchTimerRef.current);
     patchTimerRef.current = setTimeout(async () => {
+      // The debounce has fired: no longer pending (issue #336 unsaved-changes).
+      patchTimerRef.current = null;
       const reconciled: { frontendId: string; value: number; area?: number }[] = [];
       await Promise.all(
         dirty.map(async (m) => {
@@ -1028,21 +1173,28 @@ export function useMeasurementPersistence({
           if (inFlightPatchRef.current.has(serverId)) return; // coalesce
           inFlightPatchRef.current.add(serverId);
           const sig = syncSignature(m);
+          // Only re-stamp the page scale when the geometry actually moved
+          // (issue #334); a pure colour / label / opacity edit leaves the
+          // stored calibration untouched.
+          const geometryChanged =
+            geomSigRef.current.get(serverId) !== geometrySignature(m);
           try {
-            // Per-page scale: PATCH with the measurement's own page scale so
-            // the server B8 recompute uses the ratio that sheet was drawn at,
-            // plus the page's calibration intent so the metadata round-trips
-            // without resurrecting the #277 phantom badge.
+            // Per-page scale: on a geometry change, PATCH with the measurement's
+            // own page scale so the server B8 recompute uses the ratio that
+            // sheet was drawn at, plus the page's calibration intent so the
+            // metadata round-trips without resurrecting the #277 phantom badge.
             const updated = await takeoffApi.update(
               serverId,
               toApiUpdate(
                 m,
                 scaleForPage(pageScales, m.page),
                 pageIsCalibrated(pageScales, m.page),
+                geometryChanged,
               ),
             );
             // Mark this signature as known-on-server so we don't re-PATCH it.
             syncSigRef.current.set(serverId, sig);
+            geomSigRef.current.set(serverId, geometrySignature(m));
             // Overwrite the optimistic value with the server-authoritative
             // recompute so the displayed quantity can never exceed what the
             // geometry justifies.
@@ -1084,6 +1236,44 @@ export function useMeasurementPersistence({
     };
   }, [canSync, projectId, documentId, measurements, pageScales, qc]);
 
+  // A local drop that later gains a server UUID (canSync flips false -> true):
+  // reset the page-scale baseline so a calibration made before the document was
+  // syncable gets persisted to the new server document (issue #334). Defined
+  // BEFORE the PUT effect so the reset lands before that effect re-evaluates.
+  useEffect(() => {
+    if (canSync && !prevCanSyncRef.current) {
+      pageScalesSyncRef.current = null;
+    }
+    prevCanSyncRef.current = canSync;
+  }, [canSync]);
+
+  // Persist the per-page calibration to the DOCUMENT (issue #334). Calibration
+  // is authoritative at the document level now (not a per-measurement echo), so
+  // a reload / a second device restores the exact scales instead of losing them
+  // or letting a stale local default win. Debounced. The first observed value
+  // persists only when it already carries a real calibration (restored on load)
+  // so an uncalibrated default never writes an empty scale; every later change
+  // is a genuine recalibration and always persists.
+  useEffect(() => {
+    if (!canSync || !documentId) return;
+    const sig = JSON.stringify(pageScales);
+    const firstRun = pageScalesSyncRef.current === null;
+    if (pageScalesSyncRef.current === sig) return;
+    pageScalesSyncRef.current = sig;
+    if (firstRun && !pageScalesHaveCalibration(pageScales)) return;
+    if (pageScalesPutTimerRef.current) clearTimeout(pageScalesPutTimerRef.current);
+    pageScalesPutTimerRef.current = setTimeout(() => {
+      pageScalesPutTimerRef.current = null;
+      void takeoffApi.saveDocumentScales(documentId, pageScales).catch(() => {
+        // Offline / server down: the localStorage copy keeps the calibration
+        // and the next load reconciles it back up.
+      });
+    }, 800);
+    return () => {
+      if (pageScalesPutTimerRef.current) clearTimeout(pageScalesPutTimerRef.current);
+    };
+  }, [canSync, documentId, pageScales]);
+
   // Manual save (the toolbar Save button). Persists locally now AND triggers
   // the server sync immediately rather than waiting out the 3s debounce, so a
   // deliberate Save reliably pushes creates/edits/deletes.
@@ -1091,6 +1281,25 @@ export function useMeasurementPersistence({
     writeLocalNow();
     void runServerSync();
   }, [writeLocalNow, runServerSync]);
+
+  // Whether any local-or-server write is still pending (issue #336). ORs the
+  // real pending sources - the debounced local-write + server-sync + edit-PATCH
+  // timers, the document page-scale PUT, the in-flight PATCH set, and the queued
+  // server deletes - so the "leave site?" prompt fires only when work is
+  // genuinely unsaved, not on every navigation. A stable callback that reads the
+  // refs live, so the beforeunload handler sees the freshest state at fire time
+  // rather than a value snapshotted at render. Deliberately NOT derived from the
+  // `syncing` boolean alone.
+  const hasUnsavedChanges = useCallback(
+    () =>
+      debounceRef.current !== null ||
+      serverSyncRef.current !== null ||
+      patchTimerRef.current !== null ||
+      pageScalesPutTimerRef.current !== null ||
+      inFlightPatchRef.current.size > 0 ||
+      pendingDeletesRef.current.size > 0,
+    [],
+  );
 
   /**
    * Record a viewer-side deletion (issue #282). For a synced row (has a
@@ -1149,5 +1358,6 @@ export function useMeasurementPersistence({
     syncing,
     syncedToServer,
     registerDeletion,
+    hasUnsavedChanges,
   };
 }

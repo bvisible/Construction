@@ -120,13 +120,22 @@ export function CertaintyBadge({
 
   if (!data) return null;
 
-  const tooltip = t('costs.certainty.tooltip', {
+  const baseTooltip = t('costs.certainty.tooltip', {
     defaultValue:
       'Used {{frequency}}× · last {{age}} · source {{source}}',
     frequency: data.frequency,
     age: formatAge(data.age_days, t),
     source: data.source || 'manual',
   });
+  // A stale price date earns a gentle pulse and an extra tooltip line, on top
+  // of the usage band. This is independent of usage frequency: a heavily-used
+  // but long-unpriced rate is still flagged as due for a reprice.
+  const repriceDue = Boolean(data.reprice_due);
+  const tooltip = repriceDue
+    ? `${baseTooltip} · ${t('costs.certainty.reprice_due', {
+        defaultValue: 'price may be out of date - reprice suggested',
+      })}`
+    : baseTooltip;
 
   return (
     <span
@@ -135,10 +144,12 @@ export function CertaintyBadge({
         'inline-flex h-2.5 w-2.5 shrink-0 rounded-full ring-2',
         BAND_STYLES[data.confidence_badge],
         BAND_RING[data.confidence_badge],
+        repriceDue && 'animate-pulse',
         className,
       )}
       aria-label={tooltip}
       data-certainty={data.confidence_badge}
+      data-reprice-due={repriceDue ? 'true' : undefined}
     />
   );
 }

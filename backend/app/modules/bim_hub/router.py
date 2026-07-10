@@ -173,7 +173,7 @@ def _quick_validate_geometry_bytes(blob: bytes, ext: str) -> tuple[bool, str]:
         # We deliberately do NOT do a full XML parse here - we trust
         # the in-memory tax of a 4 KB head scan and let the browser do
         # the heavy lifting once the file is known-good shape.
-        # Accept namespace-prefixed roots like `<ns0:COLLADA>` (Revit /
+        # Accept namespace-prefixed roots like `<ns0:COLLADA>` (RVT /
         # DDC pipeline) as well as the bare `<COLLADA>` - both are valid
         # COLLADA per the XML namespace spec. Closes issue #153.
         import re as _re
@@ -374,7 +374,7 @@ _BIM_COLUMN_ALIASES: dict[str, list[str]] = {
     # _-prefixed alias groups are NOT top-level BIMElement columns.
     # _rows_to_elements promotes them into the properties JSONB under
     # clean keys (category, family, type_name) so the frontend can
-    # build Revit Browser-style hierarchy without data collisions.
+    # build BIM Browser-style hierarchy without data collisions.
     "_category": [
         "category",
         "elementcategory",
@@ -585,7 +585,7 @@ def _match_bim_column(header: str) -> str | None:
 
 
 # Properties-blob keys we will scan, in priority order, when the upload
-# row has no top-level storey/level column. Most Revit and IFC exporters
+# row has no top-level storey/level column. Most RVT and IFC exporters
 # put the building level under "Level"; some put the host constraint
 # under "Base Constraint" / "Reference Level" instead. Matched
 # case-insensitively against the props dict.
@@ -613,7 +613,7 @@ _STOREY_PROPERTY_FALLBACK_KEYS: tuple[str, ...] = (
     "geschoss",
 )
 
-# Literal-string sentinels that mean "no storey assigned" - Revit
+# Literal-string sentinels that mean "no storey assigned" - RVT
 # exports often write "None" / "<None>" instead of leaving the cell
 # blank.  Matched case-insensitively after stripping.
 _STOREY_NULL_LITERALS: frozenset[str] = frozenset(
@@ -653,7 +653,7 @@ def _extract_storey(row: dict[str, Any], props: dict[str, Any]) -> str | None:
            ``base_level`` / etc. via :data:`_BIM_COLUMN_ALIASES`).
         2. Case-insensitive match against
            :data:`_STOREY_PROPERTY_FALLBACK_KEYS` inside the
-           ``properties`` JSON blob - Revit/IFC exports frequently
+           ``properties`` JSON blob - RVT/IFC exports frequently
            bury "Level" inside the property bag instead of promoting
            it to a column.
 
@@ -1323,7 +1323,7 @@ async def _process_cad_in_background(
             if _fc(converter_id) is None:
                 failure_code = "ddc_not_found"
                 failure_reason = (
-                    "The Revit (RVT) converter is not installed on this "
+                    "The RVT converter is not installed on this "
                     "server. Open Settings → BIM Converters and click "
                     "Install for RVT, then click Retry on this model."
                 )
@@ -1338,7 +1338,7 @@ async def _process_cad_in_background(
                 if health["status"] != "ok":
                     failure_code = "ddc_smoke_failed"
                     failure_reason = health["message"] or (
-                        "The Revit (RVT) converter is installed but the "
+                        "The RVT converter is installed but the "
                         "smoke test failed. Open Settings → BIM Converters "
                         "and click Reinstall, then click Retry on this model."
                     )
@@ -1674,7 +1674,7 @@ async def _process_cad_in_background(
                 ddc_failure = last_ddc_failure()
                 rvt_info = ddc_failure.get("rvt_info") or {}
                 conv_info = ddc_failure.get("converter_info") or {}
-                rvt_app = rvt_info.get("app_name")  # e.g. "Revit 2024"
+                rvt_app = rvt_info.get("app_name")  # authoring app + version from the RVT header
                 conv_version = conv_info.get("version")  # e.g. "18.0.0.0"
                 stderr_tail = (ddc_failure.get("stderr") or "").strip()
                 cause = ddc_failure.get("cause") or "unknown"
@@ -1684,7 +1684,7 @@ async def _process_cad_in_background(
 
                     # Compose the message in pieces - every clause is added
                     # only when its underlying datum is non-empty so we never
-                    # ship "File saved with Revit None".
+                    # ship "File saved with None".
                     parts: list[str] = []
                     if cause == "converter_outdated":
                         # Lead with the specific, actionable diagnosis so
@@ -1704,8 +1704,8 @@ async def _process_cad_in_background(
                     else:
                         parts.append(
                             "The converter produced no elements from this file. "
-                            "Most common causes: the RVT was saved with a Revit "
-                            "version newer than the converter supports, the file "
+                            "Most common causes: the RVT was saved with a newer "
+                            "format version than the converter supports, the file "
                             "is corrupt, or a converter dependency is missing."
                         )
                     if stderr_tail:
@@ -1990,7 +1990,7 @@ async def upload_cad_file(
         description=(
             "DDC conversion depth: 'standard' (~15 basic columns, fastest),"
             " 'medium' (DDC standard + full property promotion, ~900 columns),"
-            " or 'complete' (all Revit parameters, ~1000+ columns, slowest)"
+            " or 'complete' (all RVT parameters, ~1000+ columns, slowest)"
         ),
     ),
     file: UploadFile = File(..., description="CAD file (RVT, IFC, DWG, DGN, FBX, OBJ, 3DS)"),
@@ -3779,7 +3779,7 @@ async def list_elements(
             is_parametric_inline = False
         # Skinny rows: drop the per-element `properties` / `quantities` /
         # `classification` / `metadata` payloads. These can weigh ~1.5 kB per
-        # row on a typical Revit export (45+ Revit parameters × short value),
+        # row on a typical RVT export (45+ RVT parameters × short value),
         # which adds up to a 16 MB JSON body for 7 000 elements. The viewer
         # pulls the full property set straight from Parquet on click, so
         # carrying it in the skeleton is pure overhead.
@@ -3962,7 +3962,7 @@ async def ensure_element(
 
     Needed when linking a BOQ position to a BIM mesh that was visible in the
     3D viewer but had no oe_bim_element row (e.g. DDC standard extract skips
-    certain Revit categories). Body: ``{"mesh_ref": "140056"}`` or
+    certain RVT categories). Body: ``{"mesh_ref": "140056"}`` or
     ``{"stable_id": "140056"}``.
     """
     await _verify_model_access(service, model_id, user_id or "")

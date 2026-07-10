@@ -22,13 +22,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.events import event_bus
 from app.core.json_merge import merge_metadata
-from app.modules.meetings.models import Meeting, MeetingAttendance
+from app.modules.meetings import logic
+from app.modules.meetings.models import Meeting, MeetingActionItem, MeetingAttendance, MeetingMinutes
 from app.modules.meetings.repository import MeetingRepository
 from app.modules.meetings.schemas import (
+    ActionRegisterItemCreate,
+    ActionRegisterItemUpdate,
     MeetingCreate,
     MeetingSeriesCreate,
     MeetingStatsResponse,
     MeetingUpdate,
+    MinutesGenerateRequest,
+    MinutesUpdate,
     OpenActionItemResponse,
 )
 
@@ -777,6 +782,544 @@ class MeetingService:
             .order_by(MeetingAttendance.created_at.asc())
         )
         return list(result.scalars().all())
+
+    # ── Action register (carry-over across a series) ──────────────────────
+
+    async def get_action(self, action_id: uuid.UUID) -> MeetingActionItem:
+        """Get a tracked action item by id. Raises 404 if not found."""
+        row = await self.session.get(MeetingActionItem, action_id)
+        if row is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Action item not found",
+            )
+        return row
+
+    async def _series_meeting_index(self, meeting: Meeting) -> dict[str, tuple[str, str | None]]:
+        """Map ``meeting_id -> (meeting_number, meeting_date)`` for the scope.
+
+        For a meeting in a series the scope is the whole series; for a one-off
+        meeting it is just that meeting. Used to stamp each action with the
+        date of the meeting it was raised in, which the pure carry-over logic
+        needs to decide "earlier in the series".
+        """
+        if meeting.series_id:
+            stmt = select(Meeting.id, Meeting.meeting_number, Meeting.meeting_date).where(
+                Meeting.series_id == meeting.series_id
+            )
+        else:
+            stmt = select(Meeting.id, Meeting.meeting_number, Meeting.meeting_date).where(Meeting.id == meeting.id)
+        rows = (await self.session.execute(stmt)).all()
+        return {str(r[0]): (r[1], r[2]) for r in rows}
+
+    async def _load_register_rows(self, meeting: Meeting) -> list[MeetingActionItem]:
+        """Load the action-register rows in scope for a meeting.
+
+        Series meetings share a ``series_id`` so one query scoops the whole
+        register; a one-off meeting is scoped to its own origin rows (its
+        ``series_id`` is NULL, which must never match other one-off rows).
+        """
+        if meeting.series_id:
+            stmt = select(MeetingActionItem).where(MeetingActionItem.series_id == meeting.series_id)
+        else:
+            stmt = select(MeetingActionItem).where(MeetingActionItem.origin_meeting_id == meeting.id)
+        return list((await self.session.execute(stmt)).scalars().all())
+
+    @staticmethod
+    def _serialize_action_row(
+        row: MeetingActionItem,
+        index: dict[str, tuple[str, str | None]],
+    ) -> dict[str, Any]:
+        """Turn an ORM action row into the plain dict the pure logic consumes."""
+        num, meeting_date = index.get(str(row.origin_meeting_id), ("", None))
+        return {
+            "id": str(row.id),
+            "project_id": str(row.project_id),
+            "series_id": row.series_id,
+            "origin_meeting_id": str(row.origin_meeting_id),
+            "origin_meeting_number": num,
+            "origin_meeting_date": meeting_date,
+            "description": row.description,
+            "owner_id": row.owner_id,
+            "owner_name": row.owner_name,
+            "due_date": row.due_date,
+            "status": row.status,
+            "closed_in_meeting_id": (str(row.closed_in_meeting_id) if row.closed_in_meeting_id else None),
+            "closed_at": row.closed_at.isoformat() if row.closed_at else None,
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+            "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+        }
+
+    async def _seed_actions_from_legacy(self, meeting: Meeting) -> None:
+        """Backfill the register from a meeting's legacy ``action_items`` JSON.
+
+        Idempotent: only runs when the meeting has legacy action items and no
+        register rows of its own yet. This turns imported / AI-extracted action
+        items into first-class tracked rows the first time a meeting's actions
+        are opened, so nothing has to be re-typed. Seeded rows may be missing an
+        owner or a due date (historical data) - they are surfaced, not blocked;
+        validation only gates newly entered or edited actions.
+        """
+        legacy = meeting.action_items or []
+        if not legacy:
+            return
+        exists = (
+            await self.session.execute(
+                select(MeetingActionItem.id).where(MeetingActionItem.origin_meeting_id == meeting.id).limit(1)
+            )
+        ).scalar_one_or_none()
+        if exists is not None:
+            return
+        for ai in legacy:
+            if not isinstance(ai, dict):
+                continue
+            desc = str(ai.get("description") or "").strip()
+            if not desc:
+                continue
+            raw_due = ai.get("due_date")
+            self.session.add(
+                MeetingActionItem(
+                    project_id=meeting.project_id,
+                    series_id=meeting.series_id,
+                    origin_meeting_id=meeting.id,
+                    description=desc[:1000],
+                    owner_id=ai.get("owner_id"),
+                    owner_name=(ai.get("owner_name") or ai.get("owner") or None),
+                    due_date=str(raw_due) if logic.is_iso_date(raw_due) else None,
+                    status=logic.normalize_action_status(ai.get("status")),
+                    created_by=meeting.created_by,
+                    metadata_={"seeded_from": "legacy_action_items"},
+                )
+            )
+        await self.session.flush()
+
+    async def list_meeting_actions(
+        self,
+        meeting: Meeting,
+        *,
+        reference_date: str | None = None,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """Return a meeting's own actions plus the ones brought forward into it.
+
+        Brought-forward actions are still-live actions raised in an earlier
+        meeting of the same series. Each returned dict carries the computed
+        ``overdue`` and ``brought_forward`` flags, ready for the response.
+        """
+        await self._seed_actions_from_legacy(meeting)
+        index = await self._series_meeting_index(meeting)
+        rows = await self._load_register_rows(meeting)
+        ref = reference_date or datetime.now(UTC).strftime("%Y-%m-%d")
+        actions = [self._serialize_action_row(r, index) for r in rows]
+        return logic.split_actions_for_meeting(
+            actions,
+            str(meeting.id),
+            meeting.meeting_date,
+            ref,
+        )
+
+    async def add_action(
+        self,
+        meeting: Meeting,
+        data: ActionRegisterItemCreate,
+        *,
+        user_id: str | None = None,
+        reference_date: str | None = None,
+    ) -> dict[str, Any]:
+        """Add a tracked action item to a meeting and return it serialized.
+
+        Enforces the ownership rule (owner + due date required) at the API
+        boundary. The action joins the series register via the meeting's
+        ``series_id`` so it can carry forward.
+        """
+        await self._seed_actions_from_legacy(meeting)
+        problems = logic.validate_action_fields(data.owner_id, data.owner_name, data.due_date, data.status)
+        if problems:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=" ".join(problems),
+            )
+        row = MeetingActionItem(
+            project_id=meeting.project_id,
+            series_id=meeting.series_id,
+            origin_meeting_id=meeting.id,
+            description=data.description,
+            owner_id=data.owner_id,
+            owner_name=data.owner_name,
+            due_date=data.due_date,
+            status=data.status,
+            created_by=user_id,
+            metadata_={},
+        )
+        self.session.add(row)
+        await self.session.flush()
+        await self.session.refresh(row)
+        logger.info("Action item added to meeting %s (status=%s)", meeting.id, row.status)
+        return await self.serialize_single_action(row, reference_date=reference_date)
+
+    async def update_action(
+        self,
+        row: MeetingActionItem,
+        data: ActionRegisterItemUpdate,
+        *,
+        reference_date: str | None = None,
+    ) -> dict[str, Any]:
+        """Update a tracked action, closing it for the whole series if resolved.
+
+        Moving the status to ``done`` or ``cancelled`` stamps ``closed_at`` and
+        the closing meeting; reopening clears them. Because the action is a
+        single row, closing it here closes it everywhere in the series.
+        """
+        fields = data.model_dump(exclude_unset=True)
+        closing_meeting_id = fields.pop("closing_meeting_id", None)
+
+        new_owner_id = fields.get("owner_id", row.owner_id)
+        new_owner_name = fields.get("owner_name", row.owner_name)
+        new_due = fields.get("due_date", row.due_date)
+        new_status = fields.get("status", row.status)
+
+        # A still-live action must keep an owner and a due date.
+        if logic.action_is_live(new_status):
+            problems = logic.validate_action_fields(new_owner_id, new_owner_name, new_due, new_status)
+            if problems:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=" ".join(problems),
+                )
+
+        for key, value in fields.items():
+            setattr(row, key, value)
+
+        if not logic.action_is_live(new_status):  # done or cancelled
+            row.closed_at = row.closed_at or datetime.now(UTC)
+            if closing_meeting_id is not None:
+                row.closed_in_meeting_id = closing_meeting_id
+        else:  # reopened
+            row.closed_at = None
+            row.closed_in_meeting_id = None
+
+        await self.session.flush()
+        await self.session.refresh(row)
+        logger.info("Action item %s updated (status=%s)", row.id, row.status)
+        return await self.serialize_single_action(row, reference_date=reference_date)
+
+    async def delete_action(self, row: MeetingActionItem) -> None:
+        """Delete a tracked action item."""
+        await self.session.delete(row)
+        await self.session.flush()
+        logger.info("Action item %s deleted", row.id)
+
+    async def serialize_single_action(
+        self,
+        row: MeetingActionItem,
+        *,
+        reference_date: str | None = None,
+    ) -> dict[str, Any]:
+        """Serialize one action row with its overdue flag (no carry-over context)."""
+        res = (
+            await self.session.execute(
+                select(Meeting.meeting_number, Meeting.meeting_date).where(Meeting.id == row.origin_meeting_id)
+            )
+        ).first()
+        index = {str(row.origin_meeting_id): (res[0] if res else "", res[1] if res else None)}
+        ref = reference_date or datetime.now(UTC).strftime("%Y-%m-%d")
+        return logic.annotate_action(self._serialize_action_row(row, index), ref)
+
+    async def series_action_register(
+        self,
+        master: Meeting,
+        *,
+        reference_date: str | None = None,
+    ) -> tuple[str | None, list[dict[str, Any]], dict[str, int]]:
+        """Return every action across a series with a status roll-up.
+
+        Scoped to the series the meeting belongs to (or the single meeting for a
+        one-off). Actions are returned newest-origin first with overdue flags.
+        """
+        series_id = master.series_id
+        index = await self._series_meeting_index(master)
+        rows = await self._load_register_rows(master)
+        ref = reference_date or datetime.now(UTC).strftime("%Y-%m-%d")
+        actions = [self._serialize_action_row(r, index) for r in rows]
+        summary = logic.summarize_register(actions, ref)
+        annotated = [logic.annotate_action(a, ref) for a in actions]
+        # Sort by origin meeting date (newest first), then due date.
+        annotated.sort(
+            key=lambda a: (
+                str(a.get("origin_meeting_date") or ""),
+                str(a.get("due_date") or ""),
+            ),
+            reverse=True,
+        )
+        return series_id, annotated, summary
+
+    # ── Auto-draft minutes ────────────────────────────────────────────────
+
+    async def get_minutes_row(self, meeting_id: uuid.UUID) -> MeetingMinutes | None:
+        """Load the minutes document for a meeting, or ``None``."""
+        return (
+            await self.session.execute(select(MeetingMinutes).where(MeetingMinutes.meeting_id == meeting_id))
+        ).scalar_one_or_none()
+
+    async def _checked_in_keys(self, meeting_id: uuid.UUID) -> set[str]:
+        """Return the set of names / user ids that actually checked in."""
+        rows = await self.list_attendance(meeting_id)
+        keys: set[str] = set()
+        for row in rows:
+            if row.checked_in_at is None:
+                continue
+            if row.user_id:
+                keys.add(str(row.user_id))
+            if row.external_name:
+                keys.add(row.external_name)
+        return keys
+
+    def _chairperson_display(self, meeting: Meeting) -> str:
+        """Resolve a human chairperson label from id + metadata name."""
+        meta = meeting.metadata_ or {}
+        name = str(meta.get("chairperson_name") or "").strip()
+        if name:
+            return name
+        raw = str(meeting.chairperson_id or "").strip()
+        # A bare contact UUID is not a name; hide it.
+        try:
+            uuid.UUID(raw)
+        except (ValueError, TypeError):
+            return raw
+        return ""
+
+    def _meeting_minutes_dict(self, meeting: Meeting, req: MinutesGenerateRequest) -> dict[str, Any]:
+        """Build the plain meeting dict the pure minutes builder consumes.
+
+        Applies any per-agenda discussion/decision overrides from the request,
+        matched by agenda number first, then by topic, then by position.
+        """
+        agenda_items = [dict(a) for a in (meeting.agenda_items or []) if isinstance(a, dict)]
+        overrides = req.agenda or []
+        for pos, ov in enumerate(overrides):
+            target: dict[str, Any] | None = None
+            if ov.number:
+                target = next((a for a in agenda_items if str(a.get("number")) == str(ov.number)), None)
+            if target is None and ov.topic:
+                target = next(
+                    (a for a in agenda_items if str(a.get("topic") or a.get("title")) == ov.topic),
+                    None,
+                )
+            if target is None and pos < len(agenda_items):
+                target = agenda_items[pos]
+            if target is None:
+                # A brand-new agenda line supplied only in the minutes request.
+                target = {"number": ov.number, "topic": ov.topic}
+                agenda_items.append(target)
+            if ov.discussion is not None:
+                target["discussion"] = ov.discussion
+            if ov.decision is not None:
+                target["decision"] = ov.decision
+            if ov.presenter is not None:
+                target["presenter"] = ov.presenter
+            if ov.required:
+                target["required"] = True
+        return {
+            "title": meeting.title,
+            "meeting_number": meeting.meeting_number,
+            "meeting_type": meeting.meeting_type,
+            "meeting_date": meeting.meeting_date,
+            "location": meeting.location,
+            "chairperson": self._chairperson_display(meeting),
+            "attendees": meeting.attendees or [],
+            "agenda_items": agenda_items,
+            "minutes": meeting.minutes,
+            "metadata": meeting.metadata_ or {},
+        }
+
+    async def _infer_next_meeting_date(self, meeting: Meeting) -> str | None:
+        """Find the next scheduled occurrence date after this meeting (series)."""
+        if not meeting.series_id:
+            return None
+        stmt = (
+            select(Meeting.meeting_date)
+            .where(Meeting.series_id == meeting.series_id)
+            .where(Meeting.meeting_date > meeting.meeting_date)
+            .order_by(Meeting.meeting_date.asc())
+            .limit(1)
+        )
+        return (await self.session.execute(stmt)).scalar_one_or_none()
+
+    async def generate_minutes(
+        self,
+        meeting: Meeting,
+        req: MinutesGenerateRequest,
+        *,
+        user_id: str | None = None,
+    ) -> MeetingMinutes:
+        """Generate (or refresh) the draft minutes for a meeting.
+
+        The draft assembles who was present/absent, the per-agenda discussion
+        and decision, the action items (brought-forward first) and the next
+        meeting date. An already-issued document is never silently rebuilt.
+        """
+        existing = await self.get_minutes_row(meeting.id)
+        if existing is not None and existing.status == "issued":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Minutes have already been issued for this meeting",
+            )
+
+        own, brought = await self.list_meeting_actions(meeting)
+        checked_in = await self._checked_in_keys(meeting.id)
+        next_md = (
+            req.next_meeting_date
+            or (existing.next_meeting_date if existing else None)
+            or await self._infer_next_meeting_date(meeting)
+        )
+        content = logic.build_minutes_content(
+            self._meeting_minutes_dict(meeting, req),
+            own,
+            brought,
+            checked_in,
+            next_meeting_date=next_md,
+            generated_at=datetime.now(UTC).isoformat(),
+        )
+
+        if existing is not None:
+            # Keep human edits unless the caller explicitly asks to rebuild.
+            if req.regenerate or not existing.content:
+                existing.content = content
+            existing.next_meeting_date = next_md
+            row = existing
+        else:
+            row = MeetingMinutes(
+                project_id=meeting.project_id,
+                meeting_id=meeting.id,
+                status="draft",
+                content=content,
+                next_meeting_date=next_md,
+                created_by=user_id,
+                distributed_to=[],
+                metadata_={},
+            )
+            self.session.add(row)
+        await self.session.flush()
+        await self.session.refresh(row)
+        logger.info("Minutes generated for meeting %s (status=%s)", meeting.id, row.status)
+        return row
+
+    async def update_minutes(
+        self,
+        row: MeetingMinutes,
+        data: MinutesUpdate,
+    ) -> MeetingMinutes:
+        """Apply human edits to a draft minutes document."""
+        if row.status == "issued":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Issued minutes can no longer be edited",
+            )
+        if data.content is not None:
+            row.content = data.content
+        if data.next_meeting_date is not None:
+            row.next_meeting_date = data.next_meeting_date
+            # Keep the embedded content in sync so the PDF matches.
+            if isinstance(row.content, dict):
+                row.content = {**row.content, "next_meeting_date": data.next_meeting_date}
+        await self.session.flush()
+        await self.session.refresh(row)
+        return row
+
+    async def issue_minutes(
+        self,
+        row: MeetingMinutes,
+        *,
+        user_id: str | None = None,
+    ) -> MeetingMinutes:
+        """Issue the minutes after the readiness validation passes.
+
+        Blocks while a required agenda item is unaddressed or no attendee is
+        marked present. Issuing is the human-confirmed step; nothing is auto-issued.
+        """
+        content = row.content if isinstance(row.content, dict) else {}
+        problems = logic.minutes_issue_problems(content)
+        if problems:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=" ".join(problems),
+            )
+        row.status = "issued"
+        row.issued_at = datetime.now(UTC)
+        row.issued_by = user_id
+        await self.session.flush()
+        await self.session.refresh(row)
+        logger.info("Minutes issued for meeting %s", row.meeting_id)
+        return row
+
+    async def distribute_minutes(
+        self,
+        meeting: Meeting,
+        row: MeetingMinutes,
+        *,
+        user_id: str | None = None,
+    ) -> tuple[MeetingMinutes, list[str]]:
+        """Notify the meeting's attendees that the minutes are available.
+
+        Reuses the platform notification service (the same in-app + connector
+        sink every other module uses). Only attendees linked to a real user
+        (a contact id) can be notified; walk-in guests have no inbox. Issued
+        minutes only.
+        """
+        if row.status != "issued":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Issue the minutes before distributing them",
+            )
+
+        recipient_ids: list[str] = []
+        seen: set[str] = set()
+        for att in meeting.attendees or []:
+            if not isinstance(att, dict):
+                continue
+            uid = str(att.get("user_id") or "").strip()
+            if not uid or uid in seen:
+                continue
+            try:
+                uuid.UUID(uid)
+            except (ValueError, TypeError):
+                continue
+            seen.add(uid)
+            recipient_ids.append(uid)
+
+        notified: list[str] = []
+        if recipient_ids:
+            try:
+                from app.modules.notifications.service import NotificationService
+
+                notif_svc = NotificationService(self.session)
+                await notif_svc.notify_users(
+                    recipient_ids,
+                    "info",
+                    "notification.meeting_minutes_issued_title",
+                    entity_type="meeting",
+                    entity_id=str(meeting.id),
+                    body_key="notification.meeting_minutes_issued_body",
+                    body_context={
+                        "meeting_number": meeting.meeting_number,
+                        "title": meeting.title,
+                    },
+                    action_url="/meetings",
+                    metadata={"minutes_id": str(row.id)},
+                )
+                notified = recipient_ids
+            except Exception:  # best-effort - never fail distribution on the sink
+                logger.exception("Failed to send meeting minutes notifications")
+
+        row.distributed_at = datetime.now(UTC)
+        row.distributed_to = notified
+        await self.session.flush()
+        await self.session.refresh(row)
+        logger.info(
+            "Minutes for meeting %s distributed to %d recipient(s)",
+            meeting.id,
+            len(notified),
+        )
+        return row, notified
 
 
 # ── RRULE parser (subset of RFC 5545) ─────────────────────────────────────

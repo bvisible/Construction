@@ -22,10 +22,11 @@
  *   DELETE /federations/{id}/models/{model_id}    — remove member
  */
 
-import { useState, useMemo, useCallback, useEffect, lazy, Suspense } from 'react';
+import { Fragment, useState, useMemo, useCallback, useEffect, lazy, Suspense, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useQuery, useQueries, useQueryClient } from '@tanstack/react-query';
+import { Network, Layers, Activity, Boxes, ScanSearch, ArrowRight } from 'lucide-react';
 
 import { apiGet, apiPost, apiDelete } from '@/shared/lib/api';
 import {
@@ -1449,6 +1450,124 @@ function FederationDetailDrawer({
   );
 }
 
+/* ── How-it-works flow + module integrations ───────────────────────────── */
+
+/** A compact inline link to a sibling module (keeps the flow copy readable). */
+function ModLink({ to, children }: { to: string; children: ReactNode }) {
+  return (
+    <Link to={to} className="font-medium text-oe-blue-text hover:underline">
+      {children}
+    </Link>
+  );
+}
+
+/**
+ * One-glance explainer of what a BIM federation is and how it connects to the
+ * rest of the platform: it aligns the discipline models that share an origin
+ * into one coordinated set, so clash checking, takeoff and the BOQ all read the
+ * same models. Every connected module is a link so the workflow is obvious.
+ */
+function HowFederationsWork() {
+  const { t } = useTranslation();
+
+  const steps: { icon: ReactNode; title: string; desc: string }[] = [
+    {
+      icon: <Layers size={14} className="text-oe-blue" />,
+      title: t('bim_federations.flow_1_title', { defaultValue: 'Group models' }),
+      desc: t('bim_federations.flow_1_desc', {
+        defaultValue: 'Add the architectural, structural and MEP models that share one origin.',
+      }),
+    },
+    {
+      icon: <Activity size={14} className="text-oe-blue" />,
+      title: t('bim_federations.flow_2_title', { defaultValue: 'Check readiness' }),
+      desc: t('bim_federations.flow_2_desc', {
+        defaultValue:
+          'See which members are converted, populated and in sync before coordinating.',
+      }),
+    },
+    {
+      icon: <Boxes size={14} className="text-oe-blue" />,
+      title: t('bim_federations.flow_3_title', { defaultValue: 'Coordinate in 3D' }),
+      desc: t('bim_federations.flow_3_desc', {
+        defaultValue: 'Open every member on one shared origin, colour-coded by discipline.',
+      }),
+    },
+    {
+      icon: <ScanSearch size={14} className="text-oe-blue" />,
+      title: t('bim_federations.flow_4_title', { defaultValue: 'Run clash detection' }),
+      desc: t('bim_federations.flow_4_desc', {
+        defaultValue: 'Seed a clash run straight from the members to find interferences.',
+      }),
+    },
+  ];
+
+  return (
+    <Card padding="md">
+      <h2 className="flex items-center gap-1.5 text-sm font-semibold text-content-primary">
+        <Network size={15} className="text-oe-blue" />
+        {t('bim_federations.flow_title', { defaultValue: 'How BIM federations fit together' })}
+      </h2>
+      <p className="mt-1 text-xs text-content-tertiary">
+        {t('bim_federations.flow_intro', {
+          defaultValue:
+            'A federation aligns the discipline models that share an origin into one coordinated set, so clash checking, takeoff and the bill of quantities all read the same models. This page is where that set is assembled.',
+        })}
+      </p>
+
+      <ol className="mt-3 flex flex-col gap-2 lg:flex-row lg:items-stretch">
+        {steps.map((s, i) => (
+          <Fragment key={s.title}>
+            <li className="flex-1 rounded-lg border border-border-light bg-surface-secondary/40 p-3">
+              <div className="flex items-center gap-2">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-oe-blue-subtle text-2xs font-bold text-oe-blue-text">
+                  {i + 1}
+                </span>
+                <span className="flex items-center gap-1 text-xs font-semibold text-content-primary">
+                  {s.icon}
+                  {s.title}
+                </span>
+              </div>
+              <p className="mt-1.5 text-2xs leading-relaxed text-content-tertiary">{s.desc}</p>
+            </li>
+            {i < steps.length - 1 && (
+              <li
+                aria-hidden="true"
+                className="hidden shrink-0 items-center self-center text-content-quaternary lg:flex"
+              >
+                <ArrowRight size={16} />
+              </li>
+            )}
+          </Fragment>
+        ))}
+      </ol>
+
+      <div className="mt-3 flex flex-col gap-1.5 border-t border-border-light pt-3 text-2xs text-content-tertiary sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-5 sm:gap-y-1">
+        <span>
+          <span className="font-medium text-content-secondary">
+            {t('bim_federations.flow_connects', { defaultValue: 'Connects with:' })}
+          </span>{' '}
+          <ModLink to="/bim">
+            {t('bim_federations.mod_bim', { defaultValue: 'BIM viewer' })}
+          </ModLink>{' '}
+          ·{' '}
+          <ModLink to="/clash">
+            {t('bim_federations.mod_clash', { defaultValue: 'Clash detection' })}
+          </ModLink>{' '}
+          ·{' '}
+          <ModLink to="/quantities">
+            {t('bim_federations.mod_quantities', { defaultValue: 'Quantity takeoff' })}
+          </ModLink>{' '}
+          ·{' '}
+          <ModLink to="/match-elements">
+            {t('bim_federations.mod_match', { defaultValue: 'Match elements' })}
+          </ModLink>
+        </span>
+      </div>
+    </Card>
+  );
+}
+
 /* ── Page ───────────────────────────────────────────────────────────── */
 
 export function FederationsPage() {
@@ -1565,6 +1684,8 @@ export function FederationsPage() {
             'Group related models that share an origin, such as architectural, structural and MEP, into one federation. Manage the members of a set and open each model in the 3D viewer, so the disciplines stay aligned for clash checking, takeoff and BOQ work.',
         })}
       </DismissibleInfo>
+
+      <HowFederationsWork />
 
       <section className="min-h-[60vh]">
         {!projectId ? (

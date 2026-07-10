@@ -56,6 +56,8 @@ import { PipelineNode } from './PipelineNode';
 import {
   CATEGORY_MINIMAP_COLOR,
   getPortTokens,
+  inferPortType,
+  isPortDataType,
   type NodeCategory,
 } from '../tokens';
 import { usePipelineStore, type PipelinePort } from '../usePipelineStore';
@@ -81,21 +83,48 @@ export interface PaletteDragItem {
   label: string;
 }
 
-/** Build the typed port lists for a node-type from the catalogue def. */
+/**
+ * Build the typed port lists for a node-type from the catalogue def.
+ *
+ * The backend advertises each port either as a bare string (its name, e.g.
+ * "rows", "project", "trigger", "file", "rows_a") or as an object carrying an
+ * explicit `id`/`type`. A string is used as both the port id and its label, and
+ * its data type is inferred from the name so the glyphs, edge colors and legend
+ * all light up. An object keeps its own id/label and its explicit type when we
+ * recognise it, otherwise the type is inferred from the id/label.
+ */
 export function portsFromDef(def: NodeTypeDef): {
   inputs: PipelinePort[];
   outputs: PipelinePort[];
 } {
-  const map = (
-    arr: NodeTypeDef['inputs'],
+  const toPort = (
+    entry: unknown,
     dir: 'input' | 'output',
-  ): PipelinePort[] =>
-    (arr ?? []).map((p, i) => ({
-      id: p.id || `${dir}_${i}`,
-      label: p.label || p.id || dir,
-      dataType: (p.type as PipelinePort['dataType']) || 'any',
+    index: number,
+  ): PipelinePort => {
+    if (typeof entry === 'string') {
+      return {
+        id: entry,
+        label: entry,
+        dataType: inferPortType(entry),
+        direction: dir,
+      };
+    }
+    const obj = (entry ?? {}) as { id?: string; label?: string; type?: string };
+    const id = obj.id || `${dir}_${index}`;
+    const dataType =
+      obj.type && isPortDataType(obj.type)
+        ? obj.type
+        : inferPortType(obj.id ?? obj.label ?? '');
+    return {
+      id,
+      label: obj.label || obj.id || dir,
+      dataType,
       direction: dir,
-    }));
+    };
+  };
+  const map = (arr: unknown, dir: 'input' | 'output'): PipelinePort[] =>
+    Array.isArray(arr) ? arr.map((entry, i) => toPort(entry, dir, i)) : [];
   return {
     inputs: map(def.inputs, 'input'),
     outputs: map(def.outputs, 'output'),

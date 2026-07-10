@@ -19,7 +19,7 @@ SEVERITY_ORDER = {s: i for i, s in enumerate(CLASH_SEVERITIES)}
 
 
 class ClashSelectionSet(BaseModel):
-    """One side (A or B) of a Navisworks-style selection-set clash.
+    """One side (A or B) of a coordination-tool-style selection-set clash.
 
     A *set* is a filter over the project's own elements: every element
     whose ``element_type`` is in :attr:`element_types`, whose
@@ -31,7 +31,7 @@ class ClashSelectionSet(BaseModel):
     (strictly cross, e.g. walls × pipes, no wall × wall noise).
 
     ``element_types`` is the indexed ``element_type`` column;
-    ``categories`` is the source-native category (Revit category /
+    ``categories`` is the source-native category (RVT category /
     ``ifc_class``, falling back to the element type); ``ifc_entities`` is
     the raw IFC entity (``IfcWall``, …) from the element ``properties``
     - only meaningful for IFC-sourced models. ``properties`` is the
@@ -61,7 +61,7 @@ class ClashSelectionSet(BaseModel):
 
 
 # The kind of interference an engine pass looks for. Mirrors the
-# Navisworks Clash Detective "Type" rule selector:
+# Coordination-tool clash "Type" rule selector:
 #   * ``hard``      - only report true geometric interpenetration
 #                     (triangles actually intersect beyond ``tolerance_m``).
 #   * ``clearance`` - only report proximity: pairs that do NOT intersect
@@ -75,7 +75,7 @@ CLASH_TYPES = ("hard", "clearance", "both")
 class ClashRule(BaseModel):
     """Wave A4 - one per-discipline-pair tolerance override row.
 
-    A *rule* is the Navisworks-style "rules tab" entry: a coordination
+    A *rule* is the coordination-tool-style "rules tab" entry: a coordination
     discipline pair (e.g. ``Structural`` × ``Mechanical``) plus a
     discipline-specific tolerance the engine should use *instead* of the
     run-wide :attr:`ClashRun.tolerance_m` when both elements of a
@@ -179,7 +179,7 @@ class ClashRunCreate(BaseModel):
     clash_type: str = Field(
         default="both",
         description="hard | clearance | both - which interference an "
-        "engine pass reports (Navisworks-style Type selector). "
+        "engine pass reports (coordination-tool-style Type selector). "
         "'hard' = interpenetration only; 'clearance' = proximity only; "
         "'both' = hard, then clearance for the non-hard pairs.",
     )
@@ -187,7 +187,7 @@ class ClashRunCreate(BaseModel):
         default=False,
         description="Federated coordination noise filter: when true a "
         "pair is only reported if its two elements come from "
-        "*different* BIM models (Navisworks 'ignore clashes within the "
+        "*different* BIM models (coordination tools' 'ignore clashes within the "
         "same file'). Skipped - has no effect - on a single-model run.",
     )
     tolerance_m: float = Field(
@@ -239,7 +239,7 @@ class ClashRunCreate(BaseModel):
 # Grouping parameters the Set A / Set B pickers can be faceted by.
 # ``discipline``/``type`` exist for every model; ``category`` and
 # ``ifc_entity`` only when the selected models actually carry that data
-# (Revit category / IFC entity in element ``properties``). In addition to
+# (RVT category / IFC entity in element ``properties``). In addition to
 # these four built-ins, ``group_by`` also accepts the open-ended form
 # ``property:<key>`` (the literal ``property:`` prefix + a raw element
 # property key, e.g. ``property:FireRating``) - the facet is then the
@@ -298,7 +298,7 @@ class ClashCategoriesResponse(BaseModel):
     compatibility (older frontends read them directly).
     ``available_group_by`` lists only the *built-in* parameters that
     actually have data across the selected models, so the UI never
-    offers an empty "IfcEntity" grouping on a pure-Revit project.
+    offers an empty "IfcEntity" grouping on a pure-RVT project.
     ``available_properties`` enumerates the open-ended element-property
     keys the UI may additionally group by (always populated regardless
     of ``group_by`` so the selector can be built up-front).

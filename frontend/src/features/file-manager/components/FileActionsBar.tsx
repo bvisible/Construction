@@ -53,9 +53,9 @@ const TYPE_PILLS: { key: string; label: string; ext?: string }[] = [
 /* Long tail of less-frequent but still essential AECO formats. Surface them
    in a "More" overflow popover so the primary row stays compact. */
 const EXTRA_PILLS: { key: string; label: string; ext: string }[] = [
-  { key: 'rvt', label: 'Revit (RVT)', ext: 'rvt' },
-  { key: 'rfa', label: 'Revit Family (RFA)', ext: 'rfa' },
-  { key: 'nwd', label: 'Navisworks (NWD)', ext: 'nwd' },
+  { key: 'rvt', label: 'BIM Model (RVT)', ext: 'rvt' },
+  { key: 'rfa', label: 'BIM Family (RFA)', ext: 'rfa' },
+  { key: 'nwd', label: 'Coordination Model (NWD)', ext: 'nwd' },
   { key: 'dwf', label: 'Design Web Format (DWF)', ext: 'dwf' },
   { key: 'docx', label: 'Word (DOCX)', ext: 'docx' },
   { key: 'mpp', label: 'MS Project (MPP)', ext: 'mpp' },

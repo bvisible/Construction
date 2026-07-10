@@ -22,6 +22,7 @@ import { ClipboardCheck, ArrowRight } from 'lucide-react';
 import { Card, CardContent, CardHeader, InfoHint } from '@/shared/ui';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { fetchInspections, type Inspection } from '@/features/inspections/api';
+import { KpiStrip } from './KpiStrip';
 
 interface InspectionStats {
   total: number;
@@ -105,52 +106,33 @@ export function InspectionsQualityCard() {
         }
       />
       <CardContent>
-        <div className="flex items-end justify-between gap-3">
-          <div>
-            <p className="text-xs uppercase tracking-wide text-content-tertiary">
-              {hasEvaluated
-                ? t('dashboard.inspections_pass_rate', { defaultValue: 'Pass rate' })
-                : t('dashboard.inspections_open_label', { defaultValue: 'Open / scheduled' })}
-            </p>
-            {hasEvaluated ? (
-              <p className={`text-3xl font-semibold tabular-nums ${rateColor}`}>{stats.passRate}%</p>
-            ) : (
-              <p className="text-3xl font-semibold tabular-nums text-content-primary">
-                {nf.format(stats.open)}
-              </p>
-            )}
-            {hasEvaluated && (
-              <p className="mt-0.5 text-xs text-content-tertiary">
-                {t('dashboard.inspections_passed_of', {
-                  defaultValue: '{{passed}} of {{evaluated}} evaluated passed',
-                  passed: nf.format(stats.passed),
-                  evaluated: nf.format(stats.evaluated),
-                })}
-              </p>
-            )}
-          </div>
-          <div className="text-right">
-            <p className="text-xs uppercase tracking-wide text-content-tertiary">
-              {t('dashboard.inspections_open_label', { defaultValue: 'Open / scheduled' })}
-            </p>
-            <p className="text-lg font-medium text-content-secondary tabular-nums">
-              {nf.format(stats.open)}
-            </p>
-          </div>
-        </div>
-
-        <div className="mt-3 flex items-center justify-between gap-2 border-t border-border-light pt-3">
-          <span className="text-xs text-content-tertiary">
-            {t('dashboard.inspections_failed', { defaultValue: 'Failed' })}
-          </span>
-          <span
-            className={`text-sm font-semibold tabular-nums ${
-              stats.failed > 0 ? 'text-rose-600' : 'text-content-secondary'
-            }`}
-          >
-            {nf.format(stats.failed)}
-          </span>
-        </div>
+        <KpiStrip
+          stats={[
+            {
+              label: t('dashboard.inspections_pass_rate', { defaultValue: 'Pass rate' }),
+              value: hasEvaluated ? `${stats.passRate}%` : '-',
+              tone: hasEvaluated ? rateColor : 'text-content-tertiary',
+            },
+            {
+              label: t('dashboard.inspections_open_short', { defaultValue: 'Open' }),
+              value: nf.format(stats.open),
+            },
+            {
+              label: t('dashboard.inspections_failed', { defaultValue: 'Failed' }),
+              value: nf.format(stats.failed),
+              tone: stats.failed > 0 ? 'text-rose-600' : 'text-content-secondary',
+            },
+          ]}
+        />
+        {hasEvaluated && (
+          <p className="mt-2 text-2xs text-content-tertiary">
+            {t('dashboard.inspections_passed_of', {
+              defaultValue: '{{passed}} of {{evaluated}} evaluated passed',
+              passed: nf.format(stats.passed),
+              evaluated: nf.format(stats.evaluated),
+            })}
+          </p>
+        )}
         <InfoHint
           className="mt-3"
           text={t('dashboard.inspections_help', {

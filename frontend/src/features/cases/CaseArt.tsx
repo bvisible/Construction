@@ -1,6 +1,7 @@
 import { useState, type ComponentType } from 'react';
 import clsx from 'clsx';
 import type { LucideProps } from 'lucide-react';
+import { CASE_SCENES, CaseScene } from './caseScenes';
 
 interface CaseArtProps {
   /** Playbook id; maps to /cases-art/line/<id>.webp. */
@@ -27,25 +28,36 @@ export function CaseArt({ id, fallbackIcon: Icon, fallbackClass, alt = '' }: Cas
     setBroken(false);
   }
 
-  if (broken) {
+  // The generated line-art picture is the canonical, consistent style for the
+  // case hub, so it WINS. Only when a picture has not been generated for this
+  // case (the image 404s / errors) do we fall back to a bespoke vector scene,
+  // and finally to the discipline icon - so the hub never shows a lone icon
+  // when a drawn scene exists, yet cases that DO have a picture read uniformly.
+  // (Inside a case, the step-by-step action visualisations stay vector - that
+  // is a different surface; this only governs the case tile / header art.)
+  if (!broken) {
     return (
-      <div className="flex h-full w-full items-center justify-center">
-        <Icon size={40} strokeWidth={1.4} className={clsx('opacity-80', fallbackClass)} />
-      </div>
+      <img
+        src={`/cases-art/line/${id}.webp`}
+        alt={alt}
+        loading="lazy"
+        decoding="async"
+        width={512}
+        height={512}
+        draggable={false}
+        onError={() => setBroken(true)}
+        className="h-full w-full object-contain p-2.5"
+      />
     );
   }
 
+  if (CASE_SCENES[id]) {
+    return <CaseScene id={id} title={alt} />;
+  }
+
   return (
-    <img
-      src={`/cases-art/line/${id}.webp`}
-      alt={alt}
-      loading="lazy"
-      decoding="async"
-      width={512}
-      height={512}
-      draggable={false}
-      onError={() => setBroken(true)}
-      className="h-full w-full object-contain p-2.5"
-    />
+    <div className="flex h-full w-full items-center justify-center">
+      <Icon size={40} strokeWidth={1.4} className={clsx('opacity-80', fallbackClass)} />
+    </div>
   );
 }

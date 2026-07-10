@@ -1301,7 +1301,7 @@
         {
           "class_name": "AISettings",
           "tablename": "oe_ai_settings",
-          "docstring": "‌⁠‍Per-user AI configuration - API keys and model preferences.",
+          "docstring": "Per-user AI configuration - API keys and model preferences.",
           "columns": [
             {
               "name": "user_id",
@@ -1435,7 +1435,7 @@
         {
           "class_name": "AIEstimateJob",
           "tablename": "oe_ai_estimate_job",
-          "docstring": "‌⁠‍Tracks an AI estimation request - input, status, and result.",
+          "docstring": "Tracks an AI estimation request - input, status, and result.",
           "columns": [
             {
               "name": "user_id",
@@ -1604,7 +1604,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Update per-user AI configuration (API keys, preferred model).",
+          "docstring": "Update per-user AI configuration (API keys, preferred model).",
           "fields": [
             {
               "name": "anthropic_api_key",
@@ -1717,7 +1717,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍AI settings returned from the API.\n\nAPI keys are masked - only the last 4 characters are shown.",
+          "docstring": "AI settings returned from the API.\n\nAPI keys are masked - only the last 4 characters are shown.",
           "fields": [
             {
               "name": "id",
@@ -6797,7 +6797,7 @@
         {
           "class_name": "Assembly",
           "tablename": "oe_assemblies_assembly",
-          "docstring": "‌⁠‍A composite cost item built from cost database entries with factors.\n\nExample: \"RC Wall C30/37 d=25cm\" = concrete + rebar + formwork + labor,\neach with a factor that defines how much of the component is needed per\nunit of the assembly.",
+          "docstring": "A composite cost item built from cost database entries with factors.\n\nExample: \"RC Wall C30/37 d=25cm\" = concrete + rebar + formwork + labor,\neach with a factor that defines how much of the component is needed per\nunit of the assembly.",
           "columns": [
             {
               "name": "code",
@@ -6904,7 +6904,7 @@
         {
           "class_name": "Component",
           "tablename": "oe_assemblies_component",
-          "docstring": "‌⁠‍A single line item within an assembly - links to a cost database entry.",
+          "docstring": "A single line item within an assembly - links to a cost database entry.",
           "columns": [
             {
               "name": "assembly_id",
@@ -7184,7 +7184,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Create a new assembly component.\n\nAccepts ``name`` as an alias for ``description`` and ``unit_rate`` as an\nalias for ``unit_cost`` so that the AI-generate preview payload can be\nforwarded directly without field remapping on the frontend.\n\n``resource_type`` is now a first-class column (v2940). Free-form\nextended fields (waste_pct for materials, crew_size/hours/burden_pct\nfor labor, fuel_cost/rental_days for equipment) live in ``metadata``\nso we don't lock the schema to one industry's vocabulary, but the\nservice layer reads them when computing the typed total.",
+          "docstring": "Create a new assembly component.\n\nAccepts ``name`` as an alias for ``description`` and ``unit_rate`` as an\nalias for ``unit_cost`` so that the AI-generate preview payload can be\nforwarded directly without field remapping on the frontend.\n\n``resource_type`` is now a first-class column (v2940). Free-form\nextended fields (waste_pct for materials, crew_size/hours/burden_pct\nfor labor, fuel_cost/rental_days for equipment) live in ``metadata``\nso we don't lock the schema to one industry's vocabulary, but the\nservice layer reads them when computing the typed total.",
           "fields": [
             {
               "name": "cost_item_id",
@@ -8619,7 +8619,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Request body for ``POST /api/v1/backup/export/``.\n\nAll fields are optional; an empty body (``{}``) produces a full\nbackup of every table the requesting user owns.",
+          "docstring": "Request body for ``POST /api/v1/backup/export/``.\n\nAll fields are optional; an empty body (``{}``) produces a full\nbackup of every table the requesting user owns.",
           "fields": [
             {
               "name": "include_modules",
@@ -8643,7 +8643,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Result of a restore operation.",
+          "docstring": "Result of a restore operation.",
           "fields": [
             {
               "name": "status",
@@ -8743,7 +8743,7 @@
         {
           "class_name": "BCFTopic",
           "tablename": "oe_bcf_topic",
-          "docstring": "‌⁠‍A BCF Topic (issue) attached to a project.\n\nMaps to ``<Topic>`` inside ``markup.bcf``. ``guid`` is the canonical\nBCF ``Topic/@Guid``; we keep it distinct from the surrogate ``id`` so\nan imported topic preserves its original GUID across roundtrips while\nstill benefiting from the platform's ``GUID`` primary-key convention.",
+          "docstring": "A BCF Topic (issue) attached to a project.\n\nMaps to ``<Topic>`` inside ``markup.bcf``. ``guid`` is the canonical\nBCF ``Topic/@Guid``; we keep it distinct from the surrogate ``id`` so\nan imported topic preserves its original GUID across roundtrips while\nstill benefiting from the platform's ``GUID`` primary-key convention.",
           "columns": [
             {
               "name": "guid",
@@ -8886,7 +8886,7 @@
         {
           "class_name": "BCFComment",
           "tablename": "oe_bcf_comment",
-          "docstring": "‌⁠‍A comment on a BCF topic.\n\nMaps to ``<Comment>`` inside ``markup.bcf``. ``viewpoint_guid``\noptionally references a sibling :class:`BCFViewpoint`'s ``guid``.",
+          "docstring": "A comment on a BCF topic.\n\nMaps to ``<Comment>`` inside ``markup.bcf``. ``viewpoint_guid``\noptionally references a sibling :class:`BCFViewpoint`'s ``guid``.",
           "columns": [
             {
               "name": "guid",
@@ -9169,7 +9169,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍A 3-component vector / point (BCF XYZ triplet).",
+          "docstring": "A 3-component vector / point (BCF XYZ triplet).",
           "fields": [
             {
               "name": "x",
@@ -9193,7 +9193,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍BCF ``PerspectiveCamera``.",
+          "docstring": "BCF ``PerspectiveCamera``.",
           "fields": [
             {
               "name": "camera_view_point",
@@ -9762,7 +9762,7 @@
         {
           "class_name": "KPIDefinition",
           "tablename": "oe_bi_dashboards_kpi_definition",
-          "docstring": "‌⁠‍A registered KPI in the library.\n\nThe ``formula_ref`` column is the lookup key into the in-process\n:data:`app.modules.bi_dashboards.kpis.KPI_FORMULAS` registry. System\nKPIs are seeded on startup; users may register custom KPIs by adding\na row here and a Python function via the ``@register_kpi`` decorator.",
+          "docstring": "A registered KPI in the library.\n\nThe ``formula_ref`` column is the lookup key into the in-process\n:data:`app.modules.bi_dashboards.kpis.KPI_FORMULAS` registry. System\nKPIs are seeded on startup; users may register custom KPIs by adding\na row here and a Python function via the ``@register_kpi`` decorator.",
           "columns": [
             {
               "name": "code",
@@ -9830,7 +9830,7 @@
         {
           "class_name": "Dashboard",
           "tablename": "oe_bi_dashboards_dashboard",
-          "docstring": "‌⁠‍A dashboard configuration (collection of widgets).",
+          "docstring": "A dashboard configuration (collection of widgets).",
           "columns": [
             {
               "name": "name",
@@ -12183,7 +12183,7 @@
         {
           "class_name": "BidPackage",
           "tablename": "oe_bid_management_package",
-          "docstring": "‌⁠‍A formal bid package (RFx) belonging to a project.",
+          "docstring": "A formal bid package (RFx) belonging to a project.",
           "columns": [
             {
               "name": "project_id",
@@ -12314,7 +12314,7 @@
         {
           "class_name": "BidPackageLineItem",
           "tablename": "oe_bid_management_line_item",
-          "docstring": "‌⁠‍A single line of scope inside a bid package.",
+          "docstring": "A single line of scope inside a bid package.",
           "columns": [
             {
               "name": "package_id",
@@ -13447,7 +13447,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Create a new bid package.",
+          "docstring": "Create a new bid package.",
           "fields": [
             {
               "name": "project_id",
@@ -13511,7 +13511,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Partial update for a bid package.",
+          "docstring": "Partial update for a bid package.",
           "fields": [
             {
               "name": "tender_id",
@@ -15622,7 +15622,7 @@
         {
           "class_name": "BIMModel",
           "tablename": "oe_bim_model",
-          "docstring": "‌⁠‍Imported BIM/CAD model - one record per uploaded file version.",
+          "docstring": "Imported BIM/CAD model - one record per uploaded file version.",
           "columns": [
             {
               "name": "project_id",
@@ -15735,7 +15735,7 @@
         {
           "class_name": "BIMElement",
           "tablename": "oe_bim_element",
-          "docstring": "‌⁠‍Single element extracted from a BIM model.\n\nSince v2.3.0 BIMElement is also the **asset register** for the project\n(ISO 19650 Asset Information Model). ``asset_info`` holds the\noperational-phase metadata (manufacturer, warranty, serial) and\n``is_tracked_asset`` flags the element as a real-world object that\npersists after construction - pumps, AHUs, doors, elevators etc.\nMost geometry-only elements (walls, floors) leave both fields at\ntheir defaults and are invisible to the Assets page.",
+          "docstring": "Single element extracted from a BIM model.\n\nSince v2.3.0 BIMElement is also the **asset register** for the project\n(ISO 19650 Asset Information Model). ``asset_info`` holds the\noperational-phase metadata (manufacturer, warranty, serial) and\n``is_tracked_asset`` flags the element as a real-world object that\npersists after construction - pumps, AHUs, doors, elevators etc.\nMost geometry-only elements (walls, floors) leave both fields at\ntheir defaults and are invisible to the Assets page.",
           "columns": [
             {
               "name": "model_id",
@@ -16113,7 +16113,7 @@
         {
           "class_name": "BIMFederation",
           "tablename": "oe_bim_federation",
-          "docstring": "‌⁠‍Federation - a named group of N BIM models with a shared origin.\n\nA federation composes multiple per-discipline models (architectural,\nstructural, MEP, …) into a single coordinated set. Each member model\nkeeps its own version history and upload pipeline; the federation\nsimply records which models belong together, in what z-order, and\nwith what display hint (visibility + color).\n\nFederation ownership tracks project ownership - the project access\nhelper (``_verify_project_access``) is the sole authorization gate.",
+          "docstring": "Federation - a named group of N BIM models with a shared origin.\n\nA federation composes multiple per-discipline models (architectural,\nstructural, MEP, …) into a single coordinated set. Each member model\nkeeps its own version history and upload pipeline; the federation\nsimply records which models belong together, in what z-order, and\nwith what display hint (visibility + color).\n\nFederation ownership tracks project ownership - the project access\nhelper (``_verify_project_access``) is the sole authorization gate.",
           "columns": [
             {
               "name": "project_id",
@@ -16158,7 +16158,7 @@
         {
           "class_name": "BIMFederationModel",
           "tablename": "oe_bim_federation_model",
-          "docstring": "‌⁠‍Join row - one ``BIMModel`` participating in one ``BIMFederation``.\n\nA model can belong to multiple federations (e.g. the structural\nmodel takes part in both a clash-detection federation and a coord-\nreview federation), so the link table is intentionally many-to-many\nwith a uniqueness constraint per (federation, model) pair to keep\nduplicate adds out.",
+          "docstring": "Join row - one ``BIMModel`` participating in one ``BIMFederation``.\n\nA model can belong to multiple federations (e.g. the structural\nmodel takes part in both a clash-detection federation and a coord-\nreview federation), so the link table is intentionally many-to-many\nwith a uniqueness constraint per (federation, model) pair to keep\nduplicate adds out.",
           "columns": [
             {
               "name": "federation_id",
@@ -16636,7 +16636,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Create a new BIM model record.",
+          "docstring": "Create a new BIM model record.",
           "fields": [
             {
               "name": "project_id",
@@ -16691,7 +16691,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Partial update for a BIM model.",
+          "docstring": "Partial update for a BIM model.",
           "fields": [
             {
               "name": "name",
@@ -18959,7 +18959,7 @@
         {
           "class_name": "BIMRequirementSet",
           "tablename": "oe_bim_requirement_set",
-          "docstring": "‌⁠‍Container for a group of BIM requirements from a single import.",
+          "docstring": "Container for a group of BIM requirements from a single import.",
           "columns": [
             {
               "name": "project_id",
@@ -19018,7 +19018,7 @@
         {
           "class_name": "BIMRequirement",
           "tablename": "oe_bim_requirement",
-          "docstring": "‌⁠‍Individual BIM requirement -- 5-column universal model.\n\nColumns:\n    element_filter  -- which element (JSONB: ifc_class, classification, ...)\n    property_group  -- property set name (nullable for direct IFC attributes)\n    property_name   -- property/attribute name\n    constraint_def  -- constraint definition (JSONB: datatype, cardinality, enum, ...)\n    context         -- when/who/why (JSONB: phase, actor, use_case, ...)",
+          "docstring": "Individual BIM requirement -- 5-column universal model.\n\nColumns:\n    element_filter  -- which element (JSONB: ifc_class, classification, ...)\n    property_group  -- property set name (nullable for direct IFC attributes)\n    property_name   -- property/attribute name\n    constraint_def  -- constraint definition (JSONB: datatype, cardinality, enum, ...)\n    context         -- when/who/why (JSONB: phase, actor, use_case, ...)",
           "columns": [
             {
               "name": "requirement_set_id",
@@ -19159,7 +19159,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍A single normalized BIM requirement (5-column model).",
+          "docstring": "A single normalized BIM requirement (5-column model).",
           "fields": [
             {
               "name": "element_filter",
@@ -19190,7 +19190,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Describes a single parse error or warning.",
+          "docstring": "Describes a single parse error or warning.",
           "fields": [
             {
               "name": "row",
@@ -19597,7 +19597,7 @@
         {
           "class_name": "BOQ",
           "tablename": "oe_boq_boq",
-          "docstring": "‌⁠‍Bill of Quantities - groups positions for a project.",
+          "docstring": "Bill of Quantities - groups positions for a project.",
           "columns": [
             {
               "name": "project_id",
@@ -19688,7 +19688,7 @@
         {
           "class_name": "Position",
           "tablename": "oe_boq_position",
-          "docstring": "‌⁠‍Single line item in a BOQ - the core estimation entity.",
+          "docstring": "Single line item in a BOQ - the core estimation entity.",
           "columns": [
             {
               "name": "boq_id",
@@ -20715,7 +20715,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Create a new Bill of Quantities.",
+          "docstring": "Create a new Bill of Quantities.",
           "fields": [
             {
               "name": "project_id",
@@ -24308,7 +24308,7 @@
         {
           "class_name": "EPDRecord",
           "tablename": "oe_carbon_epd_record",
-          "docstring": "‌⁠‍A single Environmental Product Declaration (EPD) record.\n\nSourced from public databases (Ökobaudat, ICE, EC3) or imported manually.\nStores GWP indicators per LCA module (A1-A3, A4, A5, B, C, D).",
+          "docstring": "A single Environmental Product Declaration (EPD) record.\n\nSourced from public databases (Ökobaudat, ICE, EC3) or imported manually.\nStores GWP indicators per LCA module (A1-A3, A4, A5, B, C, D).",
           "columns": [
             {
               "name": "epd_id",
@@ -24412,7 +24412,7 @@
         {
           "class_name": "MaterialCarbonFactor",
           "tablename": "oe_carbon_material_factor",
-          "docstring": "‌⁠‍Internal-facing material carbon factor.\n\nLinks a cost item (plain UUID - no FK across modules) to an EPD record\nor a manual override. Used when computing embodied carbon for BOQ\npositions that reference a cost item.",
+          "docstring": "Internal-facing material carbon factor.\n\nLinks a cost item (plain UUID - no FK across modules) to an EPD record\nor a manual override. Used when computing embodied carbon for BOQ\npositions that reference a cost item.",
           "columns": [
             {
               "name": "cost_item_id",
@@ -25380,7 +25380,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Create an EPD record.",
+          "docstring": "Create an EPD record.",
           "fields": [
             {
               "name": "epd_id",
@@ -25459,7 +25459,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Partial update of an EPD record.",
+          "docstring": "Partial update of an EPD record.",
           "fields": [
             {
               "name": "source",
@@ -27239,7 +27239,7 @@
         {
           "class_name": "CatalogResource",
           "tablename": "oe_catalog_resource",
-          "docstring": "‌⁠‍A single catalog resource entry (material, equipment, labor, or operator).",
+          "docstring": "A single catalog resource entry (material, equipment, labor, or operator).",
           "columns": [
             {
               "name": "resource_code",
@@ -27404,7 +27404,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Create a new catalog resource.",
+          "docstring": "Create a new catalog resource.",
           "fields": [
             {
               "name": "resource_code",
@@ -27466,7 +27466,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Catalog resource in API responses.\n\nA *resource* is one leaf input - a single material, labour, equipment,\nor operator entry with one price per region. Each resource can be\nreferenced by many cost positions (``/api/v1/costs/``); the inverse\nlookup is exposed at ``/api/v1/catalog/{resource_id}/used-by/``.\n\nField notes:\n\n* ``resource_type`` is the kind of input (``material`` / ``labor`` /\n  ``equipment`` / ``operator``). A catalog resource has no inner\n  material/labour breakdown because **it already is one of those**.\n* ``usage_count`` is the number of cost positions that reference this\n  resource by ``resource_code``.\n* ``used_in_cost_items`` is a synonym of ``usage_count`` for\n  integrations that prefer the explicit name; both are kept so old\n  clients reading ``specifications.used_in_work_items`` still work.",
+          "docstring": "Catalog resource in API responses.\n\nA *resource* is one leaf input - a single material, labour, equipment,\nor operator entry with one price per region. Each resource can be\nreferenced by many cost positions (``/api/v1/costs/``); the inverse\nlookup is exposed at ``/api/v1/catalog/{resource_id}/used-by/``.\n\nField notes:\n\n* ``resource_type`` is the kind of input (``material`` / ``labor`` /\n  ``equipment`` / ``operator``). A catalog resource has no inner\n  material/labour breakdown because **it already is one of those**.\n* ``usage_count`` is the number of cost positions that reference this\n  resource by ``resource_code``.\n* ``used_in_cost_items`` is a synonym of ``usage_count`` for\n  integrations that prefer the explicit name; both are kept so old\n  clients reading ``specifications.used_in_work_items`` still work.",
           "fields": [
             {
               "name": "id",
@@ -27716,7 +27716,7 @@
         {
           "class_name": "DocumentContainer",
           "tablename": "oe_cde_container",
-          "docstring": "‌⁠‍An ISO 19650 document container with CDE state management.",
+          "docstring": "An ISO 19650 document container with CDE state management.",
           "columns": [
             {
               "name": "project_id",
@@ -27834,7 +27834,7 @@
         {
           "class_name": "DocumentRevision",
           "tablename": "oe_cde_revision",
-          "docstring": "‌⁠‍A revision of a document within a CDE container.",
+          "docstring": "A revision of a document within a CDE container.",
           "columns": [
             {
               "name": "container_id",
@@ -28087,7 +28087,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Create a new document container.",
+          "docstring": "Create a new document container.",
           "fields": [
             {
               "name": "project_id",
@@ -28161,7 +28161,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Partial update for a document container.",
+          "docstring": "Partial update for a document container.",
           "fields": [
             {
               "name": "container_code",
@@ -28691,7 +28691,7 @@
         {
           "class_name": "ChangeOrder",
           "tablename": "oe_changeorders_order",
-          "docstring": "‌⁠‍Change order tracking scope changes during project execution.",
+          "docstring": "Change order tracking scope changes during project execution.",
           "columns": [
             {
               "name": "project_id",
@@ -28876,7 +28876,7 @@
         {
           "class_name": "ChangeOrderItem",
           "tablename": "oe_changeorders_item",
-          "docstring": "‌⁠‍Individual line item within a change order.",
+          "docstring": "Individual line item within a change order.",
           "columns": [
             {
               "name": "change_order_id",
@@ -28960,7 +28960,7 @@
         {
           "class_name": "ChangeOrderApproval",
           "tablename": "oe_changeorder_approval",
-          "docstring": "‌⁠‍One ordered step in a change order's multi-approver chain.\n\nA change order's chain is a list of these rows keyed by ``step_order``\n(1, 2, 3, …). The :class:`ChangeOrder` carries a ``current_approval_step``\ncursor pointing at the row that is currently in ``pending`` and is\nexpected to act next; the service advances the cursor on each\n``approve`` decision and short-circuits the chain on a ``reject``.\n\nThe FK to ``oe_users_user`` is ``SET NULL`` rather than ``CASCADE``\nbecause we want the audit trail of who decided what to survive a\nuser being removed - the row becomes \"decision recorded, decider\ndeleted\" instead of vanishing.",
+          "docstring": "One ordered step in a change order's multi-approver chain.\n\nA change order's chain is a list of these rows keyed by ``step_order``\n(1, 2, 3, …). The :class:`ChangeOrder` carries a ``current_approval_step``\ncursor pointing at the row that is currently in ``pending`` and is\nexpected to act next; the service advances the cursor on each\n``approve`` decision and short-circuits the chain on a ``reject``.\n\nThe FK to ``oe_users_user`` is ``SET NULL`` rather than ``CASCADE``\nbecause we want the audit trail of who decided what to survive a\nuser being removed - the row becomes \"decision recorded, decider\ndeleted\" instead of vanishing.",
           "columns": [
             {
               "name": "change_order_id",
@@ -29153,7 +29153,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Create a new change order.",
+          "docstring": "Create a new change order.",
           "fields": [
             {
               "name": "project_id",
@@ -29195,7 +29195,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Partial update for a change order.\n\nStatus transitions must go through the dedicated action endpoints\n(``/submit``, ``/approve``, ``/reject``). Sending ``status`` here\nreturns 422 instead of silently ignoring it - the silent-ignore\nbehaviour was :bug:`385` and made the whole CO workflow look\nnon-functional.",
+          "docstring": "Partial update for a change order.\n\nStatus transitions must go through the dedicated action endpoints\n(``/submit``, ``/approve``, ``/reject``). Sending ``status`` here\nreturns 422 instead of silently ignoring it - the silent-ignore\nbehaviour was :bug:`385` and made the whole CO workflow look\nnon-functional.",
           "fields": [
             {
               "name": "title",
@@ -30083,7 +30083,7 @@
         {
           "class_name": "ClashRun",
           "tablename": "oe_clash_run",
-          "docstring": "‌⁠‍A single clash-detection analysis scoped to one project.\n\n``model_ids`` is the set of BIM models fed into the broad phase. With\none model it is an *internal* (intra-model) clash; with two or more it\nis a *federated* coordination run. ``summary`` caches the rendered\ndiscipline matrix + per-status counts so the dashboard never has to\nre-aggregate thousands of result rows on every poll.",
+          "docstring": "A single clash-detection analysis scoped to one project.\n\n``model_ids`` is the set of BIM models fed into the broad phase. With\none model it is an *internal* (intra-model) clash; with two or more it\nis a *federated* coordination run. ``summary`` caches the rendered\ndiscipline matrix + per-status counts so the dashboard never has to\nre-aggregate thousands of result rows on every poll.",
           "columns": [
             {
               "name": "project_id",
@@ -30226,7 +30226,7 @@
         {
           "class_name": "ClashResult",
           "tablename": "oe_clash_result",
-          "docstring": "‌⁠‍One clashing element pair (A↔B) inside a :class:`ClashRun`.\n\n``status`` drives the review workflow:\n``new`` → ``active`` → ``reviewed`` → ``approved`` / ``resolved`` /\n``ignored``. ``approved`` means \"intentional, accepted\" and\n``ignored`` means \"false positive\"; both drop out of the open count.",
+          "docstring": "One clashing element pair (A↔B) inside a :class:`ClashRun`.\n\n``status`` drives the review workflow:\n``new`` → ``active`` → ``reviewed`` → ``approved`` / ``resolved`` /\n``ignored``. ``approved`` means \"intentional, accepted\" and\n``ignored`` means \"false positive\"; both drop out of the open count.",
           "columns": [
             {
               "name": "run_id",
@@ -30474,7 +30474,7 @@
         {
           "class_name": "ClashCluster",
           "tablename": "oe_clash_cluster",
-          "docstring": "‌⁠‍AI-derived label for a run-scoped spatial cluster of clashes.\n\nThe DBSCAN pass groups clash centroids that sit within ``eps_m`` of\neach other into ``cluster_id`` buckets (per :class:`ClashRun`); this\ntable caches a short human-style label for each non-noise bucket\n(e.g. \"MEP × Structural - Level 3\") plus its member count, so the\nreview-table chip group renders without a per-render heuristic\nre-derivation. Noise rows (``cluster_id IS NULL``) have no row here.",
+          "docstring": "AI-derived label for a run-scoped spatial cluster of clashes.\n\nThe DBSCAN pass groups clash centroids that sit within ``eps_m`` of\neach other into ``cluster_id`` buckets (per :class:`ClashRun`); this\ntable caches a short human-style label for each non-noise bucket\n(e.g. \"MEP × Structural - Level 3\") plus its member count, so the\nreview-table chip group renders without a per-render heuristic\nre-derivation. Noise rows (``cluster_id IS NULL``) have no row here.",
           "columns": [
             {
               "name": "run_id",
@@ -30508,7 +30508,7 @@
         {
           "class_name": "ClashIssue",
           "tablename": "oe_clash_issue",
-          "docstring": "‌⁠‍Smart-issue identity of a clash across re-runs.\n\nA :class:`ClashResult` is *run-scoped* - the same physical interference\nre-appears as a fresh row on every re-run. The ``ClashIssue`` is the\n*persistent* identity behind those rows: keyed by the project-scoped\n``signature_hash``, it tracks first-seen / last-seen runs, a smart\nstatus (new / persisted / resolved / ignored / archived), assignee,\ndue date and the project-local server-assigned id (``CLASH-042``).\n\nStatus transitions:\n\n    new        - created this run, has matching result rows\n    persisted  - present in N>1 consecutive runs\n    resolved   - gone from the latest run (was present in the prior)\n    ignored    - manually suppressed (see :class:`ClashSuppression`)\n    archived   - absent for ``_ARCHIVE_AFTER_MISSING`` consecutive runs\n\nEach project has its own monotonic counter (``server_assigned_id``)\nso ids are stable + readable + scoped - the same number never appears\non two projects.",
+          "docstring": "Smart-issue identity of a clash across re-runs.\n\nA :class:`ClashResult` is *run-scoped* - the same physical interference\nre-appears as a fresh row on every re-run. The ``ClashIssue`` is the\n*persistent* identity behind those rows: keyed by the project-scoped\n``signature_hash``, it tracks first-seen / last-seen runs, a smart\nstatus (new / persisted / resolved / ignored / archived), assignee,\ndue date and the project-local server-assigned id (``CLASH-042``).\n\nStatus transitions:\n\n    new        - created this run, has matching result rows\n    persisted  - present in N>1 consecutive runs\n    resolved   - gone from the latest run (was present in the prior)\n    ignored    - manually suppressed (see :class:`ClashSuppression`)\n    archived   - absent for ``_ARCHIVE_AFTER_MISSING`` consecutive runs\n\nEach project has its own monotonic counter (``server_assigned_id``)\nso ids are stable + readable + scoped - the same number never appears\non two projects.",
           "columns": [
             {
               "name": "project_id",
@@ -30602,7 +30602,7 @@
         {
           "class_name": "ClashSuppression",
           "tablename": "oe_clash_suppression",
-          "docstring": "‌⁠‍A per-project \"ignore this signature\" rule.\n\nSuppressing a signature flips every matching :class:`ClashIssue` to\n``ignored`` and prevents the same signature from re-surfacing as\n``new`` in future runs (it stays ``ignored`` while the suppression\nis in place). Scoped to a single project - suppressing ``ABC...`` on\nProject A has zero effect on Project B even if a clash there carries\nthe same hash.",
+          "docstring": "A per-project \"ignore this signature\" rule.\n\nSuppressing a signature flips every matching :class:`ClashIssue` to\n``ignored`` and prevents the same signature from re-surfacing as\n``new`` in future runs (it stays ``ignored`` while the suppression\nis in place). Scoped to a single project - suppressing ``ABC...`` on\nProject A has zero effect on Project B even if a clash there carries\nthe same hash.",
           "columns": [
             {
               "name": "project_id",
@@ -30636,7 +30636,7 @@
         {
           "class_name": "ClashProfile",
           "tablename": "oe_clash_profile",
-          "docstring": "‌⁠‍A reusable clash-run configuration template, scoped to one project.\n\nTable: ``oe_clash_profile``.\n\nA *profile* is a named snapshot of every run parameter a coordinator\ntunes (tolerance, clearance, mode, discipline filter, selection sets,\nper-discipline-pair rules, spatial grid) minus the model selection -\nso the same coordination policy can be launched again on a fresh model\nset with one click. Profiles are project-local (each project has its\nown library) and mutable; they are templates, not history. ``name`` is\nunique per project so the picker never shows two \"MEP × Structural\"\nprofiles. ``id`` / ``created_at`` / ``updated_at`` come from\n:class:`app.database.Base`.",
+          "docstring": "A reusable clash-run configuration template, scoped to one project.\n\nTable: ``oe_clash_profile``.\n\nA *profile* is a named snapshot of every run parameter a coordinator\ntunes (tolerance, clearance, mode, discipline filter, selection sets,\nper-discipline-pair rules, spatial grid) minus the model selection -\nso the same coordination policy can be launched again on a fresh model\nset with one click. Profiles are project-local (each project has its\nown library) and mutable; they are templates, not history. ``name`` is\nunique per project so the picker never shows two \"MEP × Structural\"\nprofiles. ``id`` / ``created_at`` / ``updated_at`` come from\n:class:`app.database.Base`.",
           "columns": [
             {
               "name": "project_id",
@@ -30970,7 +30970,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "One side (A or B) of a Navisworks-style selection-set clash.\n\nA *set* is a filter over the project's own elements: every element\nwhose ``element_type`` is in :attr:`element_types`, whose\n``discipline`` is in :attr:`disciplines`, whose grouping *category*\nis in :attr:`categories` **or** whose IFC entity is in\n:attr:`ifc_entities` belongs to the set (union - each chip the user\nadds widens it). Used only with ``mode=\"selection_sets\"``: a pair is\nreported iff one element is in Set A and the other is in Set B\n(strictly cross, e.g. walls × pipes, no wall × wall noise).\n\n``element_types`` is the indexed ``element_type`` column;\n``categories`` is the source-native category (Revit category /\n``ifc_class``, falling back to the element type); ``ifc_entities`` is\nthe raw IFC entity (``IfcWall``, …) from the element ``properties``\n- only meaningful for IFC-sourced models. ``properties`` is the\nopen-ended ``{property_key: [allowed_values]}`` map: an element is\nalso in the set when, for *any* key, its source-native\n``properties[key]`` (string-coerced + trimmed) is one of the listed\nvalues - so the picker can facet by *any* element property, not just\nthe four built-ins. The extra lists/maps keep older payloads (which\nonly carried ``disciplines``/``element_types``) forward-compatible.",
+          "docstring": "One side (A or B) of a coordination-tool-style selection-set clash.\n\nA *set* is a filter over the project's own elements: every element\nwhose ``element_type`` is in :attr:`element_types`, whose\n``discipline`` is in :attr:`disciplines`, whose grouping *category*\nis in :attr:`categories` **or** whose IFC entity is in\n:attr:`ifc_entities` belongs to the set (union - each chip the user\nadds widens it). Used only with ``mode=\"selection_sets\"``: a pair is\nreported iff one element is in Set A and the other is in Set B\n(strictly cross, e.g. walls × pipes, no wall × wall noise).\n\n``element_types`` is the indexed ``element_type`` column;\n``categories`` is the source-native category (Revit category /\n``ifc_class``, falling back to the element type); ``ifc_entities`` is\nthe raw IFC entity (``IfcWall``, …) from the element ``properties``\n- only meaningful for IFC-sourced models. ``properties`` is the\nopen-ended ``{property_key: [allowed_values]}`` map: an element is\nalso in the set when, for *any* key, its source-native\n``properties[key]`` (string-coerced + trimmed) is one of the listed\nvalues - so the picker can facet by *any* element property, not just\nthe four built-ins. The extra lists/maps keep older payloads (which\nonly carried ``disciplines``/``element_types``) forward-compatible.",
           "fields": [
             {
               "name": "disciplines",
@@ -30999,7 +30999,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "Wave A4 - one per-discipline-pair tolerance override row.\n\nA *rule* is the Navisworks-style \"rules tab\" entry: a coordination\ndiscipline pair (e.g. ``Structural`` × ``Mechanical``) plus a\ndiscipline-specific tolerance the engine should use *instead* of the\nrun-wide :attr:`ClashRun.tolerance_m` when both elements of a\ncandidate pair fall on that axis. The pair match is symmetric:\n``(A, B)`` and ``(B, A)`` resolve to the same rule.\n\n``severity_override`` lets a coordinator stamp every result for the\npair with a fixed severity (e.g. \"Pipe × Beam is always *high*\"),\nbypassing the geometry-derived ladder. Empty / ``None`` → keep the\nengine value. ``enabled=False`` keeps the row visible but inert -\nthe engine ignores it (handy for parking a tuning iteration without\nlosing the row). ``id`` is a stable client-generated identifier so\nReact lists can ``key`` cleanly; the backend never indexes it.",
+          "docstring": "Wave A4 - one per-discipline-pair tolerance override row.\n\nA *rule* is the coordination-tool-style \"rules tab\" entry: a coordination\ndiscipline pair (e.g. ``Structural`` × ``Mechanical``) plus a\ndiscipline-specific tolerance the engine should use *instead* of the\nrun-wide :attr:`ClashRun.tolerance_m` when both elements of a\ncandidate pair fall on that axis. The pair match is symmetric:\n``(A, B)`` and ``(B, A)`` resolve to the same rule.\n\n``severity_override`` lets a coordinator stamp every result for the\npair with a fixed severity (e.g. \"Pipe × Beam is always *high*\"),\nbypassing the geometry-derived ladder. Empty / ``None`` → keep the\nengine value. ``enabled=False`` keeps the row visible but inert -\nthe engine ignores it (handy for parking a tuning iteration without\nlosing the row). ``id`` is a stable client-generated identifier so\nReact lists can ``key`` cleanly; the backend never indexes it.",
           "fields": [
             {
               "name": "id",
@@ -31114,7 +31114,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Configure + launch a clash run.",
+          "docstring": "Configure + launch a clash run.",
           "fields": [
             {
               "name": "name",
@@ -31128,12 +31128,12 @@
             {
               "name": "clash_type",
               "type": "str",
-              "description": "hard | clearance | both - which interference an engine pass reports (Navisworks-style Type selector). 'hard' = interpenetration only; 'clearance' = proximity only; 'both' = hard, then clearance for the non-hard pairs."
+              "description": "hard | clearance | both - which interference an engine pass reports (coordination-tool-style Type selector). 'hard' = interpenetration only; 'clearance' = proximity only; 'both' = hard, then clearance for the non-hard pairs."
             },
             {
               "name": "ignore_same_model",
               "type": "bool",
-              "description": "Federated coordination noise filter: when true a pair is only reported if its two elements come from *different* BIM models (Navisworks 'ignore clashes within the same file'). Skipped - has no effect - on a single-model run."
+              "description": "Federated coordination noise filter: when true a pair is only reported if its two elements come from *different* BIM models (the coordination-tool convention of 'ignore clashes within the same file'). Skipped - has no effect - on a single-model run."
             },
             {
               "name": "tolerance_m",
@@ -31318,7 +31318,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍A single clashing pair.",
+          "docstring": "A single clashing pair.",
           "fields": [
             {
               "name": "id",
@@ -32733,7 +32733,7 @@
         {
           "class_name": "ClashTriageResult",
           "tablename": "oe_clash_triage_result",
-          "docstring": "‌⁠‍A persisted LLM triage verdict for one clash subject.\n\n``subject_type`` + ``subject_id`` form the polymorphic link to either\na ``ClashResult`` (per-run row) or a ``ClashIssue`` (cross-run\nidentity). The cache key on the service layer is\n``(subject_id, prompt_version, model_name)`` so two re-runs against\nthe same prompt + model resolve from the row instead of paying for\nanother LLM call. ``force_refresh=True`` writes a fresh row.\n\n``raw_prompt`` and ``raw_response`` are kept for audit. They are the\nSINGLE source of truth when a coordinator disputes a verdict - the\nstructured fields are derived from ``raw_response``, not from the\nother way around.",
+          "docstring": "A persisted LLM triage verdict for one clash subject.\n\n``subject_type`` + ``subject_id`` form the polymorphic link to either\na ``ClashResult`` (per-run row) or a ``ClashIssue`` (cross-run\nidentity). The cache key on the service layer is\n``(subject_id, prompt_version, model_name)`` so two re-runs against\nthe same prompt + model resolve from the row instead of paying for\nanother LLM call. ``force_refresh=True`` writes a fresh row.\n\n``raw_prompt`` and ``raw_response`` are kept for audit. They are the\nSINGLE source of truth when a coordinator disputes a verdict - the\nstructured fields are derived from ``raw_response``, not from the\nother way around.",
           "columns": [
             {
               "name": "subject_type",
@@ -34178,7 +34178,7 @@
         {
           "class_name": "Comment",
           "tablename": "oe_collaboration_comment",
-          "docstring": "‌⁠‍Threaded comment attached to any entity.",
+          "docstring": "Threaded comment attached to any entity.",
           "columns": [
             {
               "name": "entity_type",
@@ -34269,7 +34269,7 @@
         {
           "class_name": "CommentMention",
           "tablename": "oe_collaboration_mention",
-          "docstring": "‌⁠‍An @mention of a user within a comment.",
+          "docstring": "An @mention of a user within a comment.",
           "columns": [
             {
               "name": "comment_id",
@@ -34418,7 +34418,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍A single @mention to include when creating a comment.",
+          "docstring": "A single @mention to include when creating a comment.",
           "fields": [
             {
               "name": "mentioned_user_id",
@@ -34435,7 +34435,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Mention in API responses.",
+          "docstring": "Mention in API responses.",
           "fields": [
             {
               "name": "id",
@@ -34742,7 +34742,7 @@
         {
           "class_name": "CollabLock",
           "tablename": "oe_collab_lock",
-          "docstring": "‌⁠‍One active soft lock per ``(entity_type, entity_id)`` pair.",
+          "docstring": "One active soft lock per ``(entity_type, entity_id)`` pair.",
           "columns": [
             {
               "name": "org_id",
@@ -34840,7 +34840,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Payload for ``POST /collab_locks/``.",
+          "docstring": "Payload for ``POST /collab_locks/``.",
           "fields": [
             {
               "name": "entity_type",
@@ -34861,7 +34861,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Payload for ``POST /collab_locks/{lock_id}/heartbeat/``.",
+          "docstring": "Payload for ``POST /collab_locks/{lock_id}/heartbeat/``.",
           "fields": [
             {
               "name": "extend_seconds",
@@ -34984,7 +34984,7 @@
         {
           "class_name": "ComplianceDSLRule",
           "tablename": "oe_compliance_dsl_rule",
-          "docstring": "‌⁠‍A user-authored DSL validation rule.\n\n``rule_id`` is unique per tenant so two tenants in the same database\ncan both author ``custom.boq.no_zero_quantities`` without collision.\n``definition_yaml`` is the source of truth - every other column is\na denormalised hint computed at save time.",
+          "docstring": "A user-authored DSL validation rule.\n\n``rule_id`` is unique per tenant so two tenants in the same database\ncan both author ``custom.boq.no_zero_quantities`` without collision.\n``definition_yaml`` is the source of truth - every other column is\na denormalised hint computed at save time.",
           "columns": [
             {
               "name": "tenant_id",
@@ -35096,7 +35096,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Body for ``POST /dsl/validate-syntax``.\n\nEither ``definition_yaml`` (raw text) or ``definition`` (already\nparsed mapping) - exactly one must be supplied.",
+          "docstring": "Body for ``POST /dsl/validate-syntax``.\n\nEither ``definition_yaml`` (raw text) or ``definition`` (already\nparsed mapping) - exactly one must be supplied.",
           "fields": [
             {
               "name": "definition_yaml",
@@ -35148,7 +35148,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Body for ``POST /dsl/compile`` - persists + registers.",
+          "docstring": "Body for ``POST /dsl/compile`` - persists + registers.",
           "fields": [
             {
               "name": "definition_yaml",
@@ -35478,7 +35478,7 @@
         {
           "class_name": "ComplianceDoc",
           "tablename": "oe_compliance_docs_doc",
-          "docstring": "‌⁠‍A tracked compliance document (insurance / permit / bond / cert).",
+          "docstring": "A tracked compliance document (insurance / permit / bond / cert).",
           "columns": [
             {
               "name": "project_id",
@@ -35634,7 +35634,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Body for ``POST /v1/compliance_docs/``.",
+          "docstring": "Body for ``POST /v1/compliance_docs/``.",
           "fields": [
             {
               "name": "project_id",
@@ -35701,7 +35701,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Body for ``PATCH /v1/compliance_docs/{id}``.",
+          "docstring": "Body for ``PATCH /v1/compliance_docs/{id}``.",
           "fields": [
             {
               "name": "doc_type",
@@ -35893,7 +35893,7 @@
         {
           "class_name": "Contact",
           "tablename": "oe_contacts_contact",
-          "docstring": "‌⁠‍A contact entry: client, subcontractor, supplier, consultant, or internal.",
+          "docstring": "A contact entry: client, subcontractor, supplier, consultant, or internal.",
           "columns": [
             {
               "name": "contact_type",
@@ -36168,7 +36168,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Create a new contact.",
+          "docstring": "Create a new contact.",
           "fields": [
             {
               "name": "contact_type",
@@ -36617,7 +36617,7 @@
         {
           "class_name": "Contract",
           "tablename": "oe_contracts_contract",
-          "docstring": "‌⁠‍A construction contract of any type (lump-sum / GMP / cost-plus / T&M / etc.).",
+          "docstring": "A construction contract of any type (lump-sum / GMP / cost-plus / T&M / etc.).",
           "columns": [
             {
               "name": "code",
@@ -36737,7 +36737,7 @@
         {
           "class_name": "ContractLine",
           "tablename": "oe_contracts_contract_line",
-          "docstring": "‌⁠‍Schedule of values (SoV) line item belonging to a Contract.",
+          "docstring": "Schedule of values (SoV) line item belonging to a Contract.",
           "columns": [
             {
               "name": "contract_id",
@@ -37704,7 +37704,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Create a new contract.",
+          "docstring": "Create a new contract.",
           "fields": [
             {
               "name": "code",
@@ -37784,7 +37784,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Partial update for a contract.",
+          "docstring": "Partial update for a contract.",
           "fields": [
             {
               "name": "title",
@@ -39681,7 +39681,7 @@
         {
           "class_name": "CoordinationThreshold",
           "tablename": "oe_coordination_threshold",
-          "docstring": "‌⁠‍Per-project warn / error threshold for one named coordination metric.\n\nA single project may carry one row per ``metric`` value (the\n``(project_id, metric)`` pair is unique). Rows are seeded the first\ntime the project's thresholds endpoint is hit so the API never\nreturns an empty payload - the operator gets sensible defaults they\ncan then edit.\n\nThe values are :class:`~decimal.Decimal` (persisted as ``NUMERIC``)\nrather than ``float`` because some metrics (``open_cost_impact_pct_of_budget``)\nare user-facing percentages and silent float drift in the threshold\ncolumn would surface as confusing \"off-by-0.00001\" alerts.",
+          "docstring": "Per-project warn / error threshold for one named coordination metric.\n\nA single project may carry one row per ``metric`` value (the\n``(project_id, metric)`` pair is unique). Rows are seeded the first\ntime the project's thresholds endpoint is hit so the API never\nreturns an empty payload - the operator gets sensible defaults they\ncan then edit.\n\nThe values are :class:`~decimal.Decimal` (persisted as ``NUMERIC``)\nrather than ``float`` because some metrics (``open_cost_impact_pct_of_budget``)\nare user-facing percentages and silent float drift in the threshold\ncolumn would surface as confusing \"off-by-0.00001\" alerts.",
           "columns": [
             {
               "name": "project_id",
@@ -40234,7 +40234,7 @@
         {
           "class_name": "Correspondence",
           "tablename": "oe_correspondence_correspondence",
-          "docstring": "‌⁠‍A project correspondence record (letter, email, notice).",
+          "docstring": "A project correspondence record (letter, email, notice).",
           "columns": [
             {
               "name": "project_id",
@@ -40393,7 +40393,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Create a new correspondence record.",
+          "docstring": "Create a new correspondence record.",
           "fields": [
             {
               "name": "project_id",
@@ -40457,7 +40457,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Partial update for a correspondence record.",
+          "docstring": "Partial update for a correspondence record.",
           "fields": [
             {
               "name": "direction",
@@ -40682,7 +40682,7 @@
         {
           "class_name": "CostSnapshot",
           "tablename": "oe_costmodel_snapshot",
-          "docstring": "‌⁠‍Monthly cost snapshot for earned value analysis (EVM).\n\nStores BCWS (planned), BCWP (earned), and ACWP (actual) per period,\nalong with derived performance indices (SPI, CPI) and forecast EAC.",
+          "docstring": "Monthly cost snapshot for earned value analysis (EVM).\n\nStores BCWS (planned), BCWP (earned), and ACWP (actual) per period,\nalong with derived performance indices (SPI, CPI) and forecast EAC.",
           "columns": [
             {
               "name": "project_id",
@@ -40752,7 +40752,7 @@
         {
           "class_name": "BudgetLine",
           "tablename": "oe_costmodel_budget_line",
-          "docstring": "‌⁠‍Budget tracking per BOQ position or cost category.\n\nLinks planned budgets to committed contracts, actual invoices,\nand forecast amounts. Optionally tied to a BOQ position or 4D activity.",
+          "docstring": "Budget tracking per BOQ position or cost category.\n\nLinks planned budgets to committed contracts, actual invoices,\nand forecast amounts. Optionally tied to a BOQ position or 4D activity.",
           "columns": [
             {
               "name": "project_id",
@@ -40934,7 +40934,7 @@
         {
           "class_name": "ControlAccount",
           "tablename": "oe_costmodel_control_account",
-          "docstring": "‌⁠‍A control account in the project Cost Breakdown Structure (CBS).\n\nControl accounts form a tree (``parent_id`` self-reference) that mirrors\nthe chosen classification standard (DIN 276 cost groups, NRM elements,\nMasterFormat divisions, ...). Cost lines hang off the leaves. The account\ncode is unique within a project so the spine generator can upsert\naccounts idempotently while building the tree from BOQ classifications.",
+          "docstring": "A control account in the project Cost Breakdown Structure (CBS).\n\nControl accounts form a tree (``parent_id`` self-reference) that mirrors\nthe chosen classification standard (DIN 276 cost groups, NRM elements,\nMasterFormat divisions, ...). Cost lines hang off the leaves. The account\ncode is unique within a project so the spine generator can upsert\naccounts idempotently while building the tree from BOQ classifications.",
           "columns": [
             {
               "name": "project_id",
@@ -40994,7 +40994,7 @@
         {
           "class_name": "CostLine",
           "tablename": "oe_costmodel_cost_line",
-          "docstring": "‌⁠‍A single cost line in the Cost Spine - the canonical scope item.\n\nEach cost line is the single source of truth a BOQ position, budget line,\npurchase-order item, contract line, and RFQ all point at, so estimate,\nbudget, committed, actual and claimed money roll up against one row. A\ncost line may originate from the BOQ (``source='boq'`` with\n``boq_position_id`` / ``boq_id`` set) or be entered manually. ``code`` is\nunique within a project so generation can upsert deterministically.",
+          "docstring": "A single cost line in the Cost Spine - the canonical scope item.\n\nEach cost line is the single source of truth a BOQ position, budget line,\npurchase-order item, contract line, and RFQ all point at, so estimate,\nbudget, committed, actual and claimed money roll up against one row. A\ncost line may originate from the BOQ (``source='boq'`` with\n``boq_position_id`` / ``boq_id`` set) or be entered manually. ``code`` is\nunique within a project so generation can upsert deterministically.",
           "columns": [
             {
               "name": "project_id",
@@ -41308,7 +41308,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Create a new EVM cost snapshot.\n\nv3 §10 - ``planned_cost`` / ``earned_value`` / ``actual_cost`` are\nmoney; Decimal-as-string in JSON. SPI/CPI/forecast_eac stay float\n(SPI/CPI are ratios; forecast_eac is a derived metric not yet\nstandardised on Decimal - leave for a future pass).",
+          "docstring": "Create a new EVM cost snapshot.\n\nv3 §10 - ``planned_cost`` / ``earned_value`` / ``actual_cost`` are\nmoney; Decimal-as-string in JSON. SPI/CPI/forecast_eac stay float\n(SPI/CPI are ratios; forecast_eac is a derived metric not yet\nstandardised on Decimal - leave for a future pass).",
           "fields": [
             {
               "name": "project_id",
@@ -41362,7 +41362,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Partial update for an EVM snapshot.",
+          "docstring": "Partial update for an EVM snapshot.",
           "fields": [
             {
               "name": "planned_cost",
@@ -42832,7 +42832,7 @@
         "name": "oe_costs",
         "version": "0.1.0",
         "display_name": "Cost Database",
-        "description": "Cost item management, rate databases (CWICR, RSMeans, BKI), bulk import",
+        "description": "Cost item management, rate databases (CWICR and regional catalogues), bulk import",
         "author": "OpenConstructionERP Core Team",
         "category": "core",
         "depends": [],
@@ -42843,7 +42843,7 @@
         {
           "class_name": "CostItem",
           "tablename": "oe_costs_item",
-          "docstring": "‌⁠‍A single cost database entry (rate, unit price, assembly component).",
+          "docstring": "A single cost database entry (rate, unit price, assembly component).",
           "columns": [
             {
               "name": "code",
@@ -42929,7 +42929,7 @@
         {
           "class_name": "RegionalIndex",
           "tablename": "oe_regional_indices",
-          "docstring": "‌⁠‍Regional cost-factor row (region × category × effective_date).\n\nBacks ``GET /v1/costs/regional-adjust`` - given a base rate, the\nservice multiplies by ``factor`` to estimate the same line item's\ncost in a different region (RSMeans-style city cost index).\n\nMultiple rows per (region_code, category) are allowed when\n``effective_date`` differs so escalation feeds (v3.13.0) can append\nquarter-on-quarter snapshots without losing history. The lookup\nalways picks the row with the largest ``effective_date`` that is\nnot in the future.",
+          "docstring": "Regional cost-factor row (region × category × effective_date).\n\nBacks ``GET /v1/costs/regional-adjust`` - given a base rate, the\nservice multiplies by ``factor`` to estimate the same line item's\ncost in a different region (RSMeans-style city cost index).\n\nMultiple rows per (region_code, category) are allowed when\n``effective_date`` differs so escalation feeds (v3.13.0) can append\nquarter-on-quarter snapshots without losing history. The lookup\nalways picks the row with the largest ``effective_date`` that is\nnot in the future.",
           "columns": [
             {
               "name": "region_code",
@@ -42973,7 +42973,7 @@
         {
           "class_name": "CostItemUsage",
           "tablename": "oe_cost_item_usage",
-          "docstring": "‌⁠‍Append-only usage ledger for a single ``CostItem``.\n\nOne row per \"rate was applied to a BOQ position / assembly /\ntender\". The certainty badge reads ``count(*) + max(used_at)`` from\nthis table to grade rate freshness:\n\n* green  - used ≥ 10× AND last use < 365 days ago\n* yellow - used 3..9× OR last use 365..1095 days ago\n* red    - everything else (never used, or very old)\n\nPure append: no updates, no deletes (CASCADE wipes rows when the\nparent cost item is deleted). Index on ``(cost_item_id,\nused_at DESC)`` matches the badge's \"latest N rows\" query.",
+          "docstring": "Append-only usage ledger for a single ``CostItem``.\n\nOne row per \"rate was applied to a BOQ position / assembly /\ntender\". The certainty badge reads ``count(*) + max(used_at)`` from\nthis table to grade rate freshness:\n\n* green  - used ≥ 10× AND last use < 365 days ago\n* yellow - used 3..9× OR last use 365..1095 days ago\n* red    - everything else (never used, or very old)\n\nPure append: no updates, no deletes (CASCADE wipes rows when the\nparent cost item is deleted). Index on ``(cost_item_id,\nused_at DESC)`` matches the badge's \"latest N rows\" query.",
           "columns": [
             {
               "name": "cost_item_id",
@@ -43268,7 +43268,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Create a new cost item.",
+          "docstring": "Create a new cost item.",
           "fields": [
             {
               "name": "code",
@@ -43303,7 +43303,7 @@
             {
               "name": "source",
               "type": "str",
-              "description": "Data source (e.g. cwicr, rsmeans, manual)"
+              "description": "Data source (e.g. cwicr, manual)"
             },
             {
               "name": "classification",
@@ -43337,7 +43337,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Update a cost item (all fields optional).",
+          "docstring": "Update a cost item (all fields optional).",
           "fields": [
             {
               "name": "code",
@@ -43955,7 +43955,7 @@
             {
               "name": "source",
               "type": "str",
-              "description": "Underlying CostItem.source (cwicr, rsmeans, manual, …)"
+              "description": "Underlying CostItem.source (cwicr, manual, …)"
             },
             {
               "name": "confidence_badge",
@@ -44133,7 +44133,7 @@
         {
           "class_name": "PipelineStage",
           "tablename": "oe_crm_pipeline_stage",
-          "docstring": "‌⁠‍A configurable stage in the sales pipeline (Lead → Won/Lost).",
+          "docstring": "A configurable stage in the sales pipeline (Lead → Won/Lost).",
           "columns": [
             {
               "name": "code",
@@ -44189,7 +44189,7 @@
         {
           "class_name": "WinLossReason",
           "tablename": "oe_crm_win_loss_reason",
-          "docstring": "‌⁠‍Catalogue entry for the reason an opportunity was won or lost.",
+          "docstring": "Catalogue entry for the reason an opportunity was won or lost.",
           "columns": [
             {
               "name": "code",
@@ -46502,7 +46502,7 @@
         {
           "class_name": "DailyDiary",
           "tablename": "oe_daily_diary_diary",
-          "docstring": "‌⁠‍Daily site diary header - one per project per calendar day.",
+          "docstring": "Daily site diary header - one per project per calendar day.",
           "columns": [
             {
               "name": "project_id",
@@ -46600,7 +46600,7 @@
         {
           "class_name": "WeatherRecord",
           "tablename": "oe_daily_diary_weather",
-          "docstring": "‌⁠‍Granular weather record. Multiple per day per project.",
+          "docstring": "Granular weather record. Multiple per day per project.",
           "columns": [
             {
               "name": "project_id",
@@ -47536,7 +47536,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Create a new daily diary.",
+          "docstring": "Create a new daily diary.",
           "fields": [
             {
               "name": "project_id",
@@ -47578,7 +47578,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Partial update for a daily diary.",
+          "docstring": "Partial update for a daily diary.",
           "fields": [
             {
               "name": "site_supervisor_id",
@@ -50687,7 +50687,7 @@
         {
           "class_name": "Snapshot",
           "tablename": "oe_dashboards_snapshot",
-          "docstring": "‌⁠‍One named Parquet dump of a project's entity data.\n\nA snapshot is immutable once created - re-running cad2data produces\na fresh snapshot with a new id. Users compare snapshots via the\nhistorical navigator (T11); they never edit an existing one.\n\nThe ``parquet_dir`` column stores the *storage key prefix* (as\ncomposed by :func:`snapshot_storage.snapshot_prefix`), not a\nfilesystem path - that way moving from local to S3 does not rewrite\nany row in the DB.",
+          "docstring": "One named Parquet dump of a project's entity data.\n\nA snapshot is immutable once created - re-running cad2data produces\na fresh snapshot with a new id. Users compare snapshots via the\nhistorical navigator (T11); they never edit an existing one.\n\nThe ``parquet_dir`` column stores the *storage key prefix* (as\ncomposed by :func:`snapshot_storage.snapshot_prefix`), not a\nfilesystem path - that way moving from local to S3 does not rewrite\nany row in the DB.",
           "columns": [
             {
               "name": "project_id",
@@ -50757,7 +50757,7 @@
         {
           "class_name": "SnapshotSourceFile",
           "tablename": "oe_dashboards_source_file",
-          "docstring": "‌⁠‍Per-file descriptor inside a snapshot.\n\nPopulated by the cad2data bridge during snapshot creation. One row\nper uploaded file. The discipline free-text is user-provided at\nupload time (``\"architecture\"`` / ``\"structure\"`` / ``\"mep\"`` /\n``\"civil\"`` - no enum because regional naming varies).",
+          "docstring": "Per-file descriptor inside a snapshot.\n\nPopulated by the cad2data bridge during snapshot creation. One row\nper uploaded file. The discipline free-text is user-provided at\nupload time (``\"architecture\"`` / ``\"structure\"`` / ``\"mep\"`` /\n``\"civil\"`` - no enum because regional naming varies).",
           "columns": [
             {
               "name": "snapshot_id",
@@ -51086,7 +51086,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍List-row shape. No ``source_files`` - list views don't need them.",
+          "docstring": "List-row shape. No ``source_files`` - list views don't need them.",
           "fields": [
             {
               "name": "id",
@@ -51127,7 +51127,7 @@
           "bases": [
             "SnapshotSummaryOut"
           ],
-          "docstring": "‌⁠‍Detail-view shape including source-file descriptors.",
+          "docstring": "Detail-view shape including source-file descriptors.",
           "fields": [
             {
               "name": "parquet_dir",
@@ -52338,7 +52338,7 @@
         {
           "class_name": "Document",
           "tablename": "oe_documents_document",
-          "docstring": "‌⁠‍Uploaded project document with metadata and categorization.",
+          "docstring": "Uploaded project document with metadata and categorization.",
           "columns": [
             {
               "name": "project_id",
@@ -52471,7 +52471,7 @@
         {
           "class_name": "ProjectPhoto",
           "tablename": "oe_documents_photo",
-          "docstring": "‌⁠‍Project photo with EXIF/GPS metadata for site documentation gallery.",
+          "docstring": "Project photo with EXIF/GPS metadata for site documentation gallery.",
           "columns": [
             {
               "name": "project_id",
@@ -52971,7 +52971,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Partial update for a document.",
+          "docstring": "Partial update for a document.",
           "fields": [
             {
               "name": "name",
@@ -53041,7 +53041,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Document returned from the API.",
+          "docstring": "Document returned from the API.",
           "fields": [
             {
               "name": "id",
@@ -54021,7 +54021,7 @@
         {
           "class_name": "DwgDrawing",
           "tablename": "oe_dwg_takeoff_drawing",
-          "docstring": "‌⁠‍Uploaded DWG/DXF drawing file.",
+          "docstring": "Uploaded DWG/DXF drawing file.",
           "columns": [
             {
               "name": "project_id",
@@ -54121,7 +54121,7 @@
         {
           "class_name": "DwgDrawingVersion",
           "tablename": "oe_dwg_takeoff_drawing_version",
-          "docstring": "‌⁠‍Parsed version of a DWG/DXF drawing with extracted layers and entities.",
+          "docstring": "Parsed version of a DWG/DXF drawing with extracted layers and entities.",
           "columns": [
             {
               "name": "drawing_id",
@@ -54508,7 +54508,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Create a new DWG drawing record (file uploaded separately via multipart).",
+          "docstring": "Create a new DWG drawing record (file uploaded separately via multipart).",
           "fields": [
             {
               "name": "project_id",
@@ -54558,7 +54558,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍DWG drawing returned from the API.",
+          "docstring": "DWG drawing returned from the API.",
           "fields": [
             {
               "name": "id",
@@ -55432,7 +55432,7 @@
         {
           "class_name": "EacRuleset",
           "tablename": "oe_eac_ruleset",
-          "docstring": "‌⁠‍Logical bundle of rules.\n\nA ruleset groups rules sharing context: a BoQ extraction pack, a\nvalidation suite, a clash matrix, etc. Rulesets nest via\n``parent_ruleset_id`` so users can compose a \"DACH residential\"\nruleset out of \"DIN 276 base\" + \"Berlin overrides\".",
+          "docstring": "Logical bundle of rules.\n\nA ruleset groups rules sharing context: a BoQ extraction pack, a\nvalidation suite, a clash matrix, etc. Rulesets nest via\n``parent_ruleset_id`` so users can compose a \"DACH residential\"\nruleset out of \"DIN 276 base\" + \"Berlin overrides\".",
           "columns": [
             {
               "name": "name",
@@ -55520,7 +55520,7 @@
         {
           "class_name": "EacRule",
           "tablename": "oe_eac_rule",
-          "docstring": "‌⁠‍Declarative rule. Body lives in ``definition_json``.\n\nThe Python and TypeScript layers never branch on rule shape - they\nparse ``definition_json`` against the ``EacRuleDefinition`` JSON\nSchema. This lets us version the schema and ship marketplace rule\npacks without code changes (RFC 35 L12).",
+          "docstring": "Declarative rule. Body lives in ``definition_json``.\n\nThe Python and TypeScript layers never branch on rule shape - they\nparse ``definition_json`` against the ``EacRuleDefinition`` JSON\nSchema. This lets us version the schema and ship marketplace rule\npacks without code changes (RFC 35 L12).",
           "columns": [
             {
               "name": "ruleset_id",
@@ -57093,7 +57093,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Rule-scoped named expression resolved before predicates / formulas.",
+          "docstring": "Rule-scoped named expression resolved before predicates / formulas.",
           "fields": [
             {
               "name": "name",
@@ -57120,7 +57120,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Configuration for clash output mode.",
+          "docstring": "Configuration for clash output mode.",
           "fields": [
             {
               "name": "set_a",
@@ -57294,7 +57294,7 @@
         {
           "class_name": "ApprovalWorkflow",
           "tablename": "oe_workflows_approval",
-          "docstring": "‌⁠‍A configurable approval workflow definition.",
+          "docstring": "A configurable approval workflow definition.",
           "columns": [
             {
               "name": "project_id",
@@ -57351,7 +57351,7 @@
         {
           "class_name": "ApprovalRequest",
           "tablename": "oe_workflows_request",
-          "docstring": "‌⁠‍An individual approval request submitted against a workflow.",
+          "docstring": "An individual approval request submitted against a workflow.",
           "columns": [
             {
               "name": "workflow_id",
@@ -57510,7 +57510,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Create a new approval workflow.",
+          "docstring": "Create a new approval workflow.",
           "fields": [
             {
               "name": "project_id",
@@ -57550,7 +57550,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Partial update for a workflow.",
+          "docstring": "Partial update for a workflow.",
           "fields": [
             {
               "name": "project_id",
@@ -57834,7 +57834,7 @@
         {
           "class_name": "EquipmentType",
           "tablename": "oe_equipment_type",
-          "docstring": "‌⁠‍Catalog of equipment types with default maintenance intervals.",
+          "docstring": "Catalog of equipment types with default maintenance intervals.",
           "columns": [
             {
               "name": "code",
@@ -57884,7 +57884,7 @@
         {
           "class_name": "Equipment",
           "tablename": "oe_equipment_equipment",
-          "docstring": "‌⁠‍A single piece of equipment in the fleet.",
+          "docstring": "A single piece of equipment in the fleet.",
           "columns": [
             {
               "name": "code",
@@ -58883,7 +58883,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Create a new equipment type catalog entry.",
+          "docstring": "Create a new equipment type catalog entry.",
           "fields": [
             {
               "name": "code",
@@ -58923,7 +58923,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Partial update for an equipment type.",
+          "docstring": "Partial update for an equipment type.",
           "fields": [
             {
               "name": "name",
@@ -60726,7 +60726,7 @@
         {
           "class_name": "ChatSession",
           "tablename": "oe_erp_chat_session",
-          "docstring": "‌⁠‍A single chat session between a user and the ERP AI assistant.",
+          "docstring": "A single chat session between a user and the ERP AI assistant.",
           "columns": [
             {
               "name": "user_id",
@@ -60765,7 +60765,7 @@
         {
           "class_name": "ChatMessage",
           "tablename": "oe_erp_chat_message",
-          "docstring": "‌⁠‍A single message in a chat session.",
+          "docstring": "A single message in a chat session.",
           "columns": [
             {
               "name": "session_id",
@@ -60861,7 +60861,7 @@
         {
           "class_name": "ChatTurnFeedback",
           "tablename": "oe_erp_chat_turn_feedback",
-          "docstring": "‌⁠‍User-supplied thumbs up/down on a single assistant message.\n\nOne row per ``(message_id, user_id)``. Re-submitting on the same\npair updates the rating in place - see\n:meth:`ERPChatService.submit_feedback`.",
+          "docstring": "User-supplied thumbs up/down on a single assistant message.\n\nOne row per ``(message_id, user_id)``. Re-submitting on the same\npair updates the rating in place - see\n:meth:`ERPChatService.submit_feedback`.",
           "columns": [
             {
               "name": "message_id",
@@ -60956,7 +60956,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Request body for the streaming chat endpoint.",
+          "docstring": "Request body for the streaming chat endpoint.",
           "fields": [
             {
               "name": "session_id",
@@ -60984,7 +60984,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Chat session returned from the API.",
+          "docstring": "Chat session returned from the API.",
           "fields": [
             {
               "name": "id",
@@ -61109,7 +61109,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Body for ``POST /v1/erp_chat/messages/{id}/feedback``.",
+          "docstring": "Body for ``POST /v1/erp_chat/messages/{id}/feedback``.",
           "fields": [
             {
               "name": "rating",
@@ -61126,7 +61126,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Echo of the persisted feedback row.",
+          "docstring": "Echo of the persisted feedback row.",
           "fields": [
             {
               "name": "id",
@@ -61165,7 +61165,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍One row of the admin-stats daily breakdown.",
+          "docstring": "One row of the admin-stats daily breakdown.",
           "fields": [
             {
               "name": "date",
@@ -61194,7 +61194,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍One of the top user-prompts that received a thumbs-down.",
+          "docstring": "One of the top user-prompts that received a thumbs-down.",
           "fields": [
             {
               "name": "snippet",
@@ -61216,7 +61216,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Admin observability rollup over a ``window_days`` window.",
+          "docstring": "Admin observability rollup over a ``window_days`` window.",
           "fields": [
             {
               "name": "window_days",
@@ -62588,7 +62588,7 @@
         {
           "class_name": "FieldReport",
           "tablename": "oe_fieldreports_report",
-          "docstring": "‌⁠‍A field report documenting on-site conditions, workforce, and activities.",
+          "docstring": "A field report documenting on-site conditions, workforce, and activities.",
           "columns": [
             {
               "name": "project_id",
@@ -62778,7 +62778,7 @@
         {
           "class_name": "SiteWorkforceLog",
           "tablename": "oe_fieldreports_workforce",
-          "docstring": "‌⁠‍Structured workforce log entry linked to a field report.\n\nTracks headcount, hours worked, and overtime per trade/company\nfor a single day's report.",
+          "docstring": "Structured workforce log entry linked to a field report.\n\nTracks headcount, hours worked, and overtime per trade/company\nfor a single day's report.",
           "columns": [
             {
               "name": "field_report_id",
@@ -62900,7 +62900,7 @@
         {
           "class_name": "FieldReportTemplate",
           "tablename": "oe_fieldreports_template",
-          "docstring": "‌⁠‍A reusable report template - a named, ordered set of custom fields.\n\nProject-scoped: ``project_id`` is always set so the standard\nproject-access / IDOR guard applies exactly like every other\nfield-reports endpoint. Built-in templates (Daily Site Report,\nSafety Walk, Progress Report) are *code-defined* and merged in by\nthe service layer - they are never stored as rows, so a fresh\ninstall needs no seed migration.\n\n``fields`` is an ordered list of field definitions, each::\n\n    {\"key\": \"weather_summary\",\n     \"label\": \"Weather summary\",\n     \"type\": \"text\" | \"textarea\" | \"number\" | \"select\" | \"date\" | \"checkbox\",\n     \"required\": false,\n     \"options\": [\"Dry\", \"Wet\"],   # only for type == \"select\"\n     \"placeholder\": \"…\"}",
+          "docstring": "A reusable report template - a named, ordered set of custom fields.\n\nProject-scoped: ``project_id`` is always set so the standard\nproject-access / IDOR guard applies exactly like every other\nfield-reports endpoint. Built-in templates (Daily Site Report,\nSafety Walk, Progress Report) are *code-defined* and merged in by\nthe service layer - they are never stored as rows, so a fresh\ninstall needs no seed migration.\n\n``fields`` is an ordered list of field definitions, each::\n\n    {\"key\": \"weather_summary\",\n     \"label\": \"Weather summary\",\n     \"type\": \"text\" | \"textarea\" | \"number\" | \"select\" | \"date\" | \"checkbox\",\n     \"required\": false,\n     \"options\": [\"Dry\", \"Wet\"],   # only for type == \"select\"\n     \"placeholder\": \"…\"}",
           "columns": [
             {
               "name": "project_id",
@@ -63156,7 +63156,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍A single workforce entry: trade + count + hours.",
+          "docstring": "A single workforce entry: trade + count + hours.",
           "fields": [
             {
               "name": "trade",
@@ -63177,7 +63177,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Create a new field report.",
+          "docstring": "Create a new field report.",
           "fields": [
             {
               "name": "project_id",
@@ -68702,7 +68702,7 @@
         {
           "class_name": "Invoice",
           "tablename": "oe_finance_invoice",
-          "docstring": "‌⁠‍A payable or receivable invoice linked to a project.",
+          "docstring": "A payable or receivable invoice linked to a project.",
           "columns": [
             {
               "name": "project_id",
@@ -68831,7 +68831,7 @@
         {
           "class_name": "InvoiceLineItem",
           "tablename": "oe_finance_invoice_item",
-          "docstring": "‌⁠‍A single line item within an invoice.",
+          "docstring": "A single line item within an invoice.",
           "columns": [
             {
               "name": "invoice_id",
@@ -72175,7 +72175,7 @@
         {
           "class_name": "EVMForecast",
           "tablename": "oe_evm_forecast",
-          "docstring": "‌⁠‍Advanced EVM forecast with ETC, EAC, VAC, and TCPI metrics.",
+          "docstring": "Advanced EVM forecast with ETC, EAC, VAC, and TCPI metrics.",
           "columns": [
             {
               "name": "project_id",
@@ -72288,7 +72288,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Manually create an EVM forecast record.",
+          "docstring": "Manually create an EVM forecast record.",
           "fields": [
             {
               "name": "project_id",
@@ -72342,7 +72342,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍EVM forecast returned from the API.",
+          "docstring": "EVM forecast returned from the API.",
           "fields": [
             {
               "name": "id",
@@ -75530,7 +75530,7 @@
         {
           "class_name": "HSEIncidentInvestigation",
           "tablename": "oe_hse_advanced_incident_investigation",
-          "docstring": "‌⁠‍In-depth root-cause investigation of a safety incident.",
+          "docstring": "In-depth root-cause investigation of a safety incident.",
           "columns": [
             {
               "name": "incident_ref",
@@ -75600,7 +75600,7 @@
         {
           "class_name": "JobSafetyAnalysis",
           "tablename": "oe_hse_advanced_jsa",
-          "docstring": "‌⁠‍JSA - Job Safety Analysis (a.k.a. Job Hazard Analysis).",
+          "docstring": "JSA - Job Safety Analysis (a.k.a. Job Hazard Analysis).",
           "columns": [
             {
               "name": "project_id",
@@ -77016,7 +77016,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Create a new incident investigation.",
+          "docstring": "Create a new incident investigation.",
           "fields": [
             {
               "name": "incident_ref",
@@ -77058,7 +77058,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Partial update for an investigation.",
+          "docstring": "Partial update for an investigation.",
           "fields": [
             {
               "name": "investigation_lead",
@@ -79373,7 +79373,7 @@
         {
           "class_name": "ExchangeRate",
           "tablename": "oe_i18n_exchange_rate",
-          "docstring": "‌⁠‍Currency exchange rate entry.\n\nStores exchange rates between currency pairs. Rates are stored as strings\nfor SQLite compatibility. Supports manual entry and automated feeds (ECB, custom).",
+          "docstring": "Currency exchange rate entry.\n\nStores exchange rates between currency pairs. Rates are stored as strings\nfor SQLite compatibility. Supports manual entry and automated feeds (ECB, custom).",
           "columns": [
             {
               "name": "from_currency",
@@ -79423,7 +79423,7 @@
         {
           "class_name": "Country",
           "tablename": "oe_i18n_country",
-          "docstring": "‌⁠‍Country registry entry.\n\nStores ISO country codes, localized names, default currency/measurement,\nand regional grouping. Name translations are stored as a JSON dict for\nfast queries without joins.",
+          "docstring": "Country registry entry.\n\nStores ISO country codes, localized names, default currency/measurement,\nand regional grouping. Name translations are stored as a JSON dict for\nfast queries without joins.",
           "columns": [
             {
               "name": "iso_code",
@@ -79758,7 +79758,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Create a new exchange rate entry.",
+          "docstring": "Create a new exchange rate entry.",
           "fields": [
             {
               "name": "from_currency",
@@ -79795,7 +79795,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Update an exchange rate (all fields optional).",
+          "docstring": "Update an exchange rate (all fields optional).",
           "fields": [
             {
               "name": "from_currency",
@@ -80485,7 +80485,7 @@
         {
           "class_name": "QualityInspection",
           "tablename": "oe_inspections_inspection",
-          "docstring": "‌⁠‍A quality inspection record with checklist and pass/fail result.",
+          "docstring": "A quality inspection record with checklist and pass/fail result.",
           "columns": [
             {
               "name": "project_id",
@@ -80655,7 +80655,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍A single checklist item within an inspection.",
+          "docstring": "A single checklist item within an inspection.",
           "fields": [
             {
               "name": "id",
@@ -80694,7 +80694,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Create a new quality inspection.",
+          "docstring": "Create a new quality inspection.",
           "fields": [
             {
               "name": "project_id",
@@ -80929,7 +80929,7 @@
         {
           "class_name": "WebhookEndpoint",
           "tablename": "oe_integrations_webhook",
-          "docstring": "‌⁠‍A user-configured outgoing webhook endpoint.\n\nWhen events matching the ``events`` list occur, an HTTP POST is sent\nto ``url`` with a JSON payload.  If a ``secret`` is set, the request\nincludes an ``X-Webhook-Signature`` header (HMAC-SHA256).",
+          "docstring": "A user-configured outgoing webhook endpoint.\n\nWhen events matching the ``events`` list occur, an HTTP POST is sent\nto ``url`` with a JSON payload.  If a ``secret`` is set, the request\nincludes an ``X-Webhook-Signature`` header (HMAC-SHA256).",
           "columns": [
             {
               "name": "user_id",
@@ -81007,7 +81007,7 @@
         {
           "class_name": "WebhookDelivery",
           "tablename": "oe_integrations_delivery",
-          "docstring": "‌⁠‍Log entry for a single webhook delivery attempt.",
+          "docstring": "Log entry for a single webhook delivery attempt.",
           "columns": [
             {
               "name": "webhook_id",
@@ -81210,7 +81210,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Create a new integration config (Teams, Slack, Telegram, etc.).",
+          "docstring": "Create a new integration config (Teams, Slack, Telegram, etc.).",
           "fields": [
             {
               "name": "project_id",
@@ -81251,7 +81251,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Partial update for an integration config.",
+          "docstring": "Partial update for an integration config.",
           "fields": [
             {
               "name": "name",
@@ -81639,7 +81639,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Read-only view of a JobRun row.\n\nMirrors the columns on :class:`app.core.job_run.JobRun` that are\nsafe and useful to expose over HTTP. Mutating fields (payload,\ncelery_task_id) are intentionally omitted from the public surface\nto keep the contract tight.",
+          "docstring": "Read-only view of a JobRun row.\n\nMirrors the columns on :class:`app.core.job_run.JobRun` that are\nsafe and useful to expose over HTTP. Mutating fields (payload,\ncelery_task_id) are intentionally omitted from the public surface\nto keep the contract tight.",
           "fields": [
             {
               "name": "id",
@@ -81710,7 +81710,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Paginated list payload for ``GET /jobs``.",
+          "docstring": "Paginated list payload for ``GET /jobs``.",
           "fields": [
             {
               "name": "items",
@@ -81802,7 +81802,7 @@
         {
           "class_name": "Markup",
           "tablename": "oe_markups_markup",
-          "docstring": "‌⁠‍Drawing markup annotation on a project document page.",
+          "docstring": "Drawing markup annotation on a project document page.",
           "columns": [
             {
               "name": "project_id",
@@ -81944,7 +81944,7 @@
         {
           "class_name": "ScaleConfig",
           "tablename": "oe_markups_scale_config",
-          "docstring": "‌⁠‍Scale calibration for a document page (pixels-to-real-world mapping).",
+          "docstring": "Scale calibration for a document page (pixels-to-real-world mapping).",
           "columns": [
             {
               "name": "document_id",
@@ -82076,7 +82076,7 @@
         {
           "class_name": "MarkupComment",
           "tablename": "oe_markups_comment",
-          "docstring": "‌⁠‍Threaded comment attached to a markup.\n\nComments are flat per markup (no nested replies in v1). Authorisation\nis delegated to the parent markup's project - anyone with project\nread access can list/post; deletion is restricted to the author or\nproject owner via the router layer.",
+          "docstring": "Threaded comment attached to a markup.\n\nComments are flat per markup (no nested replies in v1). Authorisation\nis delegated to the parent markup's project - anyone with project\nread access can list/post; deletion is restricted to the author or\nproject owner via the router layer.",
           "columns": [
             {
               "name": "markup_id",
@@ -82238,7 +82238,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Create a new markup annotation.",
+          "docstring": "Create a new markup annotation.",
           "fields": [
             {
               "name": "project_id",
@@ -82330,7 +82330,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Partial update for a markup annotation.",
+          "docstring": "Partial update for a markup annotation.",
           "fields": [
             {
               "name": "document_id",
@@ -83013,7 +83013,7 @@
         {
           "class_name": "MatchSession",
           "tablename": "oe_match_elements_session",
-          "docstring": "‌⁠‍A user's matching session for a single project + source.\n\nSessions are durable so estimators can pause and come back. The\n``group_by`` and ``filters`` columns are the live config; changes\nrebuild groups on the fly via the source adapter.",
+          "docstring": "A user's matching session for a single project + source.\n\nSessions are durable so estimators can pause and come back. The\n``group_by`` and ``filters`` columns are the live config; changes\nrebuild groups on the fly via the source adapter.",
           "columns": [
             {
               "name": "project_id",
@@ -83120,7 +83120,7 @@
         {
           "class_name": "MatchGroup",
           "tablename": "oe_match_elements_group",
-          "docstring": "‌⁠‍A single group within a session - N elements that share group-by values.\n\n``group_key`` is the human-readable composite key\n(``\"ifc_class:IfcWall|material:STB|thickness:240\"``). ``signature`` is the\ncanonical hash used for cross-project lookup in ``oe_match_elements_template``.",
+          "docstring": "A single group within a session - N elements that share group-by values.\n\n``group_key`` is the human-readable composite key\n(``\"ifc_class:IfcWall|material:STB|thickness:240\"``). ``signature`` is the\ncanonical hash used for cross-project lookup in ``oe_match_elements_template``.",
           "columns": [
             {
               "name": "session_id",
@@ -84056,7 +84056,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Compact session row for the resume picker.",
+          "docstring": "Compact session row for the resume picker.",
           "fields": [
             {
               "name": "id",
@@ -84117,7 +84117,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍One row in the group grid - summary fields only.",
+          "docstring": "One row in the group grid - summary fields only.",
           "fields": [
             {
               "name": "id",
@@ -85500,7 +85500,7 @@
         {
           "class_name": "Meeting",
           "tablename": "oe_meetings_meeting",
-          "docstring": "‌⁠‍A project meeting with agenda, attendees, and action items.",
+          "docstring": "A project meeting with agenda, attendees, and action items.",
           "columns": [
             {
               "name": "project_id",
@@ -85625,7 +85625,7 @@
         {
           "class_name": "MeetingAttendance",
           "tablename": "oe_meetings_attendance",
-          "docstring": "‌⁠‍Per-meeting attendance check-in record.\n\nDistinct from the JSON ``Meeting.attendees`` array because check-in\nis a transactional event (timestamped) and may carry a signature\nimage blob on disk.  Either ``user_id`` (system user) or\n``external_name`` (walk-in, non-system) identifies the attendee.",
+          "docstring": "Per-meeting attendance check-in record.\n\nDistinct from the JSON ``Meeting.attendees`` array because check-in\nis a transactional event (timestamped) and may carry a signature\nimage blob on disk.  Either ``user_id`` (system user) or\n``external_name`` (walk-in, non-system) identifies the attendee.",
           "columns": [
             {
               "name": "meeting_id",
@@ -85786,7 +85786,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍A single attendee entry.",
+          "docstring": "A single attendee entry.",
           "fields": [
             {
               "name": "user_id",
@@ -85812,7 +85812,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍A single agenda item.",
+          "docstring": "A single agenda item.",
           "fields": [
             {
               "name": "number",
@@ -87244,7 +87244,7 @@
         {
           "class_name": "NCR",
           "tablename": "oe_ncr_ncr",
-          "docstring": "‌⁠‍A Non-Conformance Report with root cause analysis and corrective/preventive actions.",
+          "docstring": "A Non-Conformance Report with root cause analysis and corrective/preventive actions.",
           "columns": [
             {
               "name": "project_id",
@@ -87421,7 +87421,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Create a new NCR.",
+          "docstring": "Create a new NCR.",
           "fields": [
             {
               "name": "project_id",
@@ -87494,7 +87494,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Partial update for an NCR.",
+          "docstring": "Partial update for an NCR.",
           "fields": [
             {
               "name": "title",
@@ -87710,7 +87710,7 @@
         {
           "class_name": "Notification",
           "tablename": "oe_notifications_notification",
-          "docstring": "‌⁠‍In-app notification for a single user.\n\nNotifications use i18n keys (``title_key``, ``body_key``) so the frontend\ncan render them in the user's locale.  ``body_context`` carries interpolation\nvariables for the translation template.",
+          "docstring": "In-app notification for a single user.\n\nNotifications use i18n keys (``title_key``, ``body_key``) so the frontend\ncan render them in the user's locale.  ``body_context`` carries interpolation\nvariables for the translation template.",
           "columns": [
             {
               "name": "user_id",
@@ -87786,7 +87786,7 @@
         {
           "class_name": "NotificationPreference",
           "tablename": "oe_notification_preference",
-          "docstring": "‌⁠‍Per-user, per-event-type, per-channel notification routing.\n\nLooked up by :func:`NotificationService.enqueue_or_dispatch` to decide\nwhether to dispatch an event to the in-app sink immediately, route it\nthrough email/webhook, or queue it for the hourly/daily digest.",
+          "docstring": "Per-user, per-event-type, per-channel notification routing.\n\nLooked up by :func:`NotificationService.enqueue_or_dispatch` to decide\nwhether to dispatch an event to the in-app sink immediately, route it\nthrough email/webhook, or queue it for the hourly/daily digest.",
           "columns": [
             {
               "name": "user_id",
@@ -87826,7 +87826,7 @@
         {
           "class_name": "NotificationDigestQueue",
           "tablename": "oe_notification_digest_queue",
-          "docstring": "‌⁠‍Queued notification payload waiting for the next digest flush.\n\n``scheduled_for`` is set when the row is created - ``now() + interval``\nwhere the interval depends on the user's chosen digest cadence\n(``hourly`` → +1h, ``daily`` → next 09:00 local UTC).  The flusher\npicks up every row with ``scheduled_for <= now AND sent_at IS NULL``,\ngroups by ``(user_id, channel)``, sends one combined notification per\ngroup, and marks the rows as sent.",
+          "docstring": "Queued notification payload waiting for the next digest flush.\n\n``scheduled_for`` is set when the row is created - ``now() + interval``\nwhere the interval depends on the user's chosen digest cadence\n(``hourly`` → +1h, ``daily`` → next 09:00 local UTC).  The flusher\npicks up every row with ``scheduled_for <= now AND sent_at IS NULL``,\ngroups by ``(user_id, channel)``, sends one combined notification per\ngroup, and marks the rows as sent.",
           "columns": [
             {
               "name": "user_id",
@@ -87872,7 +87872,7 @@
         {
           "class_name": "WebhookTarget",
           "tablename": "oe_notification_webhook_target",
-          "docstring": "‌⁠‍Admin-managed webhook endpoint that consumes ``notifications.dispatch.webhook``.\n\nEach row is one outbound POST destination.  When the notification\ndispatcher fires a ``webhook`` channel, every active target whose\n``event_filter`` matches the event type receives the payload as\nJSON.  ``secret`` is optional; when set it is included as a\nHMAC-SHA256 signature in the ``X-OE-Signature`` header so\ndownstream services can verify authenticity.\n\nIdempotency: the dispatcher uses a per-event UUID4 idempotency key\nthat downstream consumers can dedupe on.  ``failure_count`` /\n``last_status`` track the most recent delivery so the Admin UI can\nsurface broken endpoints without trawling logs.\n\nNOT scoped to ``user_id`` - webhooks are tenant-global plumbing,\nnot per-user channels.  RBAC at the router edge restricts CRUD to\nadmins.",
+          "docstring": "Admin-managed webhook endpoint that consumes ``notifications.dispatch.webhook``.\n\nEach row is one outbound POST destination.  When the notification\ndispatcher fires a ``webhook`` channel, every active target whose\n``event_filter`` matches the event type receives the payload as\nJSON.  ``secret`` is optional; when set it is included as a\nHMAC-SHA256 signature in the ``X-OE-Signature`` header so\ndownstream services can verify authenticity.\n\nIdempotency: the dispatcher uses a per-event UUID4 idempotency key\nthat downstream consumers can dedupe on.  ``failure_count`` /\n``last_status`` track the most recent delivery so the Admin UI can\nsurface broken endpoints without trawling logs.\n\nNOT scoped to ``user_id`` - webhooks are tenant-global plumbing,\nnot per-user channels.  RBAC at the router edge restricts CRUD to\nadmins.",
           "columns": [
             {
               "name": "name",
@@ -88102,7 +88102,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Paginated notification list.",
+          "docstring": "Paginated notification list.",
           "fields": [
             {
               "name": "items",
@@ -88479,7 +88479,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍A single supported API version.",
+          "docstring": "A single supported API version.",
           "fields": [
             {
               "name": "api_id",
@@ -88501,7 +88501,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Response for GET /foundation/versions.",
+          "docstring": "Response for GET /foundation/versions.",
           "fields": [
             {
               "name": "versions",
@@ -89695,7 +89695,7 @@
         {
           "class_name": "Pipeline",
           "tablename": "oe_pipeline",
-          "docstring": "‌⁠‍A saved, versioned node-graph automation.\n\n``graph`` is the editor's source of truth: ``{\"nodes\": [...],\n\"edges\": [...]}``. ``policy`` holds run-as / scheduling / retry knobs\n(a flexible bag so future phases extend it without a migration). A\npipeline that fails the structural ``pipeline`` validation rule cannot\nbe published, and only a published pipeline can be triggered.",
+          "docstring": "A saved, versioned node-graph automation.\n\n``graph`` is the editor's source of truth: ``{\"nodes\": [...],\n\"edges\": [...]}``. ``policy`` holds run-as / scheduling / retry knobs\n(a flexible bag so future phases extend it without a migration). A\npipeline that fails the structural ``pipeline`` validation rule cannot\nbe published, and only a published pipeline can be triggered.",
           "columns": [
             {
               "name": "name",
@@ -89759,7 +89759,7 @@
         {
           "class_name": "PipelineRun",
           "tablename": "oe_pipeline_run",
-          "docstring": "‌⁠‍One execution of a pipeline - a thin pointer to an ``oe_job_run``.\n\nThe heavy lifecycle (submit / progress / retry / cancel / idempotency)\nlives on the ``JobRun`` row identified by ``job_run_id``. This table\nonly adds the frozen ``graph_snapshot`` (so a later graph edit can't\nrewrite history) and the ``trigger`` context, plus a project-scoped\nindex for fast run listings.",
+          "docstring": "One execution of a pipeline - a thin pointer to an ``oe_job_run``.\n\nThe heavy lifecycle (submit / progress / retry / cancel / idempotency)\nlives on the ``JobRun`` row identified by ``job_run_id``. This table\nonly adds the frozen ``graph_snapshot`` (so a later graph edit can't\nrewrite history) and the ``trigger`` context, plus a project-scoped\nindex for fast run listings.",
           "columns": [
             {
               "name": "pipeline_id",
@@ -89943,7 +89943,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Canvas coordinates for a node (xyflow).",
+          "docstring": "Canvas coordinates for a node (xyflow).",
           "fields": [
             {
               "name": "x",
@@ -89962,7 +89962,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍A single node in the editor graph.",
+          "docstring": "A single node in the editor graph.",
           "fields": [
             {
               "name": "id",
@@ -91189,7 +91189,7 @@
         {
           "class_name": "PortalUser",
           "tablename": "oe_portal_user",
-          "docstring": "‌⁠‍An external portal account - client / investor / consultant / sub / etc.",
+          "docstring": "An external portal account - client / investor / consultant / sub / etc.",
           "columns": [
             {
               "name": "email",
@@ -91269,7 +91269,7 @@
         {
           "class_name": "PortalAccessRule",
           "tablename": "oe_portal_access_rule",
-          "docstring": "‌⁠‍Per-resource access grant for a portal user (row-level security).",
+          "docstring": "Per-resource access grant for a portal user (row-level security).",
           "columns": [
             {
               "name": "portal_user_id",
@@ -91727,7 +91727,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Body for POST /admin/users/invite.",
+          "docstring": "Body for POST /admin/users/invite.",
           "fields": [
             {
               "name": "email",
@@ -91760,7 +91760,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Portal user as returned to internal admins.",
+          "docstring": "Portal user as returned to internal admins.",
           "fields": [
             {
               "name": "id",
@@ -92830,7 +92830,7 @@
         {
           "class_name": "PurchaseOrder",
           "tablename": "oe_procurement_po",
-          "docstring": "‌⁠‍A purchase order linked to a project and vendor.",
+          "docstring": "A purchase order linked to a project and vendor.",
           "columns": [
             {
               "name": "project_id",
@@ -92959,7 +92959,7 @@
         {
           "class_name": "PurchaseOrderItem",
           "tablename": "oe_procurement_po_item",
-          "docstring": "‌⁠‍A single line item within a purchase order.",
+          "docstring": "A single line item within a purchase order.",
           "columns": [
             {
               "name": "po_id",
@@ -93490,7 +93490,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Create a line item within a purchase order.",
+          "docstring": "Create a line item within a purchase order.",
           "fields": [
             {
               "name": "description",
@@ -94204,7 +94204,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Per-PO-line 3-way match summary.\n\n``match_status`` collapses the PO/GR/Invoice quantity comparison into\none tag the UI badge consumes:\n\n* ``ok``             - invoiced and received quantities cover the order.\n* ``partial``        - some quantity received or invoiced, more pending.\n* ``unmatched``      - nothing received or invoiced yet.\n* ``over_received``  - confirmed GR quantity exceeds the PO line.\n* ``over_invoiced``  - invoiced quantity exceeds received quantity.",
+          "docstring": "Per-PO-line 3-way match summary.\n\n``match_status`` collapses the PO/GR/Invoice quantity comparison into\none tag the UI badge consumes:\n\n* ``ok``             - invoiced and received quantities cover the order.\n* ``partial``        - some quantity received or invoiced, more pending.\n* ``unmatched``      - nothing received or invoiced yet.\n* ``over_received``  - confirmed GR quantity exceeds the PO line.\n* ``over_invoiced``  - invoiced quantity exceeds received quantity.",
           "fields": [
             {
               "name": "line_id",
@@ -96417,7 +96417,7 @@
         {
           "class_name": "Project",
           "tablename": "oe_projects_project",
-          "docstring": "‌⁠‍Construction estimation project.",
+          "docstring": "Construction estimation project.",
           "columns": [
             {
               "name": "name",
@@ -96651,7 +96651,7 @@
         {
           "class_name": "ProjectWBS",
           "tablename": "oe_projects_wbs",
-          "docstring": "‌⁠‍Work Breakdown Structure node for a project.\n\nSupports hierarchical decomposition of project scope into cost, schedule,\nor scope-oriented WBS trees.  Each node can carry planned cost/hours for\nearned-value analysis.",
+          "docstring": "Work Breakdown Structure node for a project.\n\nSupports hierarchical decomposition of project scope into cost, schedule,\nor scope-oriented WBS trees.  Each node can carry planned cost/hours for\nearned-value analysis.",
           "columns": [
             {
               "name": "project_id",
@@ -98488,7 +98488,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Per-module \"has any data?\" booleans for one project.\n\nUsed by the frontend sidebar to dim/grey modules that have no rows\nfor the current project. Every field is a single boolean - keeping\nthe response shape literal (vs. a free-form dict) so the\nopenapi-typescript client gets a strongly typed surface.\n\nRules of the road:\n\n* ``True``  - at least one row exists in that module's primary\n              project-scoped table.\n* ``False`` - either zero rows, OR the underlying table is missing\n              (fresh DB / migration not yet applied). Endpoint must\n              never 500 because one module is unwired.\n\nModule keys mirror the frontend sidebar slugs.",
+          "docstring": "Per-module \"has any data?\" booleans for one project.\n\nUsed by the frontend sidebar to dim/grey modules that have no rows\nfor the current project. Every field is a single boolean - keeping\nthe response shape literal (vs. a free-form dict) so the\nopenapi-typescript client gets a strongly typed surface.\n\nRules of the road:\n\n* ``True``  - at least one row exists in that module's primary\n              project-scoped table.\n* ``False`` - either zero rows, OR the underlying table is missing\n              (fresh DB / migration not yet applied). Endpoint must\n              never 500 because one module is unwired.\n\nModule keys mirror the frontend sidebar slugs.",
           "fields": [
             {
               "name": "boq",
@@ -98846,7 +98846,7 @@
         {
           "class_name": "Development",
           "tablename": "oe_property_dev_development",
-          "docstring": "‌⁠‍A property development - a collection of plots tied to one project.",
+          "docstring": "A property development - a collection of plots tied to one project.",
           "columns": [
             {
               "name": "project_id",
@@ -99024,7 +99024,7 @@
         {
           "class_name": "HouseType",
           "tablename": "oe_property_dev_house_type",
-          "docstring": "‌⁠‍A reusable house type / model within a development.",
+          "docstring": "A reusable house type / model within a development.",
           "columns": [
             {
               "name": "development_id",
@@ -103317,7 +103317,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Create a new development.",
+          "docstring": "Create a new development.",
           "fields": [
             {
               "name": "project_id",
@@ -103441,7 +103441,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Partial update for a development.",
+          "docstring": "Partial update for a development.",
           "fields": [
             {
               "name": "name",
@@ -111596,7 +111596,7 @@
         {
           "class_name": "PunchItem",
           "tablename": "oe_punchlist_item",
-          "docstring": "‌⁠‍Punch list entry tracking a construction deficiency or quality issue.",
+          "docstring": "Punch list entry tracking a construction deficiency or quality issue.",
           "columns": [
             {
               "name": "project_id",
@@ -111869,7 +111869,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Create a new punch list item.",
+          "docstring": "Create a new punch list item.",
           "fields": [
             {
               "name": "project_id",
@@ -111947,7 +111947,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Partial update for a punch list item.",
+          "docstring": "Partial update for a punch list item.",
           "fields": [
             {
               "name": "title",
@@ -112346,7 +112346,7 @@
         {
           "class_name": "ITPPlan",
           "tablename": "oe_qms_itp_plan",
-          "docstring": "‌⁠‍Inspection & Test Plan header.\n\nAn ITP is the project's checklist of control points (hold points,\nwitness points, document reviews) for a specific work type - e.g.\n\"Concrete pour - slab on grade\". It is the QA template against\nwhich inspections are scheduled and signed off.",
+          "docstring": "Inspection & Test Plan header.\n\nAn ITP is the project's checklist of control points (hold points,\nwitness points, document reviews) for a specific work type - e.g.\n\"Concrete pour - slab on grade\". It is the QA template against\nwhich inspections are scheduled and signed off.",
           "columns": [
             {
               "name": "project_id",
@@ -112396,7 +112396,7 @@
         {
           "class_name": "ITPItem",
           "tablename": "oe_qms_itp_item",
-          "docstring": "‌⁠‍A control point inside an :class:`ITPPlan`.",
+          "docstring": "A control point inside an :class:`ITPPlan`.",
           "columns": [
             {
               "name": "itp_plan_id",
@@ -113744,7 +113744,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Create an Inspection & Test Plan.",
+          "docstring": "Create an Inspection & Test Plan.",
           "fields": [
             {
               "name": "project_id",
@@ -113777,7 +113777,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Partial update for an ITP plan.",
+          "docstring": "Partial update for an ITP plan.",
           "fields": [
             {
               "name": "name",
@@ -116009,7 +116009,7 @@
         {
           "class_name": "KPISnapshot",
           "tablename": "oe_reporting_kpi_snapshot",
-          "docstring": "‌⁠‍Periodic KPI snapshot for a project.\n\nStores cost, schedule, quality, and risk indicators at a point in time.\nString types are used for numeric fields to avoid float precision issues\nacross databases; parsing happens at the application layer.",
+          "docstring": "Periodic KPI snapshot for a project.\n\nStores cost, schedule, quality, and risk indicators at a point in time.\nString types are used for numeric fields to avoid float precision issues\nacross databases; parsing happens at the application layer.",
           "columns": [
             {
               "name": "project_id",
@@ -116089,7 +116089,7 @@
         {
           "class_name": "ReportTemplate",
           "tablename": "oe_reporting_template",
-          "docstring": "‌⁠‍Reusable report template (system or custom).\n\nSystem templates (is_system=True) are seeded on first startup and\ncannot be deleted by users.\n\nv2.3.0 schedule fields:\n    schedule_cron / recipients / is_scheduled / last_run_at\n    next_run_at / project_id_scope\nLet the Celery-Beat worker pick up due templates, render them via\nthe reporting service, and email the result to the listed\nrecipients. If ``project_id_scope`` is set, the render is locked to\nthat project; otherwise the template renders a portfolio-wide\nreport.",
+          "docstring": "Reusable report template (system or custom).\n\nSystem templates (is_system=True) are seeded on first startup and\ncannot be deleted by users.\n\nv2.3.0 schedule fields:\n    schedule_cron / recipients / is_scheduled / last_run_at\n    next_run_at / project_id_scope\nLet the Celery-Beat worker pick up due templates, render them via\nthe reporting service, and email the result to the listed\nrecipients. If ``project_id_scope`` is set, the render is locked to\nthat project; otherwise the template renders a portfolio-wide\nreport.",
           "columns": [
             {
               "name": "name",
@@ -116363,7 +116363,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Create a new KPI snapshot for a project.",
+          "docstring": "Create a new KPI snapshot for a project.",
           "fields": [
             {
               "name": "project_id",
@@ -116425,7 +116425,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍KPI snapshot returned from the API.",
+          "docstring": "KPI snapshot returned from the API.",
           "fields": [
             {
               "name": "id",
@@ -116817,7 +116817,7 @@
         {
           "class_name": "RequirementSet",
           "tablename": "oe_requirements_set",
-          "docstring": "‌⁠‍Container for a group of requirements linked to a project.",
+          "docstring": "Container for a group of requirements linked to a project.",
           "columns": [
             {
               "name": "project_id",
@@ -116894,7 +116894,7 @@
         {
           "class_name": "Requirement",
           "tablename": "oe_requirements_item",
-          "docstring": "‌⁠‍Individual requirement expressed as an EAC (Entity-Attribute-Constraint) triplet.\n\nExample:\n    entity=\"exterior_wall\", attribute=\"fire_rating\", constraint_type=\"equals\",\n    constraint_value=\"F90\"",
+          "docstring": "Individual requirement expressed as an EAC (Entity-Attribute-Constraint) triplet.\n\nExample:\n    entity=\"exterior_wall\", attribute=\"fire_rating\", constraint_type=\"equals\",\n    constraint_value=\"F90\"",
           "columns": [
             {
               "name": "requirement_set_id",
@@ -117070,7 +117070,7 @@
         {
           "class_name": "RequirementDeliverable",
           "tablename": "oe_requirement_deliverable",
-          "docstring": "‌⁠‍ISO 19650 Employer Information Requirements (EIR) deliverable row.\n\nEach requirement may demand one or more information deliverables -\na 3D model at LOD 300, a schedule, a COBie export, a property-set\nsubmittal. The matrix view (rows = requirements, cols = deliverable\ntypes) is reconstructed by grouping rows of this table.\n\nStates are derived from the timestamps:\n    * ``accepted_at IS NOT NULL`` → ``accepted``\n    * ``submitted_at IS NOT NULL`` → ``submitted``\n    * else → ``missing``",
+          "docstring": "ISO 19650 Employer Information Requirements (EIR) deliverable row.\n\nEach requirement may demand one or more information deliverables -\na 3D model at LOD 300, a schedule, a COBie export, a property-set\nsubmittal. The matrix view (rows = requirements, cols = deliverable\ntypes) is reconstructed by grouping rows of this table.\n\nStates are derived from the timestamps:\n    * ``accepted_at IS NOT NULL`` → ``accepted``\n    * ``submitted_at IS NOT NULL`` → ``submitted``\n    * else → ``missing``",
           "columns": [
             {
               "name": "requirement_id",
@@ -117339,7 +117339,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Create a new EAC requirement.",
+          "docstring": "Create a new EAC requirement.",
           "fields": [
             {
               "name": "entity",
@@ -117393,7 +117393,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Partial update for a requirement.",
+          "docstring": "Partial update for a requirement.",
           "fields": [
             {
               "name": "entity",
@@ -118237,7 +118237,7 @@
         {
           "class_name": "Resource",
           "tablename": "oe_resources_resource",
-          "docstring": "‌⁠‍A resource that can be assigned to projects / tasks / work orders.\n\nresource_type controls behaviour:\n    person          - individual worker\n    crew            - predefined group (foreman + members)\n    equipment       - machine/tool tracked in equipment module\n    subcontractor   - external company",
+          "docstring": "A resource that can be assigned to projects / tasks / work orders.\n\nresource_type controls behaviour:\n    person          - individual worker\n    crew            - predefined group (foreman + members)\n    equipment       - machine/tool tracked in equipment module\n    subcontractor   - external company",
           "columns": [
             {
               "name": "code",
@@ -118319,7 +118319,7 @@
         {
           "class_name": "Skill",
           "tablename": "oe_resources_skill",
-          "docstring": "‌⁠‍A skill / qualification / language tag.\n\ncategory values: trade, certification, language, other",
+          "docstring": "A skill / qualification / language tag.\n\ncategory values: trade, certification, language, other",
           "columns": [
             {
               "name": "code",
@@ -119108,7 +119108,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Create a new resource.",
+          "docstring": "Create a new resource.",
           "fields": [
             {
               "name": "code",
@@ -119167,7 +119167,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Partial update for a resource.",
+          "docstring": "Partial update for a resource.",
           "fields": [
             {
               "name": "code",
@@ -121262,7 +121262,7 @@
         {
           "class_name": "RFI",
           "tablename": "oe_rfi_rfi",
-          "docstring": "‌⁠‍A Request for Information with response tracking and impact assessment.",
+          "docstring": "A Request for Information with response tracking and impact assessment.",
           "columns": [
             {
               "name": "project_id",
@@ -121521,7 +121521,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Create a new RFI.",
+          "docstring": "Create a new RFI.",
           "fields": [
             {
               "name": "project_id",
@@ -121933,7 +121933,7 @@
         {
           "class_name": "RFQ",
           "tablename": "oe_rfq_rfq",
-          "docstring": "‌⁠‍A Request for Quotation issued to vendors/subcontractors.",
+          "docstring": "A Request for Quotation issued to vendors/subcontractors.",
           "columns": [
             {
               "name": "project_id",
@@ -122020,7 +122020,7 @@
         {
           "class_name": "RFQBid",
           "tablename": "oe_rfq_bid",
-          "docstring": "‌⁠‍A bid submitted by a vendor against an RFQ.",
+          "docstring": "A bid submitted by a vendor against an RFQ.",
           "columns": [
             {
               "name": "rfq_id",
@@ -122185,7 +122185,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Create a new RFQ.",
+          "docstring": "Create a new RFQ.",
           "fields": [
             {
               "name": "project_id",
@@ -122234,7 +122234,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Partial update for an RFQ.",
+          "docstring": "Partial update for an RFQ.",
           "fields": [
             {
               "name": "title",
@@ -122577,7 +122577,7 @@
         {
           "class_name": "RiskItem",
           "tablename": "oe_risk_register",
-          "docstring": "‌⁠‍Risk register entry tracking project risks and mitigation.",
+          "docstring": "Risk register entry tracking project risks and mitigation.",
           "columns": [
             {
               "name": "project_id",
@@ -122878,7 +122878,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Create a new risk item.",
+          "docstring": "Create a new risk item.",
           "fields": [
             {
               "name": "project_id",
@@ -122956,7 +122956,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Partial update for a risk item.",
+          "docstring": "Partial update for a risk item.",
           "fields": [
             {
               "name": "title",
@@ -123339,7 +123339,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Request body for ``POST /v1/risk/projects/{id}/simulate``.\n\n``iterations`` is bounded so a misconfigured client can't accidentally\nDoS the worker; 100 000 samples per risk is plenty for stable\nP50/P80/P95 estimates and finishes in well under a second on a typical\nproject (fewer than ~50 risks).",
+          "docstring": "Request body for ``POST /v1/risk/projects/{id}/simulate``.\n\n``iterations`` is bounded so a misconfigured client can't accidentally\nDoS the worker; 100 000 samples per risk is plenty for stable\nP50/P80/P95 estimates and finishes in well under a second on a typical\nproject (fewer than ~50 risks).",
           "fields": [
             {
               "name": "iterations",
@@ -123529,7 +123529,7 @@
         {
           "class_name": "SafetyIncident",
           "tablename": "oe_safety_incident",
-          "docstring": "‌⁠‍A safety incident report tracking injuries, near misses, and property damage.",
+          "docstring": "A safety incident report tracking injuries, near misses, and property damage.",
           "columns": [
             {
               "name": "project_id",
@@ -123689,7 +123689,7 @@
         {
           "class_name": "HSECorrectiveAction",
           "tablename": "oe_hse_corrective_action",
-          "docstring": "‌⁠‍Slim incident-scoped corrective action with a strict FSM.\n\nDistinct from :class:`app.modules.hse_advanced.models.CorrectiveAction`\n(which is the audit/JSA/observation-scoped CAPA carrying 5-Whys and\neffectiveness verification). This table is the lightweight\nconstruction-suite style \"open a CA off an incident\" record with a single\npending → in_progress → verified → closed lifecycle.",
+          "docstring": "Slim incident-scoped corrective action with a strict FSM.\n\nDistinct from :class:`app.modules.hse_advanced.models.CorrectiveAction`\n(which is the audit/JSA/observation-scoped CAPA carrying 5-Whys and\neffectiveness verification). This table is the lightweight\nconstruction-suite style \"open a CA off an incident\" record with a single\npending → in_progress → verified → closed lifecycle.",
           "columns": [
             {
               "name": "incident_id",
@@ -123749,7 +123749,7 @@
         {
           "class_name": "SafetyObservation",
           "tablename": "oe_safety_observation",
-          "docstring": "‌⁠‍A proactive safety observation with risk scoring.",
+          "docstring": "A proactive safety observation with risk scoring.",
           "columns": [
             {
               "name": "project_id",
@@ -123951,7 +123951,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍A corrective action within an incident.",
+          "docstring": "A corrective action within an incident.",
           "fields": [
             {
               "name": "description",
@@ -123977,7 +123977,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Create a new safety incident.",
+          "docstring": "Create a new safety incident.",
           "fields": [
             {
               "name": "project_id",
@@ -124759,7 +124759,7 @@
         {
           "class_name": "SavedView",
           "tablename": "oe_saved_views_view",
-          "docstring": "‌⁠‍A named, scoped saved search against one registered entity.\n\nThe ``spec`` JSON is the serialized ``FilterSpec``; it is re-validated by\nPydantic on every read and write, never trusted as-is. ``share_scope`` is one\nof ``private`` / ``project`` / ``workspace`` - never ``public``; there is no\nunauthenticated share token in Phase 1.",
+          "docstring": "A named, scoped saved search against one registered entity.\n\nThe ``spec`` JSON is the serialized ``FilterSpec``; it is re-validated by\nPydantic on every read and write, never trusted as-is. ``share_scope`` is one\nof ``private`` / ``project`` / ``workspace`` - never ``public``; there is no\nunauthenticated share token in Phase 1.",
           "columns": [
             {
               "name": "owner_id",
@@ -124825,7 +124825,7 @@
         {
           "class_name": "SavedViewRun",
           "tablename": "oe_saved_views_run",
-          "docstring": "‌⁠‍Append-only audit row written after a run.\n\nLets budget-overflow attempts and slow views be observed. ``outcome`` is one\nof ``ok`` / ``budget`` / ``scope`` / ``whitelist`` / ``error``.",
+          "docstring": "Append-only audit row written after a run.\n\nLets budget-overflow attempts and slow views be observed. ``outcome`` is one\nof ``ok`` / ``budget`` / ``scope`` / ``whitelist`` / ``error``.",
           "columns": [
             {
               "name": "saved_view_id",
@@ -125315,7 +125315,7 @@
         {
           "class_name": "Schedule",
           "tablename": "oe_schedule_schedule",
-          "docstring": "‌⁠‍Project schedule - groups activities for 4D planning.",
+          "docstring": "Project schedule - groups activities for 4D planning.",
           "columns": [
             {
               "name": "project_id",
@@ -125392,7 +125392,7 @@
         {
           "class_name": "Activity",
           "tablename": "oe_schedule_activity",
-          "docstring": "‌⁠‍Individual activity / task in a schedule with WBS hierarchy.",
+          "docstring": "Individual activity / task in a schedule with WBS hierarchy.",
           "columns": [
             {
               "name": "schedule_id",
@@ -126305,7 +126305,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Create a new schedule.",
+          "docstring": "Create a new schedule.",
           "fields": [
             {
               "name": "project_id",
@@ -128018,7 +128018,7 @@
         {
           "class_name": "MasterSchedule",
           "tablename": "oe_schedule_advanced_master_schedule",
-          "docstring": "‌⁠‍Top-level project schedule container for the LPS workflow.\n\nEach project may have many master schedules (e.g. baseline, current\nrev-B, etc.). Phase plans, look-aheads, weekly plans, and baselines\nall hang off a master schedule.",
+          "docstring": "Top-level project schedule container for the LPS workflow.\n\nEach project may have many master schedules (e.g. baseline, current\nrev-B, etc.). Phase plans, look-aheads, weekly plans, and baselines\nall hang off a master schedule.",
           "columns": [
             {
               "name": "project_id",
@@ -128076,7 +128076,7 @@
         {
           "class_name": "PhasePlan",
           "tablename": "oe_schedule_advanced_phase_plan",
-          "docstring": "‌⁠‍A pull-planning phase (e.g. \"Foundations\", \"Tower Crane Phase\").\n\nCreated collaboratively in a pull session. ``milestone_target_id``\nreferences a task UUID - kept as a plain UUID (NOT FK at ORM level)\nbecause it crosses module boundaries.",
+          "docstring": "A pull-planning phase (e.g. \"Foundations\", \"Tower Crane Phase\").\n\nCreated collaboratively in a pull session. ``milestone_target_id``\nreferences a task UUID - kept as a plain UUID (NOT FK at ORM level)\nbecause it crosses module boundaries.",
           "columns": [
             {
               "name": "master_schedule_id",
@@ -129447,7 +129447,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Create a new master schedule for a project.",
+          "docstring": "Create a new master schedule for a project.",
           "fields": [
             {
               "name": "project_id",
@@ -129488,7 +129488,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Patch update for a master schedule.",
+          "docstring": "Patch update for a master schedule.",
           "fields": [
             {
               "name": "name",
@@ -132001,7 +132001,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍One semantic-search hit returned by the unified search endpoint.",
+          "docstring": "One semantic-search hit returned by the unified search endpoint.",
           "fields": [
             {
               "name": "id",
@@ -132196,7 +132196,7 @@
         {
           "class_name": "ServiceContract",
           "tablename": "oe_service_contract",
-          "docstring": "‌⁠‍Service agreement between us (provider) and a customer (Contact).\n\nA contract scopes assets, tickets and work orders. It is *not* required\nto be linked to a project - service work routinely spans many projects\nor none at all (post-handover maintenance).",
+          "docstring": "Service agreement between us (provider) and a customer (Contact).\n\nA contract scopes assets, tickets and work orders. It is *not* required\nto be linked to a project - service work routinely spans many projects\nor none at all (post-handover maintenance).",
           "columns": [
             {
               "name": "customer_id",
@@ -132311,7 +132311,7 @@
         {
           "class_name": "ServiceAsset",
           "tablename": "oe_service_asset",
-          "docstring": "‌⁠‍A serviceable customer asset (boiler, AHU, lift, generator, etc.).",
+          "docstring": "A serviceable customer asset (boiler, AHU, lift, generator, etc.).",
           "columns": [
             {
               "name": "contract_id",
@@ -132929,7 +132929,7 @@
         {
           "class_name": "ServiceRecurringSchedule",
           "tablename": "oe_service_recurring_schedule",
-          "docstring": "‌⁠‍RRULE-driven schedule that materialises ServiceTicket rows on a cadence.\n\nDistinct from ``ServiceSchedule`` (asset-scoped PPM with a fixed frequency\nenum) - this row is project-scoped and uses iCalendar RFC 5545 RRULE\nsyntax (e.g. ``FREQ=MONTHLY;BYMONTHDAY=1``). The cron worker scans for\n``enabled & next_run_at < now`` and materialises one ticket per overdue\noccurrence, advancing ``next_run_at`` via the RRULE.\n\n``template_ticket_data`` carries a ServiceTicketCreate-shaped payload (at\nminimum ``contract_id`` + ``title`` + ``priority``) which the\nmaterialiser uses verbatim when stamping each new ticket.",
+          "docstring": "RRULE-driven schedule that materialises ServiceTicket rows on a cadence.\n\nDistinct from ``ServiceSchedule`` (asset-scoped PPM with a fixed frequency\nenum) - this row is project-scoped and uses iCalendar RFC 5545 RRULE\nsyntax (e.g. ``FREQ=MONTHLY;BYMONTHDAY=1``). The cron worker scans for\n``enabled & next_run_at < now`` and materialises one ticket per overdue\noccurrence, advancing ``next_run_at`` via the RRULE.\n\n``template_ticket_data`` carries a ServiceTicketCreate-shaped payload (at\nminimum ``contract_id`` + ``title`` + ``priority``) which the\nmaterialiser uses verbatim when stamping each new ticket.",
           "columns": [
             {
               "name": "project_id",
@@ -134350,7 +134350,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Body for POST /work-orders/{id}/complete.",
+          "docstring": "Body for POST /work-orders/{id}/complete.",
           "fields": [
             {
               "name": "debrief",
@@ -135254,7 +135254,7 @@
         {
           "class_name": "SmartView",
           "tablename": "oe_smart_view",
-          "docstring": "‌⁠‍A named, re-evaluating BIM visibility / colour preset.\n\nScoping is encoded by the ``scope_type`` + ``scope_id`` pair:\n\n* ``user``       - private to one user (``scope_id`` = user UUID).\n* ``project``    - shared inside one project (``scope_id`` =\n                   project UUID); visible to anyone with\n                   ``bim.read`` on that project.\n* ``federation`` - shared inside one federation (``scope_id`` =\n                   federation UUID).\n\nThe ``rules`` JSON column carries the ordered list of rule dicts\ndocumented by :class:`SmartViewRule` in ``schemas.py``. Later rules\noverride earlier ones - semantics validated by the evaluator.",
+          "docstring": "A named, re-evaluating BIM visibility / colour preset.\n\nScoping is encoded by the ``scope_type`` + ``scope_id`` pair:\n\n* ``user``       - private to one user (``scope_id`` = user UUID).\n* ``project``    - shared inside one project (``scope_id`` =\n                   project UUID); visible to anyone with\n                   ``bim.read`` on that project.\n* ``federation`` - shared inside one federation (``scope_id`` =\n                   federation UUID).\n\nThe ``rules`` JSON column carries the ordered list of rule dicts\ndocumented by :class:`SmartViewRule` in ``schemas.py``. Later rules\noverride earlier ones - semantics validated by the evaluator.",
           "columns": [
             {
               "name": "scope_type",
@@ -135398,7 +135398,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Predicate describing which elements a rule applies to.\n\nAll four fields are optional individually so the schema can express\n\"match every IfcWall regardless of property\" (``ifc_class`` only),\n\"match every element where Material exists\" (``property`` +\n``operator='exists'``), or the full quad\n\"ifc_class=IfcWall AND FireRating between [60,120]\".",
+          "docstring": "Predicate describing which elements a rule applies to.\n\nAll four fields are optional individually so the schema can express\n\"match every IfcWall regardless of property\" (``ifc_class`` only),\n\"match every element where Material exists\" (``property`` +\n``operator='exists'``), or the full quad\n\"ifc_class=IfcWall AND FireRating between [60,120]\".",
           "fields": [
             {
               "name": "ifc_class",
@@ -135425,7 +135425,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Optional per-action arguments.\n\nOnly the keys relevant to the chosen action are read by the\nevaluator; the others are tolerated so authors can edit a rule in\nplace without losing previous customisation when they flip the\naction verb. ``extra='forbid'`` is intentionally NOT set so a\nforward-compatible field can ship without breaking old views.",
+          "docstring": "Optional per-action arguments.\n\nOnly the keys relevant to the chosen action are read by the\nevaluator; the others are tolerated so authors can edit a rule in\nplace without losing previous customisation when they flip the\naction verb. ``extra='forbid'`` is intentionally NOT set so a\nforward-compatible field can ship without breaking old views.",
           "fields": [
             {
               "name": "color",
@@ -135447,7 +135447,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍A single rule: (selector → action).\n\n``order`` decides the evaluation order - lower runs first; later\nrules overwrite earlier ones (last-write-wins). Two rules with the\nsame ``order`` resolve by their stable ``id`` (lexicographic) so\nbehaviour is deterministic across saves.",
+          "docstring": "A single rule: (selector → action).\n\n``order`` decides the evaluation order - lower runs first; later\nrules overwrite earlier ones (last-write-wins). Two rules with the\nsame ``order`` resolve by their stable ``id`` (lexicographic) so\nbehaviour is deterministic across saves.",
           "fields": [
             {
               "name": "id",
@@ -135477,7 +135477,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Shared fields between create/update payloads + response.",
+          "docstring": "Shared fields between create/update payloads + response.",
           "fields": [
             {
               "name": "name",
@@ -135659,7 +135659,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Resolved per-element visual state produced by the evaluator.",
+          "docstring": "Resolved per-element visual state produced by the evaluator.",
           "fields": [
             {
               "name": "visible",
@@ -135747,7 +135747,7 @@
         {
           "class_name": "Subcontractor",
           "tablename": "oe_subcontractors_subcontractor",
-          "docstring": "‌⁠‍Legal subcontractor entity (may be linked to a Contact row).",
+          "docstring": "Legal subcontractor entity (may be linked to a Contact row).",
           "columns": [
             {
               "name": "contact_id",
@@ -135881,7 +135881,7 @@
         {
           "class_name": "SubcontractorContact",
           "tablename": "oe_subcontractors_subcontractor_contact",
-          "docstring": "‌⁠‍Point of contact for a subcontractor.",
+          "docstring": "Point of contact for a subcontractor.",
           "columns": [
             {
               "name": "subcontractor_id",
@@ -136931,7 +136931,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Shared subcontractor fields.",
+          "docstring": "Shared subcontractor fields.",
           "fields": [
             {
               "name": "legal_name",
@@ -136979,7 +136979,7 @@
           "bases": [
             "SubcontractorBase"
           ],
-          "docstring": "‌⁠‍Create payload for Subcontractor.",
+          "docstring": "Create payload for Subcontractor.",
           "fields": [
             {
               "name": "prequalification_status",
@@ -138890,7 +138890,7 @@
         {
           "class_name": "Submittal",
           "tablename": "oe_submittals_submittal",
-          "docstring": "‌⁠‍A construction submittal with multi-stage review and approval workflow.",
+          "docstring": "A construction submittal with multi-stage review and approval workflow.",
           "columns": [
             {
               "name": "project_id",
@@ -139104,7 +139104,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Create a new submittal.",
+          "docstring": "Create a new submittal.",
           "fields": [
             {
               "name": "project_id",
@@ -139177,7 +139177,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Partial update for a submittal.",
+          "docstring": "Partial update for a submittal.",
           "fields": [
             {
               "name": "title",
@@ -139444,7 +139444,7 @@
         {
           "class_name": "Vendor",
           "tablename": "oe_supplier_catalogs_vendor",
-          "docstring": "‌⁠‍Supplier master record.",
+          "docstring": "Supplier master record.",
           "columns": [
             {
               "name": "code",
@@ -139555,7 +139555,7 @@
         {
           "class_name": "ItemCategory",
           "tablename": "oe_supplier_catalogs_item_category",
-          "docstring": "‌⁠‍Hierarchical category tree for materials and services.",
+          "docstring": "Hierarchical category tree for materials and services.",
           "columns": [
             {
               "name": "code",
@@ -141292,7 +141292,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍A vendor contact person (stored inside Vendor.contacts_json).",
+          "docstring": "A vendor contact person (stored inside Vendor.contacts_json).",
           "fields": [
             {
               "name": "name",
@@ -141325,7 +141325,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Create a vendor.",
+          "docstring": "Create a vendor.",
           "fields": [
             {
               "name": "code",
@@ -143415,7 +143415,7 @@
         {
           "class_name": "CadExtractionSession",
           "tablename": "oe_takeoff_cad_session",
-          "docstring": "‌⁠‍Persistent storage for CAD file extraction sessions.\n\nReplaces the in-memory ``_cad_sessions`` dict to survive server restarts\nand support multi-process deployments.  Sessions expire after 24 hours.",
+          "docstring": "Persistent storage for CAD file extraction sessions.\n\nReplaces the in-memory ``_cad_sessions`` dict to survive server restarts\nand support multi-process deployments.  Sessions expire after 24 hours.",
           "columns": [
             {
               "name": "session_id",
@@ -143510,7 +143510,7 @@
         {
           "class_name": "TakeoffDocument",
           "tablename": "oe_takeoff_document",
-          "docstring": "‌⁠‍Uploaded PDF document for quantity takeoff.",
+          "docstring": "Uploaded PDF document for quantity takeoff.",
           "columns": [
             {
               "name": "filename",
@@ -144139,7 +144139,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Response after uploading a PDF document.",
+          "docstring": "Response after uploading a PDF document.",
           "fields": [
             {
               "name": "id",
@@ -144176,7 +144176,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍A single element extracted from AI analysis.",
+          "docstring": "A single element extracted from AI analysis.",
           "fields": [
             {
               "name": "id",
@@ -145337,7 +145337,7 @@
         {
           "class_name": "Task",
           "tablename": "oe_tasks_task",
-          "docstring": "‌⁠‍A project task with checklist, assignment, and due date tracking.",
+          "docstring": "A project task with checklist, assignment, and due date tracking.",
           "columns": [
             {
               "name": "project_id",
@@ -145565,7 +145565,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍A single checklist item within a task.",
+          "docstring": "A single checklist item within a task.",
           "fields": [
             {
               "name": "id",
@@ -145588,7 +145588,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Create a new task.",
+          "docstring": "Create a new task.",
           "fields": [
             {
               "name": "project_id",
@@ -146013,7 +146013,7 @@
         {
           "class_name": "Team",
           "tablename": "oe_teams_team",
-          "docstring": "‌⁠‍A team within a project for visibility control.",
+          "docstring": "A team within a project for visibility control.",
           "columns": [
             {
               "name": "project_id",
@@ -146070,7 +146070,7 @@
         {
           "class_name": "TeamMembership",
           "tablename": "oe_teams_membership",
-          "docstring": "‌⁠‍Association between a user and a team.",
+          "docstring": "Association between a user and a team.",
           "columns": [
             {
               "name": "team_id",
@@ -146196,7 +146196,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Create a new team within a project.",
+          "docstring": "Create a new team within a project.",
           "fields": [
             {
               "name": "project_id",
@@ -146452,7 +146452,7 @@
         {
           "class_name": "TenderPackage",
           "tablename": "oe_tendering_package",
-          "docstring": "‌⁠‍A tender package groups BOQ positions for subcontractor bidding.",
+          "docstring": "A tender package groups BOQ positions for subcontractor bidding.",
           "columns": [
             {
               "name": "project_id",
@@ -146509,7 +146509,7 @@
         {
           "class_name": "TenderBid",
           "tablename": "oe_tendering_bid",
-          "docstring": "‌⁠‍A bid submitted by a company for a tender package.",
+          "docstring": "A bid submitted by a company for a tender package.",
           "columns": [
             {
               "name": "package_id",
@@ -146716,7 +146716,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Create a new tender package.",
+          "docstring": "Create a new tender package.",
           "fields": [
             {
               "name": "project_id",
@@ -146751,7 +146751,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Partial update for a tender package.",
+          "docstring": "Partial update for a tender package.",
           "fields": [
             {
               "name": "name",
@@ -147597,7 +147597,7 @@
         {
           "class_name": "Transmittal",
           "tablename": "oe_transmittals_transmittal",
-          "docstring": "‌⁠‍A formal document transmittal package.",
+          "docstring": "A formal document transmittal package.",
           "columns": [
             {
               "name": "project_id",
@@ -147690,7 +147690,7 @@
         {
           "class_name": "TransmittalRecipient",
           "tablename": "oe_transmittals_recipient",
-          "docstring": "‌⁠‍A recipient of a transmittal with acknowledgement and response tracking.",
+          "docstring": "A recipient of a transmittal with acknowledgement and response tracking.",
           "columns": [
             {
               "name": "transmittal_id",
@@ -147865,7 +147865,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Add a recipient to a transmittal.",
+          "docstring": "Add a recipient to a transmittal.",
           "fields": [
             {
               "name": "recipient_org_id",
@@ -147888,7 +147888,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Recipient in API responses.",
+          "docstring": "Recipient in API responses.",
           "fields": [
             {
               "name": "id",
@@ -148317,7 +148317,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Returned after a successful HMAC-signed PUT against the local backend.",
+          "docstring": "Returned after a successful HMAC-signed PUT against the local backend.",
           "fields": [
             {
               "name": "key",
@@ -148397,7 +148397,7 @@
         {
           "class_name": "User",
           "tablename": "oe_users_user",
-          "docstring": "‌⁠‍Application user.",
+          "docstring": "Application user.",
           "columns": [
             {
               "name": "email",
@@ -148508,7 +148508,7 @@
         {
           "class_name": "APIKey",
           "tablename": "oe_users_api_key",
-          "docstring": "‌⁠‍API key for programmatic access.",
+          "docstring": "API key for programmatic access.",
           "columns": [
             {
               "name": "user_id",
@@ -149518,7 +149518,7 @@
         {
           "class_name": "ValidationReport",
           "tablename": "oe_validation_report",
-          "docstring": "‌⁠‍Persisted validation report for a BOQ, document, or CAD import.\n\nStores the full validation result including per-rule outcomes so that\nhistorical reports can be reviewed without re-running validation.",
+          "docstring": "Persisted validation report for a BOQ, document, or CAD import.\n\nStores the full validation result including per-rule outcomes so that\nhistorical reports can be reviewed without re-running validation.",
           "columns": [
             {
               "name": "project_id",
@@ -149666,7 +149666,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍A single validation rule result within a report.",
+          "docstring": "A single validation rule result within a report.",
           "fields": [
             {
               "name": "rule_id",
@@ -149703,7 +149703,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Schema for creating a validation report manually (rare - prefer /run).",
+          "docstring": "Schema for creating a validation report manually (rare - prefer /run).",
           "fields": [
             {
               "name": "project_id",
@@ -149957,7 +149957,7 @@
         {
           "class_name": "Notice",
           "tablename": "oe_variations_notice",
-          "docstring": "‌⁠‍Early-warning notice raised to recipient on a project.",
+          "docstring": "Early-warning notice raised to recipient on a project.",
           "columns": [
             {
               "name": "project_id",
@@ -150051,7 +150051,7 @@
         {
           "class_name": "VariationRequest",
           "tablename": "oe_variations_request",
-          "docstring": "‌⁠‍Formal variation request submitted for approval.",
+          "docstring": "Formal variation request submitted for approval.",
           "columns": [
             {
               "name": "project_id",
@@ -153425,7 +153425,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍Stamp a TIA result onto an EoT claim.",
+          "docstring": "Stamp a TIA result onto an EoT claim.",
           "fields": [
             {
               "name": "tia_delta_days",
@@ -153443,7 +153443,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "‌⁠‍NEC4 SLA-overdue status for a VariationRequest.",
+          "docstring": "NEC4 SLA-overdue status for a VariationRequest.",
           "fields": [
             {
               "name": "request_id",

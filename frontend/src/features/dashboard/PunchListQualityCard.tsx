@@ -22,10 +22,11 @@
 import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { ClipboardCheck, ArrowRight } from 'lucide-react';
+import { ArrowRight } from 'lucide-react';
 import { Card, CardContent, CardHeader, InfoHint } from '@/shared/ui';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { fetchPunchSummary, type PunchStatus } from '@/features/punchlist/api';
+import { KpiStrip } from './KpiStrip';
 
 /**
  * Statuses the punchlist module treats as "done". Everything else counts
@@ -89,40 +90,24 @@ export function PunchListQualityCard() {
         }
       />
       <CardContent>
-        <div className="flex items-end justify-between gap-3">
-          <div>
-            <p className="text-xs uppercase tracking-wide text-content-tertiary">
-              {t('dashboard.punch_open_items', { defaultValue: 'Open items' })}
-            </p>
-            <p className="flex items-center gap-2 text-2xl font-semibold text-content-primary">
-              <ClipboardCheck size={20} strokeWidth={1.75} className="text-oe-blue" />
-              {formatCount(open)}
-            </p>
-          </div>
-          <div className="text-right">
-            <p className="text-xs uppercase tracking-wide text-content-tertiary">
-              {t('dashboard.punch_overdue', { defaultValue: 'Overdue' })}
-            </p>
-            <p
-              className={`text-lg font-medium ${
-                hasOverdue ? 'text-rose-600' : 'text-content-secondary'
-              }`}
-            >
-              {formatCount(overdue)}
-            </p>
-          </div>
-        </div>
-
-        <p className="mt-3 text-xs text-content-tertiary">
-          {hasAvgDays
-            ? t('dashboard.punch_avg_days', {
-                defaultValue: 'Average {{days}} days to close an item',
-                days: avgDays.toFixed(1),
-              })
-            : t('dashboard.punch_avg_days_none', {
-                defaultValue: 'No items closed yet',
-              })}
-        </p>
+        <KpiStrip
+          stats={[
+            {
+              label: t('dashboard.punch_open_items', { defaultValue: 'Open items' }),
+              value: formatCount(open),
+            },
+            {
+              label: t('dashboard.punch_overdue', { defaultValue: 'Overdue' }),
+              value: formatCount(overdue),
+              tone: hasOverdue ? 'text-rose-600' : 'text-content-secondary',
+            },
+            {
+              label: t('dashboard.punch_avg_label', { defaultValue: 'Avg to close' }),
+              value: hasAvgDays ? avgDays.toFixed(1) : '-',
+              tone: 'text-content-secondary',
+            },
+          ]}
+        />
         <InfoHint
           className="mt-3"
           text={t('dashboard.punch_help', {

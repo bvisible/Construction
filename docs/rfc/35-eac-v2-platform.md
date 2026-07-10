@@ -239,7 +239,7 @@ The block editor, Excel import, composition, and 4D linker are all **adapters**:
 
 - **Files**: `eac/bcf/exporter.py`. Hand-rolled XML or `bcf-py` (no IfcOpenShell — ADR 002).
 - Topic = one `eac_issue` row; viewpoint rendered headless via Playwright on the existing `BIMViewer` (RFC 34 W2.2 reuse path).
-- **Tests first**: round-trip — generated `.bcfzip` opens cleanly in BIMcollab Zoom (manual once + automated XSD validation always).
+- **Tests first**: round-trip — generated `.bcfzip` opens cleanly in any BCF-compatible tool (manual once + automated XSD validation always).
 - **Visual**: `bcf-export-flow.png`.
 
 **Wave EAC-3 deliverable**: spec §3 AC-3.1..AC-3.8 green.
@@ -316,11 +316,11 @@ The block editor, Excel import, composition, and 4D linker are all **adapters**:
 
 ## 10. Wave EAC-6 — 4D module (5 weeks; new — not in RFC 34)
 
-### EAC-6.1 — PMXML / MSPDI / MS Project / CSV import
+### EAC-6.1 - PMXML / MSPDI / CSV import
 
 - **Files**: `schedule/import/{pmxml,mspdi,csv,msproject_xml}.py`.
-- PMXML: parse Primavera P6 XML, map to `Schedule` + `Activity` + `Relationship`.
-- MSPDI: parse Microsoft Project XML.
+- PMXML: parse the schedule interchange XML, map to `Schedule` + `Activity` + `Relationship`.
+- MSPDI: parse Project XML.
 - **Tests first**:
   - `tests/integration/schedule/import/test_pmxml_real_files.py` — 5 real-world PMXML fixtures (open-source samples).
   - `tests/integration/schedule/import/test_mspdi.py` — full round-trip parse → re-export → byte-compare.

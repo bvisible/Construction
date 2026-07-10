@@ -1,7 +1,7 @@
 // DDC-CWICR-OE: DataDrivenConstruction - OpenConstructionERP
 // Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 
@@ -39,6 +39,9 @@ function renderPage() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Search history is localStorage-backed; clear it so saved/recent state from
+  // one test never leaks into the next.
+  localStorage.clear();
   vi.mocked(searchRecords).mockResolvedValue({
     count: 1,
     results: [
@@ -76,12 +79,23 @@ describe('RetrievalPage', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: /^Search$/i }));
 
-    await waitFor(() => {
-      expect(screen.getByText('Additional rebar to core wall')).toBeInTheDocument();
+    // The title is a deep-link to the owning module, and the query term is
+    // highlighted inside it (so the text is split by a <mark>); assert on the
+    // link's accessible name, which concatenates the whole title.
+    const titleLink = await screen.findByRole('link', {
+      name: 'Additional rebar to core wall',
     });
+    expect(titleLink).toHaveAttribute('href', '/changeorders');
     expect(searchRecords).toHaveBeenCalledWith('p-1', expect.objectContaining({ text: 'rebar' }));
-    expect(screen.getByText('Add rebar to the core wall.')).toBeInTheDocument();
+    // The snippet is likewise split by the highlight mark, so match on the
+    // paragraph's full text content.
+    expect(
+      screen.getByText(
+        (_content, el) =>
+          el?.tagName === 'P' && el?.textContent === 'Add rebar to the core wall.',
+      ),
+    ).toBeInTheDocument();
     expect(screen.getByText('CO-7')).toBeInTheDocument();
-    expect(screen.getByText(/1 matching records/i)).toBeInTheDocument();
+    expect(screen.getByText(/1 results/i)).toBeInTheDocument();
   });
 });

@@ -14,16 +14,21 @@
  * Clears state when the active project changes so you never see stale
  * rows from a previous project.
  */
-import { useCallback, useState } from 'react';
+import { Fragment, useCallback, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
+  Activity,
   AlertTriangle,
+  ArrowRight,
   ArrowUpRight,
+  ClipboardList,
   Cuboid,
   Download,
   Edit3,
+  FileSpreadsheet,
+  Network,
   Package,
   Search,
 } from 'lucide-react';
@@ -54,6 +59,123 @@ function statusTone(status?: string | null): string {
   return (
     OPERATIONAL_STATUSES.find((s) => s.value === status)?.tone ??
     'bg-neutral-700/40 text-neutral-300 border-neutral-600/50'
+  );
+}
+
+/* ── How-it-works flow + module integrations ───────────────────────────── */
+
+/** A compact inline link to a sibling module (keeps the flow copy readable). */
+function ModLink({ to, children }: { to: string; children: ReactNode }) {
+  return (
+    <Link to={to} className="font-medium text-oe-blue-text hover:underline">
+      {children}
+    </Link>
+  );
+}
+
+/**
+ * One-glance explainer of what the asset register is and how it connects: it
+ * carries the BIM model through to operations, so elements become tracked
+ * assets with operational data and a COBie handover. Every connected module is
+ * a link so the workflow is obvious.
+ */
+function HowAssetsWork() {
+  const { t } = useTranslation();
+
+  const steps: { icon: ReactNode; title: string; desc: string }[] = [
+    {
+      icon: <Cuboid size={14} className="text-oe-blue" />,
+      title: t('assets.flow_1_title', { defaultValue: 'Extract from the model' }),
+      desc: t('assets.flow_1_desc', {
+        defaultValue: 'Elements flagged as tracked assets in your BIM models appear here.',
+      }),
+    },
+    {
+      icon: <ClipboardList size={14} className="text-oe-blue" />,
+      title: t('assets.flow_2_title', { defaultValue: 'Record details' }),
+      desc: t('assets.flow_2_desc', {
+        defaultValue: 'Add manufacturer, model, serial and warranty to each asset.',
+      }),
+    },
+    {
+      icon: <Activity size={14} className="text-oe-blue" />,
+      title: t('assets.flow_3_title', { defaultValue: 'Track status' }),
+      desc: t('assets.flow_3_desc', {
+        defaultValue: 'Set operational status as assets move through maintenance and service.',
+      }),
+    },
+    {
+      icon: <FileSpreadsheet size={14} className="text-oe-blue" />,
+      title: t('assets.flow_4_title', { defaultValue: 'Hand over' }),
+      desc: t('assets.flow_4_desc', {
+        defaultValue: 'Export the register as COBie for facilities management at handover.',
+      }),
+    },
+  ];
+
+  return (
+    <Card padding="md">
+      <h2 className="flex items-center gap-1.5 text-sm font-semibold text-content-primary">
+        <Network size={15} className="text-oe-blue" />
+        {t('assets.flow_title', { defaultValue: 'How the asset register fits together' })}
+      </h2>
+      <p className="mt-1 text-xs text-content-tertiary">
+        {t('assets.flow_intro', {
+          defaultValue:
+            'The asset register carries your BIM model through to operations: model elements become tracked assets with manufacturer, warranty and status, ready for a COBie handover to facilities management.',
+        })}
+      </p>
+
+      <ol className="mt-3 flex flex-col gap-2 lg:flex-row lg:items-stretch">
+        {steps.map((s, i) => (
+          <Fragment key={s.title}>
+            <li className="flex-1 rounded-lg border border-border-light bg-surface-secondary/40 p-3">
+              <div className="flex items-center gap-2">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-oe-blue-subtle text-2xs font-bold text-oe-blue-text">
+                  {i + 1}
+                </span>
+                <span className="flex items-center gap-1 text-xs font-semibold text-content-primary">
+                  {s.icon}
+                  {s.title}
+                </span>
+              </div>
+              <p className="mt-1.5 text-2xs leading-relaxed text-content-tertiary">{s.desc}</p>
+            </li>
+            {i < steps.length - 1 && (
+              <li
+                aria-hidden="true"
+                className="hidden shrink-0 items-center self-center text-content-quaternary lg:flex"
+              >
+                <ArrowRight size={16} />
+              </li>
+            )}
+          </Fragment>
+        ))}
+      </ol>
+
+      <div className="mt-3 flex flex-col gap-1.5 border-t border-border-light pt-3 text-2xs text-content-tertiary sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-5 sm:gap-y-1">
+        <span>
+          <span className="font-medium text-content-secondary">
+            {t('assets.flow_connects', { defaultValue: 'Connects with:' })}
+          </span>{' '}
+          <ModLink to="/bim">
+            {t('assets.mod_bim', { defaultValue: 'BIM viewer' })}
+          </ModLink>{' '}
+          ·{' '}
+          <ModLink to="/quantities">
+            {t('assets.mod_quantities', { defaultValue: 'Quantity takeoff' })}
+          </ModLink>{' '}
+          ·{' '}
+          <ModLink to="/match-elements">
+            {t('assets.mod_match', { defaultValue: 'Match elements' })}
+          </ModLink>{' '}
+          ·{' '}
+          <ModLink to="/equipment">
+            {t('assets.mod_equipment', { defaultValue: 'Equipment & Fleet' })}
+          </ModLink>
+        </span>
+      </div>
+    </Card>
   );
 }
 
@@ -169,6 +291,8 @@ export function AssetsPage() {
               'Lists every BIM element flagged as a tracked asset in the active project, with search across manufacturer, model and serial and a status filter. Edit a row to record operational data on the element, open it in the 3D viewer, or export the register as COBie for facilities handover. This register is for installed building assets and fixtures from the model; for plant, vehicles and movable machinery use Equipment & Fleet.',
           })}
         </DismissibleInfo>
+
+        <HowAssetsWork />
       </div>
 
       {/* ── Filters ──────────────────────────────────────────────────── */}

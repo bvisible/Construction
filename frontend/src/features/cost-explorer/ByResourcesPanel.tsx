@@ -15,6 +15,7 @@ import { getErrorMessage } from '@/shared/lib/api';
 import { findByResources, type ByResourcesMatch, type CatalogResource } from './api';
 import { ResourceSearchInput } from './ResourceSearchInput';
 import { fmtMoney, MetaLine, Meter, pct, RegionSelect } from './parts';
+import { RowEstimateActions } from './RowEstimateActions';
 import type { CrossNav } from './types';
 
 interface Picked {
@@ -74,16 +75,16 @@ export function ByResourcesPanel({ nav }: { nav: CrossNav }) {
     <div className="space-y-4">
       <div className="grid gap-3 md:grid-cols-[1fr_220px]">
         <div>
-          <label className="mb-1.5 block text-sm font-medium text-content-primary">
+          <label htmlFor="ce-byres-resource" className="mb-1.5 block text-sm font-medium text-content-primary">
             {t('costExplorer.byResources.addLabel', { defaultValue: 'Resources you know' })}
           </label>
-          <ResourceSearchInput onPick={addResource} region={region || null} excludeCodes={picked.map((p) => p.code)} />
+          <ResourceSearchInput id="ce-byres-resource" onPick={addResource} region={region || null} excludeCodes={picked.map((p) => p.code)} />
         </div>
         <div>
-          <label className="mb-1.5 block text-sm font-medium text-content-primary">
+          <label htmlFor="ce-byres-region" className="mb-1.5 block text-sm font-medium text-content-primary">
             {t('costExplorer.region.label', { defaultValue: 'Price base region' })}
           </label>
-          <RegionSelect value={region} onChange={setRegion} />
+          <RegionSelect id="ce-byres-region" value={region} onChange={setRegion} />
         </div>
       </div>
 
@@ -246,6 +247,17 @@ function ResultRow({
             >
               <Repeat2 className="h-3.5 w-3.5" /> {t('costExplorer.actions.substitute', { defaultValue: 'Substitute' })}
             </button>
+            <RowEstimateActions
+              row={{
+                cost_item_id: row.cost_item_id,
+                code: row.code,
+                description: row.description,
+                unit: row.unit,
+                rate: row.rate,
+                currency: row.currency,
+                region: row.region,
+              }}
+            />
           </div>
         </div>
       </div>

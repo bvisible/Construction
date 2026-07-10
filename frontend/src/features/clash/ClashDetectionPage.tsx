@@ -18,13 +18,15 @@
  *     is no camera/point param, so we isolate both clash elements by id.
  */
 
-import { useMemo, useState, useEffect, useCallback, useRef } from 'react';
+import { Fragment, useMemo, useState, useEffect, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import {
   Radar,
+  Network,
+  ArrowRight,
   AlertTriangle,
   Ruler,
   CheckCircle2,
@@ -2062,6 +2064,8 @@ export function ClashDetectionPage() {
             'Run geometric interference and clearance checks across the canonical BIM models in this project, then triage each clash by discipline, status and severity. Resolved issues link straight into the 3D viewer and export to BCF for coordination with the rest of the platform.',
         })}
       </DismissibleInfo>
+
+      <HowClashWorks />
 
       {/* ── Selectable CAD-BIM model cards ──────────────────────────────
             One card per BIM model in the project. Clicking a card toggles
@@ -4598,6 +4602,127 @@ function Header({
         actions={actions}
       />
     </>
+  );
+}
+
+/* ── How-it-works flow + module integrations ───────────────────────────── */
+
+/** A compact inline link to a sibling module (keeps the flow copy readable). */
+function ModLink({ to, children }: { to: string; children: React.ReactNode }) {
+  return (
+    <Link to={to} className="font-medium text-oe-blue-text hover:underline">
+      {children}
+    </Link>
+  );
+}
+
+/**
+ * One-glance explainer of what clash detection does and how it connects: it
+ * checks the federated BIM models for interferences, then hands the issues to
+ * coordination and the 3D viewer. Every connected module is a link so the
+ * workflow is obvious.
+ */
+function HowClashWorks() {
+  const { t } = useTranslation();
+
+  const steps: { icon: React.ReactNode; title: string; desc: string }[] = [
+    {
+      icon: <Layers className="h-3.5 w-3.5 text-oe-blue" />,
+      title: t('clash.flow_1_title', { defaultValue: 'Select models' }),
+      desc: t('clash.flow_1_desc', {
+        defaultValue: 'Pick the federated BIM models to check against each other.',
+      }),
+    },
+    {
+      icon: <Radar className="h-3.5 w-3.5 text-oe-blue" />,
+      title: t('clash.flow_2_title', { defaultValue: 'Run checks' }),
+      desc: t('clash.flow_2_desc', {
+        defaultValue: 'Detect geometric interferences and clearance breaches across disciplines.',
+      }),
+    },
+    {
+      icon: <AlertTriangle className="h-3.5 w-3.5 text-oe-blue" />,
+      title: t('clash.flow_3_title', { defaultValue: 'Triage' }),
+      desc: t('clash.flow_3_desc', {
+        defaultValue: 'Group and sort clashes by discipline, status and severity.',
+      }),
+    },
+    {
+      icon: <CheckCircle2 className="h-3.5 w-3.5 text-oe-blue" />,
+      title: t('clash.flow_4_title', { defaultValue: 'Resolve' }),
+      desc: t('clash.flow_4_desc', {
+        defaultValue: 'Open each clash in the 3D viewer and track it to resolution.',
+      }),
+    },
+    {
+      icon: <FileDown className="h-3.5 w-3.5 text-oe-blue" />,
+      title: t('clash.flow_5_title', { defaultValue: 'Export BCF' }),
+      desc: t('clash.flow_5_desc', {
+        defaultValue: 'Share issues as BCF for coordination with the rest of the team.',
+      }),
+    },
+  ];
+
+  return (
+    <Card padding="md">
+      <h2 className="flex items-center gap-1.5 text-sm font-semibold text-content-primary">
+        <Network className="h-4 w-4 text-oe-blue" />
+        {t('clash.flow_title', { defaultValue: 'How clash detection fits together' })}
+      </h2>
+      <p className="mt-1 text-xs text-content-tertiary">
+        {t('clash.flow_intro', {
+          defaultValue:
+            'Clash detection checks the federated BIM models for geometric interferences and clearance breaches, then hands each issue to coordination, the 3D viewer and BCF export, so problems are fixed before they reach the site.',
+        })}
+      </p>
+
+      <ol className="mt-3 flex flex-col gap-2 lg:flex-row lg:items-stretch">
+        {steps.map((s, i) => (
+          <Fragment key={s.title}>
+            <li className="flex-1 rounded-lg border border-border-light bg-surface-secondary/40 p-3">
+              <div className="flex items-center gap-2">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-oe-blue-subtle text-2xs font-bold text-oe-blue-text">
+                  {i + 1}
+                </span>
+                <span className="flex items-center gap-1 text-xs font-semibold text-content-primary">
+                  {s.icon}
+                  {s.title}
+                </span>
+              </div>
+              <p className="mt-1.5 text-2xs leading-relaxed text-content-tertiary">{s.desc}</p>
+            </li>
+            {i < steps.length - 1 && (
+              <li
+                aria-hidden="true"
+                className="hidden shrink-0 items-center self-center text-content-quaternary lg:flex"
+              >
+                <ArrowRight className="h-4 w-4" />
+              </li>
+            )}
+          </Fragment>
+        ))}
+      </ol>
+
+      <div className="mt-3 flex flex-col gap-1.5 border-t border-border-light pt-3 text-2xs text-content-tertiary sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-5 sm:gap-y-1">
+        <span>
+          <span className="font-medium text-content-secondary">
+            {t('clash.flow_connects', { defaultValue: 'Connects with:' })}
+          </span>{' '}
+          <ModLink to="/bim/federations">
+            {t('clash.mod_federations', { defaultValue: 'BIM Federations' })}
+          </ModLink>{' '}
+          ·{' '}
+          <ModLink to="/bim">
+            {t('clash.mod_bim', { defaultValue: 'BIM viewer' })}
+          </ModLink>{' '}
+          ·{' '}
+          <ModLink to="/rfi">{t('clash.mod_rfi', { defaultValue: 'RFIs' })}</ModLink> ·{' '}
+          <ModLink to="/transmittals">
+            {t('clash.mod_transmittals', { defaultValue: 'Transmittals' })}
+          </ModLink>
+        </span>
+      </div>
+    </Card>
   );
 }
 

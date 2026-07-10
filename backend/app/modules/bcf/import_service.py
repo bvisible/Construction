@@ -2,7 +2,7 @@
 """BCF 3.0 → :class:`ClashIssue` import service.
 
 This module is the **inverse** of :class:`app.modules.bcf.service.BCFExportService`:
-it takes a ``.bcfzip`` produced by Revit / ArchiCAD / Solibri (or by our
+it takes a ``.bcfzip`` produced by any BCF-compatible tool (or by our
 own BCFWriter - round-trip!) and upserts each Topic into the project's
 :class:`app.modules.clash.models.ClashIssue` table.
 

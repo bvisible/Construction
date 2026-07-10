@@ -1,7 +1,7 @@
-import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
+import { Fragment, useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Calendar,
   CalendarDays,
@@ -25,6 +25,9 @@ import {
   TrendingUp,
   Layers,
   Table2,
+  Network,
+  ArrowRight,
+  ListPlus,
 } from 'lucide-react';
 import { Button, Card, Badge, Input, SkeletonTable, Breadcrumb, DismissibleInfo, IntroRichText, GanttChart as SVGGanttChart, ViewInBIMButton, ConfirmDialog, ModuleGuideButton } from '@/shared/ui';
 import { PageHeader } from '@/shared/ui/PageHeader';
@@ -2308,6 +2311,131 @@ function ProjectSchedules({
 
 /* ── Main Page ─────────────────────────────────────────────────────────── */
 
+/* ── How-it-works flow + module integrations ───────────────────────────── */
+
+/** A compact inline link to a sibling module (keeps the flow copy readable). */
+function ModLink({ to, children }: { to: string; children: React.ReactNode }) {
+  return (
+    <Link to={to} className="font-medium text-oe-blue-text hover:underline">
+      {children}
+    </Link>
+  );
+}
+
+/**
+ * One-glance explainer for the 4D Schedule: what it does and how it connects to
+ * the rest of the platform. The plan is generated from a priced BOQ, resourced
+ * with crews, sequenced with CPM, tracked against field progress and rolled up
+ * into the portfolio - so every connected module is a link.
+ */
+function HowScheduleWorks() {
+  const { t } = useTranslation();
+
+  const steps: { icon: React.ReactNode; title: string; desc: string }[] = [
+    {
+      icon: <CalendarDays size={14} className="text-oe-blue" />,
+      title: t('schedule.flow_1_title', { defaultValue: 'Create a schedule' }),
+      desc: t('schedule.flow_1_desc', {
+        defaultValue: 'Set up a programme for the project and give it a start date.',
+      }),
+    },
+    {
+      icon: <ListPlus size={14} className="text-oe-blue" />,
+      title: t('schedule.flow_2_title', { defaultValue: 'Add or generate activities' }),
+      desc: t('schedule.flow_2_desc', {
+        defaultValue: 'Add activities by hand or generate them straight from a BOQ.',
+      }),
+    },
+    {
+      icon: <GitBranch size={14} className="text-oe-blue" />,
+      title: t('schedule.flow_3_title', { defaultValue: 'Sequence & critical path' }),
+      desc: t('schedule.flow_3_desc', {
+        defaultValue: 'Link dependencies and run CPM to find the longest path and the float.',
+      }),
+    },
+    {
+      icon: <TrendingUp size={14} className="text-oe-blue" />,
+      title: t('schedule.flow_4_title', { defaultValue: 'Track progress' }),
+      desc: t('schedule.flow_4_desc', {
+        defaultValue: 'Update percent complete as work happens and compare plan against actual.',
+      }),
+    },
+    {
+      icon: <Box size={14} className="text-oe-blue" />,
+      title: t('schedule.flow_5_title', { defaultValue: 'Drive 4D on the model' }),
+      desc: t('schedule.flow_5_desc', {
+        defaultValue: 'Link activities to BIM elements to play back the build sequence in 4D.',
+      }),
+    },
+  ];
+
+  return (
+    <Card padding="md">
+      <h2 className="flex items-center gap-1.5 text-sm font-semibold text-content-primary">
+        <Network size={15} className="text-oe-blue" />
+        {t('schedule.flow_title', { defaultValue: 'How the 4D Schedule fits together' })}
+      </h2>
+      <p className="mt-1 text-xs text-content-tertiary">
+        {t('schedule.flow_intro', {
+          defaultValue:
+            'The schedule turns a priced estimate into a build timeline, then tracks it against what actually happens on site. This page is where that timeline is built.',
+        })}
+      </p>
+
+      <ol className="mt-3 flex flex-col gap-2 lg:flex-row lg:items-stretch">
+        {steps.map((s, i) => (
+          <Fragment key={s.title}>
+            <li className="flex-1 rounded-lg border border-border-light bg-surface-secondary/40 p-3">
+              <div className="flex items-center gap-2">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-oe-blue-subtle text-2xs font-bold text-oe-blue-text">
+                  {i + 1}
+                </span>
+                <span className="flex items-center gap-1 text-xs font-semibold text-content-primary">
+                  {s.icon}
+                  {s.title}
+                </span>
+              </div>
+              <p className="mt-1.5 text-2xs leading-relaxed text-content-tertiary">{s.desc}</p>
+            </li>
+            {i < steps.length - 1 && (
+              <li
+                aria-hidden="true"
+                className="hidden shrink-0 items-center self-center text-content-quaternary lg:flex"
+              >
+                <ArrowRight size={16} />
+              </li>
+            )}
+          </Fragment>
+        ))}
+      </ol>
+
+      <div className="mt-3 flex flex-col gap-1.5 border-t border-border-light pt-3 text-2xs text-content-tertiary sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-5 sm:gap-y-1">
+        <span>
+          <span className="font-medium text-content-secondary">
+            {t('schedule.flow_pulls', { defaultValue: 'Pulls from:' })}
+          </span>{' '}
+          <ModLink to="/boq">{t('schedule.mod_boq', { defaultValue: 'BOQ' })}</ModLink> ·{' '}
+          <ModLink to="/resources">
+            {t('schedule.mod_resources', { defaultValue: 'Resources & crew' })}
+          </ModLink>
+        </span>
+        <span>
+          <span className="font-medium text-content-secondary">
+            {t('schedule.flow_feeds', { defaultValue: 'Feeds:' })}
+          </span>{' '}
+          <ModLink to="/field-reports">
+            {t('schedule.mod_field', { defaultValue: 'Field reports' })}
+          </ModLink>{' '}
+          ·{' '}
+          <ModLink to="/portfolio">
+            {t('schedule.mod_portfolio', { defaultValue: 'Portfolio' })}
+          </ModLink>
+        </span>
+      </div>
+    </Card>
+  );
+}
+
 export function SchedulePage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -2420,6 +2548,9 @@ export function SchedulePage() {
 
       {/* Cross-module navigation — connects the planning value chain */}
       <PlanningCrossLinks active="schedule" />
+
+      {/* How this module works + what it connects to */}
+      <HowScheduleWorks />
 
       {isLoading ? (
         <SkeletonTable rows={3} columns={3} />

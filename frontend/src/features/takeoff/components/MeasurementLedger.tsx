@@ -34,6 +34,7 @@ import {
 } from '../lib/takeoff-ledger';
 import { usePreferencesStore } from '@/stores/usePreferencesStore';
 import { convertQuantity } from '../lib/takeoff-display-units';
+import { effectiveQuantity, quantityAdjustmentLabel } from '../lib/takeoff-quantity';
 
 export interface MeasurementLedgerProps {
   measurements: Measurement[];
@@ -488,9 +489,11 @@ function GroupRows({
     <>
       {groupRows.map(({ ordinal, measurement }) => {
         const selected = selectedId === measurement.id;
-        const signed = measurement.isDeduction
-          ? -measurement.value
-          : measurement.value;
+        // Reported (effective) quantity: folds slope / wastage / typical-
+        // multiplier and the opening-deduction sign, so the row reconciles with
+        // the net subtotal below and matches the export.
+        const signed = effectiveQuantity(measurement);
+        const adjustment = quantityAdjustmentLabel(measurement);
         const disp = convertQuantity(signed, measurement.unit || '', measurementSystem);
         return (
           <tr
@@ -525,6 +528,18 @@ function GroupRows({
                   data-testid="ledger-deduction-badge"
                 >
                   {t('takeoff_viewer.deduction', { defaultValue: 'deduction' })}
+                </span>
+              )}
+              {adjustment && (
+                <span
+                  className="ml-1 text-[9px] font-semibold text-oe-blue tabular-nums"
+                  data-testid="ledger-adjustment-badge"
+                  title={t('takeoff_viewer.adjustment_hint', {
+                    defaultValue:
+                      'Reported quantity adjusted (slope / wastage / typical multiplier)',
+                  })}
+                >
+                  {adjustment}
                 </span>
               )}
             </td>

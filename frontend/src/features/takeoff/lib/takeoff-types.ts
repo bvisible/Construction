@@ -59,6 +59,19 @@ export interface Measurement {
   fillAlpha?: number;
   /** Per-measurement stroke width override in CSS px (issue #312). */
   strokeWidth?: number;
+  /** Per-measurement STROKE (line) opacity override for LINEAR types
+   *  (distance, polyline), 0..1 (issue #332). Undefined = fully opaque, so a
+   *  measurement drawn before this field existed renders exactly as before. */
+  strokeAlpha?: number;
+  /** True-surface slope / pitch factor for an AREA measurement (roofs, ramps):
+   *  true surface qty = plan area x slopeFactor (>= 1). Undefined = 1 (flat). */
+  slopeFactor?: number;
+  /** Material wastage / allowance percent added on top of the reported
+   *  quantity (e.g. 10 = +10%). Undefined = 0 (no allowance). */
+  wastagePct?: number;
+  /** Typical-multiplier: this measurement stands for N identical repeats
+   *  (typical floors / bays). Effective qty = base x multiplier. Undefined = 1. */
+  multiplier?: number;
   /** Free-form notes entered via the properties panel. */
   notes?: string;
   /** Opening deduction: an `area` measurement representing a void (door,

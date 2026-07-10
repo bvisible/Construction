@@ -70,6 +70,9 @@ export interface Meeting {
   notes: string;
   minutes?: string | null;
   document_ids: string[];
+  /** Recurring-series id (the master meeting id); null for a one-off meeting. */
+  series_id?: string | null;
+  is_series_master?: boolean;
   created_by: string | null;
   created_at: string;
   updated_at: string;
@@ -470,4 +473,219 @@ export async function recordExternalAttendee(
 
 export async function getAttendance(meetingId: string): Promise<AttendanceRow[]> {
   return apiGet<AttendanceRow[]>(`/v1/meetings/${meetingId}/attendance/`);
+}
+
+/* -- Action register (carry-over across a series) ------------------------- */
+
+export type ActionStatus = 'open' | 'in_progress' | 'done' | 'cancelled';
+
+export const ACTION_STATUSES: ActionStatus[] = ['open', 'in_progress', 'done', 'cancelled'];
+
+export interface ActionRegisterItem {
+  id: string;
+  project_id: string;
+  series_id: string | null;
+  origin_meeting_id: string;
+  origin_meeting_number: string;
+  origin_meeting_date: string | null;
+  description: string;
+  owner_id: string | null;
+  owner_name: string | null;
+  due_date: string | null;
+  status: ActionStatus;
+  overdue: boolean;
+  brought_forward: boolean;
+  closed_in_meeting_id: string | null;
+  closed_at: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface MeetingActions {
+  meeting_id: string;
+  own: ActionRegisterItem[];
+  brought_forward: ActionRegisterItem[];
+}
+
+export interface SeriesActionRegister {
+  series_id: string | null;
+  total: number;
+  open: number;
+  in_progress: number;
+  done: number;
+  cancelled: number;
+  overdue: number;
+  actions: ActionRegisterItem[];
+}
+
+export interface CreateActionPayload {
+  description: string;
+  owner_id?: string | null;
+  owner_name?: string | null;
+  due_date?: string | null;
+  status?: ActionStatus;
+}
+
+export interface UpdateActionPayload {
+  description?: string;
+  owner_id?: string | null;
+  owner_name?: string | null;
+  due_date?: string | null;
+  status?: ActionStatus;
+  closing_meeting_id?: string | null;
+}
+
+export async function fetchMeetingActions(meetingId: string): Promise<MeetingActions> {
+  return apiGet<MeetingActions>(`/v1/meetings/${meetingId}/actions/`);
+}
+
+export async function addMeetingAction(
+  meetingId: string,
+  payload: CreateActionPayload,
+): Promise<ActionRegisterItem> {
+  return apiPost<ActionRegisterItem>(`/v1/meetings/${meetingId}/actions/`, payload);
+}
+
+export async function updateMeetingAction(
+  actionId: string,
+  payload: UpdateActionPayload,
+): Promise<ActionRegisterItem> {
+  return apiPatch<ActionRegisterItem>(`/v1/meetings/actions/${actionId}`, payload);
+}
+
+export async function deleteMeetingAction(actionId: string): Promise<void> {
+  return apiDelete(`/v1/meetings/actions/${actionId}`);
+}
+
+export async function fetchSeriesActionRegister(seriesId: string): Promise<SeriesActionRegister> {
+  return apiGet<SeriesActionRegister>(`/v1/meetings/series/${seriesId}/actions/`);
+}
+
+/* -- Auto-draft minutes --------------------------------------------------- */
+
+export type MinutesStatus = 'draft' | 'issued';
+
+export interface MinutesAttendee {
+  name: string;
+  company: string;
+}
+
+export interface MinutesAgendaLine {
+  number: string;
+  topic: string;
+  presenter: string;
+  discussion: string;
+  decision: string;
+  required: boolean;
+}
+
+export interface MinutesActionLine {
+  description: string;
+  owner: string;
+  due_date: string | null;
+  status: string;
+  overdue: boolean;
+  brought_forward: boolean;
+  origin_meeting_number: string;
+}
+
+export interface MinutesContent {
+  title: string;
+  meeting_number: string;
+  meeting_type: string;
+  meeting_date: string | null;
+  location: string;
+  chairperson: string;
+  attendees_present: MinutesAttendee[];
+  attendees_absent: MinutesAttendee[];
+  agenda: MinutesAgendaLine[];
+  action_items: MinutesActionLine[];
+  decisions: string[];
+  next_meeting_date: string | null;
+  summary: string;
+  generated_at: string | null;
+}
+
+export interface Minutes {
+  id: string;
+  project_id: string;
+  meeting_id: string;
+  status: MinutesStatus;
+  content: MinutesContent;
+  next_meeting_date: string | null;
+  issued_at: string | null;
+  issued_by: string | null;
+  distributed_at: string | null;
+  distributed_to: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface GenerateMinutesPayload {
+  next_meeting_date?: string;
+  agenda?: Array<{
+    number?: string;
+    topic?: string;
+    presenter?: string;
+    discussion?: string;
+    decision?: string;
+    required?: boolean;
+  }>;
+  regenerate?: boolean;
+}
+
+export interface DistributeMinutesResult {
+  minutes_id: string;
+  recipients: number;
+  notified_user_ids: string[];
+}
+
+/** GET the minutes for a meeting, returning ``null`` when none exist yet (404). */
+export async function fetchMinutes(meetingId: string): Promise<Minutes | null> {
+  const token = useAuthStore.getState().accessToken;
+  const res = await fetch(`/api/v1/meetings/${meetingId}/minutes/`, {
+    method: 'GET',
+    headers: {
+      Accept: 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      'X-DDC-Client': 'OE/1.0',
+    },
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) {
+    let detail = 'Failed to load minutes';
+    try {
+      detail = extractErrorMessageFromBody(await res.json()) ?? detail;
+    } catch {
+      // ignore parse error
+    }
+    throw new Error(detail);
+  }
+  return (await res.json()) as Minutes;
+}
+
+export async function generateMinutes(
+  meetingId: string,
+  payload: GenerateMinutesPayload = {},
+): Promise<Minutes> {
+  return apiPost<Minutes>(`/v1/meetings/${meetingId}/minutes/generate/`, payload);
+}
+
+export async function updateMinutes(
+  meetingId: string,
+  payload: { content?: MinutesContent; next_meeting_date?: string },
+): Promise<Minutes> {
+  return apiPatch<Minutes>(`/v1/meetings/${meetingId}/minutes/`, payload);
+}
+
+export async function issueMinutes(meetingId: string): Promise<Minutes> {
+  return apiPost<Minutes>(`/v1/meetings/${meetingId}/minutes/issue/`);
+}
+
+export async function distributeMinutes(meetingId: string): Promise<DistributeMinutesResult> {
+  return apiPost<DistributeMinutesResult>(`/v1/meetings/${meetingId}/minutes/distribute/`);
+}
+
+export function getMinutesPdfUrl(meetingId: string): string {
+  return `/api/v1/meetings/${meetingId}/minutes/export/pdf/`;
 }

@@ -33,6 +33,7 @@ import { PermissionsMatrixPage } from '@/features/admin/PermissionsMatrixPage';
 import { ApprovalRoutesPage } from '@/features/approval-routes';
 import { ValidationRulesSettingsPage } from '@/features/property-dev';
 import { governanceGuide } from './governanceGuide';
+import { GovernanceOverview } from './GovernanceOverview';
 
 /* ── Tab definitions ───────────────────────────────────────────────────── */
 
@@ -98,7 +99,7 @@ export function GovernancePage() {
   });
 
   return (
-    <div className="space-y-5 animate-fade-in">
+    <div className="space-y-6 animate-fade-in">
       <Breadcrumb
         items={[
           {
@@ -142,6 +143,11 @@ export function GovernancePage() {
             'One admin home for three platform controls behind tabs: Permissions sets which role can do what, Approval Routes defines who signs off on RFIs, submittals, change requests and other records, and Validation Rules picks which standards (DIN 276, NRM, GAEB, BOQ quality) a project is checked against. What you set here drives the sign-off badges and validation checks the rest of the modules enforce.',
         })}
       </DismissibleInfo>
+
+      {/* Persistent "how it fits" band - an always-visible integration rail
+          (survives when the intro above is collapsed) plus three clickable
+          posture stats that jump into their tab. See GovernanceOverview. */}
+      <GovernanceOverview onJump={setActiveTab} />
 
       {/* Tab bar — identical look to the /modules page tab strip. */}
       <div

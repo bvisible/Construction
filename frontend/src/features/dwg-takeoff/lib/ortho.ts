@@ -4,7 +4,7 @@
  * When the user holds Shift while placing the next point of a distance /
  * line / polyline, we snap the cursor to the nearest ray emanating from
  * the last committed point at 0°, 45°, 90°, 135° (and their mirrors).
- * This gives AutoCAD-style "ortho" behaviour without a toggle.
+ * This gives CAD-style "ortho" behaviour without a toggle.
  */
 
 /** World-space 2D point — kept minimal so the helper has no dependency

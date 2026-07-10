@@ -39,6 +39,37 @@ class PhoneLogCreate(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class PhoneLogFinalize(BaseModel):
+    """Confirm a recording draft into a normal, logged phone-log record.
+
+    The recording ingestion path (`POST /transcribe`) stores the recording and
+    returns a DRAFT the user reviews and edits. This schema carries the reviewed,
+    human-confirmed values back: parties, direction, timing, the transcript, and
+    the edited structured protocol. Parties / direction / channel are still
+    normalized server-side; the transcript, the reviewed instructions, and the
+    protocol are stored as confirmed. Nothing here is applied until the user
+    submits it, which is the "AI suggests, human confirms" boundary.
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    direction: str = Field(default="", max_length=40)
+    channel: str = Field(default="voice_note", max_length=40)
+    raw_parties: str | list[str] = Field(default="")
+    occurred_at: str | None = Field(default=None, max_length=40)
+    duration_seconds: int | None = Field(default=None, ge=0)
+    # A transcribed recording can be long, so allow more than the manual-capture
+    # path; it is stored verbatim in a Text column as the underlying evidence.
+    transcript: str = Field(default="", max_length=200000)
+    summary: str = Field(default="", max_length=2000)
+    # Human-reviewed instruction sentences. When empty, the server re-derives
+    # them from the transcript so a confirm never silently drops instructions.
+    instructions: list[str] = Field(default_factory=list)
+    # The edited structured protocol (participants, summary, decisions, action
+    # items, confidence). Stored under metadata_["protocol"].
+    protocol: dict[str, Any] = Field(default_factory=dict)
+
+
 class PhoneLogResponse(BaseModel):
     """A normalized phone-log record returned from the API."""
 

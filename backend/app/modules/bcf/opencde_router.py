@@ -11,7 +11,7 @@ Notes (security / protocol)
     * HTTPS enforcement is a deployment concern (reverse proxy / Nginx
       / Traefik) - this module does not check the scheme of the request.
     * The 14 endpoints below cover the conformance subset BCF Manager
-      plugins (Revit / Archicad / Navisworks) probe; richer OpenCDE
+      plugins (any BCF-compatible tool) probe; richer OpenCDE
       surfaces (related-topics, document-references, file-info,
       authentication discovery) are deliberately out of scope.
     * On mutation we set ``Cache-Control: no-store``; on single-resource
@@ -175,7 +175,7 @@ async def get_project_extensions(
 
     Topic types / statuses / priorities / stages mirror the values
     the file-based exporter emits - keeps the REST surface and the
-    .bcfzip codec consistent for round-trips through Revit / Archicad.
+    .bcfzip codec consistent for round-trips through any BCF-compatible tool.
     """
     await _project_owned_by_caller(session, project_id, payload["sub"], payload.get("role", "viewer"))
     return {

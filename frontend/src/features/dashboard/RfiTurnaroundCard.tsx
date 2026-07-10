@@ -17,6 +17,7 @@ import { useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardHeader, InfoHint } from '@/shared/ui';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { fetchRFIStats } from '@/features/rfi/api';
+import { KpiStrip } from './KpiStrip';
 
 const countFormat = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 });
 
@@ -54,7 +55,6 @@ export function RfiTurnaroundCard() {
   const openCount = data.open;
   const overdueCount = data.overdue;
   const avgDays = formatDays(data.avg_days_to_response);
-  const overdueColor = overdueCount > 0 ? 'text-amber-600' : 'text-content-secondary';
 
   return (
     <Card className="h-full">
@@ -74,34 +74,24 @@ export function RfiTurnaroundCard() {
         }
       />
       <CardContent>
-        <div className="flex items-end justify-between gap-2">
-          <div>
-            <p className="text-xs uppercase tracking-wide text-content-tertiary">
-              {t('dashboard.rfi_open_count', { defaultValue: 'Open' })}
-            </p>
-            <p className="text-2xl font-semibold text-content-primary tabular-nums">
-              {formatCount(openCount)}
-            </p>
-          </div>
-          <div className="text-right">
-            <p className="text-xs uppercase tracking-wide text-content-tertiary">
-              {t('dashboard.rfi_overdue', { defaultValue: 'Overdue' })}
-            </p>
-            <p className={`text-lg font-medium tabular-nums ${overdueColor}`}>
-              {formatCount(overdueCount)}
-            </p>
-          </div>
-        </div>
-        <p className="mt-3 text-xs text-content-tertiary">
-          {avgDays === null
-            ? t('dashboard.rfi_avg_days_none', {
-                defaultValue: 'No responses yet',
-              })
-            : t('dashboard.rfi_avg_days', {
-                defaultValue: '{{days}} days average to response',
-                days: avgDays,
-              })}
-        </p>
+        <KpiStrip
+          stats={[
+            {
+              label: t('dashboard.rfi_open_count', { defaultValue: 'Open' }),
+              value: formatCount(openCount),
+            },
+            {
+              label: t('dashboard.rfi_overdue', { defaultValue: 'Overdue' }),
+              value: formatCount(overdueCount),
+              tone: overdueCount > 0 ? 'text-amber-600' : 'text-content-secondary',
+            },
+            {
+              label: t('dashboard.rfi_avg_label', { defaultValue: 'Avg days' }),
+              value: avgDays === null ? '-' : avgDays,
+              tone: 'text-content-secondary',
+            },
+          ]}
+        />
         <InfoHint
           className="mt-3"
           text={t('dashboard.rfi_help', {

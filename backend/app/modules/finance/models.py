@@ -393,3 +393,8 @@ from app.modules.finance.connector_models import (  # noqa: E402,F401
     AccountingConnectorConfig,
     SyncLog,
 )
+
+# ── Invoice-approval DMS model ───────────────────────────────────────────────
+# Same rationale: re-exported so ``Base.metadata.create_all`` registers the
+# oe_finance_captured_invoice table via the module's models.py scan.
+from app.modules.finance.invoice_capture_models import CapturedInvoice  # noqa: E402,F401

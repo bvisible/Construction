@@ -14,13 +14,13 @@
 import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
 import {
   AlertTriangle,
   ArrowRight,
   Bell,
   CheckSquare,
   ClipboardCheck,
+  Filter,
   Info,
   Inbox as InboxIcon,
   Loader2,
@@ -28,14 +28,17 @@ import {
 } from 'lucide-react';
 import clsx from 'clsx';
 import { Badge, Card, CardHeader } from '@/shared/ui';
-import { fetchInbox, type InboxItem, type InboxSeverity } from './api';
+import { type InboxItem, type InboxSeverity } from './api';
 import {
   countApprovals,
+  filterInboxItems,
   formatTimeAgo,
   normalizeSeverity,
   resolveTitle,
   sortInboxItems,
+  type InboxFilter,
 } from './inboxUtils';
+import { useInboxQuery } from './useInbox';
 
 export interface InboxPanelProps {
   /** Max rows requested from the backend. Default 8 (a compact widget). */
@@ -44,15 +47,24 @@ export interface InboxPanelProps {
   showHeader?: boolean;
   /** Tighten spacing for the dashboard widget. */
   compact?: boolean;
+  /**
+   * Optional client-side triage filter (kind / project / severity). Applied to
+   * the already-fetched list before rendering; when omitted the full list shows
+   * (the dashboard widget passes nothing). No extra request is made.
+   */
+  filter?: InboxFilter;
 }
 
+// Severity → theme-aware semantic design tokens (the app-wide traffic-light
+// system). Each text/bg pair is WCAG-AA contrast-tuned for BOTH light and dark
+// themes in index.css (--oe-*-bg), so no hard-coded dark: variants are needed.
 const SEVERITY_STYLE: Record<
   InboxSeverity,
   { color: string; bg: string }
 > = {
-  critical: { color: 'text-semantic-error', bg: 'bg-rose-50 dark:bg-rose-900/30' },
-  warning: { color: 'text-amber-500', bg: 'bg-amber-50 dark:bg-amber-900/30' },
-  info: { color: 'text-oe-blue', bg: 'bg-oe-blue-subtle' },
+  critical: { color: 'text-semantic-error', bg: 'bg-semantic-error-bg' },
+  warning: { color: 'text-semantic-warning', bg: 'bg-semantic-warning-bg' },
+  info: { color: 'text-semantic-info', bg: 'bg-semantic-info-bg' },
 };
 
 function severityIcon(severity: InboxSeverity) {
@@ -117,49 +129,57 @@ function InboxRow({ item }: { item: InboxItem }) {
       </span>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5">
-          <p className="text-xs font-semibold text-content-primary line-clamp-1">{title}</p>
+          <p className="min-w-0 flex-1 truncate text-xs font-semibold text-content-primary">
+            {title}
+          </p>
           {item.kind === 'approval' && (
             <Badge variant="warning" size="sm">
               {t('inbox.badge_approval', { defaultValue: 'Approval' })}
             </Badge>
           )}
-        </div>
-        <div className="mt-0.5 flex items-center gap-2 text-2xs text-content-tertiary">
-          {item.project_name && (
-            <span className="truncate max-w-[160px]">{item.project_name}</span>
+          {timeAgo && (
+            <span className="shrink-0 text-2xs tabular-nums text-content-tertiary">{timeAgo}</span>
           )}
-          {item.project_name && timeAgo && <span aria-hidden>·</span>}
-          {timeAgo && <span className="tabular-nums shrink-0">{timeAgo}</span>}
         </div>
+        {item.project_name && (
+          <div className="mt-0.5 truncate text-2xs text-content-tertiary">{item.project_name}</div>
+        )}
       </div>
       <SevIcon size={13} className={clsx('shrink-0 mt-0.5', sevStyle.color)} aria-hidden />
       {clickable && (
         <ArrowRight
           size={14}
-          className="shrink-0 mt-0.5 text-content-quaternary group-hover:text-oe-blue group-hover:translate-x-0.5 transition-all"
+          className="shrink-0 mt-0.5 text-content-quaternary opacity-0 transition-all group-hover:translate-x-0.5 group-hover:text-oe-blue group-hover:opacity-100"
         />
       )}
     </RowTag>
   );
 }
 
-export function InboxPanel({ limit = 8, showHeader = true, compact = false }: InboxPanelProps) {
+export function InboxPanel({
+  limit = 8,
+  showHeader = true,
+  compact = false,
+  filter,
+}: InboxPanelProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
 
-  const { data, isLoading, isError, refetch } = useQuery({
-    queryKey: ['inbox', limit],
-    queryFn: () => fetchInbox(limit),
-    retry: false,
-    staleTime: 30_000,
-    refetchOnWindowFocus: true,
-  });
+  const { data, isLoading, isError, isFetching, refetch } = useInboxQuery(limit);
 
   // Defensive client-side re-sort (backend already sorts) + approval count.
-  const items = useMemo(() => sortInboxItems(data?.items ?? []), [data?.items]);
-  const approvalsCount = data?.approvals_count ?? countApprovals(items);
-  const alertsCount = data?.alerts_count ?? items.length - approvalsCount;
-  const total = data?.total ?? items.length;
+  const allItems = useMemo(() => sortInboxItems(data?.items ?? []), [data?.items]);
+  // The rendered subset: narrowed by the triage filter when the page passes one.
+  const items = useMemo(
+    () => (filter ? filterInboxItems(allItems, filter) : allItems),
+    [allItems, filter],
+  );
+  // Summary-rail counts stay on the server totals (pre-cap, unfiltered).
+  const approvalsCount = data?.approvals_count ?? countApprovals(allItems);
+  const alertsCount = data?.alerts_count ?? allItems.length - approvalsCount;
+  const total = data?.total ?? allItems.length;
+  // Distinguish an empty inbox from "your filter hid everything".
+  const filteredEmpty = !isLoading && !isError && allItems.length > 0 && items.length === 0;
 
   const body = (
     <>
@@ -182,12 +202,26 @@ export function InboxPanel({ limit = 8, showHeader = true, compact = false }: In
             {t('inbox.load_error', { defaultValue: "Couldn't load your inbox" })}
           </p>
           <button
+            type="button"
             onClick={() => refetch()}
-            className="text-2xs font-medium text-oe-blue hover:underline inline-flex items-center gap-1"
+            disabled={isFetching}
+            className="inline-flex items-center gap-1 rounded text-2xs font-medium text-oe-blue hover:underline disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-oe-blue/40"
           >
-            <Loader2 size={10} className="hidden" />
+            {isFetching && <Loader2 size={10} className="animate-spin" aria-hidden />}
             {t('common.retry', { defaultValue: 'Try again' })}
           </button>
+        </div>
+      ) : filteredEmpty ? (
+        <div className="px-4 py-8 text-center">
+          <Filter size={22} className="mx-auto mb-2 text-content-quaternary" />
+          <p className="text-xs font-medium text-content-secondary">
+            {t('inbox.filter_empty_title', { defaultValue: 'No items match these filters' })}
+          </p>
+          <p className="text-2xs text-content-tertiary mt-0.5">
+            {t('inbox.filter_empty_desc', {
+              defaultValue: 'Try a different segment, project or severity.',
+            })}
+          </p>
         </div>
       ) : items.length === 0 ? (
         <div className="px-4 py-8 text-center">
@@ -230,14 +264,14 @@ export function InboxPanel({ limit = 8, showHeader = true, compact = false }: In
   const hasItems = !isLoading && !isError && items.length > 0;
 
   const summaryRail = (
-    <div className="flex shrink-0 flex-row items-stretch gap-3 border-b border-border-light px-4 py-3 lg:w-56 lg:flex-col lg:gap-3 lg:border-b-0 lg:border-l lg:py-4">
+    <div className="flex shrink-0 flex-row items-stretch gap-3 border-b border-border-light px-4 py-3 lg:w-52 lg:flex-col lg:gap-3 lg:border-b-0 lg:border-l lg:py-4">
       <button
         type="button"
         onClick={() => navigate('/inbox')}
         className="group flex flex-1 items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-surface-secondary lg:flex-none"
       >
-        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-amber-50 dark:bg-amber-900/20">
-          <ClipboardCheck size={15} className="text-amber-500" />
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-semantic-warning-bg">
+          <ClipboardCheck size={15} className="text-semantic-warning" />
         </span>
         <span className="min-w-0">
           <span className="block text-lg font-bold leading-none tabular-nums text-content-primary">

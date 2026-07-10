@@ -1,6 +1,6 @@
-"""Revit Shared Parameters (.txt) parser.
+"""RVT Shared Parameters (.txt) parser.
 
-Parses the TAB-delimited Revit shared parameter file format into
+Parses the TAB-delimited RVT shared parameter file format into
 UniversalRequirement rows.
 """
 
@@ -16,7 +16,7 @@ from app.modules.bim_requirements.parsers.base import (
 
 logger = logging.getLogger(__name__)
 
-# Revit datatype -> IFC datatype mapping
+# RVT datatype -> IFC datatype mapping
 _REVIT_DATATYPE_MAP: dict[str, str] = {
     "TEXT": "IFCTEXT",
     "INTEGER": "IFCINTEGER",
@@ -35,13 +35,13 @@ _REVIT_DATATYPE_MAP: dict[str, str] = {
 
 
 class RevitSPParser(BaseRequirementParser):
-    """Parser for Revit Shared Parameters .txt files."""
+    """Parser for RVT Shared Parameters .txt files."""
 
     FORMAT_NAME = "RevitSP"
     SUPPORTED_EXTENSIONS = [".txt"]
 
     def parse(self, source: Path | str | bytes) -> ParseResult:
-        """Parse a Revit Shared Parameters file."""
+        """Parse an RVT Shared Parameters file."""
         result = ParseResult()
         result.metadata["format"] = self.FORMAT_NAME
 
@@ -103,7 +103,7 @@ class RevitSPParser(BaseRequirementParser):
 
             constraint_def: dict[str, Any] = {
                 "datatype": ifc_datatype,
-                "cardinality": "optional",  # Revit SP doesn't specify cardinality
+                "cardinality": "optional",  # RVT SP doesn't specify cardinality
             }
 
             context: dict[str, Any] = {}
@@ -114,7 +114,7 @@ class RevitSPParser(BaseRequirementParser):
 
             result.requirements.append(
                 UniversalRequirement(
-                    element_filter={},  # Revit SP has no element binding
+                    element_filter={},  # RVT SP has no element binding
                     property_group=group_name or None,
                     property_name=param["name"],
                     constraint_def=constraint_def,
@@ -126,7 +126,7 @@ class RevitSPParser(BaseRequirementParser):
         result.metadata["param_count"] = len(params)
 
         logger.info(
-            "Revit SP parsed: %d parameters in %d groups",
+            "RVT SP parsed: %d parameters in %d groups",
             len(params),
             len(groups),
         )

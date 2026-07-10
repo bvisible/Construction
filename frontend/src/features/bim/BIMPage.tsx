@@ -895,7 +895,7 @@ function UploadPanel({
           </select>
         </div>
         {/* Conversion depth and PDF-sheet export are RVT-only - the options
-            control Revit category extraction / sheet export. Hide them for
+            control RVT category extraction / sheet export. Hide them for
             IFC uploads where neither applies. */}
         {file && getFileExtension(file.name) === '.rvt' && (
           <>
@@ -906,7 +906,7 @@ function UploadPanel({
                 <option value="medium">{t('bim.upload_depth_medium', { defaultValue: 'Medium · extended categories (balanced)' })}</option>
                 <option value="complete">{t('bim.upload_depth_complete', { defaultValue: 'Complete · all categories (slow)' })}</option>
               </select>
-              <p className="mt-1 text-[10px] text-content-quaternary leading-relaxed">{t('bim.upload_depth_help', { defaultValue: 'Controls how many Revit categories are extracted. Element IDs and full properties are always preserved.' })}</p>
+              <p className="mt-1 text-[10px] text-content-quaternary leading-relaxed">{t('bim.upload_depth_help', { defaultValue: 'Controls how many RVT categories are extracted. Element IDs and full properties are always preserved.' })}</p>
             </div>
             <div>
               <label className="flex items-start gap-2 cursor-pointer group">
@@ -1570,7 +1570,7 @@ function LandingPage({ projectId, onUploadComplete: _onUploadComplete, breadcrum
                         <span className="text-[10px] font-mono px-2 py-1 rounded-md bg-oe-blue/8 text-oe-blue border border-oe-blue/15 font-semibold">.ifc</span>
                       </div>
                       <p className="text-[10px] text-content-quaternary leading-relaxed mt-1 text-center">
-                        Revit 2015–2026 &middot; IFC 2x3, 4.0, 4.1, 4.3
+                        RVT 2015–2026 &middot; IFC 2x3, 4.0, 4.1, 4.3
                       </p>
                     </>
                   )}
@@ -1579,7 +1579,7 @@ function LandingPage({ projectId, onUploadComplete: _onUploadComplete, breadcrum
                 {file && (
                   <div className="mt-4 space-y-3">
                     <input type="text" className="w-full text-sm py-2.5 px-4 rounded-xl border border-border-light bg-surface-secondary text-content-primary placeholder-content-quaternary focus:outline-none focus:ring-2 focus:ring-oe-blue/30" placeholder={t('bim.model_name')} value={modelName} onChange={(e) => setModelName(e.target.value)} />
-                    {/* RVT-only options - Revit category extraction depth
+                    {/* RVT-only options - RVT category extraction depth
                         and sheet-to-PDF export don't apply to IFC uploads. */}
                     {getFileExtension(file.name) === '.rvt' && (
                       <>
@@ -1597,7 +1597,7 @@ function LandingPage({ projectId, onUploadComplete: _onUploadComplete, breadcrum
                             <option value="complete">{t('bim.upload_depth_complete', { defaultValue: 'Complete · all categories (slow)' })}</option>
                           </select>
                           <p className="mt-1 text-[10px] text-content-quaternary leading-relaxed">
-                            {t('bim.upload_depth_help', { defaultValue: 'Controls how many Revit categories are extracted. Element IDs and full properties are always preserved.' })}
+                            {t('bim.upload_depth_help', { defaultValue: 'Controls how many RVT categories are extracted. Element IDs and full properties are always preserved.' })}
                           </p>
                         </div>
                         <label className="flex items-start gap-2 cursor-pointer group">
@@ -1666,7 +1666,7 @@ function LandingPage({ projectId, onUploadComplete: _onUploadComplete, breadcrum
                   {t('bim.landing_hero_subtitle')}
                 </p>
                 <p className="text-xs text-content-tertiary mt-3 leading-relaxed">
-                  {t('bim.landing_formats_detailed', { defaultValue: 'Revit 2015\u20132026 (.rvt) \u00B7 IFC 2x3, 4.0, 4.1, 4.3 (.ifc) \u00B7 CSV \u00B7 Excel. DWG \u2192 DWG Takeoff.' })}
+                  {t('bim.landing_formats_detailed', { defaultValue: 'RVT 2015\u20132026 (.rvt) \u00B7 IFC 2x3, 4.0, 4.1, 4.3 (.ifc) \u00B7 CSV \u00B7 Excel. DWG \u2192 DWG Takeoff.' })}
                 </p>
                 <div className="mt-4 flex items-center justify-start">
                   <div className="inline-flex flex-wrap items-center gap-2 px-4 py-2 rounded-full bg-emerald-500/10 border border-emerald-500/20">
@@ -2433,7 +2433,7 @@ export function BIMPage() {
   //   • /clash review "3D" link - the two interfering element ids plus
   //     `clash=1` (colour them clash-red) and `focus=cx,cy,cz` (the clash
   //     world centroid). The centroid is the reliable camera target: on
-  //     showcase IFC/RVT models the GLB nodes are numeric Revit ids that
+  //     showcase IFC/RVT models the GLB nodes are numeric RVT ids that
   //     never equal the DB element UUIDs, so per-element mesh resolution is
   //     only an approximate positional fallback and framing the matched
   //     meshes can point the camera at the wrong spot. The centroid is

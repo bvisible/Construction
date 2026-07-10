@@ -1013,7 +1013,7 @@ def _build_reportlab_pdf(project_id: uuid.UUID, items: list[PunchItem]) -> bytes
         if item.description:
             story.append(Paragraph(item.description[:1000], body))
 
-        # Sheet-pin caption (PlanGrid-style).
+        # Sheet-pin caption (sheet-pin style).
         sheet_ref = getattr(item, "document_id", None) or (item.metadata_ or {}).get("sheet_id")
         pin_x = item.location_x
         pin_y = item.location_y

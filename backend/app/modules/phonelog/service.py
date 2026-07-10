@@ -18,9 +18,10 @@ import uuid
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.phonelog import transcription
 from app.modules.phonelog.models import PhoneLog
 from app.modules.phonelog.normalize import PhoneLogInput, normalize
-from app.modules.phonelog.schemas import PhoneLogCreate
+from app.modules.phonelog.schemas import PhoneLogCreate, PhoneLogFinalize
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +98,203 @@ async def create_phone_log(
         },
     )
     return row
+
+
+async def transcribe_recording(
+    session: AsyncSession,
+    *,
+    project_id: uuid.UUID,
+    file_content: bytes,
+    filename: str,
+    occurred_at: str | None = None,
+    direction_hint: str | None = None,
+    user_id: str | None = None,
+) -> PhoneLog:
+    """Store a recording, transcribe it, and build a DRAFT protocol row.
+
+    The returned row is a draft the user reviews and confirms via
+    :func:`finalize_phone_log`; it is never a final logged record. AI is optional:
+    when transcription is unavailable the recording is still stored and the row is
+    created with status ``awaiting_transcript`` and an empty transcript so the
+    user can paste one by hand via the normal capture path. Nothing here raises on
+    a missing provider or a provider failure.
+    """
+    # 1. Persist the recording under a unique, project-scoped storage key.
+    ext = transcription.audio_extension(filename)
+    object_id = uuid.uuid4().hex
+    key = f"phonelog/{project_id}/{object_id}.{ext}" if ext else f"phonelog/{project_id}/{object_id}"
+    from app.core.storage import get_storage_backend
+
+    await get_storage_backend().put(key, file_content)
+
+    # 2. Transcribe (graceful: no key or a provider failure -> empty transcript).
+    result = transcription.TranscriptionResult()
+    api_key = await transcription.resolve_openai_key(session, user_id)
+    if api_key:
+        result = await transcription.transcribe_audio(file_content, filename, api_key=api_key)
+    transcript = result.text
+
+    # 3. Deterministic normalize pass over the transcript plus the caller hints.
+    normalized = normalize(
+        PhoneLogInput(
+            raw_parties="",
+            direction=direction_hint or "",
+            started_at=occurred_at,
+            duration_seconds=result.duration_seconds,
+            transcript=transcript,
+            summary="",
+            channel="voice_note",
+        )
+    )
+
+    # 4. Optional structured-protocol extraction (only with a transcript + LLM).
+    llm_result = await transcription.extract_protocol(transcript, session, user_id) if transcript else None
+    protocol = transcription.build_protocol(llm_result=llm_result, normalized=normalized, transcript=transcript)
+
+    parties = list(protocol.get("participants") or normalized.parties)
+    status = "draft" if transcript else "awaiting_transcript"
+    metadata = {
+        "source": "recording",
+        "original_filename": filename,
+        "protocol": protocol,
+        "transcription": {
+            "available": result.available,
+            "model": transcription.TRANSCRIBE_MODEL if result.available else None,
+            "language": result.language,
+            "error": result.error,
+        },
+    }
+
+    row = PhoneLog(
+        project_id=project_id,
+        direction=normalized.direction,
+        channel=normalized.channel,
+        parties=parties,
+        occurred_at=occurred_at or None,
+        duration_seconds=normalized.duration_seconds,
+        transcript=transcript,
+        summary=normalized.summary,
+        instructions=list(normalized.instructions),
+        word_count=normalized.word_count,
+        audio_storage_key=key,
+        status=status,
+        created_by=user_id,
+        metadata_=metadata,
+    )
+    session.add(row)
+    await session.flush()
+    await session.refresh(row)
+
+    # PII discipline: log only structural fields, never transcript / parties.
+    logger.info(
+        "Phone log recording ingested: %s (status=%s, transcribed=%s) for project %s",
+        row.id,
+        status,
+        "yes" if transcript else "no",
+        project_id,
+    )
+    await _safe_publish(
+        "phone_log.recording_ingested",
+        {
+            "project_id": str(project_id),
+            "phone_log_id": str(row.id),
+            "status": status,
+            "transcribed": bool(transcript),
+        },
+    )
+    return row
+
+
+async def finalize_phone_log(
+    session: AsyncSession,
+    phone_log_id: uuid.UUID,
+    data: PhoneLogFinalize,
+) -> PhoneLog | None:
+    """Confirm a reviewed draft into a normal, logged phone-log record.
+
+    Parties, direction, channel, and duration are re-normalized from the reviewed
+    input; the transcript and the edited protocol are stored as confirmed. The
+    reviewed instructions win, falling back to the transcript-derived ones so a
+    confirm never silently drops instructions. Returns None when the row is gone.
+    """
+    row = await get_phone_log(session, phone_log_id)
+    if row is None:
+        return None
+
+    normalized = normalize(
+        PhoneLogInput(
+            raw_parties=data.raw_parties,
+            direction=data.direction,
+            started_at=data.occurred_at,
+            duration_seconds=data.duration_seconds,
+            transcript=data.transcript,
+            summary=data.summary,
+            channel=data.channel,
+        )
+    )
+
+    row.direction = normalized.direction
+    row.channel = normalized.channel
+    row.parties = list(normalized.parties)
+    row.occurred_at = data.occurred_at or row.occurred_at
+    if normalized.duration_seconds is not None:
+        row.duration_seconds = normalized.duration_seconds
+    row.transcript = data.transcript
+    row.summary = normalized.summary
+    row.instructions = list(data.instructions) if data.instructions else list(normalized.instructions)
+    row.word_count = normalized.word_count
+
+    # Merge the reviewed protocol into metadata, keeping the transcription record,
+    # and re-sync the protocol's participants / summary / instructions with the
+    # confirmed values so the stored protocol stays self-consistent. A whole-dict
+    # reassignment is used so the JSON column change is detected and persisted.
+    metadata = dict(row.metadata_ or {})
+    protocol = dict(metadata.get("protocol") or {})
+    if data.protocol:
+        protocol.update(data.protocol)
+    protocol["participants"] = list(normalized.parties)
+    protocol["summary"] = normalized.summary
+    protocol["instructions"] = list(row.instructions)
+    metadata["protocol"] = protocol
+    row.metadata_ = metadata
+
+    row.status = "logged"
+    await session.flush()
+    await session.refresh(row)
+
+    logger.info("Phone log draft confirmed: %s for project %s", row.id, row.project_id)
+    await _safe_publish(
+        "phone_log.created",
+        {
+            "project_id": str(row.project_id),
+            "phone_log_id": str(row.id),
+            "direction": row.direction,
+            "channel": row.channel,
+        },
+    )
+    return row
+
+
+async def delete_phone_log(session: AsyncSession, phone_log_id: uuid.UUID) -> bool:
+    """Delete a phone-log row and its stored recording. Returns False if missing.
+
+    Used to discard a draft the user chose not to keep. The stored recording is
+    best-effort removed; a stray file must never fail the row delete.
+    """
+    row = await get_phone_log(session, phone_log_id)
+    if row is None:
+        return False
+    key = getattr(row, "audio_storage_key", "") or ""
+    await session.delete(row)
+    await session.flush()
+    if key:
+        try:
+            from app.core.storage import get_storage_backend
+
+            await get_storage_backend().delete(key)
+        except Exception as exc:  # noqa: BLE001 - a stray file must not fail the delete
+            logger.debug("Recording delete failed for %s: %s", key, exc)
+    return True
 
 
 async def list_phone_logs(

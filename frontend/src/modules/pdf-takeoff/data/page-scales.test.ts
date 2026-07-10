@@ -5,6 +5,8 @@ import {
   scaleForPage,
   setPageScale,
   pageIsCalibrated,
+  pageScalesHaveCalibration,
+  reconcilePageScales,
   hydratePageScales,
   type PageScales,
 } from './page-scales';
@@ -93,6 +95,60 @@ describe('page-scales (per-sheet scale model)', () => {
       const ps = hydratePageScales(undefined, undefined);
       expect(ps.defaultScale).toEqual(defaultScaleConfig());
       expect(ps.byPage).toEqual({});
+    });
+  });
+
+  describe('pageScalesHaveCalibration (issue #334)', () => {
+    it('is false for the factory default', () => {
+      expect(pageScalesHaveCalibration(emptyPageScales())).toBe(false);
+    });
+
+    it('is true once any page is calibrated', () => {
+      const ps = setPageScale(emptyPageScales(), 2, { pixelsPerUnit: 25, unitLabel: 'm' });
+      expect(pageScalesHaveCalibration(ps)).toBe(true);
+    });
+
+    it('is true when the document default was moved off the factory ratio', () => {
+      const ps: PageScales = { defaultScale: { pixelsPerUnit: 50, unitLabel: 'm' }, byPage: {} };
+      expect(pageScalesHaveCalibration(ps)).toBe(true);
+    });
+  });
+
+  describe('reconcilePageScales (issue #334 load reconciliation)', () => {
+    it('a stale local DEFAULT never overrides an explicit server calibration', () => {
+      // The exact #334 failure: localStorage still on the factory default, the
+      // server carries a real calibration. The server calibration must survive.
+      const local = emptyPageScales();
+      const server = setPageScale(emptyPageScales(), 1, { pixelsPerUnit: 144, unitLabel: 'm' });
+      const merged = reconcilePageScales(local, server)!;
+      expect(scaleForPage(merged, 1).pixelsPerUnit).toBe(144);
+      expect(pageIsCalibrated(merged, 1)).toBe(true);
+    });
+
+    it('a local calibration is kept when the server has none', () => {
+      const local = setPageScale(emptyPageScales(), 2, { pixelsPerUnit: 25, unitLabel: 'm' });
+      const merged = reconcilePageScales(local, emptyPageScales())!;
+      expect(scaleForPage(merged, 2).pixelsPerUnit).toBe(25);
+    });
+
+    it('unions per-page calibrations from both sides, local winning a conflict', () => {
+      // Page 1 calibrated on the server (another device), page 3 here (local),
+      // page 1 ALSO re-calibrated locally -> local wins page 1, page 3 survives.
+      let server = setPageScale(emptyPageScales(), 1, { pixelsPerUnit: 100.5, unitLabel: 'm' });
+      server = setPageScale(server, 5, { pixelsPerUnit: 10, unitLabel: 'm' });
+      let local = setPageScale(emptyPageScales(), 1, { pixelsPerUnit: 144, unitLabel: 'm' });
+      local = setPageScale(local, 3, { pixelsPerUnit: 25, unitLabel: 'm' });
+      const merged = reconcilePageScales(local, server)!;
+      expect(scaleForPage(merged, 1).pixelsPerUnit).toBe(144); // local wins the conflict
+      expect(scaleForPage(merged, 3).pixelsPerUnit).toBe(25); // local-only survives
+      expect(scaleForPage(merged, 5).pixelsPerUnit).toBe(10); // server-only survives
+    });
+
+    it('returns the non-null side and null when neither exists', () => {
+      const only = setPageScale(emptyPageScales(), 1, { pixelsPerUnit: 30, unitLabel: 'm' });
+      expect(reconcilePageScales(only, null)).toBe(only);
+      expect(reconcilePageScales(null, only)).toBe(only);
+      expect(reconcilePageScales(null, null)).toBeNull();
     });
   });
 });

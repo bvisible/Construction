@@ -3,23 +3,49 @@
 //
 // Tenant-scoped match-template library (cross-project memory).
 
-import { useEffect } from 'react';
+import { useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { X, Trash2, Loader2, Library } from 'lucide-react';
+import { X, Trash2, Loader2, Library, Sparkles } from 'lucide-react';
 import { matchElementsApi } from './api';
 
 interface Props {
   onClose: () => void;
+  /** Signatures of the groups in the active match session. Templates whose
+   *  signature is in this set are "hits" - saved mappings this session is
+   *  reusing right now. They get a badge and float to the top. Optional, so
+   *  the panel still works when opened without a session in context. */
+  activeSignatures?: readonly string[];
 }
 
-export function TemplatesPanel({ onClose }: Props) {
+export function TemplatesPanel({ onClose, activeSignatures }: Props) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const listQ = useQuery({
     queryKey: ['match-templates'],
     queryFn: matchElementsApi.listTemplates,
   });
+
+  // Which saved templates does the current session actually reuse? A hit =
+  // a template whose signature matches a group in this session. We surface
+  // those first, and count them in the header, so the cross-project memory
+  // is visible instead of buried in a long list.
+  const activeSet = useMemo(
+    () => new Set((activeSignatures ?? []).filter(Boolean)),
+    [activeSignatures],
+  );
+  const templates = useMemo(() => {
+    const rows = listQ.data ?? [];
+    if (activeSet.size === 0) return rows;
+    // Stable partition: hits first (each list is already use_count-ordered).
+    const hits = rows.filter((r) => activeSet.has(r.signature));
+    const rest = rows.filter((r) => !activeSet.has(r.signature));
+    return [...hits, ...rest];
+  }, [listQ.data, activeSet]);
+  const hitCount = useMemo(
+    () => (listQ.data ?? []).filter((r) => activeSet.has(r.signature)).length,
+    [listQ.data, activeSet],
+  );
 
   const deleteMut = useMutation({
     mutationFn: (id: string) => matchElementsApi.deleteTemplate(id),
@@ -56,6 +82,15 @@ export function TemplatesPanel({ onClose }: Props) {
             <span className="text-xs text-slate-500">
               {listQ.data ? t('match_elements.templates.count', '{{count}} signatures', { count: listQ.data.length }) : ''}
             </span>
+            {hitCount > 0 && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-indigo-100 px-2 py-0.5 text-[11px] font-medium text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-200">
+                <Sparkles className="h-3 w-3" />
+                {t('match_elements.templates.hit_count', {
+                  defaultValue: '{{count}} in this session',
+                  count: hitCount,
+                })}
+              </span>
+            )}
           </div>
           <button
             type="button"
@@ -82,15 +117,31 @@ export function TemplatesPanel({ onClose }: Props) {
               </p>
             </div>
           )}
-          {(listQ.data ?? []).map((tpl) => (
+          {templates.map((tpl) => {
+            const isHit = activeSet.has(tpl.signature);
+            return (
             <div
               key={tpl.id}
-              className="mb-3 p-3 rounded border border-slate-200 dark:border-slate-700 hover:border-indigo-300 dark:hover:border-indigo-600 transition"
+              className={
+                isHit
+                  ? 'mb-3 p-3 rounded border border-indigo-300 dark:border-indigo-600 bg-indigo-50/50 dark:bg-indigo-900/10 transition'
+                  : 'mb-3 p-3 rounded border border-slate-200 dark:border-slate-700 hover:border-indigo-300 dark:hover:border-indigo-600 transition'
+              }
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0 flex-1">
-                  <div className="text-sm font-medium truncate">
-                    {tpl.label ?? <span className="text-slate-400 italic">{t('match_elements.templates.unnamed', '(unnamed)')}</span>}
+                  <div className="flex items-center gap-2">
+                    <div className="text-sm font-medium truncate">
+                      {tpl.label ?? <span className="text-slate-400 italic">{t('match_elements.templates.unnamed', '(unnamed)')}</span>}
+                    </div>
+                    {isHit && (
+                      <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-indigo-100 px-1.5 py-0.5 text-[10px] font-medium text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-200">
+                        <Sparkles className="h-2.5 w-2.5" />
+                        {t('match_elements.templates.hit_badge', {
+                          defaultValue: 'Matched here',
+                        })}
+                      </span>
+                    )}
                   </div>
                   <div className="font-mono text-xs text-slate-500 truncate mt-0.5">
                     {t('match_elements.templates.sig', 'sig: {{prefix}}…', { prefix: tpl.signature.slice(0, 16) })}
@@ -124,7 +175,8 @@ export function TemplatesPanel({ onClose }: Props) {
                 </button>
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
 
         <footer className="px-4 py-3 border-t border-slate-200 dark:border-slate-700 text-xs text-slate-500">

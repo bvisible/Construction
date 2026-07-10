@@ -1,5 +1,5 @@
-import { useState, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useState, useMemo, Fragment, type ReactNode } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
@@ -16,6 +16,9 @@ import {
   AlertOctagon,
   Truck,
   ArrowUpRight,
+  Network,
+  ArrowRight,
+  Coins,
 } from 'lucide-react';
 import {
   Button,
@@ -71,6 +74,121 @@ const VENDOR_VARIANT: Record<VendorStatus, 'neutral' | 'blue' | 'success' | 'war
 
 const inputCls =
   'h-9 w-full rounded-lg border border-border bg-surface-primary px-3 text-sm focus:outline-none focus:ring-2 focus:ring-oe-blue/30 focus:border-oe-blue';
+
+/* ── How it works + module connections ─────────────────────────────────── */
+
+/** Compact inline link to a sibling module (keeps the flow copy readable). */
+function ModLink({ to, children }: { to: string; children: ReactNode }) {
+  return (
+    <Link to={to} className="font-medium text-oe-blue-text hover:underline">
+      {children}
+    </Link>
+  );
+}
+
+/**
+ * One-glance explainer of what the supplier library does and how it feeds
+ * the buying and estimating workflow. Every connected module is a link so
+ * the next step is one click away.
+ */
+function HowSupplierCatalogsWork() {
+  const { t } = useTranslation();
+
+  const steps: { icon: ReactNode; title: string; desc: string }[] = [
+    {
+      icon: <Truck size={14} className="text-oe-blue" />,
+      title: t('supplier_catalogs.flow_1_title', { defaultValue: 'Register vendors' }),
+      desc: t('supplier_catalogs.flow_1_desc', {
+        defaultValue: 'Suppliers with payment terms, currency and category coverage.',
+      }),
+    },
+    {
+      icon: <Boxes size={14} className="text-oe-blue" />,
+      title: t('supplier_catalogs.flow_2_title', { defaultValue: 'Build the catalog' }),
+      desc: t('supplier_catalogs.flow_2_desc', {
+        defaultValue: 'The SKUs you order, tied to vendors for price comparison.',
+      }),
+    },
+    {
+      icon: <Coins size={14} className="text-oe-blue" />,
+      title: t('supplier_catalogs.flow_3_title', { defaultValue: 'Compare prices' }),
+      desc: t('supplier_catalogs.flow_3_desc', {
+        defaultValue: 'Rank vendor prices per item and start a purchase order from the best.',
+      }),
+    },
+    {
+      icon: <WarehouseIcon size={14} className="text-oe-blue" />,
+      title: t('supplier_catalogs.flow_4_title', { defaultValue: 'Track stock' }),
+      desc: t('supplier_catalogs.flow_4_desc', {
+        defaultValue: 'Warehouse balances, reservations and average cost on hand.',
+      }),
+    },
+  ];
+
+  return (
+    <Card padding="md">
+      <h2 className="flex items-center gap-1.5 text-sm font-semibold text-content-primary">
+        <Network size={15} className="text-oe-blue" />
+        {t('supplier_catalogs.flow_title', {
+          defaultValue: 'How the supplier library fits together',
+        })}
+      </h2>
+      <p className="mt-1 text-xs text-content-tertiary">
+        {t('supplier_catalogs.flow_intro', {
+          defaultValue:
+            'Build up your supply base step by step - vendors, then the items they sell, then the stock you hold - and hand off to Procurement when it is time to buy.',
+        })}
+      </p>
+
+      <ol className="mt-3 flex flex-col gap-2 lg:flex-row lg:items-stretch">
+        {steps.map((s, i) => (
+          <Fragment key={s.title}>
+            <li className="flex-1 rounded-lg border border-border-light bg-surface-secondary/40 p-3">
+              <div className="flex items-center gap-2">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-oe-blue-subtle text-2xs font-bold text-oe-blue-text">
+                  {i + 1}
+                </span>
+                <span className="flex items-center gap-1 text-xs font-semibold text-content-primary">
+                  {s.icon}
+                  {s.title}
+                </span>
+              </div>
+              <p className="mt-1.5 text-2xs leading-relaxed text-content-tertiary">{s.desc}</p>
+            </li>
+            {i < steps.length - 1 && (
+              <li
+                aria-hidden="true"
+                className="hidden shrink-0 items-center self-center text-content-quaternary lg:flex"
+              >
+                <ArrowRight size={16} />
+              </li>
+            )}
+          </Fragment>
+        ))}
+      </ol>
+
+      <div className="mt-3 flex flex-col gap-1.5 border-t border-border-light pt-3 text-2xs text-content-tertiary sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-5 sm:gap-y-1">
+        <span>
+          <span className="font-medium text-content-secondary">
+            {t('supplier_catalogs.flow_connects', { defaultValue: 'Connects with:' })}
+          </span>{' '}
+          <ModLink to="/procurement">
+            {t('nav.procurement', { defaultValue: 'Procurement' })}
+          </ModLink>{' '}
+          ·{' '}
+          <ModLink to="/cost-explorer">
+            {t('nav.cost_explorer', { defaultValue: 'Cost Explorer' })}
+          </ModLink>{' '}
+          ·{' '}
+          <ModLink to="/boq">{t('nav.boq', { defaultValue: 'BOQ' })}</ModLink> ·{' '}
+          <ModLink to="/subcontractors">
+            {t('nav.subcontractors', { defaultValue: 'Subcontractors' })}
+          </ModLink>
+        </span>
+      </div>
+    </Card>
+  );
+}
 
 export function SupplierCatalogsPage() {
   const { t } = useTranslation();
@@ -222,6 +340,8 @@ export function SupplierCatalogsPage() {
             'This page is your reference library of vendors, priced catalog items and warehouse stock. Live purchasing - raising requisitions, issuing purchase orders and three-way matching invoices - happens in the Procurement module.',
         })}
       </DismissibleInfo>
+
+      <HowSupplierCatalogsWork />
 
       <div className="border-b border-border-light">
         <nav className="flex gap-1 -mb-px overflow-x-auto">

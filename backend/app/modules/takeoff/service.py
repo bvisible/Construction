@@ -1198,6 +1198,24 @@ class TakeoffService:
     async def get_document(self, doc_id: str) -> TakeoffDocument | None:
         return await self.repo.get_by_id(uuid.UUID(doc_id))
 
+    async def set_document_page_scales(self, doc_id: str, page_scales: dict) -> TakeoffDocument | None:
+        """Persist the document-level per-page scale calibration (issue #334).
+
+        The document ``page_scales`` column is the authoritative, durable source
+        of truth for each sheet's drawing scale (the browser localStorage copy
+        is only an offline cache and the per-measurement ``scale_pixels_per_unit``
+        is capture provenance). Stored verbatim in the frontend ``PageScales``
+        shape so a reload / a second device restores the exact calibration.
+
+        Returns the refreshed row, or ``None`` when the document does not exist.
+        """
+        did = uuid.UUID(doc_id)
+        doc = await self.repo.get_by_id(did)
+        if doc is None:
+            return None
+        await self.repo.update_fields(did, page_scales=page_scales)
+        return await self.repo.get_by_id(did)
+
     async def list_documents(
         self,
         owner_id: str,

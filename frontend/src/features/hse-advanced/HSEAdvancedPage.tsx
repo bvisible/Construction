@@ -1,6 +1,6 @@
-import { useState, useMemo, useEffect } from 'react';
+import { Fragment, useState, useMemo, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   AlertTriangle,
@@ -27,6 +27,8 @@ import {
   ListChecks,
   Trash2,
   ExternalLink,
+  Network,
+  ArrowRight,
 } from 'lucide-react';
 import {
   Button,
@@ -366,6 +368,124 @@ function CapaSourceRefPicker({
 
 /* ── Main Page ─────────────────────────────────────────────────────────── */
 
+/* ── How it works + connects ─────────────────────────────────────────── */
+
+/** Compact inline link to a sibling module, keeping the flow copy readable. */
+function ModLink({ to, children }: { to: string; children: React.ReactNode }) {
+  return (
+    <Link to={to} className="font-medium text-oe-blue-text hover:underline">
+      {children}
+    </Link>
+  );
+}
+
+/**
+ * One-glance explainer: what HSE Advanced does and how it connects. It is the
+ * formal counterpart to the day-to-day Safety module, carrying a finding from
+ * "something happened" to "fixed and verified" with the paper trail an audit
+ * needs, and it links back to Safety, Inspections and the Risk register.
+ */
+function HowHSEWork() {
+  const { t } = useTranslation();
+
+  const steps: { icon: React.ReactNode; title: string; desc: string }[] = [
+    {
+      icon: <ShieldAlert size={14} className="text-oe-blue" />,
+      title: t('hse_advanced.flow_1_title', { defaultValue: 'Investigate' }),
+      desc: t('hse_advanced.flow_1_desc', {
+        defaultValue: 'Root-cause a serious Safety incident with 5-Whys, fishbone or timeline.',
+      }),
+    },
+    {
+      icon: <ClipboardList size={14} className="text-oe-blue" />,
+      title: t('hse_advanced.flow_2_title', { defaultValue: 'Plan the work' }),
+      desc: t('hse_advanced.flow_2_desc', {
+        defaultValue: 'Run Job Safety Analyses and permits-to-work through their approval states.',
+      }),
+    },
+    {
+      icon: <HardHat size={14} className="text-oe-blue" />,
+      title: t('hse_advanced.flow_3_title', { defaultValue: 'Brief and equip' }),
+      desc: t('hse_advanced.flow_3_desc', {
+        defaultValue: 'Record toolbox talks, PPE issues and site safety audits with findings.',
+      }),
+    },
+    {
+      icon: <Wrench size={14} className="text-oe-blue" />,
+      title: t('hse_advanced.flow_4_title', { defaultValue: 'Close CAPAs' }),
+      desc: t('hse_advanced.flow_4_desc', {
+        defaultValue: 'Turn findings into corrective and preventive actions and verify them.',
+      }),
+    },
+    {
+      icon: <ShieldCheck size={14} className="text-oe-blue" />,
+      title: t('hse_advanced.flow_5_title', { defaultValue: 'Track and report' }),
+      desc: t('hse_advanced.flow_5_desc', {
+        defaultValue: 'A KPI strip plus an OSHA 300 log you can export for retention.',
+      }),
+    },
+  ];
+
+  return (
+    <Card padding="md">
+      <h2 className="flex items-center gap-1.5 text-sm font-semibold text-content-primary">
+        <Network size={15} className="text-oe-blue" />
+        {t('hse_advanced.flow_title', { defaultValue: 'How HSE Advanced fits together' })}
+      </h2>
+      <p className="mt-1 text-xs text-content-tertiary">
+        {t('hse_advanced.flow_intro', {
+          defaultValue:
+            'The formal side of site safety: it carries a finding from something happened all the way to fixed and verified, with the record an audit or insurance claim needs.',
+        })}
+      </p>
+
+      <ol className="mt-3 flex flex-col gap-2 lg:flex-row lg:items-stretch">
+        {steps.map((s, i) => (
+          <Fragment key={s.title}>
+            <li className="flex-1 rounded-lg border border-border-light bg-surface-secondary/40 p-3">
+              <div className="flex items-center gap-2">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-oe-blue-subtle text-2xs font-bold text-oe-blue-text">
+                  {i + 1}
+                </span>
+                <span className="flex items-center gap-1 text-xs font-semibold text-content-primary">
+                  {s.icon}
+                  {s.title}
+                </span>
+              </div>
+              <p className="mt-1.5 text-2xs leading-relaxed text-content-tertiary">{s.desc}</p>
+            </li>
+            {i < steps.length - 1 && (
+              <li
+                aria-hidden="true"
+                className="hidden shrink-0 items-center self-center text-content-quaternary lg:flex"
+              >
+                <ArrowRight size={16} />
+              </li>
+            )}
+          </Fragment>
+        ))}
+      </ol>
+
+      <div className="mt-3 flex flex-col gap-1.5 border-t border-border-light pt-3 text-2xs text-content-tertiary sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-5 sm:gap-y-1">
+        <span>
+          <span className="font-medium text-content-secondary">
+            {t('hse_advanced.flow_connects', { defaultValue: 'Connects with:' })}
+          </span>{' '}
+          <ModLink to="/safety">{t('hse_advanced.mod_safety', { defaultValue: 'Safety' })}</ModLink>{' '}
+          ·{' '}
+          <ModLink to="/inspections">
+            {t('hse_advanced.mod_inspections', { defaultValue: 'Inspections' })}
+          </ModLink>{' '}
+          ·{' '}
+          <ModLink to="/risks">
+            {t('hse_advanced.mod_risk', { defaultValue: 'Risk register' })}
+          </ModLink>
+        </span>
+      </div>
+    </Card>
+  );
+}
+
 export function HSEAdvancedPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -470,6 +590,8 @@ export function HSEAdvancedPage() {
           </>
         }
       />
+
+      <HowHSEWork />
 
       <SectionIntro
         storageKey="hse_advanced"

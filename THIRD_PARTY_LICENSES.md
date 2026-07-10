@@ -9,8 +9,8 @@ attached to the corresponding release as downloadable assets.
 
 For the authoritative human-readable licensing overview —
 including the dual-licensing model (AGPL-3.0-or-later /
-commercial), third-party trademarks (Autodesk, Bentley,
-buildingSMART, DIN, GAEB, NRM, CSI MasterFormat, ISO), and the
+commercial), third-party trademarks (buildingSMART, DIN, GAEB, NRM,
+CSI MasterFormat, ISO), and the
 AI / cryptography / export-control notices — see
 [`./NOTICE`](./NOTICE).
 

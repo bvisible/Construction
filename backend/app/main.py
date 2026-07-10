@@ -62,6 +62,35 @@ from app.dependencies import RequireRole, get_current_user_id
 logger = logging.getLogger(__name__)
 
 
+def _emit_server_fail(exc: BaseException) -> None:
+    """Report a fatal startup failure as a machine-readable marker plus a log.
+
+    The FastAPI startup event runs the work that can fatally fail (DB connect,
+    schema build, module load, demo seed). When it raises, uvicorn swallows the
+    cause into a bare "Application startup failed" line and exits, and the
+    embedded-PostgreSQL shutdown that follows floods stdout - so the desktop
+    launcher used to show that shutdown noise instead of the real reason.
+    Emitting a ``STAGE:server:fail:<reason>`` marker here (flushed, before the
+    process tears down) lets the launcher latch the true cause; the full
+    traceback is logged for the log file. Best effort - never raises and never
+    changes how the original error propagates.
+    """
+    try:
+        import traceback
+
+        reason = f"{type(exc).__name__}: {exc}".replace("\n", " ").replace("\r", " ").strip()
+        if len(reason) > 180:
+            reason = reason[:177] + "..."
+        from app.core.embedded_pg import emit_stage
+
+        emit_stage("server", "fail", reason)
+        logger.error("startup failed: %s", reason)
+        tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+        logger.error("startup traceback:\n%s", tb)
+    except Exception:  # noqa: BLE001 - diagnostics must never mask the real error
+        pass
+
+
 def configure_logging(settings: Settings) -> None:
     """Configure structured logging."""
     structlog.configure(
@@ -609,7 +638,7 @@ async def _seed_demo_account() -> None:
         {
             "email": "manager@openconstructionerp.com",
             "env_var": "DEMO_MANAGER_PASSWORD",
-            "full_name": "Thomas Müller",
+            "full_name": "Michael Carter",
             "role": "manager",
         },
     ]
@@ -1958,7 +1987,7 @@ def create_app() -> FastAPI:
         DDC_BRANCH = "main"
         WIN_DIRS: dict[str, tuple[str, str, str]] = {
             # ext: (github_dir, exe_name, display_name)
-            "rvt": ("DDC_WINDOWS_Converters/DDC_CONVERTER_REVIT", "RvtExporter.exe", "Revit (RVT) Parser"),
+            "rvt": ("DDC_WINDOWS_Converters/DDC_CONVERTER_REVIT", "RvtExporter.exe", "RVT Parser"),
             "ifc": ("DDC_WINDOWS_Converters/DDC_CONVERTER_IFC", "IfcExporter.exe", "IFC Import"),
             "dwg": ("DDC_WINDOWS_Converters/DDC_CONVERTER_DWG", "DwgExporter.exe", "DWG/DXF Converter"),
             "dgn": ("DDC_WINDOWS_Converters/DDC_CONVERTER_DGN", "DgnExporter.exe", "DGN Converter"),
@@ -2319,6 +2348,19 @@ def create_app() -> FastAPI:
 
     @app.on_event("startup")
     async def startup() -> None:
+        # Guard the whole startup sequence. If any fatal step (DB connect,
+        # schema build, module load, demo seed) raises, surface the real cause
+        # as a STAGE:server:fail marker and log the full traceback BEFORE
+        # re-raising, so the desktop launcher shows the true reason instead of
+        # the embedded-PostgreSQL shutdown noise that follows. uvicorn still
+        # handles the re-raised error exactly as before.
+        try:
+            await _startup_impl()
+        except Exception as exc:
+            _emit_server_fail(exc)
+            raise
+
+    async def _startup_impl() -> None:
         _section("OpenConstructionERP")
         logger.info(
             "Starting %s v%s (env=%s)",

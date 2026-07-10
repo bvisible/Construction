@@ -48,7 +48,7 @@ Tolerance is fixed at `10 / vpRef.current.scale` (L435). The outer-polyline bias
 
 Shift+Click adds to selection; Ctrl+Click toggles; Escape clears. Right-click opens a context menu with Hide / Link to BOQ / Save Group.
 
-- **Pros:** matches Revit / AutoCAD / Rhino convention; no picker redesign; backward-compatible single-click behaviour.
+- **Pros:** matches common CAD/BIM tool convention; no picker redesign; backward-compatible single-click behaviour.
 - **Cons:** does not on its own solve the outer-polyline bias — still picks "closest," just picks it multiple times.
 
 ### Option B — Area / proximity ranking in hit-test (fixes outer-polyline bias)

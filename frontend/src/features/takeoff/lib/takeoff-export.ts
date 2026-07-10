@@ -34,6 +34,7 @@ import {
   toRealDistance,
 } from '../../../modules/pdf-takeoff/data/scale-helpers';
 import { ANNOTATION_TYPES } from './takeoff-groups';
+import { effectiveQuantity } from './takeoff-quantity';
 import type { MeasurementSystem } from '@/stores/usePreferencesStore';
 import {
   convertQuantity,
@@ -156,10 +157,10 @@ export function summariseByGroupType(
     };
     existing.count += 1;
     if (!isAnnotationType(m.type)) {
-      // Opening deductions (area voids) subtract from the (group, type) total
-      // so the exported total is the NET area (gross - openings), matching the
-      // legend and ledger. Stored as a positive gross area; area-only.
-      existing.total += m.isDeduction ? -m.value : m.value;
+      // Effective quantity folds slope / wastage / typical-multiplier and the
+      // opening-deduction sign, so the exported (group, type) total is the NET
+      // reported figure, matching the legend and ledger.
+      existing.total += effectiveQuantity(m);
       if (m.unit) existing.units[m.unit] = (existing.units[m.unit] ?? 0) + 1;
     }
     byKey.set(key, existing);
@@ -264,7 +265,11 @@ export function renderMeasurementsOnCanvas(
       ctx.beginPath();
       ctx.moveTo(p0.x * dpr * zoom, p0.y * dpr * zoom);
       ctx.lineTo(p1.x * dpr * zoom, p1.y * dpr * zoom);
+      // Per-measurement line opacity (issue #332); unset = fully opaque so the
+      // export is unchanged for a line that never got a stroke-opacity.
+      ctx.globalAlpha = m.strokeAlpha ?? 1;
       ctx.stroke();
+      ctx.globalAlpha = 1;
       const mx = ((p0.x + p1.x) / 2) * dpr * zoom;
       const my = ((p0.y + p1.y) / 2) * dpr * zoom - 8 * dpr;
       ctx.font = `${12 * dpr}px sans-serif`;
@@ -281,7 +286,11 @@ export function renderMeasurementsOnCanvas(
         const pt = m.points[i]!;
         ctx.lineTo(pt.x * dpr * zoom, pt.y * dpr * zoom);
       }
+      // Per-measurement line opacity (issue #332); reset to opaque after so the
+      // per-segment labels + vertex dots below are unaffected.
+      ctx.globalAlpha = m.strokeAlpha ?? 1;
       ctx.stroke();
+      ctx.globalAlpha = 1;
       for (let i = 0; i < m.points.length - 1; i++) {
         const pa = m.points[i]!;
         const pb = m.points[i + 1]!;
@@ -765,7 +774,9 @@ export async function buildTakeoffWorkbook(
     // flags the type so the sheet reconciles with the net subtotal below.
     for (const m of groupMs) {
       const isAnno = isAnnotationType(m.type);
-      const signed = m.isDeduction ? -m.value : m.value;
+      // Reported (effective) quantity: slope / wastage / multiplier + the
+      // deduction sign, so the sheet reconciles with the net subtotal below.
+      const signed = effectiveQuantity(m);
       const disp = convertQuantity(signed, m.unit || '', system);
       const cellValue = isAnno ? '' : disp.value;
       ws.addRow({
@@ -790,8 +801,9 @@ export async function buildTakeoffWorkbook(
     for (const t of subtotalTypes) {
       const subset = groupMs.filter((m) => m.type === t);
       if (subset.length === 0) continue;
-      // Net out deductions so the area subtotal is gross - openings.
-      const total = subset.reduce((s, m) => s + (m.isDeduction ? -m.value : m.value), 0);
+      // Sum the reported (effective) quantities so the subtotal folds slope /
+      // wastage / multiplier and nets out deductions (gross - openings).
+      const total = subset.reduce((s, m) => s + effectiveQuantity(m), 0);
       const metricUnit = subset[0]!.unit;
       // Counts are unitless tallies (kept as pcs, integer); length / area /
       // volume subtotals convert to the export measurement system.

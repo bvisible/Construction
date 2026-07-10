@@ -51,11 +51,13 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 # to extend coverage. Keep to unambiguous coined brand tokens to avoid matching
 # ordinary words.
 #
-# Functional-interop brand names (CAD/BIM import formats like Revit/AutoCAD/Tekla
-# and explicit integration targets) are deliberately NOT hashed here: they have
-# legitimate functional uses the platform needs, and are governed by the
-# allowlist plus human review instead. Only unambiguous coined product names with
-# no functional use are denylisted.
+# Founder ruling (2026-07): third-party product names are purged from every
+# shippable surface and referred to only by open format (DWG/RVT/IFC/DGN) or a
+# neutral category. CAD/BIM authoring and coordination product names are therefore
+# denylisted below as well. The few genuinely load-bearing uses (our own DDC
+# converter repository URL, a file-format detection value the parser compares
+# against) are kept precise via the allowlist plus human review, so enforcement
+# never breaks our own integration code.
 _DENY_HASHES: frozenset[str] = frozenset(
     {
         "a62ee5ab3e8914010c0f75ff149f9415c839c64ccf4d8ed91d13b456dbc1d813",
@@ -95,6 +97,25 @@ _DENY_HASHES: frozenset[str] = frozenset(
         "58b4537b616e657203a685e86b79ab85c981615d4c0ad243608f457cbbe0de34",
         "8ae56be495a96f1f31eabe97921415525913c2985c70b473631f52dee05c25be",
         "e0a27b93a6c5fd64c53a87e60bf2eff7113e271567044c910576f2c5dd760e0f",
+        # 2026-07 purge: pure competitor tool names (BCF coordination, BIM
+        # authoring, estimating, construction management). Format-intrinsic vendor
+        # names that spell a file format's own vocabulary (the DWG version labels
+        # and binary sentinel, the RVT/DGN header strings) are NOT hashed here -
+        # they are functional-interop, kept off the gate and genericized only on
+        # user-facing surfaces by review, per the note above.
+        "5f37acd72c2cc038391bde05c11697a168667aa4a27c886638faecfd25b1bdd6",
+        "aec4c46090689ecbff828e189c03de452bf3709710b168b0864079e631f772d5",
+        "5db318368f0b9f5974d745815cfb9290560966eb7c0fac6077192761748bf07e",
+        "82713ff6e800821047c46a2c29642fdaee6f4a3dcf2d98006edac2b311340926",
+        "7175b0331bdaf8b428d33897b5b55983293776a5a9ca9ea8612cce412003b442",
+        "bac8736b4055203b1e2fbbf131280979d0342920a5d1646e257a9a9e6727fcbd",
+        "804a7ac7d37b4944a2c02f8e3f6826aa6c15ec82d8ae848f62cac5d0be9e7af3",
+        "55efa080d02d76fdd9021db48718aeababaafa85f082ab4152db505b26f6cbf8",
+        "62cfc917c13eda7b31202f66f8378344d69f601bab9c89e043807dc763f1e0bc",
+        "96aed7c729899185bf13863acea99b958f81be3d5222ea709d49aa0af3e7446b",
+        "5696c9f4a0e58aa85c12d312e051162363c3f29a1fcdf0da152f43bf9a7a604b",
+        "0aab8b5450e4846d17896c6115b1620d6b5b6ad130666845845c02554546c746",
+        "5971b0dc06256600737ca8ba133808b5d8122016a777948e998535036594a95b",
     }
 )
 
@@ -117,6 +138,15 @@ _SKIP_PARTS = {
 # This gate stores hashes, never literals, so it never matches itself, but skip
 # it anyway to keep the report clean.
 _SELF = Path(__file__).resolve()
+
+# Embedded static mirror of DataDrivenConstruction's own converter website
+# (datadrivenconstruction.io), kept as a marketing asset. It is not the product
+# UI; its cad2data pages name the CAD formats that converter reads and write, plus
+# real external blog URLs, which is functional for that product rather than a
+# competitor-brand leak in ours. Excluded so the gate does not fight that asset.
+_SKIP_FILES = {
+    (REPO_ROOT / "website-marketing/pro/breeze/assets/people/ddc_home.html").resolve(),
+}
 
 # Reviewed functional-interop exceptions (e.g. an import-format name or an
 # integration-target list that tells a user what they can actually connect to).
@@ -223,6 +253,8 @@ def main(argv: list[str]) -> int:
     for path in candidates:
         rp = path.resolve()
         if rp == _SELF:
+            continue
+        if rp in _SKIP_FILES:
             continue
         if any(part in _SKIP_PARTS for part in rp.parts):
             continue

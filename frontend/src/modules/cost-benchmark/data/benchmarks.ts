@@ -451,11 +451,11 @@ const AREA_PER_UNIT: Partial<Record<BuildingType, { unitId: string; label: strin
 
 /** Provenance per region (source string, year, currency). */
 const PROVENANCE: Record<BenchmarkRegion, { source: string; sourceYear: number; currency: CurrencyCode }> = {
-  DE: { source: 'BKI Baukosten Gebaeude 2024', sourceYear: 2024, currency: 'EUR' },
+  DE: { source: 'German building cost benchmarks 2024', sourceYear: 2024, currency: 'EUR' },
   AT: { source: 'Statistik Austria Baukostenindex 2024', sourceYear: 2024, currency: 'EUR' },
   CH: { source: 'SIA / BFS Schweiz 2024', sourceYear: 2024, currency: 'CHF' },
   UK: { source: 'BCIS Building Cost Information Service 2024', sourceYear: 2024, currency: 'GBP' },
-  US: { source: 'ENR Construction Cost Index 2024', sourceYear: 2024, currency: 'USD' },
+  US: { source: 'US construction cost index 2024', sourceYear: 2024, currency: 'USD' },
   FR: { source: 'Batiprix / UNTEC 2024', sourceYear: 2024, currency: 'EUR' },
   NL: { source: 'Bouwkosten Kompas 2024', sourceYear: 2024, currency: 'EUR' },
   ES: { source: 'ITeC BEDEC 2024', sourceYear: 2024, currency: 'EUR' },

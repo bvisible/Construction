@@ -8,9 +8,15 @@
  */
 import { describe, it, expect } from 'vitest';
 import {
+  ALL_INBOX_FILTER,
   SEVERITY_RANK,
   countApprovals,
+  distinctInboxProjects,
+  distinctInboxSeverities,
+  filterInboxItems,
   formatTimeAgo,
+  isInboxFiltered,
+  matchesInboxFilter,
   normalizeSeverity,
   resolveTitle,
   sortInboxItems,
@@ -175,5 +181,95 @@ describe('formatTimeAgo', () => {
     expect(formatTimeAgo('2026-06-01T11:30:00+00:00', t, now)).toBe('30m ago');
     expect(formatTimeAgo('2026-06-01T09:00:00+00:00', t, now)).toBe('3h ago');
     expect(formatTimeAgo('2026-05-29T12:00:00+00:00', t, now)).toBe('3d ago');
+  });
+});
+
+describe('matchesInboxFilter / filterInboxItems', () => {
+  const items: InboxItem[] = [
+    item({ id: 'a', kind: 'approval', project_id: 'p1', project_name: 'Alpha', severity: 'critical' }),
+    item({ id: 'b', kind: 'alert', project_id: 'p1', project_name: 'Alpha', severity: 'warning' }),
+    item({ id: 'c', kind: 'alert', project_id: 'p2', project_name: 'Beta', severity: 'info' }),
+  ];
+
+  it('the neutral filter matches everything', () => {
+    expect(filterInboxItems(items, ALL_INBOX_FILTER).map((i) => i.id)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('filters by kind', () => {
+    expect(
+      filterInboxItems(items, { ...ALL_INBOX_FILTER, kind: 'approval' }).map((i) => i.id),
+    ).toEqual(['a']);
+  });
+
+  it('filters by project', () => {
+    expect(
+      filterInboxItems(items, { ...ALL_INBOX_FILTER, projectId: 'p1' }).map((i) => i.id),
+    ).toEqual(['a', 'b']);
+  });
+
+  it('filters by severity', () => {
+    expect(
+      filterInboxItems(items, { ...ALL_INBOX_FILTER, severity: 'info' }).map((i) => i.id),
+    ).toEqual(['c']);
+  });
+
+  it('combines axes with AND', () => {
+    expect(matchesInboxFilter(items[1]!, { kind: 'alert', projectId: 'p1', severity: 'warning' })).toBe(
+      true,
+    );
+    expect(
+      filterInboxItems(items, { kind: 'alert', projectId: 'p1', severity: 'warning' }).map(
+        (i) => i.id,
+      ),
+    ).toEqual(['b']);
+  });
+
+  it('treats a missing project_id as unmatched by a specific project', () => {
+    expect(matchesInboxFilter(item({ id: 'x' }), { ...ALL_INBOX_FILTER, projectId: 'p1' })).toBe(
+      false,
+    );
+  });
+});
+
+describe('isInboxFiltered', () => {
+  it('is false for the neutral filter', () => {
+    expect(isInboxFiltered(ALL_INBOX_FILTER)).toBe(false);
+  });
+
+  it('is true when any axis is narrowed', () => {
+    expect(isInboxFiltered({ ...ALL_INBOX_FILTER, kind: 'alert' })).toBe(true);
+    expect(isInboxFiltered({ ...ALL_INBOX_FILTER, projectId: 'p1' })).toBe(true);
+    expect(isInboxFiltered({ ...ALL_INBOX_FILTER, severity: 'info' })).toBe(true);
+  });
+});
+
+describe('distinctInboxProjects', () => {
+  it('dedupes by id, sorts by name and skips project-less items', () => {
+    const out = distinctInboxProjects([
+      item({ id: '1', project_id: 'p2', project_name: 'Beta' }),
+      item({ id: '2', project_id: 'p1', project_name: 'Alpha' }),
+      item({ id: '3', project_id: 'p1', project_name: 'Alpha' }),
+      item({ id: '4' }),
+    ]);
+    expect(out).toEqual([
+      { id: 'p1', name: 'Alpha' },
+      { id: 'p2', name: 'Beta' },
+    ]);
+  });
+
+  it('falls back to the id when the name is missing', () => {
+    const out = distinctInboxProjects([item({ id: '1', project_id: 'p9', project_name: null })]);
+    expect(out).toEqual([{ id: 'p9', name: 'p9' }]);
+  });
+});
+
+describe('distinctInboxSeverities', () => {
+  it('returns present severities, most-severe first', () => {
+    const out = distinctInboxSeverities([
+      item({ id: '1', severity: 'info' }),
+      item({ id: '2', severity: 'critical' }),
+      item({ id: '3', severity: 'info' }),
+    ]);
+    expect(out).toEqual(['critical', 'info']);
   });
 });

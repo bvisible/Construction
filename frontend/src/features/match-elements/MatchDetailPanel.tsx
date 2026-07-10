@@ -7,7 +7,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { X, CheckCircle2, ChevronRight, Loader2, AlertCircle, XCircle } from 'lucide-react';
+import { X, CheckCircle2, ChevronRight, Loader2, AlertCircle, XCircle, Sparkles } from 'lucide-react';
 import { useTabKeyboardNav } from '@/shared/hooks/useTabKeyboardNav';
 import { useDisplayQuantity } from '@/shared/hooks/useDisplayQuantity';
 import { AITrustNote } from '@/shared/ui';
@@ -17,6 +17,15 @@ import {
   type GroupSummary,
   type MatchCandidate,
 } from './api';
+import {
+  buildMatchReasons,
+  indexTemplatesBySignature,
+  isPriorPickCandidate,
+  priorConfirmReason,
+  priorPickForSignature,
+  reasoningText,
+  type MatchReason,
+} from './matchReasons';
 import { NoMatchModal } from './NoMatchModal';
 import { SymbolSuggestionPanel } from './SymbolSuggestionPanel';
 
@@ -45,6 +54,33 @@ function ConfidencePill({ band, score }: { band: ConfidenceBand; score: number }
     <span className={`inline-block px-1.5 py-0.5 rounded text-white text-xs ${cls}`}>
       {score.toFixed(2)}
     </span>
+  );
+}
+
+/** Plain-language chips explaining why a candidate ranked - matched unit,
+ *  trade, size, keyword overlap, prior confirmations. The reasons are
+ *  derived in the tested matchReasons helper; here we only translate and
+ *  colour them by tone. */
+function ReasonChips({ reasons }: { reasons: MatchReason[] }) {
+  const { t } = useTranslation();
+  if (reasons.length === 0) return null;
+  return (
+    <div className="mt-1 flex flex-wrap gap-1">
+      {reasons.map((r) => (
+        <span
+          key={r.id}
+          className={
+            r.tone === 'negative'
+              ? 'inline-flex items-center rounded px-1.5 py-0.5 text-[10px] bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-300'
+              : r.tone === 'neutral'
+                ? 'inline-flex items-center rounded px-1.5 py-0.5 text-[10px] bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'
+                : 'inline-flex items-center rounded px-1.5 py-0.5 text-[10px] bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'
+          }
+        >
+          {t(r.i18nKey, { defaultValue: r.defaultLabel, ...(r.vars ?? {}) })}
+        </span>
+      ))}
+    </div>
   );
 }
 
@@ -119,6 +155,24 @@ export function MatchDetailPanel({ sessionId, group, projectId, onClose }: Props
     }
     return best;
   }, [methodNames, methods]);
+
+  // Cross-project memory: did the caller map a group with this same
+  // signature before? The library query shares the ['match-templates'] key
+  // with the TemplatesPanel so it dedupes. When there is a prior pick we
+  // badge the group and mark the exact candidate that was chosen last time.
+  const templatesQ = useQuery({
+    queryKey: ['match-templates'],
+    queryFn: matchElementsApi.listTemplates,
+    staleTime: 60_000,
+  });
+  const priorPick = useMemo(
+    () =>
+      priorPickForSignature(
+        group?.signature ?? null,
+        indexTemplatesBySignature(templatesQ.data ?? []),
+      ),
+    [templatesQ.data, group?.signature],
+  );
 
   // Escape closes the slide-over (parent listens for Escape too — this
   // ensures the inner panel handles it first when the user is focused
@@ -224,6 +278,25 @@ export function MatchDetailPanel({ sessionId, group, projectId, onClose }: Props
                 </span>
               )}
             </div>
+            {priorPick && (
+              <div className="mt-1.5">
+                <span className="inline-flex items-center gap-1 rounded-full bg-indigo-100 px-2 py-0.5 text-[11px] font-medium text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-200">
+                  <Sparkles className="w-3 h-3" />
+                  {t('match_elements.detail.prior_pick', {
+                    defaultValue: 'You mapped this before ({{count}}x)',
+                    count: priorPick.use_count,
+                  })}
+                  {priorPick.last_used_at && (
+                    <span className="opacity-80">
+                      {t('match_elements.detail.prior_pick_last', {
+                        defaultValue: '· last {{date}}',
+                        date: new Date(priorPick.last_used_at).toLocaleDateString(),
+                      })}
+                    </span>
+                  )}
+                </span>
+              </div>
+            )}
           </div>
           <button
             ref={closeBtnRef}
@@ -325,20 +398,51 @@ export function MatchDetailPanel({ sessionId, group, projectId, onClose }: Props
                       </tr>
                     </thead>
                     <tbody>
-                      {(methods[name] ?? []).slice(0, 10).map((cand, idx) => (
+                      {(methods[name] ?? []).slice(0, 10).map((cand, idx) => {
+                        // Why did this candidate rank? Plain-language chips from
+                        // its boosts + semantic score, plus a "you picked this
+                        // last time" reason when it is the saved template's pick.
+                        const isPrior = isPriorPickCandidate(cand.id, priorPick);
+                        const reasons = buildMatchReasons(cand);
+                        if (isPrior && priorPick) {
+                          reasons.unshift(priorConfirmReason(priorPick.use_count));
+                        }
+                        const note = reasoningText(cand);
+                        return (
                         <tr
                           key={`${name}-${cand.code}-${idx}`}
                           className="border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/50"
                         >
-                          <td className="px-2 py-1.5 font-mono text-xs">{cand.code}</td>
-                          <td className="px-2 py-1.5 text-xs">{cand.description}</td>
-                          <td className="px-2 py-1.5 text-right text-xs tabular-nums">
+                          <td className="px-2 py-1.5 font-mono text-xs align-top">
+                            {cand.code}
+                            {isPrior && (
+                              <span className="mt-1 flex items-center gap-1 text-[10px] font-sans font-medium text-indigo-600 dark:text-indigo-300">
+                                <Sparkles className="w-2.5 h-2.5" />
+                                {t('match_elements.detail.your_pick', {
+                                  defaultValue: 'Your pick last time',
+                                })}
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-2 py-1.5 text-xs align-top">
+                            <div>{cand.description}</div>
+                            <ReasonChips reasons={reasons} />
+                            {note && (
+                              <div className="mt-1 text-[10px] italic text-slate-500 dark:text-slate-400">
+                                {t('match_elements.detail.model_note', {
+                                  defaultValue: 'Model note: {{note}}',
+                                  note,
+                                })}
+                              </div>
+                            )}
+                          </td>
+                          <td className="px-2 py-1.5 text-right text-xs tabular-nums align-top">
                             {Number(cand.unit_rate).toFixed(2)} {cand.currency}/{cand.unit}
                           </td>
-                          <td className="px-2 py-1.5 text-right">
+                          <td className="px-2 py-1.5 text-right align-top">
                             <ConfidencePill band={cand.confidence_band} score={cand.score} />
                           </td>
-                          <td className="px-2 py-1.5 text-right">
+                          <td className="px-2 py-1.5 text-right align-top">
                             <button
                               onClick={() => confirmMut.mutate(cand)}
                               disabled={confirmMut.isPending || !cand.id}
@@ -356,7 +460,8 @@ export function MatchDetailPanel({ sessionId, group, projectId, onClose }: Props
                             </button>
                           </td>
                         </tr>
-                      ))}
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>

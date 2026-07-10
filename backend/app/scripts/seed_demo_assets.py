@@ -165,7 +165,7 @@ _DWG_SOURCE_DOC = {
     "category": "drawing",
     "mime": "image/vnd.dwg",
     "tags": ["drawings", "dwg", "source-drawing"],
-    "description": "Native AutoCAD DWG drawing",
+    "description": "Native DWG drawing",
 }
 # IFC source document. Unlike RVT/DWG a real IFC sample is committed in the repo
 # (``frontend/e2e/fixtures/dashboards/sample-project.ifc``, ~2.4 MB, a genuine

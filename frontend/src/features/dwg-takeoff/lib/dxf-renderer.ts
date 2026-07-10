@@ -9,7 +9,7 @@ import type { DxfEntity } from '../api';
 import type { ViewportState } from './viewport';
 import { worldToScreen } from './viewport';
 
-/* ── AutoCAD Color Index → CSS hex ─────────────────────────────────────── */
+/* ── CAD Color Index → CSS hex ─────────────────────────────────────── */
 
 const ACI_TABLE: Record<number, string> = {
   0: '#000000', // ByBlock

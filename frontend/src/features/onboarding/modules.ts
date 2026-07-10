@@ -1,12 +1,12 @@
 /**
  * Module catalogue for the OpenConstructionERP onboarding wizard.
  *
- * Each entry mirrors one of the 88 backend module manifests in
+ * Each entry mirrors one of the 112 backend module manifests in
  * ``backend/app/modules/<mod>/manifest.py``. Keys follow the backend ``name``
  * minus the ``oe_`` prefix (snake_case). The wizard hands the key list to
  * ``useModuleStore.setModuleEnabled`` on finish.
  *
- * Groups partition the 88 modules into 19 user-facing buckets. The v3.0
+ * Groups partition the 112 modules into 19 user-facing buckets. The v3.0
  * 18-Modules Wave is broken across the new groups (sustainability_esg,
  * qms_compliance, bi_analytics, operations, commercial, bim_advanced).
  *
@@ -58,8 +58,8 @@ export const MODULE_GROUPS: ModuleGroup[] = [
   { id: 'platform', labelKey: 'onboarding.mod_group_platform' },
 ];
 
-/* ── 88-module catalogue ────────────────────────────────────────────────── */
-/* One entry per backend manifest. Total: 88. */
+/* ── 112-module catalogue ───────────────────────────────────────────────── */
+/* One entry per backend manifest. Total: 112. */
 
 export const ALL_MODULES: ModuleDef[] = [
   // ── Core (always on) ─────────────────────────────────────────────────
@@ -75,6 +75,7 @@ export const ALL_MODULES: ModuleDef[] = [
   { key: 'validation', labelKey: 'validation.title', descriptionKey: 'onboarding.mod_validation_desc', group: 'estimation' },
   { key: 'cost_match', labelKey: 'onboarding.mod_cost_match', descriptionKey: 'onboarding.mod_cost_match_desc', group: 'estimation' },
   { key: 'match', labelKey: 'onboarding.mod_match', descriptionKey: 'onboarding.mod_match_desc', group: 'estimation' },
+  { key: 'cost-benchmark', labelKey: 'nav.benchmarks', descriptionKey: 'onboarding.mod_cost_benchmark_desc', group: 'estimation' },
 
   // ── Takeoff & CAD ────────────────────────────────────────────────────
   { key: 'takeoff', labelKey: 'nav.takeoff_overview', descriptionKey: 'onboarding.mod_takeoff_desc', group: 'takeoff' },
@@ -86,6 +87,10 @@ export const ALL_MODULES: ModuleDef[] = [
   { key: 'bim_requirements', labelKey: 'onboarding.mod_bim_requirements', descriptionKey: 'onboarding.mod_bim_requirements_desc', group: 'bim_advanced' },
   { key: 'match_elements', labelKey: 'onboarding.mod_match_elements', descriptionKey: 'onboarding.mod_match_elements_desc', group: 'bim_advanced' },
   { key: 'opencde_api', labelKey: 'onboarding.mod_opencde_api', descriptionKey: 'onboarding.mod_opencde_api_desc', group: 'bim_advanced' },
+  { key: 'coordination_hub', labelKey: 'nav.coordination_hub', descriptionKey: 'onboarding.mod_coordination_hub_desc', group: 'bim_advanced' },
+  { key: 'clash', labelKey: 'nav.clash_detection', descriptionKey: 'onboarding.mod_clash_desc', group: 'bim_advanced' },
+  { key: 'geo_hub', labelKey: 'sidebar.geo_hub', descriptionKey: 'onboarding.mod_geo_hub_desc', group: 'bim_advanced' },
+  { key: 'pointcloud', labelKey: 'nav.point_cloud', descriptionKey: 'onboarding.mod_pointcloud_desc', group: 'bim_advanced' },
 
   // ── AI ───────────────────────────────────────────────────────────────
   { key: 'ai', labelKey: 'nav.ai_estimate', descriptionKey: 'onboarding.mod_ai_estimate_desc', group: 'ai' },
@@ -93,6 +98,7 @@ export const ALL_MODULES: ModuleDef[] = [
   { key: 'erp_chat', labelKey: 'onboarding.mod_erp_chat', descriptionKey: 'onboarding.mod_erp_chat_desc', group: 'ai' },
   { key: 'compliance_ai', labelKey: 'onboarding.mod_compliance_ai', descriptionKey: 'onboarding.mod_compliance_ai_desc', group: 'ai' },
   { key: 'ai_agents', labelKey: 'nav.ai_agents', descriptionKey: 'onboarding.mod_ai_agents_desc', group: 'ai' },
+  { key: 'pipelines', labelKey: 'nav.pipelines', descriptionKey: 'onboarding.mod_pipelines_desc', group: 'ai' },
 
   // ── Planning ─────────────────────────────────────────────────────────
   { key: 'schedule', labelKey: 'schedule.title', descriptionKey: 'onboarding.mod_schedule_desc', group: 'planning' },
@@ -100,12 +106,14 @@ export const ALL_MODULES: ModuleDef[] = [
   { key: 'tasks', labelKey: 'tasks.title', descriptionKey: 'onboarding.mod_tasks_desc', group: 'planning' },
   { key: 'costmodel', labelKey: 'nav.5d_cost_model', descriptionKey: 'onboarding.mod_5d_desc', group: 'planning' },
   { key: 'eac', labelKey: 'onboarding.mod_eac', descriptionKey: 'onboarding.mod_eac_desc', group: 'planning' },
+  { key: 'portfolio', labelKey: 'portfolio.title', descriptionKey: 'onboarding.mod_portfolio_desc', group: 'planning' },
 
   // ── Finance ──────────────────────────────────────────────────────────
   { key: 'finance', labelKey: 'finance.title', descriptionKey: 'onboarding.mod_finance_desc', group: 'finance' },
   { key: 'procurement', labelKey: 'procurement.title', descriptionKey: 'onboarding.mod_procurement_desc', group: 'finance' },
   { key: 'tendering', labelKey: 'tendering.title', descriptionKey: 'onboarding.mod_tendering_desc', group: 'finance' },
   { key: 'changeorders', labelKey: 'nav.change_orders', descriptionKey: 'onboarding.mod_changeorders_desc', group: 'finance' },
+  { key: 'cvr', labelKey: 'nav.cvr', descriptionKey: 'onboarding.mod_cvr_desc', group: 'finance' },
 
   // ── Commercial / Sales ──────────────────────────────────────────────
   { key: 'bid_management', labelKey: 'onboarding.mod_bid_management', descriptionKey: 'onboarding.mod_bid_management_desc', group: 'commercial' },
@@ -115,6 +123,7 @@ export const ALL_MODULES: ModuleDef[] = [
   { key: 'supplier_catalogs', labelKey: 'onboarding.mod_supplier_catalogs', descriptionKey: 'onboarding.mod_supplier_catalogs_desc', group: 'commercial' },
   { key: 'property_dev', labelKey: 'onboarding.mod_property_dev', descriptionKey: 'onboarding.mod_property_dev_desc', group: 'commercial' },
   { key: 'moc', labelKey: 'moc.title', descriptionKey: 'onboarding.mod_moc_desc', group: 'commercial' },
+  { key: 'accommodation', labelKey: 'nav.accommodation', descriptionKey: 'onboarding.mod_accommodation_desc', group: 'commercial' },
 
   // ── Operations ───────────────────────────────────────────────────────
   { key: 'service', labelKey: 'onboarding.mod_service', descriptionKey: 'onboarding.mod_service_desc', group: 'operations' },
@@ -123,6 +132,9 @@ export const ALL_MODULES: ModuleDef[] = [
   { key: 'daily_diary', labelKey: 'onboarding.mod_daily_diary', descriptionKey: 'onboarding.mod_daily_diary_desc', group: 'operations' },
   { key: 'subcontractors', labelKey: 'onboarding.mod_subcontractors', descriptionKey: 'onboarding.mod_subcontractors_desc', group: 'operations' },
   { key: 'portal', labelKey: 'onboarding.mod_portal', descriptionKey: 'onboarding.mod_portal_desc', group: 'operations' },
+  { key: 'prefab', labelKey: 'nav.prefab', descriptionKey: 'onboarding.mod_prefab_desc', group: 'operations' },
+  { key: 'site_logistics', labelKey: 'nav.site_logistics', descriptionKey: 'onboarding.mod_site_logistics_desc', group: 'operations' },
+  { key: 'assets', labelKey: 'nav.assets', descriptionKey: 'onboarding.mod_assets_desc', group: 'operations' },
 
   // ── Communication ────────────────────────────────────────────────────
   { key: 'meetings', labelKey: 'meetings.title', descriptionKey: 'onboarding.mod_meetings_desc', group: 'communication' },
@@ -144,6 +156,10 @@ export const ALL_MODULES: ModuleDef[] = [
   { key: 'punchlist', labelKey: 'nav.punchlist', descriptionKey: 'onboarding.mod_punchlist_desc', group: 'quality' },
   { key: 'risk', labelKey: 'nav.risk_register', descriptionKey: 'onboarding.mod_risks_desc', group: 'quality' },
   { key: 'hse_advanced', labelKey: 'onboarding.mod_hse_advanced', descriptionKey: 'onboarding.mod_hse_advanced_desc', group: 'quality' },
+  { key: 'construction_control', labelKey: 'construction_control.title', descriptionKey: 'onboarding.mod_construction_control_desc', group: 'quality' },
+  { key: 'commissioning', labelKey: 'nav.commissioning', descriptionKey: 'onboarding.mod_commissioning_desc', group: 'quality' },
+  { key: 'closeout', labelKey: 'closeout.title', descriptionKey: 'onboarding.mod_closeout_desc', group: 'quality' },
+  { key: 'forms', labelKey: 'nav.forms', descriptionKey: 'onboarding.mod_forms_desc', group: 'quality' },
 
   // ── QMS & Compliance ────────────────────────────────────────────────
   { key: 'qms', labelKey: 'onboarding.mod_qms', descriptionKey: 'onboarding.mod_qms_desc', group: 'qms_compliance' },
@@ -156,9 +172,12 @@ export const ALL_MODULES: ModuleDef[] = [
   { key: 'collaboration', labelKey: 'nav.collaboration', descriptionKey: 'onboarding.mod_collaboration_desc', group: 'field' },
   { key: 'field_diary', labelKey: 'onboarding.mod_field_diary', descriptionKey: 'onboarding.mod_field_diary_desc', group: 'field' },
   { key: 'payroll', labelKey: 'nav.payroll', descriptionKey: 'onboarding.mod_payroll_desc', group: 'field' },
+  { key: 'field_time', labelKey: 'nav.field_time', descriptionKey: 'onboarding.mod_field_time_desc', group: 'field' },
 
   // ── Sustainability / ESG ────────────────────────────────────────────
   { key: 'carbon', labelKey: 'onboarding.mod_carbon', descriptionKey: 'onboarding.mod_carbon_desc', group: 'sustainability_esg' },
+  { key: 'sustainability', labelKey: 'nav.sustainability', descriptionKey: 'onboarding.mod_sustainability_desc', group: 'sustainability_esg' },
+  { key: 'esg', labelKey: 'nav.esg', descriptionKey: 'onboarding.mod_esg_desc', group: 'sustainability_esg' },
 
   // ── BI & Analytics ──────────────────────────────────────────────────
   { key: 'bi_dashboards', labelKey: 'onboarding.mod_bi_dashboards', descriptionKey: 'onboarding.mod_bi_dashboards_desc', group: 'bi_analytics' },
@@ -205,6 +224,6 @@ export const ALL_MODULES: ModuleDef[] = [
 
 export const CORE_MODULE_KEYS = new Set(ALL_MODULES.filter((m) => m.core).map((m) => m.key));
 
-/** Total count of modules surfaced in the wizard. Mirrors the 88 backend
+/** Total count of modules surfaced in the wizard. Mirrors the 112 backend
  *  manifests in ``backend/app/modules/<mod>/manifest.py``. */
 export const TOTAL_MODULE_COUNT = ALL_MODULES.length;

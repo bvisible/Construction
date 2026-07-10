@@ -31,7 +31,7 @@ export const manifest: ModuleManifest = {
     {
       label: 'Cost Benchmarks',
       path: '/benchmarks',
-      keywords: ['benchmark', 'bki', 'bcis', 'cost per m2', 'percentile', 'comparison'],
+      keywords: ['benchmark', 'bcis', 'cost per m2', 'percentile', 'comparison'],
     },
   ],
 };

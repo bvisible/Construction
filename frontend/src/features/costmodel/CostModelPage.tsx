@@ -1,6 +1,6 @@
 import { useState, useMemo, useCallback, useEffect, useRef, memo, Fragment } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowLeft,
@@ -2644,6 +2644,104 @@ const ProjectCard = memo(function ProjectCard({
 
 /* ── Main Page ─────────────────────────────────────────────────────────── */
 
+/* ── How it works + connects ─────────────────────────────────────────────
+ * Compact at-a-glance flow so a project controller sees what the 5D Cost Model
+ * does and which sibling modules feed the numbers. Mirrors the approved
+ * norm-expansion pattern. */
+function ModLink({ to, children }: { to: string; children: React.ReactNode }) {
+  return (
+    <Link to={to} className="font-medium text-oe-blue-text hover:underline">
+      {children}
+    </Link>
+  );
+}
+
+function HowCostModelConnects() {
+  const { t } = useTranslation();
+  const steps: { icon: React.ReactNode; title: string; desc: string }[] = [
+    {
+      icon: <Wallet size={14} className="text-oe-blue" />,
+      title: t('costmodel.flow_1_title', { defaultValue: 'Set the budget' }),
+      desc: t('costmodel.flow_1_desc', {
+        defaultValue: 'Generate budget lines from your priced BOQ positions.',
+      }),
+    },
+    {
+      icon: <Activity size={14} className="text-oe-blue" />,
+      title: t('costmodel.flow_2_title', { defaultValue: 'Record actuals & progress' }),
+      desc: t('costmodel.flow_2_desc', {
+        defaultValue: 'Log committed, actual cost and field progress each period.',
+      }),
+    },
+    {
+      icon: <Gauge size={14} className="text-oe-blue" />,
+      title: t('costmodel.flow_3_title', { defaultValue: 'Track earned value' }),
+      desc: t('costmodel.flow_3_desc', {
+        defaultValue: 'SPI, CPI and EAC show cost and schedule health at a glance.',
+      }),
+    },
+    {
+      icon: <GitBranch size={14} className="text-oe-blue" />,
+      title: t('costmodel.flow_4_title', { defaultValue: 'Forecast & test scenarios' }),
+      desc: t('costmodel.flow_4_desc', {
+        defaultValue: 'Run what-if and Monte Carlo on the outturn cost.',
+      }),
+    },
+  ];
+
+  return (
+    <div className="rounded-xl border border-border-light bg-surface-secondary/40 p-4">
+      <h2 className="flex items-center gap-1.5 text-sm font-semibold text-content-primary">
+        <Network size={15} className="text-oe-blue" />
+        {t('costmodel.flow_title', { defaultValue: 'How the 5D cost model connects' })}
+      </h2>
+      <p className="mt-1 text-xs text-content-tertiary">
+        {t('costmodel.flow_intro', {
+          defaultValue:
+            'Turn your priced BOQ into a live budget and track it against actual cost and progress with earned value. Record the current period costs and progress to keep it current.',
+        })}
+      </p>
+
+      <ol className="mt-3 flex flex-col gap-2 lg:flex-row lg:items-stretch">
+        {steps.map((s, i) => (
+          <Fragment key={s.title}>
+            <li className="flex-1 rounded-lg border border-border-light bg-surface-primary p-3">
+              <div className="flex items-center gap-2">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-oe-blue-subtle">
+                  {s.icon}
+                </span>
+                <span className="text-xs font-semibold text-content-primary">{s.title}</span>
+              </div>
+              <p className="mt-1.5 text-2xs leading-relaxed text-content-tertiary">{s.desc}</p>
+            </li>
+            {i < steps.length - 1 && (
+              <li
+                aria-hidden="true"
+                className="hidden shrink-0 items-center self-center text-content-quaternary lg:flex"
+              >
+                <ChevronRight size={16} />
+              </li>
+            )}
+          </Fragment>
+        ))}
+      </ol>
+
+      <div className="mt-3 border-t border-border-light pt-3 text-2xs text-content-tertiary">
+        <span className="font-medium text-content-secondary">
+          {t('costmodel.flow_connects', { defaultValue: 'Connects with:' })}
+        </span>{' '}
+        <ModLink to="/boq">{t('costmodel.mod_boq', { defaultValue: 'BOQ' })}</ModLink>
+        {' · '}
+        <ModLink to="/reconciliation">
+          {t('costmodel.mod_reconciliation', { defaultValue: 'Reconciliation' })}
+        </ModLink>
+        {' · '}
+        <ModLink to="/reports">{t('costmodel.mod_reports', { defaultValue: 'Reports' })}</ModLink>
+      </div>
+    </div>
+  );
+}
+
 export function CostModelPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -2751,6 +2849,8 @@ export function CostModelPage() {
         {/* Cross-module navigation — below the header to keep the canonical
             breadcrumb > header > content order. */}
         <PlanningCrossLinks active="5d" />
+
+        <HowCostModelConnects />
 
         {/* Scope indicator — single project */}
         <div

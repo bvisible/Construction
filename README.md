@@ -254,7 +254,7 @@ Each block below is a short GIF cut from the full walkthrough above - same order
 </td>
 <td align="center">
 <strong><picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/tools-dark.svg"><img src="docs/readme-icons/tools-light.svg" width="14" align="center" alt=""></picture> 4 · BIM → BOQ Bulk Link</strong><br/>
-<em>Link 100 Revit walls → one BOQ line with aggregated area / volume / length - no IfcOpenShell</em><br/><br/>
+<em>Link 100 BIM walls → one BOQ line with aggregated area / volume / length - no IfcOpenShell</em><br/><br/>
 <img src="docs/gifs/09_Bulk_Link_BIM_Group.gif" alt="Bulk Link BIM Group" width="400" />
 </td>
 </tr>
@@ -273,7 +273,7 @@ Each block below is a short GIF cut from the full walkthrough above - same order
 <tr>
 <td align="center">
 <strong><picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/credit-card-dark.svg"><img src="docs/readme-icons/credit-card-light.svg" width="14" align="center" alt=""></picture> 7 · Complete Estimate - $6.26M</strong><br/>
-<em>Real Revit project → 215 positions, 88 sections, CWICR-priced, quality score 99</em><br/><br/>
+<em>Real BIM project → 215 positions, 88 sections, CWICR-priced, quality score 99</em><br/><br/>
 <img src="docs/gifs/11_Complete_Estimate_6M.gif" alt="Complete Estimate" width="400" />
 </td>
 <td align="center">
@@ -452,8 +452,8 @@ Extract quantities from any source - drawings, models, text, or photos:
 ```
 
 
-- **CAD/BIM takeoff** - Upload Revit (.rvt), IFC, AutoCAD (.dwg), or MicroStation (.dgn) files. DDC converters extract elements with volumes, areas, and lengths automatically
-- **Interactive QTO** - Choose how to group extracted data: by Category, Type, Level, Family. Format-specific presets for Revit and IFC
+- **CAD/BIM takeoff** - Upload RVT, IFC, DWG, or DGN files. DDC converters extract elements with volumes, areas, and lengths automatically
+- **Interactive QTO** - Choose how to group extracted data: by Category, Type, Level, Family. Format-specific presets for RVT and IFC
 - **Linked geometry preview** - Click the BIM link badge on any BOQ position to see a 3D preview of linked elements with interactive rotate/zoom/pan controls
 - **BIM Quantity Picker** - Select quantities (area, volume, length) directly from linked BIM elements and apply them to BOQ positions. The source parameter name is shown next to the unit
 - **DWG polyline measurement** - Click any polyline in the DWG viewer to instantly see area, perimeter, and individual segment lengths with on-canvas labels
@@ -590,9 +590,9 @@ Multi-disciplinary BIM coordination with AI-assisted issue triage:
 ```
   Federation         Raw clashes        Smart Issues       AI Triage         BCF 3.0
  ┌──────────┐      ┌────────────┐     ┌────────────┐    ┌────────────┐    ┌──────────┐
- │ ARC ·STR │      │ thousands  │     │ clustered  │    │ severity   │    │ Solibri  │
- │ MEP ·HSE │─────▶│ raw pairs  │────▶│ by zone +  │───▶│ rework $   │───▶│ Navisw.  │
- │ models   │      │ + distance │     │ disciplines│    │ confidence │    │ BIMcollab│
+ │ ARC ·STR │      │ thousands  │     │ clustered  │    │ severity   │    │ any BCF  │
+ │ MEP ·HSE │─────▶│ raw pairs  │────▶│ by zone +  │───▶│ rework $   │───▶│ viewer   │
+ │ models   │      │ + distance │     │ disciplines│    │ confidence │    │ or tool  │
  └──────────┘      └────────────┘     └────────────┘    └────────────┘    └──────────┘
                                             │                                  ▲
                                             ▼                                  │
@@ -609,7 +609,7 @@ Multi-disciplinary BIM coordination with AI-assisted issue triage:
 - **Clash Smart Issues** - Auto-group thousands of raw clash results into prioritized issue clusters by location + discipline pair
 - **AI Triage** - LLM ranks new clashes by severity / rework cost / location criticality with confidence scores
 - **Cost Impact rollup** - Per-issue rework estimate driven by your cost database, surfaced on the dashboard
-- **BCF 3.0 / OpenCDE export** - Round-trip with Solibri, Navisworks, BIMcollab via the open BIM standard
+- **BCF 3.0 / OpenCDE export** - Round-trip with any BCF-compatible tool via the open BIM standard
 - **BIM Requirements** - IDS (Information Delivery Specification) and COBie import / export for owner-side data drops
 
 ### <picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/calendar-dark.svg"><img src="docs/readme-icons/calendar-light.svg" width="14" align="center" alt=""></picture> 4D Scheduling & 5D Cost Model

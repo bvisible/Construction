@@ -26,7 +26,15 @@ export const manifest: ModuleManifest = {
   version: '0.1.0',
   icon: Workflow,
   category: 'tools',
-  defaultEnabled: false,
+  // Enabled by default so the statically-listed "Pipeline Builder" sidebar
+  // entry (Automation & AI group, advanced-only) resolves to a mounted
+  // route. `useModuleRouteElements` only mounts a module's routes when
+  // `isModuleEnabled(id)` is true; with this false the nav link 404'd (the
+  // sidebar item is NOT gated by module-enabled, so the link showed while
+  // the route was absent). Every other statically-listed feature module
+  // (schedule, validation, tendering, cost-benchmark, …) is defaultEnabled
+  // too. BETA is still communicated via the in-page BetaBanner.
+  defaultEnabled: true,
   depends: ['validation'],
   routes: [
     {

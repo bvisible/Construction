@@ -19,7 +19,7 @@ const REGIONS: { code: string; flag: string; label: string; standard: string }[]
   { code: 'DACH', flag: '\ud83c\udde9\ud83c\uddea', label: 'DACH', standard: 'VOB/HOAI' },
   { code: 'UK', flag: '\ud83c\uddec\ud83c\udde7', label: 'United Kingdom', standard: 'NRM/RICS' },
   { code: 'FR', flag: '\ud83c\uddeb\ud83c\uddf7', label: 'France', standard: 'BATIPRIX' },
-  { code: 'US', flag: '\ud83c\uddfa\ud83c\uddf8', label: 'United States', standard: 'RSMeans/AIA' },
+  { code: 'US', flag: '\ud83c\uddfa\ud83c\uddf8', label: 'United States', standard: 'MasterFormat/AIA' },
   { code: 'GULF', flag: '\ud83c\udde6\ud83c\uddea', label: 'Gulf / UAE', standard: 'FIDIC' },
   { code: 'IN', flag: '\ud83c\uddee\ud83c\uddf3', label: 'India', standard: 'CPWD' },
   { code: 'AU', flag: '\ud83c\udde6\ud83c\uddfa', label: 'Australia', standard: 'AIQS' },

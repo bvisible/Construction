@@ -13,8 +13,8 @@
  * the commit path to reverse. Both editors must be a strict no-op under
  * metric (identity), so this covers every country, not just the US.
  */
-import { describe, it, expect, beforeEach } from 'vitest';
-import { render, renderHook, cleanup, screen } from '@testing-library/react';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { render, renderHook, cleanup, screen, fireEvent } from '@testing-library/react';
 import { createRef } from 'react';
 
 import { FormulaCellEditor, RateCellEditor } from './cellEditors';
@@ -107,5 +107,73 @@ describe('FormulaCellEditor quantity seed - Issue #287', () => {
   it('leaves unitless quantities untouched in imperial (pcs)', () => {
     const { input } = renderQty(7, 'pcs', apiFor('imperial'));
     expect(Number(input.value)).toBe(7);
+  });
+});
+
+/**
+ * Resource-less unit-rate commit path.
+ *
+ * A rate typed on a BOQ position WITHOUT contributing resources was silently
+ * dropped: ag-grid-react v32 + React 18 can skip the editor's getValue after
+ * stopEditing, and the synthetic onChange did not always fire in the edit root,
+ * so the cell reverted and no PATCH went out. The fix writes the value straight
+ * to the row via node.setDataValue on Enter / Tab / blur and cancels ag-grid's
+ * secondary commit. These tests pin that write path.
+ */
+describe('RateCellEditor - commit path (resource-less rate fix)', () => {
+  beforeEach(() => {
+    cleanup();
+    usePreferencesStore.getState().setPreference('measurementSystem', 'metric');
+  });
+
+  function renderRateForCommit(seed: number, unit: string, api: DisplayQuantityApi) {
+    const setDataValue = vi.fn();
+    const stopEditing = vi.fn();
+    const tabToNextCell = vi.fn();
+    const params = {
+      value: seed,
+      data: { unit },
+      context: { displayQuantity: api },
+      node: { data: { unit, unit_rate: seed }, setDataValue },
+      api: { stopEditing, tabToNextCell },
+      column: { getColId: () => 'unit_rate' },
+    } as unknown as FormulaCellEditorParams;
+    render(<RateCellEditor {...params} />);
+    const input = screen.getByRole('spinbutton') as HTMLInputElement;
+    return { input, setDataValue, stopEditing, tabToNextCell };
+  }
+
+  it('writes a typed rate straight to the row on Enter (was silently dropped)', () => {
+    const { input, setDataValue, stopEditing } = renderRateForCommit(0, 'm', apiFor('metric'));
+    fireEvent.input(input, { target: { value: '99' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(setDataValue).toHaveBeenCalledWith('unit_rate', 99);
+    // Wrote via setDataValue -> cancel ag-grid's secondary commit (stopEditing true).
+    expect(stopEditing).toHaveBeenCalledWith(true);
+  });
+
+  it('also commits on blur, not just Enter', () => {
+    const { input, setDataValue } = renderRateForCommit(0, 'm', apiFor('metric'));
+    fireEvent.input(input, { target: { value: '42' } });
+    fireEvent.blur(input);
+    expect(setDataValue).toHaveBeenCalledWith('unit_rate', 42);
+  });
+
+  it('does not write or double-commit when the value is unchanged', () => {
+    const { input, setDataValue, stopEditing } = renderRateForCommit(50, 'm', apiFor('metric'));
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(setDataValue).not.toHaveBeenCalled();
+    expect(stopEditing).toHaveBeenCalledWith(false);
+  });
+
+  it('converts the typed display rate back to metric before writing (imperial)', () => {
+    const { input, setDataValue } = renderRateForCommit(50, 'm', apiFor('imperial'));
+    fireEvent.input(input, { target: { value: '16' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(setDataValue).toHaveBeenCalledTimes(1);
+    const written = Number(setDataValue.mock.calls[0]![1]);
+    // A per-foot figure stores as a larger per-metre rate, so NOT the raw 16.
+    expect(written).toBeGreaterThan(16);
+    expect(written).not.toBeCloseTo(16, 1);
   });
 });

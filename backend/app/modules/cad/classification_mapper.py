@@ -2,9 +2,9 @@
 # CAD2DATA Pipeline · CWICR Cost Database Engine
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
 # AGPL-3.0 License · DDC-CWICR-OE-2026
-"""Auto-map Revit/IFC categories to construction classification standards.
+"""Auto-map RVT/IFC categories to construction classification standards.
 
-Provides deterministic mapping tables from common Revit family categories
+Provides deterministic mapping tables from common RVT family categories
 and IFC entity types to DIN 276, NRM 1, and CSI MasterFormat codes.
 These mappings are used as fallback/default classification when no AI or
 vector search is available, and as confidence anchors for AI suggestions.
@@ -37,7 +37,7 @@ Supported standards:
 from __future__ import annotations
 
 # ---------------------------------------------------------------------------
-# Revit Category -> DIN 276 KG mapping (coarse, 3-digit fallback)
+# RVT category -> DIN 276 KG mapping (coarse, 3-digit fallback)
 # ---------------------------------------------------------------------------
 REVIT_TO_DIN276: dict[str, str] = {
     "Walls": "330",
@@ -69,7 +69,7 @@ REVIT_TO_DIN276: dict[str, str] = {
 }
 
 # ---------------------------------------------------------------------------
-# Revit Category -> NRM 1 mapping (coarse fallback)
+# RVT category -> NRM 1 mapping (coarse fallback)
 # ---------------------------------------------------------------------------
 REVIT_TO_NRM: dict[str, str] = {
     "Walls": "2.5",
@@ -87,7 +87,7 @@ REVIT_TO_NRM: dict[str, str] = {
 }
 
 # ---------------------------------------------------------------------------
-# Revit Category -> CSI MasterFormat mapping (coarse fallback)
+# RVT category -> CSI MasterFormat mapping (coarse fallback)
 # ---------------------------------------------------------------------------
 REVIT_TO_MASTERFORMAT: dict[str, str] = {
     "Walls": "04 00 00",
@@ -112,9 +112,9 @@ _STANDARD_MAPPINGS: dict[str, dict[str, str]] = {
 }
 
 # ---------------------------------------------------------------------------
-# Category aliasing - Revit emits Pascal-case plurals ("Walls"); BIM
+# Category aliasing - RVT exports emit Pascal-case plurals ("Walls"); BIM
 # canonical-format and the matcher's golden set use lowercase singulars
-# ("wall"). Normalise to the Revit form so the coarse maps still hit.
+# ("wall"). Normalise to the RVT form so the coarse maps still hit.
 # ---------------------------------------------------------------------------
 _CATEGORY_ALIASES: dict[str, str] = {
     "wall": "Walls",
@@ -156,10 +156,10 @@ _CATEGORY_ALIASES: dict[str, str] = {
     "parking": "Parking",
     # IFC entity-type aliases - when a BIM extractor surfaces the raw
     # IFC class verbatim (``"IfcWall"``, ``"IfcSlab"``, …) the coarse
-    # maps would otherwise miss because they're keyed on Revit Pascal-
-    # case plurals. Folding IFC → Revit here lets ``enrich_classification``
+    # maps would otherwise miss because they're keyed on RVT Pascal-
+    # case plurals. Folding IFC → RVT here lets ``enrich_classification``
     # produce a DIN 276 / NRM / MasterFormat code even when the canonical
-    # extractor never ran through a Revit-style category aliaser.
+    # extractor never ran through an RVT-style category aliaser.
     # Without this the BIM extractor produces ``classifier_hint=None``
     # for every IFC-sourced element, which kills the
     # ``department_code`` hard filter AND the classifier boost.
@@ -204,12 +204,12 @@ _CATEGORY_ALIASES: dict[str, str] = {
     "ifcbuildingelementpart": "Generic Models",
     "ifcvirtualelement": "Generic Models",
     "ifctransportelement": "Generic Models",
-    # Insulation has no Revit-Pascal coarse code; tracked via material map.
+    # Insulation has no RVT-Pascal coarse code; tracked via material map.
 }
 
 
 def _canonical_category(category: str) -> str:
-    """Return the Revit-style category key the coarse maps are keyed on.
+    """Return the RVT-style category key the coarse maps are keyed on.
 
     Pass-through if the input already matches a key in the coarse map;
     otherwise fold through the alias table by lowercase lookup. Returns
@@ -343,7 +343,7 @@ def _normalise_material(material: str | None) -> str | None:
 # Codes verified against tests/eval/golden_set.yaml (the matcher's golden
 # ground truth) - every code below appears as a ground-truth entry there
 # OR matches the structure documented in the v2.8.0 Phase-1 spec.
-# Format: (revit_category, material_canonical_key) -> deeper_code.
+# Format: (category, material_canonical_key) -> deeper_code.
 # ---------------------------------------------------------------------------
 MATERIAL_AWARE_DIN276: dict[tuple[str, str], str] = {
     # Walls (KG 330 = Außenwände, KG 331 = subdivision in fixture data)
@@ -380,7 +380,7 @@ MATERIAL_AWARE_DIN276: dict[tuple[str, str], str] = {
 
 # ---------------------------------------------------------------------------
 # Material-aware NRM 1 refinements (smaller scope - coarse map is thin).
-# Format: (revit_category, material_canonical_key) -> deeper_code.
+# Format: (category, material_canonical_key) -> deeper_code.
 # ---------------------------------------------------------------------------
 MATERIAL_AWARE_NRM: dict[tuple[str, str], str] = {
     # NRM 2.5 = External walls; sub-element splits used in BCIS.
@@ -411,7 +411,7 @@ MATERIAL_AWARE_NRM: dict[tuple[str, str], str] = {
 
 # ---------------------------------------------------------------------------
 # Material-aware CSI MasterFormat refinements.
-# Format: (revit_category, material_canonical_key) -> deeper_code.
+# Format: (category, material_canonical_key) -> deeper_code.
 # Codes follow the standard MasterFormat 2020 6-digit form.
 # ---------------------------------------------------------------------------
 MATERIAL_AWARE_MASTERFORMAT: dict[tuple[str, str], str] = {
@@ -463,15 +463,15 @@ def _is_fire_rated(fire_rating: str | None) -> bool:
 
 
 def map_category_to_standard(category: str, standard: str = "din276") -> str | None:
-    """Map a Revit/IFC category to a classification code (coarse fallback).
+    """Map an RVT/IFC category to a classification code (coarse fallback).
 
     Performs a lookup against the coarse mapping table for the requested
-    standard. Accepts both Revit-Pascal-case (``"Walls"``) and the
+    standard. Accepts both RVT-Pascal-case (``"Walls"``) and the
     lowercase singular forms (``"wall"``) used by the BIM canonical
     format and the matcher's golden set.
 
     Args:
-        category: Revit category name (e.g. ``"Walls"``, ``"Doors"``)
+        category: RVT category name (e.g. ``"Walls"``, ``"Doors"``)
             or canonical-format singular (``"wall"``, ``"door"``).
         standard: Classification standard key - one of ``"din276"``,
             ``"nrm"``, or ``"masterformat"``.
@@ -506,7 +506,7 @@ def enrich_classification(
     4. ``None`` when even the coarse map has no entry.
 
     Args:
-        category: Revit / canonical-format category name.
+        category: RVT / canonical-format category name.
         material: Free-form material string from the BIM ``properties``
             dict. Folded through :data:`_MATERIAL_SYNONYMS` before
             lookup. ``None`` skips material refinement.
@@ -617,7 +617,7 @@ def get_mapping_table(standard: str) -> dict[str, str]:
         standard: Classification standard key.
 
     Returns:
-        Dict mapping Revit category names to classification codes.
+        Dict mapping RVT category names to classification codes.
         Empty dict if the standard is not recognized.
     """
     return dict(_STANDARD_MAPPINGS.get(standard, {}))

@@ -23,7 +23,18 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Clock, Camera, Users, User } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import {
+  Clock,
+  Camera,
+  Users,
+  User,
+  AlertTriangle,
+  Smartphone,
+  ClipboardList,
+  RefreshCw,
+  Network,
+} from 'lucide-react';
 import { registerFieldServiceWorker } from '@/shared/lib/offline';
 import { ModuleGuideButton } from '@/shared/ui';
 import { useFieldSync } from './useFieldSync';
@@ -31,6 +42,7 @@ import { OfflineStatusBadge } from './OfflineStatusBadge';
 import { SyncQueuePanel } from './SyncQueuePanel';
 import { readFieldSession } from './fieldApi';
 import { TodayTab, CaptureTab, CrewTab } from './FieldTabs';
+import { FieldRaiseIssueTab } from './FieldRaiseIssueTab';
 import { fieldGuide } from './fieldGuide';
 
 /**
@@ -53,7 +65,7 @@ function fieldAuthHeaders(): Record<string, string> {
   }
 }
 
-type FieldTab = 'today' | 'capture' | 'crew' | 'profile';
+type FieldTab = 'today' | 'capture' | 'crew' | 'issue' | 'profile';
 
 interface FieldTabDef {
   key: FieldTab;
@@ -65,8 +77,109 @@ const TABS: readonly FieldTabDef[] = [
   { key: 'today', label: 'Today', Icon: Clock },
   { key: 'capture', label: 'Capture', Icon: Camera },
   { key: 'crew', label: 'Crew', Icon: Users },
+  { key: 'issue', label: 'Issue', Icon: AlertTriangle },
   { key: 'profile', label: 'Me', Icon: User },
 ] as const;
+
+/* ── How-it-works flow + office integrations ───────────────────────────── */
+
+/**
+ * A compact "what this app does and where it connects" card for the field
+ * worker's Me tab. It explains the capture-then-sync flow in plain language and
+ * links to the office modules the captured work flows into (schedule progress,
+ * payroll hours, inspections and safety). Uses the shell's own slate palette so
+ * it stays consistent with this always-light mobile surface rather than the
+ * themed design tokens the desktop pages use.
+ */
+function HowFieldWorks() {
+  const { t } = useTranslation();
+
+  const steps = [
+    {
+      icon: <Smartphone size={14} className="text-sky-600" />,
+      title: t('field.flow_1_title', { defaultValue: 'Sign in' }),
+      desc: t('field.flow_1_desc', {
+        defaultValue: 'Open the link from your SMS and enter your PIN - no password needed.',
+      }),
+    },
+    {
+      icon: <ClipboardList size={14} className="text-sky-600" />,
+      title: t('field.flow_2_title', { defaultValue: 'Log today' }),
+      desc: t('field.flow_2_desc', {
+        defaultValue: 'Record your hours and the progress on the jobs you worked today.',
+      }),
+    },
+    {
+      icon: <Camera size={14} className="text-sky-600" />,
+      title: t('field.flow_3_title', { defaultValue: 'Capture' }),
+      desc: t('field.flow_3_desc', {
+        defaultValue: 'Add site photos and notes - it all works even with no signal.',
+      }),
+    },
+    {
+      icon: <RefreshCw size={14} className="text-sky-600" />,
+      title: t('field.flow_4_title', { defaultValue: 'Auto-sync' }),
+      desc: t('field.flow_4_desc', {
+        defaultValue: 'Saved offline and sent to the office automatically when you are back online.',
+      }),
+    },
+  ];
+
+  return (
+    <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+      <h2 className="flex items-center gap-1.5 text-sm font-semibold text-slate-900">
+        <Network size={15} className="text-sky-600" />
+        {t('field.flow_title', { defaultValue: 'How field work connects' })}
+      </h2>
+      <p className="mt-1 text-xs text-slate-500">
+        {t('field.flow_intro', {
+          defaultValue: 'Capture your day on site and it flows straight through to the office.',
+        })}
+      </p>
+
+      <ol className="mt-3 flex flex-col gap-2">
+        {steps.map((s, i) => (
+          <li
+            key={s.title}
+            className="flex items-start gap-2 rounded-lg border border-slate-200 bg-white p-3"
+          >
+            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-sky-50 text-2xs font-bold text-sky-600">
+              {i + 1}
+            </span>
+            <div className="min-w-0">
+              <span className="flex items-center gap-1 text-xs font-semibold text-slate-900">
+                {s.icon}
+                {s.title}
+              </span>
+              <p className="mt-0.5 text-2xs leading-relaxed text-slate-500">{s.desc}</p>
+            </div>
+          </li>
+        ))}
+      </ol>
+
+      <div className="mt-3 border-t border-slate-200 pt-3 text-2xs text-slate-500">
+        <span className="font-medium text-slate-600">
+          {t('field.flow_feeds', { defaultValue: 'Feeds the office:' })}
+        </span>{' '}
+        <Link to="/schedule" className="font-medium text-sky-600 hover:underline">
+          {t('field.mod_schedule', { defaultValue: 'Schedule' })}
+        </Link>{' '}
+        ·{' '}
+        <Link to="/payroll" className="font-medium text-sky-600 hover:underline">
+          {t('field.mod_payroll', { defaultValue: 'Payroll' })}
+        </Link>{' '}
+        ·{' '}
+        <Link to="/inspections" className="font-medium text-sky-600 hover:underline">
+          {t('field.mod_inspections', { defaultValue: 'Inspections' })}
+        </Link>{' '}
+        ·{' '}
+        <Link to="/safety" className="font-medium text-sky-600 hover:underline">
+          {t('field.mod_safety', { defaultValue: 'Safety' })}
+        </Link>
+      </div>
+    </div>
+  );
+}
 
 export function FieldShellPage() {
   const { t } = useTranslation();
@@ -75,7 +188,7 @@ export function FieldShellPage() {
 
   // Stable headers provider so the queue sender is constructed once.
   const getHeaders = useCallback(() => fieldAuthHeaders(), []);
-  const { online, pending, pendingOps, syncing, syncNow, enqueue, discard } =
+  const { online, pending, pendingOps, syncing, syncNow, enqueue, discard, lastResults } =
     useFieldSync(getHeaders);
 
   // Register the scoped field service worker so the shell + last-viewed data
@@ -119,8 +232,20 @@ export function FieldShellPage() {
         {tab === 'today' && <TodayTab session={session} />}
         {tab === 'capture' && <CaptureTab session={session} enqueue={enqueue} />}
         {tab === 'crew' && <CrewTab session={session} enqueue={enqueue} />}
+        {tab === 'issue' && (
+          <FieldRaiseIssueTab
+            session={session}
+            enqueue={enqueue}
+            pendingOps={pendingOps}
+            lastResults={lastResults}
+            online={online}
+          />
+        )}
         {tab === 'profile' && (
           <div className="flex flex-1 flex-col">
+            <div className="px-4 pt-4">
+              <HowFieldWorks />
+            </div>
             <div className="flex flex-col items-center gap-2 px-4 py-6 text-center">
               <p className="text-sm text-slate-500">
                 {session
@@ -151,19 +276,20 @@ export function FieldShellPage() {
       >
         {TABS.map(({ key, label, Icon }) => {
           const active = key === tab;
+          const tabLabel = t(`field.tab_${key}`, { defaultValue: label });
           return (
             <button
               key={key}
               type="button"
               onClick={() => setTab(key)}
               aria-current={active ? 'page' : undefined}
-              aria-label={label}
+              aria-label={tabLabel}
               className={`flex h-16 flex-1 flex-col items-center justify-center gap-1 text-xs ${
                 active ? 'text-sky-600' : 'text-slate-500'
               }`}
             >
               <Icon size={28} aria-hidden="true" />
-              <span>{label}</span>
+              <span>{tabLabel}</span>
             </button>
           );
         })}

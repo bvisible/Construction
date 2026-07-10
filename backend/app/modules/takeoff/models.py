@@ -112,6 +112,21 @@ class TakeoffDocument(Base):
     analysis: Mapped[dict] = mapped_column(  # type: ignore[assignment]
         JSON, nullable=False, default=dict, server_default="{}"
     )
+    # Per-page scale calibration (issue #334). The document-level, authoritative
+    # source of truth for each sheet's drawing scale, mirroring the frontend
+    # ``PageScales`` shape ({defaultScale, byPage}). Calibration used to live
+    # only in the browser (localStorage) plus a weak per-measurement echo, so a
+    # reload where a stale local default won - or a non-geometry edit that
+    # re-stamped the live view scale - silently dropped a real calibration.
+    # Persisting it once here makes it durable across reloads and devices, with
+    # the per-measurement ``scale_pixels_per_unit`` kept as capture provenance
+    # only. Nullable with no server_default: NULL = never calibrated at the
+    # document level (fall back to the legacy per-measurement stamps), so every
+    # existing row reads unchanged and no backfill is needed. create_all +
+    # postgres_auto_migrate add the column, so no alembic migration is needed.
+    page_scales: Mapped[dict | None] = mapped_column(  # type: ignore[assignment]
+        JSON, nullable=True, default=None
+    )
     metadata_: Mapped[dict] = mapped_column(  # type: ignore[assignment]
         "metadata", JSON, nullable=False, default=dict, server_default="{}"
     )

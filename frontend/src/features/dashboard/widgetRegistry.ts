@@ -35,6 +35,8 @@ import {
   FileCheck2,
   ClipboardCheck,
   ListChecks,
+  // Interoperability: dashboard <- estimate (2026-07-09)
+  Package,
 } from 'lucide-react';
 
 export interface DashboardWidgetMeta {
@@ -89,6 +91,17 @@ export const DASHBOARD_WIDGETS: readonly DashboardWidgetMeta[] = [
     descKey: 'dashboard.layout.w_finance_summary_desc',
     descDefault: 'Estimated value, open change orders and budget warnings',
     icon: Wallet,
+  },
+  // Interoperability: surface the ESTIMATE side's resource rollup (labour
+  // hours, total resource cost, distinct resource count) next to the field
+  // labour-cost widget. Self-hides when the estimate has no resources.
+  {
+    id: 'estimate_resources',
+    labelKey: 'dashboard.layout.w_estimate_resources',
+    labelDefault: 'Estimate resources',
+    descKey: 'dashboard.layout.w_estimate_resources_desc',
+    descDefault: 'Labour hours, total resource cost and distinct resources from the estimate',
+    icon: Package,
   },
   {
     id: 'projects',

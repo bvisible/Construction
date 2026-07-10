@@ -832,7 +832,7 @@
         <!-- input column -->
         <g>
           <rect class="node-rect" x="20"  y="22"  width="148" height="36" rx="8"/>
-          <text class="label-name" x="36" y="45">RVT · Revit</text>
+          <text class="label-name" x="36" y="45">RVT · BIM</text>
           <rect class="node-rect" x="20"  y="68"  width="148" height="36" rx="8"/>
           <text class="label-name" x="36" y="91">IFC 4 · 4.3</text>
           <rect class="node-rect" x="20"  y="114" width="148" height="36" rx="8"/>
@@ -969,9 +969,9 @@
               <div class="std-name">RVT</div>
               <span class="std-region" data-i18n="page.standards.region_global">Global</span>
             </div>
-            <p class="std-fullname" data-i18n="page.standards.rvt_fullname">Autodesk Revit native - DDC RvtConverter</p>
+            <p class="std-fullname" data-i18n="page.standards.rvt_fullname">RVT native - DDC RvtConverter</p>
             <p class="std-body" data-i18n-html="page.standards.rvt_body">
-              Native Revit handled the same way as IFC - DDC extracts elements, parameters and quantities into canonical
+              Native RVT handled the same way as IFC - DDC extracts elements, parameters and quantities into canonical
               JSON without round‑tripping through IFC. The Linux <code>ddc-rvtconverter</code> .deb is a packaged binary on our VPS apt repo.
             </p>
             <div class="std-meta">
@@ -987,7 +987,7 @@
               <div class="std-name">DWG · DGN</div>
               <span class="std-region" data-i18n="page.standards.region_global">Global</span>
             </div>
-            <p class="std-fullname" data-i18n="page.standards.dwg_fullname">AutoCAD DWG and Bentley DGN - 2D/3D geometry</p>
+            <p class="std-fullname" data-i18n="page.standards.dwg_fullname">DWG and DGN - 2D/3D geometry</p>
             <p class="std-body" data-i18n="page.standards.dwg_body">
               The 2D world. DDC reads DWG and DGN for geometry, layers, blocks, and dimension strings.
               On vector‑clean files we extract quantities; on raster scans we route to the PDF takeoff path.
@@ -1336,7 +1336,7 @@
           <h2 class="cat-title" data-i18n-html="page.standards.cat05_title">Cost data &amp; <em>seed catalogues</em></h2>
           <p class="cat-blurb" data-i18n-html="page.standards.cat05_blurb">
             What ships: <b>CWICR open core, ~55,000 priced positions</b> spanning UK and DACH catalogues.
-            <b>Honest:</b> we do not have live API connectors to RSMeans, BCIS, BKI, Sirados, Spon's, ENR or Destatis. Customers bring those in as XLSX/CSV imports today.
+            <b>Honest:</b> we do not have live API connectors to BCIS, Sirados, Spon's or Destatis. Customers bring those in as XLSX/CSV imports today.
           </p>
         </div>
 
@@ -1350,7 +1350,7 @@
             <p class="std-body" data-i18n-html="page.standards.cwicr_body">
               The open foundation. <b>~55,000 priced items in total</b>, covering both
               UK (NRM‑aligned, with BCIS regional indices baked in) and DACH (DIN 276‑aligned,
-              with BKI regional benchmarks) classifications. Multi‑language; ships as the seed
+              with regional benchmarks) classifications. Multi‑language; ships as the seed
               catalogue on every fresh OCERP install. Author: Artem Boiko.
             </p>
             <div class="std-meta">
@@ -1368,7 +1368,7 @@
             </div>
             <p class="std-fullname" data-i18n="page.standards.pricebook_fullname">XLSX / CSV / GAEB X81 import path</p>
             <p class="std-body" data-i18n-html="page.standards.pricebook_body">
-              No API connectors today. <b>Customers import their RSMeans, BCIS, BKI, Sirados, Spon's
+              No API connectors today. <b>Customers import their BCIS, Sirados, Spon's
               extracts as XLSX / CSV / GAEB X81 STLB.</b> Rates land in the per‑project catalogue with
               source provenance preserved on every line. See roadmap for native API integrations.
             </p>
@@ -1459,13 +1459,13 @@
 
         <div class="roadmap" style="margin-top:14px;">
           <p class="roadmap-eyebrow" data-i18n="page.standards.roadmap3_eyebrow">Cost data connectors - planned</p>
-          <h4 data-i18n="page.standards.roadmap3_title">RSMeans · BCIS · BKI · Sirados live API integrations</h4>
+          <h4 data-i18n="page.standards.roadmap3_title">BCIS · Sirados live API integrations</h4>
           <p data-i18n="page.standards.roadmap3_body">
             Today: customers import as XLSX/CSV/GAEB X81. Roadmap: live API connectors so updates flow continuously.
-            ENR CCI / Destatis BAU‑Index / Spon's index time series for indexation clauses are also tracked, not shipped.
+            national cost index / Destatis BAU‑Index / Spon's index time series for indexation clauses are also tracked, not shipped.
           </p>
           <div class="roadmap-tags">
-            <span>RSMeans API</span><span>BCIS API</span><span data-i18n="page.standards.roadmap3_tag3">BKI live</span><span data-i18n="page.standards.roadmap3_tag4">Sirados live</span><span data-i18n="page.standards.roadmap3_tag5">ENR CCI series</span><span>Destatis BAU</span>
+            <span>Cost data API</span><span>BCIS API</span><span data-i18n="page.standards.roadmap3_tag3">regional cost index live</span><span data-i18n="page.standards.roadmap3_tag4">Sirados live</span><span data-i18n="page.standards.roadmap3_tag5">national cost index series</span><span>Destatis BAU</span>
           </div>
         </div>
 
@@ -1714,12 +1714,12 @@
             <tr>
               <td data-i18n="page.standards.decision_r2_job">German Hochbau public</td>
               <td data-i18n="page.standards.decision_r2_reach">DIN 276 · GAEB X83 round‑trip · VOB/B templates · CWICR seed (~55K total, UK + DACH)</td>
-              <td data-i18n="page.standards.decision_r2_gap">BKI live feed not wired - extracts via XLSX</td>
+              <td data-i18n="page.standards.decision_r2_gap">regional cost index live feed not wired - extracts via XLSX</td>
             </tr>
             <tr>
               <td data-i18n="page.standards.decision_r3_job">US commercial new‑build</td>
               <td data-i18n="page.standards.decision_r3_reach">MasterFormat rule pack · XLSX export with CSI columns</td>
-              <td data-i18n="page.standards.decision_r3_gap">RSMeans connector not wired; AIA SoV not native</td>
+              <td data-i18n="page.standards.decision_r3_gap">commercial cost data connector not wired; AIA SoV not native</td>
             </tr>
             <tr>
               <td data-i18n="page.standards.decision_r4_job">Spanish public works</td>

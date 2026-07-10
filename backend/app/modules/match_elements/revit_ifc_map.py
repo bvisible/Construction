@@ -1,8 +1,8 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""Revit OST category to canonical IFC class crosswalk.
+"""RVT OST category to canonical IFC class crosswalk.
 
-DDC cad2data extracts Revit (RVT) elements with their native Revit
+DDC cad2data extracts RVT elements with their native RVT
 *OmniClass / Object Style Type* (OST) category name, e.g. ``"Walls"``,
 ``"Floors"``, ``"Structural Columns"`` - not an IFC entity. The
 match-elements pipeline keys all of its label / standards / trade
@@ -31,11 +31,11 @@ from __future__ import annotations
 
 import re
 
-# Canonical Revit OST category (as DDC cad2data surfaces it) → IFC class.
+# Canonical RVT OST category (as DDC cad2data surfaces it) → IFC class.
 #
 # Keys are stored in their normalized form (see ``_normalize_key``):
 # lower-case, ``"OST_"`` prefix stripped, trailing whitespace removed.
-# Both the plural Revit category ("Walls") and the singular family-tier
+# Both the plural RVT category ("Walls") and the singular family-tier
 # spelling ("Wall", "Basic Wall") are listed so we never depend on the
 # extractor's pluralisation. Lookups also try a singular/plural fallback
 # (see :func:`normalize_to_ifc_class`).
@@ -129,7 +129,7 @@ _CAMEL_BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 def _normalize_key(raw: str) -> str:
     """Canonicalise a raw category string for :data:`OST_TO_IFC` lookup.
 
-    Strips a leading ``"OST_"`` Revit prefix (case-insensitive), splits
+    Strips a leading ``"OST_"`` RVT prefix (case-insensitive), splits
     CamelCase identifiers into words, collapses internal
     whitespace/underscores to single spaces and lower-cases the result so
     ``"OST_StructuralColumns"`` and ``"Structural Columns"`` resolve
@@ -138,7 +138,7 @@ def _normalize_key(raw: str) -> str:
     s = raw.strip()
     if s[:4].lower() == "ost_":
         s = s[4:]
-    # Revit enum-style OST identifiers are CamelCase with no separators
+    # RVT enum-style OST identifiers are CamelCase with no separators
     # ("OST_StructuralColumns"); cad2data category labels use spaces. Split
     # CamelCase so both shapes normalise to the same spaced key.
     s = _CAMEL_BOUNDARY.sub(" ", s)
@@ -147,7 +147,7 @@ def _normalize_key(raw: str) -> str:
     return s.lower()
 
 
-# Ordered keyword fallback for Revit categories NOT in OST_TO_IFC - custom
+# Ordered keyword fallback for RVT categories NOT in OST_TO_IFC - custom
 # family categories and sub-categories such as "Curtain Grids Wall", "Stairs
 # Railing Baluster" or "Structural Framing - Joist". Checked top to bottom on
 # the spaced, lower-cased key; the FIRST rule whose keyword appears wins, so
@@ -189,10 +189,10 @@ def _keyword_fallback(key: str) -> str | None:
 
 
 def normalize_to_ifc_class(raw: str | None) -> str | None:
-    """Map a raw Revit OST category to its canonical IFC class.
+    """Map a raw RVT OST category to its canonical IFC class.
 
     Args:
-        raw: A Revit category / object-style name as surfaced by the DDC
+        raw: An RVT category / object-style name as surfaced by the DDC
             cad2data extractor (e.g. ``"Walls"``, ``"Structural
             Columns"``, ``"OST_Walls"``). May already be an IFC class
             name (``"IfcWall"``).
@@ -228,6 +228,6 @@ def normalize_to_ifc_class(raw: str | None) -> str | None:
         alt = OST_TO_IFC.get(key + "s")
         if alt is not None:
             return alt
-    # Last resort: keyword heuristic for the Revit long tail (custom and
+    # Last resort: keyword heuristic for the RVT long tail (custom and
     # sub-category names the exact table cannot enumerate).
     return _keyword_fallback(key)

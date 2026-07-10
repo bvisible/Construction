@@ -160,7 +160,7 @@ import LinkRequirementToDwgModal from './LinkRequirementToDwgModal';
 /* ── GridBackground ──────────────────────────────────────────────────── */
 
 /**
- * AutoCAD-style drafting grid background.
+ * CAD-style drafting grid background.
  *
  * Renders two overlaid grids (minor 24px, major 120px - classic 1:5 ratio)
  * plus a radial vignette that darkens the corners so content in the middle
@@ -175,7 +175,7 @@ import LinkRequirementToDwgModal from './LinkRequirementToDwgModal';
 function GridBackground({ className = '' }: { className?: string }) {
   return (
     <div className={clsx('absolute inset-0 pointer-events-none overflow-hidden', className)}>
-      {/* Grid lines - minor (24px) + major (120px), 1:5 AutoCAD-style ratio */}
+      {/* Grid lines - minor (24px) + major (120px), 1:5 CAD-style ratio */}
       <div
         className="absolute inset-0"
         style={{
@@ -3115,7 +3115,7 @@ export function DwgTakeoffPage() {
               className="oe-dwg-canvas relative flex flex-1 overflow-hidden overflow-y-auto"
               style={{ background: '#3f3f3f' }}
             >
-              {/* AutoCAD-style drafting grid + vignette */}
+              {/* CAD-style drafting grid + vignette */}
               <GridBackground className="z-0" />
               {/* Subtle blue center glow retains the "laser-focused drawing" feel */}
               <div
@@ -3125,7 +3125,7 @@ export function DwgTakeoffPage() {
                     'radial-gradient(ellipse 60% 50% at 50% 40%, rgba(59,130,246,0.06) 0%, transparent 70%)',
                 }}
               />
-              {/* Crosshair at center (AutoCAD UCS marker) */}
+              {/* Crosshair at center (CAD UCS marker) */}
               <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none opacity-20 z-0">
                 <div className="w-px h-8 bg-blue-400 absolute left-1/2 -translate-x-1/2 -top-4" />
                 <div className="h-px w-8 bg-blue-400 absolute top-1/2 -translate-y-1/2 -left-4" />
@@ -3184,7 +3184,7 @@ export function DwgTakeoffPage() {
                         </div>
                         <p className="text-[11px] text-gray-600 leading-relaxed mt-1 text-center">
                           {t('dwg_takeoff.format_support', {
-                            defaultValue: 'AutoCAD 2000–2025 · DXF R12–R2025',
+                            defaultValue: 'DWG 2000–2025 · DXF R12–R2025',
                           })}
                         </p>
                       </button>
@@ -3210,7 +3210,7 @@ export function DwgTakeoffPage() {
                       </p>
                       <p className="text-xs text-gray-600 mt-3 leading-relaxed">
                         {t('dwg_takeoff.format_support_dwg', {
-                          defaultValue: 'AutoCAD DWG 2000–2025 · DXF R12–R2025',
+                          defaultValue: 'DWG 2000–2025 · DXF R12–R2025',
                         })}
                       </p>
                     </div>

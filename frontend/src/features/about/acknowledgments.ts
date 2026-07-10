@@ -68,6 +68,7 @@ export const CONTRIBUTORS: Acknowledged[] = [
   { name: 'j209', handle: 'j209' },
   { name: 'darkleono', handle: 'darkleono' },
   { name: 'serviteur', handle: 'serviteur' },
+  { name: 'Mr.R', handle: 'Mr-OpenR' },
 ];
 
 /**

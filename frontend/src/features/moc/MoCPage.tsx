@@ -42,6 +42,10 @@ import {
   Pencil,
   ListPlus,
   ShieldCheck,
+  Wallet,
+  Download,
+  ArrowUpDown,
+  RotateCcw,
 } from 'lucide-react';
 import {
   Button,
@@ -54,6 +58,7 @@ import {
   SkeletonTable,
   IntroRichText,
   ModuleGuideButton,
+  InfoHint,
 } from '@/shared/ui';
 import { RequiresProject } from '@/shared/auth/RequiresProject';
 import { PageHeader } from '@/shared/ui/PageHeader';
@@ -61,6 +66,7 @@ import { SectionIntro } from '@/features/validation';
 import { useConfirm } from '@/shared/hooks/useConfirm';
 import { DateDisplay } from '@/shared/ui/DateDisplay';
 import { apiGet } from '@/shared/lib/api';
+import { toNum, formatCurrency } from '@/shared/lib/money';
 import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import {
@@ -176,6 +182,184 @@ function formatMoney(amount: string | null | undefined, currency: string): strin
   if (!Number.isFinite(n) || n === 0) return '';
   const formatted = n.toLocaleString(undefined, { maximumFractionDigits: 2 });
   return currency ? `${currency} ${formatted}` : formatted;
+}
+
+/** Signed integer for schedule deltas: "+5", "0", "-3". */
+function signed(n: number): string {
+  return n > 0 ? `+${n}` : String(n);
+}
+
+const selectCls =
+  'h-10 appearance-none rounded-lg border border-border bg-surface-primary pl-3 pr-9 text-sm text-content-primary focus:outline-none focus:ring-2 focus:ring-oe-blue';
+
+/* -- Cost / schedule exposure rollup + register sorting -------------------- */
+
+/** Weight used to surface the highest-risk changes first. */
+const RISK_RANK: Record<string, number> = { critical: 4, high: 3, medium: 2, low: 1 };
+
+/** Register sort modes. `default` keeps the order the backend returned. */
+type MoCSortMode = 'default' | 'cost' | 'risk' | 'schedule';
+
+const SORT_OPTIONS: { mode: MoCSortMode; labelKey: string; labelDefault: string }[] = [
+  { mode: 'default', labelKey: 'moc.sort_default', labelDefault: 'Default order' },
+  { mode: 'cost', labelKey: 'moc.sort_cost', labelDefault: 'Largest cost impact' },
+  { mode: 'risk', labelKey: 'moc.sort_risk', labelDefault: 'Highest risk' },
+  { mode: 'schedule', labelKey: 'moc.sort_schedule', labelDefault: 'Largest schedule impact' },
+];
+
+/**
+ * Exposure buckets by lifecycle stage. `declined` is deliberately excluded:
+ * a rejected change carries no committed cost or programme exposure.
+ *   pending     = proposed + reviewed (potential, still under review)
+ *   accepted    = approved but NOT yet implemented (the live exposure)
+ *   implemented = already carried out (realized)
+ */
+type ExposureBucket = 'pending' | 'accepted' | 'implemented';
+
+interface CurrencyExposure {
+  /** Normalised ISO-ish code; '' means the entry left currency blank. */
+  currency: string;
+  cost: Record<ExposureBucket, number>;
+  days: Record<ExposureBucket, number>;
+  count: Record<ExposureBucket, number>;
+}
+
+const EXPOSURE_BUCKETS: {
+  key: ExposureBucket;
+  labelKey: string;
+  labelDefault: string;
+  accent: string;
+  emphasized?: boolean;
+}[] = [
+  {
+    key: 'pending',
+    labelKey: 'moc.exposure_pending',
+    labelDefault: 'Under review',
+    accent: 'border-border-light bg-surface-secondary/40',
+  },
+  {
+    key: 'accepted',
+    labelKey: 'moc.exposure_committed',
+    labelDefault: 'Committed (accepted)',
+    accent:
+      'border-amber-300 bg-amber-50 ring-1 ring-amber-300/40 dark:border-amber-800 dark:bg-amber-950/30 dark:ring-amber-700/40',
+    emphasized: true,
+  },
+  {
+    key: 'implemented',
+    labelKey: 'moc.exposure_realized',
+    labelDefault: 'Realized (implemented)',
+    accent: 'border-emerald-200 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-950/20',
+  },
+];
+
+/**
+ * Cost and schedule exposure band.
+ *
+ * Sums the headline cost_impact (a Decimal string, coerced via `toNum`) and
+ * schedule_delta_days on the currently-visible entries, split by lifecycle
+ * bucket and grouped by currency so amounts in different currencies are never
+ * blended into one total. Answers the question the count cards cannot: how
+ * much accepted-but-not-yet-implemented change is the project carrying.
+ */
+function MoCExposureBand({
+  rows,
+  declinedCount,
+}: {
+  rows: CurrencyExposure[];
+  declinedCount: number;
+}) {
+  const { t } = useTranslation();
+  const multi = rows.length > 1;
+
+  return (
+    <Card padding="none" className="overflow-hidden animate-card-in">
+      <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-border-light bg-surface-secondary/30">
+        <div className="flex items-center gap-2 min-w-0">
+          <Wallet size={15} className="text-content-tertiary shrink-0" />
+          <span className="text-sm font-semibold text-content-primary">
+            {t('moc.exposure_title', { defaultValue: 'Cost and schedule exposure' })}
+          </span>
+          <InfoHint
+            inline
+            text={t('moc.exposure_hint', {
+              defaultValue:
+                'Under review is potential exposure from proposed and reviewed changes. Committed is accepted change, approved but not yet implemented, which is your live exposure. Realized is change already implemented. Declined changes are excluded, and each currency is totalled separately.',
+            })}
+          />
+        </div>
+        {multi && (
+          <span className="text-2xs text-content-tertiary shrink-0 tabular-nums">
+            {t('moc.exposure_currencies', {
+              defaultValue: '{{count}} currencies',
+              count: rows.length,
+            })}
+          </span>
+        )}
+      </div>
+
+      <div className="divide-y divide-border-light">
+        {rows.map((row) => (
+          <div key={row.currency || '__unspecified__'} className="px-4 py-3">
+            <div className="mb-2.5 flex items-center gap-2">
+              <Badge variant="neutral" size="sm" className="font-mono uppercase">
+                {row.currency || t('moc.currency_unspecified', { defaultValue: 'Unspecified' })}
+              </Badge>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+              {EXPOSURE_BUCKETS.map((b) => {
+                const cost = row.cost[b.key];
+                const days = row.days[b.key];
+                const count = row.count[b.key];
+                return (
+                  <div key={b.key} className={clsx('rounded-lg border px-3 py-2.5', b.accent)}>
+                    <p className="text-2xs font-medium uppercase tracking-wide text-content-tertiary">
+                      {t(b.labelKey, { defaultValue: b.labelDefault })}
+                    </p>
+                    <p
+                      className={clsx(
+                        'mt-1 text-base font-semibold tabular-nums',
+                        count === 0
+                          ? 'text-content-quaternary'
+                          : b.emphasized
+                            ? 'text-amber-700 dark:text-amber-300'
+                            : 'text-content-primary',
+                      )}
+                    >
+                      {formatCurrency(cost, row.currency, undefined, { maximumFractionDigits: 0 })}
+                    </p>
+                    <p className="mt-0.5 flex items-center gap-1.5 text-2xs text-content-tertiary tabular-nums">
+                      {days !== 0 && (
+                        <span className="inline-flex items-center gap-0.5">
+                          <CalendarClock size={11} />
+                          {signed(days)} {t('moc.days', { defaultValue: 'days' })}
+                        </span>
+                      )}
+                      <span
+                        className="text-content-quaternary"
+                        title={t('moc.exposure_count_title', { defaultValue: 'Number of changes' })}
+                      >
+                        ({count})
+                      </span>
+                    </p>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {declinedCount > 0 && (
+        <div className="px-4 py-2 border-t border-border-light bg-surface-secondary/20 text-2xs text-content-tertiary">
+          {t('moc.exposure_declined_note', {
+            defaultValue: 'Declined changes are excluded from exposure ({{count}})',
+            count: declinedCount,
+          })}
+        </div>
+      )}
+    </Card>
+  );
 }
 
 /* -- Create / Edit modal --------------------------------------------------- */
@@ -1081,6 +1265,9 @@ export function MoCPage() {
   const [impactTarget, setImpactTarget] = useState<MoCEntry | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<MoCStatus | ''>('');
+  const [categoryFilter, setCategoryFilter] = useState<MoCChangeCategory | ''>('');
+  const [riskFilter, setRiskFilter] = useState<MoCRiskLevel | ''>('');
+  const [sortMode, setSortMode] = useState<MoCSortMode>('default');
 
   const { data: projects = [] } = useQuery({
     queryKey: ['projects'],
@@ -1108,16 +1295,103 @@ export function MoCPage() {
     enabled: !!projectId,
   });
 
+  // Client-side narrowing: category + risk + free-text search, layered on top
+  // of the server-side status filter that already scoped `entries`.
   const filtered = useMemo(() => {
-    if (!searchQuery.trim()) return entries;
-    const q = searchQuery.toLowerCase();
-    return entries.filter(
-      (e) =>
+    const q = searchQuery.trim().toLowerCase();
+    return entries.filter((e) => {
+      if (categoryFilter && e.change_category !== categoryFilter) return false;
+      if (riskFilter && e.risk_level !== riskFilter) return false;
+      if (!q) return true;
+      return (
         e.title.toLowerCase().includes(q) ||
         e.code.toLowerCase().includes(q) ||
-        e.description.toLowerCase().includes(q),
-    );
-  }, [entries, searchQuery]);
+        e.description.toLowerCase().includes(q)
+      );
+    });
+  }, [entries, searchQuery, categoryFilter, riskFilter]);
+
+  // Sort surfaces the biggest changes first. Cost / schedule sort by absolute
+  // magnitude so large savings (negative deltas) rise to the top too.
+  const sorted = useMemo(() => {
+    if (sortMode === 'default') return filtered;
+    const arr = [...filtered];
+    arr.sort((a, b) => {
+      if (sortMode === 'cost') {
+        return Math.abs(toNum(b.cost_impact)) - Math.abs(toNum(a.cost_impact));
+      }
+      if (sortMode === 'schedule') {
+        return Math.abs(toNum(b.schedule_delta_days)) - Math.abs(toNum(a.schedule_delta_days));
+      }
+      return (RISK_RANK[b.risk_level] ?? 0) - (RISK_RANK[a.risk_level] ?? 0);
+    });
+    return arr;
+  }, [filtered, sortMode]);
+
+  // Exposure rollup: sum the Decimal-string cost_impact (via toNum) and the
+  // schedule delta per lifecycle bucket, grouped by currency so different
+  // currencies are never blended. Declined changes carry no exposure.
+  const exposure = useMemo<CurrencyExposure[]>(() => {
+    const map = new Map<string, CurrencyExposure>();
+    const blank = (currency: string): CurrencyExposure => ({
+      currency,
+      cost: { pending: 0, accepted: 0, implemented: 0 },
+      days: { pending: 0, accepted: 0, implemented: 0 },
+      count: { pending: 0, accepted: 0, implemented: 0 },
+    });
+    for (const e of filtered) {
+      let bucket: ExposureBucket | null = null;
+      if (e.status === 'proposed' || e.status === 'reviewed') bucket = 'pending';
+      else if (e.status === 'accepted') bucket = 'accepted';
+      else if (e.status === 'implemented') bucket = 'implemented';
+      if (!bucket) continue; // declined excluded
+      const cur = (e.currency || '').trim().toUpperCase();
+      let row = map.get(cur);
+      if (!row) {
+        row = blank(cur);
+        map.set(cur, row);
+      }
+      row.cost[bucket] += toNum(e.cost_impact);
+      row.days[bucket] += toNum(e.schedule_delta_days);
+      row.count[bucket] += 1;
+    }
+    // Lead with the currency carrying the largest overall cost exposure.
+    return [...map.values()].sort((a, b) => {
+      const at = a.cost.pending + a.cost.accepted + a.cost.implemented;
+      const bt = b.cost.pending + b.cost.accepted + b.cost.implemented;
+      return bt - at;
+    });
+  }, [filtered]);
+
+  // Only worth rendering the band when it actually reports money or days;
+  // a wall of zeros helps nobody.
+  const exposureHasFigures = useMemo(
+    () =>
+      exposure.some(
+        (r) =>
+          r.cost.pending ||
+          r.cost.accepted ||
+          r.cost.implemented ||
+          r.days.pending ||
+          r.days.accepted ||
+          r.days.implemented,
+      ),
+    [exposure],
+  );
+
+  const declinedCount = useMemo(
+    () => filtered.filter((e) => e.status === 'declined').length,
+    [filtered],
+  );
+
+  const hasActiveFilters = !!(searchQuery || statusFilter || categoryFilter || riskFilter);
+
+  const resetFilters = useCallback(() => {
+    setSearchQuery('');
+    setStatusFilter('');
+    setCategoryFilter('');
+    setRiskFilter('');
+  }, []);
 
   const stats = useMemo(() => {
     const total = entries.length;
@@ -1126,6 +1400,99 @@ export function MoCPage() {
     const implemented = entries.filter((e) => e.status === 'implemented').length;
     return { total, open, accepted, implemented };
   }, [entries]);
+
+  // Export the visible register (respecting filters + sort) to CSV, with each
+  // impact line as its own row. A UTF-8 BOM keeps non-Latin text readable in
+  // spreadsheet tools; text cells are quoted only when they carry a comma,
+  // quote or newline.
+  const handleExportCSV = useCallback(() => {
+    if (!sorted.length) return;
+    const esc = (v: string | number | null | undefined): string => {
+      const s = v == null ? '' : String(v);
+      return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const catLabel = (c: string) => t(`moc.category_${c}`, { defaultValue: cap(c) });
+    const riskLabel = (r: string) => t(`moc.risk_${r}`, { defaultValue: cap(r) });
+    const statusLabel = (s: string) => t(`moc.status_${s}`, { defaultValue: cap(s) });
+    const areaLabel = (a: string) => t(`moc.area_${a}`, { defaultValue: cap(a) });
+
+    const headers = [
+      t('moc.col_code', { defaultValue: 'Code' }),
+      t('moc.csv_row_type', { defaultValue: 'Row type' }),
+      t('moc.csv_title_area', { defaultValue: 'Title / area' }),
+      t('moc.field_category', { defaultValue: 'Change category' }),
+      t('moc.csv_risk_severity', { defaultValue: 'Risk / severity' }),
+      t('moc.col_status', { defaultValue: 'Status' }),
+      t('moc.col_cost', { defaultValue: 'Cost impact' }),
+      t('moc.field_currency', { defaultValue: 'Currency' }),
+      t('moc.csv_schedule_days', { defaultValue: 'Schedule days' }),
+      t('moc.field_description', { defaultValue: 'Description' }),
+      t('moc.impact_mitigation', { defaultValue: 'Mitigation' }),
+      t('moc.label_proposed', { defaultValue: 'Proposed' }),
+      t('moc.label_reviewed', { defaultValue: 'Reviewed' }),
+      t('moc.label_decided', { defaultValue: 'Decided' }),
+      t('moc.label_implemented', { defaultValue: 'Implemented' }),
+    ];
+    const changeType = t('moc.csv_type_change', { defaultValue: 'Change' });
+    const impactType = t('moc.csv_type_impact', { defaultValue: 'Impact' });
+
+    const lines: string[] = [headers.map(esc).join(',')];
+    for (const e of sorted) {
+      lines.push(
+        [
+          e.code,
+          changeType,
+          e.title,
+          catLabel(e.change_category),
+          riskLabel(e.risk_level),
+          statusLabel(e.status),
+          toNum(e.cost_impact).toFixed(2),
+          e.currency,
+          String(toNum(e.schedule_delta_days)),
+          e.description,
+          '',
+          e.proposed_at ?? '',
+          e.reviewed_at ?? '',
+          e.decided_at ?? '',
+          e.implemented_at ?? '',
+        ]
+          .map(esc)
+          .join(','),
+      );
+      for (const imp of e.impacts) {
+        lines.push(
+          [
+            e.code,
+            impactType,
+            areaLabel(imp.impact_area),
+            '',
+            riskLabel(imp.severity),
+            '',
+            toNum(imp.cost_impact).toFixed(2),
+            imp.currency,
+            String(toNum(imp.schedule_delta_days)),
+            imp.description,
+            imp.mitigation,
+            '',
+            '',
+            '',
+            '',
+          ]
+            .map(esc)
+            .join(','),
+        );
+      }
+    }
+
+    const csv = '\uFEFF' + lines.join('\r\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `moc-register-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [sorted, t]);
 
   const invalidate = useCallback(() => {
     qc.invalidateQueries({ queryKey: ['moc'] });
@@ -1373,9 +1740,10 @@ export function MoCPage() {
             </div>
           </div>
 
-          {/* Toolbar */}
-          <div className="flex flex-col sm:flex-row sm:items-center gap-3">
-            <div className="relative flex-1 max-w-sm">
+          {/* Toolbar: search, status / category / risk filters, sort, reset,
+              and a CSV export of the visible register. */}
+          <div className="flex flex-wrap items-center gap-2.5">
+            <div className="relative min-w-[180px] flex-1 sm:max-w-xs">
               <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-content-tertiary" />
               <input
                 value={searchQuery}
@@ -1390,7 +1758,7 @@ export function MoCPage() {
                 value={statusFilter}
                 onChange={(e) => setStatusFilter(e.target.value as MoCStatus | '')}
                 aria-label={t('moc.filter_all_statuses', { defaultValue: 'All statuses' })}
-                className="h-10 appearance-none rounded-lg border border-border bg-surface-primary pl-3 pr-9 text-sm text-content-primary focus:outline-none focus:ring-2 focus:ring-oe-blue sm:w-44"
+                className={selectCls + ' sm:w-44'}
               >
                 <option value="">{t('moc.filter_all_statuses', { defaultValue: 'All statuses' })}</option>
                 {STATUS_FLOW.map((s) => (
@@ -1403,7 +1771,85 @@ export function MoCPage() {
                 <ChevronDown size={14} />
               </div>
             </div>
+            <div className="relative">
+              <select
+                value={categoryFilter}
+                onChange={(e) => setCategoryFilter(e.target.value as MoCChangeCategory | '')}
+                aria-label={t('moc.filter_all_categories', { defaultValue: 'All categories' })}
+                className={selectCls + ' sm:w-44'}
+              >
+                <option value="">{t('moc.filter_all_categories', { defaultValue: 'All categories' })}</option>
+                {CATEGORIES.map((c) => (
+                  <option key={c} value={c}>
+                    {t(`moc.category_${c}`, { defaultValue: cap(c) })}
+                  </option>
+                ))}
+              </select>
+              <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-2.5 text-content-tertiary">
+                <ChevronDown size={14} />
+              </div>
+            </div>
+            <div className="relative">
+              <select
+                value={riskFilter}
+                onChange={(e) => setRiskFilter(e.target.value as MoCRiskLevel | '')}
+                aria-label={t('moc.filter_all_risks', { defaultValue: 'All risk levels' })}
+                className={selectCls + ' sm:w-44'}
+              >
+                <option value="">{t('moc.filter_all_risks', { defaultValue: 'All risk levels' })}</option>
+                {RISK_LEVELS.map((r) => (
+                  <option key={r} value={r}>
+                    {t(`moc.risk_${r}`, { defaultValue: cap(r) })}
+                  </option>
+                ))}
+              </select>
+              <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-2.5 text-content-tertiary">
+                <ChevronDown size={14} />
+              </div>
+            </div>
+            {/* Register sort. ArrowUpDown is the control affordance. */}
+            <div className="relative">
+              <select
+                value={sortMode}
+                onChange={(e) => setSortMode(e.target.value as MoCSortMode)}
+                aria-label={t('moc.sort_label', { defaultValue: 'Sort changes' })}
+                className={selectCls + ' sm:w-56'}
+              >
+                {SORT_OPTIONS.map((o) => (
+                  <option key={o.mode} value={o.mode}>
+                    {t(o.labelKey, { defaultValue: o.labelDefault })}
+                  </option>
+                ))}
+              </select>
+              <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-2.5 text-content-tertiary">
+                <ArrowUpDown size={14} />
+              </div>
+            </div>
+            {hasActiveFilters && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={resetFilters}
+                icon={<RotateCcw size={14} />}
+              >
+                {t('moc.reset_filters', { defaultValue: 'Reset filters' })}
+              </Button>
+            )}
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={handleExportCSV}
+              disabled={!sorted.length}
+              icon={<Download size={14} />}
+            >
+              {t('moc.export_csv', { defaultValue: 'Export CSV' })}
+            </Button>
           </div>
+
+          {/* Cost and schedule exposure rollup across the visible register. */}
+          {exposureHasFigures && (
+            <MoCExposureBand rows={exposure} declinedCount={declinedCount} />
+          )}
 
           {/* List */}
           <div>
@@ -1411,7 +1857,7 @@ export function MoCPage() {
               <SkeletonTable rows={5} columns={5} />
             ) : isError ? (
               <RecoveryCard error={error} onRetry={() => refetch()} />
-            ) : filtered.length === 0 ? (
+            ) : sorted.length === 0 ? (
               <EmptyState
                 icon={<Replace size={28} strokeWidth={1.5} />}
                 title={
@@ -1441,7 +1887,7 @@ export function MoCPage() {
             ) : (
               <>
                 <p className="mb-3 text-sm text-content-tertiary">
-                  {t('moc.showing_count', { defaultValue: '{{count}} change requests', count: filtered.length })}
+                  {t('moc.showing_count', { defaultValue: '{{count}} change requests', count: sorted.length })}
                 </p>
                 <Card padding="none" className="overflow-x-auto">
                   <div className="flex items-center gap-3 px-4 py-2.5 border-b border-border-light bg-surface-secondary/30 text-2xs font-medium text-content-tertiary uppercase tracking-wider min-w-[640px]">
@@ -1453,7 +1899,7 @@ export function MoCPage() {
                     <span className="w-28 text-right hidden md:block">{t('moc.col_cost', { defaultValue: 'Cost impact' })}</span>
                     <span className="w-28 text-center">{t('moc.col_status', { defaultValue: 'Status' })}</span>
                   </div>
-                  {filtered.map((entry) => (
+                  {sorted.map((entry) => (
                     <MoCRow
                       key={entry.id}
                       entry={entry}

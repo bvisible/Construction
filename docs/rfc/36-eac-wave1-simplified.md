@@ -155,8 +155,8 @@ limitation in `docs/limitations.md`.
 ### W1.4 — BCF export from validation results → v2.6.3
 
 **Why:** Spec 2.5 deep insight #2: validation results as BCF issues
-makes them actionable in any BIM-coord tool (Solibri, BIMcollab,
-Revizto). Now that BCF is allowed (decision 2026-04-26), this lands
+makes them actionable in any BCF-compatible coordination tool.
+Now that BCF is allowed (decision 2026-04-26), this lands
 naturally on top of W1.2.
 
 **Scope:**
@@ -173,7 +173,7 @@ naturally on top of W1.2.
 - `tests/integration/bcf/test_bcf_export.py` — golden report → BCF zip,
   unzip, validate against BCF 3.0 schema, assert one topic per failing
   rule.
-- Open exported BCF in Solibri Anywhere / BIMcollab ZOOM (manual smoke
+- Open exported BCF in any BCF-compatible tool (manual smoke
   test, documented in `docs/qa/bcf-validation.md`).
 
 ### W1.5 — Classification engine, rule-based tier → v2.6.4

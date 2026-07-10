@@ -1,9 +1,9 @@
 /**
- * BIM category taxonomy — bucket raw Revit categories and IFC entities
+ * BIM category taxonomy — bucket raw RVT categories and IFC entities
  * into a small set of semantic groups that estimators actually care about.
  *
  * Why this exists: a freshly-loaded RVT model exposes ~50–80 distinct
- * Revit categories, half of which are annotation noise ("Weak Dims",
+ * RVT categories, half of which are annotation noise ("Weak Dims",
  * "Area Scheme Lines", "Detail Components") or model-analytical only
  * ("Analytical Nodes", "Analytical Members"). Showing all of those as
  * filter chips drowns the building elements that matter for cost
@@ -54,13 +54,13 @@ export const BUCKETS: Record<BIMCategoryBucket, BucketMeta> = {
 
 /* ── Display prettifier ──────────────────────────────────────────────────
  *
- * Real-world Revit ingestion produces lowercase concatenated category
+ * Real-world RVT ingestion produces lowercase concatenated category
  * names like "Curtainwallmullions" or "Structuralcolumns" instead of
  * the natural "Curtain Wall Mullions" / "Structural Columns".  This
  * helper provides a *display-only* pretty form for the chips, while
  * the raw key stays unchanged for filter matching.
  *
- * Strategy: a curated lookup table of the well-known Revit categories
+ * Strategy: a curated lookup table of the well-known RVT categories
  * that show up everywhere in real models.  For anything NOT in the
  * table we return the raw value with the first letter capitalised —
  * never try to guess word boundaries algorithmically because the
@@ -307,7 +307,7 @@ function humaniseIfcEntity(raw: string): string | null {
 }
 
 /**
- * Pretty-print a normalised Revit/IFC category name for display.
+ * Pretty-print a normalised RVT/IFC category name for display.
  *
  * - Lookups in the curated `KNOWN_CATEGORIES` table win first.
  * - "None" / empty → "Uncategorised".
@@ -343,7 +343,7 @@ export function prettifyCategoryName(raw: string | undefined | null): string {
 
 /* ── Mapping rules ───────────────────────────────────────────────────────
  *
- * Both Revit category names and IFC entity names are normalised
+ * Both RVT category names and IFC entity names are normalised
  * (lowercase, alphanumeric only) and matched against this table. The
  * first matching pattern wins.  Order matters — more specific patterns
  * must come before broader ones.
@@ -356,7 +356,7 @@ interface Rule {
 }
 
 const RULES: Rule[] = [
-  // ── Universal junk: the "None" Revit ingest bucket (no category at all).
+  // ── Universal junk: the "None" RVT ingest bucket (no category at all).
   //    Treated as noise so the buildings-only view doesn't pollute the
   //    real category list with thousands of uncategorised rows.
   { match: 'none', bucket: 'annotation' },
@@ -366,7 +366,7 @@ const RULES: Rule[] = [
 
   // ── Annotations / drafting / view-only categories ──────────────────
   //    Conservative — only patterns that are universally annotation-only
-  //    across Revit + IFC + every other CAD source.
+  //    across RVT + IFC + every other CAD source.
   { match: 'dimension', bucket: 'annotation' },
   { match: 'genericannotation', bucket: 'annotation' },
   { match: 'annotation', bucket: 'annotation' },
@@ -384,7 +384,7 @@ const RULES: Rule[] = [
   { match: 'matchline', bucket: 'annotation' },
   { match: 'titleblock', bucket: 'annotation' },
   { match: 'ifcannotation', bucket: 'annotation' },
-  // Revit sketch / path / extension / boundary lines — drafting artefacts
+  // RVT sketch / path / extension / boundary lines — drafting artefacts
   // that look like real geometry but are annotation-only. Must come BEFORE
   // the broad "stair"/"railing"/"wall" envelope rules so they don't leak.
   { match: 'sketchline', bucket: 'annotation' },

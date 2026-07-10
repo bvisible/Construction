@@ -7,6 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [10.9.0] - 2026-07-10
+
+This release turns site issue management into one connected workflow, from a defect spotted on a drawing or in the 3D model through to its documented closure, and it deepens another wave of delivery modules.
+
+A punch list item now carries site photos, taken straight from a phone camera or uploaded, shown as a thumbnail gallery you can add to and prune. Instead of typing pin coordinates you place the pin visually on the drawing sheet, and every open item shows as a numbered pin over the page. The full status path, from open through assigned, in progress, resolved and verified to closed, is a closure stepper on the item so nothing is marked done without the trail behind it.
+
+Issues can now be raised on the 3D model. You open the model-issues register, file a coordination topic with a priority, an assignee and a due date, attach a captured viewpoint and snapshot, and discuss it in a comment thread, all held in the open BIM Collaboration Format so a topic and its viewpoint export and import as a standard file for any other tool in the coordination chain. A drawing markup is no longer only an annotation: give it a priority and a due date and convert it into a tracked issue in one click, so a cloud drawn on a plan becomes a photographed, assignable, closable item.
+
+Checklists join up with issues. A compact inspection or handover checklist can be filled in against an issue, and a failed check offers to raise the issue for you, so the fault and its evidence stay together. From the field shell a site worker can raise a defect with a photo even with no signal, and it syncs when the connection returns. A new Issues hub gathers every open item across drawings, punch lists, non-conformances, model coordination and clashes into one list, showing who owns each one and what is overdue, with a link back to where it lives.
+
+Alongside the issue work, several delivery modules were deepened. Site logistics gains a gate timeline that lays deliveries out hour by hour per gate and packs overlapping bookings into visible lanes, with per-gate occupancy against capacity and a day schedule you can export or print. Cost value reconciliation, management of change, off-site and prefabrication, systems commissioning and ESG site performance each surface more of their data with clearer views and export. The guided Cases process strip is more compact, with a small picture and a prominent numbered title so it reads as an ordered process.
+
+This release also fixes the PDF takeoff viewer, which now fills the available height through a flexible layout instead of fixed height constants, and adds a way to enter a linear measurement line width in real world units rather than pixels. A Files bug report raised from the in app menu is resolved. The community reporters who filed these are credited on the About page.
+
+## [10.8.0] - 2026-07-08
+
+This release connects the estimating tools introduced in the last version into one working chain, from a resource-built rate through to a single defensible estimate total.
+
+A production norm now expands into a priced assembly and grosses its material quantities up from net to gross through the waste-factor library. A labor-rate build-up can be published as a reusable labor cost item, so an all-in rate you worked out once is available everywhere. The resource summary produces a material procurement buy-list you can export to CSV. The estimate rolls up as one total that composes the bill base, the priced preliminaries and the allowances and contingency register, and the conceptual order-of-magnitude estimate reconciles against the live bill so you can watch the concept close on the real number as it firms up. The basis of estimate reflects the allowances, preliminaries and pricing date in its drafted assumptions, and the guided copilot runs each step and keeps its live results per project.
+
+Rates can now be escalated in time and by region. You can escalate the estimate's own stored rates to a target date, escalate the specific rates a project's bill actually uses, and see the adjustment in the interface before you accept it. Off-site and prefabricated units can be linked to a bill position or an assembly so they carry real cost, and the estimating rate tools are regrouped in the navigation into their own section.
+
+The main dashboard is tighter and clearer. The delivery and quality cards no longer leave a wide empty margin, the project locations and weather panel shows its cities in two columns without scrolling, and the inbox and the day's work sit together in a compact top row. The Cases hub loads its first cards immediately and reveals the rest as you scroll, each card carries a very soft wash of its discipline colour so groups are easy to tell apart at a glance, a case that ships without a picture now gets a drawn line-art scene, and opening a case shows its action as a single row of step scenes.
+
+This release also fixes a set of things. A bill position without resources keeps its unit rate editable, while a position that does have priced resources still derives its rate from their total. The estimate breakdown lines reconcile exactly to the total even where multi-currency rounding would otherwise leave them a cent apart. Project-scoped rate escalation now checks project access so it cannot read another tenant's rates, the two open database migration heads were merged into one, embedded PostgreSQL retries a flaky first start and reports the real cause when it fails, and remaining commercial cost-data brand names were taken out of user-facing text.
+
+The hub and editor screens are clearer this release. The Cases project lifecycle now reads as a row of labelled stage cards, each with a one line description of the phase, and a short how-to explains how to narrow the list by lifecycle stage, company type and role, translated across all supported languages. The pipeline builder shows each step's inputs and outputs as named, typed ports with a plain-language key for how to connect them, the palette is searchable and grouped, and the empty canvas walks you through building a first pipeline. The demo sign-in on the login screen carries a note that it can be hidden in settings, newer modules that are still maturing are marked beta in the navigation, several recently added modules were added to the onboarding picker and the project journey, and a few module pages had their width brought in line with the rest of the app.
+
+## [10.7.0] - 2026-07-08
+
+This release deepens the estimating side of the platform with a wave of new tools that take a job from a first rough number all the way to a defensible, well-documented bill.
+
+You can now start from a conceptual, order-of-magnitude estimate driven by a few high-level parameters, and a guided copilot walks that concept through to a priced result with the assumptions, exclusions and confidence written up as a proper basis of estimate. General conditions and preliminaries are priced in their own right, split into time-related and fixed items, and an allowances and contingency register keeps provisional sums and risk money explicit instead of buried inside rates. Regional and time-based price indexing adjusts a rate for where and when the work happens, labor-rate build-ups turn a base wage plus on-costs into a chargeable rate, and a resource summary rolls a bill up into its total labor, material and equipment demand. Net quantities convert to gross through a reusable waste-factor library, and production norms expand a work item into the labor and material it implies.
+
+Cost rates now carry a price-date freshness signal. A rate whose price is going stale is flagged next to its usage certainty, independent of how often it is used, and the app suggests a refreshed value you can accept. AI-suggested assemblies are now grounded in real per-unit factors from the catalogue rather than a flat quantity, so a generated recipe is a sensible starting point rather than a list of ones.
+
+The desktop app now shows the real reason when startup fails. Before, a failure could surface only the embedded database shutdown output and leave you staring at cleanup noise; the launcher now latches the true cause, always ends with a clear next step and the log location, and the underlying startup errors that used to be swallowed are reported directly.
+
+## [10.6.1] - 2026-07-08
+
+The app now loads noticeably faster on first open. The dashboard is the landing page and, through a chain of shared modules, it was pulling the whole 3D globe and 2D map libraries into the very first download even for people who never open a map. Those libraries now load only when a map or the geo hub is actually opened, which takes about 1.6 MB off the initial load with no change in behaviour. Clicks inside the takeoff Link to BOQ picker no longer bubble to the measurement row and toggle the properties panel.
+
+## [10.6.0] - 2026-07-07
+
+Five new modules extend the platform past the estimate into delivery on site. Site Logistics and Delivery plans the gates, the laydown zones and the delivery bookings so material arrives to a slot instead of a queue at the gate. Commissioning tracks each system through its checklists, results and open issues up to a clear ready for handover state. Off-site and Prefab runs a production board for prefabricated units through their stages, with a quality gate before a unit can be dispatched and installed. ESG Site Performance records environmental and social metrics for a project and reads them against targets. Cost-Value Reconciliation and Cashflow is the monthly commercial CVR, cost to date against value earned per cost head, the forecast final margin, and the project cashflow as a cumulative S-curve with interim payment applications.
+
+Site coordination gains four capabilities that turn talk and paper into tracked records. Meeting minutes capture the decisions from a site or coordination meeting and turn each one into an action item with an owner, a due date and a status, and those actions carry over across a recurring series so nothing is dropped between meetings. A forms and checklists library lets you build your own inspection, acceptance, safety and handover templates once and fill them in on site, with the record exportable as a PDF. Voice input turns a spoken note into a structured diary entry, defect or task for crews who would rather talk than type, with optional translation for a trade. The finance module gains an invoice inbox that captures a supplier invoice or delivery note, reads out the header and line fields, proposes the booking for a quick human confirmation, routes it through approval and posts it to the ledger, keeping the original archived unaltered with a tamper-evident seal.
+
+PDF takeoff gains its own set of measuring helpers. Each linear measurement now carries its own line opacity, matching the fill opacity it already had. There is a slope or pitch factor for roofs and ramps, a wastage or allowance percentage, a typical multiplier to repeat a measured quantity across identical elements, orthogonal and angle lock while drawing, and a way to copy a measurement or a whole group onto other pages.
+
+Every step in all 85 guided cases now shows a clear colour illustration of what to do at that step, a priced bill read under a magnifier, a benchmark against a reference base, a signed off inspection, drawn from the step itself so the whole catalogue moved to the new style at once.
+
+This release also fixes a set of reported issues. Takeoff calibration no longer corrupts stored measurements when a document is reloaded, the document now holds the authoritative page scale so an edit cannot lose it, measurement units follow the saved account preference, and the leave page prompt only appears when there really are unsaved changes. The Pipeline Builder runs again, its Run action failed on installs without the optional task broker and now executes in process, which also restores every background job on such installs. The cost database no longer errors when you open a position and offers to import a ready made base or create your own when there is none yet. The developer guide page no longer stretches an empty panel across wide screens and gains a sticky on this page table of contents.
+
 ## [10.5.0] - 2026-07-06
 
 Every step of every case now shows a small drawing of what it does. Open a case and each step carries a piece of line art, an RFI sheet for a question, a balance for a comparison, a hard hat for a permit, a calendar for a programme, so you can see what a step is about before you read a word. The drawings are chosen from the step itself, so all 85 cases got them at once, and where a specific drawing has not been made yet the step falls back to a clean framed icon rather than a blank. The same drawings now appear in the How it works hub, so expanding a module there shows its illustration too.
@@ -942,7 +996,7 @@ A security and data-integrity hardening release from a deep internal audit.
 
 ### Fixed
 
-- Cost matching now returns results for projects outside the US. A Canadian, UK or German project resolved to the English cost collection, which only carries US-tagged rates, and then pinned a country filter that removed every row, so the match screen came back empty. The country pin is now data-driven: if the region has no rows in the collection being searched, the pin is dropped and the whole collection is ranked instead. Where the country really is present, for example Mexican rates inside the Spanish collection, the pin still narrows correctly. A keyword fallback in the Revit to IFC crosswalk also maps the long tail of custom Revit sub-categories such as curtain grids, stair railings and framing joists, while genuinely non-billable categories stay unmapped. Across six demo models the IFC suggest rate rose from 32 to 95 percent and Revit from 57 to 87 percent, and the three non-US projects went from zero to between 84 and 95 percent.
+- Cost matching now returns results for projects outside the US. A Canadian, UK or German project resolved to the English cost collection, which only carries US-tagged rates, and then pinned a country filter that removed every row, so the match screen came back empty. The country pin is now data-driven: if the region has no rows in the collection being searched, the pin is dropped and the whole collection is ranked instead. Where the country really is present, for example Mexican rates inside the Spanish collection, the pin still narrows correctly. A keyword fallback in the RVT to IFC crosswalk also maps the long tail of custom BIM sub-categories such as curtain grids, stair railings and framing joists, while genuinely non-billable categories stay unmapped. Across six demo models the IFC suggest rate rose from 32 to 95 percent and RVT from 57 to 87 percent, and the three non-US projects went from zero to between 84 and 95 percent.
 - Backup restore is now scoped to the user who runs it. Export already filtered rows to the caller, but restore cleared every row in each table before reloading, so one user's restore could wipe another user's data. Restore now deletes only inside the same ownership scope it exports.
 - The purchase-order list no longer returns a server error for a project that has at least one order. Two figures on the order were declared as plain text but exposed by the model as methods, so reading the list failed validation before the real values could be filled in. The list and the per-order quantities now read consistently, with ordered, received and invoiced totals shown the same way rather than one as 100 and another as 100.0.
 - A purchase order can only be created as a draft. It was possible to create one already approved or issued and skip the approval step that commits budget. The only legal starting state is now draft, and callers move it forward with the approve and issue actions.
@@ -992,7 +1046,7 @@ A security and data-integrity hardening release from a deep internal audit.
 ### Changed
 
 - All 27 interface languages are now fully translated. The pass focused on the dashboard and the project screens, where some English words were still showing through, and went over every module so the app reads naturally in each language.
-- The example projects are filled out across every module. Each demo now arrives with a real Revit, IFC and DWG model and a PDF plan set attached, so the BIM viewer, the quantity takeoff and the reports all have real content to work with, and validation runs at install time and stores a report against the bill of quantities.
+- The example projects are filled out across every module. Each demo now arrives with a real RVT, IFC and DWG model and a PDF plan set attached, so the BIM viewer, the quantity takeoff and the reports all have real content to work with, and validation runs at install time and stores a report against the bill of quantities.
 - Partner packs ship the real company logos for Doka Formwork, Batimatech and BIM-Cluster Hessen, and each pack installs cleanly together with its catalogue and demo data. The Batimatech pack now defaults to French and loads the Canadian CWICR cost database for Toronto through the DDC parser.
 - Every partner pack now installs two demo projects instead of one. The cross-region packs that had no in-country second demo (Australia, modular and prefab, renewables EPC) now ship a sensible second project in the same currency and standards.
 
@@ -1004,7 +1058,7 @@ A security and data-integrity hardening release from a deep internal audit.
 - Validation no longer fails when it runs straight after a demo is installed. It was reaching for a related collection that the async database session had not loaded yet, so the run could error before producing a report. It now reads the positions with an explicit query and produces the report every time.
 - Reinstalling a demo project no longer stops on a duplicate resource code. The seeding step clears the demo's own resource rows by code before inserting them again, so a forced reinstall completes cleanly.
 - The cost database import and the catalogue picker no longer fail with a server error. Importing the Germany and DACH cost database and adding items from the catalogue both work again.
-- CAD conversion works on a headless Linux server. The DWG, Revit and IFC importers and the drawing-to-PDF export now point the bundled DDC cad2data converter at its own libraries when they run, which a no-root install keeps outside the system path. Before this an upload could report that the converter was installed and then fail on the server with nothing useful in the log. Windows and macOS were not affected.
+- CAD conversion works on a headless Linux server. The DWG, RVT and IFC importers and the drawing-to-PDF export now point the bundled DDC cad2data converter at its own libraries when they run, which a no-root install keeps outside the system path. Before this an upload could report that the converter was installed and then fail on the server with nothing useful in the log. Windows and macOS were not affected.
 - The assemblies editor shows every Cost Drivers category again when you enter prices, rather than only the first group that matched.
 
 ## [6.6.0] - 2026-06-02
@@ -1157,7 +1211,7 @@ A security and data-integrity hardening release from a deep internal audit.
 ### Added
 
 - Flagship reference project: a single residential house built from one real
-  DWG drawing, one Revit model, one IFC model and one PDF plan set. Each CAD
+  DWG drawing, one RVT model, one IFC model and one PDF plan set. Each CAD
   and BIM file is converted through the DDC cad2data console converters into
   our canonical JSON, with no IfcOpenShell and no native IFC parsing. Element
   groups are linked to bill-of-quantities positions with real quantities, real
@@ -2046,14 +2100,14 @@ on showcase / fast-path-converted models with sequential placeholder names.
 ### Fixed
 - `BIMFilterPanel.getTypeNameKey` now detects the `<element_type> <integer>`
   placeholder pattern (`"Walls 1"`, `"Walls 2"`, ..., `"Walls 64"`) that the
-  showcase seed and the converted-DAE fast path emit when no real Revit
+  showcase seed and the converted-DAE fast path emit when no real BIM
   Family/Type can be resolved. Previously those names flowed through to the
   Category → Type Name hierarchy verbatim - a model with 64 walls rendered
   64 single-element TypeName rows under the Walls category instead of
   collapsing into a few real family/types. The placeholder pattern is now
   treated as no-real-name and routes through to the "Unspecified" bucket like
   any other unlabeled element. Verified on the showcase model
-  `c8acb9a5-3fff-5719-a2b0-fe7d62a8a21f` (380 elements across 15 Revit
+  `c8acb9a5-3fff-5719-a2b0-fe7d62a8a21f` (380 elements across 15 BIM
   categories): zero `"Walls N"` rows left in the tree.
 
 ## [4.9.1] - 2026-05-25
@@ -2168,7 +2222,7 @@ the working build.
 ### Fixed
 - **Issue #153 (real root cause).** `bim_hub` DAE serve-time validator was
   rejecting valid COLLADA files with namespace-prefixed roots like
-  `<ns0:COLLADA>` (the form the DDC/Revit pipeline emits) - both are valid
+  `<ns0:COLLADA>` (the form the DDC/RVT pipeline emits) - both are valid
   per the XML namespace spec. Validator now accepts either form.
 - **Contact email canonicalised.** Every user-visible string and config
   default now points to `info@datadrivenconstruction.io`. The old aliases
@@ -2681,8 +2735,8 @@ Identical to 3.12.1: no migration steps required. Existing 3.12.x installs upgra
 
 ### Added
 
-- New **Clash Detection** module (`/clash`): intra-project geometric interference + clearance coordination over real GLB element geometry - exact OBB-SAT + Möller tri-tri narrow phase, discipline×discipline matrix, Navisworks/Solibri-grade review table, BCF export, one-click "Isolate in 3D".
-- Clash: Navisworks-style category/type **selection sets** (Set A × Set B) as the primary search mode; collision results deep-link into the BIM viewer and frame the camera on the clash centroid.
+- New **Clash Detection** module (`/clash`): intra-project geometric interference + clearance coordination over real GLB element geometry - exact OBB-SAT + Möller tri-tri narrow phase, discipline×discipline matrix, professional-grade review table, BCF export, one-click "Isolate in 3D".
+- Clash: category/type **selection sets** (Set A × Set B) as the primary search mode; collision results deep-link into the BIM viewer and frame the camera on the clash centroid.
 - Clash: active-project context panel - model/element/run summary + working links to BIM 3D Viewer, element matcher and project overview.
 - New **Incoming Webhook Leads** module (`oe_webhook_leads`): secure `POST /incoming/{source}` ingestion (API-key/HMAC/JWT, IP allow-list, rate limit), payload→lead mapping, audit log, Settings UI (#147).
 - File manager: clicking a BIM model offers BIM 3D Viewer / CAD-BIM BI Explorer / Clash Detection navigation.
@@ -2777,7 +2831,7 @@ Identical to 3.12.1: no migration steps required. Existing 3.12.x installs upgra
 
 ### Changed
 
-- Showcase snapshot regenerated: each of the 7 projects now ships a second Autodesk Revit (.rvt) structural model alongside the IFC architectural model - both visible in the BIM viewer and the Match Elements (data-analytics) module.
+- Showcase snapshot regenerated: each of the 7 projects now ships a second RVT structural model alongside the IFC architectural model - both visible in the BIM viewer and the Match Elements (data-analytics) module.
 
 ## [3.4.0] - 2026-05-17 · Professional showcase BOQ + colored real-IFC BIM + viewer fix
 
@@ -2924,7 +2978,7 @@ tier 5269 passing, frontend type-check clean, zero regressions.
 ### Fixed (DWG upload - root cause)
 
 - **One stuck DDC conversion no longer poisons the next 5+ uploads.** `_handle_dwg()` was awaited inline in the upload request handler, so a 60–120 s DDC binary call (or a crash on an R16/R17 file) pinned a uvicorn worker; subsequent uploads queued behind it and timed out on the client side with `HTTP 500 "Unable to upload drawing"` or `ReadTimeout`. The upload row is now committed first and DDC conversion runs on a detached task with its own `AsyncSession` (`_run_dwg_conversion_in_background`), so the HTTP request returns immediately with `status=uploaded` and status transitions are polled normally.
-- **DWG version floor dropped R18 → R14.** Previously the pre-emptive `_dwg_version_too_old` check refused AutoCAD 2004/2007 (R16/R17) before handing them to DDC. The 2026-05-14 bench showed several R16/R17 files DO convert successfully with the installed binary - let DDC have a go and surface its real error when it can't.
+- **DWG version floor dropped R18 → R14.** Previously the pre-emptive `_dwg_version_too_old` check refused R16/R17 DWG files (2004/2007) before handing them to DDC. The 2026-05-14 bench showed several R16/R17 files DO convert successfully with the installed binary - let DDC have a go and surface its real error when it can't.
 - **DDC DwgExporter rolled back v18.2.0 → v17.1.1 (penultimate stable).** Verified upstream regression: v18.2.0 crashes with `Error: converter crashed.` on DDC's own sample `architectural_example-imperial.dwg`, while v17.1.1 converts the same file to a 443 KB Excel at 100 %. IFC/RVT/DGN keep the v18.2.0 inner binaries (no observed regression there) - only the DWG path is reverted.
 
 ### Added
@@ -3349,7 +3403,7 @@ Source: https://github.com/datadrivenconstruction/OpenConstructionERP
 
 ### Verified
 
-- **Issue #113** (`[BUG] can't get any IFC or Revit file to be viewed in the 3D viewer`) - closed. End-to-end check on a fresh `pip install openconstructionerp==2.9.25` venv: IFC upload → conversion `status=ready` (289 elements, 4 storeys), `/elements/` returns finite bboxes for 37/50 sampled rows, `/geometry/` returns 302 KB `model/vnd.collada+xml`. Likely fixed by v2.9.21 (IFC conversion regression) + v2.9.22 (`ORJSONResponse` removed - orjson rejects `NaN` in bbox coords).
+- **Issue #113** (`[BUG] can't get any IFC or RVT file to be viewed in the 3D viewer`) - closed. End-to-end check on a fresh `pip install openconstructionerp==2.9.25` venv: IFC upload → conversion `status=ready` (289 elements, 4 storeys), `/elements/` returns finite bboxes for 37/50 sampled rows, `/geometry/` returns 302 KB `model/vnd.collada+xml`. Likely fixed by v2.9.21 (IFC conversion regression) + v2.9.22 (`ORJSONResponse` removed - orjson rejects `NaN` in bbox coords).
 
 ## [2.9.25] - 2026-05-07
 
@@ -4202,7 +4256,7 @@ Phase 3 + Phase 4 of vector match + concurrent-match perf hardening, shipped tog
 - Multi-variant per position: each variant component gets its own picker pill - `available_variants` forwarded for ALL components on apply, not just the first.
 - `/costs/import` Installed Databases section reappears under empty/loading/error states; uninstall buttons restored.
 - Quantity save instant: PATCH response splices into cache (no full BOQ refetch). Sibling rollups debounced 400ms.
-- Revit `.rvt` upload no longer fails on `BIMHubService.create_model() got an unexpected keyword argument 'created_by'`.
+- RVT `.rvt` upload no longer fails on `BIMHubService.create_model() got an unexpected keyword argument 'created_by'`.
 
 ### Added
 - "Report a bug" entry in user menu - pre-filled GitHub issue with anonymized last error, app version, page, build hash.
@@ -4330,7 +4384,7 @@ Phase 3 + Phase 4 of vector match + concurrent-match perf hardening, shipped tog
 ### Added
 - **CWICR cost database expanded from 11 → 30 regions.** DDC repo grew with 19 new countries (AU, NZ, IT, NL, PL, CS, HR, BG, RO, SV, TR, JA, KO, TH, VI, ID, MX, ZA, NG); registry, REGION_MAP, DatabaseSetupPage, ImportDatabasePage, OnboardingWizard all updated. Onboarding region grid grouped by region (Anglosphere / Western Europe / CEE / MENA / APAC / Americas) with a search filter so 30 entries don't dominate the step. `LANG_TO_REGION` updated so `it`→`IT_ROME`, `ja`→`JA_TOKYO`, `ko`→`KO_SEOUL`, `nl`→`NL_AMSTERDAM`, `pl`→`PL_WARSAW`, etc. - previously these locales fell back to DE/SP/ZH approximations.
 - **BIM converter health check + smoke test.** `GET /v1/takeoff/converters/?verify=true` now runs an 8s smoke test per installed converter (parallel via `asyncio.gather`) to catch DLL load failures, Mark-of-the-Web blocking, missing VC++ Redistributable, wrong-arch binaries. New `POST /v1/takeoff/converters/{id}/verify/` for on-demand re-check. Result cached 5 min server-side; cache invalidated on install/uninstall. Pre-flight smoke test added to RVT background processor so a broken-but-installed binary fails fast with a structured error instead of a 5-minute conversion that produces nothing.
-- **BIM converter status panel rewrite.** Always visible on `/bim` (was hidden when all installed); shows `health` per converter with ✓ Working / ⚠ Broken / ⬇ Not installed pills, install path on hover, Re-check button on every installed row, action buttons mapped from backend's `suggested_actions` (Install / Reinstall / Install VC++ Redist / Manual install on GitHub / Unblock files / Run as Administrator). IFC now included (was previously omitted, which is why "Revit and IFC don't load" was reproducible). Dismissible mode added; mounted on `/projects` empty state so fresh-install users see converter status before creating their first project.
+- **BIM converter status panel rewrite.** Always visible on `/bim` (was hidden when all installed); shows `health` per converter with ✓ Working / ⚠ Broken / ⬇ Not installed pills, install path on hover, Re-check button on every installed row, action buttons mapped from backend's `suggested_actions` (Install / Reinstall / Install VC++ Redist / Manual install on GitHub / Unblock files / Run as Administrator). IFC now included (was previously omitted, which is why "RVT and IFC don't load" was reproducible). Dismissible mode added; mounted on `/projects` empty state so fresh-install users see converter status before creating their first project.
 - **Abstract resource variants polished to ship-quality.** Default = mean rate when applying a CWICR cost item with multiple price variants (closest-to-mean entry chosen when no exact match). Inline variant picker (`▾ N options`) on every BOQ unit_rate cell; opens the same `VariantPicker` used at apply time. Position metadata stamps a `variant_snapshot = {code, rate, currency, captured_at}` so subsequent CWICR re-imports don't silently rewrite the position's rate. Visual markers: 4px left-edge bar (blue for explicit pick, amber for default = mean) plus an Abstract pill in the description cell. Excel export gains a "Variant" column. 6 backend tests + 8 frontend tests; all green.
 
 ### Fixed
@@ -5417,7 +5471,7 @@ WebSocket tests: rejects missing token (1008), delivers
 
 #### BIM viewer geometry-loading progress bar
 The BIM viewer used to show only a generic spinner while the COLLADA
-geometry blob downloaded - a 100MB Revit model could take 30+ seconds
+geometry blob downloaded - a 100MB BIM model could take 30+ seconds
 with no visible progress, so users assumed the page had hung.
 ``ElementManager.loadDAEGeometry`` now accepts an ``onProgress``
 callback that surfaces the XHR ``loaded / total`` ratio, and
@@ -5598,11 +5652,11 @@ projects look like they were silently 50 % done.
 
 ### Levels filter - rename "Storeys" → "Levels", real Level support
 The BIM filter panel labelled the storey filter "Storeys" but
-Revit users overwhelmingly think in terms of "Level" (the actual
-Revit property name).  Worse, when the upload row had no top-level
+BIM users overwhelmingly think in terms of "Level" (the actual
+BIM property name).  Worse, when the upload row had no top-level
 ``storey`` column the filter would silently miss elements whose
 level was buried inside the ``properties`` JSONB blob - common
-for Revit Excel exports where "Level" lives as a Type Parameter,
+for BIM Excel exports where "Level" lives as a Type Parameter,
 not a column.
 
 - Backend ``_rows_to_elements`` (``bim_hub/router.py``) now calls
@@ -5616,7 +5670,7 @@ not a column.
 - ``_normalise_storey()`` coerces literal ``"None"`` / ``"<None>"``
   / ``"null"`` / ``"-"`` / ``"-"`` strings to None so they don't
   pollute the filter panel with a fake "None (586)" bucket.  This
-  was visible in screenshots from real Revit exports.
+  was visible in screenshots from real BIM exports.
 - Frontend ``BIMFilterPanel.tsx`` rename: "Storeys" → "Levels",
   "by Storey" → "by Level", "No storeys detected" → "No levels
   detected", search placeholder updated.  i18n keys renamed to
@@ -6535,13 +6589,13 @@ in one click.
   "real building elements" section (chips at top) or a collapsible
   "Annotations & analytical" section (closed by default). Works
   zero-curation for any project.
-- **Pretty category names** for ~150 well-known Revit categories
+- **Pretty category names** for ~150 well-known BIM categories
   ("Curtainwallmullions" → "Curtain Wall Mullions", "Doortags" → "Door Tags").
   Anything not in the table passes through with first-letter
   capitalised - no wrong algorithmic word splits.
 
 ### Fixed
-- BIM filter "None" element_type (the 6 048 Revit-ingest junk rows in
+- BIM filter "None" element_type (the 6 048 BIM-ingest junk rows in
   the demo) now classified as noise.
 - Headless test verdict baseline comparison.
 
@@ -6549,7 +6603,7 @@ in one click.
 
 ### Added
 - **3 grouping modes** in BIM filter via segmented control:
-  **By Category** (flat, default), **By Type Name** (Revit Browser
+  **By Category** (flat, default), **By Type Name** (BIM Browser
   hierarchy), **Buckets** (semantic).
 
 ## [1.3.26] - 2026-04-11

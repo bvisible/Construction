@@ -1041,12 +1041,12 @@
         <article class="question" data-dim="bim" data-q="3">
           <div class="question-head">
             <span class="question-num">Q3</span>
-            <div class="question-text">When you receive a 3D model (Revit®, IFC, ArchiCAD®, Allplan®, Tekla®) — how do quantities get from the model into the BOQ?</div>
+            <div class="question-text">When you receive a 3D model (IFC, RVT or another BIM format) - how do quantities get from the model into the BOQ?</div>
             <span class="question-dim">BIM &amp; CAD</span>
           </div>
           <div class="question-options">
             <label class="option"><input type="radio" name="q3" value="0" /><div class="option-body"><div class="option-label"><b>We don't get models.</b> Tendering off 2D PDFs only — manual takeoff with measure-on-screen tools.</div></div></label>
-            <label class="option"><input type="radio" name="q3" value="1" /><div class="option-body"><div class="option-label"><b>Manual after Revit®/IFC export.</b> Schedules dropped to Excel, estimator manually maps quantities to BOQ rows.</div></div></label>
+            <label class="option"><input type="radio" name="q3" value="1" /><div class="option-body"><div class="option-label"><b>Manual after BIM/IFC export.</b> Schedules dropped to Excel, estimator manually maps quantities to BOQ rows.</div></div></label>
             <label class="option"><input type="radio" name="q3" value="2" /><div class="option-body"><div class="option-label"><b>QTO plugin in our CAD tool</b> - a quantity-takeoff add-in inside the BIM authoring or coordination environment. Lives inside the model authoring environment.</div></div></label>
             <label class="option"><input type="radio" name="q3" value="3" /><div class="option-body"><div class="option-label"><b>Automated extraction from IFC</b> via a custom pipeline. Element-level quantities flow into the cost system, classified against DIN 276 / NRM / MasterFormat.</div></div></label>
             <label class="option"><input type="radio" name="q3" value="4" /><div class="option-body"><div class="option-label"><b>Bi-directional sync.</b> Model changes automatically update BOQ; BOQ flags model gaps (missing classifications, unpriceable elements) back to the modeller.</div></div></label>
@@ -1063,7 +1063,7 @@
           <div class="question-options">
             <label class="option"><input type="radio" name="q4" value="0" /><div class="option-body"><div class="option-label"><b>One format only.</b> If the client doesn't deliver in the format we accept, we ask them to convert before sending.</div></div></label>
             <label class="option"><input type="radio" name="q4" value="1" /><div class="option-body"><div class="option-label"><b>Manual conversion per file</b> using a CAD tool we happen to have. Bottlenecked on whoever knows the tool.</div></div></label>
-            <label class="option"><input type="radio" name="q4" value="2" /><div class="option-body"><div class="option-label"><b>Single-vendor toolchain</b> (Autodesk-only, Bentley-only, Trimble-only). Works inside the family, breaks outside.</div></div></label>
+            <label class="option"><input type="radio" name="q4" value="2" /><div class="option-body"><div class="option-label"><b>Single-vendor toolchain</b> (locked to a single authoring vendor). Works inside the family, breaks outside.</div></div></label>
             <label class="option"><input type="radio" name="q4" value="3" /><div class="option-body"><div class="option-label"><b>Multi-format pipeline</b> with a canonical conversion step (DWG/DGN/RVT/IFC → unified data). Same downstream workflow regardless of source.</div></div></label>
             <label class="option"><input type="radio" name="q4" value="4" /><div class="option-body"><div class="option-label"><b>Format-agnostic.</b> Auto-detect on upload, route to the right converter, full canonical model with provenance. Including raster/vector PDF and photos via CV/OCR.</div></div></label>
           </div>
@@ -1271,7 +1271,7 @@
     </div>
   
       <div class="wrap">
-        <p class="footer-trademarks" style="margin-top:12px;font-size:11px;line-height:1.55;opacity:.55;max-width:none;">AutoCAD&reg;, Revit&reg;, Navisworks&reg; and Autodesk&reg; are trademarks of Autodesk, Inc. Allplan&reg; is a trademark of the Nemetschek group, ArchiCAD&reg; of Graphisoft, Tekla&reg; of Trimble, and Bentley&reg; and MicroStation&reg; of Bentley Systems. All other product names and trademarks are the property of their respective owners. OpenConstructionERP is an independent open-source project, not affiliated with, sponsored by or endorsed by any of these companies, and names their products only to describe file-format and interoperability support.</p>
+        <p class="footer-trademarks" style="margin-top:12px;font-size:11px;line-height:1.55;opacity:.55;max-width:none;">All product names, logos and brands are the property of their respective owners and are used for identification purposes only. Their use does not imply any affiliation with or endorsement by them.</p>
       </div>
   </footer>
 

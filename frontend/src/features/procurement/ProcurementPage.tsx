@@ -1,7 +1,7 @@
-import { useState, useMemo, useEffect, useRef } from 'react';
+import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import clsx from 'clsx';
 import {
   Package,
@@ -152,6 +152,34 @@ export function isGoodsReceiptFullyReceived(
   return ordered > 0 && received >= ordered;
 }
 
+/**
+ * Normalise a router-state buy-list handoff (from the Resource Summary
+ * buy-list, F4 interop) into PO line-item form rows. Router state is untyped,
+ * so every field is validated defensively: a non-array input, or an entry with
+ * no description, is dropped. Quantities are the Decimal STRINGS the backend
+ * served - carried through verbatim (never parsed to a float); unit_rate and
+ * amount are left blank for the buyer to fill in from the supplier quote.
+ */
+export function parseIncomingBuyList(raw: unknown): POLineItemForm[] {
+  if (!Array.isArray(raw)) return [];
+  const lines: POLineItemForm[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object') continue;
+    const rec = entry as Record<string, unknown>;
+    const description = typeof rec.description === 'string' ? rec.description.trim() : '';
+    if (!description) continue;
+    const unit = typeof rec.unit === 'string' ? rec.unit : '';
+    const quantity =
+      typeof rec.quantity === 'string'
+        ? rec.quantity
+        : typeof rec.quantity === 'number'
+          ? String(rec.quantity)
+          : '';
+    lines.push({ description, quantity: quantity || '1', unit, unit_rate: '', amount: '' });
+  }
+  return lines;
+}
+
 /* ── Constants ────────────────────────────────────────────────────────── */
 
 const inputCls =
@@ -211,10 +239,25 @@ const GR_STATUS_COLORS: Record<
 export function ProcurementPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const location = useLocation();
   const projectId = useProjectContextStore((s) => s.activeProjectId);
   const projectName = useProjectContextStore((s) => s.activeProjectName);
 
   const [activeTab, setActiveTab] = useState<ProcurementTab>('purchase-orders');
+
+  // F4 interop: the Resource Summary buy-list hands its material lines over as
+  // router state so a buyer can turn the estimate straight into a draft PO.
+  // Parse it once per state change; the Purchase Orders tab consumes it and
+  // pre-fills the create flow. We then clear the state (below) so a refresh or
+  // back-navigation doesn't reopen the draft.
+  const incomingBuyList = useMemo(
+    () => parseIncomingBuyList((location.state as { buyList?: unknown } | null)?.buyList),
+    [location.state],
+  );
+
+  const clearIncomingBuyList = useCallback(() => {
+    navigate(location.pathname, { replace: true, state: null });
+  }, [navigate, location.pathname]);
 
   const tabs: { key: ProcurementTab; label: string; icon: React.ReactNode }[] = [
     {
@@ -330,7 +373,11 @@ export function ProcurementPage() {
       ) : (
         <>
           {activeTab === 'purchase-orders' && (
-            <PurchaseOrdersTab projectId={projectId} />
+            <PurchaseOrdersTab
+              projectId={projectId}
+              incomingBuyList={incomingBuyList}
+              onBuyListConsumed={clearIncomingBuyList}
+            />
           )}
           {activeTab === 'goods-receipts' && (
             <GoodsReceiptsTab
@@ -346,7 +393,15 @@ export function ProcurementPage() {
 
 /* ── Purchase Orders Tab ──────────────────────────────────────────────── */
 
-function PurchaseOrdersTab({ projectId }: { projectId: string }) {
+function PurchaseOrdersTab({
+  projectId,
+  incomingBuyList,
+  onBuyListConsumed,
+}: {
+  projectId: string;
+  incomingBuyList: POLineItemForm[];
+  onBuyListConsumed: () => void;
+}) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
@@ -380,6 +435,10 @@ function PurchaseOrdersTab({ projectId }: { projectId: string }) {
      order; otherwise it POSTs a new one. */
   const [showCreate, setShowCreate] = useState(false);
   const [editingPO, setEditingPO] = useState<string | null>(null);
+  // True only while the create modal is showing lines handed over from the
+  // Resource Summary buy-list (F4 interop), so we can surface a one-line hint
+  // telling the buyer to add a supplier + rates. Reset whenever the modal closes.
+  const [prefilledFromBuyList, setPrefilledFromBuyList] = useState(false);
   const todayStr = new Date().toISOString().split('T')[0];
   const emptyLine: POLineItemForm = { description: '', quantity: '1', unit: '', unit_rate: '', amount: '' };
 
@@ -415,6 +474,7 @@ function PurchaseOrdersTab({ projectId }: { projectId: string }) {
   const closeModal = () => {
     setShowCreate(false);
     setEditingPO(null);
+    setPrefilledFromBuyList(false);
     setPoForm({ ...emptyPoForm, items: [{ ...emptyLine }] });
     setPoTaxInput('0');
     setPoErrors({});
@@ -430,6 +490,23 @@ function PurchaseOrdersTab({ projectId }: { projectId: string }) {
     return () => document.removeEventListener('keydown', handler);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showCreate]);
+
+  // F4 interop: when Procurement was opened from the Resource Summary buy-list,
+  // pre-fill the create flow with those material lines and open it. A ref makes
+  // this a once-only hand-off, so reopening or editing the modal afterwards is
+  // never clobbered; once consumed we ask the parent to clear the router state
+  // so the draft is not reopened on a refresh or back-navigation.
+  const buyListConsumedRef = useRef(false);
+  useEffect(() => {
+    if (buyListConsumedRef.current) return;
+    if (incomingBuyList.length === 0) return;
+    buyListConsumedRef.current = true;
+    setEditingPO(null);
+    setPoForm((f) => ({ ...f, items: incomingBuyList.map((li) => ({ ...li })) }));
+    setPrefilledFromBuyList(true);
+    setShowCreate(true);
+    onBuyListConsumed();
+  }, [incomingBuyList, onBuyListConsumed]);
 
   // Auto-calc line amounts
   const updateLineItem = (idx: number, field: keyof POLineItemForm, value: string) => {
@@ -766,6 +843,17 @@ function PurchaseOrdersTab({ projectId }: { projectId: string }) {
             </button>
           </div>
           <div className="px-6 py-5 space-y-5 overflow-y-auto flex-1">
+            {/* F4 interop hint: shown only when the lines were pre-filled from
+                the Resource Summary buy-list, to explain the auto-opened modal
+                and prompt the buyer for the supplier + rates the buy-list omits. */}
+            {prefilledFromBuyList && !isEdit && (
+              <div className="rounded-lg border border-oe-blue/30 bg-oe-blue/5 px-3.5 py-2.5 text-xs text-content-secondary">
+                {t('procurement.prefilled_from_buy_list', {
+                  defaultValue:
+                    'These lines came from the estimate buy-list. Pick a supplier and enter rates, then save to create the draft purchase order.',
+                })}
+              </div>
+            )}
             {/* ── Section: Order Details ──
                 The widened modal (max-w-5xl) gives us room to surface
                 vendor + PO type + delivery date as a single 3-column row

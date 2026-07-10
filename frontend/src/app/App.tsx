@@ -48,6 +48,7 @@ import { FloatingQueuePanel } from './layout/FloatingQueuePanel';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useThemeStore } from '@/stores/useThemeStore';
 import { useBrandingStore } from '@/stores/useBrandingStore';
+import { usePreferencesStore } from '@/stores/usePreferencesStore';
 import { ddcVerifyIntegrity, ddcInjectMeta, DDC_ORIGIN } from '@/shared/lib/ddc-integrity';
 import { NavigationProgress } from '@/shared/lib/navigationProgress';
 import { useKeyboardShortcuts } from '@/shared/hooks/useKeyboardShortcuts';
@@ -142,6 +143,10 @@ const PdfComparePage = lazy(() =>
 const PunchListPage = lazy(() =>
   import('@/features/punchlist/PunchListPage').then((m) => ({ default: m.PunchListPage }))
 );
+const IssuesHubPage = lazy(() =>
+  import('@/features/issues/IssuesHubPage').then((m) => ({ default: m.IssuesHubPage }))
+);
+const BcfPage = lazy(() => import('@/features/bcf/BcfPage').then((m) => ({ default: m.BcfPage })));
 const CloseoutPage = lazy(() => import('@/features/closeout/CloseoutPage'));
 const InboxPage = lazy(() =>
   import('@/features/inbox').then((m) => ({ default: m.InboxPage })),
@@ -531,6 +536,56 @@ const CostsPage = lazy(() =>
 const CostExplorerPage = lazy(() =>
   import('@/features/cost-explorer').then((m) => ({ default: m.CostExplorerPage }))
 );
+// v10.7.0 estimating modules
+const RomEstimatePage = lazy(() =>
+  import('@/features/rom-estimate').then((m) => ({ default: m.RomEstimatePage }))
+);
+const EstimateBasisPage = lazy(() =>
+  import('@/features/estimate-basis').then((m) => ({ default: m.EstimateBasisPage }))
+);
+const EstimateCopilotPage = lazy(() =>
+  import('@/features/estimate-copilot').then((m) => ({ default: m.EstimateCopilotPage }))
+);
+const PriceIndexPage = lazy(() =>
+  import('@/features/price-index').then((m) => ({ default: m.PriceIndexPage }))
+);
+const LaborRatesPage = lazy(() =>
+  import('@/features/labor-rates').then((m) => ({ default: m.LaborRatesPage }))
+);
+const ResourceSummaryPage = lazy(() =>
+  import('@/features/resource-summary').then((m) => ({ default: m.ResourceSummaryPage }))
+);
+const PreliminariesPage = lazy(() =>
+  import('@/features/preliminaries').then((m) => ({ default: m.PreliminariesPage }))
+);
+const AllowancesPage = lazy(() =>
+  import('@/features/allowances').then((m) => ({ default: m.AllowancesPage }))
+);
+const WasteFactorsPage = lazy(() =>
+  import('@/features/waste-factors').then((m) => ({ default: m.WasteFactorsPage }))
+);
+const NormExpansionPage = lazy(() =>
+  import('@/features/norm-expansion').then((m) => ({ default: m.NormExpansionPage }))
+);
+// v10.6.0 modules
+const PrefabPage = lazy(() =>
+  import('@/features/prefab').then((m) => ({ default: m.PrefabPage }))
+);
+const CvrPage = lazy(() =>
+  import('@/features/cvr').then((m) => ({ default: m.CvrPage }))
+);
+const SiteLogisticsPage = lazy(() =>
+  import('@/features/site-logistics').then((m) => ({ default: m.SiteLogisticsPage }))
+);
+const CommissioningPage = lazy(() =>
+  import('@/features/commissioning').then((m) => ({ default: m.CommissioningPage }))
+);
+const EsgPage = lazy(() =>
+  import('@/features/esg').then((m) => ({ default: m.EsgPage }))
+);
+const FormsPage = lazy(() =>
+  import('@/features/forms').then((m) => ({ default: m.FormsPage }))
+);
 const ValidationPage = lazy(() =>
   import('@/features/validation').then((m) => ({ default: m.ValidationPage }))
 );
@@ -828,6 +883,13 @@ export default function App() {
   // immediately sees their workspace brand.
   useEffect(() => {
     void useBrandingStore.getState().hydrateFromServer();
+    // Account-level preferences are a user-scoped endpoint, so only pull them
+    // once the user is authenticated. Firing this before sign-in 401s on
+    // /v1/users/me/preferences/ and, though the store swallows the error, the
+    // failed request still lands in the in-app bug-report buffer (issue #340).
+    if (isAuthenticated) {
+      void usePreferencesStore.getState().hydrateFromServer();
+    }
   }, [isAuthenticated]);
 
   // Onboarding-tour migration (one-shot). The app used to mount two
@@ -992,6 +1054,7 @@ export default function App() {
         <Route path="/clash/profiles" element={<P title="Clash Profiles"><ClashProfileManager /></P>} />
         <Route path="/projects/:projectId/clash/profiles" element={<P title="Clash Profiles"><ClashProfileManager /></P>} />
         <Route path="/coordination" element={<P title="Model Coordination"><CoordinationHubPage /></P>} />
+        <Route path="/bcf" element={<P title="Model Issues"><BcfPage /></P>} />
         <Route path="/assets" element={<P title="Asset Register"><AssetsPage /></P>} />
         <Route path="/bim/:modelId" element={<P title="BIM Viewer"><BIMPage /></P>} />
         <Route path="/projects/:projectId/bim" element={<P title="BIM Viewer"><BIMPage /></P>} />
@@ -1013,6 +1076,17 @@ export default function App() {
 
         <Route path="/catalog" element={<P title="Resource Catalog"><CatalogPage /></P>} />
         <Route path="/cost-explorer" element={<P title="Cost Explorer"><CostExplorerPage /></P>} />
+
+        <Route path="/rom-estimate" element={<P title="Conceptual Estimate"><RomEstimatePage /></P>} />
+        <Route path="/estimate-copilot" element={<P title="Estimate Copilot"><EstimateCopilotPage /></P>} />
+        <Route path="/estimate-basis" element={<P title="Basis of Estimate"><EstimateBasisPage /></P>} />
+        <Route path="/preliminaries" element={<P title="Preliminaries"><PreliminariesPage /></P>} />
+        <Route path="/allowances" element={<P title="Allowances"><AllowancesPage /></P>} />
+        <Route path="/price-index" element={<P title="Price Index"><PriceIndexPage /></P>} />
+        <Route path="/labor-rates" element={<P title="Labor Rates"><LaborRatesPage /></P>} />
+        <Route path="/resource-summary" element={<P title="Resource Summary"><ResourceSummaryPage /></P>} />
+        <Route path="/waste-factors" element={<P title="Waste Factors"><WasteFactorsPage /></P>} />
+        <Route path="/norm-expansion" element={<P title="Production Norms"><NormExpansionPage /></P>} />
 
         <Route path="/assemblies" element={<P title="Assemblies"><AssembliesPage /></P>} />
         <Route path="/assemblies/library" element={<P title="Assembly Library"><AssemblyLibraryPage /></P>} />
@@ -1048,6 +1122,16 @@ export default function App() {
         <Route path="/reports" element={<P title="Reports"><ReportsPage /></P>} />
         <Route path="/reporting" element={<P title="Reporting Dashboards"><ReportingPage /></P>} />
 
+        {/* v10.6.0 modules */}
+        <Route path="/projects/:projectId/prefab" element={<P title="Off-site / Prefab"><PrefabPage /></P>} />
+        <Route path="/prefab" element={<P title="Off-site / Prefab"><PrefabPage /></P>} />
+        <Route path="/projects/:projectId/cvr" element={<P title="Cost-Value Reconciliation"><CvrPage /></P>} />
+        <Route path="/cvr" element={<P title="Cost-Value Reconciliation"><CvrPage /></P>} />
+        <Route path="/site-logistics" element={<P title="Site Logistics"><SiteLogisticsPage /></P>} />
+        <Route path="/commissioning" element={<P title="Commissioning"><CommissioningPage /></P>} />
+        <Route path="/esg" element={<P title="ESG Site Performance"><EsgPage /></P>} />
+        <Route path="/forms" element={<P title="Forms & checklists"><FormsPage /></P>} />
+
         <Route path="/tendering" element={<P title="Tendering"><TenderingPage /></P>} />
 
         <Route path="/changeorders" element={<P title="Change Orders"><ChangeOrdersPage /></P>} />
@@ -1077,6 +1161,7 @@ export default function App() {
         <Route path="/markups" element={<P title="Markups"><MarkupsPage /></P>} />
         <Route path="/markups/compare" element={<P title="Compare Revisions"><PdfComparePage /></P>} />
         <Route path="/punchlist" element={<P title="Punch List"><PunchListPage /></P>} />
+        <Route path="/issues" element={<P title="Issues"><IssuesHubPage /></P>} />
         <Route path="/closeout" element={<P title="Handover & Closeout"><CloseoutPage /></P>} />
         <Route path="/field-reports" element={<P title="Field Reports"><FieldReportsPage /></P>} />
 

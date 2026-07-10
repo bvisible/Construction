@@ -1402,7 +1402,7 @@ export function listResources(params?: {
   if (params?.status) qs.set('status', params.status);
   if (params?.limit !== undefined) qs.set('limit', String(params.limit));
   const suffix = qs.toString() ? `?${qs.toString()}` : '';
-  return apiGet<ResourceListItem[]>(`/v1/resources/${suffix}`);
+  return apiGet<ResourceListItem[]>(`/v1/resources/resources/${suffix}`);
 }
 
 /** Time-phased demand / availability / cost histogram for one resource. */
@@ -1417,7 +1417,7 @@ export function resourceHistogram(
   qs.set('rate_type', params.rate_type ?? 'cost');
   qs.set('hours_per_day', String(params.hours_per_day ?? 8));
   return apiGet<ResourceHistogram>(
-    `/v1/resources/${encodeURIComponent(resourceId)}/histogram?${qs.toString()}`,
+    `/v1/resources/resources/${encodeURIComponent(resourceId)}/histogram?${qs.toString()}`,
   );
 }
 

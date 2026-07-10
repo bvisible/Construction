@@ -137,8 +137,6 @@ owners. All company, product, and service names used in this software and
 its documentation are for identification purposes only. Use of these
 names, trademarks, and brands does not imply endorsement.
 
-Revit(R), AutoCAD(R), and DWG(TM) are trademarks of Autodesk, Inc.
-MicroStation(R) and DGN are trademarks of Bentley Systems, Inc.
 IFC(R) is a trademark of buildingSMART International.
 DIN is a registered trademark of DIN Deutsches Institut fuer Normung e.V.
 GAEB is a trademark of the Gemeinsamer Ausschuss Elektronik im Bauwesen.
@@ -148,10 +146,10 @@ ISO is a registered trademark of the International Organization for Standardizat
 
 OpenConstructionERP is an independent project and is not affiliated with,
 endorsed by, or sponsored by any of the trademark owners listed above.
-Comparative references to commercial products (e.g., RIB iTWO, Exactal
-CostX, Sage Estimating, Bluebeam) reflect publicly available feature
-information at the time of publication and are used for fair comparative
-purposes under EU Directive 2006/114/EC and US Lanham Act Section 43(a).
+Comparative references to commercial products reflect publicly available
+feature information at the time of publication and are used for fair
+comparative purposes under EU Directive 2006/114/EC and US Lanham Act
+Section 43(a).
 
 ------------------------------------------------------------------------
 Data Sources

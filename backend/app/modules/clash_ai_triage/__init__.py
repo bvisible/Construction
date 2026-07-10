@@ -3,7 +3,7 @@
 """Clash AI Triage module.
 
 LLM-assisted triage of clash detection results. The competitive move:
-Revizto & co. monetise AI clash triage as a paid black box. We ship the
+Commercial coordination tools monetise AI clash triage as a paid black box. We ship the
 prompt VISIBLE in the repo (user-tunable per project), persist the full
 prompt + raw response for audit, and surface a defensible confidence
 score on every verdict.

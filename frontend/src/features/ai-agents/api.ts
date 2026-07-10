@@ -369,7 +369,7 @@ export const aiAgentsApi = {
     ),
   // BOQs the proposals can be applied to (the cross-module target list).
   listProjectBoqs: (projectId: string) =>
-    apiGet<BoqOption[]>(`/v1/boq/?project_id=${projectId}`),
+    apiGet<BoqOption[]>(`/v1/boq/boqs/?project_id=${projectId}`),
 
   // Trust verdict + accuracy: record a run's actual outcome (which feeds the
   // calibration record) and read the scoreboard that scores each agent's stated

@@ -96,7 +96,7 @@ class SmartView(Base):
 
     # 'show_all' | 'hide_all' - what the evaluator starts from before
     # the rules run. ``hide_all`` + a ``show`` rule produces the
-    # "isolate by query" pattern BIMcollab Zoom is famous for.
+    # "isolate by query" pattern coordination tools are famous for.
     default_action: Mapped[str] = mapped_column(
         String(16),
         nullable=False,

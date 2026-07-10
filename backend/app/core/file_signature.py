@@ -88,12 +88,12 @@ def detect(head: bytes) -> str | None:
     if stripped.startswith(b"ISO-10303-21"):
         return "ifc"
 
-    # - DWG AutoCAD - "AC" followed by 4-digit version.
+    # - DWG - "AC" followed by 4-digit version.
     if head[:2] == b"AC" and head[2:6].isdigit():
         return "dwg"
 
     # - DXF ASCII - optional leading whitespace then "0\nSECTION" or
-    # "999\n" comment. Vector AutoCAD-exchange text format.
+    # "999\n" comment. Vector drawing-exchange text format.
     stripped_dxf = head.lstrip(b" \t\r\n\xef\xbb\xbf")
     if stripped_dxf[:2] == b"0\n" or stripped_dxf[:4] == b"999\n":
         return "dxf"

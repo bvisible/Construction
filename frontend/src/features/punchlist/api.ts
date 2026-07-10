@@ -9,7 +9,17 @@ import { apiGet, apiPost, apiPatch, apiDelete } from '@/shared/lib/api';
 /* ── Types ─────────────────────────────────────────────────────────────── */
 
 export type PunchPriority = 'low' | 'medium' | 'high' | 'critical';
-export type PunchStatus = 'open' | 'in_progress' | 'resolved' | 'verified' | 'closed';
+// Full lifecycle FSM mirrored from the backend (punchlist/service.py
+// VALID_TRANSITIONS): open -> assigned -> in_progress -> resolved ->
+// verified -> closed, and any state can go back to open (reopen). The
+// 'assigned' stage lets a snag be owned before work actually starts.
+export type PunchStatus =
+  | 'open'
+  | 'assigned'
+  | 'in_progress'
+  | 'resolved'
+  | 'verified'
+  | 'closed';
 export type PunchCategory =
   | 'structural'
   | 'mechanical'
@@ -150,8 +160,20 @@ export async function deletePunchItem(id: string): Promise<void> {
 export async function transitionPunchStatus(
   id: string,
   newStatus: PunchStatus,
+  notes?: string,
 ): Promise<PunchItem> {
-  return apiPost<PunchItem>(`/v1/punchlist/items/${id}/transition/`, { new_status: newStatus });
+  // `notes` is optional and, when present, is stored by the backend as the
+  // resolution note (or the reopen reason on a reopen). Existing callers that
+  // pass only (id, status) are unaffected.
+  const body: { new_status: PunchStatus; notes?: string } = { new_status: newStatus };
+  const trimmed = notes?.trim();
+  if (trimmed) body.notes = trimmed;
+  return apiPost<PunchItem>(`/v1/punchlist/items/${id}/transition/`, body);
+}
+
+/** Fetch a single punch item by id (used by the detail drawer to stay fresh). */
+export async function fetchPunchItem(id: string): Promise<PunchItem> {
+  return apiGet<PunchItem>(`/v1/punchlist/items/${id}`);
 }
 
 export async function bulkClose(
@@ -180,6 +202,75 @@ export async function uploadPunchPhoto(id: string, file: File): Promise<PunchIte
   });
   if (!res.ok) throw new Error(`Upload failed: ${res.statusText}`);
   return res.json();
+}
+
+/** Remove a photo from a punch item by its index in the photos array. */
+export async function deletePunchPhoto(id: string, index: number): Promise<void> {
+  return apiDelete(`/v1/punchlist/items/${id}/photos/${index}`);
+}
+
+/** Payload for pinning a punch item to a location on a drawing sheet. */
+export interface PinToSheetPayload {
+  /** Document (drawing) the pin sits on. */
+  document_id?: string;
+  /** Sheet id, accepted by the backend as an alternative to document_id. */
+  sheet_id?: string;
+  /** 1-based page the pin sits on. */
+  page: number;
+  /** Normalised pin coordinates on the sheet (0..1). */
+  location_x: number;
+  location_y: number;
+}
+
+/**
+ * Pin a punch item to a normalised (0..1) location on a drawing sheet.
+ * Wraps POST /v1/punchlist/items/{id}/pin-to-sheet/.
+ */
+export async function pinPunchToSheet(id: string, payload: PinToSheetPayload): Promise<PunchItem> {
+  return apiPost<PunchItem>(`/v1/punchlist/items/${id}/pin-to-sheet/`, payload);
+}
+
+/** A project document as returned by the documents list endpoint. */
+export interface PunchDocument {
+  id: string;
+  name: string;
+  description?: string;
+  category?: string;
+}
+
+/**
+ * Photos uploaded to a punch item are stored as relative paths and
+ * cross-linked as Document records (category "photo", name = the stored
+ * filename). There is no static route that serves the raw path, so to show a
+ * thumbnail we resolve the photo's basename to its cross-linked document and
+ * stream that through the authenticated documents download endpoint. This
+ * returns the photo-category documents for the project so the caller can build
+ * a filename -> document-id map.
+ */
+export async function fetchPunchPhotoDocuments(projectId: string): Promise<PunchDocument[]> {
+  if (!projectId) return [];
+  const rows = await apiGet<PunchDocument[] | { items: PunchDocument[] }>(
+    `/v1/documents/?project_id=${projectId}&category=photo&limit=500`,
+  );
+  return Array.isArray(rows) ? rows : rows.items ?? [];
+}
+
+/** A drawing/document option for the pin board and pin picker. */
+export interface PunchDrawing {
+  id: string;
+  filename: string;
+}
+
+/** List the project documents that can be used as pin-board drawings. */
+export async function fetchPunchDrawings(projectId: string): Promise<PunchDrawing[]> {
+  if (!projectId) return [];
+  const rows = await apiGet<{ id: string; filename?: string; name?: string }[]>(
+    `/v1/documents/?project_id=${projectId}&limit=500`,
+  );
+  return (Array.isArray(rows) ? rows : []).map((r) => ({
+    id: r.id,
+    filename: r.filename ?? r.name ?? '',
+  }));
 }
 
 export async function fetchPunchSummary(projectId: string): Promise<PunchSummary> {

@@ -6,14 +6,26 @@
 
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
+import { getIntlLocale } from '@/shared/lib/formatters';
 import { listRegions } from './api';
 
-/** Format a Decimal-string (or number) for display, optionally with a currency. */
+/**
+ * Format a Decimal-as-string (or number) for display, optionally suffixed with
+ * its currency code.
+ *
+ * Money and quantities arrive from the API as Decimal-compatible strings; this
+ * coerces for DISPLAY only (never arithmetic) and groups the number in the
+ * user's ACTIVE app locale via {@link getIntlLocale} - the same locale
+ * primitive the shared formatCurrency / fmtNumber helpers use - so a German or
+ * Turkish user sees "1.234,5" instead of the browser-default "1,234.5". A
+ * missing value renders a dash (clearer than "0"); a non-numeric value is
+ * echoed back untouched rather than shown as "NaN".
+ */
 export function fmtMoney(value: string | number | null | undefined, currency?: string): string {
   if (value === null || value === undefined || value === '') return currency ? `- ${currency}` : '-';
   const n = typeof value === 'number' ? value : Number(value);
   const body = Number.isFinite(n)
-    ? new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(n)
+    ? new Intl.NumberFormat(getIntlLocale(), { maximumFractionDigits: 2 }).format(n)
     : String(value);
   return currency ? `${body} ${currency}` : body;
 }

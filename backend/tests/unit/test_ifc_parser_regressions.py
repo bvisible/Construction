@@ -166,7 +166,7 @@ def test_apostrophe_in_name_does_not_truncate_globalid(workdir: Path) -> None:
 def test_multi_line_entity_is_parsed(workdir: Path) -> None:
     """Audit C5 — STEP statements are terminated by `;`, not `\\n`.
 
-    Allplan/Revit/Tekla emit long IFCRELAGGREGATES / IFCPOLYLOOP rows on
+    Some authoring tools emit long IFCRELAGGREGATES / IFCPOLYLOOP rows on
     multiple physical lines. The old split-by-newline missed them.
     """
     # IFCRELCONTAINEDINSPATIALSTRUCTURE on three physical lines, valid
@@ -302,7 +302,7 @@ def test_rel_defines_by_properties_does_not_leak_through_owner_history() -> None
 def test_step_comments_are_stripped(workdir: Path) -> None:
     """Audit C6 — `/* … */` blocks must not produce phantom entities.
 
-    Tekla and Allplan emit comment blocks that contain `#N` references.
+    Some authoring tools emit comment blocks that contain `#N` references.
     Without stripping these comments the regex tokenizer would match
     them as entities, producing duplicate IDs and corrupted parse state.
     """
@@ -405,7 +405,7 @@ def test_full_parse_flags_unit_uncertain_when_units_missing(
 ) -> None:
     """Audit C2 end-to-end — minimal IFC with no IFCUNITASSIGNMENT.
 
-    Many real-world Allplan exports omit the unit assignment block
+    Many real-world exports omit the unit assignment block
     entirely. The text-fallback parser must mark every element with
     ``unit_uncertain=True`` AND propagate the flag at the model root
     so the bim_hub router can show a "Install DDC converter" banner.

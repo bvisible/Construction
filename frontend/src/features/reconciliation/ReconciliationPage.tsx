@@ -11,8 +11,8 @@
 // Confirm / reject persist through the project-scoped decision endpoint; the
 // thread and the decision ledger refresh so the timeline reflects the call.
 
-import { useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { Fragment, useState, type ReactNode } from 'react';
+import { Link, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -27,6 +27,8 @@ import {
   CircleCheck,
   CircleX,
   Sparkles,
+  Network,
+  ArrowRight,
 } from 'lucide-react';
 import {
   Card,
@@ -222,6 +224,118 @@ function LinkRow({
   );
 }
 
+/* ── How it works + connects ─────────────────────────────────────────────
+ * Compact at-a-glance flow so a reviewer sees what Event Reconciliation does
+ * and which sibling modules the records it stitches together come from.
+ * Mirrors the approved norm-expansion pattern. */
+function ModLink({ to, children }: { to: string; children: ReactNode }) {
+  return (
+    <Link to={to} className="font-medium text-oe-blue-text hover:underline">
+      {children}
+    </Link>
+  );
+}
+
+function HowReconciliationWork() {
+  const { t } = useTranslation();
+  const steps: { icon: ReactNode; title: string; desc: string }[] = [
+    {
+      icon: <Search size={14} className="text-oe-blue" />,
+      title: t('reconciliation.flow_1_title', { defaultValue: 'Pick a seed event' }),
+      desc: t('reconciliation.flow_1_desc', {
+        defaultValue: 'Start from one record: a change order, variation or letter.',
+      }),
+    },
+    {
+      icon: <Sparkles size={14} className="text-oe-blue" />,
+      title: t('reconciliation.flow_2_title', { defaultValue: 'See suggested links' }),
+      desc: t('reconciliation.flow_2_desc', {
+        defaultValue: 'The engine scores every candidate pair and names the signals that fired.',
+      }),
+    },
+    {
+      icon: <Link2 size={14} className="text-oe-blue" />,
+      title: t('reconciliation.flow_3_title', { defaultValue: 'Weigh the evidence' }),
+      desc: t('reconciliation.flow_3_desc', {
+        defaultValue: 'Each correlation shows its reasons and a confidence band.',
+      }),
+    },
+    {
+      icon: <Check size={14} className="text-oe-blue" />,
+      title: t('reconciliation.flow_4_title', { defaultValue: 'Confirm or reject' }),
+      desc: t('reconciliation.flow_4_desc', {
+        defaultValue: 'Your decision shapes the thread and is recorded for the project.',
+      }),
+    },
+  ];
+
+  return (
+    <div className="rounded-xl border border-border-light bg-surface-secondary/40 p-4">
+      <h2 className="flex items-center gap-1.5 text-sm font-semibold text-content-primary">
+        <Network size={15} className="text-oe-blue" />
+        {t('reconciliation.flow_title', {
+          defaultValue: 'How reconciliation works, and what it connects to',
+        })}
+      </h2>
+      <p className="mt-1 text-xs text-content-tertiary">
+        {t('reconciliation.flow_intro', {
+          defaultValue:
+            'One site event scatters into separate records across modules; assemble them into a single thread and confirm the links. Enter a seed record above to start.',
+        })}
+      </p>
+
+      <ol className="mt-3 flex flex-col gap-2 lg:flex-row lg:items-stretch">
+        {steps.map((s, i) => (
+          <Fragment key={s.title}>
+            <li className="flex-1 rounded-lg border border-border-light bg-surface-primary p-3">
+              <div className="flex items-center gap-2">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-oe-blue-subtle">
+                  {s.icon}
+                </span>
+                <span className="text-xs font-semibold text-content-primary">{s.title}</span>
+              </div>
+              <p className="mt-1.5 text-2xs leading-relaxed text-content-tertiary">{s.desc}</p>
+            </li>
+            {i < steps.length - 1 && (
+              <li
+                aria-hidden="true"
+                className="hidden shrink-0 items-center self-center text-content-quaternary lg:flex"
+              >
+                <ArrowRight size={16} />
+              </li>
+            )}
+          </Fragment>
+        ))}
+      </ol>
+
+      <div className="mt-3 border-t border-border-light pt-3 text-2xs text-content-tertiary">
+        <span className="font-medium text-content-secondary">
+          {t('reconciliation.flow_connects', { defaultValue: 'Reconciles records from:' })}
+        </span>{' '}
+        <ModLink to="/variations">
+          {t('reconciliation.mod_variations', { defaultValue: 'Variations' })}
+        </ModLink>
+        {' · '}
+        <ModLink to="/changeorders">
+          {t('reconciliation.mod_change_orders', { defaultValue: 'Change orders' })}
+        </ModLink>
+        {' · '}
+        <ModLink to="/correspondence">
+          {t('reconciliation.mod_correspondence', { defaultValue: 'Correspondence' })}
+        </ModLink>
+        {' · '}
+        <ModLink to="/moc">
+          {t('reconciliation.mod_moc', { defaultValue: 'Management of Change' })}
+        </ModLink>
+        {' · '}
+        <ModLink to="/reports">
+          {t('reconciliation.mod_reports', { defaultValue: 'Reports' })}
+        </ModLink>
+      </div>
+    </div>
+  );
+}
+
 export function ReconciliationPage() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
@@ -339,6 +453,8 @@ export function ReconciliationPage() {
           })}
         </p>
       </div>
+
+      <HowReconciliationWork />
 
       <DismissibleInfo
         storageKey="reconciliation-intro"

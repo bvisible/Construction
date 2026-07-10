@@ -1,5 +1,5 @@
-import { useState, useMemo, useEffect, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Fragment, useState, useMemo, useEffect, useRef } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import { useTabKeyboardNav } from '@/shared/hooks/useTabKeyboardNav';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -29,6 +29,8 @@ import {
   Loader2,
   TrendingUp,
   BarChart3,
+  Network,
+  ArrowRight,
 } from 'lucide-react';
 import {
   Button,
@@ -371,6 +373,135 @@ function TaskPicker({
 
 /* ── Page ────────────────────────────────────────────────────────────── */
 
+/* ── How-it-works flow + module integrations ───────────────────────────── */
+
+/** A compact inline link to a sibling module (keeps the flow copy readable). */
+function ModLink({ to, children }: { to: string; children: React.ReactNode }) {
+  return (
+    <Link to={to} className="font-medium text-oe-blue-text hover:underline">
+      {children}
+    </Link>
+  );
+}
+
+/**
+ * One-glance explainer for the Last Planner stack built on top of a master
+ * schedule: phase pull-planning, a rolling look-ahead that clears constraints,
+ * weekly commitments and baselines. Links out to the modules that feed it (the
+ * 4D schedule, resources) and that it feeds (portfolio roll-up, project
+ * controls).
+ */
+function HowScheduleAdvancedWorks() {
+  const { t } = useTranslation();
+
+  const steps: { icon: React.ReactNode; title: string; desc: string }[] = [
+    {
+      icon: <Calendar size={14} className="text-oe-blue" />,
+      title: t('schedule_advanced.flow_1_title', { defaultValue: 'Master schedule' }),
+      desc: t('schedule_advanced.flow_1_desc', {
+        defaultValue: 'Start from the top-level plan every phase and week rolls up to.',
+      }),
+    },
+    {
+      icon: <LayoutGrid size={14} className="text-oe-blue" />,
+      title: t('schedule_advanced.flow_2_title', { defaultValue: 'Phase pull-planning' }),
+      desc: t('schedule_advanced.flow_2_desc', {
+        defaultValue: 'Break the project into phases and pull them into sequence with the trades.',
+      }),
+    },
+    {
+      icon: <Clock size={14} className="text-oe-blue" />,
+      title: t('schedule_advanced.flow_3_title', { defaultValue: 'Look-ahead & constraints' }),
+      desc: t('schedule_advanced.flow_3_desc', {
+        defaultValue: 'Roll a six-week look-ahead and clear constraints before work is due.',
+      }),
+    },
+    {
+      icon: <ClipboardCheck size={14} className="text-oe-blue" />,
+      title: t('schedule_advanced.flow_4_title', { defaultValue: 'Weekly commitments' }),
+      desc: t('schedule_advanced.flow_4_desc', {
+        defaultValue: 'Capture the weekly promises crews make and measure how many they keep (PPC).',
+      }),
+    },
+    {
+      icon: <GitBranch size={14} className="text-oe-blue" />,
+      title: t('schedule_advanced.flow_5_title', { defaultValue: 'Baselines & variance' }),
+      desc: t('schedule_advanced.flow_5_desc', {
+        defaultValue: 'Snapshot the plan and track slippage against the baseline.',
+      }),
+    },
+  ];
+
+  return (
+    <Card padding="md">
+      <h2 className="flex items-center gap-1.5 text-sm font-semibold text-content-primary">
+        <Network size={15} className="text-oe-blue" />
+        {t('schedule_advanced.flow_title', { defaultValue: 'How Last Planner fits together' })}
+      </h2>
+      <p className="mt-1 text-xs text-content-tertiary">
+        {t('schedule_advanced.flow_intro', {
+          defaultValue:
+            'Last Planner makes the master schedule reliable at the work face: plan in phases, clear what blocks the work, and hold weekly commitments the trades can actually keep.',
+        })}
+      </p>
+
+      <ol className="mt-3 flex flex-col gap-2 lg:flex-row lg:items-stretch">
+        {steps.map((s, i) => (
+          <Fragment key={s.title}>
+            <li className="flex-1 rounded-lg border border-border-light bg-surface-secondary/40 p-3">
+              <div className="flex items-center gap-2">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-oe-blue-subtle text-2xs font-bold text-oe-blue-text">
+                  {i + 1}
+                </span>
+                <span className="flex items-center gap-1 text-xs font-semibold text-content-primary">
+                  {s.icon}
+                  {s.title}
+                </span>
+              </div>
+              <p className="mt-1.5 text-2xs leading-relaxed text-content-tertiary">{s.desc}</p>
+            </li>
+            {i < steps.length - 1 && (
+              <li
+                aria-hidden="true"
+                className="hidden shrink-0 items-center self-center text-content-quaternary lg:flex"
+              >
+                <ArrowRight size={16} />
+              </li>
+            )}
+          </Fragment>
+        ))}
+      </ol>
+
+      <div className="mt-3 flex flex-col gap-1.5 border-t border-border-light pt-3 text-2xs text-content-tertiary sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-5 sm:gap-y-1">
+        <span>
+          <span className="font-medium text-content-secondary">
+            {t('schedule_advanced.flow_pulls', { defaultValue: 'Pulls from:' })}
+          </span>{' '}
+          <ModLink to="/schedule">
+            {t('schedule_advanced.mod_schedule', { defaultValue: '4D Schedule' })}
+          </ModLink>{' '}
+          ·{' '}
+          <ModLink to="/resources">
+            {t('schedule_advanced.mod_resources', { defaultValue: 'Resources & crew' })}
+          </ModLink>
+        </span>
+        <span>
+          <span className="font-medium text-content-secondary">
+            {t('schedule_advanced.flow_feeds', { defaultValue: 'Feeds:' })}
+          </span>{' '}
+          <ModLink to="/portfolio">
+            {t('schedule_advanced.mod_portfolio', { defaultValue: 'Portfolio' })}
+          </ModLink>{' '}
+          ·{' '}
+          <ModLink to="/project-controls">
+            {t('schedule_advanced.mod_controls', { defaultValue: 'Project controls' })}
+          </ModLink>
+        </span>
+      </div>
+    </Card>
+  );
+}
+
 export function ScheduleAdvancedPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -577,6 +708,9 @@ export function ScheduleAdvancedPage() {
 
       {/* Cross-module navigation — connects the planning value chain */}
       <PlanningCrossLinks active="schedule-advanced" />
+
+      {/* How this module works + what it connects to */}
+      <HowScheduleAdvancedWorks />
 
       {/* Tabs */}
       <div className="border-b border-border-light">

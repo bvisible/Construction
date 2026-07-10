@@ -221,10 +221,19 @@ def _setup_env(data_dir: Path, host: str, port: int) -> None:
             # actionable message instead of limping along on a different engine.
             print(
                 _red(_u("✗ ", "X "))
-                + "Embedded PostgreSQL could not start. Reinstall the package "
-                + "(pip install --upgrade --force-reinstall openconstructionerp), run "
-                + "'openconstructionerp doctor' for details, or set DATABASE_URL to an "
-                + "external PostgreSQL."
+                + "Embedded PostgreSQL could not start (already retried a few times). "
+                + "Reinstall the package (pip install --upgrade --force-reinstall "
+                + "openconstructionerp), run 'openconstructionerp doctor' for details, or "
+                + "set DATABASE_URL to an external PostgreSQL."
+            )
+            print(
+                _dim(
+                    "  The underlying error is in the log at "
+                    + str(data_dir / "pgdata" / "log")
+                    + " (and "
+                    + str(Path.home() / ".openestimate" / "desktop-launcher.log")
+                    + "). If it keeps happening, send those logs to info@datadrivenconstruction.io."
+                )
             )
             raise SystemExit(1)
 
@@ -675,6 +684,32 @@ def cmd_serve(args: argparse.Namespace) -> None:
     except Exception:  # noqa: BLE001
         pass
 
+    def _emit_server_fail(exc: BaseException) -> None:
+        """Surface a fatal serve() error as a machine-readable failure marker.
+
+        The desktop launcher latches this ``STAGE:server:fail`` line as the real
+        startup cause, so the embedded-PostgreSQL shutdown output that follows a
+        crash can no longer bury it. Emit the marker first (flushed) so it wins
+        the race against that shutdown noise; the full traceback still goes to
+        stderr for the log file. Best effort - never raises.
+        """
+        import traceback
+
+        reason = f"{type(exc).__name__}: {exc}".replace("\n", " ").replace("\r", " ").strip()
+        if len(reason) > 180:
+            reason = reason[:177] + "..."
+        try:
+            from app.core.embedded_pg import emit_stage
+
+            emit_stage("server", "fail", reason)
+        except Exception:  # noqa: BLE001
+            # Even without the helper, get the raw marker out on stdout.
+            print(f"STAGE:server:fail:{reason}", flush=True)
+        try:
+            print(traceback.format_exc(), file=sys.stderr, flush=True)
+        except Exception:  # noqa: BLE001
+            pass
+
     try:
         import uvicorn
 
@@ -690,6 +725,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
         print()
         print(_dim("Server stopped. Bye!"))
     except OSError as exc:
+        _emit_server_fail(exc)
         print()
         print(_red(_bold("Server failed to start:")) + f" {exc}")
         arrow = _u("\u2192", "->")
@@ -703,6 +739,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
             print(_dim(f"  {arrow} See: {TROUBLESHOOTING_URL}"))
         sys.exit(1)
     except Exception as exc:  # noqa: BLE001
+        _emit_server_fail(exc)
         arrow = _u("\u2192", "->")
         print()
         print(_red(_bold("Unexpected startup error:")) + f" {type(exc).__name__}: {exc}")

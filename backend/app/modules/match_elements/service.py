@@ -37,6 +37,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.i18n import get_locale
+from app.core.match_service.boosts import prior_pick
 from app.core.match_service.config import (
     CONFIDENCE_HIGH_THRESHOLD,
     CONFIDENCE_MEDIUM_THRESHOLD,
@@ -490,7 +491,7 @@ def _aggregate_quantities(elements: list[SourceElement]) -> dict[str, float]:
 
 # Fallback unit per IFC class when explicit quantities are missing. Used
 # when the BIM extractor could not derive volume/area/length (e.g. an IFC
-# file without proper Qto_* property sets, or an early-design Revit model
+# file without proper Qto_* property sets, or an early-design RVT model
 # where the only quantity is the count). Without this fallback every
 # such group defaults to "pcs" and the matcher then picks count-priced
 # catalogue rows for elements that should be priced by area or volume.
@@ -612,6 +613,12 @@ def _quantity_for_unit(quantities: dict[str, float], unit: str) -> float:
 # update each call so the user sees forward motion.
 _BULK_BATCH_LIMIT = 1000
 _APPLY_BATCH_LIMIT = 1000
+
+# Prior-pick learning loop: how many times the team must have picked the
+# same code for a signature before a search-log pick (as opposed to a
+# saved template) is trusted enough to re-pin a repeat. Guards against a
+# single misclick dominating future matches.
+_PRIOR_PICK_MIN_HISTORY = 2
 
 
 def _split_unit_multiplier(unit: str | None) -> tuple[float, str]:
@@ -804,6 +811,55 @@ def _derive_picked_rank_and_code(
     return None, None
 
 
+def _coerce_cost_item_uuid(value: str | None) -> uuid.UUID | None:
+    """Parse a candidate id into a ``CostItem`` UUID, or ``None`` on failure.
+
+    The vector ranker stamps ``MatchCandidate.id`` with the catalogue
+    rate code (a non-UUID string such as ``"01.02.003"``) while the
+    resources matcher and the prior-pick short-circuit stamp a real
+    ``CostItem.id``. Pre-selecting the top candidate must only write a
+    ``chosen_candidate_id`` when the id is a genuine row id - a rate code
+    can never resolve, and blindly calling ``uuid.UUID`` on one would
+    raise and abort the whole match run. Returning ``None`` leaves the
+    group as a plain suggestion the user confirms by hand instead.
+    """
+    if not value:
+        return None
+    try:
+        return uuid.UUID(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _candidate_from_cost_item(item: Any, code: str) -> MatchCandidate:
+    """Build a high-confidence candidate from a confirmed catalogue row.
+
+    Used by the exact-repeat short-circuit: when the team already
+    confirmed this exact element signature to a live ``CostItem``, we
+    pre-fill that rate instead of running a fresh vector search. The id is
+    the real ``CostItem.id`` so the downstream pre-select links the BOQ
+    position to the row, and the rate/currency travel verbatim so nothing
+    is fabricated. The group still lands as ``suggested`` - a human
+    confirms it, per the human-in-the-loop rule.
+    """
+    return MatchCandidate(
+        id=str(item.id),
+        code=str(item.code or code),
+        description=str(item.description or ""),
+        unit=str(item.unit or ""),
+        unit_rate=_to_decimal(item.rate, 0.0),
+        currency=str(item.currency or ""),
+        score=1.0,
+        vector_score=0.0,
+        boosts_applied={prior_pick.BOOST_KEY: 1.0},
+        confidence_band="high",
+        reasoning="Previously confirmed for this element signature (exact repeat).",
+        region_code=str(item.region or ""),
+        source="prior_pick",
+        classification=dict(item.classification or {}),
+    )
+
+
 def _envelope_from_group(
     group_key: str,
     elements: list[SourceElement],
@@ -823,7 +879,7 @@ def _envelope_from_group(
 
     Each segment is included only when present, so a sparse group
     (just a name) still produces a useful envelope and a dense one
-    (Revit family with full Pset) carries every dimensioning hint into
+    (RVT family with full Pset) carries every dimensioning hint into
     the embedder. The previous implementation joined every attribute
     value into one string - that pollutes the embedding with GUIDs and
     layer names and caps recall. This composition is selective.
@@ -856,7 +912,7 @@ def _envelope_from_group(
 
     parts: list[str] = []
     # 1. Human category (translated IFC label) - anchors the embedding.
-    # ``ifc_labels.lookup`` aliases a raw Revit OST category ("Walls") to
+    # ``ifc_labels.lookup`` aliases a raw RVT OST category ("Walls") to
     # its canonical IFC class meta, so an RVT group inherits the right
     # label + din276 / masterformat / nrm hints. Genuine IFC and non-BIM
     # placeholder categories are unaffected.
@@ -876,7 +932,7 @@ def _envelope_from_group(
     raw_text = _attr("raw_text", "description")
     if source in {"text", "boq"} and raw_text:
         parts.append(raw_text)
-    # ``type_name`` carries the discriminating Revit family/type
+    # ``type_name`` carries the discriminating RVT family/type
     # ("Exterior - Brick on Mtl. Stud" / "Generic 150mm"). Prefer a real
     # family/type over the bare category word: the BIM adapter already
     # surfaces the RVT ``family`` as ``type_name``, but we also probe
@@ -947,7 +1003,7 @@ def _envelope_from_group(
     classifier_hint: dict[str, str] | None = classifier_hint_parts or None
 
     # ── v3 ProjectItem-equivalent structured fields ──────────────────
-    # Populated when the upstream BIM/Revit extractor knows the value.
+    # Populated when the upstream BIM extractor knows the value.
     # The query builder downstream routes these to either Qdrant
     # ``hard_filters`` or ``soft_boosts`` per MAPPING_PROCESS.md §4.2.1.
     nominal_size_mm: int | None = None
@@ -958,7 +1014,7 @@ def _envelope_from_group(
 
     # Forward ``ifc_class`` only when it's an actual IFC class - BIM
     # extractors set ``sample.category="IfcWall"`` / ``IfcSlab`` (and the
-    # adapter now crosswalks a Revit OST category into a canonical
+    # adapter now crosswalks an RVT OST category into a canonical
     # ``IfcXxx`` stored in ``attributes["ifc_class"]``), but BoQ / text /
     # image adapters synthesise placeholders (``"BoQ"``, ``"Text"``) that
     # aren't valid IFC identifiers. Promoting those to the v3 SearchPlan's
@@ -979,12 +1035,12 @@ def _envelope_from_group(
         forwarded_ifc_class = raw_cat
 
     # Material bucket for the x1.3 soft boost. Prefer an explicit material
-    # property. When a Revit model carries the material inside the family
+    # property. When an RVT model carries the material inside the family
     # name instead ("Exterior - Brick on Mtl. Stud"), fall back to the
     # type/family string so a confident bucket ("brick") still fires. The
     # bucketiser is conservative (returns ``None`` when unsure), so this
     # never invents a material - it only recovers one the property layer
-    # missed. The type-name fallback is scoped to non-IFC (Revit) inputs
+    # missed. The type-name fallback is scoped to non-IFC (RVT) inputs
     # so a genuine IFC envelope's ``material_class`` stays exactly as
     # before (IFC elements always carry their material as a property).
     material_class = _normalise_material_class(material)
@@ -1001,9 +1057,9 @@ def _envelope_from_group(
         classifier_hint=classifier_hint,
         ifc_class=forwarded_ifc_class,
         ifc_predefined_type=_attr("ifc_predefined_type", "PredefinedType"),
-        # The Revit OST category drives the x1.5 ``ost_category`` soft
+        # The RVT OST category drives the x1.5 ``ost_category`` soft
         # boost. The BIM adapter records it under both ``ost_category``
-        # and ``revit_category`` for any non-IFC (Revit) source, so it
+        # and ``revit_category`` for any non-IFC (RVT) source, so it
         # fires for RVT models that previously had no OST hint at all.
         ost_category=_attr("ost_category", "revit_category", "Category", "OST_Category"),
         material_class=material_class,
@@ -1996,7 +2052,7 @@ class MatchElementsService:
                 gross_q = qty.get("gross_area_m2")
                 net_q = qty.get("net_area_m2")
             if gross_q is not None and net_q is not None and gross_q > 0:
-                # Catch the Revit IFC export bug - host has openings but
+                # Catch the RVT IFC export bug - host has openings but
                 # gross == net suggests the deduction never happened.
                 opening_warning = abs(gross_q - net_q) < 0.01
 
@@ -2213,6 +2269,116 @@ class MatchElementsService:
             "updated_at": progress.get("updated_at"),
             "error": progress.get("error"),
         }
+
+    async def _prior_pick_contexts(
+        self,
+        db: AsyncSession,
+        *,
+        project_id: uuid.UUID,
+        owner_id: uuid.UUID | None,
+        signatures: list[str],
+    ) -> tuple[dict[str, prior_pick.PriorPickContext], dict[str, Any]]:
+        """Resolve the prior-pick signal for a batch of group signatures.
+
+        Reads the two persisted signals the match learning loop leaves
+        behind and packages them per signature:
+
+        * the template library (``MatchTemplate`` - an explicit "save this
+          mapping" confirmation, owner-scoped exactly like the /templates
+          read paths), resolved to the live :class:`CostItem` so an exact
+          repeat can be pre-filled verbatim, and
+        * the search-log pick history (``MatchSearchLog.picked_rate_code``
+          joined back to the group signature - the code the team keeps
+          choosing for this kind of work).
+
+        Returns ``(contexts, winners)`` keyed by signature. ``winners``
+        maps a signature to its resolved template :class:`CostItem` when
+        one is active, so the caller can short-circuit the vector fan-out
+        for a deterministic repeat. Never raises - any read failure yields
+        empty maps and matching degrades to the normal vector path.
+        """
+        sigs = sorted({s for s in signatures if s})
+        if not sigs:
+            return {}, {}
+
+        from app.modules.costs.models import CostItem  # noqa: PLC0415
+
+        # 1. Template library (explicit confirmations), owner-scoped.
+        try:
+            lookup = await self.lookup_templates(db, owner_id=owner_id, signatures=sigs)
+            templates = lookup.matches
+        except Exception as exc:  # noqa: BLE001 - never block matching
+            logger.debug("prior_pick: template lookup skipped: %s", exc)
+            templates = {}
+
+        # Resolve each template's CostItem in one round-trip (active only -
+        # a deleted/deactivated row must not resurrect a stale rate).
+        position_by_sig: dict[str, uuid.UUID] = {
+            sig: tmpl.cwicr_position_id for sig, tmpl in templates.items() if tmpl.cwicr_position_id
+        }
+        cost_by_id: dict[uuid.UUID, Any] = {}
+        if position_by_sig:
+            try:
+                ci_stmt = select(CostItem).where(
+                    CostItem.id.in_(set(position_by_sig.values())),
+                    CostItem.is_active.is_(True),
+                )
+                ci_rows = (await db.execute(ci_stmt)).scalars().all()
+                cost_by_id = {c.id: c for c in ci_rows}
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("prior_pick: cost-item resolve skipped: %s", exc)
+
+        # 2. Search-log pick history, joined to the group signature and
+        # scoped to this project (a team shares its project's match
+        # history). A confirm saves a template by default, so this is the
+        # fallback signal for confirmations that opted out of the library;
+        # we count picks per code and only trust a code the team chose more
+        # than once, so a single misclick never hard-pins a repeat.
+        picks_by_sig: dict[str, dict[str, int]] = {}
+        try:
+            pick_rows = (
+                await db.execute(
+                    select(MatchGroup.signature, MatchSearchLog.picked_rate_code)
+                    .join(MatchSearchLog, MatchSearchLog.group_id == MatchGroup.id)
+                    .where(
+                        MatchSearchLog.project_id == project_id,
+                        MatchGroup.signature.in_(sigs),
+                        MatchSearchLog.picked_rate_code.is_not(None),
+                    )
+                )
+            ).all()
+            for sig, code in pick_rows:
+                if sig and code:
+                    bucket = picks_by_sig.setdefault(sig, {})
+                    bucket[str(code)] = bucket.get(str(code), 0) + 1
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("prior_pick: pick-history read skipped: %s", exc)
+
+        contexts: dict[str, prior_pick.PriorPickContext] = {}
+        winners: dict[str, Any] = {}
+        for sig in sigs:
+            strong: set[str] = set()
+            exact_code: str | None = None
+            tmpl = templates.get(sig)
+            if tmpl is not None:
+                item = cost_by_id.get(position_by_sig.get(sig))  # type: ignore[arg-type]
+                if item is not None:
+                    strong.add(str(item.id))
+                    if item.code:
+                        strong.add(str(item.code))
+                        exact_code = str(item.code)
+                    winners[sig] = item
+            weak = {code for code, count in (picks_by_sig.get(sig) or {}).items() if count >= _PRIOR_PICK_MIN_HISTORY}
+            weak.discard(exact_code or "")
+            weak -= strong
+            ctx = prior_pick.PriorPickContext(
+                strong=frozenset(strong),
+                weak=frozenset(weak),
+                exact_code=exact_code,
+            )
+            if not ctx.is_empty:
+                contexts[sig] = ctx
+        return contexts, winners
 
     async def run_match(
         self,
@@ -2444,6 +2610,28 @@ class MatchElementsService:
             )
         rows = (await db.execute(stmt)).scalars().all()
 
+        # Prior-pick learning loop: resolve, once for the whole batch, the
+        # codes the team already confirmed for these group signatures
+        # (template library + search-log picks). A live confirmed mapping
+        # lets us short-circuit the vector fan-out for a deterministic
+        # repeat; a softer history nudge is bound for the ranker's
+        # prior-pick boost and used to re-pin the returned candidates. Only
+        # the vector method reads CWICR CostItems (resources/llm run a
+        # different candidate universe), so gate on it. Best-effort: an
+        # empty map means "no history" and matching runs exactly as before.
+        prior_contexts: dict[str, prior_pick.PriorPickContext] = {}
+        prior_winners: dict[str, Any] = {}
+        if spec.method == "vector":
+            try:
+                prior_contexts, prior_winners = await self._prior_pick_contexts(
+                    db,
+                    project_id=sess.project_id,
+                    owner_id=user_id,
+                    signatures=[grow.signature for grow in rows if grow.signature],
+                )
+            except Exception as exc:  # noqa: BLE001 - never block matching
+                logger.debug("run_match: prior-pick resolve skipped: %s", exc)
+
         # Stage 3: per-group ranking. The for-loop below dominates wall
         # time on real matches - each iteration runs one Qdrant vector
         # search + sparse fusion + region/unit boost + (sometimes) BGE
@@ -2495,21 +2683,41 @@ class MatchElementsService:
                     exc,
                 )
                 continue
-            try:
-                candidates = await matcher.rank(
-                    envelope=envelope,
-                    project_id=sess.project_id,
-                    catalogue_id=sess.catalogue_id,
-                    top_k=spec.top_k,
-                )
-            except Exception as exc:  # noqa: BLE001 - log + degrade per group
-                logger.warning(
-                    "Matcher %s failed for group %s: %s",
-                    spec.method,
-                    grow.group_key,
-                    exc,
-                )
-                candidates = []
+            prior_ctx = prior_contexts.get(grow.signature or "")
+            prior_winner = prior_winners.get(grow.signature or "")
+            if prior_ctx is not None and prior_winner is not None and prior_ctx.exact_code:
+                # Deterministic exact-repeat short-circuit, ahead of the
+                # vector fan-out: the team already confirmed this exact
+                # signature to a live catalogue row, so pre-fill that code
+                # instead of paying a fresh Qdrant round-trip. The group
+                # still lands "suggested" - a human confirms it below.
+                candidates = [_candidate_from_cost_item(prior_winner, prior_ctx.exact_code)]
+            else:
+                # Bind any softer prior signal so the ranker's prior_pick
+                # boost lifts a previously-picked code before the
+                # confidence band is derived, then re-pin the result as a
+                # backstop against a large cosine gap swamping the nudge.
+                token = prior_pick.bind(prior_ctx) if prior_ctx is not None else None
+                try:
+                    candidates = await matcher.rank(
+                        envelope=envelope,
+                        project_id=sess.project_id,
+                        catalogue_id=sess.catalogue_id,
+                        top_k=spec.top_k,
+                    )
+                except Exception as exc:  # noqa: BLE001 - log + degrade per group
+                    logger.warning(
+                        "Matcher %s failed for group %s: %s",
+                        spec.method,
+                        grow.group_key,
+                        exc,
+                    )
+                    candidates = []
+                finally:
+                    if token is not None:
+                        prior_pick.reset(token)
+                if prior_ctx is not None and candidates:
+                    candidates = prior_pick.pin_candidates(candidates, prior_ctx)
 
             total_candidates += len(candidates)
             if candidates:
@@ -2538,7 +2746,12 @@ class MatchElementsService:
                     # confirm has a CostItem to read the rate from. This
                     # is a suggestion, not a commitment: confirmed_by /
                     # confirmed_at stay empty until the user confirms.
-                    grow.chosen_candidate_id = uuid.UUID(top.id) if top.id else None
+                    # Only a real row id pre-selects - the vector ranker
+                    # stamps the rate code on ``id`` (see
+                    # ``_coerce_cost_item_uuid``), and now that the
+                    # prior-pick boost can lift a code over the threshold
+                    # this guard keeps a non-UUID id from aborting the run.
+                    grow.chosen_candidate_id = _coerce_cost_item_uuid(top.id)
                     grow.chosen_method = "auto"
 
             ifc_class = _ifc_class_from_group_key(grow.group_key)

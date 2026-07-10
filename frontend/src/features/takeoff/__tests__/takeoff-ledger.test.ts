@@ -228,6 +228,16 @@ describe('typeGrandTotals', () => {
     expect(area.total).toBeCloseTo(92, 6); // 100 - 8
     expect(area.count).toBe(2);
   });
+
+  it('folds slope / wastage / multiplier into the grand total (issue #332 wave)', () => {
+    const measurements: Measurement[] = [
+      m({ id: 'a', type: 'area', value: 10, unit: 'm²', group: 'G', slopeFactor: 1.5 }), // 15
+      m({ id: 'b', type: 'area', value: 20, unit: 'm²', group: 'G', wastagePct: 10 }), // 22
+      m({ id: 'c', type: 'area', value: 5, unit: 'm²', group: 'G', multiplier: 3 }), // 15
+    ];
+    const area = typeGrandTotals(measurements).find((t) => t.type === 'area')!;
+    expect(area.total).toBeCloseTo(15 + 22 + 15, 6); // 52
+  });
 });
 
 describe('withOrdinals', () => {

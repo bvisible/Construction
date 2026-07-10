@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, Fragment, type ReactNode } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
@@ -26,6 +26,8 @@ import {
   Send,
   ShieldCheck,
   HeartPulse,
+  Network,
+  ArrowRight,
 } from 'lucide-react';
 import {
   Button,
@@ -208,6 +210,124 @@ function RatingStars({ score }: { score: number | string }) {
   );
 }
 
+/* ── How it works + module connections ─────────────────────────────────── */
+
+/** Compact inline link to a sibling module (keeps the flow copy readable). */
+function ModLink({ to, children }: { to: string; children: ReactNode }) {
+  return (
+    <Link to={to} className="font-medium text-oe-blue-text hover:underline">
+      {children}
+    </Link>
+  );
+}
+
+/**
+ * One-glance explainer of what the subcontractor register does and how it
+ * feeds the rest of the supply-chain workflow. Every connected module is a
+ * link so the next step is one click away.
+ */
+function HowSubcontractorsWork() {
+  const { t } = useTranslation();
+
+  const steps: { icon: ReactNode; title: string; desc: string }[] = [
+    {
+      icon: <ClipboardCheck size={14} className="text-oe-blue" />,
+      title: t('subcontractors.flow_1_title', { defaultValue: 'Register & prequalify' }),
+      desc: t('subcontractors.flow_1_desc', {
+        defaultValue: 'Capture trades, insurance and certificates, then score each firm.',
+      }),
+    },
+    {
+      icon: <FileSignature size={14} className="text-oe-blue" />,
+      title: t('subcontractors.flow_2_title', { defaultValue: 'Award scope' }),
+      desc: t('subcontractors.flow_2_desc', {
+        defaultValue: 'Invite qualified firms to bid packages and sign subcontract agreements.',
+      }),
+    },
+    {
+      icon: <DollarSign size={14} className="text-oe-blue" />,
+      title: t('subcontractors.flow_3_title', { defaultValue: 'Pay against progress' }),
+      desc: t('subcontractors.flow_3_desc', {
+        defaultValue: 'Track payment applications, retention and lien waivers per agreement.',
+      }),
+    },
+    {
+      icon: <Star size={14} className="text-oe-blue" />,
+      title: t('subcontractors.flow_4_title', { defaultValue: 'Rate performance' }),
+      desc: t('subcontractors.flow_4_desc', {
+        defaultValue: 'Roll up quality, HSE, schedule and cost scores each month.',
+      }),
+    },
+  ];
+
+  return (
+    <Card padding="md">
+      <h2 className="flex items-center gap-1.5 text-sm font-semibold text-content-primary">
+        <Network size={15} className="text-oe-blue" />
+        {t('subcontractors.flow_title', {
+          defaultValue: 'How the subcontractor register fits together',
+        })}
+      </h2>
+      <p className="mt-1 text-xs text-content-tertiary">
+        {t('subcontractors.flow_intro', {
+          defaultValue:
+            'Your register of every subcontractor, with their qualification, scope, payments and performance in one place. Prequalify a firm before you invite it to bid or award it a subcontract.',
+        })}
+      </p>
+
+      <ol className="mt-3 flex flex-col gap-2 lg:flex-row lg:items-stretch">
+        {steps.map((s, i) => (
+          <Fragment key={s.title}>
+            <li className="flex-1 rounded-lg border border-border-light bg-surface-secondary/40 p-3">
+              <div className="flex items-center gap-2">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-oe-blue-subtle text-2xs font-bold text-oe-blue-text">
+                  {i + 1}
+                </span>
+                <span className="flex items-center gap-1 text-xs font-semibold text-content-primary">
+                  {s.icon}
+                  {s.title}
+                </span>
+              </div>
+              <p className="mt-1.5 text-2xs leading-relaxed text-content-tertiary">{s.desc}</p>
+            </li>
+            {i < steps.length - 1 && (
+              <li
+                aria-hidden="true"
+                className="hidden shrink-0 items-center self-center text-content-quaternary lg:flex"
+              >
+                <ArrowRight size={16} />
+              </li>
+            )}
+          </Fragment>
+        ))}
+      </ol>
+
+      <div className="mt-3 flex flex-col gap-1.5 border-t border-border-light pt-3 text-2xs text-content-tertiary sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-5 sm:gap-y-1">
+        <span>
+          <span className="font-medium text-content-secondary">
+            {t('subcontractors.flow_connects', { defaultValue: 'Connects with:' })}
+          </span>{' '}
+          <ModLink to="/procurement">
+            {t('nav.procurement', { defaultValue: 'Procurement' })}
+          </ModLink>{' '}
+          ·{' '}
+          <ModLink to="/tendering">
+            {t('nav.tendering', { defaultValue: 'Tendering' })}
+          </ModLink>{' '}
+          ·{' '}
+          <ModLink to="/contracts">
+            {t('nav.contracts', { defaultValue: 'Contracts' })}
+          </ModLink>{' '}
+          ·{' '}
+          <ModLink to="/supplier-catalogs">
+            {t('nav.supplier_catalogs', { defaultValue: 'Supplier Catalogs' })}
+          </ModLink>
+        </span>
+      </div>
+    </Card>
+  );
+}
+
 export function SubcontractorsPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -318,6 +438,8 @@ export function SubcontractorsPage() {
             'Keep your supply chain here with insurance and certificate status, subcontract scopes, payment applications, retention and performance ratings. Prequalification and lien waivers gate who can be invited to bid packages and who can be paid, so an expired certificate or a missing waiver stops the award before it happens.',
         })}
       </DismissibleInfo>
+
+      <HowSubcontractorsWork />
 
       {/* Tabs (single tab — left for layout parity with ServicePage) */}
       <div className="border-b border-border-light">

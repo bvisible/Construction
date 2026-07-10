@@ -28,7 +28,7 @@ from app.core.validation.engine import (
     ValidationRule,
     rule_registry,
 )
-from app.core.validation.messages import DEFAULT_LOCALE, translate
+from app.core.validation.messages import DEFAULT_LOCALE, is_key_present, translate
 
 logger = logging.getLogger(__name__)
 
@@ -6531,6 +6531,840 @@ class FieldTimeApprovedImmutable(ValidationRule):
         ]
 
 
+# ── Estimate Audit rule set (curated cross-checks) ────────────────────────────
+#
+# A curated ``estimate_audit`` rule set that catches the four classes of
+# mistake a reviewer looks for first when auditing someone else's estimate:
+#
+#   1. wrong unit of measure    - concrete billed per metre, formwork per m³ …
+#   2. near-duplicate lines     - the same scope entered twice under two OZ
+#   3. missing companion item   - concrete with no formwork / rebar line;
+#                                 paint with no primer (driven by the shapes
+#                                 of the platform's own Assembly recipes)
+#   4. off-band unit rate       - a rate that is a multiple of, or a fraction
+#                                 of, the same work's catalogue rate in the
+#                                 SAME currency (benchmarked with the existing
+#                                 CWICR matcher, not a hardcoded threshold)
+#
+# The maps below are seed data distilled from two existing sources of truth:
+# the unit conventions of the CWICR catalogue (``CostItem.unit``) and the
+# component structure of the Assembly library (``AssemblyTemplate.components``
+# - e.g. a reinforced-concrete recipe carries concrete + rebar + formwork).
+# Keeping them as curated constants means the rules stay pure and DB-free;
+# only the rate-benchmark rule reaches for a live matcher, and only when the
+# caller supplies one.
+
+
+def _audit_text(key: str, locale: str, default: str, **params: Any) -> str:
+    """Localized estimate-audit message with an English default.
+
+    Routes through the validation message bundle when a translation for
+    ``key`` exists, so these strings localize automatically once the keys are
+    added to the locale bundles (and by the translation sweep). Until then a
+    sensible English ``default`` is rendered instead of a humanised key stub,
+    so an estimator always sees a clear message. Mirrors the frontend
+    ``t(key, { defaultValue })`` convention.
+
+    Args:
+        key: Dot-notation message key (``estimate_audit.<rule>.<state>``).
+        locale: Caller locale from ``ValidationContext.metadata['locale']``.
+        default: English fallback template with ``str.format`` placeholders.
+        **params: Interpolation values applied to whichever template wins.
+
+    Returns:
+        The formatted, localized (or English-default) message.
+    """
+    if is_key_present(key, locale) or is_key_present(key, DEFAULT_LOCALE):
+        return translate(key, locale=locale, **params)
+    try:
+        return default.format(**params)
+    except (KeyError, IndexError, ValueError):
+        return default
+
+
+# Unit token → physical dimension. Comparisons are made on the *dimension*
+# (length / area / volume / mass / count / time / lump) rather than the exact
+# unit string, so "m3" and "m³" and "cbm" all read as volume and a work
+# type's expected dimension can be checked without enumerating every spelling.
+_UNIT_DIMENSIONS: dict[str, str] = {
+    # length
+    "m": "length",
+    "lm": "length",
+    "lfm": "length",
+    "lfdm": "length",
+    "rm": "length",
+    "mm": "length",
+    "cm": "length",
+    "km": "length",
+    "ft": "length",
+    "lft": "length",
+    "in": "length",
+    "inch": "length",
+    "yd": "length",
+    # area
+    "m2": "area",
+    "m²": "area",
+    "sqm": "area",
+    "qm": "area",
+    "ft2": "area",
+    "sqft": "area",
+    "sf": "area",
+    "yd2": "area",
+    "sqyd": "area",
+    "sy": "area",
+    "ha": "area",
+    # volume
+    "m3": "volume",
+    "m³": "volume",
+    "cbm": "volume",
+    "cum": "volume",
+    "ft3": "volume",
+    "cuft": "volume",
+    "cf": "volume",
+    "cy": "volume",
+    "yd3": "volume",
+    "l": "volume",
+    "ltr": "volume",
+    "litre": "volume",
+    "liter": "volume",
+    "gal": "volume",
+    "gallon": "volume",
+    # mass
+    "kg": "mass",
+    "t": "mass",
+    "to": "mass",
+    "mt": "mass",
+    "tonne": "mass",
+    "tonnes": "mass",
+    "ton": "mass",
+    "lb": "mass",
+    "lbs": "mass",
+    "g": "mass",
+    # count
+    "pcs": "count",
+    "pc": "count",
+    "stk": "count",
+    "stck": "count",
+    "st": "count",
+    "stück": "count",
+    "nr": "count",
+    "no": "count",
+    "ea": "count",
+    "each": "count",
+    "u": "count",
+    "unit": "count",
+    "set": "count",
+    # time (labour / plant)
+    "h": "time",
+    "hr": "time",
+    "hrs": "time",
+    "hour": "time",
+    "std": "time",
+    "day": "time",
+    "wk": "time",
+    "week": "time",
+    "mo": "time",
+    # lump sum / not dimension-bound
+    "lsum": "lump",
+    "ls": "lump",
+    "psch": "lump",
+    "pausch": "lump",
+    "pauschal": "lump",
+    "sum": "lump",
+    "item": "lump",
+    "lot": "lump",
+}
+
+# Representative unit label per dimension (for human-readable messages).
+_DIMENSION_LABEL: dict[str, str] = {
+    "length": "m",
+    "area": "m²",
+    "volume": "m³",
+    "mass": "kg",
+    "count": "pcs",
+    "time": "h",
+    "lump": "lsum",
+}
+
+
+def _unit_dimension(unit: str) -> str | None:
+    """Return the physical dimension of a BOQ unit token, or ``None``.
+
+    Args:
+        unit: Raw unit string (``"m3"``, ``"m²"``, ``"kg"``, ``"lsum"`` …).
+
+    Returns:
+        One of ``length`` / ``area`` / ``volume`` / ``mass`` / ``count`` /
+        ``time`` / ``lump``, or ``None`` when the token is unknown (in which
+        case a rule must not judge it, to avoid false positives).
+    """
+    return _UNIT_DIMENSIONS.get((unit or "").strip().lower())
+
+
+# Ordered work-type detection. First match wins, so the more specific
+# companion trades (formwork, reinforcement, screed …) are listed BEFORE the
+# bulk "concrete" so a line like "concrete formwork" is read as formwork, not
+# concrete. Keywords are lower-case substrings covering the most common
+# EN / DE plus a few ES / FR / RU spellings (CWICR is multilingual). Every
+# keyword is distinctive enough to substring-match a description safely.
+_WORK_TYPES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("reinforcement", ("reinforcement", "rebar", "bewehrung", "betonstahl", "armadura", "ferraillage", "арматур")),
+    ("formwork", ("formwork", "shuttering", "schalung", "coffrage", "encofrado", "опалубк")),
+    ("structural_steel", ("structural steel", "steelwork", "steel section", "stahlbau", "charpente")),
+    ("screed", ("screed", "estrich", "chape", "solado", "стяжк")),
+    ("paint", ("paint", "coating", "anstrich", "malerarbeit", "lackier", "peinture", "pintura", "покрас", "окрас")),
+    ("tiling", ("tiling", "tile", "fliesen", "carrelage", "alicatado", "плитк")),
+    ("plaster", ("plaster", "render", "putz", "enduit", "revoco", "штукатур")),
+    ("waterproofing", ("waterproofing", "abdichtung", "impermeabili", "étanchéité", "etancheite", "гидроизоляц")),
+    ("insulation", ("insulation", "dämmung", "daemmung", "aislamiento", "isolation", "утеплен", "теплоизоляц")),
+    ("flooring", ("flooring", "floor covering", "bodenbelag", "revêtement de sol", "напольн")),
+    ("piping", ("piping", "pipe", "rohrleitung", "rohr", "tubería", "tuberia", "tuyau", "трубопровод")),
+    ("masonry", ("masonry", "brickwork", "brick", "mauerwerk", "mampostería", "mamposteria", "maçonnerie", "кладка")),
+    (
+        "excavation",
+        ("excavation", "earthwork", "erdarbeit", "aushub", "excavación", "excavacion", "terrassement", "выемка"),
+    ),
+    ("concrete", ("concrete", "beton", "hormigón", "hormigon", "béton", "calcestruzzo", "бетон")),
+)
+
+# Acceptable unit dimension(s) per work type. Deliberately permissive where a
+# trade legitimately spans dimensions (rebar bars in kg vs mesh in m², steel
+# sections per tonne vs per metre, masonry walls in m² or m³) so the rule only
+# fires on a genuine unit/scope mismatch, not on a valid measurement choice.
+_WORK_TYPE_EXPECTED_DIMS: dict[str, frozenset[str]] = {
+    "concrete": frozenset({"volume"}),
+    "formwork": frozenset({"area"}),
+    "reinforcement": frozenset({"mass", "area"}),
+    "structural_steel": frozenset({"mass", "length"}),
+    "masonry": frozenset({"area", "volume"}),
+    "plaster": frozenset({"area"}),
+    "screed": frozenset({"area"}),
+    "paint": frozenset({"area"}),
+    "tiling": frozenset({"area"}),
+    "waterproofing": frozenset({"area"}),
+    "insulation": frozenset({"area", "volume"}),
+    "excavation": frozenset({"volume", "area"}),
+    "piping": frozenset({"length"}),
+    "flooring": frozenset({"area"}),
+}
+
+# Extra keywords for companion items that are not themselves primary work
+# types above (primer, tile adhesive, grout). Merged with the primary
+# keywords into one presence lookup so any companion trade can be searched
+# for across the BOQ.
+_COMPANION_ONLY_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "primer": (
+        "primer",
+        "grundierung",
+        "grundanstrich",
+        "voranstrich",
+        "imprimación",
+        "imprimacion",
+        "primaire",
+        "грунтов",
+    ),
+    "adhesive": ("adhesive", "thinset", "tile cement", "kleber", "adhesivo", "colle", "клей"),
+    "grout": ("grout", "verfugung", "fugenmörtel", "fugenmoertel", "lechada", "jointoiement", "затирк"),
+}
+_PRESENCE_KEYWORDS: dict[str, tuple[str, ...]] = {
+    **{name: kws for name, kws in _WORK_TYPES},
+    **_COMPANION_ONLY_KEYWORDS,
+}
+
+# Companion completeness, distilled from the Assembly library recipes: a
+# reinforced-concrete recipe bundles concrete + rebar + formwork, a tiled
+# floor bundles tile + adhesive + grout, a painted / steel surface carries a
+# primer coat. When a BOQ prices the primary work as a standalone line it
+# usually needs the companions as their own lines too, unless the line is
+# assembly-priced (then the recipe already contains them - see the skip).
+_COMPANION_MAP: dict[str, tuple[str, ...]] = {
+    "concrete": ("formwork", "reinforcement"),
+    "paint": ("primer",),
+    "structural_steel": ("primer",),
+    "tiling": ("adhesive", "grout"),
+}
+
+# Human-readable labels for companion trades used in messages.
+_COMPANION_LABELS: dict[str, str] = {
+    "formwork": "formwork",
+    "reinforcement": "reinforcement / rebar",
+    "primer": "primer",
+    "adhesive": "adhesive",
+    "grout": "grout",
+}
+
+# Small multilingual stop list so token-overlap on descriptions ignores
+# connectors and articles when comparing lines for near-duplication.
+_DEDUP_STOPWORDS: frozenset[str] = frozenset(
+    {
+        "and",
+        "or",
+        "the",
+        "of",
+        "for",
+        "with",
+        "to",
+        "in",
+        "on",
+        "at",
+        "per",
+        "as",
+        "by",
+        "der",
+        "die",
+        "das",
+        "und",
+        "mit",
+        "für",
+        "fur",
+        "den",
+        "dem",
+        "im",
+        "zur",
+        "zum",
+        "de",
+        "la",
+        "le",
+        "el",
+        "los",
+        "las",
+        "del",
+        "con",
+        "y",
+        "du",
+        "des",
+        "et",
+    }
+)
+
+
+def _detect_work_type(description: str) -> str | None:
+    """Classify a BOQ line's primary work type from its description text.
+
+    Iterates :data:`_WORK_TYPES` in priority order (companion trades first)
+    and returns the first work type whose any keyword is a substring of the
+    lower-cased description, or ``None`` when nothing matches.
+    """
+    text = (description or "").lower()
+    if not text:
+        return None
+    for name, keywords in _WORK_TYPES:
+        if any(kw in text for kw in keywords):
+            return name
+    return None
+
+
+def _desc_has(description_lower: str, keywords: tuple[str, ...]) -> bool:
+    """True when any of ``keywords`` occurs in an already-lower-cased text."""
+    return any(kw in description_lower for kw in keywords)
+
+
+def _present_work_types(positions: list[dict[str, Any]]) -> set[str]:
+    """Set of work / companion trades that appear anywhere in the BOQ.
+
+    Scans every position description once against :data:`_PRESENCE_KEYWORDS`
+    so the companion-completeness rule can ask "does this estimate contain a
+    formwork line at all?" cheaply.
+    """
+    present: set[str] = set()
+    for pos in positions:
+        text = str(pos.get("description") or "").lower()
+        if not text:
+            continue
+        for name, keywords in _PRESENCE_KEYWORDS.items():
+            if name not in present and _desc_has(text, keywords):
+                present.add(name)
+    return present
+
+
+def _is_assembly_priced(pos: dict[str, Any]) -> bool:
+    """True when a position is priced as an assembly (bundles its companions).
+
+    An assembly-linked line already contains formwork / rebar / primer inside
+    its recipe, so the companion-completeness rule must not flag it. Detected
+    from an ``assembly_id`` (top-level or in metadata), an embedded component
+    list, an ``assembly`` source, or a lump-sum unit (which bundles scope).
+    """
+    if pos.get("assembly_id") or pos.get("components"):
+        return True
+    meta = _position_metadata(pos)
+    if meta.get("assembly_id") or meta.get("assembly") or meta.get("components"):
+        return True
+    if str(pos.get("source") or "").strip().lower() == "assembly":
+        return True
+    return _unit_dimension(str(pos.get("unit") or "")) == "lump"
+
+
+def _dedup_tokens(description: str) -> tuple[frozenset[str], frozenset[str]]:
+    """Split a description into ``(word_tokens, numeric_tokens)`` for dedup.
+
+    Word tokens are alphabetic, length >= 2, not stop words. Numeric tokens
+    are any token that carries a digit (``"c30"``, ``"37"``, ``"20cm"``) and
+    are compared for *equality* between two lines so that "door 90x210" and
+    "door 100x210" are never treated as duplicates - a differing dimension is
+    a real difference, not a typo. Unicode-aware, so non-Latin scripts tokenize.
+    """
+    words: set[str] = set()
+    nums: set[str] = set()
+    for tok in re.findall(r"\w+", (description or "").lower()):
+        if any(ch.isdigit() for ch in tok):
+            nums.add(tok)
+        elif len(tok) >= 2 and tok not in _DEDUP_STOPWORDS:
+            words.add(tok)
+    return frozenset(words), frozenset(nums)
+
+
+def _word_jaccard(a: frozenset[str], b: frozenset[str]) -> float:
+    """Jaccard overlap of two word-token sets (0.0 when both empty)."""
+    if not a and not b:
+        return 0.0
+    union = len(a | b)
+    return len(a & b) / union if union else 0.0
+
+
+def _match_field(match: Any, name: str, default: Any = None) -> Any:
+    """Read ``name`` off a match result that may be an object or a dict."""
+    if isinstance(match, dict):
+        return match.get(name, default)
+    return getattr(match, name, default)
+
+
+# Near-duplicate detection tuning.
+_NEAR_DUP_JACCARD = 0.8
+"""Word-set overlap at or above which two same-unit, same-number lines are
+treated as near-duplicates."""
+_NEAR_DUP_BLOCK_CAP = 250
+"""Largest (unit, numeric-fingerprint) block compared pairwise. Bigger blocks
+are skipped to keep the check linear; exact-ordinal duplicates in such blocks
+are still caught by ``boq_quality.no_duplicate_ordinals``."""
+
+# Catalogue rate-benchmark tuning. The band is RELATIVE to the matched
+# catalogue rate (a multiple / a fraction) rather than an absolute number, so
+# it travels across trades, regions and currencies.
+_RATE_MIN_MATCH_SCORE = 0.6
+_RATE_OUTLIER_HIGH = 3.0
+_RATE_OUTLIER_LOW = 1.0 / 3.0
+_BENCH_MAX_POSITIONS = 300
+
+
+class WrongUnitOfMeasure(ValidationRule):
+    """Flags a line whose unit dimension does not fit its work type.
+
+    Concrete measured in metres, formwork in cubic metres, pipework in square
+    metres: the unit belongs to a different physical dimension than the work
+    normally uses. The check is dimension-based (so ``m³`` / ``m3`` / ``cbm``
+    are equivalent) and only fires when both the work type is recognised and
+    the unit dimension is known, so unclassified lines and lump sums are left
+    untouched.
+    """
+
+    rule_id = "estimate_audit.wrong_unit"
+    name = "Work-Type Unit Sanity"
+    standard = "estimate_audit"
+    severity = Severity.WARNING
+    category = RuleCategory.CONSISTENCY
+    description = (
+        "Flags BOQ lines whose unit of measure does not match the physical "
+        "dimension the described work is normally measured in (e.g. concrete "
+        "should be a volume, formwork an area, pipework a length)."
+    )
+
+    async def validate(self, context: ValidationContext) -> list[RuleResult]:
+        locale = _get_locale(context)
+        results: list[RuleResult] = []
+        for pos in _get_leaf_positions(context):
+            work_type = _detect_work_type(str(pos.get("description") or ""))
+            if work_type is None:
+                continue
+            unit = str(pos.get("unit") or "").strip()
+            if not unit:
+                continue  # empty unit is owned by boq_quality.empty_unit
+            dim = _unit_dimension(unit)
+            if dim is None or dim == "lump":
+                continue  # unknown or lump-sum units cannot be judged safely
+            expected = _WORK_TYPE_EXPECTED_DIMS.get(work_type, frozenset())
+            passed = dim in expected
+            if passed:
+                message = _ok(locale)
+                suggestion = None
+            else:
+                expected_units = " / ".join(_DIMENSION_LABEL.get(d, d) for d in sorted(expected))
+                message = _audit_text(
+                    "estimate_audit.wrong_unit.fail",
+                    locale,
+                    "Position {ordinal}: {work_type} work is normally measured "
+                    "in {expected} but this line uses '{unit}'",
+                    ordinal=pos.get("ordinal", "?"),
+                    work_type=work_type.replace("_", " "),
+                    expected=expected_units,
+                    unit=unit,
+                )
+                suggestion = _audit_text(
+                    "estimate_audit.wrong_unit.suggestion",
+                    locale,
+                    "Check the unit of measure - it looks like it belongs to a different quantity",
+                )
+            results.append(
+                RuleResult(
+                    rule_id=self.rule_id,
+                    rule_name=self.name,
+                    severity=self.severity,
+                    category=self.category,
+                    passed=passed,
+                    message=message,
+                    element_ref=pos.get("id"),
+                    details={
+                        "work_type": work_type,
+                        "unit": unit,
+                        "unit_dimension": dim,
+                        "expected_dimensions": sorted(expected),
+                    },
+                    suggestion=suggestion,
+                )
+            )
+        return results
+
+
+class NearDuplicateLine(ValidationRule):
+    """Flags two lines that describe the same scope in the same unit.
+
+    Goes beyond ``boq_quality.no_duplicate_ordinals`` (which only catches an
+    identical ordinal): here the ordinals differ but the descriptions are a
+    fuzzy match under the same unit and the same set of numeric tokens, which
+    is the fingerprint of a line entered twice by mistake. Numeric tokens must
+    match exactly, so "door 90x210" and "door 100x210" are never conflated.
+    """
+
+    rule_id = "estimate_audit.near_duplicate"
+    name = "Near-Duplicate Line"
+    standard = "estimate_audit"
+    severity = Severity.WARNING
+    category = RuleCategory.CONSISTENCY
+    description = (
+        "Detects near-duplicate BOQ lines - same unit, same numeric detail and "
+        "a highly similar description under a different ordinal - which usually "
+        "means the same scope was entered twice."
+    )
+
+    async def validate(self, context: ValidationContext) -> list[RuleResult]:
+        locale = _get_locale(context)
+        entries: list[tuple[dict[str, Any], frozenset[str], frozenset[str]]] = []
+        for pos in _get_leaf_positions(context):
+            desc = str(pos.get("description") or "").strip()
+            unit = str(pos.get("unit") or "").strip().lower()
+            if len(desc) < 4 or not unit:
+                continue
+            words, nums = _dedup_tokens(desc)
+            if len(words) < 2:
+                continue  # too little signal to compare without false positives
+            entries.append((pos, words, nums))
+
+        if len(entries) < 2:
+            return []
+
+        # Block by (unit, numeric fingerprint): only lines sharing both can be
+        # duplicates, which keeps the pairwise comparison local and cheap.
+        blocks: dict[tuple[str, frozenset[str]], list[int]] = {}
+        for idx, (pos, _words, nums) in enumerate(entries):
+            key = (str(pos.get("unit") or "").strip().lower(), nums)
+            blocks.setdefault(key, []).append(idx)
+
+        partners: dict[int, set[int]] = {}
+        for members in blocks.values():
+            if len(members) < 2 or len(members) > _NEAR_DUP_BLOCK_CAP:
+                continue
+            for a in range(len(members)):
+                for b in range(a + 1, len(members)):
+                    ia, ib = members[a], members[b]
+                    if _word_jaccard(entries[ia][1], entries[ib][1]) >= _NEAR_DUP_JACCARD:
+                        partners.setdefault(ia, set()).add(ib)
+                        partners.setdefault(ib, set()).add(ia)
+
+        if not partners:
+            # Nothing duplicated - one green summary row keeps the dashboard tile.
+            return [
+                RuleResult(
+                    rule_id=self.rule_id,
+                    rule_name=self.name,
+                    severity=self.severity,
+                    category=self.category,
+                    passed=True,
+                    message=_ok(locale),
+                )
+            ]
+
+        results: list[RuleResult] = []
+        for idx in sorted(partners):
+            pos = entries[idx][0]
+            partner_ordinals = [
+                str(entries[p][0].get("ordinal") or entries[p][0].get("id") or "?") for p in sorted(partners[idx])
+            ]
+            results.append(
+                RuleResult(
+                    rule_id=self.rule_id,
+                    rule_name=self.name,
+                    severity=self.severity,
+                    category=self.category,
+                    passed=False,
+                    message=_audit_text(
+                        "estimate_audit.near_duplicate.fail",
+                        locale,
+                        "Position {ordinal} looks like a duplicate of {partners}",
+                        ordinal=pos.get("ordinal", "?"),
+                        partners=", ".join(partner_ordinals),
+                    ),
+                    element_ref=pos.get("id"),
+                    details={
+                        "duplicate_of_ids": [str(entries[p][0].get("id") or "") for p in sorted(partners[idx])],
+                        "duplicate_of_ordinals": partner_ordinals,
+                    },
+                    suggestion=_audit_text(
+                        "estimate_audit.near_duplicate.suggestion",
+                        locale,
+                        "Confirm these are separate scopes, otherwise remove the duplicate line",
+                    ),
+                )
+            )
+        return results
+
+
+class MissingCompanionItem(ValidationRule):
+    """Flags a primary work line missing its usual companion items.
+
+    Driven by the shapes of the Assembly library recipes: concrete lines
+    normally need formwork and reinforcement lines, tiling needs adhesive and
+    grout, painted / steel surfaces need a primer. When the primary work is
+    priced as a standalone line and no companion line exists anywhere in the
+    BOQ, the companion scope may have been forgotten. Assembly-priced lines
+    (which already bundle the companions inside the recipe) are skipped.
+    """
+
+    rule_id = "estimate_audit.missing_companion"
+    name = "Companion Item Completeness"
+    standard = "estimate_audit"
+    severity = Severity.INFO
+    category = RuleCategory.COMPLETENESS
+    description = (
+        "Flags primary work lines (concrete, tiling, painting, structural "
+        "steel) that have no matching companion line (formwork, rebar, "
+        "adhesive, grout, primer) anywhere in the estimate."
+    )
+
+    async def validate(self, context: ValidationContext) -> list[RuleResult]:
+        locale = _get_locale(context)
+        positions = _get_leaf_positions(context)
+        if not positions:
+            return []
+        present = _present_work_types(positions)
+
+        results: list[RuleResult] = []
+        affected = False
+        for pos in positions:
+            work_type = _detect_work_type(str(pos.get("description") or ""))
+            if work_type is None or work_type not in _COMPANION_MAP:
+                continue
+            if _is_assembly_priced(pos):
+                continue  # the recipe already contains the companions
+            missing = [c for c in _COMPANION_MAP[work_type] if c not in present]
+            if not missing:
+                continue
+            affected = True
+            missing_labels = ", ".join(_COMPANION_LABELS.get(c, c) for c in missing)
+            results.append(
+                RuleResult(
+                    rule_id=self.rule_id,
+                    rule_name=self.name,
+                    severity=self.severity,
+                    category=self.category,
+                    passed=False,
+                    message=_audit_text(
+                        "estimate_audit.missing_companion.fail",
+                        locale,
+                        "Position {ordinal} prices {work_type} but the estimate "
+                        "has no {missing} line - check the companion work is not missing",
+                        ordinal=pos.get("ordinal", "?"),
+                        work_type=work_type.replace("_", " "),
+                        missing=missing_labels,
+                    ),
+                    element_ref=pos.get("id"),
+                    details={"work_type": work_type, "missing_companions": missing},
+                    suggestion=_audit_text(
+                        "estimate_audit.missing_companion.suggestion",
+                        locale,
+                        "Add the companion line, or price it inside an assembly on this position",
+                    ),
+                )
+            )
+
+        if not affected:
+            # Either no primary lines, or every one had its companions.
+            return [
+                RuleResult(
+                    rule_id=self.rule_id,
+                    rule_name=self.name,
+                    severity=self.severity,
+                    category=self.category,
+                    passed=True,
+                    message=_ok(locale),
+                )
+            ]
+        return results
+
+
+async def _resolve_cwicr_matcher(context: ValidationContext) -> Any:
+    """Resolve an async catalogue matcher from the validation context.
+
+    Two supply routes, so the rule is both wired to production and DB-free
+    testable:
+
+    * ``metadata['cwicr_matcher']`` - an injected async callable
+      ``(query: str, unit: str | None) -> list[match]`` (used by tests and by
+      any caller that already holds matches).
+    * ``metadata['session']`` - a live :class:`AsyncSession`; we wrap the
+      existing ``costs.matcher.match_cwicr_items`` around it, forwarding the
+      region from ``metadata['region']`` / ``context.region``.
+
+    Returns ``None`` when neither is present, so the rule skips cleanly.
+    """
+    meta = getattr(context, "metadata", None) or {}
+    if not isinstance(meta, dict):
+        return None
+    injected = meta.get("cwicr_matcher")
+    if callable(injected):
+        return injected
+    session = meta.get("session")
+    if session is None:
+        return None
+    region = meta.get("region") or context.region
+
+    async def _call(query: str, unit: str | None) -> list[Any]:
+        from app.modules.costs.matcher import match_cwicr_items
+
+        return await match_cwicr_items(session, query, unit=unit, top_k=1, region=region)
+
+    return _call
+
+
+class CatalogueRateOutlier(ValidationRule):
+    """Flags a unit rate far from the same work's catalogue rate.
+
+    Instead of a hardcoded per-unit ceiling, this benchmarks each priced line
+    against the existing CWICR matcher: it finds the closest catalogue item
+    for the line's description and unit, and - only when the match is
+    confident, in the SAME currency and the SAME unit dimension - flags a rate
+    that is a large multiple of, or a small fraction of, that catalogue rate.
+    The band is relative to the catalogue rate, so it works in any currency
+    and region. Skips silently when no matcher is supplied or no match is found.
+    """
+
+    rule_id = "estimate_audit.rate_outlier"
+    name = "Catalogue Rate Outlier"
+    standard = "estimate_audit"
+    severity = Severity.WARNING
+    category = RuleCategory.QUALITY
+    description = (
+        "Benchmarks each unit rate against the closest same-currency catalogue "
+        "rate via the CWICR matcher and flags rates that are a large multiple "
+        "of, or a small fraction of, the catalogue rate."
+    )
+
+    async def validate(self, context: ValidationContext) -> list[RuleResult]:
+        locale = _get_locale(context)
+        matcher = await _resolve_cwicr_matcher(context)
+        if matcher is None:
+            return []  # no catalogue access wired in - nothing to benchmark against
+
+        results: list[RuleResult] = []
+        checked = 0
+        for pos in _get_leaf_positions(context):
+            if checked >= _BENCH_MAX_POSITIONS:
+                break
+            desc = str(pos.get("description") or "").strip()
+            if len(desc) < 3:
+                continue
+            rate = _to_number(pos.get("unit_rate"))
+            if rate is None or rate is _NOT_A_NUMBER or rate <= 0:  # type: ignore[operator]
+                continue
+            unit = str(pos.get("unit") or "").strip()
+            unit_dim = _unit_dimension(unit)
+            pos_currency = _position_currency(pos)
+
+            try:
+                matches = await matcher(desc, unit or None)
+            except Exception:  # pragma: no cover - defensive; one bad line must not kill the rule
+                logger.debug("estimate_audit.rate_outlier: matcher failed for %r", desc, exc_info=True)
+                continue
+            checked += 1
+            if not matches:
+                continue  # skip on no match
+            best = matches[0]
+
+            score = _num(_match_field(best, "score", 0.0), default=0.0) or 0.0
+            if score < _RATE_MIN_MATCH_SCORE:
+                continue
+            cat_rate = _num(_match_field(best, "unit_rate", 0.0), default=0.0) or 0.0
+            if cat_rate <= 0:
+                continue
+            # Same currency only: never compare a EUR rate to a USD catalogue.
+            cat_currency = str(_match_field(best, "currency", "") or "").strip().upper()
+            if pos_currency and cat_currency and pos_currency != cat_currency:
+                continue
+            # Same dimension only: never compare a per-m³ rate to a per-m² one.
+            cat_dim = _unit_dimension(str(_match_field(best, "unit", "") or ""))
+            if unit_dim and cat_dim and unit_dim != cat_dim:
+                continue
+
+            ratio = rate / cat_rate  # type: ignore[operator]
+            passed = _RATE_OUTLIER_LOW <= ratio <= _RATE_OUTLIER_HIGH
+            if passed:
+                message = _ok(locale)
+                suggestion = None
+            else:
+                key = "estimate_audit.rate_outlier.high" if ratio > 1 else "estimate_audit.rate_outlier.low"
+                default = (
+                    "Position {ordinal}: rate {rate} is {ratio}x the catalogue rate {benchmark} for similar {unit} work"
+                    if ratio > 1
+                    else "Position {ordinal}: rate {rate} is only {ratio}x the "
+                    "catalogue rate {benchmark} for similar {unit} work"
+                )
+                message = _audit_text(
+                    key,
+                    locale,
+                    default,
+                    ordinal=pos.get("ordinal", "?"),
+                    rate=_fmt_decimal(float(rate)),  # type: ignore[arg-type]
+                    benchmark=_fmt_decimal(float(cat_rate)),
+                    ratio=_fmt_decimal(float(ratio)),
+                    unit=unit or "-",
+                )
+                suggestion = _audit_text(
+                    "estimate_audit.rate_outlier.suggestion",
+                    locale,
+                    "Review this rate against the catalogue benchmark",
+                )
+            results.append(
+                RuleResult(
+                    rule_id=self.rule_id,
+                    rule_name=self.name,
+                    severity=self.severity,
+                    category=self.category,
+                    passed=passed,
+                    message=message,
+                    element_ref=pos.get("id"),
+                    details={
+                        "unit_rate": float(rate),  # type: ignore[arg-type]
+                        "catalogue_rate": float(cat_rate),
+                        "ratio": round(float(ratio), 4),
+                        "catalogue_code": str(_match_field(best, "code", "") or ""),
+                        "match_score": round(float(score), 4),
+                        "currency": pos_currency or cat_currency,
+                    },
+                    suggestion=suggestion,
+                )
+            )
+        return results
+
+
 # ── Registration ────────────────────────────────────────────────────────────
 
 
@@ -6641,6 +7475,12 @@ def register_builtin_rules() -> None:
         (FieldTimeDayworkNeedsVariation(), None),
         (FieldTimePlantNeedsEquipment(), None),
         (FieldTimeApprovedImmutable(), None),
+        # Estimate Audit (curated cross-checks: wrong unit, near-duplicate,
+        # missing companion, catalogue-benchmarked rate outlier)
+        (WrongUnitOfMeasure(), ["estimate_audit"]),
+        (NearDuplicateLine(), ["estimate_audit"]),
+        (MissingCompanionItem(), ["estimate_audit"]),
+        (CatalogueRateOutlier(), ["estimate_audit"]),
     ]
 
     for rule, sets in rules:

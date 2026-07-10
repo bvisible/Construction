@@ -1,6 +1,6 @@
-import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import { Fragment, useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import { normalizeListResponse } from '@/shared/lib/apiHelpers';
@@ -23,6 +23,8 @@ import {
   Globe2,
   LineChart,
   Microscope,
+  Network,
+  ArrowRight,
 } from 'lucide-react';
 import {
   Button,
@@ -520,6 +522,119 @@ const inputCls =
 const textareaCls =
   'w-full rounded-lg border border-border bg-surface-primary px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-oe-blue/30 focus:border-oe-blue resize-none';
 
+/* ── How it works + connects ─────────────────────────────────────────── */
+
+/** Compact inline link to a sibling module, keeping the flow copy readable. */
+function ModLink({ to, children }: { to: string; children: React.ReactNode }) {
+  return (
+    <Link to={to} className="font-medium text-oe-blue-text hover:underline">
+      {children}
+    </Link>
+  );
+}
+
+/**
+ * One-glance explainer: what the Safety module does and how it connects to the
+ * rest of the platform. Incidents and observations are captured here, the trend
+ * tiles read the same data, and serious findings escalate into HSE Advanced,
+ * an inspection or an NCR. Every connected module is a link so the workflow is
+ * obvious at a glance.
+ */
+function HowSafetyWork() {
+  const { t } = useTranslation();
+
+  const steps: { icon: React.ReactNode; title: string; desc: string }[] = [
+    {
+      icon: <ShieldAlert size={14} className="text-oe-blue" />,
+      title: t('safety.flow_1_title', { defaultValue: 'Report incidents' }),
+      desc: t('safety.flow_1_desc', {
+        defaultValue: 'Log injuries, near-misses, property damage, fire and environmental events.',
+      }),
+    },
+    {
+      icon: <Eye size={14} className="text-oe-blue" />,
+      title: t('safety.flow_2_title', { defaultValue: 'Record observations' }),
+      desc: t('safety.flow_2_desc', {
+        defaultValue: 'Capture hazards spotted before harm, scored by severity times likelihood.',
+      }),
+    },
+    {
+      icon: <LineChart size={14} className="text-oe-blue" />,
+      title: t('safety.flow_3_title', { defaultValue: 'Watch the trend' }),
+      desc: t('safety.flow_3_desc', {
+        defaultValue: 'Days without incident and the safety rollup tiles across the project.',
+      }),
+    },
+    {
+      icon: <Microscope size={14} className="text-oe-blue" />,
+      title: t('safety.flow_4_title', { defaultValue: 'Escalate and act' }),
+      desc: t('safety.flow_4_desc', {
+        defaultValue:
+          'A serious event opens an HSE investigation; a hazard can raise an inspection or NCR.',
+      }),
+    },
+  ];
+
+  return (
+    <Card padding="md">
+      <h2 className="flex items-center gap-1.5 text-sm font-semibold text-content-primary">
+        <Network size={15} className="text-oe-blue" />
+        {t('safety.flow_title', { defaultValue: 'How Safety fits together' })}
+      </h2>
+      <p className="mt-1 text-xs text-content-tertiary">
+        {t('safety.flow_intro', {
+          defaultValue:
+            'Record what happened and what was spotted on site, watch the trend, and escalate the serious findings for formal follow-up. This page is where site safety starts.',
+        })}
+      </p>
+
+      <ol className="mt-3 flex flex-col gap-2 lg:flex-row lg:items-stretch">
+        {steps.map((s, i) => (
+          <Fragment key={s.title}>
+            <li className="flex-1 rounded-lg border border-border-light bg-surface-secondary/40 p-3">
+              <div className="flex items-center gap-2">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-oe-blue-subtle text-2xs font-bold text-oe-blue-text">
+                  {i + 1}
+                </span>
+                <span className="flex items-center gap-1 text-xs font-semibold text-content-primary">
+                  {s.icon}
+                  {s.title}
+                </span>
+              </div>
+              <p className="mt-1.5 text-2xs leading-relaxed text-content-tertiary">{s.desc}</p>
+            </li>
+            {i < steps.length - 1 && (
+              <li
+                aria-hidden="true"
+                className="hidden shrink-0 items-center self-center text-content-quaternary lg:flex"
+              >
+                <ArrowRight size={16} />
+              </li>
+            )}
+          </Fragment>
+        ))}
+      </ol>
+
+      <div className="mt-3 flex flex-col gap-1.5 border-t border-border-light pt-3 text-2xs text-content-tertiary sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-5 sm:gap-y-1">
+        <span>
+          <span className="font-medium text-content-secondary">
+            {t('safety.flow_connects', { defaultValue: 'Connects with:' })}
+          </span>{' '}
+          <ModLink to="/field">{t('safety.mod_field', { defaultValue: 'Field' })}</ModLink> ·{' '}
+          <ModLink to="/inspections">
+            {t('safety.mod_inspections', { defaultValue: 'Inspections' })}
+          </ModLink>{' '}
+          ·{' '}
+          <ModLink to="/hse-advanced">
+            {t('safety.mod_hse', { defaultValue: 'HSE Advanced' })}
+          </ModLink>{' '}
+          · <ModLink to="/ncr">{t('safety.mod_ncr', { defaultValue: 'NCR' })}</ModLink>
+        </span>
+      </div>
+    </Card>
+  );
+}
+
 export function SafetyPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -644,6 +759,8 @@ export function SafetyPage() {
           </>
         }
       />
+
+      <HowSafetyWork />
 
       <SectionIntro
         storageKey="safety"

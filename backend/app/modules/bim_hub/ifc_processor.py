@@ -9,7 +9,7 @@ For full geometry: install DDC cad2data or use Advanced Mode to upload CSV + DAE
 
 Identity mapping (DDC RvtExporter):
     The DDC COLLADA pass emits numeric ``<node id="N">`` values where ``N`` is
-    the Revit ElementId (``Element.Id.IntegerValue``). The DDC Excel pass emits
+    the RVT ElementId (``Element.Id.IntegerValue``). The DDC Excel pass emits
     the same ElementId in its first column (header ``ID``). We use that ID as
     the element's ``mesh_ref`` so the 3D viewer can pair each BIM element row
     with its DAE node for filtering and isolation.
@@ -169,7 +169,7 @@ def _decode_step_string(s: str) -> str:
       * ``\\S\\X``         → Latin-1 with high bit set (legacy)
       * ``''``             → single apostrophe (replaces our placeholder)
     Anything we cannot decode falls through unchanged. Non-ASCII text in
-    Tekla/Allplan/SOFiSTiK exports survives intact instead of being kept
+    BIM authoring tool exports survives intact instead of being kept
     as raw ``\\X2\\…`` escape sequences in BIMElement.name (audit C4).
     """
     if not s:
@@ -984,7 +984,7 @@ def _try_cad2data(ifc_path: Path, output_dir: Path, *, conversion_depth: str = "
 
 
 # Header aliases (already lower-cased) that can carry the element classification
-# in a DDC export, tried in priority order.  The Revit RvtExporter uses
+# in a DDC export, tried in priority order.  The RvtExporter uses
 # ``Category``; the DDC IfcExporter and some converter builds expose the IFC
 # class under ``IFC Class`` / ``IfcType`` / ``Type`` / ``Class`` / ``Object
 # Type`` instead.  Keep this in sync with the dataframe-upload path's
@@ -1020,18 +1020,18 @@ def _excel_elements_to_bim_result(
 ) -> dict[str, Any]:
     """Convert parsed Excel elements (from DDC converter) into BIM result format.
 
-    DDC RvtExporter produces Excel rows with Revit-specific columns:
+    DDC RvtExporter produces Excel rows with RVT-specific columns:
     - ``category`` like "OST_Walls", "OST_Doors", "OST_PipeFitting"
     - ``name``, ``type name``, ``family name``
-    - ``uniqueid`` (Revit GUID)
+    - ``uniqueid`` (RVT GUID)
     - ``level`` for storey, ``length``/``area``/``volume`` for quantities
     - Many BuiltIn parameters like ``width``, ``height``, ``thickness``, etc.
 
     We filter out non-element rows (sun studies, materials, viewports, etc.)
-    and map the meaningful Revit categories into our generic element model.
+    and map the meaningful RVT categories into our generic element model.
 
     If ``real_dae_path`` is provided (output of a separate RvtExporter call to
-    .dae), we use the real Revit COLLADA geometry instead of the placeholder
+    .dae), we use the real RVT COLLADA geometry instead of the placeholder
     box-grid generated from element bounding boxes.
 
     ``geometry_supported`` distinguishes "the geometry pass ran but produced
@@ -1045,7 +1045,7 @@ def _excel_elements_to_bim_result(
     # Skip these categories - they're not building elements.
     # Expanded set covers views, sheets, materials, annotations, tags,
     # dimensions, analytical model, model groups, revisions, schedules,
-    # legends, and other non-physical Revit categories.
+    # legends, and other non-physical RVT categories.
     SKIP_CATEGORIES: set[str | None] = {
         None,
         "",
@@ -1196,7 +1196,7 @@ def _excel_elements_to_bim_result(
 
     # Decide ONCE which header carries the element classification for this
     # export, rather than per row.  When the dataset has a populated ``category``
-    # column (the Revit RvtExporter case) we use it exclusively, preserving the
+    # column (the RvtExporter case) we use it exclusively, preserving the
     # historical behaviour where orphan parameter rows with a blank category are
     # skipped.  Only when no alias before it carries any value - the DDC
     # IfcExporter and some converter builds, which expose the IFC class under
@@ -1243,7 +1243,7 @@ def _excel_elements_to_bim_result(
         _patch_collada_node_names(real_dae_path)
 
     # Pre-parse the DAE (if provided) to extract per-node bounding boxes
-    # keyed by the numeric Revit ElementId written into <node id="...">.
+    # keyed by the numeric RVT ElementId written into <node id="...">.
     dae_bboxes: dict[int, dict[str, float]] = {}
     if real_dae_path and real_dae_path.exists():
         try:
@@ -1260,15 +1260,15 @@ def _excel_elements_to_bim_result(
         lc_row = {k.lower(): v for k, v in row.items()}
 
         # Read the classification from the column resolved for this export
-        # (``category`` for Revit, an IFC-class alias for IfcExporter output).
+        # (``category`` for RVT, an IFC-class alias for IfcExporter output).
         category = lc_row.get(category_key) if category_key else None
         cat_lower = str(category or "").lower()
 
         # ── DWG fallback classification ──────────────────────────────────
-        # DwgExporter rows have NO Revit ``category`` column. Instead each
+        # DwgExporter rows have NO RVT ``category`` column. Instead each
         # top-level entity carries a DWG ``classname`` (AcDbLine, AcDbHatch,
         # AcDbBlockReference, …) and a drawing ``layer`` (wall / doors /
-        # furniture / …). When the Revit category is absent we derive the
+        # furniture / …). When the RVT category is absent we derive the
         # category from the classname so DWG entities become real elements
         # rather than being dropped as "no category".  Sub-geometry rows
         # (polyline segments / hatch loops) have a ``parentid`` and NO
@@ -1286,7 +1286,7 @@ def _excel_elements_to_bim_result(
 
         # Skip non-element rows: those with no category at all (likely orphan
         # parameter rows from the DDC converter), and known non-element categories.
-        # DDC writes the literal string "None" for elements without a Revit
+        # DDC writes the literal string "None" for elements without an RVT
         # category - treat it the same as Python None.  Track the reason so the
         # caller can tell "spatial-only file" (legitimately no products) apart
         # from "could not classify any row" (column / parser mismatch).
@@ -1298,7 +1298,7 @@ def _excel_elements_to_bim_result(
             continue
 
         # Friendly element type derived from OST_ category name.
-        # DDC writes raw Revit built-in category names like
+        # DDC writes raw RVT built-in category names like
         # "OST_CurtainWallMullions" - we strip the prefix, split
         # CamelCase into words, and title-case the result so the
         # filter panel shows "Curtain Wall Mullions" instead of
@@ -1325,8 +1325,8 @@ def _excel_elements_to_bim_result(
         # Storey: DDC writes the actual building level under "Level" for most
         # categories, but walls/columns sometimes only fill "Base Constraint"
         # or "Reference Level". Fall back through all known synonyms.  For DWG
-        # entities (no Revit level) the drawing ``layer`` is the natural
-        # grouping - it is tried LAST so it never shadows a real Revit level.
+        # entities (no RVT level) the drawing ``layer`` is the natural
+        # grouping - it is tried LAST so it never shadows a real RVT level.
         storey = (
             lc_row.get("level")
             or lc_row.get("storey")
@@ -1349,7 +1349,7 @@ def _excel_elements_to_bim_result(
             storeys_set.add(storey)
         disciplines_set.add(discipline)
 
-        # Numeric quantity fields - handle Revit native (mm/m²/m³) units.
+        # Numeric quantity fields - handle RVT native (mm/m²/m³) units.
         # DDC Excel columns have exact names; we map them all.
         quantities: dict[str, float] = {}
         for src_key, dest_key in (
@@ -1387,12 +1387,12 @@ def _excel_elements_to_bim_result(
             except (ValueError, TypeError):
                 pass
 
-        # Stable ID - prefer Revit uniqueid, fall back to type ifcguid, then row index
+        # Stable ID - prefer RVT uniqueid, fall back to type ifcguid, then row index
         stable_id = str(
             lc_row.get("uniqueid") or lc_row.get("type ifcguid") or lc_row.get("globalid") or lc_row.get("id") or i
         )
 
-        # mesh_ref - numeric Revit ElementId that matches the DAE <node id="...">.
+        # mesh_ref - numeric RVT ElementId that matches the DAE <node id="...">.
         # DDC's Excel ``ID`` column IS ``Element.Id.IntegerValue``. If it is
         # missing we can still recover it from the last segment of ``UniqueId``
         # (which encodes the ElementId in hex).
@@ -1454,14 +1454,14 @@ def _excel_elements_to_bim_result(
             if v is None:
                 continue
             sval = str(v).strip()
-            # Drop only truly empty values; keep "0" because for some Revit
+            # Drop only truly empty values; keep "0" because for some RVT
             # parameters (e.g. counts, structural flags) zero is meaningful.
             if not sval or sval.lower() in ("none", "null", "n/a"):
                 continue
             # Cap value length to keep payloads reasonable
             properties[k] = sval[:500]
 
-        # Promote Revit hierarchy fields into properties under clean keys
+        # Promote RVT hierarchy fields into properties under clean keys
         # so the frontend can build Category -> Family -> Type Name trees.
         # Use the friendly etype (with spaces) rather than the raw OST_ name.
         if etype and etype.lower() not in ("none", "null", "n/a", "-", "unknown"):
@@ -1510,7 +1510,7 @@ def _excel_elements_to_bim_result(
                     properties[prop_key] = sval[:500]
 
         # Cap properties at 30 entries to keep per-element payloads small -
-        # Revit/IFC exports often expose 100+ parameters, most irrelevant.
+        # RVT/IFC exports often expose 100+ parameters, most irrelevant.
         # Priority order: critical DDC/hierarchy keys win, then remaining
         # properties by insertion order (stable output across runs).
         _PRIORITY_KEYS = (
@@ -1553,7 +1553,7 @@ def _excel_elements_to_bim_result(
             }
         )
 
-    # Geometry: prefer the real Revit COLLADA from the second DDC pass.
+    # Geometry: prefer the real RVT COLLADA from the second DDC pass.
     # Fall back to the simplified box-grid only when the real .dae is missing.
     geometry_path: Path | None = None
     bounding_box = None
@@ -1561,7 +1561,7 @@ def _excel_elements_to_bim_result(
         # Already named geometry.dae in output_dir - use as-is.
         geometry_path = real_dae_path
         logger.info(
-            "Using real Revit COLLADA geometry: %s (%d KB)",
+            "Using real RVT COLLADA geometry: %s (%d KB)",
             real_dae_path.name,
             real_dae_path.stat().st_size // 1024,
         )
@@ -1682,7 +1682,7 @@ def _dae_element_bboxes(
         element_to_shape: ``{element_id: shape_id}`` (for diagnostics).
 
     The DDC ``RvtExporter`` writes one top-level
-    ``<visual_scene>/<node id="{RevitElementId}">`` per element, each with a
+    ``<visual_scene>/<node id="{RvtElementId}">`` per element, each with a
     single ``<instance_geometry url="#shapeN-lib">`` pointing at the shape
     definition in ``<library_geometries>``.  We read every shape's
     ``<float_array>`` of positions to compute its axis-aligned bbox.  Under
@@ -1724,7 +1724,7 @@ def _dae_element_bboxes(
 
     for node in tree.findall(".//c:visual_scene/c:node", ns):
         nid = node.get("id", "") or ""
-        # Only numeric ids - Revit ElementId. Lights/cameras/named nodes skipped.
+        # Only numeric ids - RVT ElementId. Lights/cameras/named nodes skipped.
         if not nid.isdigit():
             continue
         ig = node.find("c:instance_geometry", ns)
@@ -1816,7 +1816,7 @@ def _convert_dae_to_glb(dae_path: Path, output_dir: Path) -> Path | None:
     For DAE files larger than ``MAX_DAE_FOR_GLB_BYTES`` (default 250 MB)
     we skip the conversion entirely: trimesh loads the whole mesh into
     Python memory and routinely OOMs on a 200+ MB DAE produced from a
-    large Revit model (Hugo Lee / Glodon, 204MB RVT). The browser can
+    large RVT model (204MB RVT). The browser can
     still load the raw DAE - it's ~3x larger over the wire but parses
     fine in ColladaLoader on a modern desktop.
 
@@ -2177,7 +2177,7 @@ def process_ifc_file(
 
     Args:
         conversion_depth: 'standard' (~15 key columns, faster) or
-            'complete' (~1000+ Revit parameters, slower). Passed
+            'complete' (~1000+ RVT parameters, slower). Passed
             to the DDC converter as the export mode argument.
 
     Returns dict with elements, storeys, disciplines, geometry info.
@@ -2239,7 +2239,7 @@ def process_ifc_file(
     # by newline lost those entities silently - only single-line
     # statements were ever parsed.
     #
-    # Bugfix (C6): strip /* … */ comments before tokenising. Tekla/Allplan
+    # Bugfix (C6): strip /* … */ comments before tokenising. Some BIM authoring tools'
     # exports embed comments with #N-style references that would otherwise
     # match _LINE_RE and produce false phantom entities.
     #
@@ -2285,7 +2285,7 @@ def process_ifc_file(
     #
     # ``unit_uncertain`` is preserved for back-compat: it's now ``True``
     # iff the file shipped without an IFCUNITASSIGNMENT block at all
-    # (legacy Allplan/Tekla exporter bug) - in that case we DO fall
+    # (legacy BIM authoring tool exporter bug) - in that case we DO fall
     # back to metric defaults per ISO 16739, but downstream callers
     # may still want to flag the file for review.
     unit_ctx = _parse_unit_assignment(entities)
@@ -2484,7 +2484,7 @@ def process_ifc_file(
 # Earlier revisions of this module shipped a "probe" that merely flagged
 # files with non-SI-metre length units and refused to roll their numbers
 # into a BOQ.  That was safe but useless: roughly a third of real-world
-# Revit/Allplan exports ship in millimetres or feet and the UI ended up
+# BIM authoring tool exports ship in millimetres or feet and the UI ended up
 # rejecting them all.
 #
 # This rewrite (per ISO 16739-1:2024 §5.4.3) parses IFCUNITASSIGNMENT in
@@ -2508,7 +2508,7 @@ _IFC_UNIT_TYPES: tuple[str, ...] = (
     "PLANEANGLEUNIT",
     "SOLIDANGLEUNIT",
     # PLANEANGLEUNIT is the spec spelling; ANGLEUNIT is a common shorthand
-    # that some exporters (older Tekla) emit. We accept both.
+    # that some exporters (some BIM authoring tools) emit. We accept both.
     "ANGLEUNIT",
     "TEMPERATUREUNIT",
     "THERMODYNAMICTEMPERATUREUNIT",
@@ -2872,7 +2872,7 @@ def _resolve_conversion_based_unit(
 
     # Fall back to the hard-coded customary-unit table when the IFC
     # writer omitted or mangled the conversion factor.  Real-world IFC
-    # files from older Tekla versions ship with the Name field but a
+    # files from some BIM authoring tools ship with the Name field but a
     # null conversion factor, expecting consumers to know the value.
     if scale is None or scale <= 0:
         normalised = name_raw.replace(" ", "").replace("_", "").upper()
@@ -3054,11 +3054,11 @@ def _parse_unit_assignment(entities: dict[int, dict]) -> UnitContext:
         for m in re.findall(r"#(\d+)", ent["args_raw"]):
             unit_refs.add(int(m))
 
-    # Some exporters (older Allplan) emit no IFCUNITASSIGNMENT and
+    # Some exporters (some BIM authoring tools) emit no IFCUNITASSIGNMENT and
     # expect consumers to default to metric.  We honour that.
     if not unit_refs:
         # Still walk standalone IFCSIUNIT entities so we pick up
-        # any explicit declarations (some Tekla exports define units
+        # any explicit declarations (some BIM authoring tool exports define units
         # without bundling them into an assignment block).
         for ent in entities.values():
             if ent["type"] != "IFCSIUNIT":
@@ -3685,7 +3685,7 @@ def _generate_collada_boxes(
         g_max_y = max(g_max_y, y + w)
         g_max_z = max(g_max_z, z + h)
 
-        # Use the element's original mesh_ref (Revit ElementId / IFC GlobalId)
+        # Use the element's original mesh_ref (RVT ElementId / IFC GlobalId)
         # as the COLLADA node identity so the frontend viewer can match meshes
         # to elements. Fall back to stable_id or index.
         node_id = str(elem.get("mesh_ref") or elem.get("stable_id") or f"n{i}")
@@ -3738,7 +3738,7 @@ def _generate_collada_boxes(
         # not the human label - otherwise matching falls back to the positional
         # nearest-bbox pairing and filtering/grouping stops lining up with the
         # geometry (the IFC "grouping shows the whole model" symptom). This is
-        # the same correction _patch_collada_node_names applies to the DDC/Revit
+        # the same correction _patch_collada_node_names applies to the DDC/RVT
         # real-DAE path; here we just emit it correctly at generation time. The
         # human label is preserved on the <geometry name=...> above.
         node = ET.SubElement(vscene, "node", id=node_id, name=node_id)
@@ -3771,14 +3771,14 @@ def _generate_collada_boxes(
 
 
 def _extract_revit_element_id(lc_row: dict[str, Any]) -> int | None:
-    """Pull the Revit ``Element.Id.IntegerValue`` out of a DDC Excel row.
+    """Pull the RVT ``Element.Id.IntegerValue`` out of a DDC Excel row.
 
     Tries, in order:
     1. The lowercase ``id`` column (DDC's first column, already an integer).
-    2. The last hyphenated segment of ``uniqueid`` parsed as hex - the Revit
+    2. The last hyphenated segment of ``uniqueid`` parsed as hex - the RVT
        UniqueId format is ``<EpisodeGUID>-<ElementIdHex>``.
     3. Any column whose normalised name matches one of the known aliases for
-       "revit element id".
+       "RVT element id".
 
     Returns ``None`` if no numeric id can be recovered.
     """
@@ -3823,9 +3823,9 @@ def _extract_revit_element_id(lc_row: dict[str, Any]) -> int | None:
 def _extract_dae_bboxes_by_node_id(dae_path: Path) -> dict[int, dict[str, float]]:
     """Parse a COLLADA file and compute a bounding box per scene node.
 
-    Returns a mapping ``{revit_element_id: {min_x, min_y, min_z,
+    Returns a mapping ``{element_id: {min_x, min_y, min_z,
     max_x, max_y, max_z}}`` keyed by the integer ``<node id="...">`` value
-    (which DDC RvtExporter sets to the Revit ElementId).
+    (which DDC RvtExporter sets to the RVT ElementId).
 
     Non-numeric node ids are skipped - they correspond to lights, cameras,
     and other auxiliary scene entries that do not map to BIM elements.

@@ -1785,7 +1785,7 @@ EXACT: dict[str, str] = {
     "Building photo or scanned document": "Барилгын зураг эсвэл сканердсан баримт",
     "BOQ sheets, specs, tender docs": "БМЖ хуудас, спецификаци, тендерийн баримт",
     "Spreadsheet with BOQ data": "БМЖ өгөгдөлтэй хүснэгт",
-    "Revit, IFC, DWG, DGN files": "Revit, IFC, DWG, DGN файл",
+    "Revit, IFC, DWG, DGN files": "RVT, IFC, DWG, DGN файл",
     "Copy-paste from any app": "Аливаа аппаас хуулж буулгах",
     "Describe your project in plain text": "Төслөө энгийн текстээр тайлбарлах",
 

@@ -23,7 +23,7 @@ export const costsGuide: ModuleGuideContent = {
       titleDefault: 'Regional catalogues',
       bodyKey: 'guide.costs.regions.body',
       bodyDefault:
-        'Each tab at the top is a regional reference catalogue such as CWICR, BKI or RSMeans, with its own currency and item count. Pick a region to scope the list to that catalogue, or choose All to search across every loaded database. Use Import to add a new region.',
+        'Each tab at the top is a regional reference catalogue such as CWICR, with its own currency and item count. Pick a region to scope the list to that catalogue, or choose All to search across every loaded database. Use Import to add a new region.',
       spotlightSelector: '[data-guide="costs-region-tabs"]',
     },
     {

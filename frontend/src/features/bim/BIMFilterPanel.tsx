@@ -5,7 +5,7 @@
  * - Free-text search across name / type / category / storey
  * - Storey/level multi-select
  * - Type multi-select (model-format-aware)
- *     - Revit models  → Revit Categories (Walls, Doors, Floors, Furniture, …)
+ *     - RVT models  → RVT Categories (Walls, Doors, Floors, Furniture, …)
  *     - IFC models    → IFC Entities (IfcWall, IfcSlab, IfcDoor, …)
  * - Group-by selector (storey / type)
  *
@@ -59,10 +59,10 @@ export type GroupBy = 'storey' | 'type';
  *
  *   • category - flat list of every unique element_type / IfcEntity,
  *                sorted by count.  Best matches "show me all the
- *                Revit categories / all the IfcEntities".  This is
- *                the default because it works for BOTH Revit and IFC
+ *                RVT categories / all the IfcEntities".  This is
+ *                the default because it works for BOTH RVT and IFC
  *                without any noise / curation.
- *   • typename - hierarchical Category → Type Name (Revit Browser
+ *   • typename - hierarchical Category → Type Name (BIM browser
  *                style: "Walls > Generic - 200mm").  Best for picking
  *                a single type out of a complex model.
  *   • buckets  - semantic buckets (Structure / Envelope / MEP / …)
@@ -143,7 +143,7 @@ interface BIMFilterPanelProps {
 // ── Helpers ──────────────────────────────────────────────────────────────
 
 /**
- * Detect whether the loaded model is Revit or IFC.
+ * Detect whether the loaded model is RVT or IFC.
  * Priority: explicit `model_format` prop → element properties fallback.
  */
 function detectModelFormat(
@@ -159,7 +159,7 @@ function detectModelFormat(
   if (first) {
     if (first.element_type?.toLowerCase().startsWith('ifc')) return 'ifc';
     const props = (first.properties || {}) as Record<string, unknown>;
-    // If properties.category exists with a non-IFC value, it is likely Revit
+    // If properties.category exists with a non-IFC value, it is likely RVT
     if (
       typeof props.category === 'string' &&
       props.category &&
@@ -180,7 +180,7 @@ function detectModelFormat(
 /**
  * Get the top-level category label for an element depending on model format.
  *
- *   • Revit  →  `element_type` is the clean CamelCase-split category name
+ *   • RVT  →  `element_type` is the clean CamelCase-split category name
  *               set by the backend (e.g. "Curtain Wall Mullions", "Walls").
  *               We use it directly - `properties.category` was a duplicate
  *               that sometimes held raw OST_ strings, causing filter confusion.
@@ -196,7 +196,7 @@ function getTypeKey(el: BIMElementData, _format: BIMModelFormat): string {
 /**
  * Get the second-level Type Name for an element - e.g. "Generic - 200mm"
  * for a Wall, "0915 x 1220mm" for a Door, "L Mullion 1" for a curtain
- * wall mullion.  This is the Revit "Family/Type Name" axis.
+ * wall mullion.  This is the RVT "Family/Type Name" axis.
  *
  * Source preference order:
  *   1. `properties.type_name` (promoted alias from upload pipeline)
@@ -207,7 +207,7 @@ function getTypeKey(el: BIMElementData, _format: BIMModelFormat): string {
  *
  * The showcase seed and the converted-DAE fast path both populate
  * `el.name` with a generic sequential placeholder like `"Walls 1"`,
- * `"Walls 2"`, ... when no real Revit Family/Type can be resolved from
+ * `"Walls 2"`, ... when no real RVT Family/Type can be resolved from
  * the source file. Returning that verbatim would explode the
  * Category → Type Name hierarchy: a model with 64 walls would render 64
  * unique single-element TypeName rows under the Walls category instead
@@ -227,7 +227,7 @@ function isGenericPlaceholderName(name: string, elementType: string | null | und
 
 /** Read a property value by any of several keys, matched case-insensitively.
  *
- *  Revit and IFC exports disagree on capitalisation and naming
+ *  RVT and IFC exports disagree on capitalisation and naming
  *  (`type_name` vs `ObjectType` vs `objecttype`), so a single hard-coded key
  *  silently misses the value on one of the two formats. Returns the first
  *  non-empty string value found, or null. */
@@ -254,9 +254,9 @@ function readProp(
 /**
  * Second-level "Type Name" for an element.
  *
- *   • Revit → the Family / Type Name (`type_name`, `family`, `Family`, …),
+ *   • RVT → the Family / Type Name (`type_name`, `family`, `Family`, …),
  *             promoted by the upload pipeline.
- *   • IFC   → IFC carries no Revit Family/Type. The closest equivalents are
+ *   • IFC   → IFC carries no RVT Family/Type. The closest equivalents are
  *             `ObjectType` (the user-facing type label) and `PredefinedType`
  *             (the enumerated sub-type, e.g. `IfcWall.PredefinedType = SOLIDWALL`).
  *             Without these the IFC "Type Name" view collapsed every element
@@ -269,7 +269,7 @@ function readProp(
 function getTypeNameKey(el: BIMElementData): string {
   const props = (el.properties || {}) as Record<string, unknown>;
 
-  // 1. Revit Family/Type axis (promoted aliases first, then raw column names).
+  // 1. RVT Family/Type axis (promoted aliases first, then raw column names).
   const revit = readProp(props, [
     'type_name',
     'family',
@@ -309,7 +309,7 @@ function getTypeNameKey(el: BIMElementData): string {
 
 /**
  * Parse a raw storey string into a structured form for sorting and
- * display.  Revit / IFC level names typically look like:
+ * display.  RVT / IFC level names typically look like:
  *
  *   "01 - Entry Level"     →  level = 1, label = "Entry Level"
  *   "02 - Floor 1"         →  level = 2, label = "Floor 1"
@@ -409,7 +409,7 @@ export default function BIMFilterPanel({
     groupBy: 'type',
   });
   /** Top-level grouping selector - defaults to "By Category" because
-   *  it works equally well for Revit (categories) and IFC (entities)
+   *  it works equally well for RVT (categories) and IFC (entities)
    *  with zero curation. */
   const [groupingMode, setGroupingMode] = useState<GroupingMode>('category');
   /** Which Category headers in the "By Type Name" view are expanded. */
@@ -591,7 +591,7 @@ export default function BIMFilterPanel({
     /** bucket → ordered list of [typeName, count] */
     const byBucket = new Map<BIMCategoryBucket, Map<string, number>>();
     const bucketTotals = new Map<BIMCategoryBucket, number>();
-    /** Category → (TypeName → count) - Revit Browser hierarchy */
+    /** Category → (TypeName → count) - BIM browser hierarchy */
     const byCategoryThenType = new Map<string, Map<string, number>>();
 
     const search = state.search.trim().toLowerCase();
@@ -676,7 +676,7 @@ export default function BIMFilterPanel({
         agg.length += q.Length ?? q.length_m ?? 0;
       }
 
-      // Hierarchical Category → Type Name (Revit Browser style)
+      // Hierarchical Category → Type Name (BIM browser style)
       const typeName = getTypeNameKey(el);
       let perCat = byCategoryThenType.get(tpe);
       if (!perCat) {
@@ -940,7 +940,7 @@ export default function BIMFilterPanel({
   // Label for the types section changes depending on model format
   const typesSectionTitle =
     format === 'rvt'
-      ? t('bim.filter_revit_categories', { defaultValue: 'Revit Categories' })
+      ? t('bim.filter_revit_categories', { defaultValue: 'RVT Categories' })
       : format === 'ifc'
         ? t('bim.filter_ifc_entities', { defaultValue: 'IFC Entities' })
         : t('bim.filter_types', { defaultValue: 'Element Types' });
@@ -1466,7 +1466,7 @@ export default function BIMFilterPanel({
 
         {/* Type filter - three grouping modes:
               By Category   → flat list of every element_type / IfcEntity
-              By Type Name  → hierarchical Category → TypeName (Revit Browser)
+              By Type Name  → hierarchical Category → TypeName (BIM browser)
               Buckets       → semantic buckets (Structure/Envelope/MEP/…)
             The segmented control at the top lets the user pick. */}
         <FilterSection
@@ -1493,14 +1493,14 @@ export default function BIMFilterPanel({
                   label: t('bim.group_by_category', { defaultValue: 'Category' }),
                   title: t('bim.group_by_category_title', {
                     defaultValue:
-                      'Flat list of every Revit category / IFC entity, sorted by count',
+                      'Flat list of every RVT category / IFC entity, sorted by count',
                   }),
                 },
                 {
                   id: 'typename' as const,
                   label: t('bim.group_by_typename', { defaultValue: 'Type Name' }),
                   title: t('bim.group_by_typename_title', {
-                    defaultValue: 'Category → Type Name hierarchy (Revit Browser style)',
+                    defaultValue: 'Category → Type Name hierarchy (BIM browser style)',
                   }),
                 },
                 {
@@ -1821,7 +1821,7 @@ export default function BIMFilterPanel({
  *
  * The Other section is collapsible and starts collapsed so first-time
  * users see only real building categories without the panel exploding
- * with 100+ Revit annotation rows.
+ * with 100+ RVT annotation rows.
  */
 /** Format a quantity value for compact display (e.g. 1234.5 -> "1,235") */
 function fmtQty(val: number): string {

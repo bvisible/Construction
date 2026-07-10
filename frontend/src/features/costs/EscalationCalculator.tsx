@@ -10,7 +10,7 @@ import clsx from 'clsx';
  *  These are representative averages — actual project indices may differ. */
 const ESCALATION_INDICES: Record<string, { label: string; rates: Record<string, number> }> = {
   DE: {
-    label: 'Germany (BKI)',
+    label: 'Germany',
     rates: { '2020': 3.2, '2021': 5.1, '2022': 14.6, '2023': 7.8, '2024': 4.2, '2025': 3.5, '2026': 3.0 },
   },
   AT: {
@@ -26,7 +26,7 @@ const ESCALATION_INDICES: Record<string, { label: string; rates: Record<string, 
     rates: { '2020': 2.0, '2021': 8.5, '2022': 10.2, '2023': 4.8, '2024': 3.5, '2025': 3.0, '2026': 2.8 },
   },
   US: {
-    label: 'United States (ENR)',
+    label: 'United States',
     rates: { '2020': 1.2, '2021': 6.3, '2022': 11.5, '2023': 3.2, '2024': 2.8, '2025': 2.5, '2026': 2.3 },
   },
   EU: {

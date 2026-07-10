@@ -21,7 +21,7 @@ class FormatClassifier:
         Returns:
             Format string. Strongly-typed labels - 'IDS', 'COBie', 'BIMQ',
             'Excel', 'RevitSP' - map to a dedicated parser. Loosely-detected
-            labels - 'GenericXML', 'MVD', 'ArchiCAD', 'GenericJSON',
+            labels - 'GenericXML', 'MVD', 'GenericJSON',
             'PlainText' - are *also* handled: ``service._get_parser`` routes
             them to the closest content-compatible parser as a best effort
             (any XML → IDS, any JSON → BIMQ, text → RevitSP) so a valid
@@ -55,8 +55,6 @@ class FormatClassifier:
             return "IDS"
         if "buildingsmart.org/mvd" in content:
             return "MVD"
-        if "archicad" in content.lower():
-            return "ArchiCAD"
         return "GenericXML"
 
     def _classify_excel(self, path: Path) -> str:
@@ -82,7 +80,7 @@ class FormatClassifier:
         return "Excel"
 
     def _classify_txt(self, path: Path) -> str:
-        """Classify a text file by checking for Revit SP header."""
+        """Classify a text file by checking for RVT SP header."""
         try:
             content = path.read_text(encoding="utf-8", errors="ignore")[:500]
         except Exception:

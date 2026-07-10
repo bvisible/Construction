@@ -1488,11 +1488,11 @@ tbody tr:nth-child(20) { animation-delay: 570ms; }
   30% { opacity: 1; transform: translateY(-4px); }
 }
 
-/* ── DWG Takeoff: AutoCAD-style drafting grid ─────────────────────────────
+/* ── DWG Takeoff: CAD-style drafting grid ─────────────────────────────
    Scoped to .oe-dwg-canvas — do NOT promote these tokens to :root.
    Light mode = faint black lines on a pale canvas.
    Dark mode = faint white lines on a deep drafting-board canvas.
-   1:5 minor:major ratio mirrors AutoCAD's default grid snap. */
+   1:5 minor:major ratio mirrors a typical CAD default grid snap. */
 .oe-dwg-canvas {
   /* Bumped from 0.04/0.08 → 0.10/0.20 so the drafting grid actually
      reads as a grid rather than a barely-visible texture. */

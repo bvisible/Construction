@@ -18,6 +18,7 @@ import { Card, CardContent, CardHeader } from '@/shared/ui';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { fetchLabourCost } from '@/features/payroll/api';
 import { costModelApi } from '@/features/costmodel/api';
+import { KpiStrip } from './KpiStrip';
 
 function money(value: number, currency?: string): string {
   if (!Number.isFinite(value)) return '-';
@@ -56,28 +57,36 @@ export function LabourCostWidget() {
   const labourBudget = (budgetQuery.data?.categories ?? []).find((c) => c.category === 'labor');
   const planned = labourBudget?.planned ?? 0;
   const pct = planned > 0 ? Math.min(100, Math.round((spent / planned) * 100)) : 0;
+  // Uncapped share for the KPI cell so an over-budget project can read past
+  // 100% (the progress bar below still clamps its width to `pct`).
+  const usedPct = planned > 0 ? Math.round((spent / planned) * 100) : 0;
   const over = planned > 0 && spent > planned;
 
   return (
     <Card className="h-full">
       <CardHeader title={t('dashboard.labour_cost_title', { defaultValue: 'Labour cost vs budget' })} />
       <CardContent>
-        <div className="flex items-end justify-between gap-2">
-          <div>
-            <p className="text-xs uppercase tracking-wide text-content-tertiary">
-              {t('dashboard.labour_spent', { defaultValue: 'Spent to date' })}
-            </p>
-            <p className="text-2xl font-semibold text-content-primary">{money(spent, currency)}</p>
-          </div>
-          <div className="text-right">
-            <p className="text-xs uppercase tracking-wide text-content-tertiary">
-              {t('dashboard.labour_budget', { defaultValue: 'Budget' })}
-            </p>
-            <p className="text-lg font-medium text-content-secondary">
-              {planned > 0 ? money(planned, currency) : t('dashboard.labour_no_budget', { defaultValue: 'Not set' })}
-            </p>
-          </div>
-        </div>
+        <KpiStrip
+          stats={[
+            {
+              label: t('dashboard.labour_spent', { defaultValue: 'Spent to date' }),
+              value: money(spent, currency),
+            },
+            {
+              label: t('dashboard.labour_budget', { defaultValue: 'Budget' }),
+              value:
+                planned > 0
+                  ? money(planned, currency)
+                  : t('dashboard.labour_no_budget', { defaultValue: 'Not set' }),
+              tone: 'text-content-secondary',
+            },
+            {
+              label: t('dashboard.labour_used', { defaultValue: 'Used' }),
+              value: planned > 0 ? `${usedPct}%` : '-',
+              tone: over ? 'text-rose-600' : 'text-content-secondary',
+            },
+          ]}
+        />
         {planned > 0 && (
           <div className="mt-3">
             <div className="h-2 w-full overflow-hidden rounded-full bg-surface-hover">

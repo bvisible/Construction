@@ -1,7 +1,7 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, Fragment, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import clsx from 'clsx';
 import {
   Truck,
@@ -22,6 +22,8 @@ import {
   Gauge,
   HeartPulse,
   Users,
+  Network,
+  ArrowRight,
 } from 'lucide-react';
 import {
   Button,
@@ -134,6 +136,131 @@ const labelCls = 'block text-xs font-medium text-content-secondary mb-1';
 function toNum(n: number | string | null | undefined): number {
   if (n === null || n === undefined) return 0;
   return typeof n === 'number' ? n : Number(n) || 0;
+}
+
+/* ── How-it-works flow + module integrations ───────────────────────────── */
+
+/** A compact inline link to a sibling module (keeps the flow copy readable). */
+function ModLink({ to, children }: { to: string; children: ReactNode }) {
+  return (
+    <Link to={to} className="font-medium text-oe-blue-text hover:underline">
+      {children}
+    </Link>
+  );
+}
+
+/**
+ * Explains, in one glance, what the fleet register does and how it connects to
+ * the rest of the platform: readings and inspections keep an asset assignable,
+ * crews pick it up in Resources, its running cost lands in Finance, and at
+ * handover it moves to the building Asset Register. The founder's ask is that
+ * every module make its integrations obvious, so each is a link.
+ */
+function HowEquipmentWorks() {
+  const { t } = useTranslation();
+
+  const steps: { icon: ReactNode; title: string; desc: string }[] = [
+    {
+      icon: <Truck size={14} className="text-oe-blue" />,
+      title: t('equipment.flow_1_title', { defaultValue: 'Register' }),
+      desc: t('equipment.flow_1_desc', {
+        defaultValue: 'Add every owned, rented or leased machine to the fleet register.',
+      }),
+    },
+    {
+      icon: <Gauge size={14} className="text-oe-blue" />,
+      title: t('equipment.flow_2_title', { defaultValue: 'Log readings' }),
+      desc: t('equipment.flow_2_desc', {
+        defaultValue: 'Record hour-meter, odometer and fuel readings to track real utilisation.',
+      }),
+    },
+    {
+      icon: <Wrench size={14} className="text-oe-blue" />,
+      title: t('equipment.flow_3_title', { defaultValue: 'Maintain' }),
+      desc: t('equipment.flow_3_desc', {
+        defaultValue: 'Raise and close work orders; a reading can auto-raise one when service is due.',
+      }),
+    },
+    {
+      icon: <ShieldCheck size={14} className="text-oe-blue" />,
+      title: t('equipment.flow_4_title', { defaultValue: 'Certify' }),
+      desc: t('equipment.flow_4_desc', {
+        defaultValue: 'Keep statutory inspections current; a lapsed one blocks new assignments.',
+      }),
+    },
+    {
+      icon: <Users size={14} className="text-oe-blue" />,
+      title: t('equipment.flow_5_title', { defaultValue: 'Assign & cost' }),
+      desc: t('equipment.flow_5_desc', {
+        defaultValue: 'Assign active plant to crews; its running cost flows through to Finance.',
+      }),
+    },
+  ];
+
+  return (
+    <Card padding="md">
+      <h2 className="flex items-center gap-1.5 text-sm font-semibold text-content-primary">
+        <Network size={15} className="text-oe-blue" />
+        {t('equipment.flow_title', { defaultValue: 'How the fleet fits together' })}
+      </h2>
+      <p className="mt-1 text-xs text-content-tertiary">
+        {t('equipment.flow_intro', {
+          defaultValue:
+            'The register keeps every machine safe, serviced and costed. Only active plant with a valid inspection can be assigned to a crew.',
+        })}
+      </p>
+
+      <ol className="mt-3 flex flex-col gap-2 lg:flex-row lg:items-stretch">
+        {steps.map((s, i) => (
+          <Fragment key={s.title}>
+            <li className="flex-1 rounded-lg border border-border-light bg-surface-secondary/40 p-3">
+              <div className="flex items-center gap-2">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-oe-blue-subtle text-2xs font-bold text-oe-blue-text">
+                  {i + 1}
+                </span>
+                <span className="flex items-center gap-1 text-xs font-semibold text-content-primary">
+                  {s.icon}
+                  {s.title}
+                </span>
+              </div>
+              <p className="mt-1.5 text-2xs leading-relaxed text-content-tertiary">{s.desc}</p>
+            </li>
+            {i < steps.length - 1 && (
+              <li
+                aria-hidden="true"
+                className="hidden shrink-0 items-center self-center text-content-quaternary lg:flex"
+              >
+                <ArrowRight size={16} />
+              </li>
+            )}
+          </Fragment>
+        ))}
+      </ol>
+
+      <div className="mt-3 flex flex-col gap-1.5 border-t border-border-light pt-3 text-2xs text-content-tertiary sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-5 sm:gap-y-1">
+        <span className="font-medium text-content-secondary">
+          {t('equipment.flow_connects', { defaultValue: 'Connects with:' })}
+        </span>
+        <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <ModLink to="/resources">
+            {t('equipment.mod_resources', { defaultValue: 'Resources & Crew' })}
+          </ModLink>{' '}
+          ·{' '}
+          <ModLink to="/schedule">
+            {t('equipment.mod_schedule', { defaultValue: 'Schedule' })}
+          </ModLink>{' '}
+          ·{' '}
+          <ModLink to="/finance">
+            {t('equipment.mod_finance', { defaultValue: 'Finance' })}
+          </ModLink>{' '}
+          ·{' '}
+          <ModLink to="/assets">
+            {t('equipment.mod_assets', { defaultValue: 'Building Assets' })}
+          </ModLink>
+        </span>
+      </div>
+    </Card>
+  );
 }
 
 export function EquipmentPage() {
@@ -266,6 +393,8 @@ export function EquipmentPage() {
             'Register every owned, rented or leased machine, then open an asset to see utilisation, month-to-date fuel cost, open maintenance work orders and certification expiry. An asset that is not active, or whose required inspection has lapsed, is automatically blocked from new resource assignments, and its running cost flows through to Finance.',
         })}
       </DismissibleInfo>
+
+      <HowEquipmentWorks />
 
       <div className="border-b border-border-light">
         <nav

@@ -23,6 +23,8 @@ import {
   Upload,
   Loader2,
   ExternalLink,
+  ArrowRight,
+  Network,
 } from 'lucide-react';
 import {
   Button,
@@ -1102,6 +1104,116 @@ function ConnectorCard({
   );
 }
 
+/* ── How-it-works flow + module integrations ───────────────────────────── */
+
+/** A compact inline link to a sibling module (keeps the flow copy readable). */
+function ModLink({ to, children }: { to: string; children: React.ReactNode }) {
+  return (
+    <Link to={to} className="font-medium text-oe-blue-text hover:underline">
+      {children}
+    </Link>
+  );
+}
+
+/**
+ * One-glance explainer: what the correspondence register is and how it connects
+ * to the rest of the platform. Each letter, notice, email or memo is logged with
+ * its source file and linked to the related transmittal, RFI, documents and
+ * contacts, so one traceable thread survives for any later claim. Every
+ * connected module is a link.
+ */
+function HowCorrespondenceWorks() {
+  const { t } = useTranslation();
+
+  const steps: { icon: React.ReactNode; title: string; desc: string }[] = [
+    {
+      icon: <Mail size={14} className="text-oe-blue" />,
+      title: t('correspondence.how_step1_title', { defaultValue: 'Log an entry' }),
+      desc: t('correspondence.how_step1_desc', {
+        defaultValue: 'Record each letter, notice, email or memo, incoming or outgoing.',
+      }),
+    },
+    {
+      icon: <Paperclip size={14} className="text-oe-blue" />,
+      title: t('correspondence.how_step2_title', { defaultValue: 'Attach the source' }),
+      desc: t('correspondence.how_step2_desc', {
+        defaultValue: 'Upload the original file so the evidence lives with the record.',
+      }),
+    },
+    {
+      icon: <Link2 size={14} className="text-oe-blue" />,
+      title: t('correspondence.how_step3_title', { defaultValue: 'Link the thread' }),
+      desc: t('correspondence.how_step3_desc', {
+        defaultValue: 'Connect it to the related transmittal, RFI, documents and contacts.',
+      }),
+    },
+    {
+      icon: <FileText size={14} className="text-oe-blue" />,
+      title: t('correspondence.how_step4_title', { defaultValue: 'Keep the trail' }),
+      desc: t('correspondence.how_step4_desc', {
+        defaultValue: 'One traceable thread stays intact end to end if a dispute arises.',
+      }),
+    },
+  ];
+
+  return (
+    <section className="rounded-xl border border-border-light bg-surface-secondary/40 p-4">
+      <h2 className="flex items-center gap-1.5 text-sm font-semibold text-content-primary">
+        <Network size={15} className="text-oe-blue" />
+        {t('correspondence.how_title', { defaultValue: 'How correspondence fits together' })}
+      </h2>
+      <p className="mt-1 text-xs text-content-tertiary">
+        {t('correspondence.how_intro', {
+          defaultValue:
+            'Log every formal letter, notice, email and memo, attach its source file and link it into one traceable thread you can rely on if a claim arises.',
+        })}
+      </p>
+
+      <ol className="mt-3 flex flex-col gap-2 lg:flex-row lg:items-stretch">
+        {steps.map((s, i) => (
+          <React.Fragment key={s.title}>
+            <li className="flex-1 rounded-lg border border-border-light bg-surface-primary p-3">
+              <div className="flex items-center gap-2">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-oe-blue-subtle">
+                  {s.icon}
+                </span>
+                <span className="text-xs font-semibold text-content-primary">{s.title}</span>
+              </div>
+              <p className="mt-1.5 text-2xs leading-relaxed text-content-tertiary">{s.desc}</p>
+            </li>
+            {i < steps.length - 1 && (
+              <li
+                aria-hidden="true"
+                className="hidden shrink-0 items-center self-center text-content-quaternary lg:flex"
+              >
+                <ArrowRight size={16} />
+              </li>
+            )}
+          </React.Fragment>
+        ))}
+      </ol>
+
+      <div className="mt-3 border-t border-border-light pt-3 text-2xs text-content-tertiary">
+        <span className="font-medium text-content-secondary">
+          {t('correspondence.how_connects', { defaultValue: 'Connects with:' })}
+        </span>{' '}
+        <ModLink to="/rfi">{t('correspondence.how_mod_rfi', { defaultValue: 'RFI' })}</ModLink> ·{' '}
+        <ModLink to="/contacts">
+          {t('correspondence.how_mod_contacts', { defaultValue: 'Contacts' })}
+        </ModLink>{' '}
+        ·{' '}
+        <ModLink to="/transmittals">
+          {t('correspondence.how_mod_transmittals', { defaultValue: 'Transmittals' })}
+        </ModLink>{' '}
+        ·{' '}
+        <ModLink to="/submittals">
+          {t('correspondence.how_mod_submittals', { defaultValue: 'Submittals' })}
+        </ModLink>
+      </div>
+    </section>
+  );
+}
+
 /* ── Main Page ─────────────────────────────────────────────────────────── */
 
 export function CorrespondencePage() {
@@ -1404,6 +1516,8 @@ export function CorrespondencePage() {
             'Keep a contemporaneous register of every formal letter, notice, email and memo exchanged with project parties. Log each entry, attach the source file and link it to the related Transmittals, RFIs, Documents and Contacts so a single thread of communication stays traceable end to end if a dispute arises. Inbound email auto-import is not wired yet, so entries are logged by hand today.',
         })}
       </DismissibleInfo>
+
+      <HowCorrespondenceWorks />
 
       {/* No-project warning */}
       {!projectId && (

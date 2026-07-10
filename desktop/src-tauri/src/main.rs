@@ -292,6 +292,60 @@ fn parse_stage_marker(line: &str) -> Option<(String, String, String)> {
     Some((id, splash_status, detail))
 }
 
+/// Accumulates a Python traceback seen on the sidecar's stderr so the launcher
+/// can report the real exception line as the failure cause when the backend
+/// crashed too early to emit a `STAGE:server:fail` marker. Only the exception
+/// summary line is kept (chained tracebacks overwrite it, which is what Python
+/// prints last and what the user needs to see), so the database-shutdown noise
+/// that follows a crash can never become the reported cause.
+#[derive(Default)]
+struct TracebackCapture {
+    capturing: bool,
+    cause: Option<String>,
+}
+
+impl TracebackCapture {
+    /// Feed one stderr line (the caller has already split on `\n`).
+    fn feed_line(&mut self, raw: &str) {
+        let line = raw.trim_end();
+        if line.contains("Traceback (most recent call last)") {
+            self.capturing = true;
+            return;
+        }
+        if !self.capturing {
+            return;
+        }
+        let body = line.trim();
+        if body.is_empty() {
+            return;
+        }
+        // Stack-frame lines are indented; keep reading until the summary line.
+        if line.starts_with(' ') || line.starts_with('\t') {
+            return;
+        }
+        // Chained-exception connectors are not the cause; the traceback that
+        // follows them re-triggers capture and overwrites with the later cause.
+        if body.starts_with("During handling of the above exception")
+            || body.starts_with("The above exception was the direct cause")
+        {
+            return;
+        }
+        // A non-indented, non-connector line is the exception summary
+        // (`ExceptionType: message`): record it (bounded, on a char boundary)
+        // and stop until another traceback re-triggers capture.
+        let mut summary = body.to_string();
+        if summary.len() > 300 {
+            let mut end = 300;
+            while end > 0 && !summary.is_char_boundary(end) {
+                end -= 1;
+            }
+            summary.truncate(end);
+        }
+        self.cause = Some(summary);
+        self.capturing = false;
+    }
+}
+
 /// Find an available port for the backend server, with a fixed fallback so a
 /// picker failure never aborts startup.
 fn find_available_port() -> u16 {
@@ -742,12 +796,20 @@ tools block newly installed programs; allow OpenConstructionERP and try again."
 
             let backend_ready = Arc::new(AtomicBool::new(false));
             let last_stderr = Arc::new(Mutex::new(String::new()));
+            // Latch the real startup failure cause so the database-shutdown
+            // noise that follows a crash cannot mask it: a STAGE:server:fail
+            // marker (preferred), or the exception line of a Python traceback
+            // on stderr when the backend died too early to emit a marker.
+            let latched_fail = Arc::new(Mutex::new(None::<String>));
+            let traceback = Arc::new(Mutex::new(TracebackCapture::default()));
 
             // Pump the sidecar's output into the log file and remember recent
             // stderr so a startup crash can be shown to the user verbatim.
             {
                 let ready = backend_ready.clone();
                 let stderr_buf = last_stderr.clone();
+                let latched = latched_fail.clone();
+                let traceback = traceback.clone();
                 let handle_evt = handle.clone();
                 tauri::async_runtime::spawn(async move {
                     while let Some(event) = rx.recv().await {
@@ -760,6 +822,13 @@ tools block newly installed programs; allow OpenConstructionERP and try again."
                                 for raw in line.split('\n') {
                                     if let Some((id, status, detail)) = parse_stage_marker(raw) {
                                         boot_stage(&handle_evt, &id, &status, &detail);
+                                        // Latch the first real failure cause.
+                                        if status == "failed" && !detail.is_empty() {
+                                            let mut lf = latched.lock().unwrap();
+                                            if lf.is_none() {
+                                                *lf = Some(detail.clone());
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -767,16 +836,33 @@ tools block newly installed programs; allow OpenConstructionERP and try again."
                                 let line = String::from_utf8_lossy(&bytes);
                                 log_line(&format!("[backend:err] {}", line.trim_end()));
                                 // Some launchers/loggers route progress markers
-                                // to stderr; honour them there too.
+                                // to stderr; honour them there too. Non-marker
+                                // lines feed the traceback capture so a hard
+                                // crash still yields a real cause with no marker.
                                 for raw in line.split('\n') {
                                     if let Some((id, status, detail)) = parse_stage_marker(raw) {
                                         boot_stage(&handle_evt, &id, &status, &detail);
+                                        if status == "failed" && !detail.is_empty() {
+                                            let mut lf = latched.lock().unwrap();
+                                            if lf.is_none() {
+                                                *lf = Some(detail.clone());
+                                            }
+                                        }
+                                    } else {
+                                        traceback.lock().unwrap().feed_line(raw);
                                     }
                                 }
                                 let mut buf = stderr_buf.lock().unwrap();
                                 buf.push_str(&line);
                                 if buf.len() > 4000 {
-                                    let cut = buf.len() - 4000;
+                                    // Advance the cut to a char boundary so
+                                    // slicing a UTF-8 string can never panic and
+                                    // kill the pump (which would strand the user
+                                    // on the splash for the whole timeout).
+                                    let mut cut = buf.len() - 4000;
+                                    while cut < buf.len() && !buf.is_char_boundary(cut) {
+                                        cut += 1;
+                                    }
                                     *buf = buf[cut..].to_string();
                                 }
                             }
@@ -792,30 +878,53 @@ tools block newly installed programs; allow OpenConstructionERP and try again."
                                 // healthy, surface it now instead of leaving the
                                 // user staring at the spinner for the full timeout.
                                 if !ready.load(Ordering::SeqCst) {
-                                    let tail = stderr_buf.lock().unwrap().clone();
-                                    let detail = if tail.trim().is_empty() {
-                                        format!(
-                                            "The backend stopped unexpectedly (exit code {:?}) \
-before it finished starting.",
-                                            payload.code
-                                        )
+                                    // Prefer the real cause the backend reported
+                                    // (STAGE:server:fail), then the exception line
+                                    // of a captured Python traceback, and only as a
+                                    // last resort the raw stderr tail. This is what
+                                    // keeps the database-shutdown noise from masking
+                                    // the real reason startup failed.
+                                    let latched_cause = latched.lock().unwrap().clone();
+                                    let tb_cause = traceback.lock().unwrap().cause.clone();
+                                    let core = if let Some(cause) = latched_cause.or(tb_cause) {
+                                        format!("The backend could not finish starting: {cause}")
                                     } else {
-                                        // Keep the message readable: show the
-                                        // last chunk of stderr, which usually
-                                        // carries the actual cause.
-                                        let trimmed = tail.trim();
-                                        let shown = if trimmed.len() > 600 {
-                                            &trimmed[trimmed.len() - 600..]
+                                        let tail = stderr_buf.lock().unwrap().clone();
+                                        if tail.trim().is_empty() {
+                                            format!(
+                                                "The backend stopped unexpectedly (exit code {:?}) \
+before it finished starting.",
+                                                payload.code
+                                            )
                                         } else {
-                                            trimmed
-                                        };
-                                        format!(
-                                            "The backend stopped unexpectedly during startup: {shown}"
-                                        )
+                                            // Last resort: show the tail of stderr,
+                                            // which usually carries the cause.
+                                            let trimmed = tail.trim();
+                                            let shown = if trimmed.len() > 600 {
+                                                let mut start = trimmed.len() - 600;
+                                                while start < trimmed.len()
+                                                    && !trimmed.is_char_boundary(start)
+                                                {
+                                                    start += 1;
+                                                }
+                                                &trimmed[start..]
+                                            } else {
+                                                trimmed
+                                            };
+                                            format!(
+                                                "The backend stopped unexpectedly during startup: {shown}"
+                                            )
+                                        }
                                     };
-                                    // Attribute the failure to whichever step was
-                                    // last in progress so the checklist shows a
-                                    // clear red mark, defaulting to the server step.
+                                    // Always pair the cause with a clear next step.
+                                    // report_fatal_stage also surfaces the log path
+                                    // (the splash shows an Open-log button).
+                                    let detail = format!(
+                                        "{core} Open the log file for the full details, and if \
+this keeps happening send it to info@datadrivenconstruction.io."
+                                    );
+                                    // Attribute the failure to the server step so
+                                    // the checklist shows a clear red mark.
                                     report_fatal_stage(&handle_evt, "server", &detail);
                                 }
                                 break;

@@ -23,6 +23,7 @@ import {
   CircleDot,
   Flame,
   Timer,
+  UserCheck,
 } from 'lucide-react';
 import {
   Button,
@@ -52,6 +53,7 @@ import {
   fetchPunchItems,
   fetchPunchSummary,
   fetchTeamMembers,
+  fetchPunchDrawings,
   createPunchItem,
   deletePunchItem,
   transitionPunchStatus,
@@ -65,8 +67,18 @@ import type {
   PunchSummary,
   TeamMember,
   CreatePunchPayload,
+  PunchDrawing,
 } from './api';
 import { punchlistGuide } from './punchlistGuide';
+import { PunchDetailDrawer } from './PunchDetailDrawer';
+import { VoiceEntry, getField } from '@/features/voice';
+
+// The pin board pulls in the PDF renderer (pdfjs-dist), which is heavy. Keep it
+// off the punchlist page's initial chunk so users who only use the list and
+// kanban views never pay for it; it loads the first time the pins view opens.
+const PunchPinBoard = React.lazy(() =>
+  import('./PunchPinBoard').then((m) => ({ default: m.PunchPinBoard })),
+);
 
 /* ── Constants ─────────────────────────────────────────────────────────── */
 
@@ -77,7 +89,7 @@ interface Project {
 }
 
 const PRIORITIES: PunchPriority[] = ['low', 'medium', 'high', 'critical'];
-const STATUSES: PunchStatus[] = ['open', 'in_progress', 'resolved', 'verified', 'closed'];
+const STATUSES: PunchStatus[] = ['open', 'assigned', 'in_progress', 'resolved', 'verified', 'closed'];
 const CATEGORIES: PunchCategory[] = [
   'structural',
   'mechanical',
@@ -92,7 +104,14 @@ const CATEGORIES: PunchCategory[] = [
   'general',
 ];
 
-const KANBAN_COLUMNS: PunchStatus[] = ['open', 'in_progress', 'resolved', 'verified', 'closed'];
+const KANBAN_COLUMNS: PunchStatus[] = [
+  'open',
+  'assigned',
+  'in_progress',
+  'resolved',
+  'verified',
+  'closed',
+];
 
 const PRIORITY_BADGE_VARIANT: Record<PunchPriority, 'neutral' | 'blue' | 'warning' | 'error'> = {
   low: 'neutral',
@@ -119,6 +138,7 @@ const PRIORITY_STRIPE_CLS: Record<PunchPriority, string> = {
 
 const STATUS_BADGE_VARIANT: Record<PunchStatus, 'error' | 'warning' | 'blue' | 'success' | 'neutral'> = {
   open: 'error',
+  assigned: 'blue',
   in_progress: 'warning',
   resolved: 'blue',
   verified: 'success',
@@ -127,13 +147,20 @@ const STATUS_BADGE_VARIANT: Record<PunchStatus, 'error' | 'warning' | 'blue' | '
 
 const STATUS_TRANSITION: Record<PunchStatus, { next: PunchStatus; labelKey: string; defaultLabel: string; icon: React.ElementType }[]> = {
   open: [
+    { next: 'assigned', labelKey: 'punch.action_assign', defaultLabel: 'Assign', icon: UserCheck },
     { next: 'in_progress', labelKey: 'punch.action_start', defaultLabel: 'Start Work', icon: Play },
+  ],
+  // Owned but not started yet. Reopen/unassign back to "open" mirrors the
+  // backend FSM (assigned -> open is legal).
+  assigned: [
+    { next: 'in_progress', labelKey: 'punch.action_start', defaultLabel: 'Start Work', icon: Play },
+    { next: 'open', labelKey: 'punch.action_unassign', defaultLabel: 'Unassign', icon: XCircle },
   ],
   in_progress: [
     { next: 'resolved', labelKey: 'punch.action_resolve', defaultLabel: 'Mark Resolved', icon: CheckCircle2 },
   ],
   // Reopen targets must mirror the backend FSM (punchlist/service.py
-  // VALID_TRANSITIONS): resolved/verified/closed may all go back to "open" —
+  // VALID_TRANSITIONS): resolved/verified/closed may all go back to "open".
   // "in_progress" is NOT a legal reopen target and the API rejects it.
   resolved: [
     { next: 'verified', labelKey: 'punch.action_verify', defaultLabel: 'Verify', icon: ShieldCheck },
@@ -155,7 +182,7 @@ const inputCls =
 const textareaCls =
   'w-full rounded-lg border border-border bg-surface-primary px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-oe-blue/30 focus:border-oe-blue resize-none';
 
-type ViewMode = 'list' | 'kanban';
+type ViewMode = 'list' | 'kanban' | 'pins';
 
 /* ── Source provenance badge ──────────────────────────────────────────── */
 
@@ -763,10 +790,12 @@ function AddPunchModal({
 const PunchKanbanCard = React.memo(function PunchKanbanCard({
   item,
   onTransition,
+  onOpen,
   onDelete: _onDelete,
 }: {
   item: PunchItem;
   onTransition: (id: string, status: PunchStatus) => void;
+  onOpen: (item: PunchItem) => void;
   onDelete: (id: string) => void;
 }) {
   const { t } = useTranslation();
@@ -780,13 +809,23 @@ const PunchKanbanCard = React.memo(function PunchKanbanCard({
 
   return (
     <Card
+      role="button"
+      tabIndex={0}
+      onClick={() => onOpen(item)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onOpen(item);
+        }
+      }}
       className={clsx(
-        'p-3 mb-2 hover:shadow-md transition-shadow border-l-4',
+        'p-3 mb-2 hover:shadow-md transition-shadow border-l-4 cursor-pointer',
+        'focus:outline-none focus-visible:ring-2 focus-visible:ring-oe-blue/40',
         PRIORITY_STRIPE_CLS[item.priority],
         isOverdue && 'bg-red-50/40 dark:bg-red-950/15',
       )}
     >
-      {/* Title — bold, clamped to 2 lines */}
+      {/* Title: bold, clamped to 2 lines */}
       <h4 className={clsx(
         'text-sm font-semibold line-clamp-2',
         isOverdue ? 'text-semantic-error' : 'text-content-primary',
@@ -794,14 +833,14 @@ const PunchKanbanCard = React.memo(function PunchKanbanCard({
         {item.title}
       </h4>
 
-      {/* Description — truncated single line */}
+      {/* Description: truncated single line */}
       {item.description && (
         <p className="text-xs text-content-tertiary mt-1 line-clamp-1">
           {item.description}
         </p>
       )}
 
-      {/* Source provenance — a button that deep-links back to the clash,
+      {/* Source provenance: a button that deep-links back to the clash,
           inspection or NCR this item was raised from. */}
       {resolvePunchSourceLink(item) && (
         <div className="mt-1">
@@ -864,7 +903,10 @@ const PunchKanbanCard = React.memo(function PunchKanbanCard({
                 key={tr.next}
                 variant="ghost"
                 size="sm"
-                onClick={() => onTransition(item.id, tr.next)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onTransition(item.id, tr.next);
+                }}
                 className="text-xs shrink-0 whitespace-nowrap"
               >
                 <Icon size={12} className="mr-1 shrink-0" />
@@ -883,10 +925,12 @@ const PunchKanbanCard = React.memo(function PunchKanbanCard({
 function KanbanView({
   items,
   onTransition,
+  onOpen,
   onDelete,
 }: {
   items: PunchItem[];
   onTransition: (id: string, status: PunchStatus) => void;
+  onOpen: (item: PunchItem) => void;
   onDelete: (id: string) => void;
 }) {
   const { t } = useTranslation();
@@ -903,6 +947,7 @@ function KanbanView({
 
   const COLUMN_HEADER_CLS: Record<PunchStatus, string> = {
     open: 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400',
+    assigned: 'bg-indigo-100 text-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-400',
     in_progress: 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400',
     resolved: 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400',
     verified: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400',
@@ -910,7 +955,7 @@ function KanbanView({
   };
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4">
+    <div className="grid grid-cols-1 gap-4 md:grid-cols-3 lg:grid-cols-6">
       {KANBAN_COLUMNS.map((status) => {
         const colItems = columns.get(status) ?? [];
         return (
@@ -947,6 +992,7 @@ function KanbanView({
                     key={item.id}
                     item={item}
                     onTransition={onTransition}
+                    onOpen={onOpen}
                     onDelete={onDelete}
                   />
                 ))
@@ -984,6 +1030,13 @@ export function PunchListPage() {
   const [filterAssignee, setFilterAssignee] = useState('');
   const [showFilters, setShowFilters] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  // Item detail drawer (opened from a list row, a kanban card, or a pin).
+  const [detailItem, setDetailItem] = useState<PunchItem | null>(null);
+  // Pin board focus when jumping in from "open on pin board" in the drawer.
+  const [pinFocus, setPinFocus] = useState<{ docId: string | null; page: number | null }>({
+    docId: null,
+    page: null,
+  });
 
   // Data queries
   const { data: projects = [] } = useQuery({
@@ -1035,19 +1088,13 @@ export function PunchListPage() {
     enabled: !!projectId,
   });
 
-  // Project documents, used to pin a punch item to a drawing sheet (CONN-57).
-  const { data: drawings = [] } = useQuery({
+  // Project documents, used to pin a punch item to a drawing sheet (CONN-57)
+  // and to render the visual pin board. Loaded when the add modal or the pin
+  // board actually needs the list.
+  const { data: drawings = [] } = useQuery<PunchDrawing[]>({
     queryKey: ['punchlist-drawings', projectId],
-    queryFn: async (): Promise<PunchDrawingOption[]> => {
-      const rows = await apiGet<{ id: string; filename?: string; name?: string }[]>(
-        `/v1/documents/?project_id=${projectId}`,
-      );
-      return (Array.isArray(rows) ? rows : []).map((r) => ({
-        id: r.id,
-        filename: r.filename ?? r.name ?? '',
-      }));
-    },
-    enabled: !!projectId && showAddModal,
+    queryFn: () => fetchPunchDrawings(projectId),
+    enabled: !!projectId && (showAddModal || viewMode === 'pins'),
     staleTime: 60_000,
   });
 
@@ -1098,6 +1145,14 @@ export function PunchListPage() {
     qc.invalidateQueries({ queryKey: ['punchlist'] });
     qc.invalidateQueries({ queryKey: ['punchlist-summary'] });
   }, [qc]);
+
+  // The pin board renders over the project-wide (unfiltered) `punchlist-kpi`
+  // list, whose key is NOT matched by the ['punchlist'] invalidation above.
+  // Placing a pin must refresh that list so the new pin appears at once.
+  const invalidatePins = useCallback(() => {
+    invalidateAll();
+    qc.invalidateQueries({ queryKey: ['punchlist-kpi'] });
+  }, [invalidateAll, qc]);
 
   // Mutations
   const createMut = useMutation({
@@ -1266,9 +1321,19 @@ export function PunchListPage() {
     [delMut, confirm, t],
   );
 
+  // Open the item detail drawer (from a list row, kanban card, or pin).
+  const openDetail = useCallback((item: PunchItem) => setDetailItem(item), []);
+
+  // Jump from the detail drawer to the pin board focused on the item's sheet.
+  const handleOpenPinBoard = useCallback((item: PunchItem) => {
+    setDetailItem(null);
+    setPinFocus({ docId: item.document_id, page: item.page });
+    setViewMode('pins');
+  }, []);
+
   return (
     <div className="animate-fade-in space-y-5">
-      {/* Breadcrumb — the Home icon already links to the dashboard, and a lone
+      {/* Breadcrumb: the Home icon already links to the dashboard, and a lone
           module label auto-hides (MODULE_STYLE_GUIDE section 2.1), so no
           literal "Dashboard" item. A project link is added once one is in
           context, matching the rest of the quality cluster. */}
@@ -1305,6 +1370,26 @@ export function PunchListPage() {
                 {t('geo_hub.view_on_map', { defaultValue: 'View on map' })}
               </Button>
             )}
+            <VoiceEntry
+              projectId={projectId}
+              target="defect"
+              triggerLabel={t('voice.trigger_defect', { defaultValue: 'Voice defect' })}
+              onConfirm={async (d) => {
+                const location = getField(d.fields, 'location').trim();
+                const desc = getField(d.fields, 'description').trim();
+                const description = location
+                  ? `${desc ? `${desc}\n` : ''}${t('voice.location_line', { defaultValue: 'Location' })}: ${location}`
+                  : desc;
+                await createMut.mutateAsync({
+                  project_id: projectId,
+                  title: getField(d.fields, 'title'),
+                  description: description || undefined,
+                  priority: (getField(d.fields, 'priority') || 'medium') as PunchPriority,
+                  category: (getField(d.fields, 'category') || 'general') as PunchCategory,
+                  trade: getField(d.fields, 'trade') || undefined,
+                });
+              }}
+            />
             <Button
               variant="primary"
               size="sm"
@@ -1428,6 +1513,22 @@ export function PunchListPage() {
                 {t('punch.view_kanban', { defaultValue: 'Kanban' })}
               </span>
             </button>
+            <button
+              onClick={() => setViewMode('pins')}
+              className={clsx(
+                'flex items-center gap-1 px-3 py-2 text-sm transition-colors',
+                viewMode === 'pins'
+                  ? 'bg-oe-blue text-white'
+                  : 'bg-surface-primary text-content-secondary hover:bg-surface-secondary',
+              )}
+              aria-label={t('punch.view_pins', { defaultValue: 'Pin board view' })}
+              title={t('punch.view_pins', { defaultValue: 'Pin board view' })}
+            >
+              <MapPin size={14} />
+              <span className="hidden sm:inline">
+                {t('punch.view_pins', { defaultValue: 'Pins' })}
+              </span>
+            </button>
           </div>
         </div>
       </div>
@@ -1526,6 +1627,17 @@ export function PunchListPage() {
           <SkeletonTable rows={6} columns={5} />
         ) : isError ? (
           <RecoveryCard error={error} onRetry={() => refetch()} />
+        ) : viewMode === 'pins' ? (
+          <React.Suspense fallback={<SkeletonTable rows={6} columns={5} />}>
+            <PunchPinBoard
+              items={kpiItems}
+              drawings={drawings}
+              onOpenItem={openDetail}
+              onPinned={invalidatePins}
+              initialDocId={pinFocus.docId}
+              initialPage={pinFocus.page}
+            />
+          </React.Suspense>
         ) : filteredItems.length === 0 ? (
           <EmptyState
             icon={<ListChecks size={28} strokeWidth={1.5} />}
@@ -1557,11 +1669,12 @@ export function PunchListPage() {
           <KanbanView
             items={filteredItems}
             onTransition={handleTransition}
+            onOpen={openDetail}
             onDelete={handleDelete}
           />
         ) : (
           <Card className="overflow-hidden">
-            {/* Bulk-action bar — visible only when items are selected. */}
+            {/* Bulk-action bar: visible only when items are selected. */}
             {selectedIds.size > 0 && (
               <div className="flex items-center justify-between gap-3 px-4 py-2 border-b border-border-light bg-oe-blue/5">
                 <span className="text-sm text-content-secondary">
@@ -1650,6 +1763,7 @@ export function PunchListPage() {
                       key={item.id}
                       item={item}
                       onTransition={handleTransition}
+                      onOpen={openDetail}
                       onDelete={handleDelete}
                       selected={selectedIds.has(item.id)}
                       onToggleSelect={toggleSelect}
@@ -1674,10 +1788,21 @@ export function PunchListPage() {
         />
       )}
 
+      {/* Item detail drawer - photo gallery, closure stepper, sheet pin. */}
+      {detailItem && (
+        <PunchDetailDrawer
+          itemId={detailItem.id}
+          projectId={projectId}
+          initialItem={detailItem}
+          onClose={() => setDetailItem(null)}
+          onOpenPinBoard={handleOpenPinBoard}
+        />
+      )}
+
       <ConfirmDialog {...confirmProps} />
 
-      {/* Mobile PWA — Slice 1. Bottom-anchored quick-action FAB visible
-          only on viewports ≤640px. ≥44×44 tap target. */}
+      {/* Mobile PWA, Slice 1. Bottom-anchored quick-action FAB visible
+          only on small viewports, with a comfortable tap target. */}
       <button
         type="button"
         onClick={() => setShowAddModal(true)}
@@ -1696,6 +1821,7 @@ export function PunchListPage() {
 const PunchTableRow = React.memo(function PunchTableRow({
   item,
   onTransition,
+  onOpen,
   onDelete,
   selected,
   onToggleSelect,
@@ -1703,6 +1829,7 @@ const PunchTableRow = React.memo(function PunchTableRow({
 }: {
   item: PunchItem;
   onTransition: (id: string, status: PunchStatus) => void;
+  onOpen: (item: PunchItem) => void;
   onDelete: (id: string) => void;
   selected: boolean;
   onToggleSelect: (id: string) => void;
@@ -1773,9 +1900,14 @@ const PunchTableRow = React.memo(function PunchTableRow({
           {isOverdue && (
             <AlertTriangle size={14} className="text-semantic-error shrink-0" />
           )}
-          <span className="text-sm font-medium text-content-primary truncate max-w-[250px]">
+          <button
+            type="button"
+            onClick={() => onOpen(item)}
+            title={t('punch.open_detail', { defaultValue: 'Open item details' })}
+            className="max-w-[250px] truncate rounded text-left text-sm font-medium text-content-primary hover:text-oe-blue hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-oe-blue/40"
+          >
             {item.title}
-          </span>
+          </button>
         </div>
         {(item.location_x != null || item.location_y != null) && (
           <p className="text-xs text-content-tertiary mt-0.5 truncate max-w-[250px]">

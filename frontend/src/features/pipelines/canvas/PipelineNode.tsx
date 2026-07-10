@@ -1,26 +1,34 @@
 /**
- * `<PipelineNode>` — a single pipeline node rendered as an xyflow node.
+ * `<PipelineNode>` - a single pipeline node rendered as an xyflow node card.
  *
- * Cloned from the EAC `BlockNode`:
- *   - Outer wrapper carries the category color + selected state via Tailwind
- *     token classes (auto dark-mode).
- *   - Header: category icon + double-click-editable title + `ⓘ` + caret.
- *   - Param chips: short read-only summary (full edit in the Inspector).
- *   - Typed port rows: input handles logical-start, output handles logical-end,
- *     each with a shape-coded glyph + label (color + shape = not color alone).
- *   - Run-state accent bar on the logical-start edge + a status icon so state
- *     never relies on color alone (03_ux_visual §2.3).
+ * The card resolves its identity from `node.category` via `getCategoryTokens()`
+ * and reads as a solid, modern node-editor card rather than a floating label:
+ *   - a solid CATEGORY-COLORED HEADER (icon + inline-editable title + a quiet
+ *     category label + help/expand controls; header text clears WCAG-AA),
+ *   - a surfaced BODY that lays inputs down the logical-start edge and outputs
+ *     down the logical-end edge (each = a type-colored glyph aligned to its
+ *     Handle + the port label; two columns when the node has both), plus a
+ *     compact "label: value" param preview (or a one-line description when the
+ *     step has no params), and
+ *   - a bottom STATUS strip that mirrors the live run state (idle shows nothing;
+ *     running/done/error pair an icon with color so state is never color-alone).
+ *
+ * Contracts preserved: each Handle id === the port id, inputs are `target`
+ * handles on the logical-start edge and outputs are `source` handles on the
+ * logical-end edge, and inline rename / selection / drag / run overlay all keep
+ * working against the same store actions and `CanvasNode` shape.
  */
 import { Handle, Position, type NodeProps } from '@xyflow/react';
 import clsx from 'clsx';
 import {
+  CheckCircle2,
   ChevronDown,
   ChevronRight,
   CircleSlash,
   Clock,
   Info,
   Loader2,
-  Play,
+  PauseCircle,
   XCircle,
   type LucideProps,
 } from 'lucide-react';
@@ -35,9 +43,14 @@ import { useTranslation } from 'react-i18next';
 
 import { useIsRTL } from '@/shared/hooks/useIsRTL';
 
-import { getCategoryTokens, getPortTokens, PORT_SHAPE_SVG } from '../tokens';
-import { usePipelineStore, type CanvasNode } from '../usePipelineStore';
-import type { RunStatus } from '../api';
+import { PortGlyph } from '../components/PortGlyph';
+import { getCategoryTokens, getPortTokens } from '../tokens';
+import {
+  usePipelineStore,
+  type CanvasNode,
+  type PipelinePort,
+} from '../usePipelineStore';
+import { useNodeTypes, type NodeTypeDef, type RunStatus } from '../api';
 
 export interface PipelineNodeData extends Record<string, unknown> {
   node: CanvasNode;
@@ -45,46 +58,86 @@ export interface PipelineNodeData extends Record<string, unknown> {
 
 export type PipelineNodeProps = NodeProps;
 
-/** Small inline SVG glyph for a port's data type (shape encoding). */
-function PortGlyph({ type, size = 12 }: { type: string; size?: number }) {
-  const tok = getPortTokens(type);
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 12 12"
-      aria-hidden="true"
-      style={{ fill: tok.color, stroke: tok.color }}
-      // eslint-disable-next-line react/no-danger
-      dangerouslySetInnerHTML={{ __html: PORT_SHAPE_SVG[tok.shape] }}
-    />
-  );
-}
+/** Max params rendered in the collapsed preview before a "+N more" line. */
+const MAX_PREVIEW_PARAMS = 3;
 
-/** Map a run status → {icon, accent-bar token class}. */
+/** Map a run status → {icon, tinted-strip classes, animation flags}. */
 function runVisual(status: RunStatus | undefined): {
   Icon: ComponentType<LucideProps> | null;
-  accent: string;
+  cls: string;
   spin?: boolean;
+  pulse?: boolean;
 } {
   switch (status) {
     case 'queued':
-      return { Icon: Clock, accent: 'bg-oe-blue/60' };
+      return {
+        Icon: Clock,
+        cls: 'bg-semantic-info-bg text-semantic-info',
+        pulse: true,
+      };
     case 'running':
-      return { Icon: Loader2, accent: 'bg-oe-blue', spin: true };
+      return {
+        Icon: Loader2,
+        cls: 'bg-semantic-info-bg text-semantic-info',
+        spin: true,
+      };
     case 'done':
     case 'success':
-      return { Icon: Play, accent: 'bg-semantic-success' };
+      return {
+        Icon: CheckCircle2,
+        cls: 'bg-semantic-success-bg text-semantic-success',
+      };
     case 'error':
     case 'failed':
-      return { Icon: XCircle, accent: 'bg-semantic-error' };
+      return {
+        Icon: XCircle,
+        cls: 'bg-semantic-error-bg text-semantic-error',
+      };
     case 'paused':
-      return { Icon: Clock, accent: 'bg-semantic-warning' };
+      return {
+        Icon: PauseCircle,
+        cls: 'bg-semantic-warning-bg text-semantic-warning',
+      };
     case 'cancelled':
-      return { Icon: CircleSlash, accent: 'bg-content-tertiary' };
+      return {
+        Icon: CircleSlash,
+        cls: 'bg-surface-tertiary text-content-tertiary',
+      };
     default:
-      return { Icon: null, accent: 'bg-transparent' };
+      return { Icon: null, cls: '' };
   }
+}
+
+/** Human label for a param key, taken from the node-type's params_schema. */
+function paramLabel(
+  schema: Record<string, unknown> | undefined,
+  key: string,
+): string {
+  if (!schema) return key;
+  const props =
+    schema.properties && typeof schema.properties === 'object'
+      ? (schema.properties as Record<string, unknown>)
+      : schema;
+  const entry = props[key];
+  if (entry && typeof entry === 'object' && 'title' in entry) {
+    const title = (entry as { title?: unknown }).title;
+    if (typeof title === 'string' && title.trim()) return title;
+  }
+  return key;
+}
+
+/** Compact one-line rendering of a param value. */
+function formatParamValue(value: unknown): string {
+  if (typeof value === 'boolean') return value ? 'true' : 'false';
+  if (Array.isArray(value)) return value.map((v) => String(v)).join(', ');
+  if (value && typeof value === 'object') {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  }
+  return String(value);
 }
 
 export function PipelineNode({ id, data, selected }: PipelineNodeProps) {
@@ -96,6 +149,7 @@ export function PipelineNode({ id, data, selected }: PipelineNodeProps) {
   const runNodeState = usePipelineStore((s) =>
     node ? s.run.nodeStates[node.id] : undefined,
   );
+  const { data: nodeTypes } = useNodeTypes();
 
   const [editingTitle, setEditingTitle] = useState(false);
   const [draftTitle, setDraftTitle] = useState(node?.title ?? '');
@@ -104,6 +158,10 @@ export function PipelineNode({ id, data, selected }: PipelineNodeProps) {
   const tokens = useMemo(
     () => (node ? getCategoryTokens(node.category) : null),
     [node],
+  );
+  const def = useMemo<NodeTypeDef | undefined>(
+    () => (node ? nodeTypes?.find((d) => d.type === node.type) : undefined),
+    [nodeTypes, node],
   );
 
   const commitTitle = useCallback(() => {
@@ -132,12 +190,105 @@ export function PipelineNode({ id, data, selected }: PipelineNodeProps) {
   const Icon = tokens.Icon;
   const inputSide = isRTL ? Position.Right : Position.Left;
   const outputSide = isRTL ? Position.Left : Position.Right;
-  const rows = Math.max(node.inputs.length, node.outputs.length);
-  const paramChips = Object.entries(node.params).filter(
+  const hasInputs = node.inputs.length > 0;
+  const hasOutputs = node.outputs.length > 0;
+  const hasPorts = hasInputs || hasOutputs;
+  const isAi = node.category === 'ai';
+
+  const paramEntries = Object.entries(node.params).filter(
     ([, v]) => v !== undefined && v !== null && v !== '',
   );
+  const visibleParams = node.expanded
+    ? paramEntries
+    : paramEntries.slice(0, MAX_PREVIEW_PARAMS);
+  const hiddenParamCount = paramEntries.length - visibleParams.length;
+
+  const description = def?.description?.trim();
+  const descText =
+    description ||
+    t(`pipeline.nodehelp.${node.type}`, {
+      defaultValue: t('pipeline.node.no_params', {
+        defaultValue: 'No settings needed. Connect it and press Run.',
+      }),
+    });
+
   const rv = runVisual(runNodeState?.status);
-  const isAi = node.category === 'ai';
+  const hasStatus = Boolean(runNodeState && rv.Icon);
+  const tookMs = runNodeState?.took_ms;
+
+  const categoryLabel = t(tokens.labelKey, { defaultValue: tokens.labelDefault });
+  const portTypeLong = (dt: string): string =>
+    t(getPortTokens(dt).labelKey, {
+      defaultValue: getPortTokens(dt).labelDefault,
+    });
+
+  const renderInput = (port: PipelinePort) => (
+    <div key={port.id} className="relative flex h-7 items-center">
+      <Handle
+        type="target"
+        position={inputSide}
+        id={port.id}
+        data-testid={`pipeline-node-input-${id}-${port.id}`}
+        title={t('pipeline.port.tooltip_input', {
+          defaultValue:
+            'Input "{{label}}" accepts {{type}}. Drag a matching output here to connect it.',
+          label: port.label,
+          type: portTypeLong(port.dataType),
+        })}
+        aria-label={t('pipeline.port.aria_input', {
+          defaultValue: 'input: {{label}}, type {{type}}',
+          label: port.label,
+          type: portTypeLong(port.dataType),
+        })}
+        style={{
+          background: '#fff',
+          border: `2px solid ${getPortTokens(port.dataType).color}`,
+          width: 11,
+          height: 11,
+        }}
+      />
+      <span className="flex min-w-0 items-center gap-1.5 ps-2.5 pe-1">
+        <PortGlyph type={port.dataType} />
+        <span className="truncate text-xs font-medium text-content-primary">
+          {port.label}
+        </span>
+      </span>
+    </div>
+  );
+
+  const renderOutput = (port: PipelinePort) => (
+    <div key={port.id} className="relative flex h-7 items-center justify-end">
+      <span className="flex min-w-0 items-center justify-end gap-1.5 ps-1 pe-2.5">
+        <span className="truncate text-xs font-medium text-content-primary">
+          {port.label}
+        </span>
+        <PortGlyph type={port.dataType} />
+      </span>
+      <Handle
+        type="source"
+        position={outputSide}
+        id={port.id}
+        data-testid={`pipeline-node-output-${id}-${port.id}`}
+        title={t('pipeline.port.tooltip_output', {
+          defaultValue:
+            'Output "{{label}}" sends {{type}}. Drag from here to a matching input.',
+          label: port.label,
+          type: portTypeLong(port.dataType),
+        })}
+        aria-label={t('pipeline.port.aria_output', {
+          defaultValue: 'output: {{label}}, type {{type}}',
+          label: port.label,
+          type: portTypeLong(port.dataType),
+        })}
+        style={{
+          background: '#fff',
+          border: `2px solid ${getPortTokens(port.dataType).color}`,
+          width: 11,
+          height: 11,
+        }}
+      />
+    </div>
+  );
 
   return (
     <div
@@ -146,66 +297,65 @@ export function PipelineNode({ id, data, selected }: PipelineNodeProps) {
       data-node-type={node.type}
       data-node-selected={selected ? 'true' : 'false'}
       className={clsx(
-        'relative min-w-[220px] max-w-[340px] overflow-hidden rounded-lg border-2 ps-3 pe-3 py-2 text-sm shadow-sm',
-        'transition-colors',
-        selected ? tokens.classes.bgSelected : tokens.classes.bg,
-        selected ? tokens.classes.borderSelected : tokens.classes.border,
-        tokens.classes.text,
+        'w-56 rounded-xl border border-border bg-surface-primary text-content-primary shadow-sm',
+        'transition-shadow duration-150 hover:shadow-md',
+        selected && clsx('shadow-md ring-2', tokens.classes.ring),
       )}
     >
-      {/* Run-state accent bar on the logical-start edge (no layout shift) */}
-      <span
-        aria-hidden="true"
+      {/* Header - solid category color, editable title + quiet category name */}
+      <div
         className={clsx(
-          'absolute inset-y-0 start-0 w-1',
-          rv.accent,
-          runNodeState?.status === 'queued' && 'animate-pulse',
+          'flex items-center gap-1.5 rounded-t-xl px-2.5 py-1.5',
+          tokens.classes.header,
+          tokens.classes.headerText,
         )}
-      />
-
-      {/* Header — icon + editable title + help + caret */}
-      <div className="flex items-center gap-2">
-        <span
-          className={clsx(
-            'flex h-5 w-5 shrink-0 items-center justify-center',
-            tokens.classes.icon,
-          )}
-        >
+      >
+        <span className="flex h-5 w-5 shrink-0 items-center justify-center">
           <Icon size={16} aria-hidden="true" />
         </span>
-        {editingTitle ? (
-          <input
-            type="text"
-            data-testid={`pipeline-node-title-input-${id}`}
-            value={draftTitle}
-            onChange={(e) => setDraftTitle(e.target.value)}
-            onBlur={commitTitle}
-            onKeyDown={handleTitleKeyDown}
-            autoFocus
-            aria-label={t('pipeline.node.rename', {
-              defaultValue: 'Rename node',
-            })}
-            className="h-6 w-full rounded border border-border bg-white px-1 text-sm dark:bg-gray-900"
-          />
-        ) : (
-          <button
-            type="button"
-            data-testid={`pipeline-node-title-${id}`}
-            onDoubleClick={() => {
-              setDraftTitle(node.title);
-              setEditingTitle(true);
-            }}
-            className="truncate text-start font-medium hover:underline"
-            title={t('pipeline.node.rename_hint', {
-              defaultValue: 'Double-click to rename',
-            })}
+        <div className="flex min-w-0 flex-1 flex-col leading-tight">
+          {editingTitle ? (
+            <input
+              type="text"
+              data-testid={`pipeline-node-title-input-${id}`}
+              value={draftTitle}
+              onChange={(e) => setDraftTitle(e.target.value)}
+              onBlur={commitTitle}
+              onKeyDown={handleTitleKeyDown}
+              autoFocus
+              aria-label={t('pipeline.node.rename', {
+                defaultValue: 'Rename node',
+              })}
+              className="h-6 w-full rounded border-0 bg-white/95 px-1 text-sm font-semibold text-slate-900 focus:outline-none focus:ring-2 focus:ring-white/60"
+            />
+          ) : (
+            <button
+              type="button"
+              data-testid={`pipeline-node-title-${id}`}
+              onDoubleClick={() => {
+                setDraftTitle(node.title);
+                setEditingTitle(true);
+              }}
+              className="truncate text-start text-sm font-semibold hover:underline"
+              title={t('pipeline.node.rename_hint', {
+                defaultValue: 'Double-click to rename',
+              })}
+            >
+              {node.title}
+            </button>
+          )}
+          <span
+            className={clsx(
+              'truncate text-2xs font-semibold uppercase tracking-wide',
+              tokens.classes.headerSubtle,
+            )}
           >
-            {node.title}
-          </button>
-        )}
+            {categoryLabel}
+          </span>
+        </div>
         {isAi && (
           <span
-            className="ms-1 shrink-0 rounded bg-violet-200 px-1 text-2xs font-semibold text-violet-800 dark:bg-violet-800 dark:text-violet-100"
+            className="shrink-0 rounded bg-white/25 px-1 text-2xs font-bold"
             title={t('pipeline.node.ai_confidence', {
               defaultValue: 'AI suggestion - review the confidence score',
             })}
@@ -221,9 +371,8 @@ export function PipelineNode({ id, data, selected }: PipelineNodeProps) {
           aria-expanded={showHelp}
           onClick={() => setShowHelp((v) => !v)}
           className={clsx(
-            'ms-auto flex h-5 w-5 shrink-0 items-center justify-center rounded',
-            'hover:bg-black/5 dark:hover:bg-white/10',
-            tokens.classes.icon,
+            'flex h-5 w-5 shrink-0 items-center justify-center rounded',
+            tokens.classes.headerHover,
           )}
         >
           <Info size={13} aria-hidden="true" />
@@ -239,142 +388,105 @@ export function PipelineNode({ id, data, selected }: PipelineNodeProps) {
           onClick={() => toggleExpanded(node.id)}
           className={clsx(
             'flex h-5 w-5 shrink-0 items-center justify-center rounded',
-            'hover:bg-black/5 dark:hover:bg-white/10',
-            tokens.classes.icon,
+            tokens.classes.headerHover,
           )}
         >
           {node.expanded ? (
             <ChevronDown size={14} aria-hidden="true" />
           ) : (
-            <ChevronRight size={14} aria-hidden="true" />
+            <ChevronRight
+              size={14}
+              aria-hidden="true"
+              className="rtl:scale-x-[-1]"
+            />
           )}
         </button>
       </div>
 
-      {/* Per-node help — what it does (localized, plain language) */}
+      {/* Per-node help - what it does (localized, plain language) */}
       {showHelp && (
         <p
           data-testid={`pipeline-node-help-${id}`}
-          className={clsx('mt-1.5 text-xs leading-relaxed', tokens.classes.textSubtle)}
+          className="border-b border-border px-2.5 py-1.5 text-xs leading-relaxed text-content-secondary"
         >
           {t(`pipeline.nodehelp.${node.type}`, {
-            defaultValue: t('pipeline.node.help_generic', {
-              defaultValue:
-                'Configure this step in the Inspector. It receives data from the connected step before it and passes its result on.',
-            }),
+            defaultValue:
+              description ||
+              t('pipeline.node.help_generic', {
+                defaultValue:
+                  'Configure this step in the Inspector. It receives data from the connected step before it and passes its result on.',
+              }),
           })}
         </p>
       )}
 
-      {/* Param chips */}
-      {paramChips.length > 0 && (
-        <div
-          data-testid={`pipeline-node-params-${id}`}
-          className={clsx('mt-1 flex flex-wrap gap-1 text-xs', tokens.classes.textSubtle)}
-        >
-          {(node.expanded ? paramChips : paramChips.slice(0, 3)).map(
-            ([key, value]) => (
-              <span
-                key={key}
-                className="inline-flex items-center rounded bg-black/5 px-1.5 py-0.5 dark:bg-white/10"
-              >
-                <span className="font-medium">{key}</span>
-                <span className="mx-1">:</span>
-                <span className="max-w-[120px] truncate">{String(value)}</span>
-              </span>
-            ),
+      {/* Port rows - inputs down the logical-start edge, outputs down the
+          logical-end edge (a two-column body when the node has both). Each
+          Handle keeps id === port.id so existing edges reconnect. */}
+      {hasPorts && (
+        <div className="flex items-start">
+          {hasInputs && (
+            <div className="flex flex-1 flex-col py-1.5">
+              {node.inputs.map(renderInput)}
+            </div>
           )}
-          {!node.expanded && paramChips.length > 3 && (
-            <span className="inline-flex items-center px-1 text-xs italic">
-              {t('pipeline.node.more_params', {
-                defaultValue: '+{{count}} more',
-                count: paramChips.length - 3,
-              })}
-            </span>
+          {hasOutputs && (
+            <div className="flex flex-1 flex-col py-1.5">
+              {node.outputs.map(renderOutput)}
+            </div>
           )}
         </div>
       )}
 
-      {/* Typed port rows */}
-      {rows > 0 && (
-        <div className="mt-2 space-y-1">
-          {Array.from({ length: rows }).map((_, idx) => {
-            const input = node.inputs[idx];
-            const output = node.outputs[idx];
-            return (
+      {/* Param preview ("label: value") or, when there are none, a one-liner
+          describing what the step does. */}
+      <div
+        className={clsx(
+          'px-2.5',
+          hasPorts ? 'border-t border-border pt-1.5' : 'pt-2',
+          hasStatus ? 'pb-1.5' : 'pb-2',
+        )}
+      >
+        {paramEntries.length > 0 ? (
+          <div data-testid={`pipeline-node-params-${id}`} className="space-y-0.5">
+            {visibleParams.map(([key, value]) => (
               <div
-                key={idx}
-                className="relative flex items-center justify-between text-xs"
+                key={key}
+                className="flex min-w-0 items-baseline gap-1 text-xs"
               >
-                <span className="flex items-center gap-1.5">
-                  {input && (
-                    <>
-                      <Handle
-                        type="target"
-                        position={inputSide}
-                        id={input.id}
-                        data-testid={`pipeline-node-input-${id}-${input.id}`}
-                        aria-label={t('pipeline.port.aria_input', {
-                          defaultValue: 'input: {{label}}, type {{type}}',
-                          label: input.label,
-                          type: t(getPortTokens(input.dataType).labelKey, {
-                            defaultValue: getPortTokens(input.dataType)
-                              .labelDefault,
-                          }),
-                        })}
-                        style={{
-                          background: '#fff',
-                          border: `1px solid ${getPortTokens(input.dataType).color}`,
-                          width: 9,
-                          height: 9,
-                        }}
-                      />
-                      <PortGlyph type={input.dataType} />
-                      <span>{input.label}</span>
-                    </>
-                  )}
+                <span className="shrink-0 font-medium text-content-secondary">
+                  {paramLabel(def?.params_schema, key)}:
                 </span>
-                <span className="flex items-center gap-1.5">
-                  {output && (
-                    <>
-                      <span>{output.label}</span>
-                      <PortGlyph type={output.dataType} />
-                      <Handle
-                        type="source"
-                        position={outputSide}
-                        id={output.id}
-                        data-testid={`pipeline-node-output-${id}-${output.id}`}
-                        aria-label={t('pipeline.port.aria_output', {
-                          defaultValue: 'output: {{label}}, type {{type}}',
-                          label: output.label,
-                          type: t(getPortTokens(output.dataType).labelKey, {
-                            defaultValue: getPortTokens(output.dataType)
-                              .labelDefault,
-                          }),
-                        })}
-                        style={{
-                          background: '#fff',
-                          border: `1px solid ${getPortTokens(output.dataType).color}`,
-                          width: 9,
-                          height: 9,
-                        }}
-                      />
-                    </>
-                  )}
+                <span className="min-w-0 truncate text-content-primary">
+                  {formatParamValue(value)}
                 </span>
               </div>
-            );
-          })}
-        </div>
-      )}
+            ))}
+            {hiddenParamCount > 0 && (
+              <div className="text-2xs italic text-content-tertiary">
+                {t('pipeline.node.more_params', {
+                  defaultValue: '+{{count}} more',
+                  count: hiddenParamCount,
+                })}
+              </div>
+            )}
+          </div>
+        ) : (
+          <p className="line-clamp-2 text-xs leading-snug text-content-secondary">
+            {descText}
+          </p>
+        )}
+      </div>
 
-      {/* Live status strip — icon + text so state never relies on color alone */}
-      {runNodeState && rv.Icon && (
+      {/* Live status strip - icon + text + color so state never relies on
+          color alone. Idle nodes render no strip. */}
+      {hasStatus && rv.Icon && (
         <div
           data-testid={`pipeline-node-status-${id}`}
           className={clsx(
-            'mt-2 flex items-center gap-1.5 border-t pt-1.5 text-xs',
-            tokens.classes.textSubtle,
+            'flex items-center gap-1.5 rounded-b-xl px-2.5 py-1.5 text-xs font-medium',
+            rv.cls,
+            rv.pulse && 'animate-pulse',
           )}
           aria-live="polite"
         >
@@ -383,16 +495,16 @@ export function PipelineNode({ id, data, selected }: PipelineNodeProps) {
             aria-hidden="true"
             className={rv.spin ? 'animate-spin' : undefined}
           />
-          <span>
-            {t(`pipeline.runstatus.${runNodeState.status}`, {
-              defaultValue: String(runNodeState.status ?? ''),
+          <span className="truncate">
+            {t(`pipeline.runstatus.${runNodeState?.status ?? ''}`, {
+              defaultValue: String(runNodeState?.status ?? ''),
             })}
           </span>
-          {typeof runNodeState.took_ms === 'number' && (
-            <span className="ms-auto tabular-nums">
+          {typeof tookMs === 'number' && (
+            <span className="ms-auto shrink-0 tabular-nums opacity-80">
               {t('pipeline.node.took_ms', {
                 defaultValue: '{{ms}} ms',
-                ms: runNodeState.took_ms,
+                ms: tookMs,
               })}
             </span>
           )}

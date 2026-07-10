@@ -903,7 +903,7 @@ export const scheduleApi = {
   /** Set typed progress (duration/units/physical) on an activity. */
   updateProgressTyped: (activityId: string, body: TypedProgressBody) =>
     apiPatch<TypedProgressResponse, TypedProgressBody>(
-      `/v1/schedule/activities/${encodeURIComponent(activityId)}/progress-typed/`,
+      `/v1/schedule/activities/${encodeURIComponent(activityId)}/typed-progress/`,
       body,
     ),
   /** Preview the EVM-distortion warnings a percent-type change would raise. */

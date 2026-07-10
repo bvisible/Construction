@@ -452,7 +452,7 @@ export function AssemblyEditorPage() {
             onClick={() => setCostDbModalOpen(true)}
             className="border-purple-300/30 text-purple-600 hover:bg-purple-50"
             title={t('assemblies.from_database_title', {
-              defaultValue: 'Pick a finished rate from the cost database (CWICR / RSMeans / …)',
+              defaultValue: 'Pick a finished rate from the cost database (CWICR / …)',
             })}
           >
             {t('assemblies.from_database', { defaultValue: 'Cost DB' })}

@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, Fragment } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -22,6 +22,7 @@ import {
   Info,
   Users,
   Check,
+  Network,
 } from 'lucide-react';
 import {
   Button,
@@ -363,6 +364,135 @@ function SubcontractorPickerModal({
   );
 }
 
+/* ── How it works + connects ──────────────────────────────────────────── */
+
+/** Compact inline link to a sibling module (keeps the flow copy readable). */
+function ModLink({ to, children }: { to: string; children: React.ReactNode }) {
+  return (
+    <Link to={to} className="font-medium text-oe-blue-text hover:underline">
+      {children}
+    </Link>
+  );
+}
+
+/**
+ * One-glance map of the bid workflow and how it connects: a won CRM deal or a
+ * new scope becomes a package, prequalified subcontractors bid, the bids are
+ * leveled, and the award flows into a contract. Tendering is the alternative
+ * for a formal BOQ-driven tender. Every connected module is a link.
+ */
+function HowBidManagementWorks() {
+  const { t } = useTranslation();
+
+  const steps: { icon: React.ReactNode; title: string; desc: string }[] = [
+    {
+      icon: <PackageIcon size={14} className="text-oe-blue" />,
+      title: t('bid_management.flow_1_title', { defaultValue: 'Package scope' }),
+      desc: t('bid_management.flow_1_desc', {
+        defaultValue: 'Bundle a slice of the project into a bid package.',
+      }),
+    },
+    {
+      icon: <Mail size={14} className="text-oe-blue" />,
+      title: t('bid_management.flow_2_title', { defaultValue: 'Invite bidders' }),
+      desc: t('bid_management.flow_2_desc', {
+        defaultValue: 'Invite prequalified subcontractors from the directory.',
+      }),
+    },
+    {
+      icon: <Inbox size={14} className="text-oe-blue" />,
+      title: t('bid_management.flow_3_title', { defaultValue: 'Collect bids' }),
+      desc: t('bid_management.flow_3_desc', {
+        defaultValue: 'Gather priced submissions and answer bidder Q&A.',
+      }),
+    },
+    {
+      icon: <Calculator size={14} className="text-oe-blue" />,
+      title: t('bid_management.flow_4_title', { defaultValue: 'Level' }),
+      desc: t('bid_management.flow_4_desc', {
+        defaultValue: 'Compare valid bids side by side to find the best value.',
+      }),
+    },
+    {
+      icon: <Award size={14} className="text-oe-blue" />,
+      title: t('bid_management.flow_5_title', { defaultValue: 'Award' }),
+      desc: t('bid_management.flow_5_desc', {
+        defaultValue: 'Award the winner; the scope flows straight into a contract.',
+      }),
+    },
+  ];
+
+  return (
+    <Card padding="md">
+      <h2 className="flex items-center gap-1.5 text-sm font-semibold text-content-primary">
+        <Network size={15} className="text-oe-blue" />
+        {t('bid_management.flow_title', { defaultValue: 'How bid management fits together' })}
+      </h2>
+      <p className="mt-1 text-xs text-content-tertiary">
+        {t('bid_management.flow_intro', {
+          defaultValue:
+            'Bundle scope into packages, invite subcontractors, compare their bids like for like, then award. A won CRM deal feeds the work in, and the award flows on to Contracts. Use Tendering instead for a formal BOQ-driven tender.',
+        })}
+      </p>
+
+      <ol className="mt-3 flex flex-col gap-2 lg:flex-row lg:items-stretch">
+        {steps.map((s, i) => (
+          <Fragment key={s.title}>
+            <li className="flex-1 rounded-lg border border-border-light bg-surface-secondary/40 p-3">
+              <div className="flex items-center gap-2">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-oe-blue-subtle text-2xs font-bold text-oe-blue-text">
+                  {i + 1}
+                </span>
+                <span className="flex items-center gap-1 text-xs font-semibold text-content-primary">
+                  {s.icon}
+                  {s.title}
+                </span>
+              </div>
+              <p className="mt-1.5 text-2xs leading-relaxed text-content-tertiary">{s.desc}</p>
+            </li>
+            {i < steps.length - 1 && (
+              <li
+                aria-hidden="true"
+                className="hidden shrink-0 items-center self-center text-content-quaternary lg:flex"
+              >
+                <ArrowRight size={16} />
+              </li>
+            )}
+          </Fragment>
+        ))}
+      </ol>
+
+      <div className="mt-3 flex flex-col gap-1.5 border-t border-border-light pt-3 text-2xs text-content-tertiary sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-5 sm:gap-y-1">
+        <span>
+          <span className="font-medium text-content-secondary">
+            {t('bid_management.flow_pulls', { defaultValue: 'Pulls from:' })}
+          </span>{' '}
+          <ModLink to="/crm">{t('bid_management.mod_crm', { defaultValue: 'CRM' })}</ModLink> ·{' '}
+          <ModLink to="/subcontractors">
+            {t('bid_management.mod_subs', { defaultValue: 'Subcontractors' })}
+          </ModLink>
+        </span>
+        <span>
+          <span className="font-medium text-content-secondary">
+            {t('bid_management.flow_feeds', { defaultValue: 'Feeds:' })}
+          </span>{' '}
+          <ModLink to="/contracts">
+            {t('bid_management.mod_contracts', { defaultValue: 'Contracts' })}
+          </ModLink>
+        </span>
+        <span>
+          <span className="font-medium text-content-secondary">
+            {t('bid_management.flow_alt', { defaultValue: 'Alternative:' })}
+          </span>{' '}
+          <ModLink to="/tendering">
+            {t('bid_management.mod_tendering', { defaultValue: 'Tendering' })}
+          </ModLink>
+        </span>
+      </div>
+    </Card>
+  );
+}
+
 export function BidManagementPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -493,6 +623,8 @@ export function BidManagementPage() {
             'Bundle scope into bid packages, invite prequalified subcontractors, collect their priced submissions, handle Q and A, and level the bids side by side before you award. The award flows straight into Contracts. Use Tendering instead when you want a formal BOQ-driven tender that writes rates back and raises a PO.',
         })}
       </DismissibleInfo>
+
+      <HowBidManagementWorks />
 
       <div className="border-b border-border-light">
         <nav

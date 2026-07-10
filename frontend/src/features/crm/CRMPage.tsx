@@ -16,7 +16,7 @@
  *     /projects/{id}. A won deal still flows on to bid/contracts.
  */
 
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect, useCallback, Fragment } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -56,6 +56,8 @@ import {
   History,
   Info,
   Clock,
+  Network,
+  FileSignature,
 } from 'lucide-react';
 import {
   Button,
@@ -195,6 +197,134 @@ function contactLabel(c: Contact | undefined): string {
     [c.first_name, c.last_name].filter(Boolean).join(' ') ||
     c.primary_email ||
     c.id
+  );
+}
+
+/* ═══════════════ How it works + connects ═══════════════ */
+
+/** Compact inline link to a sibling module (keeps the flow copy readable). */
+function ModLink({ to, children }: { to: string; children: React.ReactNode }) {
+  return (
+    <Link to={to} className="font-medium text-oe-blue-text hover:underline">
+      {children}
+    </Link>
+  );
+}
+
+/**
+ * One-glance map of what the CRM does and how it connects to the rest of the
+ * platform: people come from Contacts, and a won deal flows on to bid packages
+ * and contracts. Every connected module is a link so the workflow is obvious
+ * without reading the whole page.
+ */
+function HowCrmWorks() {
+  const { t } = useTranslation();
+
+  const steps: { icon: React.ReactNode; title: string; desc: string }[] = [
+    {
+      icon: <UserPlus size={14} className="text-oe-blue" />,
+      title: t('crm.flow_1_title', { defaultValue: 'Capture a lead' }),
+      desc: t('crm.flow_1_desc', {
+        defaultValue: 'Log an inbound enquiry, with the person pulled from Contacts.',
+      }),
+    },
+    {
+      icon: <CheckCircle2 size={14} className="text-oe-blue" />,
+      title: t('crm.flow_2_title', { defaultValue: 'Qualify' }),
+      desc: t('crm.flow_2_desc', {
+        defaultValue: 'Qualify the lead, then convert it into a deal.',
+      }),
+    },
+    {
+      icon: <LayoutGrid size={14} className="text-oe-blue" />,
+      title: t('crm.flow_3_title', { defaultValue: 'Work the pipeline' }),
+      desc: t('crm.flow_3_desc', {
+        defaultValue: 'Drag the deal stage by stage, logging each call and email.',
+      }),
+    },
+    {
+      icon: <Trophy size={14} className="text-oe-blue" />,
+      title: t('crm.flow_4_title', { defaultValue: 'Win or lose' }),
+      desc: t('crm.flow_4_desc', {
+        defaultValue: 'Close with a win or loss reason so your insights stay honest.',
+      }),
+    },
+    {
+      icon: <FileSignature size={14} className="text-oe-blue" />,
+      title: t('crm.flow_5_title', { defaultValue: 'Hand off' }),
+      desc: t('crm.flow_5_desc', {
+        defaultValue: 'A won deal links to its project and flows on to bids and contracts.',
+      }),
+    },
+  ];
+
+  return (
+    <Card padding="md">
+      <h2 className="flex items-center gap-1.5 text-sm font-semibold text-content-primary">
+        <Network size={15} className="text-oe-blue" />
+        {t('crm.flow_title', { defaultValue: 'How the CRM fits together' })}
+      </h2>
+      <p className="mt-1 text-xs text-content-tertiary">
+        {t('crm.flow_intro', {
+          defaultValue:
+            'The CRM turns an enquiry into a qualified deal, moves it across the pipeline, and hands a win off to delivery. People come from Contacts; won work flows on to bids and contracts.',
+        })}
+      </p>
+
+      <ol className="mt-3 flex flex-col gap-2 lg:flex-row lg:items-stretch">
+        {steps.map((s, i) => (
+          <Fragment key={s.title}>
+            <li className="flex-1 rounded-lg border border-border-light bg-surface-secondary/40 p-3">
+              <div className="flex items-center gap-2">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-oe-blue-subtle text-2xs font-bold text-oe-blue-text">
+                  {i + 1}
+                </span>
+                <span className="flex items-center gap-1 text-xs font-semibold text-content-primary">
+                  {s.icon}
+                  {s.title}
+                </span>
+              </div>
+              <p className="mt-1.5 text-2xs leading-relaxed text-content-tertiary">{s.desc}</p>
+            </li>
+            {i < steps.length - 1 && (
+              <li
+                aria-hidden="true"
+                className="hidden shrink-0 items-center self-center text-content-quaternary lg:flex"
+              >
+                <ArrowRight size={16} />
+              </li>
+            )}
+          </Fragment>
+        ))}
+      </ol>
+
+      <div className="mt-3 flex flex-col gap-1.5 border-t border-border-light pt-3 text-2xs text-content-tertiary sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-5 sm:gap-y-1">
+        <span>
+          <span className="font-medium text-content-secondary">
+            {t('crm.flow_pulls', { defaultValue: 'Pulls from:' })}
+          </span>{' '}
+          <ModLink to="/contacts">
+            {t('crm.mod_contacts', { defaultValue: 'Contacts' })}
+          </ModLink>
+        </span>
+        <span>
+          <span className="font-medium text-content-secondary">
+            {t('crm.flow_feeds', { defaultValue: 'Feeds:' })}
+          </span>{' '}
+          <ModLink to="/bid-management">
+            {t('crm.mod_bid', { defaultValue: 'Bid Management' })}
+          </ModLink>{' '}
+          ·{' '}
+          <ModLink to="/contracts">
+            {t('crm.mod_contracts', { defaultValue: 'Contracts' })}
+          </ModLink>{' '}
+          ·{' '}
+          <ModLink to="/tendering">
+            {t('crm.mod_tendering', { defaultValue: 'Tendering' })}
+          </ModLink>
+        </span>
+      </div>
+    </Card>
   );
 }
 
@@ -399,6 +529,8 @@ export function CRMPage() {
             'Qualify a lead and drag the deal stage by stage across the pipeline board, logging each call or email in one click. People and companies come from Contacts, and a won deal links to its delivery project and flows on to bid packages and contracts.',
         })}
       </DismissibleInfo>
+
+      <HowCrmWorks />
 
       {/* View switcher + search */}
       <div className="flex flex-wrap items-center gap-3">

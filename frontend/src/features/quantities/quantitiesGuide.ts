@@ -26,6 +26,15 @@ export const quantitiesGuide: ModuleGuideContent = {
         'The method cards are your starting points. Quick Estimate (AI) turns a written scope into priced lines, PDF Takeoff measures areas and lengths on drawings, and CAD/BIM extracts quantities straight from a model. Choose the one that matches the source material you have.',
     },
     {
+      icon: 'ListChecks',
+      titleKey: 'guide.quantities.register.title',
+      titleDefault: 'The measured quantities register',
+      bodyKey: 'guide.quantities.register.body',
+      bodyDefault:
+        'Once a project is active, the Measured quantities panel rolls up everything already captured, both takeoff measurements and BOQ line quantities, grouped by unit, trade, type or source with running totals. Filter it, focus a single drawing, or export the rollup to CSV. It is read-only, so the numbers move as you measure more.',
+      spotlightSelector: '[data-guide="quantities-summary"]',
+    },
+    {
       icon: 'Sparkles',
       titleKey: 'guide.quantities.ai.title',
       titleDefault: 'Quick Estimate from text',

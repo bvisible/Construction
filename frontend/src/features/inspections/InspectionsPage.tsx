@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import clsx from 'clsx';
 import {
   ClipboardCheck,
@@ -30,6 +30,8 @@ import {
   Info,
   ListChecks,
   MinusCircle,
+  Network,
+  ArrowRight,
 } from 'lucide-react';
 import { Button, Card, Badge, EmptyState, Breadcrumb, ConfirmDialog, RecoveryCard, SkeletonTable, IntroRichText, ModuleGuideButton } from '@/shared/ui';
 import { RequiresProject } from '@/shared/auth/RequiresProject';
@@ -1020,6 +1022,123 @@ async function downloadExcelExport(url: string, fallbackFilename: string): Promi
 
 /* -- Main Page ------------------------------------------------------------- */
 
+/* ── How it works + module connections ─────────────────────────────────── */
+
+/** Compact inline link to a sibling module, keeping the connections readable. */
+function ModLink({ to, children }: { to: string; children: React.ReactNode }) {
+  return (
+    <Link to={to} className="font-medium text-oe-blue-text hover:underline">
+      {children}
+    </Link>
+  );
+}
+
+/**
+ * At-a-glance card: what the Inspections module does, the stages of using it,
+ * and the sibling modules it feeds. Complements the detailed SectionIntro with
+ * a compact visual workflow so the inspect-to-fix loop is obvious immediately.
+ */
+function HowInspectionsWork() {
+  const { t } = useTranslation();
+
+  const steps: { icon: React.ReactNode; title: string; desc: string }[] = [
+    {
+      icon: <Calendar size={14} className="text-oe-blue" />,
+      title: t('inspections.how_step1_title', { defaultValue: 'Schedule' }),
+      desc: t('inspections.how_step1_desc', {
+        defaultValue:
+          'Book an inspection with a type, date, inspector and a checklist of hold points.',
+      }),
+    },
+    {
+      icon: <ClipboardCheck size={14} className="text-oe-blue" />,
+      title: t('inspections.how_step2_title', { defaultValue: 'Inspect on site' }),
+      desc: t('inspections.how_step2_desc', {
+        defaultValue: 'Start the inspection, then record the outcome as pass, partial or fail.',
+      }),
+    },
+    {
+      icon: <XCircle size={14} className="text-oe-blue" />,
+      title: t('inspections.how_step3_title', { defaultValue: 'Raise a defect' }),
+      desc: t('inspections.how_step3_desc', {
+        defaultValue: 'A fail or partial opens a Punch List item or a formal NCR in one click.',
+      }),
+    },
+    {
+      icon: <CheckCircle2 size={14} className="text-oe-blue" />,
+      title: t('inspections.how_step4_title', { defaultValue: 'Close the loop' }),
+      desc: t('inspections.how_step4_desc', {
+        defaultValue: 'Re-inspect once fixed; the trail links every defect back to its check.',
+      }),
+    },
+  ];
+
+  return (
+    <section
+      aria-label={t('inspections.how_title', { defaultValue: 'How inspections fit together' })}
+      className="rounded-xl border border-border-light bg-surface-secondary/40 p-4"
+    >
+      <h2 className="flex items-center gap-1.5 text-sm font-semibold text-content-primary">
+        <Network size={15} className="text-oe-blue" />
+        {t('inspections.how_title', { defaultValue: 'How inspections fit together' })}
+      </h2>
+      <p className="mt-1 text-xs text-content-tertiary">
+        {t('inspections.how_intro', {
+          defaultValue:
+            'Schedule quality checks, record pass or fail on site, and turn every failure into a tracked defect. Start by scheduling an inspection for the work you need to verify.',
+        })}
+      </p>
+
+      <ol className="mt-3 flex flex-col gap-2 lg:flex-row lg:items-stretch">
+        {steps.map((s, i) => (
+          <React.Fragment key={s.title}>
+            <li className="flex-1 rounded-lg border border-border-light bg-surface-primary/70 p-3">
+              <div className="flex items-center gap-2">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-oe-blue-subtle">
+                  {s.icon}
+                </span>
+                <span className="text-xs font-semibold text-content-primary">{s.title}</span>
+              </div>
+              <p className="mt-1.5 text-2xs leading-relaxed text-content-tertiary">{s.desc}</p>
+            </li>
+            {i < steps.length - 1 && (
+              <li
+                aria-hidden="true"
+                className="hidden shrink-0 items-center self-center text-content-quaternary lg:flex"
+              >
+                <ArrowRight size={16} />
+              </li>
+            )}
+          </React.Fragment>
+        ))}
+      </ol>
+
+      <div className="mt-3 border-t border-border-light pt-3 text-2xs text-content-tertiary">
+        <span className="font-medium text-content-secondary">
+          {t('inspections.how_connects', { defaultValue: 'Connects with:' })}
+        </span>{' '}
+        <ModLink to="/punchlist">
+          {t('inspections.mod_punchlist', { defaultValue: 'Punch List' })}
+        </ModLink>
+        {' · '}
+        <ModLink to="/ncr">{t('inspections.mod_ncr', { defaultValue: 'NCRs' })}</ModLink>
+        {' · '}
+        <ModLink to="/qms">{t('inspections.mod_qms', { defaultValue: 'QMS overview' })}</ModLink>
+        {' · '}
+        <ModLink to="/submittals">
+          {t('inspections.mod_submittals', { defaultValue: 'Submittals' })}
+        </ModLink>
+        {' · '}
+        <ModLink to="/closeout">
+          {t('inspections.mod_closeout', { defaultValue: 'Handover & Closeout' })}
+        </ModLink>
+      </div>
+    </section>
+  );
+}
+
+/* -- Main Page (card) ------------------------------------------------------ */
+
 export function InspectionsPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -1470,6 +1589,8 @@ export function InspectionsPage() {
             'Schedule and record quality inspections (structural, MEP, concrete, handover and more) against a project. A fail or partial result lets you raise a Punch List item or an NCR in one click, keeping the inspect, defect and close-out loop fully traceable back to the QMS overview.',
         })}
       </SectionIntro>
+
+      <HowInspectionsWork />
 
       {projectId ? (
       <>

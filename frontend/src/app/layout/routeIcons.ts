@@ -58,11 +58,13 @@ import {
   Wrench,
   Timer,
   Truck,
+  Factory,
   Users,
   Wallet,
   ShieldCheck,
   ClipboardCheck,
   AlertOctagon,
+  CircleDot,
   ListChecks,
   Shield,
   BadgeCheck,
@@ -117,6 +119,7 @@ const ROUTE_ICON_MAP: Record<string, LucideIcon> = {
   '/geo': Globe,
   // ── 5. Model Coordination ─────────────────────────────────────────
   '/coordination': LayoutDashboard,
+  '/bcf': MessageSquare,
   '/bim/federations': Layers,
   '/clash': Radar,
   '/bim/rules': SlidersHorizontal,
@@ -160,6 +163,7 @@ const ROUTE_ICON_MAP: Record<string, LucideIcon> = {
   '/inspections': ClipboardCheck,
   '/ncr': AlertOctagon,
   '/punchlist': ListChecks,
+  '/issues': CircleDot,
   '/closeout': PackageCheck,
   // ── 13. Safety & ESG ──────────────────────────────────────────────
   '/safety': HardHat,
@@ -207,6 +211,14 @@ const ROUTE_ICON_MAP: Record<string, LucideIcon> = {
   '/governance': Scale,
   '/admin/audit-log': ScrollText,
   '/about': Info,
+  // ── v10.6.0 modules ───────────────────────────────────────────────
+  '/prefab': Factory,
+  '/cvr': Scale,
+  '/site-logistics': Truck,
+  '/commissioning': ClipboardCheck,
+  '/esg': Leaf,
+  // ── Gap features ──────────────────────────────────────────────────
+  '/forms': ClipboardList,
   // ── Footer CTA ────────────────────────────────────────────────────
   '/modules/developer-guide': Plus,
 };

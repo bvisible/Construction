@@ -6,6 +6,7 @@
  */
 
 import type { Measurement } from './takeoff-types';
+import { effectiveQuantity } from './takeoff-quantity';
 
 /** Tool types that shouldn't be counted in legend totals. */
 export const ANNOTATION_TYPES = new Set([
@@ -54,11 +55,10 @@ export function computeGroupSummaries(
     existing.count += 1;
     // Annotation tools don't contribute a numeric quantity.
     if (!ANNOTATION_TYPES.has(m.type)) {
-      // Opening deductions (area voids) are stored as a positive gross area
-      // but SUBTRACT from the group total so the legend shows net area =
-      // gross - openings. Only area carries the flag.
-      const signed = m.isDeduction ? -m.value : m.value;
-      existing.total += signed;
+      // Effective quantity folds slope / wastage / typical-multiplier and the
+      // opening-deduction sign (net area = gross - openings), so the legend
+      // rolls up the same reported figure the ledger and exports do.
+      existing.total += effectiveQuantity(m);
       if (m.unit) {
         existing.unitCounts[m.unit] = (existing.unitCounts[m.unit] ?? 0) + 1;
       }

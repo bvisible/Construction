@@ -60,8 +60,40 @@ class TakeoffDocumentResponse(BaseModel):
     # that ignores the fields - is unaffected.
     pages_without_text: int = 0
     pages_without_text_list: list[int] = Field(default_factory=list)
+    # Document-level per-page scale calibration (issue #334). Mirrors the
+    # frontend ``PageScales`` shape ({defaultScale, byPage}); ``None`` when the
+    # document was never calibrated at the document level (the viewer then falls
+    # back to the legacy per-measurement scale stamps).
+    page_scales: dict[str, Any] | None = None
 
     model_config = {"from_attributes": True, "populate_by_name": True}
+
+
+class DocumentPageScalesUpdate(BaseModel):
+    """Persist the document-level per-page scale calibration (issue #334).
+
+    Calibration used to live only in the browser (localStorage) plus a weak
+    per-measurement echo, so a reload where a stale local default won - or a
+    non-geometry edit that re-stamped the live view scale - silently dropped a
+    real calibration. Storing it once at the document level makes it the
+    authoritative, durable source across reloads and devices.
+
+    The payload mirrors the frontend ``PageScales`` shape
+    (``{defaultScale: {pixelsPerUnit, unitLabel}, byPage: {<page>: {...}}}``).
+    It is the user's own calibration for their own document, so it is stored
+    verbatim (like the ``analysis`` / ``metadata`` JSON columns) behind the
+    same ownership gate, with only a size guard against an abusive payload.
+    """
+
+    page_scales: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("page_scales")
+    @classmethod
+    def _bounded(cls, v: dict[str, Any]) -> dict[str, Any]:
+        by_page = v.get("byPage")
+        if isinstance(by_page, dict) and len(by_page) > 5000:
+            raise ValueError("too many per-page scales")
+        return v
 
 
 class ExtractedElement(BaseModel):

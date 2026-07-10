@@ -1,6 +1,6 @@
-import { useState, useMemo, useEffect } from 'react';
+import { Fragment, useState, useMemo, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import {
@@ -21,6 +21,8 @@ import {
   Unlock,
   ShieldAlert,
   Download,
+  Network,
+  ArrowRight,
 } from 'lucide-react';
 import {
   Button,
@@ -154,6 +156,123 @@ const AUDIT_STATUS_VARIANT: Record<string, 'neutral' | 'blue' | 'success' | 'war
 
 const inputCls =
   'h-9 w-full rounded-lg border border-border bg-surface-primary px-3 text-sm focus:outline-none focus:ring-2 focus:ring-oe-blue/30 focus:border-oe-blue';
+
+/* ── How it works + module connections ─────────────────────────────────── */
+
+/** Compact inline link to a sibling module, keeping the connections readable. */
+function ModLink({ to, children }: { to: string; children: React.ReactNode }) {
+  return (
+    <Link to={to} className="font-medium text-oe-blue-text hover:underline">
+      {children}
+    </Link>
+  );
+}
+
+/**
+ * At-a-glance card: the ISO 9001 quality chain this hub runs, mapped to the five
+ * tabs (plan, inspect, report, close out, audit), plus the standalone modules
+ * the same records surface in. A compact visual companion to the SectionIntro.
+ */
+function HowQmsWork() {
+  const { t } = useTranslation();
+
+  const steps: { icon: React.ReactNode; title: string; desc: string }[] = [
+    {
+      icon: <FileCheck size={14} className="text-oe-blue" />,
+      title: t('qms.how_step1_title', { defaultValue: 'Plan' }),
+      desc: t('qms.how_step1_desc', {
+        defaultValue: 'Build an ITP with hold, witness and review points, then activate it.',
+      }),
+    },
+    {
+      icon: <ClipboardCheck size={14} className="text-oe-blue" />,
+      title: t('qms.how_step2_title', { defaultValue: 'Inspect' }),
+      desc: t('qms.how_step2_desc', {
+        defaultValue: 'Book inspections against the control points and sign them off.',
+      }),
+    },
+    {
+      icon: <AlertOctagon size={14} className="text-oe-blue" />,
+      title: t('qms.how_step3_title', { defaultValue: 'Report' }),
+      desc: t('qms.how_step3_desc', {
+        defaultValue: 'Failed checks raise NCRs with corrective actions and cost impact.',
+      }),
+    },
+    {
+      icon: <ListChecks size={14} className="text-oe-blue" />,
+      title: t('qms.how_step4_title', { defaultValue: 'Close out' }),
+      desc: t('qms.how_step4_desc', {
+        defaultValue: 'Track snags on the punch list and clear them through to handover.',
+      }),
+    },
+    {
+      icon: <Award size={14} className="text-oe-blue" />,
+      title: t('qms.how_step5_title', { defaultValue: 'Audit' }),
+      desc: t('qms.how_step5_desc', {
+        defaultValue: 'Run internal, external and supplier audits over the system itself.',
+      }),
+    },
+  ];
+
+  return (
+    <section
+      aria-label={t('qms.how_title', { defaultValue: 'How the quality chain fits together' })}
+      className="rounded-xl border border-border-light bg-surface-secondary/40 p-4"
+    >
+      <h2 className="flex items-center gap-1.5 text-sm font-semibold text-content-primary">
+        <Network size={15} className="text-oe-blue" />
+        {t('qms.how_title', { defaultValue: 'How the quality chain fits together' })}
+      </h2>
+      <p className="mt-1 text-xs text-content-tertiary">
+        {t('qms.how_intro', {
+          defaultValue:
+            'Run the whole quality chain in one place: plan control points, inspect them and drive failures through to close-out. Start by building an ITP plan for a work package.',
+        })}
+      </p>
+
+      <ol className="mt-3 flex flex-col gap-2 lg:flex-row lg:items-stretch">
+        {steps.map((s, i) => (
+          <Fragment key={s.title}>
+            <li className="flex-1 rounded-lg border border-border-light bg-surface-primary/70 p-3">
+              <div className="flex items-center gap-2">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-oe-blue-subtle">
+                  {s.icon}
+                </span>
+                <span className="text-xs font-semibold text-content-primary">{s.title}</span>
+              </div>
+              <p className="mt-1.5 text-2xs leading-relaxed text-content-tertiary">{s.desc}</p>
+            </li>
+            {i < steps.length - 1 && (
+              <li
+                aria-hidden="true"
+                className="hidden shrink-0 items-center self-center text-content-quaternary lg:flex"
+              >
+                <ArrowRight size={16} />
+              </li>
+            )}
+          </Fragment>
+        ))}
+      </ol>
+
+      <div className="mt-3 border-t border-border-light pt-3 text-2xs text-content-tertiary">
+        <span className="font-medium text-content-secondary">
+          {t('qms.how_connects', { defaultValue: 'Also available standalone:' })}
+        </span>{' '}
+        <ModLink to="/inspections">
+          {t('qms.mod_inspections', { defaultValue: 'Inspections' })}
+        </ModLink>
+        {' · '}
+        <ModLink to="/ncr">{t('qms.mod_ncr', { defaultValue: 'NCRs' })}</ModLink>
+        {' · '}
+        <ModLink to="/punchlist">{t('qms.mod_punchlist', { defaultValue: 'Punch List' })}</ModLink>
+        {' · '}
+        <ModLink to="/submittals">
+          {t('qms.mod_submittals', { defaultValue: 'Submittals' })}
+        </ModLink>
+      </div>
+    </section>
+  );
+}
 
 export function QMSPage() {
   const { t } = useTranslation();
@@ -305,6 +424,8 @@ export function QMSPage() {
             'Run the full ISO 9001 quality chain in one place: ITP plans define hold and witness points, Inspections sign them off, failed checks raise NCRs, NCRs with cost impact escalate to a Variation and feed the Cost of Poor Quality rollup, Punch items track close-out and Audits cover the management system. Pick a project, then work the tabs left to right.',
         })}
       </SectionIntro>
+
+      <HowQmsWork />
 
       <div className="border-b border-border-light">
         <nav className="flex gap-1 -mb-px overflow-x-auto">

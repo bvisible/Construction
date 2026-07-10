@@ -101,7 +101,7 @@ export function SubstitutePanel({ seed }: { seed: SubstituteSeed | null }) {
 
       {/* Resource line to re-price */}
       <div>
-        <label className="mb-1.5 block text-sm font-medium text-content-primary">
+        <label htmlFor="ce-sub-line" className="mb-1.5 block text-sm font-medium text-content-primary">
           {t('costExplorer.substitute.lineLabel', { defaultValue: 'Resource line to re-price' })}
         </label>
         {work.candidates && work.candidates.length > 0 && (
@@ -124,6 +124,7 @@ export function SubstitutePanel({ seed }: { seed: SubstituteSeed | null }) {
           </div>
         )}
         <ResourceSearchInput
+          id="ce-sub-line"
           onPick={(r) => pickLine(r.resource_code, r.name || r.resource_code)}
           region={work.region ?? null}
           placeholder={t('costExplorer.substitute.linePlaceholder', { defaultValue: 'Search the resource inside this work' })}

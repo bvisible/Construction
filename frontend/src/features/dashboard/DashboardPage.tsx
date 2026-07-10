@@ -48,6 +48,7 @@ import { MultiCurrencyTotal } from '@/shared/ui/MultiCurrencyTotal';
 import BIMCoverageCard from './BIMCoverageCard';
 import { DashboardCasesCard } from './DashboardCasesCard';
 import { FinanceSummaryCard } from './FinanceSummaryCard';
+import { EstimateResourceCard } from './EstimateResourceCard';
 import { InboxPanel } from '@/features/inbox';
 import { CompactProjectCard } from './components/CompactProjectCard';
 import { DashboardProjectsMap, type ProjectPin } from './components/DashboardProjectsMap';
@@ -1141,21 +1142,27 @@ function TodaySnapshot({ cards }: { cards?: ProjectCardMetrics[] }) {
     },
   ];
 
-  const toneStyles: Record<ItemTone, { dot: string; value: string; iconColor: string }> = {
+  const toneStyles: Record<
+    ItemTone,
+    { dot: string; value: string; iconColor: string; iconBg: string }
+  > = {
     urgent: {
       dot:       'bg-semantic-error',
       value:     'text-semantic-error',
       iconColor: 'text-semantic-error',
+      iconBg:    'bg-rose-50 dark:bg-rose-900/20',
     },
     attention: {
       dot:       'bg-semantic-warning',
-      value:     'text-[#b45309] dark:text-amber-400',
-      iconColor: 'text-[#b45309] dark:text-amber-400',
+      value:     'text-amber-600 dark:text-amber-400',
+      iconColor: 'text-amber-600 dark:text-amber-400',
+      iconBg:    'bg-amber-50 dark:bg-amber-900/20',
     },
     info: {
       dot:       'bg-content-quaternary',
       value:     'text-content-secondary',
-      iconColor: 'text-content-tertiary',
+      iconColor: 'text-oe-blue',
+      iconBg:    'bg-oe-blue-subtle',
     },
   };
 
@@ -1185,17 +1192,25 @@ function TodaySnapshot({ cards }: { cards?: ProjectCardMetrics[] }) {
             <button
               key={it.id}
               onClick={() => navigate(it.url)}
-              className="group flex items-center gap-3 rounded-xl border border-border-light bg-surface-elevated/90 px-4 py-3 text-left shadow-xs transition-shadow duration-normal ease-oe hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-oe-blue/30"
+              className="group flex items-center gap-3 rounded-xl border border-border-light bg-surface-elevated/90 px-3.5 py-3 text-left shadow-xs transition-all duration-normal ease-oe hover:border-oe-blue/40 hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-oe-blue/30"
             >
-              <span className={`${s.iconColor} shrink-0`}>{it.icon}</span>
+              <span
+                className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${s.iconBg} ${s.iconColor}`}
+              >
+                {it.icon}
+              </span>
               <div className="min-w-0 flex-1">
                 <div className="flex items-baseline gap-2">
-                  <span className={`text-xl font-bold tabular-nums ${hasItems ? s.value : 'text-content-tertiary'}`}>
+                  <span
+                    className={`text-2xl font-bold leading-none tabular-nums ${hasItems ? s.value : 'text-content-tertiary'}`}
+                  >
                     {it.value}
                   </span>
-                  <span className="text-xs text-content-tertiary truncate">{it.label}</span>
+                  <span className="truncate text-xs font-medium text-content-secondary">
+                    {it.label}
+                  </span>
                 </div>
-                <div className="text-2xs text-content-tertiary mt-0.5 truncate">{it.sublabel}</div>
+                <div className="mt-1 truncate text-2xs text-content-tertiary">{it.sublabel}</div>
               </div>
               {hasItems && (
                 <span className={`relative flex h-1.5 w-1.5 shrink-0 ${s.dot} rounded-full`}>
@@ -1204,7 +1219,10 @@ function TodaySnapshot({ cards }: { cards?: ProjectCardMetrics[] }) {
                   )}
                 </span>
               )}
-              <ArrowRight size={14} className="shrink-0 text-content-quaternary group-hover:text-oe-blue group-hover:translate-x-0.5 transition-all" />
+              <ArrowRight
+                size={14}
+                className="shrink-0 text-content-quaternary opacity-0 transition-all group-hover:translate-x-0.5 group-hover:text-oe-blue group-hover:opacity-100"
+              />
             </button>
           );
         })}
@@ -1351,7 +1369,7 @@ function NextSteps({
       id: 'explore-costs',
       icon: <Database size={18} strokeWidth={1.75} />,
       title: t('dashboard.next_explore_costs', { defaultValue: 'Explore the cost database' }),
-      description: t('dashboard.next_explore_costs_desc', { defaultValue: 'Browse 55,000+ regional unit rates with semantic search across CWICR / RSMeans / GAEB sources.' }),
+      description: t('dashboard.next_explore_costs_desc', { defaultValue: 'Browse 55,000+ regional unit rates with semantic search across CWICR / GAEB sources.' }),
       actionLabel: t('dashboard.next_explore_costs_action', { defaultValue: 'Open Costs' }),
       url: '/costs',
     });
@@ -2217,6 +2235,8 @@ function DashboardPageInner() {
     ),
 
     finance_summary: <FinanceSummaryCard />,
+
+    estimate_resources: <EstimateResourceCard />,
 
     projects: (
       <>

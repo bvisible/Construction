@@ -1,10 +1,13 @@
-import { useState, useCallback, useMemo, Fragment } from 'react';
+import { useState, useCallback, useMemo, Fragment, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import {
   Wallet,
   Plus,
+  Clock,
+  Network,
+  ArrowRight,
   Users,
   Coins,
   Loader2,
@@ -86,6 +89,131 @@ function money(value: string | number, currency?: string): string {
 function hours(value: string): string {
   const n = Number(value);
   return Number.isFinite(n) ? n.toFixed(2) : value;
+}
+
+/* ── How-it-works flow + module integrations ───────────────────────────── */
+
+/** A compact inline link to a sibling module (keeps the flow copy readable). */
+function ModLink({ to, children }: { to: string; children: ReactNode }) {
+  return (
+    <Link to={to} className="font-medium text-oe-blue-text hover:underline">
+      {children}
+    </Link>
+  );
+}
+
+/**
+ * Explains, in one glance, how payroll turns the hours worked on site into a
+ * posted, reconciled labour cost, and which modules feed it (field hours + crew
+ * pay rates) and which it feeds (the cost model, the finance ledger, reports).
+ * The founder's ask is that every module make its integrations obvious.
+ */
+function HowPayrollWorks() {
+  const { t } = useTranslation();
+
+  const steps: { icon: ReactNode; title: string; desc: string }[] = [
+    {
+      icon: <Clock size={14} className="text-oe-blue" />,
+      title: t('payroll.flow_1_title', { defaultValue: 'Field hours' }),
+      desc: t('payroll.flow_1_desc', {
+        defaultValue: 'Hours logged on site in field reports are the source for every pay entry.',
+      }),
+    },
+    {
+      icon: <Plus size={14} className="text-oe-blue" />,
+      title: t('payroll.flow_2_title', { defaultValue: 'Generate batch' }),
+      desc: t('payroll.flow_2_desc', {
+        defaultValue: 'Roll the hours into a draft batch of pay entries, one per worker.',
+      }),
+    },
+    {
+      icon: <MinusCircle size={14} className="text-oe-blue" />,
+      title: t('payroll.flow_3_title', { defaultValue: 'Deductions & net' }),
+      desc: t('payroll.flow_3_desc', {
+        defaultValue: 'Add tax, social and pension lines to work out net pay per payslip.',
+      }),
+    },
+    {
+      icon: <CheckCircle2 size={14} className="text-oe-blue" />,
+      title: t('payroll.flow_4_title', { defaultValue: 'Approve & post' }),
+      desc: t('payroll.flow_4_desc', {
+        defaultValue:
+          'Approve to post labour cost to the budget, then post the batch to the finance ledger.',
+      }),
+    },
+    {
+      icon: <Scale size={14} className="text-oe-blue" />,
+      title: t('payroll.flow_5_title', { defaultValue: 'Reconcile' }),
+      desc: t('payroll.flow_5_desc', {
+        defaultValue: 'Confirm batch hours still match the field records before any money moves.',
+      }),
+    },
+  ];
+
+  return (
+    <Card padding="md">
+      <h2 className="flex items-center gap-1.5 text-sm font-semibold text-content-primary">
+        <Network size={15} className="text-oe-blue" />
+        {t('payroll.flow_title', { defaultValue: 'How payroll fits together' })}
+      </h2>
+      <p className="mt-1 text-xs text-content-tertiary">
+        {t('payroll.flow_intro', {
+          defaultValue:
+            'Payroll turns the hours worked on site into a posted, reconciled labour cost. Start by generating a draft batch from the latest field hours.',
+        })}
+      </p>
+
+      <ol className="mt-3 flex flex-col gap-2 lg:flex-row lg:items-stretch">
+        {steps.map((s, i) => (
+          <Fragment key={s.title}>
+            <li className="flex-1 rounded-lg border border-border-light bg-surface-secondary/40 p-3">
+              <div className="flex items-center gap-2">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-oe-blue-subtle text-2xs font-bold text-oe-blue-text">
+                  {i + 1}
+                </span>
+                <span className="flex items-center gap-1 text-xs font-semibold text-content-primary">
+                  {s.icon}
+                  {s.title}
+                </span>
+              </div>
+              <p className="mt-1.5 text-2xs leading-relaxed text-content-tertiary">{s.desc}</p>
+            </li>
+            {i < steps.length - 1 && (
+              <li
+                aria-hidden="true"
+                className="hidden shrink-0 items-center self-center text-content-quaternary lg:flex"
+              >
+                <ArrowRight size={16} />
+              </li>
+            )}
+          </Fragment>
+        ))}
+      </ol>
+
+      <div className="mt-3 flex flex-col gap-1.5 border-t border-border-light pt-3 text-2xs text-content-tertiary sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-5 sm:gap-y-1">
+        <span>
+          <span className="font-medium text-content-secondary">
+            {t('payroll.flow_pulls', { defaultValue: 'Pulls from:' })}
+          </span>{' '}
+          <ModLink to="/field-reports">
+            {t('payroll.mod_field_reports', { defaultValue: 'Field reports' })}
+          </ModLink>{' '}
+          ·{' '}
+          <ModLink to="/resources">
+            {t('payroll.mod_resources', { defaultValue: 'Resources & Crew' })}
+          </ModLink>
+        </span>
+        <span>
+          <span className="font-medium text-content-secondary">
+            {t('payroll.flow_feeds', { defaultValue: 'Feeds:' })}
+          </span>{' '}
+          <ModLink to="/5d">{t('payroll.mod_5d', { defaultValue: '5D Cost' })}</ModLink> ·{' '}
+          <ModLink to="/finance">{t('payroll.mod_finance', { defaultValue: 'Finance' })}</ModLink> ·{' '}
+          <ModLink to="/reports">{t('payroll.mod_reports', { defaultValue: 'Reports' })}</ModLink>
+        </span>
+      </div>
+    </Card>
+  );
 }
 
 /* ── Deduction editor (per payslip / entry) ────────────────────────────── */
@@ -563,6 +691,8 @@ export default function PayrollPage() {
             'Generate a draft batch to roll the hours logged in field reports into pay entries per worker, then walk the batch through its lifecycle: submit for approval, finalize to post labour cost to the project budget, and post to the general ledger. Reconcile at any point to confirm batch hours still match the underlying field records before money moves.',
         })}
       </DismissibleInfo>
+
+      <HowPayrollWorks />
 
       {/* Project gate: keep the canonical top block above, then show the
           select-a-project empty state as a rhythm child (instead of a

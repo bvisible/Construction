@@ -20,6 +20,13 @@ export interface ResourceSearchInputProps {
   /** Codes already chosen - shown as "added" and not re-pickable. */
   excludeCodes?: string[];
   autoFocus?: boolean;
+  /**
+   * id for the underlying input so a caller can wire a visible
+   * `<label htmlFor={id}>`. When set, that label becomes the field's accessible
+   * name and the internal aria-label is dropped (avoids a Label-in-Name
+   * mismatch); when omitted, the field falls back to its own aria-label.
+   */
+  id?: string;
 }
 
 export function ResourceSearchInput({
@@ -28,6 +35,7 @@ export function ResourceSearchInput({
   placeholder,
   excludeCodes = [],
   autoFocus,
+  id,
 }: ResourceSearchInputProps) {
   const { t } = useTranslation();
   const [query, setQuery] = useState('');
@@ -135,6 +143,7 @@ export function ResourceSearchInput({
     <div ref={boxRef} className="relative">
       <Input
         ref={inputRef}
+        id={id}
         value={query}
         onChange={(e) => {
           setQuery(e.target.value);
@@ -160,7 +169,7 @@ export function ResourceSearchInput({
           ) : undefined
         }
         placeholder={placeholder ?? t('costExplorer.picker.placeholder', { defaultValue: 'Search materials, labour, plant by name or code' })}
-        aria-label={t('costExplorer.picker.aria', { defaultValue: 'Search catalog resources' })}
+        aria-label={id ? undefined : t('costExplorer.picker.aria', { defaultValue: 'Search catalog resources' })}
         role="combobox"
         aria-expanded={showDropdown}
         aria-controls={showDropdown ? listboxId : undefined}

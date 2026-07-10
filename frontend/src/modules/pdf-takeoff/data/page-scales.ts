@@ -123,3 +123,55 @@ export function hydratePageScales(
 
   return emptyPageScales();
 }
+
+/* ── Load reconciliation (issue #334) ─────────────────────────────────── */
+
+/**
+ * True when a page-scale model carries an EXPLICIT calibration rather than
+ * sitting on the factory default: either a per-page override exists, or the
+ * document default was moved off the factory ratio.
+ *
+ * Used to reconcile a local (offline-cache) model against the server
+ * (authoritative) one so a stale local DEFAULT can never override a real server
+ * calibration, and to decide whether a restored calibration is worth persisting
+ * back to the document.
+ */
+export function pageScalesHaveCalibration(ps: PageScales): boolean {
+  if (Object.keys(ps.byPage).length > 0) return true;
+  return ps.defaultScale.pixelsPerUnit !== defaultScaleConfig().pixelsPerUnit;
+}
+
+/**
+ * Reconcile a local (localStorage offline cache) page-scale model against the
+ * server (document-level, authoritative) one (issue #334).
+ *
+ * The failure this fixes: a device whose localStorage still held the factory
+ * default used to WIN over a real server calibration, silently wiping it on
+ * reload. The rule is "prefer an explicit calibration; never let a local
+ * default override an explicit server one". We MERGE rather than pick a side so
+ * a calibration made on another device (server) and one made here (local) both
+ * survive: per-page overrides are unioned with the local copy winning a
+ * conflict (it is the user's latest work on this device), and the document
+ * default prefers an explicit (non-factory) value, local first.
+ *
+ * Returns ``null`` only when neither side exists so the caller keeps its own
+ * state.
+ */
+export function reconcilePageScales(
+  local: PageScales | null,
+  server: PageScales | null,
+): PageScales | null {
+  if (!local && !server) return null;
+  if (!local) return server;
+  if (!server) return local;
+  // Union of per-page overrides; the local copy wins a page both calibrated
+  // (it is the user's latest work on this device). Every entry on either side
+  // is an explicit per-page calibration, so a merge never resurrects a default.
+  const byPage: Record<number, ScaleConfig> = { ...server.byPage, ...local.byPage };
+  // The document default prefers whichever side moved it off the factory ratio;
+  // a local factory default never overrides an explicit server default.
+  const localDefaultExplicit =
+    local.defaultScale.pixelsPerUnit !== defaultScaleConfig().pixelsPerUnit;
+  const defaultScale = localDefaultExplicit ? local.defaultScale : server.defaultScale;
+  return { defaultScale, byPage };
+}

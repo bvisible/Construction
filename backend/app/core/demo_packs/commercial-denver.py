@@ -53,13 +53,13 @@ TEMPLATE = DemoTemplate(
     boq_name="Larimer & 18th - Schematic Cost Estimate (CSI MasterFormat)",
     boq_description=(
         "Detailed core-and-shell + spec fit-out cost estimate to CSI "
-        "MasterFormat 2020 divisions, RSMeans Denver 2026 pricing, IBC 2021."
+        "MasterFormat 2020 divisions, Denver 2026 regional pricing, IBC 2021."
     ),
     boq_metadata={
         "standard": "CSI MasterFormat 2020",
         "phase": "Schematic Design Estimate (Class 3, AACE)",
         "base_date": "2026-Q1",
-        "price_level": "Denver, CO 2026 (RSMeans CCI ~0.98)",
+        "price_level": "Denver, CO 2026 (regional cost index ~0.98)",
     },
     sections=[
         # -- 01 General Requirements -------------------------------------------
@@ -356,7 +356,7 @@ TEMPLATE = DemoTemplate(
             "Colorado state use tax 2.9% + City & County of Denver combined ~8.81% applies to "
             "construction materials; captured as a separate use-tax markup line, NOT in unit rates."
         ),
-        "price_basis": "RSMeans City Cost Index Denver (~0.98 of US national average), base date 2026-Q1",
+        "price_basis": "US city cost index for Denver (~0.98 of national average), base date 2026-Q1",
         "estimate_class": "AACE Class 3 (Schematic Design, -10%/+20%)",
     },
     tender_packages=[

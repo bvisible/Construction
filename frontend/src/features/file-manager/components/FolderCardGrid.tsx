@@ -45,7 +45,7 @@ const KIND_EMPTY_HINT: Record<FileKind, string> = {
   photo: 'Capture or upload site photos (JPG, PNG, HEIC)',
   sheet: 'Upload drawing sheets (PDF, DWF) with revision tracking',
   bim_model: 'Upload IFC, RVT or NWD models for 3D coordination',
-  dwg_drawing: 'Upload AutoCAD DWG drawings for 2D takeoff',
+  dwg_drawing: 'Upload DWG drawings for 2D takeoff',
   takeoff: 'Generate quantity takeoffs from sheets and models',
   report: 'Generate analysis, validation or cost reports',
   markup: 'Create PDF markups and review sessions',

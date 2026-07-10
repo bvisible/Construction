@@ -2,7 +2,7 @@
  * Horizontal toolbar for DWG takeoff annotation tools.
  *
  * Emits per-tool keyboard shortcuts in the button tooltip so users can
- * discover them without reading the docs (AutoCAD has conditioned every
+ * discover them without reading the docs (CAD tools have conditioned every
  * estimator to hover for this information).
  */
 

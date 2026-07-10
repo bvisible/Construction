@@ -122,7 +122,7 @@ async def import_requirements_file(
     Dedicated parsers: IDS XML, COBie Excel, BIMQ Excel/JSON, generic
     Excel/CSV, Revit Shared Parameters (.txt). Format is auto-detected
     from file extension and content. Loosely-recognised inputs (a
-    non-IDS .xml, an MVD/ArchiCAD export, a non-BIMQ .json, a plain .txt)
+    non-IDS .xml, an MVD/BIM-tool export, a non-BIMQ .json, a plain .txt)
     are routed to the closest content-compatible parser on a best-effort
     basis rather than rejected outright; if that parser extracts nothing
     the response is a 422 carrying the parser's specific diagnostics. A

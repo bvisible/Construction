@@ -27,7 +27,7 @@ def _get_parser(format_name: str) -> Any:
     """Return the appropriate parser instance for a detected format.
 
     The :class:`FormatClassifier` can emit *generic* labels for content it
-    recognises only loosely (``GenericXML``, ``MVD``, ``ArchiCAD`` for any
+    recognises only loosely (``GenericXML``, ``MVD`` for any
     non-IDS XML; ``GenericJSON`` for non-BIMQ JSON; ``PlainText`` for a
     ``.txt`` that isn't a Revit shared-parameter file).  Previously every
     such label fell through to a blanket ``ValueError`` → HTTP 422, even
@@ -44,7 +44,7 @@ def _get_parser(format_name: str) -> Any:
     A genuinely unknown label still raises ``ValueError`` so the caller can
     surface an actionable message.
     """
-    if format_name == "IDS" or format_name in ("GenericXML", "MVD", "ArchiCAD"):
+    if format_name == "IDS" or format_name in ("GenericXML", "MVD"):
         from app.modules.bim_requirements.parsers.ids_parser import IDSParser
 
         return IDSParser()

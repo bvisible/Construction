@@ -66,13 +66,13 @@ class ClashRun(Base):
     model_ids: Mapped[list] = mapped_column(  # type: ignore[assignment]
         JSON, nullable=False, default=list, server_default="[]"
     )
-    # Which interference an engine pass reports (Navisworks-style Type
+    # Which interference an engine pass reports (coordination-tool-style Type
     # selector): 'hard' (interpenetration only), 'clearance' (proximity
     # only) or 'both' (hard, then clearance for the non-hard pairs - the
     # historical behaviour and the back-compatible default).
     clash_type: Mapped[str] = mapped_column(String(16), nullable=False, default="both", server_default="both")
     # Federated noise filter: when true only cross-model pairs are
-    # reported (Navisworks 'ignore clashes within the same file'). No
+    # reported (coordination tools' 'ignore clashes within the same file'). No
     # effect on a single-model run.
     ignore_same_model: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
     # Hard-clash penetration threshold (metres). A pair counts as a hard
@@ -86,7 +86,7 @@ class ClashRun(Base):
     clearance_m: Mapped[float] = mapped_column(Float, nullable=False, default=0.0, server_default="0.0")
     # 'cross_discipline' (skip same-discipline pairs - the common default),
     # 'all' (every pair), 'selected' (only discipline_filter pairs) or
-    # 'selection_sets' (Navisworks-style Set A × Set B, e.g. walls×pipes).
+    # 'selection_sets' (coordination-tool-style Set A × Set B, e.g. walls×pipes).
     mode: Mapped[str] = mapped_column(
         String(32),
         nullable=False,
@@ -95,7 +95,7 @@ class ClashRun(Base):
     )
     # Optional allow-list of [discipline_a, discipline_b] pairs to test.
     discipline_filter: Mapped[list | None] = mapped_column(JSON, nullable=True)
-    # Navisworks-style selection sets (mode='selection_sets'). Each is
+    # Coordination-tool-style selection sets (mode='selection_sets'). Each is
     # {"disciplines": [...], "element_types": [...]}; a pair is reported
     # iff one element matches set_a and the other matches set_b (strictly
     # cross). NULL for the other modes.
@@ -124,7 +124,7 @@ class ClashRun(Base):
     # Smart-issue spatial signature grid (millimetres). The clash signature
     # hashes the *bucketed* clash-box centroid so sub-mm geometry drift
     # between re-runs hashes to the same issue. 500 mm is a sane coordination
-    # default (Navisworks-style "snap to nearest half-metre"); a tighter grid
+    # default (coordination-tool-style "snap to nearest half-metre"); a tighter grid
     # makes the signature more discriminating (true motion → new issue), a
     # wider grid makes it more forgiving. Per-project / per-run override so
     # a coordinator can dial it for their model precision.

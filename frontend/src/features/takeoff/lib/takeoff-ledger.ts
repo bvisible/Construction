@@ -11,6 +11,7 @@ import type { Measurement, MeasurementType } from './takeoff-types';
 import { ANNOTATION_TYPES } from './takeoff-groups';
 import type { MeasurementSystem } from '@/stores/usePreferencesStore';
 import { convertQuantity } from './takeoff-display-units';
+import { effectiveQuantity } from './takeoff-quantity';
 
 /** Sortable column keys exposed by the ledger table. */
 export type LedgerSortColumn =
@@ -153,10 +154,10 @@ export function groupSubtotals(measurements: Measurement[]): GroupSubtotal[] {
     entry.count += 1;
     if (!ANNOTATION_TYPES.has(m.type)) {
       const unit = m.unit || '';
-      // Opening deductions subtract from the group's net area (gross -
-      // openings); they are stored as a positive gross area. Area-only.
-      const signed = m.isDeduction ? -m.value : m.value;
-      entry.totals[unit] = (entry.totals[unit] ?? 0) + signed;
+      // Effective quantity folds slope / wastage / typical-multiplier and the
+      // opening-deduction sign (net area = gross - openings), keyed by the
+      // stored unit so m + m2 + m3 stay distinct.
+      entry.totals[unit] = (entry.totals[unit] ?? 0) + effectiveQuantity(m);
     }
   }
   return Array.from(byGroup.values()).sort((a, b) =>
@@ -177,9 +178,9 @@ export function typeGrandTotals(measurements: Measurement[]): TypeGrandTotal[] {
       entry = { type: m.type, unit: m.unit || '', total: 0, count: 0 };
       byType.set(m.type, entry);
     }
-    // Opening deductions subtract from the area grand total (net = gross -
-    // openings). Stored positive; only area carries the flag.
-    entry.total += m.isDeduction ? -m.value : m.value;
+    // Effective quantity folds slope / wastage / typical-multiplier and the
+    // opening-deduction sign (net = gross - openings) into the grand total.
+    entry.total += effectiveQuantity(m);
     entry.count += 1;
     // Prefer a non-empty unit string if we have one.
     if (!entry.unit && m.unit) entry.unit = m.unit;
@@ -217,12 +218,11 @@ export function ledgerToCsv(
 
   for (const [group, groupRows] of byGroup.entries()) {
     for (const { ordinal, measurement } of groupRows) {
-      // A deduction (opening / void) prints as a NEGATIVE value so the CSV
-      // reconciles with the net subtotal below (gross - openings) and the
-      // type column flags it.
-      const signedValue = measurement.isDeduction
-        ? -measurement.value
-        : measurement.value;
+      // Reported (effective) quantity: folds slope / wastage / typical-
+      // multiplier and the opening-deduction sign, so a void still prints
+      // NEGATIVE and reconciles with the net subtotal below, and a factored
+      // row exports the same number the ledger shows.
+      const signedValue = effectiveQuantity(measurement);
       const typeLabel = measurement.isDeduction
         ? `${measurement.type} (deduction)`
         : measurement.type;

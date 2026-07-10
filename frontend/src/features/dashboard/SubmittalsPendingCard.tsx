@@ -24,6 +24,7 @@ import { ArrowRight } from 'lucide-react';
 import { Card, CardContent, CardHeader, InfoHint } from '@/shared/ui';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { fetchSubmittals, type Submittal, type SubmittalStatus } from '@/features/submittals/api';
+import { KpiStrip } from './KpiStrip';
 
 /** In-review statuses awaiting a reviewer decision. */
 const PENDING_STATUSES = new Set<SubmittalStatus>(['submitted', 'under_review']);
@@ -118,36 +119,24 @@ export function SubmittalsPendingCard() {
         }
       />
       <CardContent>
-        <div className="flex items-end gap-6">
-          <div>
-            <p className="text-xs uppercase tracking-wide text-content-tertiary">
-              {t('dashboard.submittals_pending', { defaultValue: 'Pending review' })}
-            </p>
-            <p className="text-3xl font-semibold text-content-primary tabular-nums">
-              {nf.format(buckets.pending)}
-            </p>
-          </div>
-          <div>
-            <p className="text-xs uppercase tracking-wide text-content-tertiary">
-              {t('dashboard.submittals_approved', { defaultValue: 'Approved' })}
-            </p>
-            <p className="text-lg font-medium text-emerald-600 tabular-nums">
-              {nf.format(buckets.approved)}
-            </p>
-          </div>
-          <div>
-            <p className="text-xs uppercase tracking-wide text-content-tertiary">
-              {t('dashboard.submittals_overdue', { defaultValue: 'Overdue' })}
-            </p>
-            <p
-              className={`text-lg font-medium tabular-nums ${
-                buckets.overdue > 0 ? 'text-rose-600' : 'text-content-secondary'
-              }`}
-            >
-              {nf.format(buckets.overdue)}
-            </p>
-          </div>
-        </div>
+        <KpiStrip
+          stats={[
+            {
+              label: t('dashboard.submittals_pending', { defaultValue: 'Pending review' }),
+              value: nf.format(buckets.pending),
+            },
+            {
+              label: t('dashboard.submittals_approved', { defaultValue: 'Approved' }),
+              value: nf.format(buckets.approved),
+              tone: 'text-emerald-600',
+            },
+            {
+              label: t('dashboard.submittals_overdue', { defaultValue: 'Overdue' }),
+              value: nf.format(buckets.overdue),
+              tone: buckets.overdue > 0 ? 'text-rose-600' : 'text-content-secondary',
+            },
+          ]}
+        />
         <InfoHint
           className="mt-3"
           text={t('dashboard.submittals_help', {

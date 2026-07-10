@@ -15,7 +15,7 @@ export const dwgTakeoffGuide: ModuleGuideContent = {
   titleDefault: 'DWG Takeoff',
   introKey: 'guide.dwg_takeoff.intro',
   introDefault:
-    'DWG Takeoff opens 2D AutoCAD drawings so you can measure areas, lengths and counts straight off the plan and feed those quantities into your estimate. Use it when your scope lives in DWG or DXF sheets rather than a 3D model.',
+    'DWG Takeoff opens 2D DWG drawings so you can measure areas, lengths and counts straight off the plan and feed those quantities into your estimate. Use it when your scope lives in DWG or DXF sheets rather than a 3D model.',
   sections: [
     {
       icon: 'Rocket',
@@ -23,7 +23,7 @@ export const dwgTakeoffGuide: ModuleGuideContent = {
       titleDefault: 'Upload a drawing',
       bodyKey: 'guide.dwg_takeoff.upload.body',
       bodyDefault:
-        'Drop a DWG or DXF file onto the upload area or click to browse. The file is converted to viewable entities on your own server through the DDC cad2data pipeline, so it never leaves your environment. AutoCAD 2000 to 2025 and DXF R12 to R2025 are supported.',
+        'Drop a DWG or DXF file onto the upload area or click to browse. The file is converted to viewable entities on your own server through the DDC cad2data pipeline, so it never leaves your environment. DWG 2000 to 2025 and DXF R12 to R2025 are supported.',
     },
     {
       icon: 'Layers',

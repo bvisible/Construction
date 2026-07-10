@@ -5,7 +5,7 @@ The service layer is the single source of truth for the **scoping
 rules** - RBAC at the router decides *whether* a caller may touch the
 feature at all; the service decides *which rows* they may touch. The
 counter-intuitive split (instead of just a per-row owner check) buys
-the user-/project-/federation- scoped sharing model BIMcollab Zoom
+the user-/project-/federation- scoped sharing model that BCF-compatible coordination tools
 made famous.
 """
 

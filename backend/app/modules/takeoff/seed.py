@@ -112,7 +112,7 @@ async def seed_takeoff_demo(
     # document card itself - renders a real drawing instead of an empty
     # "file not found" viewer. The id is generated up front so the on-disk
     # file name matches the row, exactly like a real upload.
-    from app.modules.takeoff.service import _TAKEOFF_DOCUMENTS_DIR
+    from app.modules.takeoff.service import _takeoff_documents_dir
 
     doc_uuid = uuid.uuid4()
     source_pdf = Path(__file__).resolve().parents[2] / "scripts" / "flagship_assets" / "house_plans.pdf"
@@ -120,8 +120,9 @@ async def seed_takeoff_demo(
     size_bytes = 0
     file_path = ""
     if source_pdf.exists():
-        _TAKEOFF_DOCUMENTS_DIR.mkdir(parents=True, exist_ok=True)
-        dest_pdf = _TAKEOFF_DOCUMENTS_DIR / f"{doc_uuid}.pdf"
+        documents_dir = _takeoff_documents_dir()
+        documents_dir.mkdir(parents=True, exist_ok=True)
+        dest_pdf = documents_dir / f"{doc_uuid}.pdf"
         shutil.copyfile(source_pdf, dest_pdf)
         size_bytes = dest_pdf.stat().st_size
         file_path = str(dest_pdf)

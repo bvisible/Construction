@@ -217,6 +217,20 @@ export interface MeasurementSummary {
   by_group: Record<string, number>;
 }
 
+/** One page's drawing scale, wire shape of the frontend ``ScaleConfig``. */
+export interface PageScaleConfigDTO {
+  pixelsPerUnit: number;
+  unitLabel: string;
+}
+
+/** Document-level per-page scale calibration (issue #334). Mirrors the
+ *  frontend ``PageScales`` model: a default scale for uncalibrated pages plus
+ *  per-page overrides keyed by 1-based page number (string keys over the wire). */
+export interface PageScalesDTO {
+  defaultScale: PageScaleConfigDTO;
+  byPage: Record<string, PageScaleConfigDTO>;
+}
+
 export interface TakeoffDocumentResponse {
   id: string;
   filename: string;
@@ -230,6 +244,10 @@ export interface TakeoffDocumentResponse {
   pages_without_text?: number;
   /** The 1-based page numbers with no text layer (8.2.0). */
   pages_without_text_list?: number[];
+  /** Document-level per-page scale calibration (issue #334). The authoritative
+   *  source the viewer restores on load; ``null`` when the document was never
+   *  calibrated at the document level (fall back to per-measurement stamps). */
+  page_scales?: PageScalesDTO | null;
 }
 
 /* ── Revision compare (Item 17) ────────────────────────────────────────── */
@@ -463,6 +481,19 @@ export const takeoffApi = {
       `/v1/takeoff/documents/${encodeURIComponent(docId)}`,
     );
   },
+
+  /** Persist the document-level per-page scale calibration (issue #334).
+   *  This is the authoritative, durable store of each sheet's drawing scale
+   *  (the browser localStorage copy is only an offline cache and the
+   *  per-measurement ``scale_pixels_per_unit`` stamp is capture provenance).
+   *  Called whenever the user calibrates a page so a reload / a second device
+   *  restores the exact per-sheet scales instead of losing them. ``pageScales``
+   *  is sent verbatim in the frontend ``PageScales`` shape. */
+  saveDocumentScales: (docId: string, pageScales: unknown) =>
+    apiPatch<{ id: string; page_scales: PageScalesDTO | null }>(
+      `/v1/takeoff/documents/${encodeURIComponent(docId)}/page-scales/`,
+      { page_scales: pageScales },
+    ),
 
   /** Delete an uploaded takeoff document. */
   deleteDocument: (docId: string) =>

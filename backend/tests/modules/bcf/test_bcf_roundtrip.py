@@ -4,7 +4,7 @@
 Sanity guarantee: every BCF 3.0 archive produced by our
 :class:`BCFWriter` must be readable by :class:`BCFReader` with no field
 loss. These tests are the safety net for the round-trip workflow with
-Revit / ArchiCAD plugins — if a field round-trips here, it will survive
+BIM authoring tool plugins - if a field round-trips here, it will survive
 a real plugin too.
 
 Cases:

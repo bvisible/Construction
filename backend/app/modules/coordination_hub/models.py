@@ -7,7 +7,7 @@ drives "this project is in trouble" signalling on top of the dashboard.
 
 Thresholds default-seed on first read for any project (see
 :meth:`CoordinationHubService.get_or_seed_thresholds`); the defaults pin
-the BIMcollab / BIM Track / Navisworks "open coordination debt" rules of
+the "open coordination debt" rules of
 thumb to OCERP's own numbers (open clashes total, severity breach,
 cost-impact as % of budget, model-age staleness).
 """

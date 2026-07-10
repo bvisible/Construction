@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom';
 import clsx from 'clsx';
 import {
   FileCheck,
@@ -12,6 +12,10 @@ import {
   ChevronRight,
   Info,
   Edit3,
+  Send,
+  CheckCircle2,
+  Link2,
+  Network,
 } from 'lucide-react';
 import {
   Button,
@@ -746,6 +750,105 @@ const SubmittalRow = React.memo(function SubmittalRow({
 
 /* ── Main Page ─────────────────────────────────────────────────────────── */
 
+/** Compact inline link to a sibling module (keeps the connects row readable). */
+function ModLink({ to, children }: { to: string; children: React.ReactNode }) {
+  return (
+    <Link to={to} className="font-medium text-oe-blue-text hover:underline">
+      {children}
+    </Link>
+  );
+}
+
+/**
+ * One-glance orientation card: what a submittal is for, the stages of moving
+ * one through approval, and the neighbouring modules it connects to. Every
+ * linked module is a real, clickable route.
+ */
+function SubmittalsHowItWorks() {
+  const { t } = useTranslation();
+
+  const steps: { icon: React.ReactNode; title: string; desc: string }[] = [
+    {
+      icon: <FileCheck size={14} className="text-oe-blue" />,
+      title: t('submittals.flow_1_title', { defaultValue: 'Log the item' }),
+      desc: t('submittals.flow_1_desc', {
+        defaultValue:
+          'Register each shop drawing, product data sheet, sample or certificate against its spec section.',
+      }),
+    },
+    {
+      icon: <Send size={14} className="text-oe-blue" />,
+      title: t('submittals.flow_2_title', { defaultValue: 'Submit for review' }),
+      desc: t('submittals.flow_2_desc', {
+        defaultValue: 'Move it from Draft to Submitted so the reviewer gets the ball, with a due date.',
+      }),
+    },
+    {
+      icon: <CheckCircle2 size={14} className="text-oe-blue" />,
+      title: t('submittals.flow_3_title', { defaultValue: 'Reviewer decides' }),
+      desc: t('submittals.flow_3_desc', {
+        defaultValue: 'Approved, Approved as noted, or Revise and resubmit, each with comments.',
+      }),
+    },
+    {
+      icon: <Link2 size={14} className="text-oe-blue" />,
+      title: t('submittals.flow_4_title', { defaultValue: 'Link to the works' }),
+      desc: t('submittals.flow_4_desc', {
+        defaultValue: 'Tie the approved submittal to the BOQ positions it covers before work starts.',
+      }),
+    },
+  ];
+
+  return (
+    <div className="rounded-xl border border-border-light bg-surface-secondary/40 p-4">
+      <h2 className="flex items-center gap-1.5 text-sm font-semibold text-content-primary">
+        <Network size={15} className="text-oe-blue" />
+        {t('submittals.flow_title', { defaultValue: 'How submittals work and connect' })}
+      </h2>
+      <p className="mt-1 text-xs text-content-tertiary">
+        {t('submittals.flow_intro', {
+          defaultValue:
+            'A submittal proves the materials and shop drawings were approved before they reach site. Start by logging an item, then move it through review.',
+        })}
+      </p>
+
+      <ol className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+        {steps.map((s) => (
+          <li
+            key={s.title}
+            className="rounded-lg border border-border-light bg-surface-primary/60 p-3"
+          >
+            <div className="flex items-center gap-2">
+              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-oe-blue-subtle">
+                {s.icon}
+              </span>
+              <span className="text-xs font-semibold text-content-primary">{s.title}</span>
+            </div>
+            <p className="mt-1.5 text-2xs leading-relaxed text-content-tertiary">{s.desc}</p>
+          </li>
+        ))}
+      </ol>
+
+      <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-border-light pt-3 text-2xs text-content-tertiary">
+        <span className="font-medium text-content-secondary">
+          {t('submittals.flow_connects', { defaultValue: 'Connects with' })}
+        </span>
+        <ModLink to="/rfi">{t('rfi.title', { defaultValue: 'RFIs' })}</ModLink>
+        <span aria-hidden="true">·</span>
+        <ModLink to="/inspections">
+          {t('submittals.link_inspections', { defaultValue: 'Inspections' })}
+        </ModLink>
+        <span aria-hidden="true">·</span>
+        <ModLink to="/transmittals">
+          {t('transmittals.title', { defaultValue: 'Transmittals' })}
+        </ModLink>
+        <span aria-hidden="true">·</span>
+        <ModLink to="/qms">{t('submittals.link_qms', { defaultValue: 'Quality management' })}</ModLink>
+      </div>
+    </div>
+  );
+}
+
 export function SubmittalsPage() {
   const { t } = useTranslation();
   const { projectId: routeProjectId } = useParams<{ projectId: string }>();
@@ -1097,6 +1200,8 @@ export function SubmittalsPage() {
             'Log each shop drawing, product data sheet, sample or certificate and move it through Draft, Submitted, Under Review, then Approved or Revise-and-resubmit, with a due-date and days-in-court badge so nothing stalls. Link a submittal to the BOQ positions it covers so you can see which items have approved documentation before they go to site.',
         })}
       </DismissibleInfo>
+
+      <SubmittalsHowItWorks />
 
       {!projectId && <RequiresProject>{null}</RequiresProject>}
 

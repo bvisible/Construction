@@ -108,7 +108,7 @@ implementation is our own.
   button did not work
   ([#110](https://github.com/datadrivenconstruction/OpenConstructionERP/issues/110)).
 - **ChristianSantoro** ([@ChristianSantoro](https://github.com/ChristianSantoro)): reported
-  that IFC and Revit files would not open in the 3D viewer
+  that IFC and RVT files would not open in the 3D viewer
   ([#113](https://github.com/datadrivenconstruction/OpenConstructionERP/issues/113),
   [#115](https://github.com/datadrivenconstruction/OpenConstructionERP/issues/115)).
 - **online14230** ([@online14230](https://github.com/online14230)): proposed regional data

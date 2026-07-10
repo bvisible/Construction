@@ -368,7 +368,7 @@ export function RequestCustomModuleDialog({ open, onClose }: Props) {
               {
                 icon: Plug,
                 key: 'modules.request_chip_integration',
-                fallback: 'SAP / Procore / MS Project integrations',
+                fallback: 'SAP / construction management / MS Project integrations',
               },
               {
                 icon: BarChart3,

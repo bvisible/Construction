@@ -355,11 +355,11 @@ TEMPLATE = DemoTemplate(
             "HOAI 2021",
             "ISO 19650-1/-2",
             "GEG 2024",
-            "BKI Baukosten 2025 (Neubau Bueroge.)",
+            "Baukosten-Benchmarks 2025 (Neubau Bueroge.)",
         ],
         "permit_authority": "Bauaufsicht Stadt Frankfurt am Main (HBO 2018)",
         "fire_concept": "Brandschutzkonzept gem. HBO / MIndBauRL, Sonderbau",
-        "cost_basis": "BKI Baukosten Gebaeude Neubau 2025, Regionalfaktor Frankfurt/M.",
+        "cost_basis": "Baukosten-Benchmarks Gebaeude Neubau 2025, Regionalfaktor Frankfurt/M.",
     },
     tender_packages=[
         (

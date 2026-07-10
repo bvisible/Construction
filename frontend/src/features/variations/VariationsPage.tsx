@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { Fragment, useState, useMemo, useEffect, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
@@ -17,6 +17,7 @@ import {
   Loader2,
   ChevronRight,
   ArrowRight,
+  Network,
   Pencil,
   Trash2,
 } from 'lucide-react';
@@ -39,7 +40,7 @@ import {
   WideModalSection,
   WideModalField,
 } from '@/shared/ui/WideModal';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { MoneyDisplay } from '@/shared/ui/MoneyDisplay';
 import { DateDisplay } from '@/shared/ui/DateDisplay';
 import { PageHeader } from '@/shared/ui/PageHeader';
@@ -240,6 +241,108 @@ function DashKPI({
       <p className="mt-0.5 text-sm font-semibold text-content-primary tabular-nums">
         {value}
       </p>
+    </div>
+  );
+}
+
+/* ── How it works + connects ─────────────────────────────────────────────
+ * Compact at-a-glance flow so a commercial manager sees what Variations does
+ * and which sibling modules a change event flows between. Mirrors the approved
+ * norm-expansion pattern. */
+function ModLink({ to, children }: { to: string; children: ReactNode }) {
+  return (
+    <Link to={to} className="font-medium text-oe-blue-text hover:underline">
+      {children}
+    </Link>
+  );
+}
+
+function HowVariationsWork() {
+  const { t } = useTranslation();
+  const steps: { icon: ReactNode; title: string; desc: string }[] = [
+    {
+      icon: <Bell size={14} className="text-oe-blue" />,
+      title: t('variations.flow_1_title', { defaultValue: 'Raise a notice' }),
+      desc: t('variations.flow_1_desc', {
+        defaultValue: 'Flag a change event the moment it happens on site.',
+      }),
+    },
+    {
+      icon: <FileText size={14} className="text-oe-blue" />,
+      title: t('variations.flow_2_title', { defaultValue: 'Price the request' }),
+      desc: t('variations.flow_2_desc', {
+        defaultValue: 'Estimate the cost and time impact for the client to review.',
+      }),
+    },
+    {
+      icon: <FileCheck2 size={14} className="text-oe-blue" />,
+      title: t('variations.flow_3_title', { defaultValue: 'Agree the order' }),
+      desc: t('variations.flow_3_desc', {
+        defaultValue: 'Approve and issue the variation order once it is agreed.',
+      }),
+    },
+    {
+      icon: <Hammer size={14} className="text-oe-blue" />,
+      title: t('variations.flow_4_title', { defaultValue: 'Track daywork & EoT' }),
+      desc: t('variations.flow_4_desc', {
+        defaultValue: 'Log daily work and time claims through to the final account.',
+      }),
+    },
+  ];
+
+  return (
+    <div className="rounded-xl border border-border-light bg-surface-secondary/40 p-4">
+      <h2 className="flex items-center gap-1.5 text-sm font-semibold text-content-primary">
+        <Network size={15} className="text-oe-blue" />
+        {t('variations.flow_title', { defaultValue: 'How variations work, and what they connect to' })}
+      </h2>
+      <p className="mt-1 text-xs text-content-tertiary">
+        {t('variations.flow_intro', {
+          defaultValue:
+            'Turn every site change into an agreed, priced variation order so nothing is lost at settlement. Start by raising a notice for the current project.',
+        })}
+      </p>
+
+      <ol className="mt-3 flex flex-col gap-2 lg:flex-row lg:items-stretch">
+        {steps.map((s, i) => (
+          <Fragment key={s.title}>
+            <li className="flex-1 rounded-lg border border-border-light bg-surface-primary p-3">
+              <div className="flex items-center gap-2">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-oe-blue-subtle">
+                  {s.icon}
+                </span>
+                <span className="text-xs font-semibold text-content-primary">{s.title}</span>
+              </div>
+              <p className="mt-1.5 text-2xs leading-relaxed text-content-tertiary">{s.desc}</p>
+            </li>
+            {i < steps.length - 1 && (
+              <li
+                aria-hidden="true"
+                className="hidden shrink-0 items-center self-center text-content-quaternary lg:flex"
+              >
+                <ArrowRight size={16} />
+              </li>
+            )}
+          </Fragment>
+        ))}
+      </ol>
+
+      <div className="mt-3 border-t border-border-light pt-3 text-2xs text-content-tertiary">
+        <span className="font-medium text-content-secondary">
+          {t('variations.flow_connects', { defaultValue: 'Connects with:' })}
+        </span>{' '}
+        <ModLink to="/contracts">
+          {t('variations.mod_contracts', { defaultValue: 'Contracts' })}
+        </ModLink>
+        {' · '}
+        <ModLink to="/boq">{t('variations.mod_boq', { defaultValue: 'BOQ' })}</ModLink>
+        {' · '}
+        <ModLink to="/reconciliation">
+          {t('variations.mod_reconciliation', { defaultValue: 'Reconciliation' })}
+        </ModLink>
+        {' · '}
+        <ModLink to="/reports">{t('variations.mod_reports', { defaultValue: 'Reports' })}</ModLink>
+      </div>
     </div>
   );
 }
@@ -518,6 +621,8 @@ export function VariationsPage() {
           </>
         }
       />
+
+      <HowVariationsWork />
 
       <DismissibleInfo
         storageKey="variations"

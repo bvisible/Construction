@@ -12,6 +12,7 @@ from typing import Any
 
 from sqlalchemy import String, and_, cast, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.expression import ColumnElement
 
 from app.modules.costs.models import CostItem
 from app.modules.costs.schemas import UNSPECIFIED_CATEGORY
@@ -72,6 +73,72 @@ def _classification_expr(depth_key: str) -> Any:
     return CostItem.classification[depth_key].as_string()
 
 
+# ── Multilingual free-text search ────────────────────────────────────────────
+#
+# The main cost browser and its autocomplete route their ``q`` through the same
+# forgiving, international matcher the Cost Explorer already ships, so an
+# estimator who types the word they know - in any of the supported languages,
+# with or without accents, singular or plural - still lands on the right priced
+# work. Substring recall is preserved (the word the user typed is matched as an
+# escaped ``ILIKE`` pattern), and cross-language synonyms are added on top.
+
+
+def _escape_like(term: str) -> str:
+    r"""Escape LIKE/ILIKE wildcards so a literal ``%`` / ``_`` stays literal.
+
+    Without this a query of ``%`` becomes the pattern ``%%%`` and matches every
+    row, and a ``_`` matches any single character. Mirrors the catalog and
+    cost-explorer repositories; pair the escaped pattern with
+    ``.ilike(pattern, escape="\\")``.
+    """
+    return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def synonym_text_predicate(query: str) -> ColumnElement[bool] | None:
+    """Build a multilingual, accent-folding free-text filter for the cost browser.
+
+    Routes ``query`` through the shared construction-vocabulary matcher
+    (:func:`app.modules.cost_explorer.search.match_terms`) so a single-word
+    search for ``rebar`` also reaches ``reinforcement`` / ``Bewehrung`` /
+    ``armatura``, ``beton`` reaches ``concrete``, and an accent-free
+    ``hormigon`` still reaches the accented row. The word the user typed is
+    matched as an escaped substring (``ILIKE``) so partial typing keeps landing;
+    the machine-injected cross-language synonyms are matched on word boundaries
+    (PostgreSQL ``~*``) so a short foreign word cannot hide inside an unrelated
+    word (French ``porte`` inside "supported"). LIKE wildcards in the term are
+    escaped, so a literal ``%`` / ``_`` matches literally instead of returning
+    the whole catalogue.
+
+    Args:
+        query: The raw free-text search string.
+
+    Returns:
+        An ``OR`` predicate over ``code`` and ``description``, or ``None`` when
+        the query is blank so the caller can skip the text filter entirely.
+    """
+    if not query or not query.strip():
+        return None
+    from app.modules.cost_explorer import search as cost_search
+
+    clauses: list[ColumnElement[bool]] = []
+    for variant, whole_word in cost_search.match_terms(query):
+        if whole_word:
+            # Cross-language synonym: word-boundary regex so a short foreign
+            # word cannot poison the result by hiding inside another word.
+            rx = rf"\y{cost_search.boundary_pattern(variant)}\y"
+            clauses.append(CostItem.code.op("~*")(rx))
+            clauses.append(CostItem.description.op("~*")(rx))
+        else:
+            # The user's own word / its folded and singular-plural forms:
+            # matched as an escaped substring so partial typing still lands.
+            pattern = f"%{_escape_like(variant)}%"
+            clauses.append(CostItem.code.ilike(pattern, escape="\\"))
+            clauses.append(CostItem.description.ilike(pattern, escape="\\"))
+    if not clauses:
+        return None
+    return or_(*clauses)
+
+
 class CostItemRepository:
     """Data access for CostItem model."""
 
@@ -117,7 +184,10 @@ class CostItemRepository:
         Args:
             offset: Number of items to skip.
             limit: Maximum number of items to return.
-            q: Optional text search query (LIKE on code and description).
+            q: Optional free-text query. Expanded with multilingual
+                construction synonyms (see :func:`synonym_text_predicate`)
+                and matched against code and description, so a single word
+                like ``rebar`` also finds ``reinforcement`` / ``Bewehrung``.
 
         Returns:
             Tuple of (items, total_count).
@@ -125,8 +195,9 @@ class CostItemRepository:
         base = select(CostItem).where(CostItem.is_active.is_(True))
 
         if q:
-            pattern = f"%{q}%"
-            base = base.where(CostItem.code.ilike(pattern) | CostItem.description.ilike(pattern))
+            predicate = synonym_text_predicate(q)
+            if predicate is not None:
+                base = base.where(predicate)
 
         # Count
         count_stmt = select(func.count()).select_from(base.subquery())
@@ -187,12 +258,15 @@ class CostItemRepository:
 
         Args:
             q: Text search on code OR description (canonical free-text param).
-                SQL ``ILIKE '%q%'`` cross-dialect via ``column.ilike()`` -
-                Postgres uses native ILIKE, SQLite uses case-insensitive
-                LIKE because the SQLite LIKE is itself case-insensitive
-                for ASCII by default. Always returns substring matches; the
-                vector layer is a best-effort re-ranker on top, never the
-                only source of recall.
+                Routed through the shared multilingual construction-vocabulary
+                matcher (:func:`synonym_text_predicate`), so a single-word query
+                like ``rebar`` also finds ``reinforcement`` / ``Bewehrung`` /
+                ``armatura`` and ``beton`` finds ``concrete``. The word the user
+                typed still matches as an escaped ``ILIKE`` substring so partial
+                typing keeps landing; cross-language synonyms are matched on word
+                boundaries. Always returns at least the substring matches; the
+                vector layer is a best-effort re-ranker on top, never the only
+                source of recall.
             name: Substring filter against ``code`` only. CostItem rows
                 have no separate ``name`` column - ``code`` is the catalog
                 identifier clients call "name", so this aliases there.
@@ -228,8 +302,9 @@ class CostItemRepository:
         base = select(CostItem).where(CostItem.is_active.is_(True))
 
         if q:
-            pattern = f"%{q}%"
-            base = base.where(CostItem.code.ilike(pattern) | CostItem.description.ilike(pattern))
+            predicate = synonym_text_predicate(q)
+            if predicate is not None:
+                base = base.where(predicate)
 
         if name:
             base = base.where(CostItem.code.ilike(f"%{name}%"))
@@ -359,8 +434,11 @@ class CostItemRepository:
         Python order ``(0 if has else 1, code)``.
 
         Args:
-            q: Substring match against code OR description (ILIKE).
-                Required - no q means use the generic listing endpoint.
+            q: Free-text match against code OR description. Expanded with
+                multilingual construction synonyms (see
+                :func:`synonym_text_predicate`) and kept as an escaped ``ILIKE``
+                substring for the user's own word. Required - no q means use
+                the generic listing endpoint.
             region: Optional region filter (e.g. ``"DE_BERLIN"``).
             limit: Hard cap on returned rows (matches the public endpoint
                 cap of 20).
@@ -371,10 +449,9 @@ class CostItemRepository:
         """
         base = select(CostItem).where(CostItem.is_active.is_(True))
 
-        pattern = f"%{q}%"
-        base = base.where(
-            CostItem.code.ilike(pattern) | CostItem.description.ilike(pattern),
-        )
+        predicate = synonym_text_predicate(q)
+        if predicate is not None:
+            base = base.where(predicate)
 
         if region:
             base = base.where(CostItem.region == region)

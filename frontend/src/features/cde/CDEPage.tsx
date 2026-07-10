@@ -1,7 +1,7 @@
-import React, { useState, useMemo, useCallback, useEffect } from 'react';
+import React, { Fragment, useState, useMemo, useCallback, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useParams, useNavigate } from 'react-router-dom';
+import { Link, useParams, useNavigate } from 'react-router-dom';
 import clsx from 'clsx';
 import {
   Database,
@@ -17,6 +17,8 @@ import {
   FileCheck,
   Check,
   File,
+  Network,
+  Archive,
 } from 'lucide-react';
 import { Button, Card, Badge, EmptyState, Breadcrumb, DateDisplay, ConfirmDialog, RecoveryCard, SkeletonTable, ModuleGuideButton } from '@/shared/ui';
 import { PageHeader } from '@/shared/ui/PageHeader';
@@ -1107,6 +1109,128 @@ function RevisionItem({ revision }: { revision: CDERevision }) {
   );
 }
 
+/* ── How-it-works flow + module integrations ───────────────────────────── */
+
+/** A compact inline link to a sibling module (keeps the flow copy readable). */
+function ModLink({ to, children }: { to: string; children: React.ReactNode }) {
+  return (
+    <Link to={to} className="font-medium text-oe-blue-text hover:underline">
+      {children}
+    </Link>
+  );
+}
+
+/**
+ * One-glance explainer of what a CDE is and how it connects: it is the agreed
+ * single source of truth for documents, moving each revision through the ISO
+ * 19650 states and out to review and distribution. Every connected module is a
+ * link so the workflow is obvious.
+ */
+function HowCdeWorks() {
+  const { t } = useTranslation();
+
+  const steps: { icon: React.ReactNode; title: string; desc: string }[] = [
+    {
+      icon: <Database size={14} className="text-oe-blue" />,
+      title: t('cde.flow_1_title', { defaultValue: 'Create container' }),
+      desc: t('cde.flow_1_desc', {
+        defaultValue: 'Register a document container with its code, discipline and suitability.',
+      }),
+    },
+    {
+      icon: <Link2 size={14} className="text-oe-blue" />,
+      title: t('cde.flow_2_title', { defaultValue: 'Link documents' }),
+      desc: t('cde.flow_2_desc', {
+        defaultValue: "Attach file revisions from the project's Files to the container.",
+      }),
+    },
+    {
+      icon: <FileCheck size={14} className="text-oe-blue" />,
+      title: t('cde.flow_3_title', { defaultValue: 'Share & approve' }),
+      desc: t('cde.flow_3_desc', {
+        defaultValue: 'Promote through WIP, Shared and Published; Published needs a signed approval.',
+      }),
+    },
+    {
+      icon: <Send size={14} className="text-oe-blue" />,
+      title: t('cde.flow_4_title', { defaultValue: 'Distribute' }),
+      desc: t('cde.flow_4_desc', {
+        defaultValue: 'Issue a container as a transmittal or raise a submittal for review.',
+      }),
+    },
+    {
+      icon: <Archive size={14} className="text-oe-blue" />,
+      title: t('cde.flow_5_title', { defaultValue: 'Archive' }),
+      desc: t('cde.flow_5_desc', {
+        defaultValue: 'Supersede old revisions so only current documents stay in use.',
+      }),
+    },
+  ];
+
+  return (
+    <Card padding="md">
+      <h2 className="flex items-center gap-1.5 text-sm font-semibold text-content-primary">
+        <Network size={15} className="text-oe-blue" />
+        {t('cde.flow_title', { defaultValue: 'How the CDE fits together' })}
+      </h2>
+      <p className="mt-1 text-xs text-content-tertiary">
+        {t('cde.flow_intro', {
+          defaultValue:
+            'A common data environment is the agreed single source of truth for project documents. Files are organised into ISO 19650 containers, moved through the review states, and issued to the team, so everyone always works off the right version.',
+        })}
+      </p>
+
+      <ol className="mt-3 flex flex-col gap-2 lg:flex-row lg:items-stretch">
+        {steps.map((s, i) => (
+          <Fragment key={s.title}>
+            <li className="flex-1 rounded-lg border border-border-light bg-surface-secondary/40 p-3">
+              <div className="flex items-center gap-2">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-oe-blue-subtle text-2xs font-bold text-oe-blue-text">
+                  {i + 1}
+                </span>
+                <span className="flex items-center gap-1 text-xs font-semibold text-content-primary">
+                  {s.icon}
+                  {s.title}
+                </span>
+              </div>
+              <p className="mt-1.5 text-2xs leading-relaxed text-content-tertiary">{s.desc}</p>
+            </li>
+            {i < steps.length - 1 && (
+              <li
+                aria-hidden="true"
+                className="hidden shrink-0 items-center self-center text-content-quaternary lg:flex"
+              >
+                <ArrowRight size={16} />
+              </li>
+            )}
+          </Fragment>
+        ))}
+      </ol>
+
+      <div className="mt-3 flex flex-col gap-1.5 border-t border-border-light pt-3 text-2xs text-content-tertiary sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-5 sm:gap-y-1">
+        <span>
+          <span className="font-medium text-content-secondary">
+            {t('cde.flow_connects', { defaultValue: 'Connects with:' })}
+          </span>{' '}
+          <ModLink to="/files">
+            {t('cde.mod_files', { defaultValue: 'Files' })}
+          </ModLink>{' '}
+          ·{' '}
+          <ModLink to="/submittals">
+            {t('cde.mod_submittals', { defaultValue: 'Submittals' })}
+          </ModLink>{' '}
+          ·{' '}
+          <ModLink to="/transmittals">
+            {t('cde.mod_transmittals', { defaultValue: 'Transmittals' })}
+          </ModLink>{' '}
+          ·{' '}
+          <ModLink to="/rfi">{t('cde.mod_rfi', { defaultValue: 'RFIs' })}</ModLink>
+        </span>
+      </div>
+    </Card>
+  );
+}
+
 /* ── Main Page ─────────────────────────────────────────────────────────── */
 
 export function CDEPage() {
@@ -1454,6 +1578,8 @@ export function CDEPage() {
             'Organise project documents into ISO 19650 containers and move each revision through Work in Progress, Shared, Published and Archived, so everyone works off the right version. Upload first, organise here, then distribute. Promotions are gated by your role and the history is kept per container.',
         })}
       </DismissibleInfo>
+
+      <HowCdeWorks />
 
       {/* Summary cards — fed by the /cde/stats aggregate endpoint. Shows the
           full ISO 19650 lifecycle (Total + every state) so users can see how

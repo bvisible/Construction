@@ -145,12 +145,12 @@ PACK_CONFIG: dict[str, Any] = {
     # ── Cost database integration stubs ──────────────────────────────────────
     "cost_database_integrations": [
         {
-            "code": "RSMeans",
-            "name": "Gordian RSMeans",
+            "code": "us_commercial_cost_data",
+            "name": "US commercial cost database",
             "description": "US construction cost data with city cost indices",
             "api_base_url": "",
             "enabled": False,
-            "note": "Requires RSMeans Data Online subscription and API key",
+            "note": "Requires a commercial US cost-data subscription and API key",
         },
     ],
     # ── Units (imperial defaults) ────────────────────────────────────────────

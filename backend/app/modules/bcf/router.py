@@ -610,7 +610,7 @@ async def export_clashes_bcfzip(
 # :class:`ClashIssue` row per Topic via :class:`BCFImportService`. The
 # auth pattern is the same as ``/export/clashes`` (RequirePermission +
 # ``_require_project_access``) so an EDITOR on the target project can
-# round-trip a Revit Coordination BCF without paperwork.
+# round-trip a coordination-tool BCF without paperwork.
 #
 # Deliberate properties:
 #   * 100 MiB hard cap on the multipart payload (matches the BCFReader's
@@ -632,7 +632,7 @@ async def import_clashes_bcfzip(
     project_id: uuid.UUID,
     user_id: CurrentUserId,
     session: SessionDep,
-    file: UploadFile = FileParam(..., description="A BCF 3.0 .bcfzip archive (Revit/ArchiCAD/etc.)"),
+    file: UploadFile = FileParam(..., description="A BCF 3.0 .bcfzip archive (from any BCF-compatible tool)"),
 ) -> dict:
     """Ingest a ``.bcfzip`` and upsert each Topic as a :class:`ClashIssue`.
 

@@ -294,6 +294,22 @@ export interface CertaintyBadge {
   confidence_badge: CertaintyBand;
   /** ISO-8601 timestamp of the most recent use, or null when never used. */
   last_used_at: string | null;
+  // Price-date freshness (optional; absent when the rate carries no price
+  // date). Mirrors ``service.price_freshness`` on the backend and is
+  // independent of usage: a heavily-used but long-unpriced rate still flags.
+  /** Day the price was last set or verified (ISO date), or null when unknown. */
+  price_as_of?: string | null;
+  /** Whole days since ``price_as_of``, or null when there is no price date. */
+  price_age_days?: number | null;
+  /** True when the price has aged at or past the staleness horizon. */
+  reprice_due?: boolean;
+  /** Green/yellow/red by price age, or null when there is no price date. */
+  price_freshness_band?: CertaintyBand | null;
+  /** The re-price-due horizon in days that was applied. */
+  staleness_horizon_days?: number | null;
+  /** Escalated one-click reprice value (Decimal as string); set only when
+   *  ``reprice_due``. */
+  suggested_reprice_value?: string | null;
 }
 
 /** Response shape for ``GET /v1/costs/regional-adjust/``. */

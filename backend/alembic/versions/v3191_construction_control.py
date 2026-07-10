@@ -5,7 +5,7 @@
 Adds the construction-control tables: acceptance criteria, inspections (with the
 MIR/WIR/IR/hidden-works/acceptance type discriminator) and the shared Universal
 Element Reference that links any control record to a model element regardless of
-source format (IFC, Revit, DWG, DGN, ...).
+source format (IFC, RVT, DWG, DGN, ...).
 
 New tables:
 

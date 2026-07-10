@@ -7,7 +7,7 @@
 
 ## Context
 
-OpenConstructionERP needed a way to take a CAD/BIM/PDF/photo element (Revit wall, IFC slab, takeoff measurement, photo of a brick wall) and surface ranked CWICR cost-position candidates so an estimator can link them with one click instead of searching the 55k-item catalog manually.
+OpenConstructionERP needed a way to take a CAD/BIM/PDF/photo element (BIM wall, IFC slab, takeoff measurement, photo of a brick wall) and surface ranked CWICR cost-position candidates so an estimator can link them with one click instead of searching the 55k-item catalog manually.
 
 Constraints from the user / existing platform:
 - Multilingual: CWICR ships per-region in 9 source languages (en, de, ru, lt, fr, es, it, pl, pt). Element data may be in a different language than the catalog the project targets.
@@ -56,7 +56,7 @@ MatchResponse (candidates + translation_used + auto_linked)
 
 ### Why a single envelope
 
-Each source (BIM/PDF/DWG/photo) has wildly different raw shapes — Revit hands you a dict with `category`, `Type Mark`, `Material`, geometry inside `geometry`; PDF takeoff hands you `{label, length, area, reading}`; photo gives you `{material_tags: [...], dimensions: {...}}`. Forcing them into one ranker surface needs a normalisation step. The universal `ElementEnvelope` (category · description · properties · quantities · classifier_hint · source_lang) means:
+Each source (BIM/PDF/DWG/photo) has wildly different raw shapes - a BIM export hands you a dict with `category`, `Type Mark`, `Material`, geometry inside `geometry`; PDF takeoff hands you `{label, length, area, reading}`; photo gives you `{material_tags: [...], dimensions: {...}}`. Forcing them into one ranker surface needs a normalisation step. The universal `ElementEnvelope` (category · description · properties · quantities · classifier_hint · source_lang) means:
 - One ranker, one set of boosts, one set of tests.
 - A new source just needs a new `extractors/<source>.py`. The ranker doesn't change.
 - The frontend panel is identical regardless of source — the viewer just builds the right `raw_element_data` dict.

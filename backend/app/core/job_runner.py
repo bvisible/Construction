@@ -121,11 +121,24 @@ def _dispatch_to_celery(job_run_id: uuid.UUID) -> str:
     no Redis). A cheap pre-flight ping (short timeout, zero retries) detects
     the missing broker fast; ``apply_async`` itself would otherwise also
     stall on the result backend's much longer retry policy.
-    """
-    from kombu.exceptions import OperationalError
 
-    from app.core.jobs import get_celery_app
-    from app.core.jobs_tasks import dispatch_job
+    Celery itself is an OPTIONAL extra (``celery[redis]`` - see
+    ``[project.optional-dependencies]``): the default ``pip install`` and
+    the shipped wheel run the lightweight, Redis-optional deploy without it.
+    So the transport imports below can raise :class:`ImportError` /
+    ``ModuleNotFoundError``; that is treated exactly like an unreachable
+    broker (raise :class:`BrokerUnavailableError`) so ``submit_job`` runs the
+    job in-process instead of failing the request with a 500. Without this
+    guard every background job (pipeline run, AI estimate, geo-hub tiling,
+    …) hard-crashes on a Celery-less install.
+    """
+    try:
+        from kombu.exceptions import OperationalError
+
+        from app.core.jobs import get_celery_app
+        from app.core.jobs_tasks import dispatch_job
+    except ImportError as exc:
+        raise BrokerUnavailableError(f"Celery/kombu not installed: {exc}") from exc
 
     # Pre-flight: confirm the broker is reachable with a bounded, no-retry
     # probe. This avoids ever entering apply_async's slow broker/result

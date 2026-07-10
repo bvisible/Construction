@@ -108,7 +108,7 @@ export function collectSnapCandidates(
 /**
  * Return the snap candidate closest to ``cursor`` within ``tolerance``
  * world-units, or ``null`` if none qualify. When two candidates are
- * exactly equidistant, endpoint wins over midpoint (matches AutoCAD).
+ * exactly equidistant, endpoint wins over midpoint (matches common CAD tools).
  */
 export function closestSnapCandidate(
   candidates: SnapCandidate[],

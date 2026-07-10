@@ -230,6 +230,32 @@ def _sync_publish_detached(name, data=None, source_module=None):
 _event_bus.publish_detached = _sync_publish_detached  # type: ignore[method-assign]
 
 
+@pytest.fixture(autouse=True)
+def _keep_validation_rules_registered():
+    """Guard the process-global validation registry against cross-test pollution.
+
+    A few suites swap the module-level ``validation_engine`` or replace/empty its
+    registry to exercise edge cases; without a restore, a later test that runs a
+    real rule set - inline BOQ-import validation, the pipeline graph gate - finds
+    an empty registry and reports every requested set as ``unsupported``. After
+    each test put the engine and its registry back, and re-register the built-ins
+    if they went missing (``register_builtin_rules`` is idempotent).
+    """
+    import app.core.validation.engine as _eng
+
+    engine = _eng.validation_engine
+    registry = engine.registry
+    try:
+        yield
+    finally:
+        _eng.validation_engine = engine
+        engine.registry = registry
+        if "boq_quality" not in registry.list_rule_sets():
+            from app.core.validation.rules import register_builtin_rules
+
+            register_builtin_rules()
+
+
 @pytest.fixture
 def sample_boq_data():
     """Sample BOQ data for validation tests."""

@@ -36,12 +36,12 @@ import {
   Sparkles,
   X,
   ArrowRight,
-  ShieldCheck,
-  FileText,
-  Map,
-  ArrowLeftRight,
-  ScanLine,
-  ListTree,
+  ListChecks,
+  Boxes,
+  Camera,
+  CheckCircle2,
+  PenTool,
+  WifiOff,
   type LucideIcon,
 } from 'lucide-react';
 import { APP_VERSION } from '@/shared/lib/version';
@@ -84,138 +84,128 @@ interface Section {
 }
 
 /* ── v8.2.0 release content ─────────────────────────────────────────────
-   Six chips for the v8.2 wave: the project journey map (headline), the
-   currency inversion guard, BIM bulk-import validation, takeoff scanned-page
-   flagging, DIN 276 dotted CAD codes, and the comment/DWG-preview fixes.
+   Six chips for the v10.9 wave: the cross-project issues hub (headline),
+   issues raised on the 3D model, punch photos and drawing pins, the closure
+   trail, mark-up to tracked issue, and offline field capture.
    Bullets surface only when the chip is expanded. */
-const SECTIONS_V820: Section[] = [
+const SECTIONS_V1090: Section[] = [
   {
-    id: 'journey',
-    icon: Map,
-    titleKey: 'whatsnew.v820.journey.title',
-    titleDefault: 'Project journey map in the top bar',
-    chipKey: 'whatsnew.v820.journey.chip',
-    chipDefault: 'Journey map',
+    id: 'issues-hub',
+    icon: ListChecks,
+    titleKey: 'whatsnew.v1090.issues.title',
+    titleDefault: 'One issues hub across the project',
+    chipKey: 'whatsnew.v1090.issues.chip',
+    chipDefault: 'Issues hub',
     bullets: [
       {
-        key: 'whatsnew.v820.journey.b1',
+        key: 'whatsnew.v1090.issues.b1',
         default:
-          'A control in the top bar names the lifecycle phase the screen you are on belongs to.',
+          'Punch items, non-conformances, clashes, mark-ups and model coordination topics gather into one open-issues list.',
       },
       {
-        key: 'whatsnew.v820.journey.b2',
+        key: 'whatsnew.v1090.issues.b2',
         default:
-          'Open it to see the whole project from first lead to handover: three arcs and eleven numbered phases.',
-      },
-      {
-        key: 'whatsnew.v820.journey.b3',
-        default:
-          'Every major module sits on its phase as a link, and it is translated in every language.',
+          'Filter by source, owner, priority or overdue, and jump straight back to where each item lives.',
       },
     ],
   },
   {
-    id: 'fx',
-    icon: ArrowLeftRight,
-    titleKey: 'whatsnew.v820.fx.title',
-    titleDefault: 'Currency inversion guard',
-    chipKey: 'whatsnew.v820.fx.chip',
-    chipDefault: 'FX guard',
+    id: 'model-issues',
+    icon: Boxes,
+    titleKey: 'whatsnew.v1090.model.title',
+    titleDefault: 'Raise issues on the 3D model',
+    chipKey: 'whatsnew.v1090.model.chip',
+    chipDefault: 'Model issues',
     bullets: [
       {
-        key: 'whatsnew.v820.fx.b1',
+        key: 'whatsnew.v1090.model.b1',
         default:
-          'The currency dialog warns when a project exchange rate looks entered upside down.',
+          'File a coordination topic on the model with a priority, an assignee and a due date, and discuss it in a comment thread.',
       },
       {
-        key: 'whatsnew.v820.fx.b2',
+        key: 'whatsnew.v1090.model.b2',
         default:
-          'It also flags a rate that sits far from a typical market rate, and shows it the right way round.',
-      },
-      {
-        key: 'whatsnew.v820.fx.b3',
-        default:
-          'A slip no longer quietly skews rolled-up totals.',
+          'A captured viewpoint and snapshot travel in the open BIM Collaboration Format, so a topic imports and exports as a standard file.',
       },
     ],
   },
   {
-    id: 'bim',
-    icon: ShieldCheck,
-    titleKey: 'whatsnew.v820.bim.title',
-    titleDefault: 'BIM bulk-import validation',
-    chipKey: 'whatsnew.v820.bim.chip',
-    chipDefault: 'BIM import',
+    id: 'punch-photos',
+    icon: Camera,
+    titleKey: 'whatsnew.v1090.punch.title',
+    titleDefault: 'Punch photos and pins on the drawing',
+    chipKey: 'whatsnew.v1090.punch.chip',
+    chipDefault: 'Punch photos',
     bullets: [
       {
-        key: 'whatsnew.v820.bim.b1',
+        key: 'whatsnew.v1090.punch.b1',
         default:
-          'Models imported from a spreadsheet or a bulk element file now run the same validation pass as the CAD path.',
+          'Add site photos to a punch item straight from a phone camera, shown as a thumbnail gallery you can add to and prune.',
       },
       {
-        key: 'whatsnew.v820.bim.b2',
+        key: 'whatsnew.v1090.punch.b2',
         default:
-          'Every imported model gets a validation report, not only the ones brought in through a converter.',
+          'Place the pin visually on the drawing sheet instead of typing coordinates, with every open item shown as a numbered pin.',
       },
     ],
   },
   {
-    id: 'takeoff',
-    icon: ScanLine,
-    titleKey: 'whatsnew.v820.takeoff.title',
-    titleDefault: 'Takeoff flags scanned pages',
-    chipKey: 'whatsnew.v820.takeoff.chip',
-    chipDefault: 'Scanned pages',
+    id: 'closure',
+    icon: CheckCircle2,
+    titleKey: 'whatsnew.v1090.closure.title',
+    titleDefault: 'A closure trail on every item',
+    chipKey: 'whatsnew.v1090.closure.chip',
+    chipDefault: 'Closure trail',
     bullets: [
       {
-        key: 'whatsnew.v820.takeoff.b1',
+        key: 'whatsnew.v1090.closure.b1',
         default:
-          'Quantity takeoff now reports how many PDF pages came back with no text layer, usually scanned drawings.',
+          'A closure stepper walks the full path from open through assigned, in progress, resolved and verified to closed.',
       },
       {
-        key: 'whatsnew.v820.takeoff.b2',
+        key: 'whatsnew.v1090.closure.b2',
         default:
-          'They are no longer treated silently as empty, so it is clear which pages need OCR.',
+          'Nothing is marked done without the trail behind it.',
       },
     ],
   },
   {
-    id: 'din276',
-    icon: ListTree,
-    titleKey: 'whatsnew.v820.din276.title',
-    titleDefault: 'DIN 276 dotted CAD codes',
-    chipKey: 'whatsnew.v820.din276.chip',
-    chipDefault: 'DIN 276',
+    id: 'markup-issue',
+    icon: PenTool,
+    titleKey: 'whatsnew.v1090.markup.title',
+    titleDefault: 'Turn a mark-up into a tracked issue',
+    chipKey: 'whatsnew.v1090.markup.chip',
+    chipDefault: 'Mark-up to issue',
     bullets: [
       {
-        key: 'whatsnew.v820.din276.b1',
+        key: 'whatsnew.v1090.markup.b1',
         default:
-          'Completeness and hierarchy checks now fold dotted CAD codes such as 330.10 to their three-digit cost group.',
+          'Give a drawing mark-up a priority and a due date and convert it into a tracked issue in one click.',
       },
       {
-        key: 'whatsnew.v820.din276.b2',
+        key: 'whatsnew.v1090.markup.b2',
         default:
-          'A model classified with deeper codes is scored against the right group instead of being undercounted.',
+          'A cloud drawn on a plan becomes a photographed, assignable, closable item.',
       },
     ],
   },
   {
-    id: 'fixes',
-    icon: FileText,
-    titleKey: 'whatsnew.v820.fixes.title',
-    titleDefault: 'Comment and DWG preview fixes',
-    chipKey: 'whatsnew.v820.fixes.chip',
-    chipDefault: 'Fixes',
+    id: 'field-capture',
+    icon: WifiOff,
+    titleKey: 'whatsnew.v1090.field.title',
+    titleDefault: 'Raise a defect offline from the field',
+    chipKey: 'whatsnew.v1090.field.chip',
+    chipDefault: 'Field capture',
     bullets: [
       {
-        key: 'whatsnew.v820.fixes.b1',
+        key: 'whatsnew.v1090.field.b1',
         default:
-          'A comment that carries a viewpoint now checks its entity type against the same allowlist as the standalone path.',
+          'From the field shell a site worker raises a defect with a photo even with no signal.',
       },
       {
-        key: 'whatsnew.v820.fixes.b2',
+        key: 'whatsnew.v1090.field.b2',
         default:
-          'DWG drawing previews render again on newer ezdxf builds, version 1.1 and later.',
+          'It syncs when the connection returns, so nothing is lost on site.',
       },
     ],
   },
@@ -341,7 +331,7 @@ export function WhatsNewCard({ forceShow = false, versionOverride }: WhatsNewCar
     navigate('/about#changelog');
   }, [navigate, handleDismiss]);
 
-  const sections = useMemo(() => SECTIONS_V820, []);
+  const sections = useMemo(() => SECTIONS_V1090, []);
 
   if (mode === null) return null;
 

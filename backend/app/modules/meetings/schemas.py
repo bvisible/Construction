@@ -120,6 +120,9 @@ class MeetingResponse(BaseModel):
     minutes: str | None = None
     status: str = "draft"
     document_ids: list[UUID] = Field(default_factory=list)
+    # Recurring-series context so the UI can offer carry-over / series views.
+    series_id: str | None = None
+    is_series_master: bool = False
     created_by: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict, validation_alias="metadata_")
     created_at: datetime
@@ -296,3 +299,145 @@ class AttendanceRow(BaseModel):
     signature_image_path: str | None = None
     created_at: datetime
     updated_at: datetime
+
+
+# ── Action register (carry-over across a series) ──────────────────────────────
+
+# open | in_progress | done | cancelled - richer than the legacy
+# ActionItemEntry (open/completed/cancelled) so a running action can be tracked.
+_ACTION_STATUS_PATTERN = r"^(open|in_progress|done|cancelled)$"
+
+
+class ActionRegisterItemCreate(BaseModel):
+    """Add a tracked action item to a meeting."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    description: str = Field(..., min_length=1, max_length=1000)
+    owner_id: str | None = Field(default=None, max_length=36)
+    owner_name: str | None = Field(default=None, max_length=200)
+    due_date: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$", max_length=20)
+    status: str = Field(default="open", pattern=_ACTION_STATUS_PATTERN)
+
+
+class ActionRegisterItemUpdate(BaseModel):
+    """Partial update for a tracked action item.
+
+    Setting ``status`` to ``done`` or ``cancelled`` closes the action for the
+    whole series; ``closing_meeting_id`` records which meeting closed it.
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    description: str | None = Field(default=None, min_length=1, max_length=1000)
+    owner_id: str | None = Field(default=None, max_length=36)
+    owner_name: str | None = Field(default=None, max_length=200)
+    due_date: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$", max_length=20)
+    status: str | None = Field(default=None, pattern=_ACTION_STATUS_PATTERN)
+    closing_meeting_id: UUID | None = None
+
+
+class ActionRegisterItemResponse(BaseModel):
+    """A tracked action item with its computed carry-over context."""
+
+    id: UUID
+    project_id: UUID
+    series_id: str | None = None
+    origin_meeting_id: UUID
+    origin_meeting_number: str = ""
+    origin_meeting_date: str | None = None
+    description: str
+    owner_id: str | None = None
+    owner_name: str | None = None
+    due_date: str | None = None
+    status: str = "open"
+    overdue: bool = False
+    brought_forward: bool = False
+    closed_in_meeting_id: UUID | None = None
+    closed_at: datetime | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class MeetingActionsResponse(BaseModel):
+    """This meeting's own actions plus the ones brought forward into it."""
+
+    meeting_id: UUID
+    own: list[ActionRegisterItemResponse] = Field(default_factory=list)
+    brought_forward: list[ActionRegisterItemResponse] = Field(default_factory=list)
+
+
+class SeriesActionRegisterResponse(BaseModel):
+    """Every action across a recurring series with a status roll-up."""
+
+    series_id: str | None = None
+    total: int = 0
+    open: int = 0
+    in_progress: int = 0
+    done: int = 0
+    cancelled: int = 0
+    overdue: int = 0
+    actions: list[ActionRegisterItemResponse] = Field(default_factory=list)
+
+
+# ── Auto-draft minutes ────────────────────────────────────────────────────────
+
+
+class MinutesAgendaInput(BaseModel):
+    """A discussion/decision override for one agenda item when generating minutes."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    number: str | None = Field(default=None, max_length=10)
+    topic: str | None = Field(default=None, max_length=500)
+    presenter: str | None = Field(default=None, max_length=200)
+    discussion: str | None = Field(default=None, max_length=10000)
+    decision: str | None = Field(default=None, max_length=5000)
+    required: bool = False
+
+
+class MinutesGenerateRequest(BaseModel):
+    """Generate (or refresh) the draft minutes for a meeting."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    next_meeting_date: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
+    agenda: list[MinutesAgendaInput] | None = None
+    # Rebuild the content from current meeting data, discarding earlier edits.
+    regenerate: bool = False
+
+
+class MinutesUpdate(BaseModel):
+    """Human edits to a draft minutes document before it is issued."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    content: dict[str, Any] | None = None
+    next_meeting_date: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
+
+
+class MinutesResponse(BaseModel):
+    """A minutes document returned from the API."""
+
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    id: UUID
+    project_id: UUID
+    meeting_id: UUID
+    status: str = "draft"
+    content: dict[str, Any] = Field(default_factory=dict)
+    next_meeting_date: str | None = None
+    issued_at: datetime | None = None
+    issued_by: str | None = None
+    distributed_at: datetime | None = None
+    distributed_to: list[str] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+
+
+class MinutesDistributeResponse(BaseModel):
+    """Result of distributing issued minutes to attendees."""
+
+    minutes_id: UUID
+    recipients: int = 0
+    notified_user_ids: list[str] = Field(default_factory=list)

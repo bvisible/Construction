@@ -3780,7 +3780,7 @@ class BIMHubService:
           representative element of each class so the colour-by-property
           UI knows which property keys are even worth offering.
 
-        The "federation-flat, not per-model" shape mirrors BIMcollab Zoom
+        The "federation-flat, not per-model" shape mirrors a coordination-tool view
         and is the key UX insight: it makes "select every IfcDuctSegment
         across 12 federated models" a one-click operation.
 

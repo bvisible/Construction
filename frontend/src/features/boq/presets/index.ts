@@ -269,7 +269,7 @@ const REGIONAL_PRESETS: ColumnPreset[] = [
     region: 'usa',
     name: 'USA - CSI MasterFormat',
     description:
-      'Division / Section codes, crew, productivity and RSMeans reference - matches CSI MasterFormat 2018',
+      'Division / Section codes, crew, productivity and cost-data reference - matches CSI MasterFormat 2018',
     icon: ClipboardList,
     iconClass: 'text-blue-700 bg-blue-700/10',
     columns: [
@@ -277,7 +277,7 @@ const REGIONAL_PRESETS: ColumnPreset[] = [
       { name: 'csi_section', display_name: 'Section', column_type: 'text' },
       { name: 'crew_code', display_name: 'Crew Code', column_type: 'text' },
       { name: 'daily_output', display_name: 'Daily Output', column_type: 'number' },
-      { name: 'rsmeans_code', display_name: 'RSMeans Code', column_type: 'text' },
+      { name: 'cost_ref_code', display_name: 'Cost Ref Code', column_type: 'text' },
     ],
   },
   {

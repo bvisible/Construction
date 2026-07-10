@@ -1,9 +1,14 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { usePreferencesStore } from './usePreferencesStore';
+import { apiGet } from '@/shared/lib/api';
+
+vi.mock('@/shared/lib/api', () => ({ apiGet: vi.fn() }));
+const mockApiGet = vi.mocked(apiGet);
 
 describe('usePreferencesStore', () => {
   beforeEach(() => {
     localStorage.clear();
+    mockApiGet.mockReset();
     usePreferencesStore.getState().resetPreferences();
   });
 
@@ -72,5 +77,44 @@ describe('usePreferencesStore', () => {
     usePreferencesStore.getState().setPreference('currency', 'JPY');
     const stored = JSON.parse(localStorage.getItem('oe_preferences') || '{}');
     expect(stored.currency).toBe('JPY');
+  });
+
+  describe('hydrateFromServer (issue #335)', () => {
+    it('applies the account regional prefs and writes them through to localStorage', async () => {
+      mockApiGet.mockResolvedValueOnce({
+        measurement_system: 'imperial',
+        date_format: 'MM/DD/YYYY',
+        number_format: '1,234.56',
+        currency_code: 'USD',
+      });
+      await usePreferencesStore.getState().hydrateFromServer();
+      const s = usePreferencesStore.getState();
+      expect(s.measurementSystem).toBe('imperial');
+      expect(s.dateFormat).toBe('MM/DD/YYYY');
+      expect(s.numberLocale).toBe('en-US'); // '1,234.56' pattern -> en-US
+      expect(s.currency).toBe('USD');
+      expect(s.defaultCurrency).toBe('USD');
+      expect(mockApiGet).toHaveBeenCalledWith('/v1/users/me/preferences/');
+      const stored = JSON.parse(localStorage.getItem('oe_preferences') || '{}');
+      expect(stored.measurementSystem).toBe('imperial');
+    });
+
+    it('skips a server value that is not a known option, keeping the default', async () => {
+      mockApiGet.mockResolvedValueOnce({
+        measurement_system: 'martian', // not in the union
+        currency_code: '', // "not chosen" on the account
+      });
+      await usePreferencesStore.getState().hydrateFromServer();
+      const s = usePreferencesStore.getState();
+      expect(s.measurementSystem).toBe('metric');
+      expect(s.currency).toBe('EUR');
+    });
+
+    it('swallows a server error and leaves the offline cache untouched', async () => {
+      usePreferencesStore.getState().setPreference('measurementSystem', 'imperial');
+      mockApiGet.mockRejectedValueOnce(new Error('offline'));
+      await expect(usePreferencesStore.getState().hydrateFromServer()).resolves.toBeUndefined();
+      expect(usePreferencesStore.getState().measurementSystem).toBe('imperial');
+    });
   });
 });

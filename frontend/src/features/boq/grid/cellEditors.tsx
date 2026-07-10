@@ -831,28 +831,100 @@ export const RateCellEditor = forwardRef((props: ICellEditorParams, ref) => {
   const unit = (props.data?.unit as string | undefined) ?? '';
   const inputRef = useRef<HTMLInputElement>(null);
   // The rate the editor OPENS on, in the displayed system. Kept as the
-  // unchanged-commit fallback: valueParser applies toMetricRate to whatever we
-  // return, so on a blank / invalid entry we must hand back a DISPLAY value
-  // (never the raw metric one) for it to reverse to the original stored rate.
+  // unchanged-commit fallback for the cold getValue path.
   const displaySeed = useMemo(() => {
     const raw = props.value;
     if (typeof raw !== 'number' || !isFinite(raw)) return null;
     return dq ? dq.convertRate(raw, unit) : raw;
   }, [props.value, dq, unit]);
 
-  const [value, setValue] = useState<string>(displaySeed != null ? String(displaySeed) : '');
+  const seedStr = displaySeed != null ? String(displaySeed) : '';
+  // ``valueRef`` mirrors the input synchronously. A plain JSX ``onChange`` +
+  // ``getValue()`` was NOT enough: ag-grid-react v32 + React 18 (a) can skip
+  // ``getValue()`` entirely after ``stopEditing`` on a functional editor, and
+  // (b) the editor renders in an edit root where the synthetic ``onChange``
+  // does not always fire. Either way a rate typed on a resource-less position
+  // committed the OLD value and the edit was silently dropped (cell reverted to
+  // 0, no PATCH). We therefore mirror FormulaCellEditor / UnitCellEditor:
+  // NATIVE input/keydown/blur listeners capture the keystrokes, and Enter/Tab/
+  // blur writes the metric-canonical rate straight to the row via
+  // ``setDataValue`` (which bypasses the column valueParser), then cancels
+  // ag-grid's own secondary commit so exactly one cellValueChanged fires.
+  const valueRef = useRef<string>(seedStr);
+  const committedRef = useRef(false);
 
   useEffect(() => {
     inputRef.current?.focus();
     inputRef.current?.select();
   }, []);
 
+  const commit = (cancelNavigation: boolean): boolean => {
+    if (committedRef.current) return true;
+    const live = (inputRef.current?.value ?? valueRef.current).replace(',', '.');
+    const n = parseFloat(live);
+    if (!isFinite(n)) {
+      // Nothing usable typed: keep the previously stored rate (Escape-style
+      // cancel). Guard set so a tail blur after Enter doesn't re-enter.
+      committedRef.current = true;
+      props.api.stopEditing(true);
+      return true;
+    }
+    committedRef.current = true;
+    // Typed value is in the DISPLAYED system; convert back to metric-canonical
+    // before writing. ``toMetricRate`` is identity for metric / unmapped units.
+    const metric = dq ? dq.toMetricRate(n, unit) : n;
+    const colId = props.column?.getColId?.() ?? 'unit_rate';
+    const oldValue = props.node?.data?.[colId as keyof typeof props.node.data];
+    const wrote = Number(metric) !== Number(oldValue);
+    if (wrote) props.node?.setDataValue(colId, metric);
+    // When we wrote via setDataValue, cancel ag-grid's secondary getValue
+    // commit (cancel=true) so it can't fire a second, stale cellValueChanged.
+    props.api.stopEditing(wrote ? true : cancelNavigation);
+    return true;
+  };
+
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    const onInput = (ev: Event) => {
+      valueRef.current = (ev.target as HTMLInputElement).value;
+    };
+    const onKeyDown = (ev: KeyboardEvent) => {
+      if (ev.key === 'Escape') {
+        props.api.stopEditing(true);
+        return;
+      }
+      if (ev.key === 'Enter') {
+        ev.preventDefault();
+        ev.stopPropagation();
+        commit(false);
+        return;
+      }
+      if (ev.key === 'Tab') {
+        ev.preventDefault();
+        ev.stopPropagation();
+        if (commit(false)) props.api.tabToNextCell();
+      }
+    };
+    const onBlur = () => commit(false);
+    el.addEventListener('input', onInput);
+    el.addEventListener('keydown', onKeyDown);
+    el.addEventListener('blur', onBlur);
+    return () => {
+      el.removeEventListener('input', onInput);
+      el.removeEventListener('keydown', onKeyDown);
+      el.removeEventListener('blur', onBlur);
+    };
+  }, []);
+
   useImperativeHandle(ref, () => ({
     getValue() {
-      const n = parseFloat(value.replace(',', '.'));
-      if (isFinite(n)) return n; // typed display value -> valueParser -> metric
-      if (displaySeed != null) return displaySeed; // unchanged -> reverses to original
-      return props.value; // non-numeric original -> valueParser returns oldValue
+      // Cold path only (programmatic stopEditing without our commit): return the
+      // typed DISPLAY value so the column valueParser converts it once to metric.
+      const n = parseFloat(valueRef.current.replace(',', '.'));
+      if (isFinite(n)) return n;
+      if (displaySeed != null) return displaySeed;
+      return props.value;
     },
     isCancelAfterEnd() {
       return false;
@@ -867,8 +939,7 @@ export const RateCellEditor = forwardRef((props: ICellEditorParams, ref) => {
       step="any"
       inputMode="decimal"
       className="w-full h-full bg-surface-elevated border border-oe-blue/40 rounded ring-2 ring-oe-blue/20 outline-none text-sm text-content-primary tabular-nums text-right px-1"
-      value={value}
-      onChange={(e) => setValue(e.target.value)}
+      defaultValue={seedStr}
     />
   );
 });

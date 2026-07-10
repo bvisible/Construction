@@ -114,6 +114,10 @@ export interface CreateMarkupPayload {
   stamp_template_id?: string;
   /** M3 — optional follow-up owner. */
   assignee_id?: string | null;
+  /** Free-form JSONB. Used by the issue-tracking layer to stash
+   *  ``priority`` / ``due_date`` on a markup without a schema change
+   *  (the backend accepts ``metadata`` on create, storing it verbatim). */
+  metadata?: Record<string, unknown>;
 }
 
 export interface UpdateMarkupPayload {
@@ -128,6 +132,12 @@ export interface UpdateMarkupPayload {
   measurement_unit?: string;
   /** M3 — re-assign or clear the follow-up owner. Pass null to clear. */
   assignee_id?: string | null;
+  /** Free-form JSONB patch. The backend shallow-MERGES this onto the
+   *  stored metadata (it does not replace it), so a request only needs to
+   *  carry the keys it changes; sibling keys such as a linked ``punch_item_id``
+   *  survive. Used to persist ``priority`` / ``due_date`` / ``punch_item_id``
+   *  without a dedicated column. */
+  metadata?: Record<string, unknown>;
 }
 
 /* ── Markups CRUD ─────────────────────────────────────────────────────── */

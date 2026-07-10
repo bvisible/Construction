@@ -68,6 +68,7 @@ from app.modules.takeoff.schemas import (
     AiTakeoffRunResponse,
     CreateVariationFromCompareRequest,
     CreateVariationFromCompareResponse,
+    DocumentPageScalesUpdate,
     LinkToBoqRequest,
     PlanReadAcceptRequest,
     PlanReadAcceptResponse,
@@ -112,7 +113,7 @@ _CONVERTER_META: list[dict[str, Any]] = [
     {
         "id": "dwg",
         "name": "DWG/DXF Converter",
-        "description": "Import AutoCAD DWG and DXF files. Extracts geometry, layers, blocks, and properties into structured element tables for cost estimation.",
+        "description": "Import DWG and DXF files. Extracts geometry, layers, blocks, and properties into structured element tables for cost estimation.",
         "engine": "DDC Community",
         "extensions": [".dwg", ".dxf"],
         "exe": "DwgExporter.exe",
@@ -121,8 +122,8 @@ _CONVERTER_META: list[dict[str, Any]] = [
     },
     {
         "id": "rvt",
-        "name": "Revit (RVT) Parser",
-        "description": "Native Revit file parser. Supports Revit 2015-2026. Extracts families, parameters, quantities, and spatial structure without a proprietary CAD vendor license. Bundles format readers for every Revit version 2011-2026, which is why the download is large.",
+        "name": "RVT Parser",
+        "description": "Native RVT file parser. Supports RVT 2015-2026. Extracts families, parameters, quantities, and spatial structure without a proprietary CAD vendor license. Bundles format readers for every RVT version 2011-2026, which is why the download is large.",
         "engine": "DDC Community",
         "extensions": [".rvt", ".rfa"],
         "exe": "RvtExporter.exe",
@@ -142,7 +143,7 @@ _CONVERTER_META: list[dict[str, Any]] = [
     {
         "id": "dgn",
         "name": "DGN Converter",
-        "description": "Import MicroStation DGN files. Extracts elements, levels, properties, and 3D geometry into structured tables.",
+        "description": "Import DGN files. Extracts elements, levels, properties, and 3D geometry into structured tables.",
         "engine": "DDC Community",
         "extensions": [".dgn"],
         "exe": "DgnExporter.exe",
@@ -514,7 +515,7 @@ def _fetch_apt_index(arch: str) -> dict[str, dict[str, str]] | None:
 
 
 # Per-.deb download tuning. The apt mirror serves packages of very different
-# sizes (the IFC chain tops out ~58 MB; the RVT chain's revit deps are ~280 MB)
+# sizes (the IFC chain tops out ~58 MB; the RVT chain's converter deps are ~280 MB)
 # and community VPS uplinks are frequently slow, so a single short deadline
 # produced spurious failures (the user-visible "signal timed out"). We use a
 # generous per-read socket timeout, retry transient network errors, and resume
@@ -1172,7 +1173,7 @@ def _download_converter_files_windows(converter_id: str) -> Path:
     or format readers.
 
     The RVT converter alone is ~600 MB across ~175 files (most of
-    which are the bundled cad2data format readers for every Revit
+    which are the bundled cad2data format readers for every RVT
     version 2011-2026), so we use a small ThreadPoolExecutor to
     download files in parallel - sequential `urlretrieve` calls
     against `raw.githubusercontent.com` would take 5+ minutes from
@@ -2030,8 +2031,8 @@ async def cad_extract(
         )
 
     # Normalise the upload extension to the converter that actually reads it
-    # before resolving/running the binary: Revit family files (.rfa) are
-    # handled by the RVT converter and AutoCAD .dxf by the DWG converter.
+    # before resolving/running the binary: RVT family files (.rfa) are
+    # handled by the RVT converter and .dxf by the DWG converter.
     # Reuse cad_import's canonical alias map so .dxf/.rfa (advertised in
     # ``_SUPPORTED_CAD_EXTS``) are routed instead of hard-failing. The
     # original ``ext`` is kept for the response payload below.
@@ -2282,7 +2283,7 @@ async def cad_columns(
     # Normalise the upload extension to the converter that actually reads it
     # (.rfa -> rvt, .dxf -> dwg) via cad_import's canonical alias map. The
     # original ``ext`` is preserved for ``get_available_columns`` (which
-    # special-cases ``rfa`` for the Revit preset set) and the session record.
+    # special-cases ``rfa`` for the RVT preset set) and the session record.
     conv_ext = _CONVERTER_FORMAT_ALIASES.get(ext, ext)
 
     # Resolve the converter, auto-downloading it on first use if missing
@@ -4431,7 +4432,47 @@ async def get_document(
         # pages even when only some pages of a mixed PDF are scanned.
         "pages_without_text": no_text_count,
         "pages_without_text_list": no_text_pages,
+        # Document-level per-page scale calibration (issue #334). The
+        # authoritative source the viewer restores on load; ``None`` when the
+        # document was never calibrated at the document level.
+        "page_scales": doc.page_scales,
     }
+
+
+# ── Document-level per-page scale calibration (issue #334) ─────────────────
+
+
+@router.patch(
+    "/documents/{doc_id}/page-scales/",
+    dependencies=[Depends(RequirePermission("takeoff.update"))],
+)
+async def update_document_page_scales(
+    doc_id: str,
+    data: DocumentPageScalesUpdate,
+    user_id: CurrentUserId = None,  # type: ignore[assignment]
+    service: TakeoffService = Depends(_get_service),
+    session: SessionDep = None,  # type: ignore[assignment]
+) -> dict[str, Any]:
+    """Persist the document-level per-page scale calibration (issue #334).
+
+    Calibration used to live only in the browser (localStorage) plus a weak
+    per-measurement echo, so a reload where a stale local default won - or a
+    non-geometry edit that re-stamped the live view scale - silently dropped a
+    real calibration. Storing it once at the document level makes it the
+    authoritative, durable source restored on every load and on a second
+    device. Gated exactly like every other document mutation: ownership via the
+    owning project when bound, else the standalone uploader's ``user_id``.
+    """
+    doc = await service.get_document(doc_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail=translate("errors.document_not_found", locale=get_locale()))
+
+    await _verify_takeoff_doc_access(doc, str(user_id) if user_id else "", session)
+
+    updated = await service.set_document_page_scales(doc_id, data.page_scales)
+    if updated is None:
+        raise HTTPException(status_code=404, detail=translate("errors.document_not_found", locale=get_locale()))
+    return {"id": str(updated.id), "page_scales": updated.page_scales}
 
 
 # ── Extract tables ────────────────────────────────────────────────────────

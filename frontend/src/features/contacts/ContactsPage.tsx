@@ -31,6 +31,8 @@ import {
   Home,
   Link2,
   ExternalLink,
+  ArrowRight,
+  Network,
 } from 'lucide-react';
 import {
   Button,
@@ -53,7 +55,7 @@ import { useConfirm } from '@/shared/hooks/useConfirm';
 import { useCreateShortcut } from '@/shared/hooks/useCreateShortcut';
 import { useToastStore } from '@/stores/useToastStore';
 import { useModuleStore } from '@/stores/useModuleStore';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   fetchContacts,
   fetchContactTags,
@@ -1162,6 +1164,111 @@ function ContactDetailDrawer({
   );
 }
 
+/* ── How-it-works flow + module integrations ───────────────────────────── */
+
+/** A compact inline link to a sibling module (keeps the flow copy readable). */
+function ModLink({ to, children }: { to: string; children: React.ReactNode }) {
+  return (
+    <Link to={to} className="font-medium text-oe-blue-text hover:underline">
+      {children}
+    </Link>
+  );
+}
+
+/**
+ * One-glance explainer: what the contact directory is and how it connects to
+ * the rest of the platform. A party is captured once, classified and
+ * prequalified, then reused everywhere (CRM, subcontractors, correspondence,
+ * tenders) so nobody retypes the same company. Every connected module is a link.
+ */
+function HowContactsWork() {
+  const { t } = useTranslation();
+
+  const steps: { icon: React.ReactNode; title: string; desc: string }[] = [
+    {
+      icon: <UserPlus size={14} className="text-oe-blue" />,
+      title: t('contacts.how_step1_title', { defaultValue: 'Add or import' }),
+      desc: t('contacts.how_step1_desc', {
+        defaultValue: 'Create a company or person, or import a spreadsheet of contacts.',
+      }),
+    },
+    {
+      icon: <Users size={14} className="text-oe-blue" />,
+      title: t('contacts.how_step2_title', { defaultValue: 'Classify' }),
+      desc: t('contacts.how_step2_desc', {
+        defaultValue: 'Tag each one by type and CRM group: client, subcontractor, supplier.',
+      }),
+    },
+    {
+      icon: <ShieldCheck size={14} className="text-oe-blue" />,
+      title: t('contacts.how_step3_title', { defaultValue: 'Prequalify' }),
+      desc: t('contacts.how_step3_desc', {
+        defaultValue: 'Record a prequalification status so you know who is cleared to bid.',
+      }),
+    },
+    {
+      icon: <Link2 size={14} className="text-oe-blue" />,
+      title: t('contacts.how_step4_title', { defaultValue: 'Reuse everywhere' }),
+      desc: t('contacts.how_step4_desc', {
+        defaultValue: 'The same record becomes an RFI party, tender invitee or letter recipient.',
+      }),
+    },
+  ];
+
+  return (
+    <section className="rounded-xl border border-border-light bg-surface-secondary/40 p-4">
+      <h2 className="flex items-center gap-1.5 text-sm font-semibold text-content-primary">
+        <Network size={15} className="text-oe-blue" />
+        {t('contacts.how_title', { defaultValue: 'How the contact directory fits together' })}
+      </h2>
+      <p className="mt-1 text-xs text-content-tertiary">
+        {t('contacts.how_intro', {
+          defaultValue:
+            'Capture each company and person once, then reuse the same record across the platform so a party is never retyped.',
+        })}
+      </p>
+
+      <ol className="mt-3 flex flex-col gap-2 lg:flex-row lg:items-stretch">
+        {steps.map((s, i) => (
+          <React.Fragment key={s.title}>
+            <li className="flex-1 rounded-lg border border-border-light bg-surface-primary p-3">
+              <div className="flex items-center gap-2">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-oe-blue-subtle">
+                  {s.icon}
+                </span>
+                <span className="text-xs font-semibold text-content-primary">{s.title}</span>
+              </div>
+              <p className="mt-1.5 text-2xs leading-relaxed text-content-tertiary">{s.desc}</p>
+            </li>
+            {i < steps.length - 1 && (
+              <li
+                aria-hidden="true"
+                className="hidden shrink-0 items-center self-center text-content-quaternary lg:flex"
+              >
+                <ArrowRight size={16} />
+              </li>
+            )}
+          </React.Fragment>
+        ))}
+      </ol>
+
+      <div className="mt-3 border-t border-border-light pt-3 text-2xs text-content-tertiary">
+        <span className="font-medium text-content-secondary">
+          {t('contacts.how_connects', { defaultValue: 'Connects with:' })}
+        </span>{' '}
+        <ModLink to="/crm">{t('contacts.how_mod_crm', { defaultValue: 'CRM' })}</ModLink> ·{' '}
+        <ModLink to="/subcontractors">
+          {t('contacts.how_mod_subs', { defaultValue: 'Subcontractors' })}
+        </ModLink>{' '}
+        ·{' '}
+        <ModLink to="/correspondence">
+          {t('contacts.how_mod_correspondence', { defaultValue: 'Correspondence' })}
+        </ModLink>
+      </div>
+    </section>
+  );
+}
+
 /* ── Main Page ─────────────────────────────────────────────────────────── */
 
 export function ContactsPage() {
@@ -1564,6 +1671,11 @@ export function ContactsPage() {
             'Keep every organisation and person on your projects here once, clients, subcontractors, suppliers and consultants, with a prequalification status that flags who is approved to bid or be awarded work. The same record is reused across the platform as RFI and submittal ball-in-court, transmittal recipient, correspondence party and tender invitee, so the downstream paperwork stays consistent.',
         })}
       </DismissibleInfo>
+
+      {/* Visual four-step explainer: add/import, classify, prequalify, reuse.
+          Complements the dismissible intro above and stays visible once the
+          intro is closed, so the workflow is always one glance away. */}
+      <HowContactsWork />
 
       {/* KPI strip — surfaces the /stats/ aggregate (total directory size
           and the count of contacts whose prequalification is expiring, the

@@ -461,7 +461,7 @@ class CoordinationHubService:
         # so ``user_count`` is deliberately an ALL-PROJECTS figure - there
         # is no cheap user-project join to scope it. The UI must label it
         # "personal views (all projects)" rather than implying it is
-        # project-scoped; this matches how BIMcollab Zoom surfaces its
+        # project-scoped; this matches how coordination tools surface their
         # personal-view drawer (one global list across projects).
         project_count = await _safe_count(
             self.session,

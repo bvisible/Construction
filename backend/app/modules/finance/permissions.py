@@ -53,5 +53,12 @@ def register_finance_permissions() -> None:
             "finance.gl.read": Role.VIEWER,
             "finance.gl.manage_accounts": Role.MANAGER,
             "finance.gl.post_journal": Role.MANAGER,
+            # Invoice-approval DMS. Capturing / coding an incoming supplier
+            # invoice is an EDITOR action; reading the inbox and the archive is
+            # VIEWER. Approving and posting reuse the existing MANAGER gates
+            # (finance.approve / finance.gl.post_journal) rather than adding new
+            # roles, so the DMS ties into the same financial-commitment gate.
+            "finance.capture.create": Role.EDITOR,
+            "finance.capture.read": Role.VIEWER,
         },
     )

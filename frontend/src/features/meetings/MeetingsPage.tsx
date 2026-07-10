@@ -84,6 +84,8 @@ import {
   type MeetingAttachment,
 } from './api';
 import { AttendanceSection } from './AttendanceSection';
+import { ActionRegisterPanel } from './ActionRegisterPanel';
+import { MinutesDialog } from './MinutesDialog';
 import { RecurringSeriesDialog } from './RecurringSeriesDialog';
 import { meetingsGuide } from './meetingsGuide';
 
@@ -1668,6 +1670,7 @@ const MeetingRow = React.memo(function MeetingRow({
 }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
+  const [showMinutes, setShowMinutes] = useState(false);
   const statusCfg = STATUS_CONFIG[meeting.status] ?? STATUS_CONFIG.scheduled;
   const typeCfg = MEETING_TYPE_COLORS[meeting.meeting_type] ?? 'neutral';
   const attendeeCount = meeting.attendees?.length ?? 0;
@@ -1823,46 +1826,8 @@ const MeetingRow = React.memo(function MeetingRow({
             </div>
           )}
 
-          {/* Action Items */}
-          {meeting.action_items && meeting.action_items.length > 0 && (
-            <div className="rounded-lg bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-800 p-3">
-              <p className="text-xs text-blue-700 dark:text-blue-400 mb-2 font-medium uppercase tracking-wide">
-                {t('meetings.label_actions', { defaultValue: 'Action Items' })}
-              </p>
-              <div className="space-y-2">
-                {meeting.action_items.map((ai) => (
-                  <div key={ai.id} className="flex items-start gap-2 text-sm">
-                    {ai.completed ? (
-                      <CheckCircle2 size={14} className="text-semantic-success mt-0.5 shrink-0" />
-                    ) : (
-                      <Circle size={14} className="text-content-tertiary mt-0.5 shrink-0" />
-                    )}
-                    <div className="flex-1 min-w-0">
-                      <span
-                        className={clsx(
-                          'text-content-primary',
-                          ai.completed && 'line-through text-content-tertiary',
-                        )}
-                      >
-                        {ai.description}
-                      </span>
-                      <div className="flex items-center gap-3 mt-0.5 text-xs text-content-tertiary">
-                        <span>
-                          {t('meetings.action_owner', { defaultValue: 'Owner' })}: {ai.owner}
-                        </span>
-                        {ai.due_date && (
-                          <span>
-                            {t('meetings.action_due', { defaultValue: 'Due' })}:{' '}
-                            <DateDisplay value={ai.due_date} />
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+          {/* Tracked actions with carry-over across a recurring series */}
+          <ActionRegisterPanel meetingId={meeting.id} seriesId={meeting.series_id ?? null} />
 
           {/* Linked Tasks */}
           {meeting.action_items && meeting.action_items.length > 0 && meeting.status === 'completed' && (
@@ -1988,7 +1953,27 @@ const MeetingRow = React.memo(function MeetingRow({
               )}
               {t('meetings.export_pdf', { defaultValue: 'Export PDF' })}
             </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowMinutes(true);
+              }}
+              data-testid="meeting-row-minutes"
+            >
+              <FileText size={14} className="mr-1.5" />
+              {t('meetings.minutes', { defaultValue: 'Minutes' })}
+            </Button>
           </div>
+
+          {showMinutes && (
+            <MinutesDialog
+              meetingId={meeting.id}
+              meetingTitle={meeting.title}
+              onClose={() => setShowMinutes(false)}
+            />
+          )}
         </div>
       )}
     </div>

@@ -96,6 +96,17 @@ describe('computeGroupSummaries', () => {
     expect(result[0]!.count).toBe(3);
   });
 
+  it('rolls up the effective quantity (slope + multiplier) in the legend total', () => {
+    const measurements = [
+      // Sloped roof: 10 m2 plan x 1.5 = 15 m2 true surface.
+      m({ group: 'Roof', value: 10, unit: 'm²', type: 'area', slopeFactor: 1.5 }),
+      // Typical bay counted 3x: 4 x 3 = 12.
+      m({ group: 'Roof', value: 4, unit: 'm²', type: 'area', multiplier: 3 }),
+    ];
+    const result = computeGroupSummaries(measurements, GROUP_COLORS);
+    expect(result[0]!.total).toBeCloseTo(15 + 12, 6);
+  });
+
   it('defaults group name to General when blank', () => {
     const measurements = [m({ group: '', value: 1 })];
     const result = computeGroupSummaries(measurements, GROUP_COLORS);

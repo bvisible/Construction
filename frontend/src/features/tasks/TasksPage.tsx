@@ -53,6 +53,7 @@ import {
   type CreateTaskPayload,
 } from './api';
 import { tasksGuide } from './tasksGuide';
+import { VoiceEntry, getField } from '@/features/voice';
 
 /* ── Constants ─────────────────────────────────────────────────────────── */
 
@@ -1393,6 +1394,21 @@ export function TasksPage() {
             >
               {t('tasks.import', { defaultValue: 'Import' })}
             </Button>
+            <VoiceEntry
+              projectId={projectId}
+              target="task"
+              triggerLabel={t('voice.trigger_task', { defaultValue: 'Voice task' })}
+              onConfirm={async (d) => {
+                await createMut.mutateAsync({
+                  project_id: projectId,
+                  title: getField(d.fields, 'title'),
+                  description: getField(d.fields, 'description') || undefined,
+                  task_type: 'task',
+                  priority: (getField(d.fields, 'priority') || 'normal') as TaskPriority,
+                  due_date: getField(d.fields, 'due_date') || undefined,
+                });
+              }}
+            />
             <Button
               variant="primary"
               size="sm"

@@ -231,7 +231,7 @@ def _signature(a_stable_id: str, b_stable_id: str, clash_type: str) -> str:
 _DEFAULT_SPATIAL_GRID_MM = 500
 # How many consecutive runs an issue must be absent for before we move
 # it from ``resolved`` to ``archived``. Three is the convention from
-# Navisworks/Solibri: one missing run is noise, three is "really gone".
+# Coordination tools: one missing run is noise, three is "really gone".
 _ARCHIVE_AFTER_MISSING = 3
 
 
@@ -993,7 +993,7 @@ def _type_of(element: object) -> str:
 
 
 def _category_of(element: object) -> str:
-    """Element's source-native category (Revit category / ``ifc_class``).
+    """Element's source-native category (RVT category / ``ifc_class``).
 
     Mirrors :meth:`ClashRepository._category_of` so a selection set built
     on the ``category`` grouping resolves to the very same elements the
@@ -1022,7 +1022,7 @@ def _system_of(element: object) -> str:
 
     Prefers an explicit MEP system property (``system`` / ``System`` /
     ``system_name`` / IFC ``Pset_*System``), then falls back to the
-    family / type name a Revit / DDC element carries. Returns ``""`` when
+    family / type name an RVT / DDC element carries. Returns ``""`` when
     the element has no usable system metadata - the grouping selector
     then hides the ``discipline_system`` dimension (graceful degradation).
     Item #23 - snapshotted onto :class:`ClashResult.a_element_system`.
@@ -1068,7 +1068,7 @@ def _property_value_of(element: object, key: str) -> str | None:
 
 
 def _in_set(element: object, etype: str, disc: str, spec: dict | None) -> bool:
-    """True iff an element belongs to a Navisworks-style selection set.
+    """True iff an element belongs to a coordination-tool-style selection set.
 
     ``spec`` is ``{"element_types": [...], "disciplines": [...],
     "categories": [...], "ifc_entities": [...], "properties":
@@ -3342,11 +3342,11 @@ class ClashService:
         dfilter: set[frozenset[str]] | None = None
         if run.mode == "selected" and run.discipline_filter:
             dfilter = {frozenset((str(a), str(b))) for a, b in run.discipline_filter}
-        # Navisworks-style selection sets: only A×B cross pairs survive.
+        # Coordination-tool-style selection sets: only A×B cross pairs survive.
         sel_a = run.set_a if run.mode == "selection_sets" else None
         sel_b = run.set_b if run.mode == "selection_sets" else None
 
-        # Navisworks-style "Type" selector. ``getattr`` default keeps the
+        # Coordination-tool-style "Type" selector. ``getattr`` default keeps the
         # legacy semantics for callers (and the test fakes) that never
         # set the field: ``both`` = hard, then clearance for the non-hard
         # pairs - exactly the historical behaviour.
@@ -3499,7 +3499,7 @@ class ClashService:
         behaviour for un-tessellated data while giving mesh-grade
         precision wherever GLB geometry exists.
 
-        ``hard_enabled`` reflects the run's Navisworks-style "Type"
+        ``hard_enabled`` reflects the run's coordination-tool-style "Type"
         selector: ``False`` for a ``clash_type='clearance'`` run, where
         the hard interpenetration classification is suppressed and only
         proximity within ``clr`` is reported. It defaults to ``True`` so

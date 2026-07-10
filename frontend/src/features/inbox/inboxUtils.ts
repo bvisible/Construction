@@ -5,7 +5,7 @@
  * derivation can be unit-tested with vitest and reused without pulling in the
  * component tree. No imports from React or the API client here.
  */
-import type { InboxItem, InboxSeverity } from './api';
+import type { InboxItem, InboxKind, InboxSeverity } from './api';
 
 /** Severity rank - higher sorts first when timestamps tie. */
 export const SEVERITY_RANK: Record<InboxSeverity, number> = {
@@ -46,6 +46,88 @@ export function sortInboxItems(items: readonly InboxItem[]): InboxItem[] {
 /** Count how many items are pending approvals (vs alerts). */
 export function countApprovals(items: readonly InboxItem[]): number {
   return items.reduce((n, it) => (it.kind === 'approval' ? n + 1 : n), 0);
+}
+
+/* ── Client-side triage filters ────────────────────────────────────────────
+ * The full inbox page turns the raw list into a real triage surface by
+ * filtering on three dimensions the API already carries on every item: kind
+ * (approval vs alert), the originating project, and severity. Everything is
+ * derived from data already fetched - no extra endpoint. The predicates are
+ * pure so they can be unit-tested and reused by both the page (for counts) and
+ * the panel (for the rendered subset).
+ * ------------------------------------------------------------------------- */
+
+/** Kind selector: either everything or one of the two streams. */
+export type InboxKindFilter = 'all' | InboxKind;
+/** Severity selector: either everything or one specific level. */
+export type InboxSeverityFilter = 'all' | InboxSeverity;
+
+/** The active triage filter. ``'all'`` on any axis means "don't narrow it". */
+export interface InboxFilter {
+  kind: InboxKindFilter;
+  /** A project id, or ``'all'`` for every project. */
+  projectId: string;
+  severity: InboxSeverityFilter;
+}
+
+/** The neutral filter - matches every item. */
+export const ALL_INBOX_FILTER: InboxFilter = {
+  kind: 'all',
+  projectId: 'all',
+  severity: 'all',
+};
+
+/** True when the filter narrows the list on at least one axis. */
+export function isInboxFiltered(filter: InboxFilter): boolean {
+  return filter.kind !== 'all' || filter.projectId !== 'all' || filter.severity !== 'all';
+}
+
+/** Does a single item satisfy every active axis of the filter? */
+export function matchesInboxFilter(item: InboxItem, filter: InboxFilter): boolean {
+  if (filter.kind !== 'all' && item.kind !== filter.kind) return false;
+  if (filter.projectId !== 'all' && (item.project_id ?? '') !== filter.projectId) return false;
+  if (filter.severity !== 'all' && normalizeSeverity(item.severity) !== filter.severity) {
+    return false;
+  }
+  return true;
+}
+
+/** Return the subset of items matching the filter (order preserved, pure). */
+export function filterInboxItems(
+  items: readonly InboxItem[],
+  filter: InboxFilter,
+): InboxItem[] {
+  return items.filter((it) => matchesInboxFilter(it, filter));
+}
+
+/**
+ * Distinct projects present in the list, for the project filter dropdown.
+ *
+ * Keyed by ``project_id``; the label falls back to the id when a name is
+ * missing. Items with no project are skipped (they live under "All projects").
+ * Sorted by display name for a stable, readable menu.
+ */
+export function distinctInboxProjects(
+  items: readonly InboxItem[],
+): { id: string; name: string }[] {
+  const byId = new Map<string, string>();
+  for (const it of items) {
+    const id = it.project_id;
+    if (typeof id === 'string' && id.length > 0 && !byId.has(id)) {
+      byId.set(id, (it.project_name ?? '').trim() || id);
+    }
+  }
+  return Array.from(byId, ([id, name]) => ({ id, name })).sort((a, b) =>
+    a.name.localeCompare(b.name),
+  );
+}
+
+/** Distinct severities present, ordered most-severe first (for the dropdown). */
+export function distinctInboxSeverities(items: readonly InboxItem[]): InboxSeverity[] {
+  const present = new Set<InboxSeverity>();
+  for (const it of items) present.add(normalizeSeverity(it.severity));
+  const order: InboxSeverity[] = ['critical', 'warning', 'info'];
+  return order.filter((s) => present.has(s));
 }
 
 /**

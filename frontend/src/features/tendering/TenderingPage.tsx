@@ -1,6 +1,6 @@
-import { useState, useMemo, useCallback, useEffect } from 'react';
+import { useState, useMemo, useCallback, useEffect, Fragment, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Package,
@@ -26,6 +26,7 @@ import {
   Loader2,
   Trash2,
   Inbox,
+  Network,
   XCircle,
   CheckCircle2,
 } from 'lucide-react';
@@ -1900,6 +1901,120 @@ function PackageDetail({
   );
 }
 
+/* ── How-it-works flow + module integrations ───────────────────────────── */
+
+/** A compact inline link to a sibling module (keeps the flow copy readable). */
+function ModLink({ to, children }: { to: string; children: ReactNode }) {
+  return (
+    <Link to={to} className="font-medium text-oe-blue-text hover:underline">
+      {children}
+    </Link>
+  );
+}
+
+/**
+ * One-glance explainer: what tendering does and how it connects to the rest of
+ * the platform. A priced BOQ is packaged, issued to subcontractors, their bids
+ * are collected and compared, and the winner is awarded, which writes rates
+ * back to the BOQ and formalises a contract. Every connected module is a link.
+ */
+function HowTenderingWorks() {
+  const { t } = useTranslation();
+
+  const steps: { icon: ReactNode; title: string; desc: string }[] = [
+    {
+      icon: <Package size={14} className="text-oe-blue" />,
+      title: t('tendering.how_step1_title', { defaultValue: 'Package from BOQ' }),
+      desc: t('tendering.how_step1_desc', {
+        defaultValue: 'Bundle priced BOQ positions into a bid package to take to market.',
+      }),
+    },
+    {
+      icon: <Send size={14} className="text-oe-blue" />,
+      title: t('tendering.how_step2_title', { defaultValue: 'Issue to subcontractors' }),
+      desc: t('tendering.how_step2_desc', {
+        defaultValue: 'Send the package to a distribution list of subcontractors to invite offers.',
+      }),
+    },
+    {
+      icon: <Inbox size={14} className="text-oe-blue" />,
+      title: t('tendering.how_step3_title', { defaultValue: 'Collect bids' }),
+      desc: t('tendering.how_step3_desc', {
+        defaultValue: 'Gather offers as they come in, each priced against the same scope.',
+      }),
+    },
+    {
+      icon: <BarChart3 size={14} className="text-oe-blue" />,
+      title: t('tendering.how_step4_title', { defaultValue: 'Compare & level' }),
+      desc: t('tendering.how_step4_desc', {
+        defaultValue: 'Line offers up side by side, flag outliers and level the scope.',
+      }),
+    },
+    {
+      icon: <Award size={14} className="text-oe-blue" />,
+      title: t('tendering.how_step5_title', { defaultValue: 'Award' }),
+      desc: t('tendering.how_step5_desc', {
+        defaultValue: 'Award the winner; rates write back to the BOQ and a contract follows.',
+      }),
+    },
+  ];
+
+  return (
+    <section className="rounded-xl border border-border-light bg-surface-secondary/40 p-4">
+      <h2 className="flex items-center gap-1.5 text-sm font-semibold text-content-primary">
+        <Network size={15} className="text-oe-blue" />
+        {t('tendering.how_title', { defaultValue: 'How tendering fits together' })}
+      </h2>
+      <p className="mt-1 text-xs text-content-tertiary">
+        {t('tendering.how_intro', {
+          defaultValue:
+            'Take a priced BOQ to market: package the work, invite subcontractors, compare their offers and award the winner, which writes the agreed rates back to the BOQ.',
+        })}
+      </p>
+
+      <ol className="mt-3 flex flex-col gap-2 lg:flex-row lg:items-stretch">
+        {steps.map((s, i) => (
+          <Fragment key={s.title}>
+            <li className="flex-1 rounded-lg border border-border-light bg-surface-primary p-3">
+              <div className="flex items-center gap-2">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-oe-blue-subtle">
+                  {s.icon}
+                </span>
+                <span className="text-xs font-semibold text-content-primary">{s.title}</span>
+              </div>
+              <p className="mt-1.5 text-2xs leading-relaxed text-content-tertiary">{s.desc}</p>
+            </li>
+            {i < steps.length - 1 && (
+              <li
+                aria-hidden="true"
+                className="hidden shrink-0 items-center self-center text-content-quaternary lg:flex"
+              >
+                <ArrowRight size={16} />
+              </li>
+            )}
+          </Fragment>
+        ))}
+      </ol>
+
+      <div className="mt-3 border-t border-border-light pt-3 text-2xs text-content-tertiary">
+        <span className="font-medium text-content-secondary">
+          {t('tendering.how_connects', { defaultValue: 'Connects with:' })}
+        </span>{' '}
+        <ModLink to="/boq">{t('tendering.how_mod_boq', { defaultValue: 'BOQ' })}</ModLink> ·{' '}
+        <ModLink to="/subcontractors">
+          {t('tendering.how_mod_subs', { defaultValue: 'Subcontractors' })}
+        </ModLink>{' '}
+        ·{' '}
+        <ModLink to="/contracts">
+          {t('tendering.how_mod_contracts', { defaultValue: 'Contracts' })}
+        </ModLink>{' '}
+        ·{' '}
+        <ModLink to="/reports">{t('tendering.how_mod_reports', { defaultValue: 'Reports' })}</ModLink>
+      </div>
+    </section>
+  );
+}
+
 /* ── Main Page ─────────────────────────────────────────────────────────── */
 
 export function TenderingPage() {
@@ -2054,6 +2169,8 @@ export function TenderingPage() {
             'Build bid packages straight from a project BOQ, issue them to subcontractors, and compare offers side by side through Draft, Issued, Collecting, Evaluating and Awarded. Awarding a winner writes the agreed rates back to the BOQ and drafts a purchase order in Procurement, which is what sets this apart from the subcontractor-package flow in Bid Management.',
         })}
       </DismissibleInfo>
+
+      <HowTenderingWorks />
 
       {/* Empty state when no project chosen (page-internal selector above) */}
       {!selectedProjectId && (

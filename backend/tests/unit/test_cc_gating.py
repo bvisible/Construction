@@ -59,7 +59,10 @@ def test_required_party_role_rejects_unknown(bad):
 
 @pytest.mark.parametrize("kind", ["activity", "handover_package", "inspection"])
 def test_attached_kind_accepts_known(kind):
-    assert HoldGateCreate(project_id=_PID, title="x", attached_kind=kind).attached_kind == kind
+    # attached_kind and attached_id must be set together (a kind with no id can
+    # never match the enforcement lookup), so pair the known kind with an id.
+    gate = HoldGateCreate(project_id=_PID, title="x", attached_kind=kind, attached_id="elem-1")
+    assert gate.attached_kind == kind
 
 
 @pytest.mark.parametrize("bad", ["task", "package", "boq", ""])

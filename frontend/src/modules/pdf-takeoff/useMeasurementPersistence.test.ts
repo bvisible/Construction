@@ -16,6 +16,10 @@ vi.mock('@/features/takeoff/api', () => ({
     bulkCreate: vi.fn().mockResolvedValue([]),
     update: vi.fn().mockResolvedValue({}),
     delete: vi.fn().mockResolvedValue(undefined),
+    // Issue #334: the load effect also fetches the document (for its
+    // authoritative page_scales) and PATCHes it when the user calibrates.
+    getDocument: vi.fn().mockResolvedValue(null),
+    saveDocumentScales: vi.fn().mockResolvedValue({ page_scales: null }),
   },
 }));
 
@@ -36,6 +40,7 @@ type TestMeasurement = {
   serverId?: string;
   color?: string;
   text?: string;
+  strokeWidthReal?: number;
 };
 const makeMeasurement = (id: string, page = 1): TestMeasurement => ({
   id,
@@ -75,6 +80,8 @@ describe('useMeasurementPersistence', () => {
     (takeoffApi.bulkCreate as unknown as ReturnType<typeof vi.fn>).mockReset().mockResolvedValue([]);
     (takeoffApi.update as unknown as ReturnType<typeof vi.fn>).mockReset().mockResolvedValue({});
     (takeoffApi.delete as unknown as ReturnType<typeof vi.fn>).mockReset().mockResolvedValue(undefined);
+    (takeoffApi.getDocument as unknown as ReturnType<typeof vi.fn>).mockReset().mockResolvedValue(null);
+    (takeoffApi.saveDocumentScales as unknown as ReturnType<typeof vi.fn>).mockReset().mockResolvedValue({ page_scales: null });
   });
 
   // Defensive: if a test leaves fake timers on (e.g. an assertion threw before
@@ -895,6 +902,112 @@ describe('useMeasurementPersistence', () => {
     // The delete was cancelled because the row is live again.
     expect(takeoffApi.delete).not.toHaveBeenCalled();
     expect(localStorage.getItem(`${compositeKey}__pending_deletes`)).toBeNull();
+
+    vi.useRealTimers();
+  });
+
+  /* ── Issue #339: real-world line width round-trips + re-syncs ── */
+
+  // A real-world stroke width (canonical metres) rides the free-form metadata
+  // blob as ``stroke_width_real`` next to the pixel ``stroke_width``. It must
+  // survive a create serialize AND come back on load, so a true-width line
+  // renders per each page's scale after a server round-trip.
+  it('round-trips strokeWidthReal as stroke_width_real (serialize + deserialize, issue #339)', async () => {
+    const { takeoffApi } = await import('@/features/takeoff/api');
+    const bulkCreate = takeoffApi.bulkCreate as unknown as ReturnType<typeof vi.fn>;
+    bulkCreate.mockResolvedValue([]);
+
+    // Serialize: saveNow pushes the create through toApiFormat immediately.
+    const { result } = renderHook(() =>
+      useMeasurementPersistence({
+        fileName: 'width.pdf',
+        documentId: DOC,
+        measurements: [{ ...makeMeasurement('m1'), strokeWidthReal: 0.25 }],
+        setMeasurements: vi.fn(),
+        pageScales: basePageScales,
+        setPageScales: vi.fn(),
+        scale: defaultScale,
+        projectId: PROJECT,
+      }),
+    );
+    await act(async () => {
+      result.current.saveNow();
+      await Promise.resolve();
+    });
+    expect(bulkCreate).toHaveBeenCalled();
+    const created = bulkCreate.mock.calls[0]![0][0];
+    expect(created.metadata.stroke_width_real).toBe(0.25);
+
+    // Deserialize: the same metadata blob read back hydrates strokeWidthReal.
+    (takeoffApi.list as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      { ...created, id: 'srv-1' },
+    ]);
+    const setM = vi.fn();
+    renderHook(() =>
+      useMeasurementPersistence({
+        fileName: 'width.pdf',
+        documentId: 'doc-uuid-2',
+        measurements: [],
+        setMeasurements: setM,
+        pageScales: basePageScales,
+        setPageScales: vi.fn(),
+        scale: defaultScale,
+        projectId: PROJECT,
+      }),
+    );
+    await waitFor(() => expect(setM).toHaveBeenCalled());
+    const loaded = setM.mock.calls[setM.mock.calls.length - 1]![0] as Array<{
+      strokeWidthReal?: number;
+    }>;
+    expect(loaded[0]!.strokeWidthReal).toBe(0.25);
+  });
+
+  // An appearance-only real-width change moves no geometry, so the sync
+  // signature must carry it (``swr``) or the edit would never reach the server.
+  it('re-syncs (PATCHes) when only strokeWidthReal changes (issue #339)', async () => {
+    vi.useFakeTimers();
+    const { takeoffApi } = await import('@/features/takeoff/api');
+    (takeoffApi.update as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      measurement_value: 2.5,
+      metadata: {},
+    });
+    const m1 = makeSyncedMeasurement('m1', 'srv-1');
+    let rows: TestMeasurement[] = [m1];
+    const setM = vi.fn();
+    const setPS = vi.fn();
+
+    const { rerender } = renderHook(() =>
+      useMeasurementPersistence({
+        fileName: 'width-edit.pdf',
+        documentId: DOC,
+        measurements: rows,
+        setMeasurements: setM,
+        pageScales: basePageScales,
+        setPageScales: setPS,
+        scale: defaultScale,
+        projectId: PROJECT,
+      }),
+    );
+
+    // First render seeds the sync baseline (no PATCH yet).
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(takeoffApi.update).not.toHaveBeenCalled();
+
+    // Change ONLY the real width -> the sync signature drifts -> a PATCH fires
+    // carrying the new stroke_width_real (an appearance-only, non-geometry edit).
+    rows = [{ ...m1, strokeWidthReal: 0.2 }];
+    rerender();
+    await act(async () => {
+      vi.advanceTimersByTime(500);
+      await Promise.resolve();
+    });
+    expect(takeoffApi.update).toHaveBeenCalledTimes(1);
+    const [patchedId, body] = (takeoffApi.update as unknown as ReturnType<typeof vi.fn>)
+      .mock.calls[0]!;
+    expect(patchedId).toBe('srv-1');
+    expect(body.metadata.stroke_width_real).toBe(0.2);
 
     vi.useRealTimers();
   });

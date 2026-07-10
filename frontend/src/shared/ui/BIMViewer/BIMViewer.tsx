@@ -278,7 +278,7 @@ export interface BIMViewerProps {
   /**
    * World-space point to frame the camera on. The clash-review deep-link
    * passes the clash centroid (`cx/cy/cz`) — a reliable focus target even
-   * for showcase IFC/RVT models whose GLB nodes are numeric Revit ids that
+   * for showcase IFC/RVT models whose GLB nodes are numeric RVT ids that
    * never match the DB element UUIDs (so per-element mesh resolution is only
    * approximate and `zoomToSelection` on the matched meshes can frame the
    * wrong spot). Re-applied after geometry finishes loading so the deep-link
@@ -287,7 +287,7 @@ export interface BIMViewerProps {
   focusPoint?: { x: number; y: number; z: number } | null;
   /**
    * Smart View evaluator result — keyed by element ``stable_id`` (the
-   * IFC GUID / Revit UniqueId). When set, the viewer paints each mesh
+   * IFC GUID / RVT UniqueId). When set, the viewer paints each mesh
    * with the resolved per-element ``{visible, color, opacity}`` state.
    * Pass ``null`` (or omit) for normal rendering. Re-paint is additive
    * and fully reversible: the helper caches each mesh's original
@@ -570,7 +570,7 @@ function colorForProgress(pct: number | null | undefined): string {
 /**
  * Sum the volume / area / length of a single element using the same
  * synonym-aware key resolution the BOQ link flow (`suggestQuantityFromBIM`)
- * relies on, so real DDC / Revit exports (`NetVolume`, `NetSideArea`,
+ * relies on, so real DDC / RVT exports (`NetVolume`, `NetSideArea`,
  * `volume_m3`, …) roll up just like the canonical bare keys.
  *
  * Resolution mirrors `suggestQuantityFromBIM`'s candidate lists, scanning
@@ -1425,7 +1425,7 @@ export function BIMViewer({
   // ``filterPredicate`` in this guard it used to zoomToFit() back to the whole
   // model a second or two after the click, which read as "the grouping briefly
   // works then the whole project shows again". Small models load instantly so
-  // the window never opened, which is why it only ever reproduced on Revit/IFC.
+  // the window never opened, which is why it only ever reproduced on RVT/IFC.
   const narrowingActiveRef = useRef(false);
   narrowingActiveRef.current =
     !!(isolatedIds && isolatedIds.length > 0) || !!focusPoint || !!filterPredicate;
@@ -1627,7 +1627,7 @@ export function BIMViewer({
     const hasClashFocus = !!focusPoint;
     // Frame the camera on the clash centroid when one was supplied. This is
     // the reliable focus target for the clash-review deep-link: showcase
-    // IFC/RVT models export GLB nodes named with numeric Revit ids that
+    // IFC/RVT models export GLB nodes named with numeric RVT ids that
     // never equal the DB element UUIDs, so the per-element mesh pairing is
     // only an approximate positional fallback — zooming to those meshes can
     // frame the wrong spot. The clash centroid is exact regardless.
@@ -2264,10 +2264,10 @@ export function BIMViewer({
   // so a slow query for element A never overwrites fresh data for element B.
   const parquetAbortRef = useRef<AbortController | null>(null);
 
-  /** Resolve the Revit ElementId of the currently-selected element. The
+  /** Resolve the RVT ElementId of the currently-selected element. The
    *  Parquet's primary key column is `id` and contains this value — it is
    *  exposed on the BIMElement row as `mesh_ref`. Unmatched stubs use the
-   *  DAE node name (backend-patched to equal the Revit id). */
+   *  DAE node name (backend-patched to equal the RVT id). */
   const revitIdOf = useCallback((el: BIMElementData | null): string | null => {
     if (!el) return null;
     const props = el.properties as Record<string, unknown> | undefined;
@@ -2842,7 +2842,7 @@ export function BIMViewer({
       byCat.set(cat, (byCat.get(cat) ?? 0) + 1);
       const st = el.storey || 'Unassigned';
       byStorey.set(st, (byStorey.get(st) ?? 0) + 1);
-      // Synonym-aware rollup so real DDC / Revit exports (NetVolume,
+      // Synonym-aware rollup so real DDC / RVT exports (NetVolume,
       // NetSideArea, volume_m3, …) sum just like the canonical bare keys.
       totalVolume += resolveElementQuantity(el, 'volume');
       totalArea += resolveElementQuantity(el, 'area');

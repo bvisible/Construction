@@ -347,6 +347,32 @@ async def test_tenant_b_project_list_excludes_tenant_a(http_client, two_tenants)
     assert leaked == [], f"LEAK: tenant B's project list contains tenant A's project: {leaked!r}"
 
 
+# ── Price index (project-scoped rate escalation) ────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_tenant_b_cannot_escalate_tenant_a_project_rates(http_client, two_tenants):
+    """``POST /price-index/escalate-preview/`` with A's project_id must NOT 200.
+
+    The project scope reads exactly the cost items A's BOQ references plus A's
+    project name, so it is gated by ``verify_project_access``. An outsider gets a
+    strict not-found, never A's project name or the rates its estimate uses. The
+    catalogue scope (no ``project_id``) stays open reference data and is covered
+    by the price-index escalation suites.
+    """
+    a = two_tenants["a"]
+    b = two_tenants["b"]
+
+    resp = await http_client.post(
+        "/api/v1/price-index/escalate-preview/",
+        json={"project_id": a["project_id"], "target_date": "2026-01-01"},
+        headers=b["headers"],
+    )
+    assert resp.status_code in (403, 404), (
+        f"LEAK: tenant B got status {resp.status_code} on tenant A's project rates. Body: {resp.text!r}"
+    )
+
+
 # ── Contacts ───────────────────────────────────────────────────────────────
 
 

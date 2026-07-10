@@ -587,7 +587,7 @@ class TestParseUnitAssignment:
         assert ctx.scale_for["VOLUMEUNIT"] == 1.0
 
     def test_standalone_si_units_without_assignment(self) -> None:
-        """Some Tekla files declare IFCSIUNIT but no IFCUNITASSIGNMENT.
+        """Some files declare IFCSIUNIT but no IFCUNITASSIGNMENT.
         We pick up the standalone units as a courtesy."""
         entities = {
             10: _ent(10, "IFCSIUNIT", "*,.LENGTHUNIT.,.MILLI.,.METRE."),

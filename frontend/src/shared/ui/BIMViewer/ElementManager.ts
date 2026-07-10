@@ -185,7 +185,7 @@ export interface PropertyValueCount {
 
 export interface BIMElementData {
   id: string;
-  /** Revit UniqueId / IFC GlobalId — stable across re-uploads. */
+  /** RVT UniqueId / IFC GlobalId — stable across re-uploads. */
   stable_id?: string;
   name: string;
   element_type: string;
@@ -297,7 +297,7 @@ function getDisciplineColor(discipline: string | null | undefined): number {
 
 /* ── Category Colors (for placeholder boxes) ─────────────────────────── */
 
-/** Map element_type (Revit Category / IFC Entity) to a distinct color so
+/** Map element_type (RVT Category / IFC Entity) to a distinct color so
  *  placeholder boxes are immediately distinguishable by building trade.
  *  Exported for reuse in the filter panel (colored dots on chips). */
 export const CATEGORY_COLORS: Record<string, number> = {
@@ -535,7 +535,7 @@ export function colorForPropertyValue(
 /* ── Glass detection ──────────────────────────────────────────────────────
  *
  * Cheap, allocation-free heuristic: a glass-like element is recognised by
- * its Revit/IFC category or name (Windows, Curtain Panels, Glazing, …) or
+ * its RVT/IFC category or name (Windows, Curtain Panels, Glazing, …) or
  * by an obviously-glass material string when the converter named it. We
  * deliberately do NOT use physical transmission/refraction — that needs a
  * second render target and a roughness map and tanks the frame rate on big
@@ -1079,7 +1079,7 @@ export class ElementManager {
     return new Promise((resolve, reject) => {
       try {
         const loader = new ColladaLoader();
-        // Strip UTF-8 BOM (some Revit exports prepend one) — leaving it
+        // Strip UTF-8 BOM (some RVT exports prepend one) — leaving it
         // in confuses ColladaLoader's XML parser on some platforms.
         let text = new TextDecoder('utf-8').decode(new Uint8Array(buffer));
         if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
@@ -1205,7 +1205,7 @@ export class ElementManager {
     scene.updateMatrixWorld(true);
 
     // Build lookups: by stable_id / mesh_ref / element name.
-    // mesh_ref is the Revit ElementId string (e.g. "105545") that matches
+    // mesh_ref is the RVT ElementId string (e.g. "105545") that matches
     // the COLLADA <node id="105545"> — after the backend patches node names,
     // ColladaLoader exposes it as Object3D.name on the parent Group.
     const stableIdToElement = new Map<string, BIMElementData>();
@@ -1234,7 +1234,7 @@ export class ElementManager {
 
     // Walk ALL ancestors up to the scene root and collect every Object3D.name.
     // The DDC RvtExporter DAE sometimes nests nodes:
-    //   <node id="140056" name="140056">        ← Revit ElementId (outer)
+    //   <node id="140056" name="140056">        ← RVT ElementId (outer)
     //     <node id="135248" name="135248">      ← internal sub-node
     //       <instance_geometry />
     //     </node>
@@ -1252,7 +1252,7 @@ export class ElementManager {
     //   4. extract any "Type-N-ElementId-suffix" numeric segments as a last resort
     //   5. remember the outermost numeric ancestor as `outerNodeId` — used
     //      later as the stub `mesh_ref` for unmatched meshes, so the
-    //      properties panel shows the user-facing Revit ElementId, not the
+    //      properties panel shows the user-facing RVT ElementId, not the
     //      inner geometry container.
     //
     // IMPORTANT: do NOT replace `child.material` -- the geometry file
@@ -1562,7 +1562,7 @@ export class ElementManager {
     // meshes that still have no elementId. Without the elementDataMap stub,
     // clicking such a mesh would call getElementData(tempId) → undefined →
     // setSelectedElement(null) → properties panel never opens. The DAE node
-    // name (patched by the backend to equal the Revit ElementId) is used as
+    // name (patched by the backend to equal the RVT ElementId) is used as
     // mesh_ref — so the Parquet-fetch path can still pull the full row for
     // elements the backend filtered out of BIMElement (planting, sketch
     // lines, detail components, …).
@@ -1576,7 +1576,7 @@ export class ElementManager {
       if (!ud.elementId) {
         const tempId = `_unmatched_${tempIdCounter++}`;
         // Prefer the OUTERMOST numeric ancestor name as mesh_ref — that
-        // matches the Revit ElementId a user would expect to see (same
+        // matches the RVT ElementId a user would expect to see (same
         // value the Excel parquet row uses as its `id`). Falling through
         // to inner node names would display a sub-component id that is
         // not what the user reads from their CAD tool.
@@ -1678,7 +1678,7 @@ export class ElementManager {
    * Big-model perf optimisation: collapse same-material meshes into one
    * `THREE.BatchedMesh` per material.  Replaces N draw calls with
    * (number of unique materials) draw calls — typically 5 000 → ~30
-   * for a real Revit export.
+   * for a real RVT export.
    *
    * The original `THREE.Mesh` objects stay in `meshMap` and `allDaeMeshes`
    * (so raycasting and the existing per-mesh API keep working) but they
@@ -1836,7 +1836,7 @@ export class ElementManager {
 
   private createBoxMesh(element: BIMElementData): THREE.Mesh {
     const bb = element.bounding_box!;
-    // DDC converters (Revit/IFC) output Z_UP coordinates (Z = height).
+    // DDC converters (RVT/IFC) output Z_UP coordinates (Z = height).
     // Three.js uses Y_UP (Y = height).  Swap Y ↔ Z so the model stands
     // upright instead of being perpendicular to the ground plane.
     const width = Math.abs(bb.max_x - bb.min_x) || 0.1;
@@ -1952,7 +1952,7 @@ export class ElementManager {
   }
 
   /** Get or create a material keyed by category name + color.
-   *  Placeholder boxes use this so each Revit/IFC category gets a
+   *  Placeholder boxes use this so each RVT/IFC category gets a
    *  unique color without duplicating material allocations. */
   private getOrCreateCategoryMaterial(
     category: string,
@@ -2285,7 +2285,7 @@ export class ElementManager {
     // the same object reference as meshMap (Three.js ColladaLoader
     // can nest meshes inside intermediate Group nodes).
     //
-    // Two rules keep this isolate-correct on large Revit/IFC models:
+    // Two rules keep this isolate-correct on large RVT/IFC models:
     //   1. Skip any mesh that carries a `batchHandle`. On big models
     //      (>= 10k meshes) the geometry is collapsed into BatchedMesh
     //      instances and the original mesh is parked at `visible = false`
@@ -2459,7 +2459,7 @@ export class ElementManager {
    * Return the meshes currently mapped to the given element IDs.  Used by
    * the clash-review deep-link to (a) decide whether the clash elements
    * actually resolved to geometry in this model and (b) frame the camera on
-   * them.  Showcase IFC/RVT exports whose GLB nodes are numeric Revit ids
+   * them.  Showcase IFC/RVT exports whose GLB nodes are numeric RVT ids
    * (unrelated to the DB element UUIDs) only resolve via the positional
    * fallback, so a caller that gets back fewer meshes than ids should fall
    * back to the clash centroid for camera framing rather than trust an

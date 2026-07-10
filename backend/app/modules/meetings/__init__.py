@@ -6,7 +6,9 @@ kickoff, and closeout meetings with agendas, attendees, and action items.
 
 
 async def on_startup() -> None:
-    """Module startup hook - register permissions."""
+    """Module startup hook - register permissions and validation rules."""
     from app.modules.meetings.permissions import register_meetings_permissions
+    from app.modules.meetings.validators import register_meetings_validation_rules
 
     register_meetings_permissions()
+    register_meetings_validation_rules()

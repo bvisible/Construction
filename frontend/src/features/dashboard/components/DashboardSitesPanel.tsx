@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { MapPin, ChevronRight } from 'lucide-react';
+import { MapPin } from 'lucide-react';
 import { ProjectWeather } from '@/shared/ui/ProjectWeather/ProjectWeather';
 import { resolveProjectCoords, type ProjectPin } from './DashboardProjectsMap';
 
@@ -17,10 +17,11 @@ interface SiteRow {
 }
 
 /**
- * Right-side companion to the dashboard project map. Lists the same
- * projects grouped by city, and for each one shows a compact Open-Meteo
- * weather summary (next 7 days and ~15-day average) so a manager can spot
- * bad weather coming to a site at a glance. Rows link to the project.
+ * Right-side companion to the dashboard project map. Shows up to six of the
+ * project cities in a tidy 2-column grid (three rows, no inner scrollbar),
+ * each cell carrying a compact Open-Meteo weather summary (next 7 days and
+ * ~15-day average) so a manager can spot bad weather coming to a site at a
+ * glance. Cells link to the first project in that city.
  *
  * Coordinates come from the shared `resolveProjectCoords` helper (explicit
  * lat/lng, then the geocode cache the map fills, then a region centroid),
@@ -53,56 +54,58 @@ export function DashboardSitesPanel({ projects }: DashboardSitesPanelProps) {
     });
   }, [projects, t]);
 
+  // Exactly six city cells fill a 3-row, 2-column grid. If more cities exist
+  // we simply show the first six and drop the scrollbar entirely.
+  const cities = groups.slice(0, 6);
+
   return (
     <div className="flex h-full flex-col overflow-hidden rounded-xl border border-border-light bg-surface-elevated/90">
       <div className="flex items-center justify-between border-b border-border-light px-3 py-2">
         <span className="text-xs font-semibold text-content-primary">
           {t('dashboard.sites_title', { defaultValue: 'Sites & weather' })}
         </span>
-        <span className="text-[10px] tabular-nums text-content-tertiary">{projects.length}</span>
+        <span className="text-[10px] tabular-nums text-content-tertiary">{groups.length}</span>
       </div>
-      <div className="flex-1 divide-y divide-border-light/60 overflow-y-auto max-h-[22rem] lg:max-h-none">
-        {groups.map(([city, rows]) => (
-          <div key={city}>
-            <div className="sticky top-0 z-10 bg-surface-elevated/95 px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-content-tertiary backdrop-blur-sm">
-              {city}
-            </div>
-            {rows.map((r) => (
-              <button
-                key={r.id}
-                type="button"
-                onClick={() => navigate(`/projects/${r.id}`)}
-                className="group flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-surface-primary/60"
-              >
-                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-oe-blue/10 text-oe-blue">
-                  <MapPin size={12} />
+      <div className="grid flex-1 auto-rows-fr grid-cols-2 gap-2 overflow-hidden p-2">
+        {cities.map(([city, rows]) => {
+          const lead = rows[0];
+          const coords = lead?.coords ?? null;
+          return (
+            <button
+              key={city}
+              type="button"
+              onClick={() => {
+                if (lead) navigate(`/projects/${lead.id}`);
+              }}
+              className="group flex min-w-0 flex-col justify-center gap-1 rounded-lg border border-border-light bg-surface-primary/50 px-2.5 py-2 text-left transition-colors hover:border-oe-blue/40 hover:bg-surface-primary"
+            >
+              <span className="flex items-center gap-1.5">
+                <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-oe-blue/10 text-oe-blue">
+                  <MapPin size={11} />
                 </span>
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-xs font-medium text-content-primary">
-                    {r.name}
+                <span className="truncate text-xs font-semibold text-content-primary">{city}</span>
+                {rows.length > 1 && (
+                  <span className="shrink-0 text-[10px] tabular-nums text-content-tertiary">
+                    {rows.length}
                   </span>
-                  {r.coords ? (
-                    <ProjectWeather
-                      lat={r.coords.lat}
-                      lng={r.coords.lng}
-                      locale={i18n.language}
-                      variant="summary"
-                      className="mt-0.5"
-                    />
-                  ) : (
-                    <span className="text-[10px] text-content-quaternary">
-                      {t('dashboard.sites_no_location', { defaultValue: 'No location set' })}
-                    </span>
-                  )}
-                </span>
-                <ChevronRight
-                  size={13}
-                  className="shrink-0 text-content-quaternary opacity-0 transition-opacity group-hover:opacity-100"
+                )}
+              </span>
+              {coords ? (
+                <ProjectWeather
+                  lat={coords.lat}
+                  lng={coords.lng}
+                  locale={i18n.language}
+                  variant="summary"
+                  className="pl-6"
                 />
-              </button>
-            ))}
-          </div>
-        ))}
+              ) : (
+                <span className="pl-6 text-[10px] text-content-quaternary">
+                  {t('dashboard.sites_no_location', { defaultValue: 'No location set' })}
+                </span>
+              )}
+            </button>
+          );
+        })}
       </div>
     </div>
   );

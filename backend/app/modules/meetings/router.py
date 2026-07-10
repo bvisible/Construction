@@ -23,6 +23,9 @@ from fastapi.responses import StreamingResponse
 from app.dependencies import CurrentUserId, RequirePermission, SessionDep, verify_project_access
 from app.modules.meetings.schemas import (
     ActionItemEntry,
+    ActionRegisterItemCreate,
+    ActionRegisterItemResponse,
+    ActionRegisterItemUpdate,
     AgendaItemEntry,
     AttendanceRow,
     AttendeeEntry,
@@ -30,13 +33,19 @@ from app.modules.meetings.schemas import (
     ExternalAttendeeRequest,
     ImportPreviewResponse,
     MaterializeRequest,
+    MeetingActionsResponse,
     MeetingCreate,
     MeetingResponse,
     MeetingSeriesCreate,
     MeetingSeriesResponse,
     MeetingStatsResponse,
     MeetingUpdate,
+    MinutesDistributeResponse,
+    MinutesGenerateRequest,
+    MinutesResponse,
+    MinutesUpdate,
     OpenActionItemResponse,
+    SeriesActionRegisterResponse,
 )
 from app.modules.meetings.service import MeetingService
 
@@ -67,6 +76,8 @@ def _meeting_to_response(meeting: object) -> MeetingResponse:
         minutes=meeting.minutes,  # type: ignore[attr-defined]
         status=meeting.status,  # type: ignore[attr-defined]
         document_ids=[str(d) for d in (getattr(meeting, "document_ids", None) or [])],
+        series_id=getattr(meeting, "series_id", None),
+        is_series_master=bool(getattr(meeting, "is_series_master", False)),
         created_by=meeting.created_by,  # type: ignore[attr-defined]
         metadata=getattr(meeting, "metadata_", {}),
         created_at=meeting.created_at,  # type: ignore[attr-defined]
@@ -1362,6 +1373,244 @@ async def list_attendance(
     return [_attendance_to_row(r) for r in rows]
 
 
+# ── Action register (carry-over across a series) ─────────────────────────────
+
+
+def _action_to_response(action: dict) -> ActionRegisterItemResponse:
+    """Build an ActionRegisterItemResponse from a serialized action dict."""
+    return ActionRegisterItemResponse.model_validate(action)
+
+
+@router.get(
+    "/{meeting_id}/actions/",
+    response_model=MeetingActionsResponse,
+    dependencies=[Depends(RequirePermission("meetings.read"))],
+)
+async def list_meeting_actions(
+    meeting_id: uuid.UUID,
+    session: SessionDep,
+    user_id: CurrentUserId = None,  # type: ignore[assignment]
+    service: MeetingService = Depends(_get_service),
+) -> MeetingActionsResponse:
+    """List a meeting's own action items plus the ones brought forward into it.
+
+    Brought-forward items are still-open actions raised in an earlier meeting of
+    the same recurring series that have not yet been closed.
+    """
+    meeting = await service.get_meeting(meeting_id)
+    await verify_project_access(meeting.project_id, str(user_id), session)
+    own, brought = await service.list_meeting_actions(meeting)
+    return MeetingActionsResponse(
+        meeting_id=meeting_id,
+        own=[_action_to_response(a) for a in own],
+        brought_forward=[_action_to_response(a) for a in brought],
+    )
+
+
+@router.post(
+    "/{meeting_id}/actions/",
+    response_model=ActionRegisterItemResponse,
+    status_code=201,
+)
+async def add_meeting_action(
+    meeting_id: uuid.UUID,
+    data: ActionRegisterItemCreate,
+    session: SessionDep,
+    user_id: CurrentUserId = None,  # type: ignore[assignment]
+    _perm: None = Depends(RequirePermission("meetings.update")),
+    service: MeetingService = Depends(_get_service),
+) -> ActionRegisterItemResponse:
+    """Add a tracked action item (owner + due date required) to a meeting."""
+    meeting = await service.get_meeting(meeting_id)
+    await verify_project_access(meeting.project_id, str(user_id), session)
+    action = await service.add_action(meeting, data, user_id=str(user_id) if user_id else None)
+    return _action_to_response(action)
+
+
+@router.patch("/actions/{action_id}", response_model=ActionRegisterItemResponse)
+async def update_meeting_action(
+    action_id: uuid.UUID,
+    data: ActionRegisterItemUpdate,
+    session: SessionDep,
+    user_id: CurrentUserId = None,  # type: ignore[assignment]
+    _perm: None = Depends(RequirePermission("meetings.update")),
+    service: MeetingService = Depends(_get_service),
+) -> ActionRegisterItemResponse:
+    """Update a tracked action item.
+
+    Moving the status to ``done`` or ``cancelled`` closes the action for the
+    whole series.
+    """
+    row = await service.get_action(action_id)
+    await verify_project_access(row.project_id, str(user_id), session)
+    action = await service.update_action(row, data)
+    return _action_to_response(action)
+
+
+@router.delete("/actions/{action_id}", status_code=204)
+async def delete_meeting_action(
+    action_id: uuid.UUID,
+    session: SessionDep,
+    user_id: CurrentUserId = None,  # type: ignore[assignment]
+    _perm: None = Depends(RequirePermission("meetings.update")),
+    service: MeetingService = Depends(_get_service),
+) -> None:
+    """Delete a tracked action item."""
+    row = await service.get_action(action_id)
+    await verify_project_access(row.project_id, str(user_id), session)
+    await service.delete_action(row)
+
+
+@router.get(
+    "/series/{master_id}/actions/",
+    response_model=SeriesActionRegisterResponse,
+    dependencies=[Depends(RequirePermission("meetings.read"))],
+)
+async def series_action_register(
+    master_id: uuid.UUID,
+    session: SessionDep,
+    user_id: CurrentUserId = None,  # type: ignore[assignment]
+    service: MeetingService = Depends(_get_service),
+) -> SeriesActionRegisterResponse:
+    """The per-series action register - every action across the series.
+
+    ``master_id`` is any meeting in the series (the series is keyed by its
+    master id). Returns each action with its status plus a roll-up count.
+    """
+    master = await service.get_meeting(master_id)
+    await verify_project_access(master.project_id, str(user_id), session)
+    series_id, actions, summary = await service.series_action_register(master)
+    return SeriesActionRegisterResponse(
+        series_id=series_id,
+        total=summary["total"],
+        open=summary["open"],
+        in_progress=summary["in_progress"],
+        done=summary["done"],
+        cancelled=summary["cancelled"],
+        overdue=summary["overdue"],
+        actions=[_action_to_response(a) for a in actions],
+    )
+
+
+# ── Auto-draft minutes ────────────────────────────────────────────────────────
+
+
+@router.post(
+    "/{meeting_id}/minutes/generate/",
+    response_model=MinutesResponse,
+)
+async def generate_meeting_minutes(
+    meeting_id: uuid.UUID,
+    body: MinutesGenerateRequest,
+    session: SessionDep,
+    user_id: CurrentUserId = None,  # type: ignore[assignment]
+    _perm: None = Depends(RequirePermission("meetings.update")),
+    service: MeetingService = Depends(_get_service),
+) -> MinutesResponse:
+    """Generate (or refresh) the draft minutes for a meeting.
+
+    Builds a structured draft: attendees present/absent, per-agenda discussion
+    and decision, action items (brought-forward first) and the next meeting
+    date. The draft is human-confirmed before it is issued.
+    """
+    meeting = await service.get_meeting(meeting_id)
+    await verify_project_access(meeting.project_id, str(user_id), session)
+    row = await service.generate_minutes(meeting, body, user_id=str(user_id) if user_id else None)
+    return MinutesResponse.model_validate(row)
+
+
+@router.get(
+    "/{meeting_id}/minutes/",
+    response_model=MinutesResponse,
+    dependencies=[Depends(RequirePermission("meetings.read"))],
+)
+async def get_meeting_minutes(
+    meeting_id: uuid.UUID,
+    session: SessionDep,
+    user_id: CurrentUserId = None,  # type: ignore[assignment]
+    service: MeetingService = Depends(_get_service),
+) -> MinutesResponse:
+    """Get the draft or issued minutes for a meeting."""
+    meeting = await service.get_meeting(meeting_id)
+    await verify_project_access(meeting.project_id, str(user_id), session)
+    row = await service.get_minutes_row(meeting_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="No minutes generated for this meeting yet")
+    return MinutesResponse.model_validate(row)
+
+
+@router.patch(
+    "/{meeting_id}/minutes/",
+    response_model=MinutesResponse,
+)
+async def update_meeting_minutes(
+    meeting_id: uuid.UUID,
+    data: MinutesUpdate,
+    session: SessionDep,
+    user_id: CurrentUserId = None,  # type: ignore[assignment]
+    _perm: None = Depends(RequirePermission("meetings.update")),
+    service: MeetingService = Depends(_get_service),
+) -> MinutesResponse:
+    """Apply human edits to a draft minutes document before it is issued."""
+    meeting = await service.get_meeting(meeting_id)
+    await verify_project_access(meeting.project_id, str(user_id), session)
+    row = await service.get_minutes_row(meeting_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="No minutes generated for this meeting yet")
+    updated = await service.update_minutes(row, data)
+    return MinutesResponse.model_validate(updated)
+
+
+@router.post(
+    "/{meeting_id}/minutes/issue/",
+    response_model=MinutesResponse,
+)
+async def issue_meeting_minutes(
+    meeting_id: uuid.UUID,
+    session: SessionDep,
+    user_id: CurrentUserId = None,  # type: ignore[assignment]
+    _perm: None = Depends(RequirePermission("meetings.update")),
+    service: MeetingService = Depends(_get_service),
+) -> MinutesResponse:
+    """Issue the minutes after the readiness validation passes."""
+    meeting = await service.get_meeting(meeting_id)
+    await verify_project_access(meeting.project_id, str(user_id), session)
+    row = await service.get_minutes_row(meeting_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="No minutes generated for this meeting yet")
+    issued = await service.issue_minutes(row, user_id=str(user_id) if user_id else None)
+    return MinutesResponse.model_validate(issued)
+
+
+@router.post(
+    "/{meeting_id}/minutes/distribute/",
+    response_model=MinutesDistributeResponse,
+)
+async def distribute_meeting_minutes(
+    meeting_id: uuid.UUID,
+    session: SessionDep,
+    user_id: CurrentUserId = None,  # type: ignore[assignment]
+    _perm: None = Depends(RequirePermission("meetings.update")),
+    service: MeetingService = Depends(_get_service),
+) -> MinutesDistributeResponse:
+    """Distribute the issued minutes to the meeting's attendees.
+
+    Notifies every attendee linked to a real user via the platform notification
+    service (in-app plus any configured connector).
+    """
+    meeting = await service.get_meeting(meeting_id)
+    await verify_project_access(meeting.project_id, str(user_id), session)
+    row = await service.get_minutes_row(meeting_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="No minutes generated for this meeting yet")
+    updated, notified = await service.distribute_minutes(meeting, row, user_id=str(user_id) if user_id else None)
+    return MinutesDistributeResponse(
+        minutes_id=updated.id,
+        recipients=len(notified),
+        notified_user_ids=notified,
+    )
+
+
 # ── PDF Export ───────────────────────────────────────────────────────────────
 
 
@@ -1609,6 +1858,240 @@ async def export_meeting_pdf(
     safe_title = meeting.title.replace(" ", "_")[:50]
     filename = f"meeting_{meeting.meeting_number}_{safe_title}.pdf"
 
+    return StreamingResponse(
+        buf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get(
+    "/{meeting_id}/minutes/export/pdf/",
+    dependencies=[Depends(RequirePermission("meetings.read"))],
+)
+async def export_minutes_pdf(
+    meeting_id: uuid.UUID,
+    session: SessionDep = None,  # type: ignore[assignment]
+    _user: CurrentUserId = None,  # type: ignore[assignment]
+    service: MeetingService = Depends(_get_service),
+) -> StreamingResponse:
+    """Export the confirmed meeting minutes as a structured PDF.
+
+    Renders the human-confirmed minutes document (present/absent, per-agenda
+    discussion and decision, action items with brought-forward and overdue
+    markers, next meeting date, summary) - not the raw meeting record.
+    """
+    from html import escape
+
+    from reportlab.lib import colors
+    from reportlab.lib.enums import TA_CENTER, TA_LEFT
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.lib.units import mm
+    from reportlab.platypus import (
+        BaseDocTemplate,
+        Frame,
+        PageTemplate,
+        Paragraph,
+        Spacer,
+        Table,
+        TableStyle,
+    )
+    from sqlalchemy import select
+
+    from app.core.pdf_fonts import BODY_FONT, BOLD_FONT, register_pdf_fonts
+    from app.modules.projects.models import Project
+
+    register_pdf_fonts()
+
+    meeting = await service.get_meeting(meeting_id)
+    await verify_project_access(meeting.project_id, str(_user), session)
+    minutes = await service.get_minutes_row(meeting_id)
+    if minutes is None:
+        raise HTTPException(status_code=404, detail="No minutes generated for this meeting yet")
+    content: dict = minutes.content if isinstance(minutes.content, dict) else {}
+
+    proj_result = await session.execute(select(Project.name).where(Project.id == meeting.project_id))
+    project_name = proj_result.scalar_one_or_none() or "Unknown Project"
+
+    PAGE_WIDTH, PAGE_HEIGHT = A4
+    MARGIN = 20 * mm
+    USABLE_WIDTH = PAGE_WIDTH - 2 * MARGIN
+
+    styles = getSampleStyleSheet()
+    style_title = ParagraphStyle(
+        "MinutesTitle",
+        parent=styles["Normal"],
+        fontName=BOLD_FONT,
+        fontSize=16,
+        alignment=TA_CENTER,
+        spaceAfter=3 * mm,
+    )
+    style_subtitle = ParagraphStyle(
+        "MinutesSubtitle",
+        parent=styles["Normal"],
+        fontName=BODY_FONT,
+        fontSize=10,
+        alignment=TA_CENTER,
+        textColor=colors.HexColor("#555555"),
+        spaceAfter=6 * mm,
+    )
+    style_heading = ParagraphStyle(
+        "SectionHeading",
+        parent=styles["Normal"],
+        fontName=BOLD_FONT,
+        fontSize=12,
+        spaceBefore=6 * mm,
+        spaceAfter=3 * mm,
+    )
+    style_body = ParagraphStyle(
+        "Body",
+        parent=styles["Normal"],
+        fontName=BODY_FONT,
+        fontSize=9,
+        leading=12,
+        alignment=TA_LEFT,
+    )
+    style_small = ParagraphStyle(
+        "Small",
+        parent=styles["Normal"],
+        fontName=BODY_FONT,
+        fontSize=8,
+        textColor=colors.HexColor("#777777"),
+    )
+
+    elements: list = []
+    elements.append(Paragraph("Meeting Minutes", style_title))
+    status_tag = "ISSUED" if minutes.status == "issued" else "DRAFT"
+    elements.append(Paragraph(f"{escape(project_name)} &middot; {status_tag}", style_subtitle))
+    elements.append(Paragraph(escape(str(content.get("title") or meeting.title)), style_heading))
+
+    info_data = [
+        ["Date:", str(content.get("meeting_date") or meeting.meeting_date or "N/A")],
+        ["Location:", str(content.get("location") or "N/A") or "N/A"],
+        ["Type:", str(content.get("meeting_type") or "").replace("_", " ").title()],
+        ["Meeting #:", str(content.get("meeting_number") or meeting.meeting_number)],
+        ["Chairperson:", str(content.get("chairperson") or "N/A") or "N/A"],
+        ["Next meeting:", str(content.get("next_meeting_date") or "Not scheduled")],
+    ]
+    info_table = Table(info_data, colWidths=[32 * mm, USABLE_WIDTH - 32 * mm])
+    info_table.setStyle(
+        TableStyle(
+            [
+                ("FONTNAME", (0, 0), (0, -1), BOLD_FONT),
+                ("FONTNAME", (1, 0), (1, -1), BODY_FONT),
+                ("FONTSIZE", (0, 0), (-1, -1), 9),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+                ("TOPPADDING", (0, 0), (-1, -1), 2),
+            ]
+        )
+    )
+    elements.append(info_table)
+
+    # Attendance (present / absent)
+    present = content.get("attendees_present") or []
+    absent = content.get("attendees_absent") or []
+    if present or absent:
+        elements.append(Paragraph("Attendance", style_heading))
+        if present:
+            names = ", ".join(escape(str(a.get("name") or "")) for a in present if isinstance(a, dict))
+            elements.append(Paragraph(f"<b>Present:</b> {names}", style_body))
+        if absent:
+            names = ", ".join(escape(str(a.get("name") or "")) for a in absent if isinstance(a, dict))
+            elements.append(Paragraph(f"<b>Absent / excused:</b> {names}", style_body))
+
+    # Agenda with discussion + decision
+    agenda = content.get("agenda") or []
+    if agenda:
+        elements.append(Paragraph("Agenda, discussion and decisions", style_heading))
+        for idx, item in enumerate(agenda, 1):
+            if not isinstance(item, dict):
+                continue
+            topic = escape(str(item.get("topic") or ""))
+            num = escape(str(item.get("number") or idx))
+            req = " <font color='#b45309'>(required)</font>" if item.get("required") else ""
+            elements.append(Paragraph(f"<b>{num}. {topic}</b>{req}", style_body))
+            if item.get("discussion"):
+                elements.append(
+                    Paragraph(f"&nbsp;&nbsp;<b>Discussion:</b> {escape(str(item['discussion']))}", style_small)
+                )
+            if item.get("decision"):
+                elements.append(Paragraph(f"&nbsp;&nbsp;<b>Decision:</b> {escape(str(item['decision']))}", style_small))
+            elements.append(Spacer(1, 1.5 * mm))
+
+    # Action items
+    actions = content.get("action_items") or []
+    if actions:
+        elements.append(Paragraph("Action items", style_heading))
+        act_data = [["#", "Action", "Owner", "Due", "Status"]]
+        for idx, ai in enumerate(actions, 1):
+            if not isinstance(ai, dict):
+                continue
+            desc = str(ai.get("description") or "")
+            if ai.get("brought_forward"):
+                desc = f"[Brought forward] {desc}"
+            status_str = str(ai.get("status") or "open").replace("_", " ").title()
+            if ai.get("overdue"):
+                status_str += " (overdue)"
+            act_data.append([str(idx), desc, str(ai.get("owner") or ""), str(ai.get("due_date") or ""), status_str])
+        act_table = Table(
+            act_data,
+            colWidths=[
+                USABLE_WIDTH * 0.06,
+                USABLE_WIDTH * 0.44,
+                USABLE_WIDTH * 0.20,
+                USABLE_WIDTH * 0.13,
+                USABLE_WIDTH * 0.17,
+            ],
+        )
+        act_table.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f0f0f0")),
+                    ("FONTNAME", (0, 0), (-1, 0), BOLD_FONT),
+                    ("FONTNAME", (0, 1), (-1, -1), BODY_FONT),
+                    ("FONTSIZE", (0, 0), (-1, -1), 8),
+                    ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cccccc")),
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ("TOPPADDING", (0, 0), (-1, -1), 3),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 4),
+                ]
+            )
+        )
+        elements.append(act_table)
+
+    # Summary
+    if content.get("summary"):
+        elements.append(Paragraph("Summary", style_heading))
+        elements.append(Paragraph(escape(str(content["summary"])).replace("\n", "<br/>"), style_body))
+
+    elements.append(Spacer(1, 8 * mm))
+    stamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
+    issued_note = ""
+    if minutes.status == "issued" and minutes.issued_at:
+        issued_note = f" &middot; Issued {minutes.issued_at.strftime('%Y-%m-%d %H:%M UTC')}"
+    elements.append(Paragraph(f"Generated: {stamp}{issued_note}", style_small))
+
+    buf = io.BytesIO()
+
+    def _header_footer(canvas_obj, doc):  # type: ignore[no-untyped-def]
+        canvas_obj.saveState()
+        canvas_obj.setFont(BODY_FONT, 7)
+        canvas_obj.setFillColor(colors.HexColor("#999999"))
+        canvas_obj.drawString(MARGIN, PAGE_HEIGHT - 12 * mm, f"{project_name} - Minutes")
+        canvas_obj.drawRightString(PAGE_WIDTH - MARGIN, 10 * mm, f"Page {doc.page}")
+        canvas_obj.restoreState()
+
+    frame = Frame(MARGIN, MARGIN, USABLE_WIDTH, PAGE_HEIGHT - 2 * MARGIN, id="main")
+    doc = BaseDocTemplate(buf, pagesize=A4)
+    doc.addPageTemplates([PageTemplate(id="main", frames=[frame], onPage=_header_footer)])
+    doc.build(elements)
+
+    buf.seek(0)
+    safe_title = str(content.get("title") or meeting.title).replace(" ", "_")[:50]
+    filename = f"minutes_{meeting.meeting_number}_{safe_title}.pdf"
     return StreamingResponse(
         buf,
         media_type="application/pdf",

@@ -6,7 +6,7 @@
 
 ## 1. Context
 
-The user asks for more useful and understandable controls in the BIM viewer at `/bim/:modelId`. The current viewer (`frontend/src/shared/ui/BIMViewer/BIMViewer.tsx`) already has a reasonable toolbar — the question is **what to add without cloning Navisworks.**
+The user asks for more useful and understandable controls in the BIM viewer at `/bim/:modelId`. The current viewer (`frontend/src/shared/ui/BIMViewer/BIMViewer.tsx`) already has a reasonable toolbar — the question is **what to add without cloning a heavyweight BIM coordination tool.**
 
 ### Current controls inventory
 
@@ -41,7 +41,7 @@ The user asks for more useful and understandable controls in the BIM viewer at `
 
 Four features chosen by value × complexity: saved views, per-category transparency, bounding-box outline on selection, measure-distance tool.
 
-### Option B — Full parity with Navisworks
+### Option B - Full parity with a dedicated coordination tool
 
 Section box, clash detection, markup, 4D phasing, walk-through. Large effort; scope creep; not aligned with "lightweight" philosophy.
 

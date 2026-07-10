@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import clsx from 'clsx';
 import {
   AlertOctagon,
@@ -24,6 +24,8 @@ import {
   MapPin,
   ListChecks,
   Link2,
+  Network,
+  ArrowRight,
 } from 'lucide-react';
 import { Button, Card, Badge, EmptyState, Breadcrumb, ConfirmDialog, RecoveryCard, SkeletonTable, IntroRichText, ModuleGuideButton, MoneyDisplay } from '@/shared/ui';
 import { RequiresProject } from '@/shared/auth/RequiresProject';
@@ -744,6 +746,122 @@ const NCRRow = React.memo(function NCRRow({
 
 /* -- Main Page ------------------------------------------------------------- */
 
+/* ── How it works + module connections ─────────────────────────────────── */
+
+/** Compact inline link to a sibling module, keeping the connections readable. */
+function ModLink({ to, children }: { to: string; children: React.ReactNode }) {
+  return (
+    <Link to={to} className="font-medium text-oe-blue-text hover:underline">
+      {children}
+    </Link>
+  );
+}
+
+/**
+ * At-a-glance card: what the NCR module does, the stages of running a
+ * non-conformance from raise to close, and the sibling modules it links to.
+ * Keeps the quality-to-cost trail obvious without expanding the SectionIntro.
+ */
+function HowNcrWork() {
+  const { t } = useTranslation();
+
+  const steps: { icon: React.ReactNode; title: string; desc: string }[] = [
+    {
+      icon: <AlertOctagon size={14} className="text-oe-blue" />,
+      title: t('ncr.how_step1_title', { defaultValue: 'Raise' }),
+      desc: t('ncr.how_step1_desc', {
+        defaultValue: 'Classify the defect by type and severity and describe what breaches the spec.',
+      }),
+    },
+    {
+      icon: <Search size={14} className="text-oe-blue" />,
+      title: t('ncr.how_step2_title', { defaultValue: 'Fix the cause' }),
+      desc: t('ncr.how_step2_desc', {
+        defaultValue: 'Record the root cause, the corrective action and a preventive action.',
+      }),
+    },
+    {
+      icon: <DollarSign size={14} className="text-oe-blue" />,
+      title: t('ncr.how_step3_title', { defaultValue: 'Escalate cost' }),
+      desc: t('ncr.how_step3_desc', {
+        defaultValue: 'If the defect carries a cost, escalate it to a Change Order.',
+      }),
+    },
+    {
+      icon: <CheckCircle2 size={14} className="text-oe-blue" />,
+      title: t('ncr.how_step4_title', { defaultValue: 'Close' }),
+      desc: t('ncr.how_step4_desc', {
+        defaultValue: 'Verify the fix and close the report, leaving a dated record of the cycle.',
+      }),
+    },
+  ];
+
+  return (
+    <section
+      aria-label={t('ncr.how_title', { defaultValue: 'How NCRs fit together' })}
+      className="rounded-xl border border-border-light bg-surface-secondary/40 p-4"
+    >
+      <h2 className="flex items-center gap-1.5 text-sm font-semibold text-content-primary">
+        <Network size={15} className="text-oe-blue" />
+        {t('ncr.how_title', { defaultValue: 'How NCRs fit together' })}
+      </h2>
+      <p className="mt-1 text-xs text-content-tertiary">
+        {t('ncr.how_intro', {
+          defaultValue:
+            'Log work that fails specification as a numbered report, fix the root cause and keep the cost trail attached. Start by raising an NCR for the non-conforming work.',
+        })}
+      </p>
+
+      <ol className="mt-3 flex flex-col gap-2 lg:flex-row lg:items-stretch">
+        {steps.map((s, i) => (
+          <React.Fragment key={s.title}>
+            <li className="flex-1 rounded-lg border border-border-light bg-surface-primary/70 p-3">
+              <div className="flex items-center gap-2">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-oe-blue-subtle">
+                  {s.icon}
+                </span>
+                <span className="text-xs font-semibold text-content-primary">{s.title}</span>
+              </div>
+              <p className="mt-1.5 text-2xs leading-relaxed text-content-tertiary">{s.desc}</p>
+            </li>
+            {i < steps.length - 1 && (
+              <li
+                aria-hidden="true"
+                className="hidden shrink-0 items-center self-center text-content-quaternary lg:flex"
+              >
+                <ArrowRight size={16} />
+              </li>
+            )}
+          </React.Fragment>
+        ))}
+      </ol>
+
+      <div className="mt-3 border-t border-border-light pt-3 text-2xs text-content-tertiary">
+        <span className="font-medium text-content-secondary">
+          {t('ncr.how_connects', { defaultValue: 'Connects with:' })}
+        </span>{' '}
+        <ModLink to="/inspections">
+          {t('ncr.mod_inspections', { defaultValue: 'Inspections' })}
+        </ModLink>
+        {' · '}
+        <ModLink to="/qms">{t('ncr.mod_qms', { defaultValue: 'QMS overview' })}</ModLink>
+        {' · '}
+        <ModLink to="/changeorders">
+          {t('ncr.mod_changeorders', { defaultValue: 'Change Orders' })}
+        </ModLink>
+        {' · '}
+        <ModLink to="/moc">{t('ncr.mod_moc', { defaultValue: 'Management of Change' })}</ModLink>
+        {' · '}
+        <ModLink to="/closeout">
+          {t('ncr.mod_closeout', { defaultValue: 'Handover & Closeout' })}
+        </ModLink>
+      </div>
+    </section>
+  );
+}
+
+/* -- Main Page (card) ------------------------------------------------------ */
+
 export function NCRPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -1028,6 +1146,8 @@ export function NCRPage() {
             'Document work that does not meet specification (material, workmanship, design, documentation or safety), record the root cause and the corrective and preventive actions. NCRs are often raised straight from a failed Inspection, and when a defect carries a cost impact you can escalate it to a Change Order so the money and the quality trail stay connected.',
         })}
       </SectionIntro>
+
+      <HowNcrWork />
 
       {projectId ? (
       <>

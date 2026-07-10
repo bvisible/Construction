@@ -45,3 +45,49 @@ export interface PhoneLogCreate {
   summary?: string;
   metadata?: Record<string, unknown>;
 }
+
+// A single action item pulled out of a recorded conversation: what must be done,
+// who owns it, and when it is due (only when a date or timeframe was stated).
+export interface ProtocolActionItem {
+  owner: string;
+  task: string;
+  due: string | null;
+}
+
+// The structured, dispute-ready protocol built from a recording. Lives under
+// PhoneLog.metadata.protocol. participants / summary / instructions mirror the
+// canonical record columns; decisions and action_items are the richer extraction
+// produced when an LLM provider is configured (ai_generated tells you which).
+export interface CallProtocol {
+  participants: string[];
+  summary: string;
+  decisions: string[];
+  action_items: ProtocolActionItem[];
+  instructions: string[];
+  confidence: number | null;
+  ai_generated: boolean;
+}
+
+// How the recording was transcribed. Lives under PhoneLog.metadata.transcription.
+// available is false when no provider was configured or the call failed - the
+// recording is still stored so a transcript can be pasted by hand.
+export interface TranscriptionMeta {
+  available: boolean;
+  model: string | null;
+  language: string | null;
+  error: string | null;
+}
+
+// The reviewed, human-confirmed payload that turns a recording draft into a
+// normal logged phone-log record. Sent as a PATCH to /phonelog/{id}.
+export interface PhoneLogFinalize {
+  direction?: string;
+  channel?: string;
+  raw_parties?: string | string[];
+  occurred_at?: string | null;
+  duration_seconds?: number | null;
+  transcript?: string;
+  summary?: string;
+  instructions?: string[];
+  protocol?: Record<string, unknown>;
+}

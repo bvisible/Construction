@@ -75,7 +75,7 @@ export const costDataControlModules: ModuleExplanation[] = [
     route: '/benchmarks',
     icon: 'BarChart3',
     category: 'cost_data',
-    keywords: 'benchmark cost per m2 percentile din 276 comparison bki',
+    keywords: 'benchmark cost per m2 percentile din 276 comparison',
     titleKey: 'howto.benchmarks.title',
     titleDefault: 'Cost Benchmarks',
     summaryKey: 'howto.benchmarks.summary',

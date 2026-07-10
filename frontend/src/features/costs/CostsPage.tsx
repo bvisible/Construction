@@ -45,6 +45,7 @@ import { useCostDatabaseStore, REGION_MAP } from '@/stores/useCostDatabaseStore'
 import { useAuthStore } from '@/stores/useAuthStore';
 import type { CostItemMetadata, CertaintyBadge as CertaintyBadgeData, CostCatalog } from './api';
 import { buildBoqPositionDraft, massEffectiveUnitRate, type FullCostItem } from './addToBoqHelpers';
+import { componentDisplayNumbers } from './costComponentDisplay';
 import { fetchUsageCounts, fetchCostCatalogs } from './api';
 import { CatalogsSection } from './CatalogsSection';
 import { CustomCategoryList } from './CustomCategoryList';
@@ -60,14 +61,19 @@ import { fetchCategoryTree, type CategoryTreeNode } from '@/features/boq/api';
 interface CostComponent {
   name: string;
   code: string;
-  unit: string;
+  /** Absent on starter-seed / manually created rows that carry no unit. */
+  unit?: string;
   /** Localized mirror of `unit` populated by the backend translation
    *  layer when a known locale is requested.  Render with the
    *  `unit_localized || unit` fallback chain — see `api.ts`. */
   unit_localized?: string;
-  quantity: number;
-  unit_rate: number;
-  cost: number;
+  /** Components are free-form JSON (`list[dict]`); numeric fields ride the
+   *  wire as Decimal-serialized STRINGS ("1.02"). Always read through
+   *  Number() — `.toFixed()` on a string throws (see costComponentDisplay). */
+  quantity?: number | string;
+  unit_rate?: number | string;
+  /** Frequently absent — derive as quantity × unit_rate when missing. */
+  cost?: number | string;
   type: 'material' | 'labor' | 'equipment' | 'operator' | 'electricity' | 'other';
 }
 
@@ -492,6 +498,96 @@ function buildSearchUrl(
   return `/v1/costs/?${params.toString()}`;
 }
 
+/* ── Empty state: no cost database yet ─────────────────────────────────── */
+
+/** Shown on /costs when the user has neither a loaded regional/CWICR base nor
+ *  a single own catalog. Offers the two ways to get started, each wired to an
+ *  EXISTING flow: import a ready-made base (→ the /costs/import page) or create
+ *  your own (→ the page's Add Item form). Copy is deliberately plain so a site
+ *  engineer or estimator understands both paths in under a minute. */
+function CostDatabaseEmptyState({
+  onImport,
+  onCreateOwn,
+  t,
+}: {
+  /** Open the existing regional / file importer (routes to /costs/import). */
+  onImport: () => void;
+  /** Open the existing "Add Custom Cost Item" form to start an own price list. */
+  onCreateOwn: () => void;
+  t: ReturnType<typeof import('react-i18next').useTranslation>['t'];
+}) {
+  return (
+    <Card padding="none" className="mx-auto max-w-3xl animate-fade-in" data-testid="costs-empty-state">
+      <div className="flex flex-col items-center px-4 pt-8 pb-2 text-center">
+        <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-md bg-surface-secondary text-content-tertiary shadow-[inset_0_2px_4px_rgba(0,0,0,0.06),inset_0_-1px_0_rgba(255,255,255,0.6)]">
+          <Database size={28} strokeWidth={1.5} />
+        </div>
+        <h2 className="text-lg font-semibold text-content-primary">
+          {t('costs.empty_state.title', { defaultValue: 'Start your cost database' })}
+        </h2>
+        <p className="mt-1.5 max-w-md text-sm text-content-secondary">
+          {t('costs.empty_state.subtitle', {
+            defaultValue:
+              'A cost database holds the unit rates you price work with. Pick how you want to begin - you can do both, and add more any time.',
+          })}
+        </p>
+      </div>
+
+      <div className="grid gap-4 p-4 sm:grid-cols-2 sm:p-6">
+        {/* Path A - import a ready-made base */}
+        <div className="flex flex-col rounded-xl border border-border-light bg-surface-secondary/30 p-5">
+          <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-lg bg-oe-blue-subtle text-oe-blue-text">
+            <Download size={18} />
+          </div>
+          <h3 className="text-sm font-semibold text-content-primary">
+            {t('costs.empty_state.import_title', { defaultValue: 'Import a ready-made base' })}
+          </h3>
+          <p className="mt-1 flex-1 text-xs leading-relaxed text-content-secondary">
+            {t('costs.empty_state.import_desc', {
+              defaultValue:
+                'Load a regional construction cost database with tens of thousands of priced items for materials, labour and equipment. Search it and pull rates straight into your estimates.',
+            })}
+          </p>
+          <Button
+            variant="primary"
+            size="sm"
+            icon={<Download size={14} />}
+            onClick={onImport}
+            className="mt-4 self-start"
+          >
+            {t('costs.empty_state.import_cta', { defaultValue: 'Import a database' })}
+          </Button>
+        </div>
+
+        {/* Path B - create your own */}
+        <div className="flex flex-col rounded-xl border border-border-light bg-surface-secondary/30 p-5">
+          <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-lg bg-oe-blue-subtle text-oe-blue-text">
+            <Plus size={18} />
+          </div>
+          <h3 className="text-sm font-semibold text-content-primary">
+            {t('costs.empty_state.create_title', { defaultValue: 'Create your own' })}
+          </h3>
+          <p className="mt-1 flex-1 text-xs leading-relaxed text-content-secondary">
+            {t('costs.empty_state.create_desc', {
+              defaultValue:
+                'Build your own price list from scratch. Add each rate - code, description, unit and price - and reuse it across every project. Best when you already know your own prices.',
+            })}
+          </p>
+          <Button
+            variant="secondary"
+            size="sm"
+            icon={<Plus size={14} />}
+            onClick={onCreateOwn}
+            className="mt-4 self-start"
+          >
+            {t('costs.empty_state.create_cta', { defaultValue: 'Add your first rate' })}
+          </Button>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
 /* ── Component ─────────────────────────────────────────────────────────── */
 
 export function CostsPage() {
@@ -591,12 +687,30 @@ export function CostsPage() {
   // User catalogs (also needed here: items imported into a catalog carry a
   // region tag named after the catalog, and auto-picking such a tag as the
   // page-wide region scope silently filters search down to one catalog).
-  const { data: userCatalogs } = useQuery<CostCatalog[]>({
+  const { data: userCatalogs, isLoading: isLoadingCatalogs } = useQuery<CostCatalog[]>({
     queryKey: ['costs', 'catalogs'],
     queryFn: fetchCostCatalogs,
     retry: false,
     staleTime: 60_000,
   });
+
+  // "No cost data at all" — the user has neither a loaded regional/CWICR base
+  // nor a single own catalog. Gate on both queries having resolved so the
+  // friendly two-path empty state never flashes over data that is still
+  // loading (cold SQLite can take seconds to answer /regions/). This is the
+  // state the founder asked to make obvious: offer importing a ready-made
+  // base OR creating your own, each with a one-line "how it works".
+  // Require both queries to have SUCCESSFULLY resolved to empty arrays - on a
+  // fetch error the data is undefined, and we must fall through to the normal
+  // render (whose search view shows a RecoveryCard) rather than mislabel a
+  // backend outage as "you have no cost database".
+  const hasNoCostData =
+    !isLoadingRegions &&
+    !isLoadingCatalogs &&
+    Array.isArray(loadedRegions) &&
+    loadedRegions.length === 0 &&
+    Array.isArray(userCatalogs) &&
+    userCatalogs.length === 0;
 
   // One-shot latch for the auto-pick below. Without it the effect re-arms
   // whenever userCatalogs / loadedRegions change identity (every ['costs']
@@ -1144,7 +1258,7 @@ export function CostsPage() {
       >
         {t('costs.intro_body', {
           defaultValue:
-            'Browse and maintain unit and composite rates for materials, labour and equipment across regional catalogues like CWICR, BKI and RSMeans, or add your own. Each rate carries its currency and classification, so items you pull into a BOQ flow straight into the cost and schedule rollup.',
+            'Browse and maintain unit and composite rates for materials, labour and equipment across regional catalogues like CWICR, or add your own. Each rate carries its currency and classification, so items you pull into a BOQ flow straight into the cost and schedule rollup.',
         })}
       </DismissibleInfo>
 
@@ -1158,6 +1272,14 @@ export function CostsPage() {
         <RegionalAdjustPanel className="animate-fade-in" />
       )}
 
+      {hasNoCostData ? (
+        <CostDatabaseEmptyState
+          onImport={() => navigate('/costs/import')}
+          onCreateOwn={() => setShowCreateItem(true)}
+          t={t}
+        />
+      ) : (
+      <>
       {/* Region Tabs */}
       <div data-guide="costs-region-tabs">
         <RegionTabBar
@@ -1619,6 +1741,8 @@ export function CostsPage() {
 
       </div>{/* end .min-w-0 */}
       </div>{/* end lg:grid */}
+      </>
+      )}
 
       {/* ── Floating Selection Bar ───────────────────────────────────────── */}
       {selectedIds.size > 0 && (
@@ -3283,9 +3407,27 @@ function CostItemRow({
   const detail: CostItem = fullItem ?? item;
 
   const meta = detail.metadata_ ?? {};
-  const laborCost = meta.labor_cost ?? 0;
-  const equipmentCost = meta.equipment_cost ?? 0;
-  const materialCost = meta.material_cost ?? 0;
+  // Cost-summary numbers for the breakdown cards. CWICR rows carry these in
+  // metadata; starter-seed / manually created rows don't, so fall back to
+  // summing the component line costs by type (coerced) - otherwise the cards
+  // read '—' while the resource table right below plainly lists priced
+  // materials and labour, which is the incoherent look the founder reported.
+  // Nullish `??` keeps an explicit 0 from metadata and only derives when the
+  // key is genuinely absent.
+  const summedByType = (detail.components ?? []).reduce(
+    (acc, c) => {
+      const { lineCost } = componentDisplayNumbers(c);
+      const ty = c.type || 'other';
+      if (ty === 'labor') acc.labor += lineCost;
+      else if (ty === 'material') acc.material += lineCost;
+      else if (ty === 'equipment' || ty === 'operator' || ty === 'electricity') acc.equipment += lineCost;
+      return acc;
+    },
+    { labor: 0, material: 0, equipment: 0 },
+  );
+  const laborCost = meta.labor_cost ?? summedByType.labor;
+  const equipmentCost = meta.equipment_cost ?? summedByType.equipment;
+  const materialCost = meta.material_cost ?? summedByType.material;
   const laborHours = meta.labor_hours ?? 0;
   const workers = meta.workers_per_unit ?? 0;
 
@@ -3317,6 +3459,11 @@ function CostItemRow({
   // code so EUR / AED / SAR / USD rows are never confused.
   const rowCurrency = (item.currency || regionCurrency || '').trim().toUpperCase();
   const money = (n: number) => fmtMoney(n, rowCurrency);
+  // Share-of-rate percentage for the cost-breakdown bar. `item.rate` is a
+  // Decimal string and the derived component sums can slightly exceed it, so
+  // coerce, guard a zero/empty rate (never divide to Infinity) and cap at 100%.
+  const rateNum = Number(item.rate) || 0;
+  const pct = (part: number) => (rateNum > 0 ? Math.min(100, (part / rateNum) * 100) : 0);
 
   return (
     <>
@@ -3573,21 +3720,21 @@ function CostItemRow({
                     {laborCost > 0 && (
                       <div
                         className="h-full bg-amber-400"
-                        style={{ width: `${(laborCost / item.rate) * 100}%` }}
+                        style={{ width: `${pct(laborCost)}%` }}
                         title={`${t('costs.component_labor', { defaultValue: 'Labor' })}: ${money(laborCost)}`}
                       />
                     )}
                     {equipmentCost > 0 && (
                       <div
                         className="h-full bg-blue-400"
-                        style={{ width: `${(equipmentCost / item.rate) * 100}%` }}
+                        style={{ width: `${pct(equipmentCost)}%` }}
                         title={`${t('costs.component_equipment', { defaultValue: 'Equipment' })}: ${money(equipmentCost)}`}
                       />
                     )}
                     {materialCost > 0 && (
                       <div
                         className="h-full bg-green-400"
-                        style={{ width: `${(materialCost / item.rate) * 100}%` }}
+                        style={{ width: `${pct(materialCost)}%` }}
                         title={`${t('costs.component_material', { defaultValue: 'Materials' })}: ${money(materialCost)}`}
                       />
                     )}
@@ -3596,19 +3743,19 @@ function CostItemRow({
                     {laborCost > 0 && (
                       <span className="flex items-center gap-1">
                         <span className="h-2 w-2 rounded-full bg-amber-400" />
-                        {t('costs.component_labor', { defaultValue: 'Labor' })} {((laborCost / item.rate) * 100).toFixed(0)}%
+                        {t('costs.component_labor', { defaultValue: 'Labor' })} {pct(laborCost).toFixed(0)}%
                       </span>
                     )}
                     {equipmentCost > 0 && (
                       <span className="flex items-center gap-1">
                         <span className="h-2 w-2 rounded-full bg-blue-400" />
-                        {t('costs.component_equipment', { defaultValue: 'Equipment' })} {((equipmentCost / item.rate) * 100).toFixed(0)}%
+                        {t('costs.component_equipment', { defaultValue: 'Equipment' })} {pct(equipmentCost).toFixed(0)}%
                       </span>
                     )}
                     {materialCost > 0 && (
                       <span className="flex items-center gap-1">
                         <span className="h-2 w-2 rounded-full bg-green-400" />
-                        {t('costs.component_material', { defaultValue: 'Materials' })} {((materialCost / item.rate) * 100).toFixed(0)}%
+                        {t('costs.component_material', { defaultValue: 'Materials' })} {pct(materialCost).toFixed(0)}%
                       </span>
                     )}
                   </div>
@@ -3650,10 +3797,16 @@ function CostItemRow({
                         electricity: 'text-cyan-600 bg-cyan-50',
                         other: 'text-gray-600 bg-gray-50',
                       };
-                      const typeColor = TYPE_COLOR_MAP[comp.type] || 'text-gray-600 bg-gray-50';
-                      const typeLabel = t(`costs.component_${comp.type}`, { defaultValue: comp.type.charAt(0).toUpperCase() + comp.type.slice(1) });
+                      // Component numbers arrive as Decimal-strings and `cost`
+                      // is often absent; coerce + derive so `.toFixed` never
+                      // runs on a string (that TypeError crashed the row) and
+                      // the Cost column shows a real figure, not a dash.
+                      const { qty, unitRate, lineCost } = componentDisplayNumbers(comp);
+                      const compType = comp.type || 'other';
+                      const typeColor = TYPE_COLOR_MAP[compType] || 'text-gray-600 bg-gray-50';
+                      const typeLabel = t(`costs.component_${compType}`, { defaultValue: compType.charAt(0).toUpperCase() + compType.slice(1) });
                       return (
-                        <tr key={`${comp.name}-${comp.type}-${i}`} className="hover:bg-surface-secondary/30">
+                        <tr key={`${comp.name}-${compType}-${i}`} className="hover:bg-surface-secondary/30">
                           <td className="px-3 py-2 text-content-primary truncate" title={comp.name}>{comp.name}</td>
                           <td className="px-3 py-2">
                             <span className={`inline-block text-2xs font-medium px-1.5 py-0.5 rounded ${typeColor}`}>
@@ -3661,16 +3814,16 @@ function CostItemRow({
                             </span>
                           </td>
                           <td className="px-3 py-2 text-content-tertiary">
-                            {comp.unit_localized || comp.unit}
+                            {comp.unit_localized || comp.unit || '—'}
                           </td>
                           <td className="px-3 py-2 text-right tabular-nums text-content-secondary">
-                            {comp.quantity > 0 ? comp.quantity.toFixed(2) : '—'}
+                            {qty > 0 ? qty.toFixed(2) : '—'}
                           </td>
                           <td className="px-3 py-2 text-right tabular-nums text-content-secondary">
-                            {comp.unit_rate > 0 ? money(comp.unit_rate) : '—'}
+                            {unitRate > 0 ? money(unitRate) : '—'}
                           </td>
                           <td className="px-3 py-2 text-right tabular-nums font-medium text-content-primary">
-                            {comp.cost > 0 ? money(comp.cost) : '—'}
+                            {lineCost > 0 ? money(lineCost) : '—'}
                           </td>
                         </tr>
                       );
