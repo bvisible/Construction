@@ -1,3 +1,5 @@
+// DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
+// Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
 import { Suspense, lazy, useState, useCallback, useEffect, useLayoutEffect, useContext, createContext } from 'react';
 import { Routes, Route, Navigate, Outlet, useLocation, useParams } from 'react-router-dom';
 // //// NEOFFICE PATCH — Frappe-embedded layout swap
@@ -561,6 +563,7 @@ const PreliminariesPage = lazy(() =>
 const AllowancesPage = lazy(() =>
   import('@/features/allowances').then((m) => ({ default: m.AllowancesPage }))
 );
+const DesignOptionsPage = lazy(() => import('@/features/design-options'));
 const WasteFactorsPage = lazy(() =>
   import('@/features/waste-factors').then((m) => ({ default: m.WasteFactorsPage }))
 );
@@ -1082,6 +1085,7 @@ export default function App() {
         <Route path="/estimate-basis" element={<P title="Basis of Estimate"><EstimateBasisPage /></P>} />
         <Route path="/preliminaries" element={<P title="Preliminaries"><PreliminariesPage /></P>} />
         <Route path="/allowances" element={<P title="Allowances"><AllowancesPage /></P>} />
+        <Route path="/design-options" element={<P title="Design Options"><DesignOptionsPage /></P>} />
         <Route path="/price-index" element={<P title="Price Index"><PriceIndexPage /></P>} />
         <Route path="/labor-rates" element={<P title="Labor Rates"><LaborRatesPage /></P>} />
         <Route path="/resource-summary" element={<P title="Resource Summary"><ResourceSummaryPage /></P>} />

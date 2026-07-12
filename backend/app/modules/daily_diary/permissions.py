@@ -1,4 +1,9 @@
-"""Daily Site Diary module permission definitions."""
+# DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
+# Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
+"""Daily Site Diary module permission definitions.
+
+Internal ref: ddc-lineage:a17f93c4-diary-01
+"""
 
 from app.core.permissions import Role, permission_registry
 

@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [11.2.0] - 2026-07-12
+
+The point cloud viewer turns into a proper measurement workspace for a reality-capture scan. On top of the slice, distance and box tools it already had, you can trace a polyline to read a running length and perimeter, draw a polygon to read plan area, estimate a volume against a reference plane, jump to preset top, front and side views, thin a very dense cloud so it stays responsive, and export every measurement to CSV. Once a scan is loaded the viewer takes the top of the page as the primary element, the way the BIM hub works, and the uploader steps back to a collapsed panel below.
+
+The architecture map now shows what connects to what. Click or hover a module and the modules it links to light up while the rest fade back, so a large map reads as one relationship at a time. On each module in your project journey the case count is now a link that opens the list of cases attached to that module, the cost base import screen uses one consistent country picker with the local China base first and the global CWICR set next, and the guided case pages are reworked to read more clearly.
+
+This release also fixes a placed drawing that anchored at the wrong spot instead of the project location, and a takeoff viewer that did not fill the available height.
+
+## [11.1.0] - 2026-07-12
+
+This release makes the cost bases the centre of the workspace. Every price base you can load now shows in one place with its own count of rates, so you can see all of them at a glance, the global set and each national base, and know how much sits in each one before you choose. The same picker appears in import, in the data setup step and in onboarding, and from it you can search across bases, load a base, set the one you want active, or simply pick a base to work with, without leaving the screen.
+
+The point cloud viewer gains a fuller set of professional tools for working a reality-capture scan, and the dashboard lets you set the width of each widget so the home screen lays out the way you read it. This release also fixes a drawing that could not be placed on the map, by serving document downloads on the right paths and filling in demo stubs, and it completes the line-art illustrations across the Cases hub. In PDF takeoff, switching to another tool in the middle of a two-click scale calibration now cancels the calibration instead of quietly consuming your next click.
+
+The interface is more complete in every language. Thousands more strings are translated in each of the twenty seven supported languages, so the newer screens read in your language instead of falling back to English.
+
+## [11.0.0] - 2026-07-11
+
+The point cloud viewer becomes a real review tool for reality-capture data on site. You can slice the cloud to a height band and read it as a top-down plan, measure point to point with the distance and its horizontal and vertical parts in millimetres, box off a region to isolate part of a scan, colour points by elevation with a legend and a pinnable height band, and save the current view as a PNG image. The geometry and formatting behind these tools are covered by unit tests.
+
+Onboarding now leads with the cost base. You choose the national price base first and the left menu is rebuilt to the company profile you pick, so the app opens already shaped to how you work. The Cases hub gains a start-here row of case tiles with a show-more card, clearer step visuals, a wider in and out flow on each step, and the full case library translated into every language. The dashboard packs more case tiles per row with the inbox below the map, and module pages share one full-width layout so every screen lines up.
+
+The founder note reads more plainly across the app and the marketing site, a guided case step splits its explanation and its data view into a 40/60 layout, and the README carries the platform message with tidied badge rows and a refreshed module catalogue and docs tree.
+
+## [10.10.0] - 2026-07-10
+
+This release opens the platform up to the wider world of cost data and adds a way to compare whole design options by what they cost.
+
+The cost side now works with many national price bases at once. Eight world cost bases are wired in for loading, and you can scope a search or a comparison across several of them together. A rate code can be compared across regional bases side by side, and search is more forgiving: a descriptive phrase returns the closest partial matches and a typo still finds the right work through fuzzy ranking, with semantic indexing behind it. Several bases ship as browsable resource catalogs, and a resource price sheet turns a coefficient base, one that carries labour, material and plant quantities but no money, into something you can price. Because bases can be priced in different currencies, a view in one currency toggle converts them for reading using live European Central Bank reference rates with a purchasing-power fallback, shown as a rough guide and never written into a bill.
+
+A new Design Options workspace compares competing designs for the same project. You attach a model to each option, generate its bill, and read the options side by side on total cost, the delta by trade and cost per square metre, with a transparent recommendation and a fairness banner that flags when two options are not being compared on equal terms. Every option is converted to one project base currency before it is summed, so a mixed-currency comparison stays honest.
+
+This release also gives builders the platform itself. A Module SDK package and a set of builder guides explain the module system, manifests, events, hooks and permissions, and walk through shipping your own module without editing the core. A full user documentation set covers the main workflows end to end, from takeoff and estimating through validation, tendering and the field.
+
+Three community-reported issues are fixed. Chat-connector notifications, for the supported messaging channels, now forward once connected, where before only the test button worked. The client portal shared model viewer no longer bounces a portal guest to the login screen. The property developer sales-target form lays out correctly. Alongside these, an administrator can now turn the public demo account login on or off from settings, which also closes a path that let the demo account in when it should have been disabled. You can hide whole sections of the left menu, not just single modules, and the project journey shows how many worked cases touch each module with a link into them.
+
 ## [10.9.0] - 2026-07-10
 
 This release turns site issue management into one connected workflow, from a defect spotted on a drawing or in the 3D model through to its documented closure, and it deepens another wave of delivery modules.

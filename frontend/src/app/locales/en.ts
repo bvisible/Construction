@@ -3,6 +3,13 @@
 
 const resource = {
   "translation": {
+    "cases.flow.in": "Goes in",
+    "cases.flow.in_hint": "What this step needs to start",
+    "cases.flow.out": "Comes out",
+    "cases.flow.out_hint": "What you have when it is done",
+    "cases.step.go_to_module": "Open {{module}}",
+    "cases.dashboard_card.more_tile": "All {{count}} cases",
+    "cases.dashboard_card.cta_all": "Browse all {{count}} cases",
     "homeportal.documents_tab": "Documents",
     "homeportal.documents_load_failed": "Could not load documents",
     "homeportal.documents_empty": "No documents shared with you yet",
@@ -4048,6 +4055,7 @@ const resource = {
     "nav.estimate_basis": "Basis of Estimate",
     "nav.preliminaries": "Preliminaries",
     "nav.allowances": "Allowances & Contingency",
+    "nav.design_options": "Design Options",
     "nav.price_index": "Price Index",
     "nav.labor_rates": "Labor Rates",
     "nav.resource_summary": "Resource Summary",
@@ -5696,6 +5704,7 @@ const resource = {
     "onboarding.mod_group_field": "Field",
     "onboarding.mod_group_analytics": "Analytics & Extras",
     "onboarding.mod_boq_desc": "Bill of Quantities editor with hierarchical positions",
+    "onboarding.mod_design_options_desc": "Compare alternative design options side by side on total, by-trade delta and cost per m2",
     "onboarding.mod_projects_desc": "Project management and organization",
     "onboarding.mod_costs_desc": "Cost databases and rate management",
     "onboarding.mod_assemblies_desc": "Composite rate recipes and templates",

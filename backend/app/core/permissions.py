@@ -1,3 +1,5 @@
+# DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
+# Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
 """RBAC permission engine.
 
 Role-Based Access Control with permission inheritance.
@@ -220,7 +222,7 @@ class PermissionRegistry:
         return dict(self._permissions)
 
 
-# Global singleton
+# Global singleton (lineage ref ddc-lineage:a17f93c4-core-01)
 permission_registry = PermissionRegistry()
 
 

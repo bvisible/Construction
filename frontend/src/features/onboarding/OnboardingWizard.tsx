@@ -1,3 +1,5 @@
+// DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
+// Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
 import { useState, useCallback, useEffect, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate, Link } from 'react-router-dom';
@@ -66,6 +68,8 @@ import { useBrandingStore } from '@/stores/useBrandingStore';
 import { BrandingEditorModal } from '@/app/layout/CustomBranding';
 import { aiApi, type AIProvider } from '@/features/ai/api';
 import { apiGet, apiPost, extractErrorMessageFromBody } from '@/shared/lib/api';
+import { useBaseCatalog } from '@/features/costs/baseCatalog';
+import { BaseCatalogBrowser } from '@/features/costs/BaseCatalogBrowser';
 import {
   ALL_MODULES,
   MODULE_GROUPS,
@@ -99,18 +103,18 @@ const TOTAL_STEPS = 6;
 
 // Language → recommended CWICR region. Updated 2026-04-28 — most languages now
 // have a proper local database; previously several locales fell back to
-// DE_BERLIN/SP_BARCELONA/ZH_SHANGHAI as approximations.
+// DE_BERLIN/SP_BARCELONA/ZH_CHINA as approximations.
 const LANG_TO_REGION: Record<string, string> = {
   de: 'DE_BERLIN',
   fr: 'FR_PARIS',
   es: 'SP_BARCELONA',
   pt: 'PT_SAOPAULO',
   ru: 'RU_STPETERSBURG',
-  zh: 'ZH_SHANGHAI',
+  zh: 'ZH_CHINA',
   ar: 'AR_DUBAI',
   hi: 'HI_MUMBAI',
   en: 'USA_USD',
-  tr: 'TR_ISTANBUL',
+  tr: 'TR_NATIONAL',
   it: 'IT_ROME',
   ja: 'JA_TOKYO',
   ko: 'KO_SEOUL',
@@ -170,14 +174,14 @@ const CWICR_DATABASES: CWICRDatabase[] = [
   { id: 'BG_SOFIA', name: 'Bulgaria', city: 'Sofia', lang: 'Balgarski', currency: 'BGN', flagId: 'bg' },
   { id: 'RO_BUCHAREST', name: 'Romania', city: 'Bucharest', lang: 'Romana', currency: 'RON', flagId: 'ro' },
   { id: 'SV_STOCKHOLM', name: 'Sweden', city: 'Stockholm', lang: 'Svenska', currency: 'SEK', flagId: 'se' },
-  { id: 'TR_ISTANBUL', name: 'T\u00fcrkiye', city: 'Istanbul', lang: 'T\u00fcrk\u00e7e', currency: 'TRY', flagId: 'tr' },
+  { id: 'TR_NATIONAL', name: 'T\u00fcrkiye', city: 'National', lang: 'T\u00fcrk\u00e7e', currency: 'TRY', flagId: 'tr' },
   { id: 'RU_STPETERSBURG', name: 'Russia / CIS', city: 'St. Petersburg', lang: '\u0420\u0443\u0441\u0441\u043a\u0438\u0439', currency: 'RUB', flagId: 'ru' },
   // Middle East / Africa
   { id: 'AR_DUBAI', name: 'Middle East / Gulf', city: 'Dubai', lang: '\u0627\u0644\u0639\u0631\u0628\u064a\u0629', currency: 'AED', flagId: 'ae' },
   { id: 'ZA_JOHANNESBURG', name: 'South Africa', city: 'Johannesburg', lang: 'English', currency: 'ZAR', flagId: 'za' },
   { id: 'NG_LAGOS', name: 'Nigeria', city: 'Lagos', lang: 'English', currency: 'NGN', flagId: 'ng' },
   // Asia-Pacific
-  { id: 'ZH_SHANGHAI', name: 'China', city: 'Shanghai', lang: '\u4e2d\u6587', currency: 'CNY', flagId: 'cn' },
+  { id: 'ZH_CHINA', name: 'China', city: 'National', lang: '\u4e2d\u6587', currency: 'CNY', flagId: 'cn' },
   { id: 'JA_TOKYO', name: 'Japan', city: 'Tokyo', lang: '\u65e5\u672c\u8a9e', currency: 'JPY', flagId: 'jp' },
   { id: 'KO_SEOUL', name: 'South Korea', city: 'Seoul', lang: '\ud55c\uad6d\uc5b4', currency: 'KRW', flagId: 'kr' },
   { id: 'TH_BANGKOK', name: 'Thailand', city: 'Bangkok', lang: '\u0e44\u0e17\u0e22', currency: 'THB', flagId: 'th' },
@@ -187,6 +191,13 @@ const CWICR_DATABASES: CWICRDatabase[] = [
   // Americas
   { id: 'PT_SAOPAULO', name: 'Brazil / Portugal', city: 'S\u00e3o Paulo', lang: 'Portugu\u00eas', currency: 'BRL', flagId: 'br' },
   { id: 'MX_MEXICOCITY', name: 'Mexico', city: 'Mexico City', lang: 'Espa\u00f1ol', currency: 'MXN', flagId: 'mx' },
+  // Authentic national / regional official bases (own local parquet, resource norms)
+  { id: 'BR_NATIONAL', name: 'Brazil (SINAPI)', city: 'National', lang: 'Portugu\u00eas', currency: 'BRL', flagId: 'br' },
+  { id: 'ES_ANDALUCIA', name: 'Spain (BCCA)', city: 'Andaluc\u00eda', lang: 'Espa\u00f1ol', currency: 'EUR', flagId: 'es' },
+  { id: 'IT_TOSCANA', name: 'Italy (Toscana)', city: 'Toscana', lang: 'Italiano', currency: 'EUR', flagId: 'it' },
+  { id: 'VN_NATIONAL', name: 'Vietnam (Dinh Muc)', city: 'National', lang: 'Ti\u1ebfng Vi\u1ec7t', currency: 'VND', flagId: 'vn' },
+  { id: 'ID_NATIONAL', name: 'Indonesia (AHSP)', city: 'National', lang: 'Bahasa Indonesia', currency: 'IDR', flagId: 'id' },
+  { id: 'GR_NATIONAL', name: 'Greece (GGDE)', city: 'National', lang: '\u0395\u03bb\u03bb\u03b7\u03bd\u03b9\u03ba\u03ac', currency: 'EUR', flagId: 'gr' },
 ];
 
 // ── AI Provider definitions ─────────────────────────────────────────────────
@@ -3091,23 +3102,10 @@ function StepDataSetup({
   // Show all regions
   const [aiExpanded, setAiExpanded] = useState(false);
 
-  // Region filter (added 2026-04-28: with 30 regions the full grid is too tall
-  // for a single onboarding step; the filter lets the user narrow down quickly
-  // by name / city / currency / language before scrolling).
-  const [regionQuery, setRegionQuery] = useState('');
-  const filteredRegions = (() => {
-    const q = regionQuery.trim().toLowerCase();
-    if (!q) return CWICR_DATABASES;
-    return CWICR_DATABASES.filter((db) => {
-      return (
-        db.name.toLowerCase().includes(q) ||
-        db.city.toLowerCase().includes(q) ||
-        db.currency.toLowerCase().includes(q) ||
-        db.lang.toLowerCase().includes(q) ||
-        db.id.toLowerCase().includes(q)
-      );
-    });
-  })();
+  // The full base catalog (9 families, 38 cost bases) with real work-item
+  // counts, shared with the import page and database setup. The browser has its
+  // own search, so no local region filter is needed here.
+  const { data: baseCatalog } = useBaseCatalog();
 
   return (
     <div className="flex flex-col items-center">
@@ -3121,42 +3119,11 @@ function StepDataSetup({
       </p>
 
       <div className="mt-6 w-full max-w-2xl space-y-4">
-        {/* ── Partner packs: the lead, one-click full-workspace install ──── */}
-        <PartnerPackInstaller onActivateLocale={applyLocale} />
-
-        {/* ── Other countries: generic presets (language + classification) ── */}
-        <CountryPackCard
-          packs={COUNTRY_PACKS}
-          selectedPack={selectedPack}
-          onSelectPack={handleSelectPack}
-          onInstallPack={handleInstallPack}
-          onPackLocale={handlePackLocale}
-          onPackDb={handlePackDb}
-          installing={packInstalling}
-          localeState={packLocaleState}
-          dbState={packDbState}
-          customizeOpen={packCustomizeOpen}
-          onToggleCustomize={() => setPackCustomizeOpen((v) => !v)}
-          recordedClassification={recordedClassification}
-        />
-
-        {/* ── Advanced / manual setup ──────────────────────────────────── */}
-        <details className="group rounded-2xl bg-surface-elevated/60 shadow-sm shadow-black/[0.04]">
-          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 p-4 text-sm font-medium text-content-secondary hover:text-content-primary transition-colors">
-            <span className="flex items-center gap-2">
-              <Settings2 size={16} className="text-content-tertiary" />
-              {t('onboarding.advanced_manual_setup', {
-                defaultValue: 'Advanced - pick a region manually or connect AI',
-              })}
-            </span>
-            <ChevronDown
-              size={16}
-              className="text-content-tertiary transition-transform duration-200 group-open:rotate-180"
-            />
-          </summary>
-
-          <div className="space-y-4 p-4 pt-0">
-        {/* Card 1: Cost Database — full width */}
+        {/* Cost base first: pick the regional pricing base(s) you estimate
+            with. This leads the step so the choice of bases comes before
+            anything else; the ready-made country packs just below can set the
+            same thing up in one click once the region is known. */}
+        {/* Card 1: Cost Database - full width */}
         <div className="rounded-2xl bg-surface-elevated shadow-sm shadow-black/[0.04] p-6">
           <div className="flex items-center gap-3 mb-4">
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-oe-blue-subtle text-oe-blue-text">
@@ -3172,55 +3139,28 @@ function StepDataSetup({
             </div>
           </div>
 
-          {/* Region filter — keeps the 30-region grid manageable */}
-          <div className="mb-2">
-            <input
-              type="search"
-              value={regionQuery}
-              onChange={(e) => setRegionQuery(e.target.value)}
-              placeholder={t('onboarding.region_filter_placeholder', {
-                defaultValue: 'Filter by country, city, or currency…',
-              })}
-              disabled={loadingDb || !!loadedDb}
-              className="w-full rounded-lg bg-surface-secondary/70 px-3 py-1.5 text-xs text-content-primary placeholder:text-content-quaternary border border-transparent focus:border-oe-blue/40 focus:outline-none focus:bg-surface-secondary disabled:opacity-50"
-            />
-          </div>
-
-          {/* All regions as selectable cards (scrollable for 30 entries) */}
-          <div className="max-h-72 overflow-y-auto pr-1 -mr-1 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2 mb-3">
-            {filteredRegions.length === 0 && (
-              <div className="col-span-full py-6 text-center text-xs text-content-tertiary">
-                {t('onboarding.region_filter_no_results', {
-                  defaultValue: 'No regions match "{{q}}"',
-                  q: regionQuery,
-                })}
+          {/* All 9 base families (30 global markets + 8 national bases) with
+              real work-item counts. Selecting one arms the Load button below;
+              the browser carries its own search across every base. */}
+          {!loadedDb &&
+            (baseCatalog ? (
+              <div className="max-h-96 overflow-y-auto pr-1 -mr-1 mb-3">
+                <BaseCatalogBrowser
+                  catalog={baseCatalog}
+                  mode="select"
+                  selectedRegion={selectedRegion}
+                  onSelect={(v) => {
+                    if (!loadingDb) setSelectedRegion(v.region);
+                  }}
+                  loadingRegion={loadingDb ? selectedRegion : null}
+                />
               </div>
-            )}
-            {filteredRegions.map((db) => {
-              const isSelected = selectedRegion === db.id;
-              return (
-                <button
-                  key={db.id}
-                  onClick={() => !loadingDb && !loadedDb && setSelectedRegion(db.id)}
-                  disabled={loadingDb || !!loadedDb}
-                  className={clsx(
-                    'flex items-center gap-2 rounded-xl px-3 py-2 text-left transition-all duration-200',
-                    isSelected
-                      ? 'bg-oe-blue-subtle/50 ring-2 ring-oe-blue/40 shadow-sm'
-                      : 'bg-surface-secondary/70 hover:bg-surface-secondary hover:shadow-sm',
-                    (loadingDb || !!loadedDb) && 'opacity-60 cursor-not-allowed',
-                  )}
-                >
-                  <CountryFlag code={db.flagId} size={18} className="shrink-0" />
-                  <div className="min-w-0 flex-1">
-                    <div className="text-xs font-medium text-content-primary truncate">{db.name}</div>
-                    <div className="text-2xs text-content-quaternary">{db.currency}</div>
-                  </div>
-                  {isSelected && <Check size={14} className="text-oe-blue shrink-0" />}
-                </button>
-              );
-            })}
-          </div>
+            ) : (
+              <div className="flex items-center justify-center gap-2 py-8 text-xs text-content-tertiary">
+                <Loader2 size={14} className="animate-spin" />
+                {t('onboarding.base_loading_catalog', { defaultValue: 'Loading cost bases...' })}
+              </div>
+            ))}
 
           {/* Load button / progress / success */}
           <div>
@@ -3253,7 +3193,43 @@ function StepDataSetup({
           </div>
         </div>
 
-        {/* Card 2: Demo Project — full width, simple toggle */}
+        {/* Or install a ready-made country pack: language, both cost
+            databases, and example projects in one click. Offered after the
+            manual base picker so the user chooses bases first. */}
+        <PartnerPackInstaller onActivateLocale={applyLocale} />
+        <CountryPackCard
+          packs={COUNTRY_PACKS}
+          selectedPack={selectedPack}
+          onSelectPack={handleSelectPack}
+          onInstallPack={handleInstallPack}
+          onPackLocale={handlePackLocale}
+          onPackDb={handlePackDb}
+          installing={packInstalling}
+          localeState={packLocaleState}
+          dbState={packDbState}
+          customizeOpen={packCustomizeOpen}
+          onToggleCustomize={() => setPackCustomizeOpen((v) => !v)}
+          recordedClassification={recordedClassification}
+        />
+
+        {/* Advanced: optional demo project and AI provider. The cost-base
+            picker used to live here; it now leads the step above. */}
+        <details className="group rounded-2xl bg-surface-elevated/60 shadow-sm shadow-black/[0.04]">
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 p-4 text-sm font-medium text-content-secondary hover:text-content-primary transition-colors">
+            <span className="flex items-center gap-2">
+              <Settings2 size={16} className="text-content-tertiary" />
+              {t('onboarding.advanced_extras_setup', {
+                defaultValue: 'Advanced - install a demo project or connect AI',
+              })}
+            </span>
+            <ChevronDown
+              size={16}
+              className="text-content-tertiary transition-transform duration-200 group-open:rotate-180"
+            />
+          </summary>
+
+          <div className="space-y-4 p-4 pt-0">
+        {/* Card 2: Demo Project - full width, simple toggle */}
         <div className="rounded-2xl bg-surface-elevated shadow-sm shadow-black/[0.04] p-6">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
@@ -3516,7 +3492,7 @@ function StepFinish({
 }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const setModuleEnabled = useModuleStore((s) => s.setModuleEnabled);
+  const syncFromServer = useModuleStore((s) => s.syncFromServer);
   const setViewMode = useViewModeStore((s) => s.setMode);
   const text = usePresetText();
   const [saving, setSaving] = useState(false);
@@ -3545,15 +3521,9 @@ function StepFinish({
       return;
     }
 
-    // 1. Apply module preferences to the store
-    const allModuleKeys = ALL_MODULES.map((m) => m.key);
-    for (const key of allModuleKeys) {
-      if (!CORE_MODULE_KEYS.has(key)) {
-        setModuleEnabled(key, enabledModules.has(key));
-      }
-    }
-
-    // 2. Save onboarding state to server
+    // 1. Persist the onboarding state. The backend turns the chosen profile
+    //    into the canonical module_preferences map, which is what the sidebar,
+    //    module routes and Project Journey read back to reshape the menu.
     try {
       await apiPost('/v1/users/me/onboarding/', {
         company_type: companyType ?? 'full_enterprise',
@@ -3561,16 +3531,25 @@ function StepFinish({
         interface_mode: 'advanced',
         completed: true,
       });
+      // 2. Reconcile the reactive module store straight from the server, the
+      //    same sequence the Modules > Company Profiles switch uses. This is
+      //    what actually rebuilds the menu to the picked profile. The old
+      //    per-key setModuleEnabled loop scheduled a debounced PATCH that raced
+      //    this POST on the same JSON and left the menu unchanged.
+      await syncFromServer();
     } catch {
-      // Non-critical -- local state is already applied
+      // Non-critical -- the profile choice is still remembered locally below.
     }
 
-    // 3. Mark completed locally
+    // 3. Remember the active profile so the Modules page opens on it too.
+    localStorage.setItem('oe_company_type', companyType ?? 'full_enterprise');
+
+    // 4. Mark completed locally (fires the guided-tour gating event).
     markOnboardingCompleted();
 
     setSaving(false);
     navigate('/');
-  }, [companyType, enabledModules, navigate, packInstalled, setModuleEnabled, setViewMode]);
+  }, [companyType, enabledModules, navigate, packInstalled, syncFromServer, setViewMode]);
 
   return (
     <div className="flex flex-col items-center justify-center text-center">

@@ -1,3 +1,5 @@
+// DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
+// Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
 /**
  * Generic client / partner portal landing (magic-link surface).
  *
@@ -406,7 +408,7 @@ const CO_STATUS_VARIANT: Record<string, 'neutral' | 'blue' | 'warning' | 'succes
 };
 
 function money(amount: string | null, currency: string): string {
-  if (amount === null) return '—';
+  if (amount === null) return '-';
   return currency ? `${currency} ${amount}` : amount;
 }
 
@@ -496,7 +498,7 @@ function ChangeOrderCard({ co }: { co: PortalChangeOrder }) {
                   defaultValue: '{{count}} days',
                   count: co.approved_time_days,
                 })
-              : '—'}
+              : '-'}
           </dd>
         </div>
         <div>
@@ -504,7 +506,7 @@ function ChangeOrderCard({ co }: { co: PortalChangeOrder }) {
             {t('homeportal.co_approved_at', { defaultValue: 'Approved' })}
           </dt>
           <dd className="text-content-secondary">
-            {co.approved_at ? <DateDisplay value={co.approved_at} /> : '—'}
+            {co.approved_at ? <DateDisplay value={co.approved_at} /> : '-'}
           </dd>
         </div>
       </dl>
@@ -597,7 +599,7 @@ function InvoiceCard({ inv }: { inv: PortalInvoice }) {
             {t('homeportal.inv_date', { defaultValue: 'Invoice date' })}
           </dt>
           <dd className="text-content-secondary">
-            {inv.invoice_date ? <DateDisplay value={inv.invoice_date} /> : '—'}
+            {inv.invoice_date ? <DateDisplay value={inv.invoice_date} /> : '-'}
           </dd>
         </div>
         <div>
@@ -605,7 +607,7 @@ function InvoiceCard({ inv }: { inv: PortalInvoice }) {
             {t('homeportal.inv_due', { defaultValue: 'Due' })}
           </dt>
           <dd className="text-content-secondary">
-            {inv.due_date ? <DateDisplay value={inv.due_date} /> : '—'}
+            {inv.due_date ? <DateDisplay value={inv.due_date} /> : '-'}
           </dd>
         </div>
       </dl>
@@ -1030,6 +1032,14 @@ function ModelCard({
  * geometry streams from the dedicated portal geometry endpoint, which
  * authenticates via the session token carried on the URL (the browser's
  * glTF/COLLADA loader cannot send an Authorization header).
+ *
+ * It is also rendered with `portal` so the viewer suppresses every panel and
+ * overlay that reads from an internal-JWT-gated endpoint (scan-vs-design
+ * deviation, the CWICR Match tab, the on-demand Parquet properties fetch). A
+ * portal client holds only the magic-link session token, so any such request
+ * would 401 and the shared API client would react by hard-redirecting the
+ * whole page to /login - which is exactly the "opening a shared model bounces
+ * me to the login page" defect this guards against.
  */
 function ModelViewerModal({
   model,
@@ -1103,6 +1113,7 @@ function ModelViewerModal({
           }
           geometryUrl={geometryUrl}
           readOnly
+          portal
         />
       </div>
     </div>,

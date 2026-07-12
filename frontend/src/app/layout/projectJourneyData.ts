@@ -1,3 +1,5 @@
+// DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
+// Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
 /**
  * Project Journey - the single source of truth for the whole-platform
  * lifecycle map shown from the top bar.
@@ -180,7 +182,13 @@ export const JOURNEY_PHASES: readonly JourneyPhase[] = [
       { to: '/assemblies', labelKey: 'nav.assemblies', label: 'Assemblies' },
       { to: '/ai-estimate', labelKey: 'nav.ai_estimate', label: 'AI Quick Estimate' },
     ],
-    extraRoutes: ['/catalog', '/ai-estimator', '/project-intelligence', '/benchmarks'],
+    extraRoutes: [
+      '/catalog',
+      '/ai-estimator',
+      '/project-intelligence',
+      '/benchmarks',
+      '/design-options',
+    ],
   },
   {
     key: 'validate',

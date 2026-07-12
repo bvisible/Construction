@@ -1,3 +1,5 @@
+# DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
+# Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
 """Reporting module permission definitions.
 
 Registered at module startup via ``app.modules.reporting.on_startup``.
@@ -11,6 +13,8 @@ only work for admins.
 Role mapping mirrors the platform-wide sibling convention
 (projects / finance / boq): create+update = EDITOR, read = VIEWER,
 delete = MANAGER.
+
+Internal id: ddc-lineage:a17f93c4-reporting-01
 """
 
 from app.core.permissions import Role, permission_registry

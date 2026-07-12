@@ -1,3 +1,5 @@
+# DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
+# Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
 """Cost database API routes.
 
 Endpoints:
@@ -54,6 +56,7 @@ from app.dependencies import (
     SessionDep,
     verify_project_access,
 )
+from app.modules.costs import base_registry
 from app.modules.costs.cwicr_v3_catalogue import CWICR_V3_CATALOGUES
 from app.modules.costs.intelligence import (
     CostCertaintyService,
@@ -67,6 +70,7 @@ from app.modules.costs.matcher import (
 )
 from app.modules.costs.models import CostItem
 from app.modules.costs.repository import synonym_text_predicate  # noqa: F401
+from app.modules.costs.resource_pricing import ResourcePriceService
 from app.modules.costs.schemas import (
     BenchmarkRequest,
     BenchmarkResponse,
@@ -87,6 +91,13 @@ from app.modules.costs.schemas import (
     RecordUsageRequest,
     RegionalAdjustResponse,
     RegionalIndexResponse,
+    RepriceResponse,
+    ResourcePriceBulkRequest,
+    ResourcePriceListResponse,
+    ResourcePriceRow,
+    ResourcePriceSetRequest,
+    ResourcePriceStats,
+    ResourceSeedResponse,
     SuggestCostsForElementRequest,
 )
 from app.modules.costs.service import CostBenchmarkService, CostCatalogService, CostItemService
@@ -178,6 +189,23 @@ _REGION_CURRENCY_LEGACY: dict[str, str] = {
     "IE_DUBLIN": "EUR",
     "USA_NEWYORK": "USD",
     "SA_RIYADH": "SAR",
+    # China authentic base (Beijing 2012 + Bortala 2022, prefixed rate_codes).
+    # Loaded from our own work-items parquet, not a DDC v3 snapshot, so it lives
+    # in the legacy overlay rather than the v3 registry.
+    "ZH_CHINA": "CNY",
+    # Turkey authentic national base (CSB analyses), separate from the legacy
+    # metro id used by DDC snapshots.
+    "TR_NATIONAL": "TRY",
+    # Authentic national / regional bases loaded from our own work-items
+    # parquet (official government sources), not DDC v3 snapshots, so they sit
+    # in the legacy overlay. The parquet also carries a per-row currency column
+    # that _resolve_currency prefers; these entries are the read-path fallback.
+    "BR_NATIONAL": "BRL",
+    "ES_ANDALUCIA": "EUR",
+    "IT_TOSCANA": "EUR",
+    "VN_NATIONAL": "VND",
+    "ID_NATIONAL": "IDR",
+    "GR_NATIONAL": "EUR",
     # NOTE: ``PT_SAOPAULO`` is intentionally NOT registered - it was a
     # mislabeled tag (São Paulo is Brazil; canonical key is ``BR_SAOPAULO``,
     # supplied by the v3 registry). A stray ``PT_SAOPAULO`` row should hit
@@ -272,6 +300,10 @@ def _get_service(session: SessionDep) -> CostItemService:
 
 def _get_catalog_service(session: SessionDep) -> CostCatalogService:
     return CostCatalogService(session)
+
+
+def _get_resource_price_service(session: SessionDep) -> ResourcePriceService:
+    return ResourcePriceService(session)
 
 
 def _parse_user_uuid(user_id: str | None) -> uuid.UUID | None:
@@ -677,6 +709,16 @@ async def search_cost_items(
             "``total`` is omitted."
         ),
     ),
+    fuzzy: bool = Query(
+        default=True,
+        description=(
+            "Typo- and word-order-tolerant fuzzy ranking for ``q`` via "
+            "PostgreSQL trigram similarity. Exact and prefix hits rank first, "
+            "then trigram similarity. Falls back automatically to plain "
+            "substring matching when the pg_trgm extension is unavailable, so "
+            "results never regress. Set false to force the legacy substring path."
+        ),
+    ),
     lite: bool = Query(
         default=False,
         description=(
@@ -748,6 +790,7 @@ async def search_cost_items(
         limit=limit,
         offset=offset,
         cursor=cursor,
+        fuzzy=fuzzy,
     )
     # Fast-path: when no text/category filters are present and we already
     # know the per-region totals from the prewarmed stats cache, skip the
@@ -1013,6 +1056,176 @@ async def clear_region_database(
     logger.info("Cleared region %s: %d items deleted", region, count)
     _invalidate_cost_cache()
     return {"deleted": count, "region": region}
+
+
+# ── Resource price sheet (make coefficient bases calculable) ─────────────────
+#
+# CWICR describes each work item through its resource lines (labour / material /
+# machine) with a norm quantity each. Coefficient bases (Vietnam Dinh Muc,
+# Indonesia AHSP) ship those quantities with NO prices - they are priced
+# regionally - so their work items import with a zero rate. These endpoints hold
+# one editable unit price per resource per region, seed it from whatever prices a
+# base already carries, and re-price every work item from the sheet
+# (rate = sum(component.quantity x price)). The same path re-prices a priced base
+# after a local price edit, so it is uniform for coded and codeless bases.
+
+
+def _resource_row(row: Any) -> ResourcePriceRow:
+    return ResourcePriceRow.model_validate(row)
+
+
+@router.get("/resource-prices/{region}/", response_model=ResourcePriceListResponse)
+async def list_resource_prices(
+    region: str,
+    _user_id: CurrentUserId,
+    service: ResourcePriceService = Depends(_get_resource_price_service),
+    search: str | None = Query(default=None, description="Filter by resource name (substring)."),
+    resource_type: str | None = Query(
+        default=None,
+        description="labor | material | equipment | operator | electricity | other.",
+    ),
+    only_unpriced: bool = Query(default=False, description="Only rows still at price 0."),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+) -> ResourcePriceListResponse:
+    """List the resource price sheet for a region (paginated) with coverage stats.
+
+    The price sheet is what makes a coefficient base estimable: every resource is
+    listed with its current local unit price (0 = still needs a price). Priced
+    bases come pre-filled; edit any row and re-price.
+    """
+    rows, total = await service.list_prices(
+        region,
+        search=search,
+        resource_type=resource_type,
+        only_unpriced=only_unpriced,
+        limit=limit,
+        offset=offset,
+    )
+    stats = await service.region_stats(region)
+    return ResourcePriceListResponse(
+        region=region,
+        total=total,
+        limit=limit,
+        offset=offset,
+        stats=ResourcePriceStats(**stats),
+        rows=[_resource_row(r) for r in rows],
+    )
+
+
+@router.get("/resource-prices/{region}/stats/", response_model=ResourcePriceStats)
+async def resource_price_stats(
+    region: str,
+    _user_id: CurrentUserId,
+    service: ResourcePriceService = Depends(_get_resource_price_service),
+) -> ResourcePriceStats:
+    """Coverage of a region's price sheet (how many resources still need a price)."""
+    return ResourcePriceStats(**await service.region_stats(region))
+
+
+@router.post(
+    "/resource-prices/{region}/seed/",
+    response_model=ResourceSeedResponse,
+    dependencies=[Depends(RequirePermission("costs.update"))],
+)
+async def seed_resource_prices(
+    region: str,
+    _user_id: CurrentUserId,
+    service: ResourcePriceService = Depends(_get_resource_price_service),
+) -> ResourceSeedResponse:
+    """(Re)build the price sheet for a region from its work items.
+
+    Collects every distinct resource and seeds its observed unit price (0 for a
+    coefficient base). Idempotent and safe to re-run: rows a user has edited are
+    preserved. Normally runs automatically on region load; this is the manual
+    rebuild.
+    """
+    result = await service.seed_region(region)
+    if result.resources == 0:
+        raise HTTPException(
+            status_code=404,
+            detail=(f"No cost items found for region '{region}'. Load the base first, then seed its price sheet."),
+        )
+    _invalidate_cost_cache()
+    return ResourceSeedResponse(**result.as_dict())
+
+
+@router.put(
+    "/resource-prices/{region}/{resource_key:path}",
+    response_model=ResourcePriceRow,
+    dependencies=[Depends(RequirePermission("costs.update"))],
+)
+async def set_resource_price(
+    region: str,
+    resource_key: str,
+    body: ResourcePriceSetRequest,
+    user_id: CurrentUserId,
+    service: ResourcePriceService = Depends(_get_resource_price_service),
+) -> ResourcePriceRow:
+    """Set one resource's unit price for a region.
+
+    ``resource_key`` is the value from the price-sheet row (a resource code, or a
+    ``name:...`` key for codeless bases). Marks the row user-edited so a later
+    re-seed leaves it alone. Call the re-price endpoint afterwards to fold the new
+    price into the region's work-item rates.
+    """
+    try:
+        row = await service.set_price(
+            region,
+            resource_key,
+            body.unit_price,
+            currency=body.currency,
+            unit=body.unit,
+            resource_name=body.resource_name,
+            resource_type=body.resource_type,
+            updated_by=_parse_user_uuid(user_id),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _resource_row(row)
+
+
+@router.post(
+    "/resource-prices/{region}/bulk/",
+    dependencies=[Depends(RequirePermission("costs.update"))],
+)
+async def set_resource_prices_bulk(
+    region: str,
+    body: ResourcePriceBulkRequest,
+    user_id: CurrentUserId,
+    service: ResourcePriceService = Depends(_get_resource_price_service),
+) -> dict:
+    """Apply many resource-price edits to a region in one transaction."""
+    written = await service.set_prices_bulk(
+        region,
+        [item.model_dump() for item in body.items],
+        updated_by=_parse_user_uuid(user_id),
+    )
+    return {"region": region, "written": written}
+
+
+@router.post(
+    "/resource-prices/{region}/reprice/",
+    response_model=RepriceResponse,
+    dependencies=[Depends(RequirePermission("costs.update"))],
+)
+async def reprice_region_endpoint(
+    region: str,
+    _user_id: CurrentUserId,
+    service: ResourcePriceService = Depends(_get_resource_price_service),
+    dry_run: bool = Query(default=False, description="Preview the effect without writing."),
+) -> RepriceResponse:
+    """Recompute every work item's rate in a region from the price sheet.
+
+    ``rate = sum(component.quantity x sheet_price)``. Each component's unit price
+    and cost, and the labour/material/equipment breakdown, are refreshed too so
+    the stored rate stays explainable. Use ``dry_run`` to preview coverage before
+    committing.
+    """
+    result = await service.reprice_region(region, dry_run=dry_run)
+    if not dry_run:
+        _invalidate_cost_cache()
+    return RepriceResponse(**result.as_dict())
 
 
 # ── Vector database (LanceDB embedded / Qdrant server) ──────────────────────
@@ -1823,6 +2036,7 @@ _GITHUB_SNAPSHOT_FILES: dict[str, str] = {
     "RU_STPETERSBURG": "RU___DDC_CWICR/RU_STPETERSBURG_workitems_costs_resources_EMBEDDINGS_3072_DDC_CWICR.snapshot",
     "AR_DUBAI": "AR___DDC_CWICR/AR_DUBAI_workitems_costs_resources_EMBEDDINGS_3072_DDC_CWICR.snapshot",
     "ZH_SHANGHAI": "ZH___DDC_CWICR/ZH_SHANGHAI_workitems_costs_resources_EMBEDDINGS_3072_DDC_CWICR.snapshot",
+    "ZH_CHINA": "ZH___DDC_CWICR/ZH_SHANGHAI_workitems_costs_resources_EMBEDDINGS_3072_DDC_CWICR.snapshot",
     "HI_MUMBAI": "HI___DDC_CWICR/HI_MUMBAI_workitems_costs_resources_EMBEDDINGS_3072_DDC_CWICR.snapshot",
 }
 
@@ -3867,56 +4081,40 @@ async def import_cost_file(
 # GitHub repository info for downloading CWICR parquet files
 _GITHUB_CWICR_BASE_URL = "https://github.com/datadrivenconstruction/OpenConstructionEstimate-DDC-CWICR/raw/main"
 
-# Mapping from db_id to the GitHub folder/filename structure
-_GITHUB_CWICR_FILES: dict[str, str] = {
-    "USA_USD": "US___DDC_CWICR/USA_USD_workitems_costs_resources_DDC_CWICR.parquet",
-    "UK_GBP": "UK___DDC_CWICR/UK_GBP_workitems_costs_resources_DDC_CWICR.parquet",
-    "DE_BERLIN": "DE___DDC_CWICR/DE_BERLIN_workitems_costs_resources_DDC_CWICR.parquet",
-    "ENG_TORONTO": "EN___DDC_CWICR/ENG_TORONTO_workitems_costs_resources_DDC_CWICR.parquet",
-    # CA_TORONTO is the canonical internal id for Canada (used by the demo
-    # packs, the batimatech-ca partner pack, _REGION_CURRENCY and
-    # region_language). It serves the same upstream EN/Toronto parquet so
-    # load-cwicr resolves the Canadian cost DB instead of 404ing.
-    "CA_TORONTO": "EN___DDC_CWICR/ENG_TORONTO_workitems_costs_resources_DDC_CWICR.parquet",
-    "FR_PARIS": "FR___DDC_CWICR/FR_PARIS_workitems_costs_resources_DDC_CWICR.parquet",
-    "SP_BARCELONA": "ES___DDC_CWICR/SP_BARCELONA_workitems_costs_resources_DDC_CWICR.parquet",
-    "PT_SAOPAULO": "PT___DDC_CWICR/PT_SAOPAULO_workitems_costs_resources_DDC_CWICR.parquet",
-    "RU_STPETERSBURG": "RU___DDC_CWICR/RU_STPETERSBURG_workitems_costs_resources_DDC_CWICR.parquet",
-    "AR_DUBAI": "AR___DDC_CWICR/AR_DUBAI_workitems_costs_resources_DDC_CWICR.parquet",
-    "ZH_SHANGHAI": "ZH___DDC_CWICR/ZH_SHANGHAI_workitems_costs_resources_DDC_CWICR.parquet",
-    "HI_MUMBAI": "HI___DDC_CWICR/HI_MUMBAI_workitems_costs_resources_DDC_CWICR.parquet",
-    # New regions added 2026-04-28 - DDC CWICR repo grew from 11 to 30 country
-    # folders.  Each entry is a single 55K-row parquet keyed on a stable
-    # ``{LANG}_{CITY}`` id; the city portion matches the upstream filename so
-    # the resolver in `_find_cwicr_file` keeps working for local DDC_Toolkit
-    # checkouts as well as for the GitHub-cache fallback.
-    "AU_SYDNEY": "AU___DDC_CWICR/AU_SYDNEY_workitems_costs_resources_DDC_CWICR.parquet",
-    "BG_SOFIA": "BG___DDC_CWICR/BG_SOFIA_workitems_costs_resources_DDC_CWICR.parquet",
-    "CS_PRAGUE": "CS___DDC_CWICR/CS_PRAGUE_workitems_costs_resources_DDC_CWICR.parquet",
-    "HR_ZAGREB": "HR___DDC_CWICR/HR_ZAGREB_workitems_costs_resources_DDC_CWICR.parquet",
-    "ID_JAKARTA": "ID___DDC_CWICR/ID_JAKARTA_workitems_costs_resources_DDC_CWICR.parquet",
-    "IT_ROME": "IT___DDC_CWICR/IT_ROME_workitems_costs_resources_DDC_CWICR.parquet",
-    "JA_TOKYO": "JA___DDC_CWICR/JA_TOKYO_workitems_costs_resources_DDC_CWICR.parquet",
-    "KO_SEOUL": "KO___DDC_CWICR/KO_SEOUL_workitems_costs_resources_DDC_CWICR.parquet",
-    "MX_MEXICOCITY": "MX___DDC_CWICR/MX_MEXICOCITY_workitems_costs_resources_DDC_CWICR.parquet",
-    "NG_LAGOS": "NG___DDC_CWICR/NG_LAGOS_workitems_costs_resources_DDC_CWICR.parquet",
-    "NL_AMSTERDAM": "NL___DDC_CWICR/NL_AMSTERDAM_workitems_costs_resources_DDC_CWICR.parquet",
-    "NZ_AUCKLAND": "NZ___DDC_CWICR/NZ_AUCKLAND_workitems_costs_resources_DDC_CWICR.parquet",
-    "PL_WARSAW": "PL___DDC_CWICR/PL_WARSAW_workitems_costs_resources_DDC_CWICR.parquet",
-    "RO_BUCHAREST": "RO___DDC_CWICR/RO_BUCHAREST_workitems_costs_resources_DDC_CWICR.parquet",
-    "SV_STOCKHOLM": "SV___DDC_CWICR/SV_STOCKHOLM_workitems_costs_resources_DDC_CWICR.parquet",
-    "TH_BANGKOK": "TH___DDC_CWICR/TH_BANGKOK_workitems_costs_resources_DDC_CWICR.parquet",
-    "TR_ISTANBUL": "TR___DDC_CWICR/TR_ISTANBUL_workitems_costs_resources_DDC_CWICR.parquet",
-    "VI_HANOI": "VI___DDC_CWICR/VI_HANOI_workitems_costs_resources_DDC_CWICR.parquet",
-    "ZA_JOHANNESBURG": "ZA___DDC_CWICR/ZA_JOHANNESBURG_workitems_costs_resources_DDC_CWICR.parquet",
-}
+# Mapping from db_id to the work-item parquet path under the CWICR repo, built
+# from the single-source base registry (app.modules.costs.base_registry) so this
+# map, the resource-catalog folder map in app.modules.catalog.router and the
+# /base-catalog API can never drift. The registry carries the current nested
+# layout: the 30 global-CWICR markets live under CIS-Russia-GESN-FER-TER/ and
+# each national base under its own folder. CA_TORONTO is the canonical internal
+# id for Canada (demo packs, the batimatech-ca partner pack, region_language); it
+# shares the EN/Toronto parquet so load-cwicr resolves it instead of 404ing.
+_GITHUB_CWICR_FILES: dict[str, str] = base_registry.github_workitems_files()
+_GITHUB_CWICR_FILES.setdefault("CA_TORONTO", _GITHUB_CWICR_FILES["ENG_TORONTO"])
 
 CWICR_SEARCH_PATHS = [
     "../../DDC_Toolkit/pricing/data/excel",
     "../DDC_Toolkit/pricing/data/excel",
+    "../../WORLD_COST_BASES",
+    "../WORLD_COST_BASES",
+    "WORLD_COST_BASES",
     str(Path.home() / "DDC_Toolkit" / "pricing" / "data" / "excel"),
     str(Path.home() / "Desktop" / "CodeProjects" / "DDC_Toolkit" / "pricing" / "data" / "excel"),
+    str(Path.home() / "Desktop" / "CodeProjects" / "ERP_26030500" / "WORLD_COST_BASES"),
 ]
+
+_LOCAL_CWICR_FILE_ALIASES: dict[str, tuple[str, ...]] = {
+    # The canonical local export is still named `TR_*`, while the product id
+    # must distinguish it from the legacy metro snapshot `TR_ISTANBUL`.
+    "TR_NATIONAL": ("TR",),
+    # Bare-country national bases: the product id carries a `_NATIONAL` suffix,
+    # but the exported parquet keeps the short country prefix. ES_ANDALUCIA and
+    # IT_TOSCANA already match their own file names, so they need no alias.
+    "BR_NATIONAL": ("BR",),
+    "VN_NATIONAL": ("VN",),
+    "ID_NATIONAL": ("ID",),
+    "GR_NATIONAL": ("GR",),
+}
 
 # Local cache directory for downloaded parquet files. The cache is
 # persistent: a successfully downloaded regional parquet is kept and reused
@@ -4044,13 +4242,28 @@ async def _find_cwicr_file(db_id: str) -> Path | None:
          ``app/data/cwicr`` (empty by default - see ``_BUNDLED_CWICR_DIR``).
       4. GitHub download as the last resort.
     """
-    # Priority 1: Parquet files in local DDC_Toolkit (fastest and most reliable)
+    candidate_prefixes = (db_id, *_LOCAL_CWICR_FILE_ALIASES.get(db_id, ()))
+
+    # Priority 1: Parquet files in local DDC_Toolkit / generated base folders
+    # (fastest and most reliable)
     for search_path in CWICR_SEARCH_PATHS:
-        parquet_path = Path(search_path).parent / "parquet"
-        if parquet_path.exists():
-            for f in parquet_path.iterdir():
-                if f.name.startswith(db_id) and f.suffix == ".parquet":
-                    return f
+        roots = [Path(search_path), Path(search_path).parent / "parquet"]
+        for parquet_path in roots:
+            if not parquet_path.exists():
+                continue
+            matches = [
+                f
+                for f in parquet_path.iterdir()
+                if f.suffix == ".parquet" and any(f.name.startswith(prefix) for prefix in candidate_prefixes)
+            ]
+            if matches:
+                # A region prefix can match more than one parquet in the same
+                # folder (e.g. the canonical IT_TOSCANA_workitems_costs_resources
+                # base alongside an auxiliary IT_TOSCANA_province_price_variants).
+                # Always prefer the canonical work-items base; sort otherwise so
+                # the choice is deterministic rather than filesystem-order.
+                canonical = [f for f in matches if "workitems_costs_resources" in f.name]
+                return canonical[0] if canonical else sorted(matches)[0]
 
     # Priority 2: Excel SIMPLE
     for search_path in CWICR_SEARCH_PATHS:
@@ -4058,7 +4271,11 @@ async def _find_cwicr_file(db_id: str) -> Path | None:
         if not p.exists():
             continue
         for f in p.iterdir():
-            if f.name.startswith(db_id) and "_SIMPLE" in f.name and f.suffix == ".xlsx":
+            if (
+                any(f.name.startswith(prefix) for prefix in candidate_prefixes)
+                and "_SIMPLE" in f.name
+                and f.suffix == ".xlsx"
+            ):
                 return f
 
     # Priority 3: Any Excel
@@ -4067,7 +4284,7 @@ async def _find_cwicr_file(db_id: str) -> Path | None:
         if not p.exists():
             continue
         for f in p.iterdir():
-            if f.name.startswith(db_id) and f.suffix == ".xlsx":
+            if any(f.name.startswith(prefix) for prefix in candidate_prefixes) and f.suffix == ".xlsx":
                 return f
 
     # Priority 4: Persistent local cache from a previous download. The 1 KB
@@ -4098,6 +4315,34 @@ async def _find_cwicr_file(db_id: str) -> Path | None:
         return downloaded
 
     return None
+
+
+@router.get(
+    "/base-catalog",
+    dependencies=[Depends(RequirePermission("costs.read"))],
+)
+@router.get(
+    # The app runs with redirect_slashes=False, so register both path forms.
+    "/base-catalog/",
+    dependencies=[Depends(RequirePermission("costs.read"))],
+    include_in_schema=False,
+)
+async def get_base_catalog(session: SessionDep) -> dict:
+    """Return the full catalog of loadable CWICR cost bases.
+
+    Enumerates the nine base families and every loadable market variant with its
+    work-item ("position") count, currency, language and flag, so the import
+    page, database setup and onboarding can all render one consistent, honest
+    picker before anything is downloaded. Merges the live loaded counts from
+    ``oe_costs_item`` so a base that is already imported shows its real figure
+    and a "loaded" badge.
+    """
+    from sqlalchemy import func
+
+    stmt = select(CostItem.region, func.count()).where(CostItem.is_active.is_(True)).group_by(CostItem.region)
+    rows = (await session.execute(stmt)).all()
+    loaded_counts = {region: int(count) for region, count in rows if region}
+    return base_registry.public_catalog(loaded_counts)
 
 
 @router.post(
@@ -4274,6 +4519,20 @@ async def load_cwicr_region(db_id: str, session: AsyncSession) -> dict:
         result_data.get("skipped", 0),
         duration,
     )
+
+    # Seed the resource price sheet from the freshly imported work items. This is
+    # what lets a coefficient base (Vietnam Dinh Muc, Indonesia AHSP - norm
+    # quantities, no prices) be priced locally: every distinct resource gets an
+    # editable row (0 for a coefficient base, the observed price for a priced
+    # one). Idempotent and fail-soft: a seeding error must never fail the import
+    # (the cost items are already committed), so it is logged and swallowed.
+    if result_data.get("imported", 0) > 0:
+        try:
+            seed = await ResourcePriceService(session).seed_region(db_id)
+            result_data["resource_prices"] = seed.as_dict()
+        except Exception:
+            logger.exception("Resource price seeding failed for %s (non-fatal)", db_id)
+
     _invalidate_cost_cache()
     # A new CWICR parquet may have been written alongside the SQL import
     # (or the import itself writes a parquet artefact). Clear the polars
@@ -4531,6 +4790,7 @@ def _process_and_insert_cwicr(parquet_path: str, db_id: str, db_file: str) -> di
         "row_type",
         "is_machine",
         "is_material",
+        "is_labor",
     ]
     available_res_cols = [c for c in res_cols if c in df.columns]
 
@@ -4676,16 +4936,24 @@ def _process_and_insert_cwicr(parquet_path: str, db_id: str, db_file: str) -> di
         ].copy()
         res_df = res_df[res_df["resource_name"].fillna("").str.len() > 0]
         if _cost_col in res_df.columns:
-            # Keep abstract-resource rows even with cost==0 - they're a
-            # variant slot the user picks from. Without this carve-out
-            # KAME-LI-MENE-KAPU and similar amortisation/option rows get
-            # silently dropped and the user loses one of their variant
-            # picks.
+            # A row is a genuine resource component when it carries EITHER a
+            # cost OR a norm quantity. Coefficient bases (Vietnam Dinh Muc,
+            # Indonesia AHSP) publish the full labour / material / machine
+            # breakdown with norm quantities but no prices (priced regionally),
+            # so gating on cost alone dropped every one of their resources.
+            # Keeping rows that carry a quantity fixes that; priced bases are
+            # unaffected (their resource rows already carry a cost) beyond also
+            # retaining a few legitimately unpriced-but-quantified lines.
+            _keep = res_df[_cost_col].fillna(0).astype(float).abs() > 0.001
+            if "resource_quantity" in res_df.columns:
+                _keep = _keep | (pd.to_numeric(res_df["resource_quantity"], errors="coerce").fillna(0.0).abs() > 1e-9)
+            # Abstract-resource rows are variant slots the user picks from - keep
+            # them even when both cost and quantity are zero. Without this
+            # carve-out KAME-LI-MENE-KAPU and similar amortisation / option rows
+            # get silently dropped and the user loses one of their variant picks.
             if "price_abstract_resource_variable_parts" in res_df.columns:
-                _is_abstract = res_df["price_abstract_resource_variable_parts"].fillna("").astype(str).str.len() > 0
-                res_df = res_df[(res_df[_cost_col].fillna(0).astype(float).abs() > 0.001) | _is_abstract]
-            else:
-                res_df = res_df[res_df[_cost_col].fillna(0).astype(float).abs() > 0.001]
+                _keep = _keep | (res_df["price_abstract_resource_variable_parts"].fillna("").astype(str).str.len() > 0)
+            res_df = res_df[_keep]
         if "row_type" in res_df.columns:
             res_df = res_df[res_df["row_type"].fillna("") != "Scope of work"]
 
@@ -4745,6 +5013,17 @@ def _process_and_insert_cwicr(parquet_path: str, db_id: str, db_file: str) -> di
             ctype_arr = ctype_arr.mask(_is_mach, "equipment")
             ctype_arr = ctype_arr.mask(_is_mach & (_row_type == "Machinist"), "operator")
             ctype_arr = ctype_arr.mask(_is_mach & (_row_type == "Electricity"), "electricity")
+            # Explicit labour flag. Most bases tag the labour line with is_labor
+            # rather than putting a labor unit on a material row, so fill any row
+            # still left "other" that carries is_labor. Guarded on == "other" so
+            # it never overrides a material / equipment / operator classification
+            # already set above. Without this, coefficient bases (Vietnam Dinh
+            # Muc, Indonesia AHSP) and even the priced bases' plain labour lines
+            # fall through unclassified instead of typing as labor.
+            _is_labor = (
+                res_df.get("is_labor", pd.Series([False] * len(res_df), index=res_df.index)).fillna(False).astype(bool)
+            )
+            ctype_arr = ctype_arr.mask(_is_labor & (ctype_arr == "other"), "labor")
             res_df["_type"] = ctype_arr
 
             # Build records via zip over numpy arrays - much faster than iterrows

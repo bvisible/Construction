@@ -1,3 +1,5 @@
+// DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
+// Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
 /**
  * WhatsNewCard — friendly "what's new in vX.Y.Z" release-notes card.
  *
@@ -36,12 +38,12 @@ import {
   Sparkles,
   X,
   ArrowRight,
-  ListChecks,
-  Boxes,
+  Scissors,
+  Ruler,
+  Mountain,
   Camera,
-  CheckCircle2,
-  PenTool,
-  WifiOff,
+  Coins,
+  GraduationCap,
   type LucideIcon,
 } from 'lucide-react';
 import { APP_VERSION } from '@/shared/lib/version';
@@ -83,129 +85,125 @@ interface Section {
   bullets: { key: string; default: string }[];
 }
 
-/* ── v8.2.0 release content ─────────────────────────────────────────────
-   Six chips for the v10.9 wave: the cross-project issues hub (headline),
-   issues raised on the 3D model, punch photos and drawing pins, the closure
-   trail, mark-up to tracked issue, and offline field capture.
-   Bullets surface only when the chip is expanded. */
-const SECTIONS_V1090: Section[] = [
+/* ── v11.0.0 release content ────────────────────────────────────────────
+   Six chips for the v11.0 wave: the new point cloud review tools take the
+   headline (section a scan, measure on it, colour it by height, snapshot a
+   view), then onboarding that leads with the cost base, and the start-here
+   worked cases now translated into every language. Bullets surface only
+   when the chip is expanded. */
+const SECTIONS_V1110: Section[] = [
   {
-    id: 'issues-hub',
-    icon: ListChecks,
-    titleKey: 'whatsnew.v1090.issues.title',
-    titleDefault: 'One issues hub across the project',
-    chipKey: 'whatsnew.v1090.issues.chip',
-    chipDefault: 'Issues hub',
+    id: 'pc-section',
+    icon: Scissors,
+    titleKey: 'whatsnew.v1110.section.title',
+    titleDefault: 'Slice a point cloud',
+    chipKey: 'whatsnew.v1110.section.chip',
+    chipDefault: 'Section a scan',
     bullets: [
       {
-        key: 'whatsnew.v1090.issues.b1',
+        key: 'whatsnew.v1110.section.b1',
         default:
-          'Punch items, non-conformances, clashes, mark-ups and model coordination topics gather into one open-issues list.',
+          'Cut a reality-capture scan to a height band and read just that slice.',
       },
       {
-        key: 'whatsnew.v1090.issues.b2',
+        key: 'whatsnew.v1110.section.b2',
         default:
-          'Filter by source, owner, priority or overdue, and jump straight back to where each item lives.',
+          'Switch the slice to a top-down plan view to work it like a floor plan.',
       },
     ],
   },
   {
-    id: 'model-issues',
-    icon: Boxes,
-    titleKey: 'whatsnew.v1090.model.title',
-    titleDefault: 'Raise issues on the 3D model',
-    chipKey: 'whatsnew.v1090.model.chip',
-    chipDefault: 'Model issues',
+    id: 'pc-measure',
+    icon: Ruler,
+    titleKey: 'whatsnew.v1110.measure.title',
+    titleDefault: 'Measure on the cloud',
+    chipKey: 'whatsnew.v1110.measure.chip',
+    chipDefault: 'Measure points',
     bullets: [
       {
-        key: 'whatsnew.v1090.model.b1',
+        key: 'whatsnew.v1110.measure.b1',
         default:
-          'File a coordination topic on the model with a priority, an assignee and a due date, and discuss it in a comment thread.',
+          'Measure point to point and read the distance with its horizontal and vertical parts in millimetres.',
       },
       {
-        key: 'whatsnew.v1090.model.b2',
+        key: 'whatsnew.v1110.measure.b2',
         default:
-          'A captured viewpoint and snapshot travel in the open BIM Collaboration Format, so a topic imports and exports as a standard file.',
+          'Box off a region with a clip box to isolate part of a scan.',
       },
     ],
   },
   {
-    id: 'punch-photos',
+    id: 'pc-elevation',
+    icon: Mountain,
+    titleKey: 'whatsnew.v1110.elevation.title',
+    titleDefault: 'Colour points by height',
+    chipKey: 'whatsnew.v1110.elevation.chip',
+    chipDefault: 'Elevation colours',
+    bullets: [
+      {
+        key: 'whatsnew.v1110.elevation.b1',
+        default:
+          'Colour the cloud by elevation with a legend from the lowest to the highest point.',
+      },
+      {
+        key: 'whatsnew.v1110.elevation.b2',
+        default:
+          'Pin a height band to hold the colour range while you look around.',
+      },
+    ],
+  },
+  {
+    id: 'pc-snapshot',
     icon: Camera,
-    titleKey: 'whatsnew.v1090.punch.title',
-    titleDefault: 'Punch photos and pins on the drawing',
-    chipKey: 'whatsnew.v1090.punch.chip',
-    chipDefault: 'Punch photos',
+    titleKey: 'whatsnew.v1110.snapshot.title',
+    titleDefault: 'Save the view',
+    chipKey: 'whatsnew.v1110.snapshot.chip',
+    chipDefault: 'Snapshot',
     bullets: [
       {
-        key: 'whatsnew.v1090.punch.b1',
+        key: 'whatsnew.v1110.snapshot.b1',
         default:
-          'Add site photos to a punch item straight from a phone camera, shown as a thumbnail gallery you can add to and prune.',
-      },
-      {
-        key: 'whatsnew.v1090.punch.b2',
-        default:
-          'Place the pin visually on the drawing sheet instead of typing coordinates, with every open item shown as a numbered pin.',
+          'Save the current point cloud view as a PNG image in one click.',
       },
     ],
   },
   {
-    id: 'closure',
-    icon: CheckCircle2,
-    titleKey: 'whatsnew.v1090.closure.title',
-    titleDefault: 'A closure trail on every item',
-    chipKey: 'whatsnew.v1090.closure.chip',
-    chipDefault: 'Closure trail',
+    id: 'onboarding-base',
+    icon: Coins,
+    titleKey: 'whatsnew.v1110.onboarding.title',
+    titleDefault: 'Onboarding leads with the cost base',
+    chipKey: 'whatsnew.v1110.onboarding.chip',
+    chipDefault: 'Cost base first',
     bullets: [
       {
-        key: 'whatsnew.v1090.closure.b1',
+        key: 'whatsnew.v1110.onboarding.b1',
         default:
-          'A closure stepper walks the full path from open through assigned, in progress, resolved and verified to closed.',
+          'Choose your national price base first, right at the start of setup.',
       },
       {
-        key: 'whatsnew.v1090.closure.b2',
+        key: 'whatsnew.v1110.onboarding.b2',
         default:
-          'Nothing is marked done without the trail behind it.',
+          'The left menu is rebuilt to the company profile you pick, so the app opens shaped to how you work.',
       },
     ],
   },
   {
-    id: 'markup-issue',
-    icon: PenTool,
-    titleKey: 'whatsnew.v1090.markup.title',
-    titleDefault: 'Turn a mark-up into a tracked issue',
-    chipKey: 'whatsnew.v1090.markup.chip',
-    chipDefault: 'Mark-up to issue',
+    id: 'start-here',
+    icon: GraduationCap,
+    titleKey: 'whatsnew.v1110.cases.title',
+    titleDefault: 'Learn by example',
+    chipKey: 'whatsnew.v1110.cases.chip',
+    chipDefault: 'Start-here cases',
     bullets: [
       {
-        key: 'whatsnew.v1090.markup.b1',
+        key: 'whatsnew.v1110.cases.b1',
         default:
-          'Give a drawing mark-up a priority and a due date and convert it into a tracked issue in one click.',
+          'A start-here row on the dashboard opens worked cases you can follow step by step.',
       },
       {
-        key: 'whatsnew.v1090.markup.b2',
+        key: 'whatsnew.v1110.cases.b2',
         default:
-          'A cloud drawn on a plan becomes a photographed, assignable, closable item.',
-      },
-    ],
-  },
-  {
-    id: 'field-capture',
-    icon: WifiOff,
-    titleKey: 'whatsnew.v1090.field.title',
-    titleDefault: 'Raise a defect offline from the field',
-    chipKey: 'whatsnew.v1090.field.chip',
-    chipDefault: 'Field capture',
-    bullets: [
-      {
-        key: 'whatsnew.v1090.field.b1',
-        default:
-          'From the field shell a site worker raises a defect with a photo even with no signal.',
-      },
-      {
-        key: 'whatsnew.v1090.field.b2',
-        default:
-          'It syncs when the connection returns, so nothing is lost on site.',
+          'The full case library is translated into every language.',
       },
     ],
   },
@@ -331,7 +329,7 @@ export function WhatsNewCard({ forceShow = false, versionOverride }: WhatsNewCar
     navigate('/about#changelog');
   }, [navigate, handleDismiss]);
 
-  const sections = useMemo(() => SECTIONS_V1090, []);
+  const sections = useMemo(() => SECTIONS_V1110, []);
 
   if (mode === null) return null;
 

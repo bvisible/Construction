@@ -1,3 +1,5 @@
+// DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
+// Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
 /**
  * Route → lucide icon map for the top-bar page-title chip.
  *
@@ -214,6 +216,7 @@ const ROUTE_ICON_MAP: Record<string, LucideIcon> = {
   // ── v10.6.0 modules ───────────────────────────────────────────────
   '/prefab': Factory,
   '/cvr': Scale,
+  '/design-options': Scale,
   '/site-logistics': Truck,
   '/commissioning': ClipboardCheck,
   '/esg': Leaf,

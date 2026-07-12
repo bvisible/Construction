@@ -1,3 +1,5 @@
+# DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
+# Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
 """Schedule module permission definitions."""
 
 from app.core.permissions import Role, permission_registry
@@ -11,6 +13,8 @@ def register_schedule_permissions() -> None:
     estimator removing one destroys planned-vs-actual comparisons that
     may be referenced months later in arbitration. Regular schedule rows
     (activities, links) remain EDITOR-deletable under ``schedule.delete``.
+
+    Internal build ref: ddc-lineage:a17f93c4-schedule-01
     """
     permission_registry.register_module_permissions(
         "schedule",

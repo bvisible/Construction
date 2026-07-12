@@ -1,3 +1,5 @@
+# DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
+# Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
 """Cost item Pydantic schemas for request/response validation."""
 
 from __future__ import annotations
@@ -54,6 +56,17 @@ _REGION_CURRENCY_LEGACY: dict[str, str] = {
     "IE_DUBLIN": "EUR",
     "USA_NEWYORK": "USD",
     "SA_RIYADH": "SAR",
+    # China authentic base - kept in lockstep with the router's legacy overlay.
+    "ZH_CHINA": "CNY",
+    # Turkey authentic national base - kept in lockstep with the router overlay.
+    "TR_NATIONAL": "TRY",
+    # National / regional official bases - kept in lockstep with the router overlay.
+    "BR_NATIONAL": "BRL",
+    "ES_ANDALUCIA": "EUR",
+    "IT_TOSCANA": "EUR",
+    "VN_NATIONAL": "VND",
+    "ID_NATIONAL": "IDR",
+    "GR_NATIONAL": "EUR",
     # NOTE: ``PT_SAOPAULO`` is intentionally NOT registered - it was a
     # mislabeled tag (São Paulo is Brazil; canonical key is ``BR_SAOPAULO``,
     # supplied by the v3 registry). A stray ``PT_SAOPAULO`` row should hit the
@@ -493,6 +506,18 @@ class CostSearchQuery(BaseModel):
             "(code, id) pair encoded in the cursor."
         ),
     )
+    fuzzy: bool = Field(
+        default=True,
+        description=(
+            "Enable typo- and word-order-tolerant fuzzy ranking for ``q`` using "
+            "PostgreSQL trigram similarity (pg_trgm): exact and prefix hits rank "
+            "first, then trigram similarity. Falls back automatically to plain "
+            "substring (ILIKE) matching when pg_trgm is unavailable, when ``q`` is "
+            "empty, or on a non-PostgreSQL backend, so results never regress "
+            "below the legacy substring behaviour. Set false to force the legacy "
+            "substring path."
+        ),
+    )
 
 
 class CostSearchResponse(BaseModel):
@@ -899,3 +924,102 @@ class BenchmarkResponse(BaseModel):
         default="",
         description="Short plain-language reading of the position, e.g. 'Your value sits below your own portfolio median.'",
     )
+
+
+# ── Resource price sheet (v3.187 - makes coefficient bases calculable) ─────────
+
+
+class ResourcePriceRow(BaseModel):
+    """One resource's unit price for a region (a row in the price sheet)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    resource_key: str = Field(..., description="Stable per-region resource identity (code, or name: prefix).")
+    resource_code: str = Field(default="", description="Resource code when the base carries one, else empty.")
+    resource_name: str = Field(..., description="Human-readable resource name.")
+    resource_type: str = Field(
+        default="material",
+        description="labor | material | equipment | operator | electricity | other.",
+    )
+    unit: str = Field(default="", description="Unit the price is per (e.g. m3, kg, hour).")
+    unit_price: DecimalMoney = Field(..., ge=0, description="Local unit price. 0 means unpriced.")
+    currency: str = Field(default="", description="ISO 4217 currency of the price.")
+    source: str = Field(default="cwicr_import", description="cwicr_import (seeded) | user (edited).")
+    is_active: bool = True
+
+
+class ResourcePriceStats(BaseModel):
+    """Coverage of a region's price sheet."""
+
+    region: str
+    resources: int = Field(..., ge=0, description="Distinct resources on the sheet.")
+    priced: int = Field(..., ge=0, description="Resources with a non-zero price.")
+    unpriced: int = Field(..., ge=0, description="Resources still at 0 (need a local price).")
+    coverage: float = Field(..., ge=0, le=1, description="priced / resources.")
+
+
+class ResourcePriceListResponse(BaseModel):
+    """Paginated price-sheet rows plus region coverage stats."""
+
+    region: str
+    total: int = Field(..., ge=0, description="Rows matching the filter, before pagination.")
+    limit: int
+    offset: int
+    stats: ResourcePriceStats
+    rows: list[ResourcePriceRow]
+
+
+class ResourcePriceSetRequest(BaseModel):
+    """Set one resource's unit price (marks the row user-edited)."""
+
+    unit_price: DecimalMoney = Field(..., ge=0, description="New local unit price.")
+    currency: str | None = Field(default=None, max_length=10)
+    unit: str | None = Field(default=None, max_length=30)
+    resource_name: str | None = Field(default=None, max_length=300)
+    resource_type: str | None = Field(default=None, max_length=30)
+
+
+class ResourcePriceBulkItem(BaseModel):
+    """One edit inside a bulk price update."""
+
+    resource_key: str = Field(..., min_length=1, max_length=300)
+    unit_price: DecimalMoney = Field(..., ge=0)
+    currency: str | None = Field(default=None, max_length=10)
+    resource_name: str | None = Field(default=None, max_length=300)
+    resource_type: str | None = Field(default=None, max_length=30)
+    unit: str | None = Field(default=None, max_length=30)
+
+
+class ResourcePriceBulkRequest(BaseModel):
+    """Apply many price edits to a region in one transaction."""
+
+    items: list[ResourcePriceBulkItem] = Field(..., min_length=1, max_length=5000)
+
+
+class ResourceSeedResponse(BaseModel):
+    """Result of seeding a region's price sheet from its work items."""
+
+    region: str
+    resources: int
+    created: int
+    updated: int
+    priced: int
+    unpriced: int
+    preserved_user_edits: int
+    coverage: float
+
+
+class RepriceResponse(BaseModel):
+    """Result of re-pricing a region's work items from its price sheet."""
+
+    region: str
+    items_total: int
+    items_repriced: int
+    items_changed: int
+    items_fully_priced: int
+    items_partially_priced: int
+    items_unpriced: int
+    coverage: float
+    missing_resource_count: int
+    missing_resources_sample: list[str]
+    dry_run: bool
