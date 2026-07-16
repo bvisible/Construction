@@ -324,7 +324,7 @@ logger = logging.getLogger(__name__)
 #
 # Based on industry standards for medium commercial building projects.
 # Percentages applied to direct cost unless noted; tax items are cumulative.
-# Sources: VOB/HOAI, NRM1/RICS, RSMeans/AIA, BATIPRIX, FIDIC, CPWD, AIQS,
+# Sources: VOB/HOAI, NRM1/RICS, US cost index/AIA, BATIPRIX, FIDIC, CPWD, AIQS,
 # MLIT, TCU/SINAPI, Byggakademin, ГЭСН/МДС, 建标[2013]44号, 조달청.
 
 DEFAULT_MARKUP_TEMPLATES: dict[str, list[dict[str, object]]] = {
@@ -368,7 +368,7 @@ DEFAULT_MARKUP_TEMPLATES: dict[str, list[dict[str, object]]] = {
         },
     ],
     # ── United Kingdom ──────────────────────────────────────────────────
-    # RICS NRM1/NRM2, BCIS Elemental Standard Form
+    # RICS NRM1/NRM2, UK cost index Elemental Standard Form
     "UK": [
         {
             "name": "Main Contractor's Preliminaries",
@@ -414,7 +414,7 @@ DEFAULT_MARKUP_TEMPLATES: dict[str, list[dict[str, object]]] = {
         },
     ],
     # ── United States ───────────────────────────────────────────────────
-    # RSMeans / AIA / CSI MasterFormat Division 01
+    # US cost index / AIA / CSI MasterFormat Division 01
     "US": [
         {
             "name": "General Conditions (Div. 01)",
@@ -1433,6 +1433,9 @@ def _build_position_response(pos: Position) -> PositionResponse:
         source=pos.source,
         confidence=(_str_to_float(pos.confidence) if pos.confidence is not None else None),
         cad_element_ids=pos.cad_element_ids,
+        # Issue #347: surface the owning BIM model so the grid picker resolves
+        # against the right model in multi-model projects.
+        cad_model_id=getattr(pos, "cad_model_id", None),
         validation_status=pos.validation_status,
         metadata_=pos.metadata_,
         sort_order=pos.sort_order,
@@ -2219,6 +2222,9 @@ class BOQService:
             source=source.source,
             confidence=source.confidence,
             cad_element_ids=list(source.cad_element_ids) if source.cad_element_ids else [],
+            # Issue #347: carry the owning model so a duplicate resolves its BIM
+            # links against the same model as the original.
+            cad_model_id=getattr(source, "cad_model_id", None),
             validation_status="pending",
             metadata_=_root_meta,
             sort_order=max_order + 1,
@@ -2256,6 +2262,8 @@ class BOQService:
                     source=child.source,
                     confidence=child.confidence,
                     cad_element_ids=(list(child.cad_element_ids) if child.cad_element_ids else []),
+                    # Issue #347: carry the owning model onto the cloned child.
+                    cad_model_id=getattr(child, "cad_model_id", None),
                     validation_status="pending",
                     metadata_=_child_meta,
                     sort_order=max_order,
@@ -5388,6 +5396,9 @@ class BOQService:
             pos_source = pos.source
             pos_confidence = pos.confidence
             pos_cad_element_ids = list(pos.cad_element_ids) if pos.cad_element_ids else []
+            # Issue #347: preserve the owning BIM model on the revision copy so
+            # its BIM links resolve against the same model as the baseline.
+            pos_cad_model_id = getattr(pos, "cad_model_id", None)
             pos_metadata = dict(pos.metadata_) if pos.metadata_ else {}
             pos_sort_order = pos.sort_order
             # Preserve the reusable code (Issue #127) so a duplicated BOQ -
@@ -5416,6 +5427,7 @@ class BOQService:
                 source=pos_source,
                 confidence=pos_confidence,
                 cad_element_ids=pos_cad_element_ids,
+                cad_model_id=pos_cad_model_id,
                 validation_status="pending",
                 reference_code=pos_reference_code,
                 metadata_=pos_metadata,
@@ -7442,6 +7454,8 @@ class BOQService:
         stable_ids: list[str],
         quantity_field: str,
         aggregation: str,
+        projection_mode: str = "field",
+        formula: str | None = None,
     ) -> tuple[Decimal, list[str], list[str]]:
         """Evaluate a link's extraction rule against current model elements.
 
@@ -7467,6 +7481,15 @@ class BOQService:
             ``(aggregated_quantity, contributing_stable_ids, missing_ids)``.
         """
         from app.modules.bim_hub.repository import BIMElementRepository
+        from app.modules.boq.quantity_formula import (
+            FormulaError,
+            build_element_vars,
+            evaluate_formula,
+        )
+
+        # Issue #347: 'formula' mode evaluates ``formula`` per element against
+        # that element's variables; 'field' mode reads ``quantity_field``.
+        use_formula = projection_mode == "formula" and bool((formula or "").strip())
 
         ids = list(stable_ids or [])
         elem_repo = BIMElementRepository(self.session)
@@ -7481,10 +7504,23 @@ class BOQService:
             if elem is None:
                 missing.append(sid)
                 continue
-            quantities = elem.quantities if isinstance(elem.quantities, dict) else {}
             if aggregation == "count":
-                # ``count`` does not need the field present - it counts
-                # resolvable elements. Still record the contribution.
+                # ``count`` is the number of RESOLVED elements, independent of
+                # the projection (a bound field value or a formula).
+                contributing.append(sid)
+                continue
+            quantities = elem.quantities if isinstance(elem.quantities, dict) else {}
+            if use_formula:
+                properties = elem.properties if isinstance(elem.properties, dict) else {}
+                element_vars = build_element_vars(quantities, properties)
+                try:
+                    values.append(evaluate_formula(formula or "", element_vars))
+                except FormulaError:
+                    # The formula references a variable this element lacks, or
+                    # hit a math error (e.g. division by zero). Surface it as a
+                    # missing contribution rather than a silent zero.
+                    missing.append(sid)
+                    continue
                 contributing.append(sid)
                 continue
             if quantity_field not in quantities:
@@ -7544,9 +7580,13 @@ class BOQService:
             boq_id=position.boq_id,
             model_id=data.model_id,
             element_stable_ids=list(data.element_stable_ids),
-            quantity_field=data.quantity_field,
+            # Issue #347: formula-mode links leave quantity_field empty (the
+            # schema validator normalises None -> "") since the column is NOT NULL.
+            quantity_field=data.quantity_field or "",
             target_field=data.target_field,
             aggregation=data.aggregation,
+            projection_mode=data.projection_mode,
+            formula=data.formula,
             status="active",
             source_model_version=str(model.version) if model.version else None,
             created_by=created_by,
@@ -7610,6 +7650,8 @@ class BOQService:
                 "quantity_field": link.quantity_field,
                 "target_field": link.target_field,
                 "aggregation": link.aggregation,
+                "projection_mode": getattr(link, "projection_mode", None) or "field",
+                "formula": getattr(link, "formula", None),
                 "source_model_version": link.source_model_version,
             }
             for link in links
@@ -7634,6 +7676,8 @@ class BOQService:
                 stable_ids=snap["element_stable_ids"],
                 quantity_field=snap["quantity_field"],
                 aggregation=snap["aggregation"],
+                projection_mode=snap.get("projection_mode") or "field",
+                formula=snap.get("formula"),
             )
             old_qty = _to_decimal(position.quantity)
             new_qty_q = _to_decimal(_quantize_money_str(new_qty))
@@ -7726,6 +7770,8 @@ class BOQService:
                 "element_stable_ids": list(link.element_stable_ids or []),
                 "quantity_field": link.quantity_field,
                 "aggregation": link.aggregation,
+                "projection_mode": getattr(link, "projection_mode", None) or "field",
+                "formula": getattr(link, "formula", None),
                 "source_model_version": link.source_model_version,
             }
             for link in await self.quantity_link_repo.list_for_boq(boq_id)
@@ -7824,6 +7870,8 @@ class BOQService:
                 stable_ids=snap["element_stable_ids"],
                 quantity_field=snap["quantity_field"],
                 aggregation=snap["aggregation"],
+                projection_mode=snap.get("projection_mode") or "field",
+                formula=snap.get("formula"),
             )
             pos_ordinal = position.ordinal
             if not contributing and missing:
@@ -7856,6 +7904,8 @@ class BOQService:
                 "model_version": latest_version,
                 "quantity_field": snap["quantity_field"],
                 "aggregation": snap["aggregation"],
+                "projection_mode": snap.get("projection_mode") or "field",
+                "formula": snap.get("formula"),
                 "element_stable_ids": list(snap["element_stable_ids"]),
                 "contributing_elements": contributing,
                 "missing_element_ids": missing,

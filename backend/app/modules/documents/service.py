@@ -13,6 +13,7 @@ Stateless service layer. Handles:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
@@ -30,6 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.cde_states import CDEState, CDEStateMachine
 from app.core.i18n import get_locale
 from app.core.json_merge import merge_metadata
+from app.core.upload_streaming import stream_upload_to_temp
 from app.core.validation.messages import translate
 from app.modules.bim_hub.models import BIMElement
 from app.modules.documents.activity_service import record_activity
@@ -184,6 +186,14 @@ PHOTO_THUMB_QUALITY = 82
 # Security constants
 MAX_FILE_SIZE = 500 * 1024 * 1024  # 500MB
 MAX_PHOTO_SIZE = 200 * 1024 * 1024  # 200MB
+# A photo's PIXEL count, not its byte size, is what OOMs the image decoder: a
+# ~150 MP image is only a few MB on disk (so it sails past MAX_PHOTO_SIZE) but
+# decodes to ~600 MB of uncompressed RGB, enough to OOM-kill the single-worker
+# container on the 2 GB target box while it blocks the event loop. Pillow ships
+# NO pixel guard by default, so cap decoded pixels the same way geo_hub caps
+# rasters (raster_pipeline.MAX_RASTER_PIXELS). 64 MP is ~8000x8000, well above
+# any real construction-site phone or DSLR photo.
+MAX_PHOTO_PIXELS = 64 * 1024 * 1024  # 64 MP (mirrors geo_hub MAX_RASTER_PIXELS)
 VALID_CATEGORIES = {
     "drawing",
     "contract",
@@ -297,6 +307,68 @@ def _reality_capture_extension(name: str) -> str | None:
     return None
 
 
+def _ensure_photo_within_pixel_cap(source_bytes: bytes) -> None:
+    """Reject a photo whose pixel count would OOM the image decoder.
+
+    ``Image.open`` is lazy: reading ``.size`` parses only the header and does
+    NOT allocate the pixel buffer, so this rejects an over-resolution image
+    BEFORE the expensive full decode in the AI-suggestion and thumbnail paths,
+    where a ~150 MP photo would otherwise expand to hundreds of MB and OOM-kill
+    the worker. ``Image.MAX_IMAGE_PIXELS`` is also pinned so that even a decode
+    reached by another path trips Pillow's own bomb guard instead of exhausting
+    memory (defence in depth).
+
+    Args:
+        source_bytes: The raw uploaded image bytes.
+
+    Raises:
+        HTTPException: 413 when the image exceeds ``MAX_PHOTO_PIXELS``.
+
+    A missing Pillow or an unreadable header is deliberately NOT fatal: the
+    magic-byte sniff already proved the bytes are a raster image and the
+    thumbnail step is best-effort, so a header we cannot parse falls through to
+    that existing graceful path rather than blocking a valid upload. Runs
+    synchronously; call it via ``asyncio.to_thread`` so a slow header parse
+    cannot block the event loop.
+    """
+    try:
+        from io import BytesIO
+
+        from PIL import Image
+    except Exception:
+        return
+
+    # Defence in depth: cap what the decoder itself may allocate.
+    Image.MAX_IMAGE_PIXELS = MAX_PHOTO_PIXELS
+
+    try:
+        with Image.open(BytesIO(source_bytes)) as img:
+            width, height = img.size
+    except (Image.DecompressionBombError, Image.DecompressionBombWarning) as exc:
+        # Declared dimensions blow past Pillow's own guard (> 2x the cap).
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=(
+                f"Photo resolution exceeds the {MAX_PHOTO_PIXELS // (1024 * 1024)} MP limit. "
+                f"Downscale the image before uploading."
+            ),
+        ) from exc
+    except Exception:
+        # A header we cannot parse - defer to the best-effort thumbnail path
+        # rather than reject a file the magic-byte gate already accepted.
+        return
+
+    if width * height > MAX_PHOTO_PIXELS:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=(
+                f"Photo has too many pixels: {width}x{height} = {width * height} "
+                f"(max {MAX_PHOTO_PIXELS} px / {MAX_PHOTO_PIXELS // (1024 * 1024)} MP). "
+                f"Downscale the image before uploading."
+            ),
+        )
+
+
 def _generate_photo_thumbnail(
     source_bytes: bytes,
     dest_path: Path,
@@ -305,7 +377,9 @@ def _generate_photo_thumbnail(
 
     Returns ``True`` on success, ``False`` if anything went wrong (missing
     Pillow, corrupt image, unsupported mode). Thumbnail generation is a
-    best-effort optimisation - a failure must never block the upload.
+    best-effort optimisation - a failure must never block the upload. CPU-bound
+    (decode + LANCZOS resample), so call it via ``asyncio.to_thread`` to keep it
+    off the event loop.
     """
     try:
         from io import BytesIO
@@ -314,6 +388,11 @@ def _generate_photo_thumbnail(
     except Exception:
         logger.warning("Pillow not available - skipping photo thumbnail")
         return False
+
+    # Cap decoded pixels here too, so this best-effort path degrades to a clean
+    # False (no thumbnail) instead of OOMing if ever reached without the
+    # upfront _ensure_photo_within_pixel_cap gate.
+    Image.MAX_IMAGE_PIXELS = MAX_PHOTO_PIXELS
 
     try:
         with Image.open(BytesIO(source_bytes)) as img:
@@ -406,21 +485,25 @@ class DocumentService:
             if reality_capture_ext is not None:
                 category = "reality_capture"
 
-        # Enforce size cap (defence in depth - max also expected at the
-        # API gateway level). Done after reading because UploadFile is a
-        # streaming object: we cap on read by checking length before
-        # acceptance. 100 MB is enough for typical AEC drawings and
-        # contracts; oversized assets belong on direct-to-S3 paths.
-        content = await file.read()
-        if len(content) > MAX_FILE_SIZE:
+        # Enforce the size cap while streaming (defence in depth; a cap is also
+        # expected at the API gateway). A bare ``await file.read()`` here pulls
+        # the entire body into RAM before the length check, so a multi-GB upload
+        # would OOM-kill the single worker first. Stream to a temp file in 1 MB
+        # chunks (aborts past the cap), then read the now-bounded bytes back for
+        # the magic-byte checks and the on-disk write below. 100 MB is enough
+        # for typical AEC drawings and contracts; oversized assets belong on
+        # direct-to-S3 paths.
+        try:
+            async with stream_upload_to_temp(file, max_bytes=MAX_FILE_SIZE) as staged:
+                content = staged.path.read_bytes()
+        except ValueError as exc:
             raise HTTPException(
                 status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                 detail=(
-                    f"File too large: {len(content)} bytes "
-                    f"(max {MAX_FILE_SIZE} bytes / "
-                    f"{MAX_FILE_SIZE // (1024 * 1024)} MB)."
+                    f"File too large (max {MAX_FILE_SIZE // (1024 * 1024)} MB). "
+                    "Upload a smaller file or use a direct-to-storage path."
                 ),
-            )
+            ) from exc
 
         # Magic-byte validation - BLOCKED_EXTENSIONS only rejects known-bad
         # names; this catches an attacker who renames evil.exe → evil.pdf.
@@ -652,12 +735,14 @@ class DocumentService:
                 detail=f"File type '{bad_ext}' is not allowed for security reasons.",
             )
 
-        content = await file.read()
-        if len(content) > MAX_FILE_SIZE:
+        try:
+            async with stream_upload_to_temp(file, max_bytes=MAX_FILE_SIZE) as staged:
+                content = staged.path.read_bytes()
+        except ValueError as exc:
             raise HTTPException(
                 status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                detail=(f"File too large: {len(content)} bytes (max {MAX_FILE_SIZE} bytes)."),
-            )
+                detail=(f"File too large (max {MAX_FILE_SIZE // (1024 * 1024)} MB)."),
+            ) from exc
 
         from app.core.file_signature import (
             ALLOWED_CAD_TYPES,
@@ -1184,20 +1269,23 @@ class PhotoService:
         if category not in VALID_PHOTO_CATEGORIES:
             category = "site"
 
-        # Enforce size cap (defence in depth; max also expected at the
-        # API gateway level). 50 MB is enough for 12 MP JPEGs and
-        # construction-site phone photos; bigger assets belong on
-        # direct-to-S3 paths.
-        content = await file.read()
-        if len(content) > MAX_PHOTO_SIZE:
+        # Enforce the size cap while streaming (defence in depth; a cap is also
+        # expected at the API gateway). A bare ``await file.read()`` here pulls
+        # the entire body into RAM before any check, so a multi-GB upload would
+        # OOM-kill the single worker before the size guard could fire. Stream to
+        # a temp file in 1 MB chunks (aborts past the cap), then read the
+        # now-bounded bytes back for the magic-byte / pixel / EXIF checks below.
+        try:
+            async with stream_upload_to_temp(file, max_bytes=MAX_PHOTO_SIZE) as staged:
+                content = staged.path.read_bytes()
+        except ValueError as exc:
             raise HTTPException(
                 status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                 detail=(
-                    f"Photo too large: {len(content)} bytes "
-                    f"(max {MAX_PHOTO_SIZE} bytes / "
-                    f"{MAX_PHOTO_SIZE // (1024 * 1024)} MB)."
+                    f"Photo too large (max {MAX_PHOTO_SIZE // (1024 * 1024)} MB). "
+                    "Resize the image or upload it at a lower resolution."
                 ),
-            )
+            ) from exc
 
         # Magic-byte cross-check - content_type is fully attacker-controlled
         # (it's a request header), so we re-derive the real format from the
@@ -1231,6 +1319,13 @@ class PhotoService:
         # for backwards-compat with the photo response field but the
         # stored canonical MIME is server-derived.
         stored_mime = _mime_for_signature(detected_photo_type)
+
+        # Reject a decompression-bomb / over-resolution image BEFORE any full
+        # decode below (EXIF read, AI suggestion, thumbnail). A byte-size cap
+        # alone does not catch this: a few-MB file can still declare ~150 MP and
+        # OOM-kill the worker on decode. Runs in a worker thread so a slow header
+        # parse never blocks the event loop. Raises 413 for an over-cap image.
+        await asyncio.to_thread(_ensure_photo_within_pixel_cap, content)
 
         # ── AI photo intelligence (Lane 7) ──────────────────────────────
         # 1) Auto-extract EXIF GPS so geotagged photos place themselves on
@@ -1317,8 +1412,10 @@ class PhotoService:
             )
 
         # Generate thumbnail from the in-memory bytes - failure is non-fatal;
-        # the serve endpoint falls back to the original on miss.
-        thumb_generated = _generate_photo_thumbnail(content, thumb_path)
+        # the serve endpoint falls back to the original on miss. Offloaded to a
+        # worker thread: the decode + LANCZOS resample is CPU-bound and must not
+        # block the event loop for other requests.
+        thumb_generated = await asyncio.to_thread(_generate_photo_thumbnail, content, thumb_path)
         if thumb_generated:
             await self.repo.update_fields(photo.id, thumbnail_path=str(thumb_path))
             await self.session.refresh(photo)
@@ -1880,17 +1977,16 @@ class SheetService:
         raw_name = file.filename or "untitled.pdf"
         safe_name = _sanitize_filename(raw_name)
 
-        content = await file.read()
-        # Defence-in-depth size cap (also expected at API gateway level).
-        if len(content) > MAX_FILE_SIZE:
+        # Stream to a temp file (aborts past the cap) so a multi-GB upload never
+        # lands fully in RAM, then read the now-bounded bytes back for the split.
+        try:
+            async with stream_upload_to_temp(file, max_bytes=MAX_FILE_SIZE, suffix=".pdf") as staged:
+                content = staged.path.read_bytes()
+        except ValueError as exc:
             raise HTTPException(
                 status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                detail=(
-                    f"PDF too large: {len(content)} bytes "
-                    f"(max {MAX_FILE_SIZE} bytes / "
-                    f"{MAX_FILE_SIZE // (1024 * 1024)} MB)."
-                ),
-            )
+                detail=(f"PDF too large (max {MAX_FILE_SIZE // (1024 * 1024)} MB)."),
+            ) from exc
 
         # Save the original PDF to uploads
         file_uuid = uuid.uuid4().hex[:12]

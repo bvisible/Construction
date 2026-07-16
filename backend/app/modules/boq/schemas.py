@@ -301,7 +301,7 @@ class PositionCreate(BaseModel):
     wbs_id: str | None = Field(default=None, description="Linked WBS node ID")
     cost_code_id: str | None = Field(default=None, description="Linked cost code ID")
     # Issue #79: link a BOQ position to a CostItem in the cost database
-    # (CWICR / RSMeans / etc.).  Persisted in ``metadata.cost_item_id`` so
+    # (CWICR / regional index / etc.).  Persisted in ``metadata.cost_item_id`` so
     # no schema migration is required; the service validates that the
     # supplied UUID resolves to an active CostItem before persisting.
     cost_item_id: UUID | None = Field(
@@ -778,6 +778,12 @@ class PositionResponse(BaseModel):
     source: str
     confidence: float | None
     cad_element_ids: list[str]
+    # Issue #347: the BIM model that owns the elements in ``cad_element_ids``.
+    # Threaded to the BOQ grid so the "pick quantity from BIM" picker and mini
+    # 3D preview resolve each row against its own model instead of the
+    # project's first-ready one. None for legacy/manual rows (client falls back
+    # to the project-level model).
+    cad_model_id: str | None = None
     validation_status: str
     metadata: dict[str, Any] = Field(default_factory=dict, validation_alias="metadata_")
     sort_order: int
@@ -2029,8 +2035,8 @@ class EscalateRateRequest(BaseModel):
     Currency / region default to empty so the AI prompt pipes blank
     strings into the LLM template - interpreted as "no constraint
     specified". Hardcoding EUR + DACH steered every escalation toward
-    BKI (the German construction cost index), even on US/UK projects
-    where ENR / BCIS would be the right index.
+    a German construction cost index, even on US/UK projects
+    where a US or UK construction cost index would be the right index.
     """
 
     description: str = Field(..., min_length=2, max_length=500)
@@ -2152,9 +2158,15 @@ class QuantityLinkCreate(BaseModel):
 
     model_id: UUID
     element_stable_ids: list[str] = Field(..., min_length=1)
-    quantity_field: str = Field(..., min_length=1, max_length=64)
+    # Issue #347: quantity_field is required in 'field' mode and ignored in
+    # 'formula' mode, so it is optional here and cross-checked below.
+    quantity_field: str | None = Field(default=None, max_length=64)
     target_field: Literal["quantity"] = "quantity"
     aggregation: QuantityAggregation = "sum"
+    # Issue #347: per-element projection. 'field' reads quantity_field off each
+    # element; 'formula' evaluates ``formula`` per element then aggregates.
+    projection_mode: Literal["field", "formula"] = "field"
+    formula: str | None = Field(default=None, max_length=512)
 
     @field_validator("element_stable_ids")
     @classmethod
@@ -2171,6 +2183,33 @@ class QuantityLinkCreate(BaseModel):
             raise ValueError("element_stable_ids must contain at least one id")
         return out
 
+    @model_validator(mode="after")
+    def _check_projection(self) -> "QuantityLinkCreate":
+        """Enforce the mode-specific requirements and pre-validate the formula.
+
+        'field' mode needs a non-empty ``quantity_field``. 'formula' mode needs
+        a non-empty ``formula`` that parses under the safe grammar (rejected as
+        a 422 here rather than surfacing at refresh time); ``quantity_field`` is
+        normalised to "" so the NOT NULL column can store it.
+        """
+        from app.modules.boq.quantity_formula import FormulaError, validate_formula
+
+        if self.projection_mode == "formula":
+            if not (self.formula or "").strip():
+                raise ValueError("formula is required when projection_mode is 'formula'")
+            try:
+                validate_formula(self.formula or "")
+            except FormulaError as exc:
+                raise ValueError(f"invalid formula: {exc}") from exc
+            if self.quantity_field is None:
+                self.quantity_field = ""
+        else:
+            if not (self.quantity_field or "").strip():
+                raise ValueError("quantity_field is required when projection_mode is 'field'")
+            # A field-mode link never carries a formula.
+            self.formula = None
+        return self
+
 
 class QuantityLinkResponse(BaseModel):
     """A persisted quantity link returned from the API."""
@@ -2185,6 +2224,10 @@ class QuantityLinkResponse(BaseModel):
     quantity_field: str
     target_field: str
     aggregation: str
+    # Issue #347: per-element formula projection. ``projection_mode`` reads as
+    # 'field' for legacy rows (server_default); ``formula`` is None in that mode.
+    projection_mode: str = "field"
+    formula: str | None = None
     status: str
     source_model_version: str | None = None
     last_applied_quantity: str | None = None
@@ -2192,6 +2235,12 @@ class QuantityLinkResponse(BaseModel):
     last_applied_at: str | None = None
     created_at: datetime
     updated_at: datetime
+
+    @field_validator("projection_mode", mode="before")
+    @classmethod
+    def _default_projection_mode(cls, v: object) -> str:
+        """Coerce a NULL projection_mode (legacy rows) to 'field'."""
+        return str(v) if v else "field"
 
 
 class QuantityLinkRefreshRow(BaseModel):

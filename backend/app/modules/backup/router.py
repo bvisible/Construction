@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import uuid
 
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
@@ -33,12 +32,14 @@ from app.modules.backup.schemas import ExportRequest, RestoreResponse, ValidateR
 from app.modules.backup.service import (
     APP_ID,
     BACKUP_FORMAT_VERSION,
+    RestoreError,
     build_backup,
-    build_scope_clause,
     cleanup_temp_file,
     deserialize_row,
     get_backup_tables,
     parse_backup_zip,
+    restore_backup_data,
+    restore_backup_files,
     serialize_row,
     spool_to_disk,
 )
@@ -117,21 +118,25 @@ async def export_backup(
 async def restore_backup(
     user_id: CurrentUserId,
     file: UploadFile = File(...),
-    mode: str = Form("replace"),
+    mode: str = Form("merge"),
 ) -> RestoreResponse:
     """Upload and restore from a backup ZIP.
 
     Args:
         file: ZIP backup file (multipart/form-data).
-        mode: ``replace`` (default) deletes the requesting user's own data
-            first, then inserts. ``merge`` skips records whose UUID already
-            exists, inserts new ones.
+        mode: ``merge`` (default) adds records whose id does not already exist
+            and deletes nothing, which is the safe way to bring a backup onto
+            another machine or into an existing account. ``replace`` clears the
+            caller's own data first and is only allowed into an empty account:
+            clearing a populated one would cascade-delete project data the backup
+            does not carry, so it returns 409 when the account already has data.
 
-    A backup belongs to the user who created it (export is scoped to the
-    user's own project graph), so ``replace`` only ever clears that same
-    scope. It never touches another user's rows - the earlier behaviour
-    deleted every row of every table globally, which let one user wipe the
-    whole instance on restore.
+    A backup belongs to the user who created it (export is scoped to the user's
+    own project graph). Restore is machine-portable: the exporter's ``users`` row
+    is never re-created (that account already exists here, with its own id, email
+    and password) and every imported row's ownership is forced to the restoring
+    user, so a backup taken on one PC lands cleanly under the restoring account on
+    another and can never be stamped with another account's id.
     """
     if mode not in ("replace", "merge"):
         raise HTTPException(status_code=400, detail="mode must be 'replace' or 'merge'")
@@ -143,118 +148,39 @@ async def restore_backup(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    tables = get_backup_tables()
-    by_key = {key: cls for key, _table_name, cls in tables}
-
-    imported: dict[str, int] = {}
-    skipped: dict[str, int] = {}
-    warnings: list[str] = []
-
-    from sqlalchemy import delete, select
-
     from app.database import async_session_factory
 
-    # The whole restore runs inside ONE transaction. Either every table is
-    # cleared (replace mode) and re-imported successfully and we commit, or
-    # ANY failure aborts the entire operation with a single rollback so the
-    # DB is never left half-wiped. We deliberately do NOT swallow a clear or
-    # flush error and continue: persisting a partial delete plus a partial
-    # import would corrupt the user's data far worse than a clean abort.
+    # Storage keys of the files backing rows we actually import. File restore
+    # runs post-commit and only writes blobs in this set, so an archive cannot
+    # push files for keys its rows do not own.
+    restored_file_keys: set[str] = set()
+
+    # The whole restore runs inside ONE transaction: commit on full success,
+    # or a single rollback on ANY failure so the DB is never left half-wiped.
     async with async_session_factory() as session:
         try:
-            if mode == "replace":
-                # FK-safe ordering: delete children before parents (reverse
-                # of the import order). A failure to clear any table aborts
-                # the whole restore - a half-wiped DB must never be committed.
-                # Each delete is scoped to the requesting user's own rows via
-                # the SAME ownership graph the export used, so restore can
-                # never delete another user's data. Tables with no known
-                # ownership path (scope clause None) are left untouched.
-                for backup_key, _table_name, model_cls in reversed(tables):
-                    scope = build_scope_clause(by_key, backup_key, str(user_id))
-                    if scope is None:
-                        continue
-                    try:
-                        await session.execute(delete(model_cls).where(scope))
-                    except Exception as exc:
-                        await session.rollback()
-                        logger.exception("Backup restore failed clearing %s: %s", backup_key, exc)
-                        raise HTTPException(
-                            status_code=500,
-                            detail=("Restore failed while clearing existing data; no changes were applied."),
-                        ) from exc
-
-            for backup_key, _table_name, model_cls in tables:
-                records = data.get(backup_key, [])
-                if not records:
-                    imported[backup_key] = 0
-                    skipped[backup_key] = 0
-                    continue
-
-                count_imported = 0
-                count_skipped = 0
-
-                for record in records:
-                    if mode == "merge":
-                        record_id = record.get("id")
-                        if record_id:
-                            # Resolve the PK value first. If a string id is not
-                            # a valid UUID for a UUID-keyed table we cannot run
-                            # the duplicate check, so we must NOT silently fall
-                            # through and insert it as a new row - that would
-                            # break merge semantics by importing a duplicate.
-                            # Treat an un-checkable record as skipped instead.
-                            try:
-                                lookup_id = uuid.UUID(record_id) if isinstance(record_id, str) else record_id
-                            except (ValueError, TypeError):
-                                count_skipped += 1
-                                logger.debug(
-                                    "Skipping un-checkable record id in %s (merge mode): %r",
-                                    backup_key,
-                                    record_id,
-                                )
-                                continue
-
-                            existing = (
-                                await session.execute(select(model_cls).where(model_cls.id == lookup_id))
-                            ).scalar_one_or_none()
-                            if existing is not None:
-                                count_skipped += 1
-                                continue
-
-                    try:
-                        obj = deserialize_row(model_cls, record)
-                        session.add(obj)
-                        count_imported += 1
-                    except Exception as exc:
-                        count_skipped += 1
-                        logger.warning("Skipped record in %s: %s", backup_key, str(exc)[:100])
-
-                imported[backup_key] = count_imported
-                skipped[backup_key] = count_skipped
-
-                # Flush per table so we get FK-ordered inserts, but a flush
-                # failure is fatal: abort the whole restore rather than
-                # rolling back this table and committing the rest, which
-                # would leave the DB half-wiped (replace mode already
-                # deleted everything above).
-                try:
-                    await session.flush()
-                except Exception as exc:
-                    await session.rollback()
-                    logger.exception("Backup restore failed flushing %s: %s", backup_key, exc)
-                    raise HTTPException(
-                        status_code=500,
-                        detail=(
-                            "Restore failed while importing data; no changes "
-                            "were applied. Please check the backup file and try again."
-                        ),
-                    ) from exc
-
+            imported, skipped, warnings = await restore_backup_data(
+                session,
+                user_id=str(user_id),
+                manifest=manifest,
+                data=data,
+                mode=mode,
+                file_key_sink=restored_file_keys,
+            )
             await session.commit()
-        except HTTPException:
-            # Already rolled back at the failure site with a clean 500.
-            raise
+        except RestoreError as exc:
+            await session.rollback()
+            if exc.stage == "guard":
+                # A deliberate refusal, not a failure: e.g. replace into an
+                # account that already holds data. 409 Conflict so the client can
+                # show the reason and offer merge instead.
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            logger.exception("Backup restore failed %s %s: %s", exc.stage, exc.table, exc)
+            verb = "clearing existing" if exc.stage == "clear" else "importing"
+            raise HTTPException(
+                status_code=500,
+                detail=f"Restore failed while {verb} data; no changes were applied.",
+            ) from exc
         except Exception as exc:
             await session.rollback()
             logger.exception("Backup restore failed: %s", exc)
@@ -262,6 +188,12 @@ async def restore_backup(
                 status_code=500,
                 detail="Restore failed due to an internal error. Please check the backup file and try again.",
             ) from exc
+
+    # Data committed. Now write any embedded files back to storage. This runs
+    # outside the DB transaction and is best-effort: a file that fails to write
+    # is a warning, not a reason to undo the (already committed) data restore.
+    files_restored, file_warnings = await restore_backup_files(raw, allowed_keys=restored_file_keys)
+    warnings.extend(file_warnings)
 
     total_imported = sum(imported.values())
     total_skipped = sum(skipped.values())
@@ -274,11 +206,12 @@ async def restore_backup(
         restore_status = "success"
 
     logger.info(
-        "Backup restored: mode=%s status=%s imported=%d skipped=%d warnings=%d",
+        "Backup restored: mode=%s status=%s imported=%d skipped=%d files=%d warnings=%d",
         mode,
         restore_status,
         total_imported,
         total_skipped,
+        files_restored,
         len(warnings),
     )
 
@@ -288,6 +221,7 @@ async def restore_backup(
         imported=imported,
         skipped=skipped,
         warnings=warnings,
+        files_restored=files_restored,
     )
 
 

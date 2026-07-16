@@ -23566,7 +23566,7 @@
           "bases": [
             "BaseModel"
           ],
-          "docstring": "Request to escalate a rate to current prices.\n\nCurrency / region default to empty so the AI prompt pipes blank\nstrings into the LLM template - interpreted as \"no constraint\nspecified\". Hardcoding EUR + DACH steered every escalation toward\nBKI (the German construction cost index), even on US/UK projects\nwhere ENR / BCIS would be the right index.",
+          "docstring": "Request to escalate a rate to current prices.\n\nCurrency / region default to empty so the AI prompt pipes blank\nstrings into the LLM template - interpreted as \"no constraint\nspecified\". Hardcoding EUR + DACH steered every escalation toward\na German construction cost index, even on US/UK projects\nwhere a US or UK construction cost index would be the right index.",
           "fields": [
             {
               "name": "description",
@@ -42929,7 +42929,7 @@
         {
           "class_name": "RegionalIndex",
           "tablename": "oe_regional_indices",
-          "docstring": "Regional cost-factor row (region × category × effective_date).\n\nBacks ``GET /v1/costs/regional-adjust`` - given a base rate, the\nservice multiplies by ``factor`` to estimate the same line item's\ncost in a different region (RSMeans-style city cost index).\n\nMultiple rows per (region_code, category) are allowed when\n``effective_date`` differs so escalation feeds (v3.13.0) can append\nquarter-on-quarter snapshots without losing history. The lookup\nalways picks the row with the largest ``effective_date`` that is\nnot in the future.",
+          "docstring": "Regional cost-factor row (region × category × effective_date).\n\nBacks ``GET /v1/costs/regional-adjust`` - given a base rate, the\nservice multiplies by ``factor`` to estimate the same line item's\ncost in a different region (a regional city cost index).\n\nMultiple rows per (region_code, category) are allowed when\n``effective_date`` differs so escalation feeds (v3.13.0) can append\nquarter-on-quarter snapshots without losing history. The lookup\nalways picks the row with the largest ``effective_date`` that is\nnot in the future.",
           "columns": [
             {
               "name": "region_code",

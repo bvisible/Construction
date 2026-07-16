@@ -70,6 +70,10 @@ import {
   serializeBIMUrlState,
   BIM_URL_STATE_KEYS,
 } from '@/shared/ui/BIMViewer/urlState';
+import { metresToModelUnits as unitsToModelScale } from '@/shared/ui/BIMViewer/geoLocate';
+import { buildElementQuestion } from '@/shared/ui/BIMViewer/elementQuestion';
+import { useFloatingChatStore } from '@/features/erp-chat/useFloatingChat';
+import { listAnchors } from '@/features/geo-hub/api';
 import BIMFilterGroupsPanel from './BIMFilterGroupsPanel';
 import BIMRightPanelTabs from './BIMRightPanelTabs';
 import PropertySearchPanel from './PropertySearchPanel';
@@ -2067,6 +2071,7 @@ export function BIMPage() {
     | '5d_cost'
     | '4d_schedule'
     | 'by_progress'
+    | 'install_status'
   >('default');
   const showBoundingBoxes = false;
   const [isolatedIds, setIsolatedIds] = useState<string[] | null>(null);
@@ -2199,6 +2204,33 @@ export function BIMPage() {
   }, [deepLinkDocId, deepLinkDocName, modelsQuery.isLoading, models]);
 
   const activeModel = useMemo(() => models.find((m) => m.id === activeModelId) ?? null, [models, activeModelId]);
+
+  // Project geo anchor drives the viewer's "locate me" pin. Cheap, shared
+  // cache key with the rest of the geo-hub surface; absent for projects that
+  // were never geolocated (the viewer simply hides the control then).
+  const geoAnchorQuery = useQuery({
+    queryKey: ['geo-hub', 'anchors', projectId],
+    queryFn: () => listAnchors(projectId),
+    enabled: Boolean(projectId),
+    staleTime: 60_000,
+  });
+  const geoAnchor = useMemo(() => {
+    const a = geoAnchorQuery.data?.[0];
+    if (!a) return null;
+    const lat = Number(a.lat);
+    const lon = Number(a.lon);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+    return { lat, lon };
+  }, [geoAnchorQuery.data]);
+  // Model units per metre, read from the canonical metadata (falls back to
+  // metres). Used to scale the GPS offset for the locate-me pin.
+  const modelUnitsScale = useMemo(() => {
+    const meta = (activeModel?.metadata ?? null) as Record<string, unknown> | null;
+    const units =
+      (meta?.units as unknown) ??
+      ((meta?.metadata as Record<string, unknown> | undefined)?.units as unknown);
+    return unitsToModelScale(units);
+  }, [activeModel]);
 
   const statusPollQuery = useQuery({
     queryKey: ['bim-model-status', activeModelId],
@@ -2386,7 +2418,7 @@ export function BIMPage() {
     queryFn: () => fetchBIMElementProgress(activeModelId!),
     enabled:
       !!activeModelId &&
-      colorByMode === 'by_progress' &&
+      (colorByMode === 'by_progress' || colorByMode === 'install_status') &&
       (activeModel?.status === 'ready' || activeModel?.status === 'degraded'),
     staleTime: 60_000,
   });
@@ -2847,6 +2879,14 @@ export function BIMPage() {
     [navigate],
   );
 
+  // "Ask AI about this element" - build a full-context prompt from the
+  // (Wave D enriched) element and seed the shared AI assistant with it. We
+  // prefill rather than auto-send, so the user reviews and submits. The panel
+  // is global (mounted in AppLayout), so the user stays in the 3D viewer.
+  const handleAskAiAboutElement = useCallback((element: BIMElementData) => {
+    useFloatingChatStore.getState().seedPrompt(buildElementQuestion(element));
+  }, []);
+
   // Link a saved group to a BOQ position - looks up every member element
   // by id from the current `elements` list and opens AddToBOQModal with
   // the resolved subset.  If some member ids aren't in the loaded element
@@ -3008,15 +3048,20 @@ export function BIMPage() {
     [activeModelId, addToast, queryClient, t],
   );
 
-  // Kick a "quick takeoff" from the currently-applied filter - aggregate all
-  // elements that match the active filter predicate and open AddToBOQ with
-  // the full subset so the user can generate one BOQ position from e.g.
-  // "all walls on level 1".
-  const handleQuickTakeoff = useCallback(() => {
+  // Kick a "quick takeoff" from the current filter panel - open AddToBOQ with
+  // the visible subset so the user can generate one BOQ position from e.g.
+  // "all walls on level 1". The panel passes its own `visibleElements`, which
+  // honors element isolation as well as the filter, so the linked set is
+  // exactly what the button counted (and matches Save-as-group / CSV export).
+  // Fall back to recomputing from the predicate for any caller that does not
+  // pass a subset.
+  const handleQuickTakeoff = useCallback((visibleElements?: BIMElementData[]) => {
     if (!elementsQuery.data || elementsQuery.data.items.length === 0) return;
-    const subset = filterPredicate
-      ? elementsQuery.data.items.filter(filterPredicate)
-      : elementsQuery.data.items;
+    const subset =
+      visibleElements ??
+      (filterPredicate
+        ? elementsQuery.data.items.filter(filterPredicate)
+        : elementsQuery.data.items);
     if (subset.length === 0) {
       addToast({
         type: 'info',
@@ -3551,7 +3596,8 @@ export function BIMPage() {
                       | 'document_coverage'
                       | '5d_cost'
                       | '4d_schedule'
-                      | 'by_progress',
+                      | 'by_progress'
+                      | 'install_status',
                   )
                 }
                 title={t('bim.color_by', { defaultValue: 'Color by' })}
@@ -3586,6 +3632,9 @@ export function BIMPage() {
                   </option>
                   <option value="by_progress">
                     {t('bim.color_by_progress', { defaultValue: 'By progress' })}
+                  </option>
+                  <option value="install_status">
+                    {t('bim.color_install_status', { defaultValue: 'Install status' })}
                   </option>
                 </optgroup>
               </select>
@@ -4003,6 +4052,8 @@ export function BIMPage() {
             isLoading={elementsQuery.isLoading}
             error={elementsQuery.error ? t('bim.error_load_elements', { defaultValue: 'Failed to load model elements. Check the server connection.' }) : null}
             geometryUrl={geometryUrl}
+            geoAnchor={geoAnchor}
+            metresToModelUnits={modelUnitsScale}
             showBoundingBoxes={showBoundingBoxes}
             filterPredicate={filterPredicate}
             colorByMode={colorByMode}
@@ -4028,6 +4079,7 @@ export function BIMPage() {
             onOpenTask={handleOpenTask}
             onOpenActivity={handleOpenActivity}
             onOpenRequirement={handleOpenRequirement}
+            onAskAiAboutElement={handleAskAiAboutElement}
             onCreateTask={handleCreateTask}
             onLinkDocument={handleLinkDocument}
             onLinkActivity={handleLinkActivity}

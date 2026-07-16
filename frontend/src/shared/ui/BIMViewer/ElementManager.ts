@@ -18,6 +18,8 @@ import { ColladaLoader } from 'three/addons/loaders/ColladaLoader.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import type { SceneManager } from './SceneManager';
 import type { BIMQualityMode } from '@/stores/useBIMViewerStore';
+import { modelIdFromGeometryUrl, streamModelTiles } from './streaming/tileStreamer';
+import { installBVH, ensureBoundsTree, disposeBounds } from './bvh';
 
 // Module-level in-flight buffer fetches, shared across ElementManager
 // instances. React StrictMode's dev double-mount creates two managers
@@ -681,6 +683,10 @@ export class ElementManager {
     // Placeholder boxes have Z_UP→Y_UP conversion baked into
     // createBoxMesh() (Y↔Z swap), so no group rotation needed.
     this.sceneManager.scene.add(this.elementGroup);
+    // Patch three's raycast for BVH-accelerated picking. Idempotent and
+    // behaviour-preserving (meshes without a bounds tree raycast as before);
+    // the loaded meshes opt in via buildPickingBVH() once geometry arrives.
+    installBVH();
   }
 
   /** Load elements and (optionally) create placeholder meshes.
@@ -809,6 +815,61 @@ export class ElementManager {
       store: (url: string, buffer: ArrayBuffer, format: 'glb' | 'dae') => void;
     },
   ): Promise<void> {
+    // 1b. Fast streaming path — when the model has a baked tileset, stream its
+    //     content-addressed tiles (IndexedDB cache-first, parsed in small
+    //     chunks that yield to the event loop) instead of one monolithic GLB.
+    //     Tiles are the same trimesh GLB format and preserve node names, so
+    //     the merged group feeds the existing processLoadedScene() unchanged.
+    //     Any failure — no tileset, a bad tile, a parse error — falls through
+    //     to the monolithic path below, so this can only speed loading up.
+    let previewGroup: THREE.Group | null = null;
+    try {
+      const streamModelId = modelIdFromGeometryUrl(geometryUrl);
+      if (streamModelId) {
+        // Progressive reveal: show each tile the instant it parses instead of
+        // waiting for the whole model. Gated to the initial open (nothing on
+        // screen yet) - on a model switch the previous model is still shown
+        // until processLoadedScene swaps it, so a progressive preview there
+        // would briefly overlap the two; that case keeps the old atomic swap.
+        const progressive = !this.geometryLoaded;
+        const streamed = await streamModelTiles(streamModelId, {
+          onProgress,
+          // Viewport-priority streaming: when the camera has already been aimed
+          // (e.g. a clash / element deep-link focused it before the geometry
+          // finished), stream the tiles nearest what the user is looking at
+          // first. Returns null on a plain cold open, so that case keeps the
+          // geometry-mass order.
+          getCameraPose: () => this.sceneManager.getPlacedCameraPose(),
+          onTileParsed: progressive
+            ? (group) => {
+                if (!previewGroup) {
+                  this.clearPlaceholders();
+                  // Apply the same -90 deg X rotation processLoadedScene will,
+                  // so the building the user watches assemble sits exactly where
+                  // the finished, batched model ends up (no jump on completion).
+                  group.rotation.x = -Math.PI / 2;
+                  this.elementGroup.add(group);
+                  previewGroup = group;
+                }
+                this.sceneManager.requestRender();
+              }
+            : undefined,
+        });
+        if (streamed) {
+          // processLoadedScene reparents this same group into daeGroup and
+          // collapses it into BatchedMeshes - the big-model batching is intact;
+          // the rotation it re-applies matches the preview, so nothing moves.
+          this.processLoadedScene(streamed.group, undefined, true);
+          onProgress?.(1);
+          return;
+        }
+      }
+    } catch (streamErr) {
+      // Streaming is a pure optimization; never let it break the load. Drop any
+      // partial preview so it can't double up with the monolithic geometry.
+      if (previewGroup) this.elementGroup.remove(previewGroup);
+      console.warn('[BIM] tile streaming failed, using monolithic GLB', streamErr);
+    }
 
     // 2. Cache miss — fetch the bytes. The actual network IO is funnelled
     //    through a module-level in-flight Map so that a parallel
@@ -1152,6 +1213,7 @@ export class ElementManager {
     if (this.daeGroup) {
       this.daeGroup.traverse((obj) => {
         if (obj instanceof THREE.Mesh) {
+          disposeBounds(obj.geometry);
           obj.geometry?.dispose();
         }
       });
@@ -1670,6 +1732,12 @@ export class ElementManager {
       }
     }
 
+    // Build a BVH per individually-rendered mesh so click / hover picking
+    // descends a tree instead of scanning every triangle. Runs after the
+    // batching decision so batched-away meshes (hidden, picked via the
+    // BatchedMesh) are skipped.
+    this.buildPickingBVH();
+
     this.sceneManager.zoomToFit();
     this.sceneManager.requestRender();
 
@@ -1804,6 +1872,34 @@ export class ElementManager {
     );
   }
 
+  /**
+   * Give every individually-rendered mesh a bounds tree so raycast picking is
+   * accelerated. Meshes collapsed into a BatchedMesh are skipped - they are
+   * hidden and their picking is resolved through the BatchedMesh + batchHandle,
+   * so a per-mesh tree would only waste memory. Each build is wrapped so a
+   * single un-indexable geometry can't abort the pass, and the whole pass is
+   * capped so a pathological un-batchable model can't stall the load; anything
+   * without a tree simply keeps the stock (correct, slower) raycast path.
+   */
+  private buildPickingBVH(): void {
+    // Above this many individual meshes the eager build cost outweighs the
+    // per-pick saving during load; such a model has almost certainly batched
+    // anyway. Kept just above the 10k batching threshold for the mixed case
+    // where small material groups stay un-batched.
+    const MAX_EAGER_BVH_MESHES = 12_000;
+    const pickable = this.allDaeMeshes.filter(
+      (m) => !(m.userData as { batchHandle?: unknown }).batchHandle,
+    );
+    if (pickable.length === 0 || pickable.length > MAX_EAGER_BVH_MESHES) return;
+    let built = 0;
+    for (const mesh of pickable) {
+      if (ensureBoundsTree(mesh.geometry)) built++;
+    }
+    if (built > 0 && typeof import.meta !== 'undefined' && import.meta.env?.DEV) {
+      console.info(`[BIM] built ${built}/${pickable.length} picking BVH(s)`);
+    }
+  }
+
   /** Returns true if DAE geometry was loaded. */
   hasLoadedGeometry(): boolean {
     return this.geometryLoaded;
@@ -1887,8 +1983,14 @@ export class ElementManager {
         color: getDisciplineColor(discipline),
         roughness: 0.7,
         metalness: 0.1,
-        transparent: true,
-        opacity: 0.85,
+        // Opaque by default: an alpha-blended default forced a per-frame
+        // back-to-front sort across every element and disabled early-z, which
+        // is the single biggest frame-rate cost on a heavy model. The
+        // see-through looks (per-category opacity, isolation ghost, glass) set
+        // their own transparency at the moment they are used, so making the
+        // default solid changes only the resting appearance, not those tools.
+        transparent: false,
+        opacity: 1.0,
         wireframe: this.wireframeEnabled,
       });
       this.baseMaterials.set(key, mat);
@@ -1967,8 +2069,11 @@ export class ElementManager {
         color,
         roughness: 0.6,
         metalness: 0.08,
-        transparent: true,
-        opacity: 0.85,
+        // Opaque by default (see getMaterial): avoids a per-frame transparency
+        // sort across every placeholder box. Per-category opacity / ghost still
+        // apply their own transparency on demand.
+        transparent: false,
+        opacity: 1.0,
         wireframe: this.wireframeEnabled,
       });
       this.baseMaterials.set(key, mat);
@@ -2034,8 +2139,8 @@ export class ElementManager {
    *            Lighting calcs simplified to vertex-flat normals → up to
    *            2× fragment perf on shaded geometry; opaque glass kills
    *            alpha-sort.
-   *   default — current behaviour (PBR standard, translucent everything,
-   *            full lighting). Migration-safe.
+   *   default — PBR standard, opaque non-glass surface (glass stays a
+   *            translucent pane), full lighting. Migration-safe.
    *   visual  — PBR + glass alone stays transparent + per-mesh edge
    *            overlay (LineSegments built from EdgesGeometry) gives a
    *            CAD-render look. The opaque non-glass surface lets the
@@ -2044,8 +2149,10 @@ export class ElementManager {
    *            navigating in first-person.
    */
   applyQualityMode(mode: BIMQualityMode): void {
-    // Per-mode property targets.
-    const baseOpaque = mode !== 'default';
+    // Per-mode property targets. The default non-glass surface is now opaque in
+    // every mode (founder call): an alpha-blended default cost a per-frame
+    // transparency sort on the whole model for a marginal look. See-through is
+    // still available on demand (per-category opacity, isolation ghost).
     const baseFlat = mode === 'fast' || mode === 'walk';
     const baseRoughness = mode === 'visual' ? 0.5 : baseFlat ? 1.0 : 0.7;
     const baseMetalness = mode === 'visual' ? 0.15 : baseFlat ? 0.0 : 0.1;
@@ -2067,8 +2174,8 @@ export class ElementManager {
       const m = mat as THREE.MeshStandardMaterial & {
         flatShading?: boolean;
       };
-      m.transparent = !baseOpaque;
-      m.opacity = baseOpaque ? 1.0 : 0.85;
+      m.transparent = false;
+      m.opacity = 1.0;
       if ('flatShading' in m) m.flatShading = baseFlat;
       if ('roughness' in m) m.roughness = baseRoughness;
       if ('metalness' in m) m.metalness = baseMetalness;
@@ -3048,6 +3155,7 @@ export class ElementManager {
   /** Remove all elements from the scene. */
   clear(): void {
     for (const mesh of this.meshMap.values()) {
+      disposeBounds(mesh.geometry);
       mesh.geometry.dispose();
       this.elementGroup.remove(mesh);
     }
@@ -3058,6 +3166,7 @@ export class ElementManager {
     if (this.daeGroup) {
       this.daeGroup.traverse((obj) => {
         if (obj instanceof THREE.Mesh) {
+          disposeBounds(obj.geometry);
           obj.geometry?.dispose();
         }
       });

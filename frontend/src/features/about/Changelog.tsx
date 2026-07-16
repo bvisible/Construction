@@ -37,6 +37,58 @@ interface ChangelogEntry {
 // RULE: each changelog description must be 1 to 2 sentences. Keep the version,
 // date, title and meaning intact; trim the prose, not the facts.
 const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '11.9.0',
+    date: '2026-07-16',
+    tag: 'NEW',
+    summary:
+      'The files area becomes a real document workspace with a right-click menu, content search, paged folders, drag-and-drop upload, keyboard navigation and bulk status changes. Takeoff measurements can now link to issues and RFIs, the How it works guide highlights the actual control it describes, setup adapts to your company size, and the worked-case library gains twelve new cases with a connected step flow and an at-a-glance panel.',
+  },
+  {
+    version: '11.8.0',
+    date: '2026-07-16',
+    tag: 'NEW',
+    summary:
+      'PDF takeoff gets a round of viewer fixes: the cursor readout no longer freezes on a point you are dragging, a measurement value sits just off its line instead of hidden under a wide band, a wide line shows its full width band while you drag or move it, and a tool shortcut pressed mid-drag no longer starts a stray measurement. The legend, hints and readout stay pinned while the drawing pans, the group legend can be dragged aside by its header and remembers its place, each measurement has its own show and hide control that never changes exported quantities, and client-portal notifications now read correctly on Telegram instead of showing an internal label.',
+  },
+  {
+    version: '11.7.1',
+    date: '2026-07-14',
+    tag: 'FIX',
+    summary:
+      'The Windows desktop app now stops its background service before installing or uninstalling, so a reinstall no longer fails because the old backend process was still running and locking the file. That service is also renamed to openconstructionerp-server so the app carries one name, and your data and settings are untouched.',
+  },
+  {
+    version: '11.7.0',
+    date: '2026-07-14',
+    summary:
+      'Each national cost base now opens market by market like the global base, and picking a market reprices the base into that market at its own price level and currency. This release also finishes removing third-party cost-index product names and refreshes the interface translations across all 27 languages.',
+    tag: 'NEW',
+  },
+  {
+    version: '11.6.2',
+    date: '2026-07-14',
+    tag: 'FIX',
+    summary:
+      'Switching the interface language now applies at once, without a page reload. The cost base browser labels the global base as Russia with its own flag, the worked-case pages get a tighter step rail with clear done marks and larger, softer flow arrows, and third-party cost-index product names were removed from the app.',
+  },
+  {
+    version: '11.6.1',
+    date: '2026-07-14',
+    tag: 'NEW',
+    summary:
+      'The in-app How it works manual reads top to bottom in the order a project runs, with each section card numbered, and a Sort control lets you switch between the lifecycle order, alphabetical, or a custom order you arrange yourself and that is remembered. Worked cases can carry a longer description shown under the title on the case page, and case cards no longer cut the summary as short.',
+  },
+  {
+    version: '11.6.0',
+    date: '2026-07-14',
+    tag: 'NEW',
+    summary:
+      'A personal backup now carries all of your own data across every module, not just the core few tables, so your contacts, site diaries, takeoff, inspections and safety records, labor rates, custom catalogs and templates travel with your projects, estimates, schedules and documents. Records are written in dependency order so a restore rebuilds parents before the rows that depend on them, shared reference and catalog data stays out as before, and every safeguard from the last release still holds: merge by default, replace only into an empty account, ownership pinned to the restoring account, embedded files restored, and provider keys never in a backup.',
+  },
+  { version: '11.5.0', date: '2026-07-14', tag: 'FIX', summary: 'Backups now move cleanly between machines: restoring a backup on a second computer no longer fails, and the projects, estimates, schedules, cost data, documents and change records it carries land under the account doing the restore, with any drawings and photos restored alongside. Merge is now the default and only adds what is missing, replace is limited to an empty account so it can never wipe data a backup does not carry, a single record that cannot come across is skipped with a note rather than failing the whole restore, and provider keys never travel in a backup. Site records such as diaries, takeoff, inspections and safety are not part of the backup yet, and the backup screen says so.' },
+  { version: '11.4.0', date: '2026-07-13', tag: 'NEW', summary: 'Scheduling gains work calendars: define named work weeks for a project (five-day, six-day or a custom set of days), each with its own hours and public holidays, and assign one to any activity from the schedule table. Rescheduling measures each activity on its own calendar, so a six-day trade finishes sooner than a five-day one and a crew with its own holidays finishes later, while activities left on the default reschedule exactly as before.' },
+  { version: '11.3.0', date: '2026-07-13', tag: 'FIX', summary: 'PDF takeoff is reliable again and the platform is hardened against out-of-memory crashes: opening a PDF from Project Files no longer floods the console with 404s, every document, revision, PDF-split and photo upload streams to disk under a size cap, PDF parsing runs in an isolated memory-capped subprocess, and the desktop build parses in-process again. The published container is secure by default while still starting with zero configuration, a pip install now ships every interface language, and scheduling gains a dependency editor and an editable grid and reschedules each chain from its own start.' },
   { version: '11.2.0', date: '2026-07-12', tag: 'NEW', summary: 'The point cloud viewer becomes a measurement workspace for a reality-capture scan: trace a polyline for running length and perimeter, draw a polygon for plan area, estimate a volume against a reference plane, jump to preset top, front and side views, thin a dense cloud to stay responsive, and export measurements to CSV, and once a scan is loaded the viewer leads the page like the BIM hub with the uploader collapsed below. The architecture map lights up what connects to what when you click or hover a module, the case count on each project-journey module opens the list of cases attached to it, the cost base import screen uses one country picker with the local China base first and the global CWICR set next, and the guided case pages read more clearly. It also fixes a drawing that anchored away from the project location and a takeoff viewer that did not fill its height.' },
   { version: '11.1.0', date: '2026-07-12', tag: 'NEW', summary: 'The cost bases move to the centre of the workspace: every price base you can load now shows in one place with its own count of rates, so you see all of them at a glance, the global set and each national base, and the same picker appears in import, data setup and onboarding, where you can search across bases, load one, set the active base or simply pick a base to work with. The point cloud viewer gains a fuller set of professional tools for a reality-capture scan, the dashboard lets you set the width of each widget, a drawing that could not be placed on the map is fixed, the Cases line-art illustrations are complete, and a PDF takeoff scale calibration is no longer left armed when you switch tools mid-pick. The interface is also more complete in every language, with thousands more strings translated in each of the twenty seven supported languages.' },
   { version: '11.0.0', date: '2026-07-11', tag: 'NEW', summary: 'The point cloud viewer becomes a site review tool: slice a reality-capture scan to a height band and read it as a top-down plan, measure point to point with the horizontal and vertical parts in millimetres, box off a region, colour points by elevation with a pinnable band, and save the view as a PNG. Onboarding now leads with the national cost base and rebuilds the left menu to your company profile, the Cases hub gains a start-here tile row with clearer step visuals and the full case library translated into every language, the dashboard fits more case tiles with the inbox below the map, and module pages share one full-width layout.' },

@@ -10,7 +10,9 @@ Stateless service layer. Handles:
 - Model diff calculation (compare elements by stable_id + geometry_hash)
 """
 
+import asyncio
 import fnmatch
+import json
 import logging
 import shutil
 import uuid
@@ -23,7 +25,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import noload, selectinload
 
 from app.core.events import event_bus
 from app.modules.bim_hub import file_storage as bim_file_storage
@@ -751,6 +753,324 @@ class BIMHubService:
             )
         return model
 
+    # ── Streaming tiles (fast viewer) ──────────────────────────────────────
+    async def ensure_tileset(self, model_id: uuid.UUID) -> dict[str, Any] | None:
+        """Return the streaming-tile manifest for a model, baking it on demand.
+
+        The monolithic ``geometry.glb`` is partitioned once (spatial octree)
+        into content-addressed sub-GLBs so the viewer can stream geometry
+        progressively and cache tiles immutably. This is idempotent and
+        self-healing: a cached manifest is reused only while both the tiler
+        version and a cheap source-geometry fingerprint still match, so a
+        re-converted model transparently re-bakes instead of serving tiles
+        that point at stale geometry.
+
+        Returns the manifest dict, or ``None`` when the model has no GLB
+        geometry or is not worth tiling - the caller then serves the
+        monolithic GLB (the untouched fallback path).
+        """
+        from app.modules.bim_hub import tiler
+
+        model = await self.model_repo.get(model_id)
+        if model is None:
+            return None
+        project_id = str(model.project_id)
+        mid = str(model_id)
+
+        # Only GLB carries the triangles we tile cheaply. If the model has only
+        # a DAE (demo seeds, CSV/Excel/DAE uploads), synthesize a plain GLB from
+        # it once - preserving per-mesh node names - so the tiler can bake and
+        # the fast viewer stops loading a multi-MB COLLADA on the main thread.
+        # A DAE that cannot be converted keeps the monolith path unchanged.
+        await self._ensure_glb(project_id, mid)
+
+        found = await bim_file_storage.find_geometry_key(project_id, mid, prefer_ext=".glb")
+        if found is None or found[1] != ".glb":
+            return None
+        glb_key = found[0]
+
+        fingerprint = await self._geometry_fingerprint(glb_key)
+
+        # Reuse a cached tileset only if it still matches this source + tiler.
+        raw = await bim_file_storage.read_tiles_manifest(project_id, mid)
+        if raw is not None:
+            try:
+                cached = json.loads(raw)
+            except (ValueError, TypeError):
+                cached = None
+            if (
+                isinstance(cached, dict)
+                and cached.get("tiler_version") == tiler.TILER_VERSION
+                and cached.get("source_fingerprint") == fingerprint
+            ):
+                return None if cached.get("skipped") else cached
+            # Stale (new geometry or new tiler): wipe before re-baking.
+            await bim_file_storage.delete_tiles(project_id, mid)
+
+        glb_bytes = await self._read_blob_bytes(glb_key)
+        if not glb_bytes:
+            return None
+
+        # CPU-bound: bake off the event loop so we never block request serving.
+        result = await asyncio.to_thread(tiler.build_tileset, glb_bytes)
+        if result is None:
+            # Not worth tiling - persist a sentinel so we don't re-bake on
+            # every open; keyed by fingerprint so a re-convert still retries.
+            sentinel = {
+                "tiler_version": tiler.TILER_VERSION,
+                "source_fingerprint": fingerprint,
+                "skipped": True,
+            }
+            await bim_file_storage.save_tiles_manifest(project_id, mid, json.dumps(sentinel).encode())
+            return None
+
+        manifest, tiles = result
+        manifest["source_fingerprint"] = fingerprint
+        manifest["model_id"] = mid
+        for content_hash, blob in tiles.items():
+            await bim_file_storage.save_tile(project_id, mid, content_hash, blob)
+        # Manifest written last: its presence marks the tileset complete.
+        await bim_file_storage.save_tiles_manifest(project_id, mid, json.dumps(manifest).encode())
+        return manifest
+
+    async def _geometry_fingerprint(self, key: str) -> str:
+        """Cheap change-detector for a geometry blob: ``size:sha256(head)``.
+
+        Reads only the first 128 KB so re-checking a cached tileset never
+        pages a 100 MB GLB into memory. A re-convert changes the size and/or
+        the header, which flips the fingerprint and triggers a re-bake.
+        """
+        import hashlib
+
+        from app.core.storage import get_storage_backend
+
+        backend = get_storage_backend()
+        try:
+            size = await backend.size(key)
+        except Exception:  # noqa: BLE001 - sizing is best-effort
+            size = -1
+
+        head = b""
+        try:
+            disk_path = backend.local_path(key)
+            if disk_path is not None:
+
+                def _read_head(p: Path) -> bytes:
+                    with p.open("rb") as fh:
+                        return fh.read(131072)
+
+                head = await asyncio.to_thread(_read_head, disk_path)
+            else:
+                async for chunk in backend.open_stream(key):
+                    head = chunk[:131072]
+                    break
+        except Exception:  # noqa: BLE001 - a bad read just weakens the fingerprint
+            head = b""
+        return f"{size}:{hashlib.sha256(head).hexdigest()[:16]}"
+
+    async def _read_blob_bytes(self, key: str) -> bytes | None:
+        """Read a stored blob fully, preferring a zero-copy local-disk read."""
+        from app.core.storage import get_storage_backend
+
+        backend = get_storage_backend()
+        try:
+            disk_path = backend.local_path(key)
+            if disk_path is not None:
+                return await asyncio.to_thread(disk_path.read_bytes)
+            return await backend.get(key)
+        except Exception:  # noqa: BLE001 - a read failure -> caller falls back
+            logger.exception("Failed to read geometry blob key=%s", key)
+            return None
+
+    async def _ensure_glb(self, project_id: str, model_id: str) -> bool:
+        """Ensure a ``.glb`` geometry blob exists, converting from DAE if needed.
+
+        The fast viewer, the tiler and the property-panel lookup all key off the
+        glTF node name, which must equal ``BIMElement.mesh_ref`` / ``stable_id``
+        / the Parquet ``id`` column. Only the CAD-conversion path emits a GLB
+        today; DAE-only models (demo seeds, CSV/Excel/DAE drops) would otherwise
+        load as a multi-MB COLLADA on the main thread and never tile. This
+        converts the DAE to a plain, uncompressed GLB exactly once, rebuilding
+        the node<->mesh name pairing by bbox matching (see
+        :func:`ifc_processor._convert_dae_to_glb`) so element identity survives.
+
+        Idempotent: returns ``True`` immediately when a GLB already exists.
+        Best-effort: a conversion failure leaves the DAE in place (still a valid
+        viewer fallback) and returns ``False``.
+        """
+        # TODO(compression): a later, optional layer can wrap the GLB produced
+        # here with a meshopt/gltfpack pass (separate dependency, not added now);
+        # this method is the single write point such a step would hook.
+        glb_found = await bim_file_storage.find_geometry_key(project_id, model_id, prefer_ext=".glb")
+        if glb_found is not None and glb_found[1] == ".glb":
+            return True
+
+        dae_found = await bim_file_storage.find_geometry_key(project_id, model_id, prefer_ext=".dae")
+        if dae_found is None or dae_found[1] != ".dae":
+            return False
+
+        dae_bytes = await self._read_blob_bytes(dae_found[0])
+        if not dae_bytes:
+            return False
+
+        def _convert(data: bytes) -> bytes | None:
+            import tempfile
+
+            from app.modules.bim_hub import ifc_processor
+
+            with tempfile.TemporaryDirectory(prefix="oe-bim-glb-") as tmp:
+                tmp_dir = Path(tmp)
+                dae_path = tmp_dir / "geometry.dae"
+                dae_path.write_bytes(data)
+                glb_path = ifc_processor._convert_dae_to_glb(dae_path, tmp_dir)
+                if glb_path is None or not glb_path.is_file():
+                    return None
+                return glb_path.read_bytes()
+
+        try:
+            # CPU/memory-bound (trimesh loads the whole mesh graph): off the loop.
+            glb_bytes = await asyncio.to_thread(_convert, dae_bytes)
+        except Exception:  # noqa: BLE001 - conversion is best-effort
+            logger.exception("ensure_glb: DAE->GLB conversion crashed for model %s", model_id)
+            return False
+
+        if not glb_bytes:
+            logger.info("ensure_glb: no GLB produced for model %s - keeping DAE fallback", model_id)
+            return False
+
+        await bim_file_storage.save_geometry(
+            project_id=project_id,
+            model_id=model_id,
+            ext=".glb",
+            content=glb_bytes,
+        )
+        logger.info("ensure_glb: converted DAE->GLB for model %s (%d bytes)", model_id, len(glb_bytes))
+        return True
+
+    async def ensure_parquet(self, project_id: str, model_id: str) -> bool:
+        """Synthesize the ``elements.parquet`` property sidecar from DB rows.
+
+        The property-filter panels and the per-element "all properties" popover
+        query ``data/bim/{project}/{model}/elements.parquet`` by the ``id``
+        column, which must equal ``mesh_ref`` (== the glTF node name). Only the
+        CAD path writes that sidecar today, so DAE / CSV / demo models return an
+        empty panel. This backfills one row per ``oe_bim_element``, keyed by
+        ``mesh_ref`` (falling back to ``stable_id`` so ``id == mesh_ref == node
+        name`` still holds), flattening the ``properties`` and ``quantities``
+        JSONB alongside the identity columns.
+
+        Idempotent: skips when the sidecar already exists. Best-effort: a write
+        failure is logged and returns ``False`` without touching the import.
+        """
+        from app.modules.bim_hub import dataframe_store
+
+        existing = await asyncio.to_thread(dataframe_store._existing_parquet_path, project_id, model_id, None)
+        if existing is not None:
+            return True
+
+        try:
+            model_uuid = uuid.UUID(model_id)
+        except (ValueError, TypeError):
+            return False
+
+        # ``noload`` on boq_links: this bulk read never needs the BOQ links, and
+        # loading them (the relationship is lazy="selectin") would fire an extra
+        # query per batch of elements for nothing.
+        result = await self.session.execute(
+            select(BIMElement).where(BIMElement.model_id == model_uuid).options(noload(BIMElement.boq_links))
+        )
+        elements = list(result.scalars().all())
+        if not elements:
+            return False
+
+        rows: list[dict[str, Any]] = []
+        for el in elements:
+            # ``id`` MUST equal mesh_ref (== the glTF node name); fall back to
+            # stable_id so the invariant id == mesh_ref == node name still holds.
+            row: dict[str, Any] = {"id": el.mesh_ref or el.stable_id, "stable_id": el.stable_id}
+            if el.element_type is not None:
+                row["element_type"] = el.element_type
+            if el.name is not None:
+                row["name"] = el.name
+            if el.storey is not None:
+                row["storey"] = el.storey
+            if el.discipline is not None:
+                row["discipline"] = el.discipline
+            # Flatten properties then quantities; earlier (identity) keys win so
+            # the id column can never be shadowed by a same-named property.
+            for key, value in (el.properties or {}).items():
+                row.setdefault(str(key), value)
+            for key, value in (el.quantities or {}).items():
+                row.setdefault(str(key), value)
+            rows.append(row)
+
+        try:
+            await asyncio.to_thread(
+                dataframe_store.write_dataframe,
+                project_id=project_id,
+                model_id=model_id,
+                rows=rows,
+            )
+        except Exception:  # noqa: BLE001 - the property panel is best-effort
+            logger.exception("ensure_parquet: failed to synthesize sidecar for model %s", model_id)
+            return False
+        logger.info("ensure_parquet: synthesized %d-row sidecar for model %s", len(rows), model_id)
+        return True
+
+    async def ensure_artifacts(
+        self,
+        project_id: uuid.UUID | str,
+        model_id: uuid.UUID | str,
+    ) -> None:
+        """Idempotently produce the viewer + property artifacts for a model.
+
+        Three artifacts, in order:
+
+        1. a plain (uncompressed) ``geometry.glb`` - converted from the model's
+           DAE when only a DAE exists (see :meth:`_ensure_glb`);
+        2. a baked streaming tileset (spatial-octree sub-GLBs) via
+           :meth:`ensure_tileset`;
+        3. an ``elements.parquet`` property sidecar keyed by ``id == mesh_ref``
+           via :meth:`ensure_parquet`.
+
+        Every BIM import path (CAD conversion, CSV/Excel/DAE upload, demo seed)
+        calls this so the fast viewer and the property-filter panels behave the
+        same for every model regardless of source. Each step is idempotent and
+        independently guarded: a failure in one is logged and never aborts the
+        import or the remaining steps. The CPU-bound bake already runs off the
+        event loop inside the callees.
+
+        ``project_id`` is advisory - the model's own ``project_id`` keys every
+        step, so a caller cannot mis-file the artifacts.
+        """
+        try:
+            model_uuid = model_id if isinstance(model_id, uuid.UUID) else uuid.UUID(str(model_id))
+        except (ValueError, TypeError):
+            logger.warning("ensure_artifacts: invalid model_id %r - skipping", model_id)
+            return
+
+        model = await self.model_repo.get(model_uuid)
+        if model is None:
+            logger.warning("ensure_artifacts: model %s not found - skipping", model_id)
+            return
+        pid = str(model.project_id)
+        mid = str(model.id)
+
+        try:
+            await self._ensure_glb(pid, mid)
+        except Exception:  # noqa: BLE001 - artifacts are best-effort
+            logger.exception("ensure_artifacts: GLB step failed for model %s", mid)
+
+        try:
+            await self.ensure_tileset(model.id)
+        except Exception:  # noqa: BLE001 - artifacts are best-effort
+            logger.exception("ensure_artifacts: tileset step failed for model %s", mid)
+
+        try:
+            await self.ensure_parquet(pid, mid)
+        except Exception:  # noqa: BLE001 - artifacts are best-effort
+            logger.exception("ensure_artifacts: parquet step failed for model %s", mid)
+
     async def list_models(
         self,
         project_id: uuid.UUID,
@@ -1003,6 +1323,7 @@ class BIMHubService:
         self,
         model_id: uuid.UUID,
         *,
+        element_id: uuid.UUID | None = None,
         element_type: str | None = None,
         storey: str | None = None,
         discipline: str | None = None,
@@ -1086,6 +1407,11 @@ class BIMHubService:
 
         # ── Step 1: load elements with BOQ links eagerly ────────────────
         base = select(BIMElement).where(BIMElement.model_id == model_id)
+        if element_id is not None:
+            # Single-element scope: powers the per-element context card, which
+            # composes the same BOQ / doc / task / activity / requirement /
+            # validation / progress briefs for exactly one selected element.
+            base = base.where(BIMElement.id == element_id)
         if element_type is not None:
             base = base.where(BIMElement.element_type == element_type)
         if storey is not None:
@@ -1995,8 +2321,13 @@ class BIMHubService:
                 detail="This BIM element is already linked to that BOQ position",
             ) from exc
 
-        # Keep Position.cad_element_ids in sync (legacy JSON mirror).
-        await self._append_cad_element_id(data.boq_position_id, data.bim_element_id)
+        # Keep Position.cad_element_ids in sync (legacy JSON mirror) and record
+        # the element's owning model on the position (Issue #347).
+        await self._append_cad_element_id(
+            data.boq_position_id,
+            data.bim_element_id,
+            model_id=element.model_id,
+        )
 
         # Auto-populate BOQ position quantity from linked element quantities.
         await self._sync_boq_quantity_from_links(data.boq_position_id)
@@ -2035,21 +2366,36 @@ class BIMHubService:
         self,
         position_id: uuid.UUID,
         element_id: uuid.UUID,
+        model_id: uuid.UUID | None = None,
     ) -> None:
         """Append ``element_id`` to ``Position.cad_element_ids`` if missing.
 
         Initialises the array when the column is NULL (legacy rows) and
-        skips duplicates. No-op when the position no longer exists - the
-        caller is responsible for verifying position existence beforehand.
+        skips duplicates. When ``model_id`` is supplied and the position has
+        no owning model yet, records it in ``Position.cad_model_id`` (Issue
+        #347) so the BOQ "pick quantity from BIM" picker resolves this row
+        against the right model in a multi-model project. First link wins -
+        an existing ``cad_model_id`` is left untouched. No-op when the
+        position no longer exists - the caller is responsible for verifying
+        position existence beforehand.
         """
         pos = await self.session.get(Position, position_id)
         if pos is None:
             return
+        changed = False
         current = list(pos.cad_element_ids or [])
         elem_str = str(element_id)
         if elem_str not in current:
             current.append(elem_str)
             pos.cad_element_ids = current
+            changed = True
+        # Issue #347: bind the position to the element's owning model on first
+        # link. Nullable + first-link-wins keeps legacy / single-model rows on
+        # the pre-#347 project-level fallback.
+        if model_id is not None and getattr(pos, "cad_model_id", None) is None:
+            pos.cad_model_id = str(model_id)
+            changed = True
+        if changed:
             # Re-assign to force SQLAlchemy to notice the mutation on JSON.
             await self.session.flush()
 
@@ -2760,22 +3106,42 @@ class BIMHubService:
         Returns a small summary ``{"links_scanned", "positions_updated"}``.
         """
         # ── Load links (optionally scoped to project) ─────────────────
+        # Issue #347: left-join the element so we also learn each link's owning
+        # model (to back-fill Position.cad_model_id) without dropping orphan
+        # links (element deleted) from the cad_element_ids rewrite.
         if project_id is not None:
             stmt = (
-                select(BOQElementLink.boq_position_id, BOQElementLink.bim_element_id)
+                select(
+                    BOQElementLink.boq_position_id,
+                    BOQElementLink.bim_element_id,
+                    BIMElement.model_id,
+                )
                 .join(Position, Position.id == BOQElementLink.boq_position_id)
                 .join(BOQ, BOQ.id == Position.boq_id)
+                .join(BIMElement, BIMElement.id == BOQElementLink.bim_element_id, isouter=True)
                 .where(BOQ.project_id == project_id)
             )
         else:
-            stmt = select(BOQElementLink.boq_position_id, BOQElementLink.bim_element_id)
+            stmt = select(
+                BOQElementLink.boq_position_id,
+                BOQElementLink.bim_element_id,
+                BIMElement.model_id,
+            ).join(BIMElement, BIMElement.id == BOQElementLink.bim_element_id, isouter=True)
 
         result = await self.session.execute(stmt)
         grouped: dict[uuid.UUID, set[str]] = {}
+        model_by_pos: dict[uuid.UUID, str] = {}
         links_scanned = 0
-        for pos_id, elem_id in result.all():
+        for pos_id, elem_id, elem_model_id in result.all():
             links_scanned += 1
             grouped.setdefault(pos_id, set()).add(str(elem_id))
+            if elem_model_id is not None:
+                # One owning model per position; deterministic pick (min) so a
+                # position whose links span models still resolves consistently.
+                mid = str(elem_model_id)
+                prev = model_by_pos.get(pos_id)
+                if prev is None or mid < prev:
+                    model_by_pos[pos_id] = mid
 
         # Also make sure positions that exist in the project but have NO
         # links get their cad_element_ids reset to [] (so stale ids from a
@@ -2791,10 +3157,19 @@ class BIMHubService:
             pos = await self.session.get(Position, pos_id)
             if pos is None:
                 continue
+            changed = False
             desired = sorted(elem_ids)
             current = list(pos.cad_element_ids or [])
             if sorted(current) != desired:
                 pos.cad_element_ids = desired
+                changed = True
+            # Issue #347: fill the owning model when the position has links but
+            # no binding yet (first-link-wins; never clobber an existing one).
+            owning = model_by_pos.get(pos_id)
+            if owning is not None and getattr(pos, "cad_model_id", None) is None:
+                pos.cad_model_id = owning
+                changed = True
+            if changed:
                 positions_updated += 1
 
         await self.session.flush()

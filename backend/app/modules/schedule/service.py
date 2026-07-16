@@ -480,6 +480,36 @@ def compute_duration(start_date: str, end_date: str, region: str | None = None) 
     return working_days
 
 
+def resolve_calendar(schedule: Schedule) -> dict:
+    """Resolve the CPM work calendar for a schedule (pure).
+
+    MVP: honour an explicit work-calendar override carried in the schedule
+    metadata (``metadata.calendar`` = ``{"work_days": [...], "exceptions":
+    [...]}``) when present; otherwise fall back to a Monday-Friday work week
+    with no holiday exceptions. Full per-project / per-activity calendar
+    resolution (and the calendar-editing UI) is deferred.
+
+    Args:
+        schedule: The schedule whose calendar is being resolved. Only its
+            ``metadata_`` is read, so the function stays pure and DB-free.
+
+    Returns:
+        The ``{"work_days": [...], "exceptions": [...]}`` shape the core CPM
+        engine (:func:`app.core.cpm.calculate_cpm`) consumes.
+    """
+    default_work_days = [0, 1, 2, 3, 4]
+    meta = getattr(schedule, "metadata_", None)
+    cal = meta.get("calendar") if isinstance(meta, dict) else None
+    if isinstance(cal, dict) and cal.get("work_days"):
+        try:
+            work_days = [int(d) for d in cal.get("work_days") or []]
+        except (TypeError, ValueError):
+            work_days = list(default_work_days)
+        exceptions = [str(e) for e in (cal.get("exceptions") or []) if e]
+        return {"work_days": work_days or list(default_work_days), "exceptions": exceptions}
+    return {"work_days": list(default_work_days), "exceptions": []}
+
+
 def _effective_activity_status(
     *,
     stored_status: str,
@@ -1729,6 +1759,7 @@ class ScheduleService:
                     wbs_code=act.wbs_code,
                     activity_type=act.activity_type,
                     status=effective_status,
+                    calendar_id=act.calendar_id,
                     metadata=act.metadata_ or {},
                 )
             )
@@ -1752,6 +1783,266 @@ class ScheduleService:
         )
 
         return GanttData(activities=gantt_activities, summary=summary)
+
+    # ── Reschedule (CPM-driven dates) ──────────────────────────────────────
+
+    @staticmethod
+    def _resolve_project_start(schedule: Schedule, activities: list[Activity]) -> date:
+        """Pick the CPM origin date the day-offsets are measured from.
+
+        Prefers the schedule's own ``start_date``; falls back to the earliest
+        activity start, then to today. The forward pass floors early_start at
+        zero, so projected dates never precede this origin.
+        """
+        raw = schedule.start_date
+        if raw:
+            try:
+                return date.fromisoformat(str(raw)[:10])
+            except (ValueError, TypeError):
+                pass
+        earliest: date | None = None
+        for act in activities:
+            try:
+                d = date.fromisoformat(str(act.start_date)[:10])
+            except (ValueError, TypeError):
+                continue
+            if earliest is None or d < earliest:
+                earliest = d
+        return earliest or datetime.now(UTC).date()
+
+    @staticmethod
+    def _activity_start_offset(activity: Activity, project_start: date) -> int:
+        """Day-offset of an activity's manual start from the project origin.
+
+        Used to anchor a root activity in the CPM forward pass so its
+        successors are scheduled after it. Returns 0 when the activity has no
+        parseable start date or starts on/before the origin (the forward pass
+        floors early_start at zero anyway).
+        """
+        try:
+            d = date.fromisoformat(str(activity.start_date)[:10])
+        except (ValueError, TypeError):
+            return 0
+        return max((d - project_start).days, 0)
+
+    async def _resolve_activity_calendars(self, activities: list[Activity], project_id: uuid.UUID) -> dict[str, dict]:
+        """Load each activity's per-activity work calendar as ``{work_days, exceptions}``.
+
+        An activity may point at a named work calendar (``Activity.calendar_id``
+        -> a ``schedule_advanced`` ``Calendar``) so its own duration is measured
+        on its own work week - a six-day trade, or a crew with its own holidays.
+        Returns a map keyed by activity-id string, only for activities whose
+        ``calendar_id`` resolves to an existing calendar in this project; the
+        rest fall back to the schedule-wide calendar inside the CPM engine. The
+        calendar model stores ``holidays``, which the engine consumes as
+        ``exceptions``. Calendars are batch-loaded in a single query.
+
+        The lookup is scoped to ``project_id`` so a foreign or dangling
+        ``calendar_id`` (for example one copied in through a schedule import from
+        another project) resolves to nothing and falls back to the schedule-wide
+        calendar, rather than silently scheduling the activity on another
+        tenant's work week. This mirrors the write path
+        (``progress_service.set_calendar``), which rejects a cross-project
+        calendar with a 404.
+
+        Args:
+            activities: The schedule's activities.
+            project_id: The owning project; calendars outside it are ignored.
+
+        Returns:
+            ``{activity_id: {"work_days": [...], "exceptions": [...]}}`` for the
+            activities that carry a resolvable calendar; empty when none do.
+        """
+        calendar_ids = {a.calendar_id for a in activities if getattr(a, "calendar_id", None)}
+        if not calendar_ids:
+            return {}
+
+        from app.modules.schedule_advanced.models import Calendar
+
+        rows = await self.session.execute(
+            select(Calendar).where(Calendar.id.in_(calendar_ids)).where(Calendar.project_id == project_id)
+        )
+        cal_by_id = {c.id: c for c in rows.scalars().all()}
+
+        resolved: dict[str, dict] = {}
+        for a in activities:
+            cid = getattr(a, "calendar_id", None)
+            cal = cal_by_id.get(cid) if cid else None
+            if cal is None:
+                continue
+            try:
+                work_days = [int(d) for d in (cal.work_days or [])]
+            except (TypeError, ValueError):
+                work_days = []
+            exceptions = [str(h) for h in (cal.holidays or []) if h]
+            resolved[str(a.id)] = {
+                "work_days": work_days or [0, 1, 2, 3, 4],
+                "exceptions": exceptions,
+            }
+        return resolved
+
+    async def _resolve_schedule_default_calendar(self, schedule: Schedule) -> dict:
+        """Resolve the schedule-wide work calendar the CPM engine falls back to.
+
+        Precedence: an explicit ``metadata.calendar`` override carried on the
+        schedule wins; otherwise the project's default named calendar (the
+        ``schedule_advanced`` ``Calendar`` flagged ``is_default``) so activities
+        without their own calendar inherit the project default the calendar UI
+        advertises; otherwise a Monday-Friday week. The calendar model stores
+        ``holidays``, which the engine consumes as ``exceptions``.
+
+        Args:
+            schedule: The schedule being rescheduled.
+
+        Returns:
+            The ``{"work_days": [...], "exceptions": [...]}`` shape the core CPM
+            engine (:func:`app.core.cpm.calculate_cpm`) consumes.
+        """
+        meta = getattr(schedule, "metadata_", None)
+        cal = meta.get("calendar") if isinstance(meta, dict) else None
+        if isinstance(cal, dict) and cal.get("work_days"):
+            return resolve_calendar(schedule)
+
+        project_id = getattr(schedule, "project_id", None)
+        if project_id is not None:
+            from app.modules.schedule_advanced.models import Calendar
+
+            rows = await self.session.execute(
+                select(Calendar).where(Calendar.project_id == project_id).where(Calendar.is_default.is_(True)).limit(1)
+            )
+            default_cal = rows.scalars().first()
+            if default_cal is not None:
+                try:
+                    work_days = [int(d) for d in (default_cal.work_days or [])]
+                except (TypeError, ValueError):
+                    work_days = []
+                exceptions = [str(h) for h in (default_cal.holidays or []) if h]
+                return {"work_days": work_days or [0, 1, 2, 3, 4], "exceptions": exceptions}
+
+        return resolve_calendar(schedule)
+
+    async def reschedule(self, schedule_id: uuid.UUID) -> list[Activity]:
+        """Recompute activity dates from the dependency network via CPM.
+
+        Loads the schedule's activities and its canonical
+        :class:`ScheduleRelationship` edges, runs the core CPM engine on a
+        resolved work calendar, then projects each early-date day-offset back
+        onto a calendar date. Activities that have at least one predecessor are
+        CPM-driven: their ``start_date`` / ``end_date`` are rewritten from the
+        forward-pass early dates, so changing a link moves the successor's bar.
+        Root activities (no predecessor) keep their manually set dates - only
+        their critical-path flag, float columns and colour are refreshed.
+
+        Constraint pinning (must-start-on / as-late-as-possible) is out of
+        scope for this pass; roots anchor the network at their manual start.
+
+        Args:
+            schedule_id: The schedule to reschedule.
+
+        Returns:
+            The activities after the write, re-fetched in sort order. Empty
+            when the schedule has no activities.
+
+        Raises:
+            HTTPException 404 if the schedule does not exist.
+        """
+        from app.core.cpm import calculate_cpm, offset_to_iso
+
+        schedule = await self.get_schedule(schedule_id)
+        activities, _ = await self.list_activities_for_schedule(schedule_id, limit=10_000)
+        if not activities:
+            return []
+
+        relationships = await self.relationship_repo.list_for_schedule(schedule_id)
+        project_start = self._resolve_project_start(schedule, activities)
+
+        # Activities that appear as a successor of some edge are CPM-driven;
+        # the rest are roots whose manual start anchors the chain.
+        has_predecessor = {str(r.successor_id) for r in relationships}
+
+        # Each activity may carry its own named work calendar so its duration is
+        # measured on its own work week (a six-day trade, a crew with its own
+        # holidays); the rest fall back to the schedule-wide calendar.
+        activity_calendars = await self._resolve_activity_calendars(activities, schedule.project_id)
+
+        # Feed each root's own start into the engine as a "start no earlier
+        # than" floor (a day-offset from the project origin) so its successors
+        # are scheduled after it, not at the origin. Successors carry no floor:
+        # they are driven purely by the network, so a stale manual date can
+        # never pin them later than their predecessors allow.
+        act_dicts: list[dict[str, object]] = []
+        for a in activities:
+            entry: dict[str, object] = {
+                "id": str(a.id),
+                "duration": a.duration_days or 0,
+                "name": a.name,
+                "start_offset": (0 if str(a.id) in has_predecessor else self._activity_start_offset(a, project_start)),
+            }
+            activity_calendar = activity_calendars.get(str(a.id))
+            if activity_calendar is not None:
+                entry["calendar"] = activity_calendar
+            act_dicts.append(entry)
+        rel_dicts = [
+            {
+                "predecessor_id": str(r.predecessor_id),
+                "successor_id": str(r.successor_id),
+                "type": r.relationship_type,
+                "lag": r.lag_days,
+            }
+            for r in relationships
+        ]
+
+        calendar = await self._resolve_schedule_default_calendar(schedule)
+        cpm_results = await calculate_cpm(
+            act_dicts,
+            rel_dicts,
+            calendar=calendar,
+            project_start_date=project_start.isoformat(),
+        )
+        cpm_map = {r["id"]: r for r in cpm_results}
+
+        # One uniform payload shape per row so the bulk UPDATE compiles a
+        # single statement (heterogeneous key sets would break executemany).
+        updates: list[dict[str, object]] = []
+        for act in activities:
+            cpm = cpm_map.get(str(act.id))
+            if cpm is None:
+                continue
+            if str(act.id) in has_predecessor:
+                new_start = offset_to_iso(cpm["early_start"], project_start)
+                new_end = offset_to_iso(cpm["early_finish"], project_start)
+            else:
+                new_start = act.start_date
+                new_end = act.end_date
+            is_critical = bool(cpm["is_critical"])
+            updates.append(
+                {
+                    "id": act.id,
+                    "start_date": new_start,
+                    "end_date": new_end,
+                    "early_start": str(cpm["early_start"]),
+                    "early_finish": str(cpm["early_finish"]),
+                    "late_start": str(cpm["late_start"]),
+                    "late_finish": str(cpm["late_finish"]),
+                    "total_float": cpm["total_float"],
+                    "free_float": cpm["free_float"],
+                    "is_critical": is_critical,
+                    "color": "#ef4444" if is_critical else "#0071e3",
+                }
+            )
+
+        await self.activity_repo.bulk_update_fields(updates)
+
+        await _safe_publish(
+            "schedule.rescheduled",
+            {"schedule_id": str(schedule_id), "count": len(updates)},
+            source_module="oe_schedule",
+        )
+
+        logger.info("Rescheduled schedule %s: %d activities updated", schedule_id, len(updates))
+
+        refreshed, _ = await self.list_activities_for_schedule(schedule_id, limit=10_000)
+        return refreshed
 
     # ── Generate from BOQ ─────────────────────────────────────────────────
 

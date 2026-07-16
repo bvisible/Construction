@@ -128,6 +128,16 @@ class Position(Base):
         default=list,
         server_default="[]",
     )
+    # ── Issue #347: owning BIM model of the linked elements ──────────────
+    # ``cad_element_ids`` on its own is ambiguous in a multi-model project:
+    # a stable_id is unique only per model (index ix_bim_element_model_stable)
+    # and even a DB-UUID id must be resolved against the right model's element
+    # set. This records the model that owns the elements in ``cad_element_ids``
+    # so the BOQ "pick quantity from BIM" picker and the mini 3D preview
+    # resolve each position against ITS model instead of the project's "first
+    # ready" one. NULL = legacy/unknown - callers fall back to the
+    # project-level model (pre-#347 behaviour, safe for single-model projects).
+    cad_model_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     validation_status: Mapped[str] = mapped_column(String(50), nullable=False, default="pending")
 
     # ── Phase 12.2 expansion fields ──────────────────────────────────────
@@ -444,6 +454,24 @@ class QuantityLink(Base):
     quantity_field: Mapped[str] = mapped_column(String(64), nullable=False)
     target_field: Mapped[str] = mapped_column(String(32), nullable=False, default="quantity", server_default="quantity")
     aggregation: Mapped[str] = mapped_column(String(16), nullable=False, default="sum", server_default="sum")
+    # ── Issue #347: per-element quantity formulas ────────────────────────
+    # ``projection_mode`` splits HOW each element's contribution is derived:
+    #   'field'   - read ``quantity_field`` off the element's quantities map
+    #               (the original behaviour, still the default);
+    #   'formula' - evaluate ``formula`` per element against that element's
+    #               variables, then combine with the same ``aggregation``.
+    # Nullable + server_default so existing rows read as 'field' with no
+    # backfill; ``quantity_field`` is left NOT NULL (formula-mode links store
+    # an empty string there) so this stays a purely additive migration.
+    projection_mode: Mapped[str | None] = mapped_column(
+        String(16),
+        nullable=True,
+        default="field",
+        server_default="field",
+    )
+    # The arithmetic expression evaluated per element in 'formula' mode
+    # (e.g. ``area_m2 * 0.5``). NULL in 'field' mode.
+    formula: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="active", server_default="active")
     source_model_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
     last_applied_quantity: Mapped[str | None] = mapped_column(String(50), nullable=True)

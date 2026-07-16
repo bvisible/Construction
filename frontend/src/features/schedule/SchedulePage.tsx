@@ -52,6 +52,9 @@ import { ScheduleDelayPanel } from './ScheduleDelayPanel';
 import { ScheduleCodesPanel } from './ScheduleCodesPanel';
 import { ScheduleResourcePanel } from './ScheduleResourcePanel';
 import { ScheduleRealtimePanel } from './ScheduleRealtimePanel';
+import { DependencyEditor } from './DependencyEditor';
+import { ActivityGrid } from './ActivityGrid';
+import { WorkCalendarManager } from './WorkCalendarManager';
 import { scheduleGuide } from './scheduleGuide';
 import { fetchBIMModels } from '@/features/bim/api';
 import type {
@@ -1097,9 +1100,11 @@ function ScheduleDetail({
   const { confirm, ...confirmProps } = useConfirm();
   const [zoomLevel, setZoomLevel] = useState<ZoomLevel>('week');
   const [viewMode, setViewMode] = useState<
-    'table' | 'gantt' | 'evm' | '4d' | 'quality' | 'risk' | 'compare' | 'progress' | 'delay' | 'codes' | 'resources' | 'realtime' | 'interchange'
+    'table' | 'gantt' | 'evm' | '4d' | 'quality' | 'risk' | 'compare' | 'progress' | 'delay' | 'codes' | 'calendars' | 'resources' | 'realtime' | 'interchange'
   >('gantt');
   const [showAddActivity, setShowAddActivity] = useState(false);
+  // #348: activity whose dependency editor is open (click a Gantt bar to edit).
+  const [selectedActivityId, setSelectedActivityId] = useState<string | null>(null);
   const [showGenerateBOQ, setShowGenerateBOQ] = useState(false);
   const [selectedBOQId, setSelectedBOQId] = useState('');
   const [generateStartDate, setGenerateStartDate] = useState(
@@ -1354,6 +1359,12 @@ function ScheduleDetail({
     return map;
   }, [ganttData]);
 
+  // #348: the activity object backing the open dependency editor (or null).
+  const selectedActivity = useMemo(
+    () => ganttData?.activities.find((a) => a.id === selectedActivityId) ?? null,
+    [ganttData, selectedActivityId],
+  );
+
   // Filtered activities for the Gantt chart (Improvement #5)
   const filteredActivities = useMemo(() => {
     const activities = ganttData?.activities ?? [];
@@ -1438,6 +1449,7 @@ function ScheduleDetail({
             variant="secondary"
             icon={<FileBarChart size={16} />}
             onClick={() => setShowGenerateBOQ(true)}
+            data-guide="schedule-generate"
           >
             {t('schedule.generate_from_boq', 'Generate from BOQ')}
           </Button>
@@ -1456,6 +1468,7 @@ function ScheduleDetail({
                   { key: 'progress' as const, label: t('schedule.view_progress', { defaultValue: 'Progress' }) },
                   { key: 'delay' as const, label: t('schedule.view_delay', { defaultValue: 'Delay' }) },
                   { key: 'codes' as const, label: t('schedule.view_codes', { defaultValue: 'Codes' }) },
+                  { key: 'calendars' as const, label: t('schedule.calendar.view', { defaultValue: 'Calendars' }) },
                   { key: 'resources' as const, label: t('schedule.view_resources', { defaultValue: 'Resources' }) },
                   { key: 'realtime' as const, label: t('schedule.view_realtime', { defaultValue: 'Live' }) },
                   { key: 'interchange' as const, label: t('schedule.view_interchange', { defaultValue: 'Interchange' }) },
@@ -1475,10 +1488,11 @@ function ScheduleDetail({
                   </button>
                 ))}
               </div>
-              {/* Zoom only applies to the timeline views (table / gantt). */}
+              {/* Zoom only applies to the Gantt timeline; the Table view is a
+                  data grid with no timescale, so hide the zoom control there. */}
               <div
                 className={`flex items-center gap-1 rounded-lg border border-border-light p-0.5 ${
-                  viewMode !== 'table' && viewMode !== 'gantt' ? 'hidden' : ''
+                  viewMode !== 'gantt' ? 'hidden' : ''
                 }`}
               >
                 {(['day', 'week', 'month', 'quarter', 'year'] as const).map((level) => (
@@ -1503,6 +1517,7 @@ function ScheduleDetail({
                 onClick={() => calculateCPM.mutate()}
                 loading={calculateCPM.isPending}
                 title={t('schedule.cpm_tooltip', { defaultValue: 'Critical Path Method calculates the longest path through the project and identifies activities that cannot be delayed' })}
+                data-guide="schedule-cpm"
               >
                 {t('schedule.calculate_cpm', 'Critical Path')}
               </Button>
@@ -1511,6 +1526,7 @@ function ScheduleDetail({
                 icon={<ShieldAlert size={16} />}
                 onClick={() => fetchRiskAnalysis.mutate()}
                 loading={fetchRiskAnalysis.isPending}
+                data-guide="schedule-risk"
               >
                 {t('schedule.risk_analysis_btn', 'Risk Analysis')}
               </Button>
@@ -1733,6 +1749,8 @@ function ScheduleDetail({
               />
             ) : viewMode === 'codes' ? (
               <ScheduleCodesPanel scheduleId={schedule.id} projectId={projectId} />
+            ) : viewMode === 'calendars' ? (
+              <WorkCalendarManager projectId={projectId} />
             ) : viewMode === 'resources' ? (
               <ScheduleResourcePanel
                 scheduleId={schedule.id}
@@ -1757,6 +1775,16 @@ function ScheduleDetail({
                   showCriticalPath={!!cpmResult}
                   todayLine={true}
                   onActivityResize={handleActivityResize}
+                  onActivityClick={(id) => setSelectedActivityId(id)}
+                />
+              ) : viewMode === 'table' ? (
+                <ActivityGrid
+                  scheduleId={schedule.id}
+                  projectId={projectId}
+                  activities={filteredActivities}
+                  criticalActivityIds={criticalActivityIds}
+                  onEditDependencies={(id) => setSelectedActivityId(id)}
+                  onAddActivity={() => setShowAddActivity(true)}
                 />
               ) : (
                 <GanttChart
@@ -1922,6 +1950,34 @@ function ScheduleDetail({
             </Button>
           </div>
         </form>
+      </Modal>
+
+      {/* Edit dependencies Modal (#348) - opens when a Gantt bar is clicked */}
+      <Modal
+        open={!!selectedActivity}
+        onClose={() => setSelectedActivityId(null)}
+        title={t('schedule.edit_dependencies', { defaultValue: 'Edit dependencies' })}
+      >
+        {selectedActivity && (
+          <div className="space-y-4">
+            <div>
+              <p className="text-sm font-semibold text-content-primary">{selectedActivity.name}</p>
+              <p className="text-xs text-content-tertiary">
+                {formatDate(selectedActivity.start_date)} &ndash; {formatDate(selectedActivity.end_date)}
+              </p>
+            </div>
+            <DependencyEditor
+              scheduleId={schedule.id}
+              activity={selectedActivity}
+              activities={ganttData?.activities ?? []}
+            />
+            <div className="flex items-center justify-end pt-1">
+              <Button variant="ghost" type="button" onClick={() => setSelectedActivityId(null)}>
+                {t('common.done', { defaultValue: 'Done' })}
+              </Button>
+            </div>
+          </div>
+        )}
       </Modal>
 
       {/* Generate from BOQ Modal */}

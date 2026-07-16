@@ -11,7 +11,7 @@ Decimal-as-string in JSON.
 
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator, model_validator
@@ -269,6 +269,11 @@ class ActivityResponse(BaseModel):
     activity_code: str | None = None
     bim_element_ids: list[str] | None = None
 
+    # Per-activity work calendar (schedule_advanced Calendar). Set via the
+    # dedicated PUT /activities/{id}/calendar/ endpoint; exposed here so the
+    # grid can show and pick the activity's calendar. None -> schedule default.
+    calendar_id: UUID | None = None
+
 
 class LinkPositionRequest(BaseModel):
     """Request body for linking a BOQ position to an activity."""
@@ -454,6 +459,10 @@ class GanttActivity(BaseModel):
     wbs_code: str
     activity_type: str
     status: str
+    # Per-activity work calendar (schedule_advanced Calendar), so the grid's
+    # calendar picker can show and clear the current assignment. None -> the
+    # activity uses the schedule default.
+    calendar_id: UUID | None = None
     # Activity metadata passthrough. Generated activities carry provenance
     # markers here (e.g. duration_source/duration_method = "estimated_fallback"
     # when the duration was estimated from unit-based production rates), which
@@ -617,6 +626,22 @@ class RelationshipCreate(BaseModel):
     relationship_type: str = Field(default="FS", pattern=r"^(FS|FF|SS|SF)$")
     # Negative lag allowed (lead time); bound both sides at int32.
     lag_days: int = Field(default=0, ge=-_INT32_MAX, le=_INT32_MAX)
+
+
+class RelationshipUpdate(BaseModel):
+    """Partial update of a CPM dependency relationship.
+
+    Only the type and/or lag of an existing edge may change; the endpoints
+    (predecessor / successor) are immutable - re-pointing an edge is a
+    delete + create so the self-reference and cycle guards run against the
+    new endpoints. Both fields are optional so a caller can PATCH just one.
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True, extra="ignore")
+
+    relationship_type: Literal["FS", "FF", "SS", "SF"] | None = None
+    # Negative lag allowed (lead time); bound both sides at int32.
+    lag_days: int | None = Field(default=None, ge=-_INT32_MAX, le=_INT32_MAX)
 
 
 class RelationshipResponse(BaseModel):

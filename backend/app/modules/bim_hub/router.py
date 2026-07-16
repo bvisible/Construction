@@ -56,6 +56,7 @@ Endpoints:
         GET    /models/{model_id}/dataframe/columns/{col}/values - Value counts for a column
 """
 
+import contextlib
 import csv
 import gzip as _gzip
 import io
@@ -66,7 +67,7 @@ import uuid
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Header, HTTPException, Query, UploadFile, status
-from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import JSONResponse, RedirectResponse, Response, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -75,6 +76,8 @@ from app.core.http_headers import content_disposition_attachment
 from app.core.i18n import get_locale
 from app.core.rate_limiter import upload_limiter
 from app.core.storage import resolve_data_dir as _resolve_data_dir
+from app.core.upload_guards import reject_if_xlsx_bomb
+from app.core.upload_streaming import StreamedUpload, stream_upload_to_temp
 from app.core.validation.messages import translate
 from app.dependencies import CurrentUserId, RequirePermission, RequireRole, SessionDep, accessible_project_ids
 from app.modules.bim_hub import file_storage as bim_file_storage
@@ -912,6 +915,38 @@ def _rows_to_elements(
         if not raw_element_type and props.get("category"):
             raw_element_type = props["category"]
 
+        # Fallback quantity recovery (issue #347): when the fixed-name pass
+        # above found nothing, a DDC export simply labelled its quantity columns
+        # differently. Recover them from the row / properties; only if there is
+        # still no numeric quantity at all fall back to coarse bounding-box
+        # figures, tagged so they read as estimated rather than measured.
+        if not quantities:
+            from app.modules.bim_hub.quantity_fallback import (
+                derive_quantities_from_bbox,
+                derive_quantities_from_columns,
+            )
+
+            derived = derive_quantities_from_columns({**row, **props})
+            for _dim, _qkey in (
+                ("area", "area_m2"),
+                ("volume", "volume_m3"),
+                ("length", "length_m"),
+                ("weight", "weight_kg"),
+            ):
+                if _dim in derived:
+                    quantities[_qkey] = derived[_dim]
+            if not quantities and bbox:
+                estimated = derive_quantities_from_bbox(bbox, raw_element_type)
+                for _dim, _qkey in (
+                    ("area", "area_m2"),
+                    ("volume", "volume_m3"),
+                    ("length", "length_m"),
+                ):
+                    if _dim in estimated:
+                        quantities[_qkey] = estimated[_dim]
+                if quantities:
+                    props.setdefault("quantities_source", "geometry_bbox")
+
         element: dict[str, Any] = {
             "stable_id": eid,
             "element_type": raw_element_type,
@@ -935,6 +970,12 @@ def _rows_to_elements(
 # ═══════════════════════════════════════════════════════════════════════════════
 # Upload (DataFrame + optional DAE geometry)
 # ═══════════════════════════════════════════════════════════════════════════════
+
+# Upload size caps for the DataFrame + geometry drop. The element table is read
+# back into memory for the CSV/openpyxl parse, so it is capped tighter than the
+# geometry blob, which only ever streams to disk on its way to storage.
+MAX_BIM_DATA_BYTES: int = 100 * 1024 * 1024  # 100 MB CSV/xlsx element table
+MAX_BIM_GEOMETRY_BYTES: int = 500 * 1024 * 1024  # 500 MB DAE/GLB/glTF geometry
 
 
 @router.post("/upload/", status_code=201)
@@ -996,18 +1037,40 @@ async def upload_bim_data(
             detail="Unsupported data file type. Please upload CSV (.csv) or Excel (.xlsx) file.",
         )
 
-    data_content = await data_file.read()
+    # Stream the element table to a bounded temp file (1 MB chunks, aborts past
+    # the cap) so an oversized body never lands fully in RAM, then read the now
+    # bounded bytes back for the CSV/openpyxl parser.
+    data_suffix = pathlib.Path(data_filename).suffix or ".csv"
+    try:
+        async with stream_upload_to_temp(
+            data_file,
+            max_bytes=MAX_BIM_DATA_BYTES,
+            suffix=data_suffix,
+        ) as data_upload:
+            data_content = data_upload.path.read_bytes()
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=(
+                f"Data file exceeds the {MAX_BIM_DATA_BYTES // (1024 * 1024)} MB upload limit. "
+                "Split the element table or export a lighter file."
+            ),
+        ) from exc
+
     if not data_content:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Uploaded data file is empty.",
         )
 
-    # No upload size cap - per product policy.
+    # xlsx is a zip container; reject a decompression bomb before openpyxl
+    # expands the full sheet in memory.
+    if data_filename.endswith((".xlsx", ".xls")):
+        reject_if_xlsx_bomb(data_content)
 
-    # --- Validate geometry file (if provided) ---
-    has_geometry = False
-    geometry_content: bytes | None = None
+    # --- Validate geometry file type (if provided) ---
+    # The bytes are streamed to disk later (inside the upload stack) so a large
+    # mesh export never has to sit in memory; here we only reject a bad type.
     if geometry_file is not None:
         geo_filename = (geometry_file.filename or "").lower()
         if not geo_filename.endswith((".dae", ".glb", ".gltf")):
@@ -1015,9 +1078,6 @@ async def upload_bim_data(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Unsupported geometry file type. Please upload DAE (.dae), GLB (.glb), or glTF (.gltf) file.",
             )
-        geometry_content = await geometry_file.read()
-        if geometry_content:
-            has_geometry = True
 
     # --- Parse data file ---
     try:
@@ -1043,43 +1103,70 @@ async def upload_bim_data(
             detail="No data rows found in the uploaded file.",
         )
 
-    # --- Convert rows to element dicts ---
-    element_dicts = _rows_to_elements(rows, has_geometry=has_geometry)
-    if not element_dicts:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No valid elements found. Ensure the file has an 'element_id' column.",
+    # Stream the geometry (if any) to a bounded temp file and keep it on disk
+    # through model creation so it can be persisted by path - a large DAE/GLB
+    # export never lands fully in RAM. The stack removes any leftover temp file
+    # once the geometry has been handed to storage.
+    async with contextlib.AsyncExitStack() as upload_stack:
+        geometry_upload: StreamedUpload | None = None
+        if geometry_file is not None:
+            geo_suffix = pathlib.Path(geometry_file.filename or "geometry.dae").suffix or ".dae"
+            try:
+                geometry_upload = await upload_stack.enter_async_context(
+                    stream_upload_to_temp(
+                        geometry_file,
+                        max_bytes=MAX_BIM_GEOMETRY_BYTES,
+                        suffix=geo_suffix,
+                    )
+                )
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                    detail=(
+                        f"Geometry file exceeds the {MAX_BIM_GEOMETRY_BYTES // (1024 * 1024)} MB "
+                        "upload limit. Export a lighter mesh or split the model."
+                    ),
+                ) from exc
+        has_geometry = geometry_upload is not None and geometry_upload.size > 0
+
+        # --- Convert rows to element dicts ---
+        element_dicts = _rows_to_elements(rows, has_geometry=has_geometry)
+        if not element_dicts:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No valid elements found. Ensure the file has an 'element_id' column.",
+            )
+
+        # --- Determine format from geometry file extension ---
+        geo_ext = ""
+        if geometry_file and geometry_file.filename:
+            geo_ext = pathlib.Path(geometry_file.filename).suffix.lstrip(".").lower()
+
+        model_format = geo_ext if geo_ext else "csv"
+
+        # --- Create BIM model ---
+        from app.modules.bim_hub.schemas import BIMModelCreate
+
+        model_data = BIMModelCreate(
+            project_id=uuid.UUID(project_id),
+            name=name,
+            discipline=discipline,
+            model_format=model_format,
+            status="processing",
         )
+        model = await service.create_model(model_data, user_id=user_id)
+        model_id = model.id
 
-    # --- Determine format from geometry file extension ---
-    geo_ext = ""
-    if geometry_file and geometry_file.filename:
-        geo_ext = pathlib.Path(geometry_file.filename).suffix.lstrip(".").lower()
-
-    model_format = geo_ext if geo_ext else "csv"
-
-    # --- Create BIM model ---
-    from app.modules.bim_hub.schemas import BIMModelCreate
-
-    model_data = BIMModelCreate(
-        project_id=uuid.UUID(project_id),
-        name=name,
-        discipline=discipline,
-        model_format=model_format,
-        status="processing",
-    )
-    model = await service.create_model(model_data, user_id=user_id)
-    model_id = model.id
-
-    # --- Save geometry file to configured storage backend ---
-    if has_geometry and geometry_content:
-        ext = pathlib.Path(geometry_file.filename or "geometry.dae").suffix or ".dae"  # type: ignore[union-attr]
-        await bim_file_storage.save_geometry(
-            project_id=project_id,
-            model_id=str(model_id),
-            ext=ext,
-            content=geometry_content,
-        )
+        # --- Save geometry to storage (streamed from the temp path) ---
+        if has_geometry and geometry_upload is not None:
+            ext = pathlib.Path(geometry_file.filename or "geometry.dae").suffix or ".dae"  # type: ignore[union-attr]
+            await bim_file_storage.save_geometry_from_path(
+                project_id=project_id,
+                model_id=str(model_id),
+                ext=ext,
+                src_path=geometry_upload.path,
+                size=geometry_upload.size,
+            )
 
     # --- Import elements ---
     from app.modules.bim_hub.schemas import BIMElementCreate
@@ -1118,6 +1205,12 @@ async def upload_bim_data(
     # never delays the upload response.
     if created_elements:
         background_tasks.add_task(_run_import_validation, model_id)
+        # Bake the fast-viewer + property artifacts (GLB from DAE, streaming
+        # tileset, Parquet property sidecar) off-request so a non-CAD upload
+        # gets the same fast viewer and populated property panel as the CAD
+        # path. Best-effort and idempotent (see _ensure_model_artifacts). Runs
+        # after the request session commits the model + elements.
+        background_tasks.add_task(_ensure_model_artifacts, project_id, str(model_id))
 
     return {
         "model_id": str(model_id),
@@ -1265,6 +1358,26 @@ async def _run_import_validation(model_uuid: uuid.UUID) -> None:
             model_uuid,
             exc,
         )
+
+
+async def _ensure_model_artifacts(project_id: str, model_id: str) -> None:
+    """Best-effort: ensure a model's GLB + streaming tileset + Parquet sidecar.
+
+    Delegates to :meth:`BIMHubService.ensure_artifacts`, which is idempotent
+    and self-guards each step. Opens its own :func:`async_session_factory`
+    session so it is safe to run from a background worker or a
+    ``BackgroundTasks`` callback (the request session is closed by then, and
+    the model + elements are committed before the callback fires). Any failure
+    is logged and swallowed - a good import must never fail because the
+    (advisory) artifact bake hit a problem.
+    """
+    from app.database import async_session_factory
+
+    try:
+        async with async_session_factory() as session:
+            await BIMHubService(session).ensure_artifacts(project_id, model_id)
+    except Exception as exc:  # noqa: BLE001 - artifacts are best-effort
+        logger.warning("Artifact baking failed for model %s (non-fatal): %s", model_id, exc)
 
 
 async def _process_cad_in_background(
@@ -1845,6 +1958,13 @@ async def _process_cad_in_background(
         # turn a good import into a hard error, so it is fully guarded.
         if element_count > 0:
             await _run_import_validation(model_uuid)
+
+        # Bake the streaming tileset now (and backfill GLB / Parquet if either
+        # was skipped). The CAD path already wrote the GLB + Parquet, so those
+        # steps are no-ops here; this proactively bakes the octree tiles that
+        # otherwise only bake lazily on the first viewer open. Idempotent and
+        # best-effort - it never turns a good import into an error.
+        await _ensure_model_artifacts(project_id, model_id)
 
     except Exception as exc:
         logger.exception("Background CAD processing failed for model %s: %s", model_id, exc)
@@ -3323,6 +3443,91 @@ async def get_model_geometry(
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Streaming tiles (fast viewer)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@router.get("/models/{model_id}/tiles/manifest/", response_model=None)
+async def get_model_tiles_manifest(
+    model_id: uuid.UUID,
+    user_id: CurrentUserId = None,  # type: ignore[assignment]
+    _perm: None = Depends(RequirePermission("bim.read")),
+    service: BIMHubService = Depends(_get_service),
+) -> Response:
+    """Return the streaming-tile manifest for a model, baking it on first use.
+
+    The viewer calls this before loading geometry. A ``200`` returns the tile
+    manifest (bounds + per-tile bbox, node names, content hashes). A ``204 No
+    Content`` means this model has no streamable tileset - too small, no GLB,
+    still converting, or a bake error - and the viewer falls back to the
+    single monolithic GLB. Either way the model is viewable; the manifest is
+    purely a fast-path opt-in.
+    """
+    await _verify_model_access(service, model_id, user_id or "")
+    try:
+        manifest = await service.ensure_tileset(model_id)
+    except Exception:  # noqa: BLE001 - never fail the viewer over the fast path
+        logger.exception("ensure_tileset failed for model %s - viewer uses monolith", model_id)
+        manifest = None
+
+    if not manifest or not manifest.get("tiles"):
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    return Response(
+        content=json.dumps(manifest),
+        media_type="application/json",
+        # The manifest tracks the current geometry and lists content hashes
+        # that change on re-convert, so it is always served fresh; the size
+        # is trivial next to the tiles it points at.
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@router.head(
+    "/models/{model_id}/tiles/{tile_hash}/",
+    response_model=None,
+    include_in_schema=False,
+)
+@router.get("/models/{model_id}/tiles/{tile_hash}/", response_model=None)
+async def get_model_tile(
+    model_id: uuid.UUID,
+    tile_hash: str,
+    user_id: CurrentUserId = None,  # type: ignore[assignment]
+    _perm: None = Depends(RequirePermission("bim.read")),
+    service: BIMHubService = Depends(_get_service),
+) -> Response | RedirectResponse:
+    """Serve one content-addressed geometry tile (GLB).
+
+    A tile URL is its content hash, so a tile is immutable: it carries a
+    one-year ``immutable`` cache directive and the browser, any CDN, and the
+    viewer's IndexedDB cache may keep it forever. This is what makes a revisit
+    (or an offline site tablet) instant instead of a full re-download - the
+    opposite of the ``no-store`` monolith path.
+    """
+    model = await _verify_model_access(service, model_id, user_id or "")
+    project_id = str(model.project_id)
+    key = bim_file_storage.tile_key(project_id, model_id, tile_hash)
+    immutable = "public, max-age=31536000, immutable"
+
+    # S3-style backend: redirect the browser straight to a presigned URL.
+    presigned = bim_file_storage.presigned_geometry_url(key)
+    if presigned:
+        return RedirectResponse(url=presigned, status_code=307)
+
+    blob = await bim_file_storage.read_tile(project_id, model_id, tile_hash)
+    if not blob:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Tile not found - reload to fetch a fresh manifest.",
+        )
+    return Response(
+        content=blob,
+        media_type="model/gltf-binary",
+        headers={"Cache-Control": immutable},
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Models
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -3698,6 +3903,66 @@ async def cleanup_orphan_bim_files(
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
+def _assemble_element_responses(
+    items: list,
+    boq_links_by_id: dict,
+    doc_links_by_id: dict,
+    task_links_by_id: dict,
+    activity_briefs_by_id: dict,
+    requirement_briefs_by_id: dict,
+    validation_summaries_by_id: dict,
+    current_pct_by_id: dict,
+    current_pct_date_by_id: dict,
+    report_exists: bool,
+) -> list[BIMElementResponse]:
+    """Map ``list_elements_with_links`` briefs onto ``BIMElementResponse`` rows.
+
+    Shared by the model-wide element list and the single-element context
+    endpoint so both surface identical BOQ / document / task / activity /
+    requirement / validation / progress enrichment. ``report_exists`` decides
+    whether an element with no findings reads as 'pass' (a report ran) or
+    'unchecked' (no report at all).
+    """
+    from app.modules.bim_hub.schemas import (
+        ActivityBrief,
+        DocumentLinkBrief,
+        ElementValidationSummary,
+        RequirementBrief,
+        TaskBrief,
+    )
+
+    responses: list[BIMElementResponse] = []
+    for elem in items:
+        boq_briefs = [BOQElementLinkBrief.model_validate(b) for b in boq_links_by_id.get(elem.id, [])]
+        doc_briefs = [DocumentLinkBrief.model_validate(b) for b in doc_links_by_id.get(elem.id, [])]
+        task_briefs = [TaskBrief.model_validate(b) for b in task_links_by_id.get(elem.id, [])]
+        activity_briefs = [ActivityBrief.model_validate(b) for b in activity_briefs_by_id.get(elem.id, [])]
+        requirement_briefs = [RequirementBrief.model_validate(b) for b in requirement_briefs_by_id.get(elem.id, [])]
+        raw_val = validation_summaries_by_id.get(elem.id, [])
+        validation_summaries = [ElementValidationSummary.model_validate(v) for v in raw_val]
+        # Derive worst-severity status; 'unchecked' iff no report exists at all.
+        if not report_exists:
+            val_status: str = "unchecked"
+        elif any(v.severity == "error" for v in validation_summaries):
+            val_status = "error"
+        elif any(v.severity == "warning" for v in validation_summaries):
+            val_status = "warning"
+        else:
+            val_status = "pass"
+        resp = BIMElementResponse.model_validate(elem)
+        resp.boq_links = boq_briefs
+        resp.linked_documents = doc_briefs
+        resp.linked_tasks = task_briefs
+        resp.linked_activities = activity_briefs
+        resp.linked_requirements = requirement_briefs
+        resp.validation_results = validation_summaries
+        resp.validation_status = val_status  # type: ignore[assignment]
+        resp.current_pct = current_pct_by_id.get(elem.id)
+        resp.current_pct_date = current_pct_date_by_id.get(elem.id)
+        responses.append(resp)
+    return responses
+
+
 @router.get("/models/{model_id}/elements/", response_model=BIMElementListResponse)
 async def list_elements(
     model_id: uuid.UUID,
@@ -3735,14 +4000,6 @@ async def list_elements(
     entries, and a ``linked_activities`` array of ``ActivityBrief`` entries
     so the viewer can render link badges without a second round trip.
     """
-    from app.modules.bim_hub.schemas import (
-        ActivityBrief,
-        DocumentLinkBrief,
-        ElementValidationSummary,
-        RequirementBrief,
-        TaskBrief,
-    )
-
     await _verify_model_access(service, model_id, user_id or "")
 
     # Skeleton path: plain BIMElement rows, no relation joins, no enrichment.
@@ -3832,36 +4089,18 @@ async def list_elements(
     report_exists = _VALIDATION_REPORT_SENTINEL in validation_summaries_by_id
     validation_summaries_by_id.pop(_VALIDATION_REPORT_SENTINEL, None)
 
-    responses: list[BIMElementResponse] = []
-    for elem in items:
-        boq_briefs = [BOQElementLinkBrief.model_validate(b) for b in boq_links_by_id.get(elem.id, [])]
-        doc_briefs = [DocumentLinkBrief.model_validate(b) for b in doc_links_by_id.get(elem.id, [])]
-        task_briefs = [TaskBrief.model_validate(b) for b in task_links_by_id.get(elem.id, [])]
-        activity_briefs = [ActivityBrief.model_validate(b) for b in activity_briefs_by_id.get(elem.id, [])]
-        requirement_briefs = [RequirementBrief.model_validate(b) for b in requirement_briefs_by_id.get(elem.id, [])]
-        raw_val = validation_summaries_by_id.get(elem.id, [])
-        validation_summaries = [ElementValidationSummary.model_validate(v) for v in raw_val]
-        # Derive worst-severity status; 'unchecked' iff no report exists
-        # at all (any element had at least one entry → report_exists).
-        if not report_exists:
-            val_status: str = "unchecked"
-        elif any(v.severity == "error" for v in validation_summaries):
-            val_status = "error"
-        elif any(v.severity == "warning" for v in validation_summaries):
-            val_status = "warning"
-        else:
-            val_status = "pass"
-        resp = BIMElementResponse.model_validate(elem)
-        resp.boq_links = boq_briefs
-        resp.linked_documents = doc_briefs
-        resp.linked_tasks = task_briefs
-        resp.linked_activities = activity_briefs
-        resp.linked_requirements = requirement_briefs
-        resp.validation_results = validation_summaries
-        resp.validation_status = val_status  # type: ignore[assignment]
-        resp.current_pct = current_pct_by_id.get(elem.id)
-        resp.current_pct_date = current_pct_date_by_id.get(elem.id)
-        responses.append(resp)
+    responses = _assemble_element_responses(
+        items,
+        boq_links_by_id,
+        doc_links_by_id,
+        task_links_by_id,
+        activity_briefs_by_id,
+        requirement_briefs_by_id,
+        validation_summaries_by_id,
+        current_pct_by_id,
+        current_pct_date_by_id,
+        report_exists,
+    )
 
     return BIMElementListResponse(
         items=responses,
@@ -3995,6 +4234,73 @@ async def get_element(
     # Verify caller owns the project this element's model belongs to.
     await _verify_model_access(service, element.model_id, user_id or "")
     return BIMElementResponse.model_validate(element)
+
+
+@router.get("/elements/{element_id}/context", response_model=BIMElementResponse)
+async def get_element_context(
+    element_id: uuid.UUID,
+    user_id: CurrentUserId = None,  # type: ignore[assignment]
+    _perm: None = Depends(RequirePermission("bim.read")),
+    service: BIMHubService = Depends(_get_service),
+) -> BIMElementResponse:
+    """Full ERP context for one selected element.
+
+    The 3D viewer loads elements in skeleton mode (no joins) so the model
+    opens fast. When the user clicks an element we call this to compose,
+    on demand, everything the platform knows about it: linked BOQ positions
+    (with cost), documents, tasks, schedule activities, requirements,
+    validation findings and install/progress. Reuses the same enrichment
+    the model-wide list uses, scoped to a single element.
+    """
+    element = await service.get_element(element_id)
+    if element is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Element not found",
+        )
+    await _verify_model_access(service, element.model_id, user_id or "")
+
+    (
+        items,
+        _total,
+        boq_links_by_id,
+        doc_links_by_id,
+        task_links_by_id,
+        activity_briefs_by_id,
+        requirement_briefs_by_id,
+        validation_summaries_by_id,
+        current_pct_by_id,
+        current_pct_date_by_id,
+    ) = await service.list_elements_with_links(
+        element.model_id,
+        element_id=element_id,
+        limit=1,
+    )
+
+    from app.modules.bim_hub.service import _VALIDATION_REPORT_SENTINEL
+
+    report_exists = _VALIDATION_REPORT_SENTINEL in validation_summaries_by_id
+    validation_summaries_by_id.pop(_VALIDATION_REPORT_SENTINEL, None)
+
+    responses = _assemble_element_responses(
+        items,
+        boq_links_by_id,
+        doc_links_by_id,
+        task_links_by_id,
+        activity_briefs_by_id,
+        requirement_briefs_by_id,
+        validation_summaries_by_id,
+        current_pct_by_id,
+        current_pct_date_by_id,
+        report_exists,
+    )
+    if not responses:
+        # The element vanished between the two queries (rare race); treat as 404.
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Element not found",
+        )
+    return responses[0]
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

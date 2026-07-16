@@ -18,6 +18,7 @@ import {
   AlertTriangle,
   Shield,
   HardDrive,
+  Info,
   X,
 } from 'lucide-react';
 import { Card, CardHeader, CardContent, Button, ConfirmDialog } from '@/shared/ui';
@@ -51,6 +52,9 @@ interface RestoreResult {
   imported: Record<string, number>;
   skipped: Record<string, number>;
   warnings: string[];
+  // Number of embedded files (drawings, documents, photos) written back to
+  // storage. Optional so older backends that omit it still typecheck.
+  files_restored?: number;
 }
 
 // Supported backup format major version. Compatibility is derived locally from
@@ -95,7 +99,20 @@ async function restoreBackup(
     headers: token ? { Authorization: `Bearer ${token}` } : {},
     body: form,
   });
-  if (!resp.ok) throw new Error('Restore failed');
+  if (!resp.ok) {
+    // Surface the server's reason instead of a generic failure. In particular a
+    // replace into an account that already holds data comes back as 409 with a
+    // detail that tells the user to use merge; swallowing it would hide the way
+    // forward.
+    let detail = 'Restore failed';
+    try {
+      const body = await resp.json();
+      if (body?.detail) detail = String(body.detail);
+    } catch {
+      /* non-JSON error body: keep the generic message */
+    }
+    throw new Error(detail);
+  }
   return resp.json();
 }
 
@@ -265,13 +282,22 @@ export function BackupRestore() {
           (a, b) => a + b,
           0,
         );
+        const filesRestored = result.files_restored ?? 0;
         addToast({
           type: 'success',
           title: t('backup.restore_success', { defaultValue: 'Backup restored' }),
-          message: t('backup.restore_success_detail', {
-            defaultValue: '{{count}} records imported successfully',
-            count: totalRecords,
-          }),
+          message:
+            filesRestored > 0
+              ? t('backup.restore_success_detail_files', {
+                  defaultValue:
+                    '{{count}} records and {{files}} files imported successfully',
+                  count: totalRecords,
+                  files: filesRestored,
+                })
+              : t('backup.restore_success_detail', {
+                  defaultValue: '{{count}} records imported successfully',
+                  count: totalRecords,
+                }),
         });
         setSelectedFile(null);
         setValidation(null);
@@ -322,6 +348,17 @@ export function BackupRestore() {
           })}
         />
         <CardContent>
+          {/* Honest scope note: the backup currently carries the core estimation
+              graph, not yet the field/site modules. Full coverage is on the way. */}
+          <div className="mb-4 flex items-start gap-2.5 rounded-lg border border-oe-blue/20 bg-oe-blue-subtle/40 px-3.5 py-2.5">
+            <Info size={15} className="mt-0.5 shrink-0 text-oe-blue" />
+            <p className="text-xs text-content-secondary leading-relaxed">
+              {t('backup.scope_note', {
+                defaultValue:
+                  'A backup currently includes your projects, estimates and BOQ, schedules, cost data, documents, tenders and change orders. Site records such as daily diaries, takeoff measurements, inspections, safety and other module data are not part of the backup yet, full coverage is on the way.',
+              })}
+            </p>
+          </div>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 items-start">
             {/* ── Export Section ──────────────────────────────────────────── */}
             <div className="rounded-xl border border-border-light bg-surface-secondary/30 p-5 h-full">
