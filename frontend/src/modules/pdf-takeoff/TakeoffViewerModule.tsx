@@ -1148,6 +1148,10 @@ export default function TakeoffViewerModule({
     setSettingScale(false);
     setCalibrationMode(false);
     setScalePoints([]);
+    // Clear the live draw/calibration preview so no rubber-band or snap ring
+    // carries over to the new page (#367).
+    setLiveCursor(null);
+    setSnapPoint(null);
     // Abandon any in-flight in-canvas edit drag so it cannot bleed onto the
     // new page (#194).
     dragRef.current = null;
@@ -2195,6 +2199,7 @@ export default function TakeoffViewerModule({
     // closing edge back to the first vertex hints the area a polygon will
     // enclose. Skipped while panning (the cursor is not placing points).
     if (
+      !settingScale &&
       liveCursor &&
       !panning &&
       activePoints.length > 0 &&
@@ -2226,7 +2231,7 @@ export default function TakeoffViewerModule({
     }
 
     // In-progress rectangle/highlight drag preview
-    if (rectStartPoint && isDraggingRect && activePoints.length === 1) {
+    if (!settingScale && rectStartPoint && isDraggingRect && activePoints.length === 1) {
       const p0 = rectStartPoint;
       const p1 = activePoints[0]!;
       const rx = Math.min(p0.x, p1.x) * dpr * zoom;
@@ -2435,8 +2440,9 @@ export default function TakeoffViewerModule({
 
     // Snap-to-vertex cue (issue #303): a ring at the existing vertex the
     // in-progress point will lock onto, so the connection is visible before the
-    // click lands. Drawn last so it sits above everything.
-    if (snapPoint) {
+    // click lands. Drawn last so it sits above everything. Suppressed while a
+    // scale calibration is armed so a stale draw-snap ring cannot linger (#367).
+    if (snapPoint && !settingScale) {
       ctx.save();
       ctx.setLineDash([]);
       ctx.globalAlpha = 1;
@@ -2765,6 +2771,10 @@ export default function TakeoffViewerModule({
           const np1 = newPoints[1]!;
           const dist = pixelDistance(np0.x, np0.y, np1.x, np1.y);
           setSettingScale(false);
+          // The pick is done: clear the live preview so no rubber-band / snap
+          // ring is left frozen behind the calibration dialog (#367).
+          setLiveCursor(null);
+          setSnapPoint(null);
           if (calibrationMode) {
             // Route to the new multi-unit calibration dialog.
             setCalibrationPixels(dist);
@@ -3867,6 +3877,10 @@ export default function TakeoffViewerModule({
     setCalibrationMode(true);
     setSettingScale(true);
     setScalePoints([]);
+    // Drop any draw-tool live preview so no rubber-band / snap ring from an
+    // in-progress measurement tracks the calibration cursor or lingers (#367).
+    setLiveCursor(null);
+    setSnapPoint(null);
   }, []);
 
   /** User confirmed the calibration dialog — persist the new scale.
@@ -3902,6 +3916,8 @@ export default function TakeoffViewerModule({
   const handleCalibrationCancel = useCallback(() => {
     setShowCalibrationDialog(false);
     setScalePoints([]);
+    setLiveCursor(null);
+    setSnapPoint(null);
   }, []);
 
   /* ── Recalculate measurements when a PAGE'S scale changes ─────────────
@@ -4195,13 +4211,14 @@ export default function TakeoffViewerModule({
    *  such tool is drawing so the HUD hides. */
   const drawReadout: DrawReadout | null = useMemo(() => {
     if (
+      settingScale ||
       !liveCursor ||
       !(activeTool === 'distance' || activeTool === 'polyline' || activeTool === 'area' || activeTool === 'volume')
     ) {
       return null;
     }
     return computeDrawReadout(activePoints, liveCursor, scale);
-  }, [liveCursor, activeTool, activePoints, scale]);
+  }, [settingScale, liveCursor, activeTool, activePoints, scale]);
 
   /** The measurement currently hovered in select mode (for the tooltip). */
   const hoverMeasurement = useMemo(
@@ -6464,6 +6481,10 @@ export default function TakeoffViewerModule({
     setSettingScale(false);
     setCalibrationMode(false);
     setScalePoints([]);
+    // Drop any calibration/draw live preview so no rubber-band or snap ring is
+    // left frozen when the tool changes (#367).
+    setLiveCursor(null);
+    setSnapPoint(null);
     if (isAnnotationTool(tool)) {
       setAnnotationColor(DEFAULT_ANNOTATION_COLORS[tool]);
     }
@@ -6525,6 +6546,9 @@ export default function TakeoffViewerModule({
           setCalibrationMode(false);
           setSettingScale(false);
           setScalePoints([]);
+          // Clear the live preview so nothing is left frozen on the canvas (#367).
+          setLiveCursor(null);
+          setSnapPoint(null);
           return;
         }
         // Leave sticky pan mode (#316), mirroring a second click on the toggle.
@@ -7098,7 +7122,7 @@ export default function TakeoffViewerModule({
                 document actions; row 2 = scale + drawing tools. Related
                 controls sit in soft "segmented" tracks instead of being
                 separated by hairline dividers. */}
-            <div className="flex shrink-0 flex-col gap-1.5 rounded-lg border border-border bg-surface-primary p-1.5 shadow-xs">
+            <div className="takeoff-toolbar flex shrink-0 flex-col gap-1.5 rounded-lg border border-border bg-surface-primary p-1.5 shadow-xs">
               <div className="flex items-center gap-1 flex-wrap">
               {/* Page nav - prev / jump / next in one segmented track. */}
               <div className={TB_GROUP}>
@@ -7163,7 +7187,7 @@ export default function TakeoffViewerModule({
                   data-testid="find-on-sheet-toggle"
                 >
                   <Search size={15} />
-                  <span className="hidden sm:inline">{t('takeoff_viewer.find', { defaultValue: 'Find' })}</span>
+                  <span className="takeoff-toolbar-label">{t('takeoff_viewer.find', { defaultValue: 'Find' })}</span>
                 </button>
                 {searchOpen && (
                   <div
@@ -7343,7 +7367,7 @@ export default function TakeoffViewerModule({
                       data-testid="thumbnails-toggle"
                     >
                       <Layers size={15} />
-                      <span className="hidden sm:inline">{t('takeoff_viewer.thumbnails', { defaultValue: 'Pages' })}</span>
+                      <span className="takeoff-toolbar-label">{t('takeoff_viewer.thumbnails', { defaultValue: 'Pages' })}</span>
                     </button>
                   )}
                   <button
@@ -7355,7 +7379,7 @@ export default function TakeoffViewerModule({
                     data-testid="legend-toggle"
                   >
                     <List size={15} />
-                    <span className="hidden sm:inline">{t('takeoff_viewer.legend', { defaultValue: 'Legend' })}</span>
+                    <span className="takeoff-toolbar-label">{t('takeoff_viewer.legend', { defaultValue: 'Legend' })}</span>
                   </button>
                   {/* Declutter toggles: hide the on-canvas name badges and the
                       dimension values independently; geometry stays visible and
@@ -7369,7 +7393,7 @@ export default function TakeoffViewerModule({
                     data-testid="names-toggle"
                   >
                     <Type size={15} />
-                    <span className="hidden sm:inline">{t('takeoff_viewer.names', { defaultValue: 'Names' })}</span>
+                    <span className="takeoff-toolbar-label">{t('takeoff_viewer.names', { defaultValue: 'Names' })}</span>
                   </button>
                   <button
                     onClick={() => setShowDimensions((v) => !v)}
@@ -7380,7 +7404,7 @@ export default function TakeoffViewerModule({
                     data-testid="values-toggle"
                   >
                     <Hash size={15} />
-                    <span className="hidden sm:inline">{t('takeoff_viewer.values', { defaultValue: 'Values' })}</span>
+                    <span className="takeoff-toolbar-label">{t('takeoff_viewer.values', { defaultValue: 'Values' })}</span>
                   </button>
                   {/* Collapse the right sidebar for a larger drawing viewport (#315). */}
                   <button
@@ -7392,7 +7416,7 @@ export default function TakeoffViewerModule({
                     data-testid="sidebar-toggle"
                   >
                     <PanelRight size={15} />
-                    <span className="hidden sm:inline">{t('takeoff_viewer.panel', { defaultValue: 'Panel' })}</span>
+                    <span className="takeoff-toolbar-label">{t('takeoff_viewer.panel', { defaultValue: 'Panel' })}</span>
                   </button>
                 </div>
 
@@ -7438,7 +7462,7 @@ export default function TakeoffViewerModule({
                   data-testid="toolbar-export-pdf-button"
                 >
                   {isExportingPdf ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
-                  <span className="hidden sm:inline">{t('takeoff_viewer.save_pdf', { defaultValue: 'Save PDF' })}</span>
+                  <span className="takeoff-toolbar-label">{t('takeoff_viewer.save_pdf', { defaultValue: 'Save PDF' })}</span>
                 </button>
 
                 {/* New file */}
@@ -7457,7 +7481,7 @@ export default function TakeoffViewerModule({
               <div className={TB_GROUP}>
                 {/* Scale */}
                 <button
-                  onClick={() => { setCalibrationMode(false); setSettingScale(true); setScalePoints([]); }}
+                  onClick={() => { setCalibrationMode(false); setSettingScale(true); setScalePoints([]); setLiveCursor(null); setSnapPoint(null); }}
                   className={tbBtn(settingScale && !calibrationMode, 'purple')}
                   title={t('takeoff_viewer.set_scale', { defaultValue: 'Set scale' })}
                   aria-label={t('takeoff_viewer.set_scale', { defaultValue: 'Set scale' })}
@@ -7476,7 +7500,7 @@ export default function TakeoffViewerModule({
                   data-testid="calibrate-button"
                 >
                   <Ruler size={15} />
-                  <span className="hidden sm:inline">{t('takeoff_viewer.calibrate', { defaultValue: 'Calibrate' })}</span>
+                  <span className="hidden sm:inline">{t('takeoff_viewer.calibrate_short', { defaultValue: 'Calibrate' })}</span>
                 </button>
               </div>
 

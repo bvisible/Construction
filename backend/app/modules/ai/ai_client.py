@@ -180,6 +180,7 @@ async def call_anthropic(
     image_media_type: str = "image/jpeg",
     model: str | None = None,
     max_tokens: int = 4096,
+    timeout: float | None = None,
 ) -> tuple[str, int]:
     """Call Anthropic Claude API.
 
@@ -232,7 +233,7 @@ async def call_anthropic(
             "https://api.anthropic.com/v1/messages",
             headers=headers,
             json=payload,
-            timeout=AI_TIMEOUT,
+            timeout=timeout if timeout is not None else AI_TIMEOUT,
         )
         response.raise_for_status()
         data = response.json()
@@ -310,6 +311,7 @@ async def call_openai(
     image_media_type: str = "image/jpeg",
     model: str | None = None,
     max_tokens: int = 4096,
+    timeout: float | None = None,
 ) -> tuple[str, int]:
     """Call OpenAI API (ChatCompletions).
 
@@ -355,7 +357,7 @@ async def call_openai(
             "https://api.openai.com/v1/chat/completions",
             headers=headers,
             json=payload,
-            timeout=AI_TIMEOUT,
+            timeout=timeout if timeout is not None else AI_TIMEOUT,
         )
         response.raise_for_status()
         data = response.json()
@@ -376,6 +378,7 @@ async def call_gemini(
     image_media_type: str = "image/jpeg",
     model: str | None = None,
     max_tokens: int = 4096,
+    timeout: float | None = None,
 ) -> tuple[str, int]:
     """Call Google Gemini API (generateContent).
 
@@ -417,7 +420,7 @@ async def call_gemini(
         response = await client.post(
             url,
             json=payload,
-            timeout=AI_TIMEOUT,
+            timeout=timeout if timeout is not None else AI_TIMEOUT,
         )
         response.raise_for_status()
         data = response.json()
@@ -564,6 +567,7 @@ async def call_openai_compatible(
     max_tokens: int = 4096,
     model: str | None = None,
     base_url: str | None = None,  # self-hosted endpoint override
+    timeout: float | None = None,
 ) -> tuple[str, int]:
     """Call any OpenAI-compatible API (OpenRouter, Mistral, Groq, DeepSeek).
 
@@ -614,12 +618,21 @@ async def call_openai_compatible(
 
     # Prefer the caller-supplied endpoint, otherwise fall back to the config.
     endpoint = base_url or config["url"]
+    # SSRF guard for self-hosted runtimes: their endpoint is user-supplied, so
+    # re-resolve and re-check it at this single dispatch choke point (every
+    # Ollama / vLLM call funnels through here). Loopback / private stay allowed;
+    # link-local and cloud-metadata are blocked, plus any configured allowlist.
+    if provider in ("ollama", "vllm"):
+        from app.config import get_settings
+        from app.core.url_safety import resolve_and_validate_ai_provider_url
+
+        await resolve_and_validate_ai_provider_url(endpoint, get_settings().ai_provider_allowlist_hosts)
     async with httpx.AsyncClient() as client:
         response = await client.post(
             endpoint,
             headers=headers,
             json=payload,
-            timeout=AI_TIMEOUT,
+            timeout=timeout if timeout is not None else AI_TIMEOUT,
         )
         response.raise_for_status()
         data = response.json()
@@ -642,6 +655,7 @@ async def call_ai(
     max_tokens: int = 4096,
     model: str | None = None,
     base_url: str | None = None,  # self-hosted endpoint override
+    timeout: float | None = None,
 ) -> tuple[str, int]:
     """Route an AI call to the correct provider.
 
@@ -688,6 +702,7 @@ async def call_ai(
                     max_tokens=max_tokens,
                     base_url=base_url,  # forward any self-hosted endpoint
                     model=model_id,
+                    timeout=timeout,
                 )
 
             return _call
@@ -705,6 +720,7 @@ async def call_ai(
                     image_media_type,
                     model=model_id,
                     max_tokens=max_tokens,
+                    timeout=timeout,
                 )
 
             return _call

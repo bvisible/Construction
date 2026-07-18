@@ -38,6 +38,48 @@ interface ChangelogEntry {
 // date, title and meaning intact; trim the prose, not the facts.
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '11.14.0',
+    date: '2026-07-18',
+    tag: 'NEW',
+    summary:
+      'The sidebar Edit menu now hides and restores the bottom shortcut buttons (Settings, Users, Modules, Governance, Audit log, About) too, not just the main menu rows. The defects liability and interface management registers, which had shipped in English only, are now fully translated into every interface language.',
+  },
+  {
+    version: '11.13.0',
+    date: '2026-07-18',
+    tag: 'SECURITY',
+    summary:
+      'Two security fixes from disclosed reports: the in-app upgrade endpoint now requires an authenticated admin, and self-hosted AI provider URLs (Ollama, vLLM) are validated against internal and cloud-metadata targets before they are fetched. The PDF takeoff viewer also gets a shorter calibrate label, no stray draw previews during a scale calibration and a toolbar that collapses by its own width, and the cases are recolored per category with the case page reworked to lead with its title and steps.',
+  },
+  {
+    version: '11.12.0',
+    date: '2026-07-17',
+    tag: 'NEW',
+    summary:
+      'Assemblies become parametric: name the values that drive a recipe (an input, a constant, or one calculated from the others), give any component a quantity formula over them, and a preview shows the exact per-line quantities and rate the bill will get before you apply it. The five delivery registers from 11.11 now have their own pages in the app, and a desktop security advisory is cleared.',
+  },
+  {
+    version: '11.11.1',
+    date: '2026-07-16',
+    tag: 'FIX',
+    summary:
+      'A packaging fix for 11.11.0: a test type annotation tripped the strict frontend build in the release pipeline, so the installers and wheel did not publish. Same feature set, build corrected.',
+  },
+  {
+    version: '11.11.0',
+    date: '2026-07-16',
+    tag: 'NEW',
+    summary:
+      'Five new registers cover work that usually lives in spreadsheets: temporary works with its permit-to-load and permit-to-strike gates, the interface register between work packages, the defects liability period with its retention-release readiness signal, pre-construction site readiness, and on-site material stock. This release also stops the desktop app implying your data is lost when offline (it keeps saving locally, only live multi-user collaboration pauses), reopens external links in the system browser, adds a wider spread of project analytics, and closes cross-tenant access gaps on several endpoints.',
+  },
+  {
+    version: '11.10.0',
+    date: '2026-07-16',
+    tag: 'NEW',
+    summary:
+      'Onboarding no longer waits on a slow cost-base or sample download, moving you straight on with a live background progress bar, and the team-size step now previews the modules each size switches on and grows into. Model Review gains coordination tools: zoom to issue flies the 3D view to where an issue was raised, coordination mode walks the open issues for a meeting, a dashboard sums the backlog up, and the list prints to a clean report.',
+  },
+  {
     version: '11.9.0',
     date: '2026-07-16',
     tag: 'NEW',

@@ -57,6 +57,7 @@ import { useKeyboardShortcuts } from '@/shared/hooks/useKeyboardShortcuts';
 import { useTranslation } from 'react-i18next';
 import { getLanguageByCode } from './i18n';
 import { initErrorLogger } from '@/shared/lib/errorLogger';
+import { installDesktopExternalLinks } from '@/shared/lib/desktop';
 
 // Lazy-loaded heavy pages — code-split into separate chunks
 const BOQEditorPage = lazy(() =>
@@ -203,6 +204,27 @@ const InspectionsPage = lazy(() =>
 );
 const NCRPage = lazy(() =>
   import('@/features/ncr/NCRPage').then((m) => ({ default: m.NCRPage }))
+);
+// Delivery-lifecycle registers (backend modules oe_site_inventory / oe_site_prep /
+// oe_temporary_works / oe_interface_management / oe_defects_liability).
+const SiteInventoryPage = lazy(() =>
+  import('@/features/site-inventory/SiteInventoryPage').then((m) => ({ default: m.SiteInventoryPage }))
+);
+const SitePrepPage = lazy(() =>
+  import('@/features/site-prep/SitePrepPage').then((m) => ({ default: m.SitePrepPage }))
+);
+const TemporaryWorksPage = lazy(() =>
+  import('@/features/temporary-works/TemporaryWorksPage').then((m) => ({ default: m.TemporaryWorksPage }))
+);
+const InterfaceManagementPage = lazy(() =>
+  import('@/features/interface-management/InterfaceManagementPage').then((m) => ({
+    default: m.InterfaceManagementPage,
+  }))
+);
+const DefectsLiabilityPage = lazy(() =>
+  import('@/features/defects-liability/DefectsLiabilityPage').then((m) => ({
+    default: m.DefectsLiabilityPage,
+  }))
 );
 const MoCPage = lazy(() =>
   import('@/features/moc/MoCPage').then((m) => ({ default: m.MoCPage }))
@@ -454,6 +476,9 @@ const ProjectControlsPage = lazy(() =>
 );
 const ChangeIntelligencePage = lazy(() =>
   import('@/features/change-intelligence').then((m) => ({ default: m.ChangeIntelligencePage }))
+);
+const ClaimsEvidencePage = lazy(() =>
+  import('@/features/claims-evidence').then((m) => ({ default: m.ClaimsEvidencePage }))
 );
 const ValueDashboardPage = lazy(() =>
   import('@/features/value').then((m) => ({ default: m.ValueDashboardPage }))
@@ -873,6 +898,14 @@ export default function App() {
     (window as any).__ddc_oe = ddcVerifyIntegrity();
   }
 
+  // Desktop shell: outbound links (docs, GitHub, marketing site, contact mail)
+  // must be handed to the OS browser, because the webview swallows a
+  // target="_blank" anchor and nothing opens. Install the one global click
+  // handler once on mount. No-op in a normal web build.
+  useEffect(() => {
+    installDesktopExternalLinks();
+  }, []);
+
   // Pull the user's saved custom-unit catalogue once after auth resolves.
   // Fire-and-forget — the BOQ Unit dropdown still works from localStorage
   // before this completes; the server merge just keeps it consistent across
@@ -1202,6 +1235,16 @@ export default function App() {
         <Route path="/inspections" element={<P title="Inspections"><InspectionsPage /></P>} />
         <Route path="/projects/:projectId/ncr" element={<P title="NCR"><NCRPage /></P>} />
         <Route path="/ncr" element={<P title="NCR"><NCRPage /></P>} />
+        <Route path="/projects/:projectId/site-inventory" element={<P title="Site Inventory"><SiteInventoryPage /></P>} />
+        <Route path="/site-inventory" element={<P title="Site Inventory"><SiteInventoryPage /></P>} />
+        <Route path="/projects/:projectId/site-prep" element={<P title="Site Mobilisation"><SitePrepPage /></P>} />
+        <Route path="/site-prep" element={<P title="Site Mobilisation"><SitePrepPage /></P>} />
+        <Route path="/projects/:projectId/temporary-works" element={<P title="Temporary Works"><TemporaryWorksPage /></P>} />
+        <Route path="/temporary-works" element={<P title="Temporary Works"><TemporaryWorksPage /></P>} />
+        <Route path="/projects/:projectId/interface-management" element={<P title="Interface Register"><InterfaceManagementPage /></P>} />
+        <Route path="/interface-management" element={<P title="Interface Register"><InterfaceManagementPage /></P>} />
+        <Route path="/projects/:projectId/defects-liability" element={<P title="Defects Liability"><DefectsLiabilityPage /></P>} />
+        <Route path="/defects-liability" element={<P title="Defects Liability"><DefectsLiabilityPage /></P>} />
         <Route path="/projects/:projectId/moc" element={<P title="Management of Change"><MoCPage /></P>} />
         <Route path="/moc" element={<P title="Management of Change"><MoCPage /></P>} />
         {/* Construction Control (QA/QC) - acceptance criteria, inspections,
@@ -1389,6 +1432,8 @@ export default function App() {
         <Route path="/projects/:projectId/variations" element={<P title="Variations"><VariationsPage /></P>} />
         <Route path="/change-intelligence" element={<P title="Change Intelligence"><ChangeIntelligencePage /></P>} />
         <Route path="/projects/:projectId/change-intelligence" element={<P title="Change Intelligence"><ChangeIntelligencePage /></P>} />
+        <Route path="/claims-evidence" element={<P title="Claims Evidence"><ClaimsEvidencePage /></P>} />
+        <Route path="/projects/:projectId/claims-evidence" element={<P title="Claims Evidence"><ClaimsEvidencePage /></P>} />
         <Route path="/value" element={<P title="Value Realized"><ValueDashboardPage /></P>} />
         <Route path="/projects/:projectId/value" element={<P title="Value Realized"><ValueDashboardPage /></P>} />
         <Route path="/phone-log" element={<P title="Phone Log"><PhoneLogPage /></P>} />

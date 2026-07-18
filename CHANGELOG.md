@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [11.14.0] - 2026-07-18
+
+The sidebar Edit menu now reaches the bottom shortcut row. When you open it, the setup buttons at the very bottom (Settings, Users, Modules, Governance, Audit log, About) turn into the same hide and show tiles as the rest of the menu, so you can switch off the ones you never use and bring them back the same way. Nothing is ever lost. Edit menu always brings every tile back.
+
+The defects liability and interface management registers shipped in English only in 11.11. They are now fully translated across every interface language, so their badges, warranty and deadline labels and status text read in the user's own language like the rest of the app.
+
+## [11.13.0] - 2026-07-18
+
+Two security fixes from responsibly disclosed reports. The in-app upgrade endpoint used to run with no authentication, so anyone who could reach the API on a quickstart or an exposed install could force a package reinstall or a downgrade, and it now requires an authenticated admin and is rejected before any pip process starts. Self-hosted AI provider URLs for Ollama and vLLM were fetched server-side without validation, so a saved base URL could point the server at an internal host or the cloud metadata endpoint, and they are now checked when saved and again after DNS resolution at the single point every AI call funnels through. Loopback and private addresses stay reachable so a local runtime still works out of the box, while link-local and cloud metadata are always blocked, and an operator can set an allowlist to restrict endpoints to a known set.
+
+The PDF takeoff viewer gets three fixes reported from the field. The scale-calibrate button showed its full tooltip text as its label and now reads a short "Calibrate", with the longer description kept in the tooltip. Starting a two-click scale calibration no longer leaves the draw tools painting underneath it: the rubber-band, the snap ring and the measurement readout are hidden for the pick and cleared afterwards, so nothing is left frozen on the canvas. The toolbar top row no longer wraps to a second line when the side panels are open, because the button labels now collapse to icons by the toolbar's own width instead of the viewport width.
+
+On the cases, every case scene is drawn in the accent color of its category so the cases hub and the dashboard preview read as a colored set, the case page now leads with the case title and tags above the process with a compact full-width row of step cards, and the dashboard "learn by example" block previews ten cases per row instead of eight.
+
+## [11.12.0] - 2026-07-17
+
+Assemblies become parametric. An assembly can now carry named parameters, an input the estimator enters with a default, a fixed constant, or a value calculated from the others, and each component can set its quantity from a formula over those parameters. Write the reinforcement as the wall area times a ratio, enter the wall area when you apply the assembly, and the quantity and its cost follow. The editor gains a parameters panel that checks the graph as you type and flags a cycle, a missing reference or a bad formula inline, a per-line formula field with an fx marker on any line whose quantity is computed, and a preview that shows the exact before and after quantity for each line and the rolled-up rate the server will write, so what you preview is what lands on the bill. The parameter graph is validated on every create, update and import, and a formula stays exact to the cent because it runs on the same decimal engine as a per-element quantity.
+
+The five delivery registers added in 11.11 now have their own pages in the app. Site inventory, site preparation, temporary works, the interface register and the defects liability period are reachable from the sidebar with full create, edit and close flows, not only through the API.
+
+On housekeeping, the desktop lockfile moves serde_with past a known advisory, and the linter pin is aligned across the pre-commit hook, the continuous integration gate and the project config so a format check run locally matches the one that runs on a push.
+
+## [11.11.1] - 2026-07-16
+
+A packaging fix for 11.11.0. A type annotation in the bill of quantities Excel export test tripped the strict frontend build inside the release pipeline, so the 11.11.0 installers and Python wheel never published. The build is corrected and the full 11.11.0 feature set ships here unchanged.
+
+## [11.11.0] - 2026-07-16
+
+This release adds five registers for parts of a job that usually live in spreadsheets. Temporary works tracks falsework, propping and excavation support through their design check, permit to load and permit to strike, and flags anything carrying load without a valid permit. The interface register tracks the handshakes between work packages and contractors, who owns each one, who is waiting on it, the date it must be agreed by, and a health score per package. The defects liability register carries post-handover warranties and the defect notices raised against them, and works out which entries have run their period with no outstanding defects and are clear for the final retention release. Site preparation is a pre-construction mobilization checklist with an overall readiness gate, and site inventory meters material on site with a running stock balance per location.
+
+The project dashboard and analytics get a wider spread of numbers: bid line-level parity, clash interference ranked against the schedule, a BIM quality scorecard with a trend, cost-composition KPIs, committed cost against budget, design versus earned quantity variance, contract final-account readiness, a retention and withholding ledger, leading and lagging safety indicators, and supplier on-time-in-full delivery. Post-calculation compares planned against actual labour productivity per work item, forms gain conditional fields that show or require themselves based on other answers, meetings export to iCalendar, and BIM-LV containers import and export to DIN SPEC 91350. A bill of quantities exported to Excel now re-imports faithfully, updating each position in place instead of creating duplicates.
+
+On the desktop app the offline banner no longer suggests your data is lost when there is no internet. The desktop backend runs on your own machine, so your work keeps saving locally, and the banner now says exactly that and notes only live multi-user collaboration pauses until the connection returns. External links open in the system browser again instead of doing nothing. This release also closes cross-tenant access gaps on several by-id and list endpoints, so a project can only ever be read or changed by someone who belongs to it.
+
+## [11.10.0] - 2026-07-16
+
+Onboarding no longer makes a new user wait. Importing a regional cost base or installing a sample project can take a while on a small server, and the first-run wizard used to sit and wait for it. Now it hands that work to the server, moves you straight on to the next step, and shows a live progress bar while the base and the samples load in the background. If a base is slow or unavailable the wizard carries on regardless, so nothing blocks the start.
+
+The team-size step now shows what each size actually gets. Alongside a plain size hint, from just you up to fifty plus people, picking or hovering a size previews the modules it switches on and the ones it grows into at the next size up, with the always-on essentials called out. It stays a single step, so it is clear at a glance what a small firm starts with and what is there to grow into later.
+
+Model Review became a place to run a coordination review, not just a list of issues next to a model. Zoom to issue flies the 3D view back to where an issue was raised and highlights the elements it concerns, from either the list or the issue detail. Coordination mode walks the open issues one at a time for a review meeting, flying to each, changing status and dropping notes as you go, paged with the arrow keys. A review dashboard sums the backlog up by status, priority, assignee, overdue and ageing, and the issue list prints to a clean report for a meeting hand-out.
+
+The Windows installer now speaks the platform's languages, so the setup screens follow the language the rest of the app is in instead of always defaulting to English.
+
 ## [11.9.0] - 2026-07-16
 
 The files area grew into a proper document workspace. A right-click menu now opens rename, download, move, status and delete right where you are working, search looks inside document contents and not just file names, and long folders load a page at a time instead of all at once. You can drag files straight in from your desktop to upload them, move between files with the keyboard, and set the review status on a whole selection at once.

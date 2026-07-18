@@ -184,7 +184,21 @@ const BOQ_COLUMNS = [
   'Variant',
   'Type',
   'Code',
+  // Round-trip identity (GitHub #360). The stable position UUID, kept as the
+  // last column so the human-facing layout above is unchanged. On re-import a
+  // row carrying an id that belongs to the BOQ updates that position in place
+  // instead of duplicating it. Do not edit these cells.
+  'Position ID',
 ];
+
+/** The stable position id for the round-trip identity column. A UUID never
+ *  starts with a formula-trigger char, so it needs no neutralisation; we
+ *  still coerce to a string and fall back to an empty cell for a section /
+ *  resource row that carries no id. */
+function positionIdCell(pos: Position): string | null {
+  const id = (pos as unknown as { id?: unknown }).id;
+  return id == null || id === '' ? null : String(id);
+}
 
 /** Read the CWICR variant marker (if any) off a position's metadata.
  *  Returns the cell text to drop into the "Variant" column:
@@ -306,6 +320,8 @@ export function buildBOQSheetData(options: ExportOptions): {
       null,
       null,
       null,
+      // Sections carry their id too so a renamed section round-trips.
+      positionIdCell(group.section),
     ]);
     merge(sectionRowIdx, 1, sectionRowIdx, 4);
 
@@ -325,6 +341,7 @@ export function buildBOQSheetData(options: ExportOptions): {
         })(),
         null,
         null,
+        positionIdCell(child),
       ]);
       // NEOFFICE — métré provenance sub-row (how the quantity was obtained).
       const metreChild = showMetre ? metreLineForExport(child) : null;
@@ -345,6 +362,8 @@ export function buildBOQSheetData(options: ExportOptions): {
           null,
           neutraliseFormula(r.type || ''),
           neutraliseFormula(r.code || ''),
+          // Resource breakdown rows are not positions - no round-trip id.
+          null,
         ]);
       }
     }
@@ -356,6 +375,7 @@ export function buildBOQSheetData(options: ExportOptions): {
       null,
       null,
       showPrices ? group.subtotal : null,
+      null,
       null,
       null,
       null,
@@ -381,6 +401,7 @@ export function buildBOQSheetData(options: ExportOptions): {
       })(),
       null,
       null,
+      positionIdCell(pos),
     ]);
     // NEOFFICE — métré provenance sub-row (how the quantity was obtained).
     const metrePos = showMetre ? metreLineForExport(pos) : null;
@@ -399,6 +420,8 @@ export function buildBOQSheetData(options: ExportOptions): {
         null,
         neutraliseFormula(r.type || ''),
         neutraliseFormula(r.code || ''),
+        // Resource breakdown rows are not positions - no round-trip id.
+        null,
       ]);
     }
   }
@@ -547,6 +570,7 @@ export async function buildBOQWorkbookBuffer(options: ExportOptions): Promise<Ar
     { width: 22 }, // Variant
     { width: 12 }, // Type
     { width: 14 }, // Code
+    { width: 38 }, // Position ID (round-trip identity, GitHub #360)
   ];
 
   // Number format for quantity / unit rate / total columns (1-based: 4, 5, 6).

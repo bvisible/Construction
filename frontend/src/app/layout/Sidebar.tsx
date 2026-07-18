@@ -94,6 +94,12 @@ import {
   PackageCheck,
   Loader2,
   ScanEye,
+  // Delivery-lifecycle register icons.
+  Flag,
+  Warehouse,
+  Construction,
+  Handshake,
+  FileWarning,
   type LucideIcon,
 } from 'lucide-react';
 import { useAuthStore } from '@/stores/useAuthStore';
@@ -451,6 +457,7 @@ const navGroups: NavGroup[] = [
       { labelKey: 'moc.title', to: '/moc', icon: Replace, advancedOnly: true },
       { labelKey: 'nav.change_orders', to: '/changeorders', icon: FileEdit, advancedOnly: true },
       { labelKey: 'nav.change_intelligence', to: '/change-intelligence', icon: BrainCircuit, advancedOnly: true },
+      { labelKey: 'nav.claims_evidence', to: '/claims-evidence', icon: ShieldCheck, advancedOnly: true },
       { labelKey: 'nav.value', to: '/value', icon: TrendingUp, advancedOnly: true },
     ],
   },
@@ -509,8 +516,10 @@ const navGroups: NavGroup[] = [
     defaultOpen: true,
     hideInSimple: true,
     items: [
+      { labelKey: 'site_prep.title', to: '/site-prep', icon: Flag },
       { labelKey: 'nav.service', to: '/service', icon: Wrench },
       { labelKey: 'nav.site_logistics', to: '/site-logistics', icon: Truck },
+      { labelKey: 'site_inventory.title', to: '/site-inventory', icon: Warehouse },
       { labelKey: 'nav.portal', to: '/portal', icon: Globe },
     ],
   },
@@ -563,6 +572,7 @@ const navGroups: NavGroup[] = [
     items: [
       { labelKey: 'nav.commissioning', to: '/commissioning', icon: ClipboardCheck },
       { labelKey: 'closeout.title', to: '/closeout', icon: PackageCheck },
+      { labelKey: 'defects_liability.title', to: '/defects-liability', icon: FileWarning },
       { labelKey: 'nav.forms', to: '/forms', icon: ClipboardList },
     ],
   },
@@ -578,6 +588,7 @@ const navGroups: NavGroup[] = [
     items: [
       { labelKey: 'safety.title', to: '/safety', icon: HardHat },
       { labelKey: 'nav.hse_advanced', to: '/hse-advanced', icon: Shield, advancedOnly: true },
+      { labelKey: 'temporary_works.title', to: '/temporary-works', icon: Construction },
       { labelKey: 'nav.qms', to: '/qms', icon: BadgeCheck, advancedOnly: true },
     ],
   },
@@ -609,6 +620,7 @@ const navGroups: NavGroup[] = [
       { labelKey: 'contacts.title', to: '/contacts', icon: Users },
       { labelKey: 'meetings.title', to: '/meetings', icon: CalendarDays },
       { labelKey: 'rfi.title', to: '/rfi', icon: HelpCircle, advancedOnly: true },
+      { labelKey: 'interface_management.title', to: '/interface-management', icon: Handshake },
       { labelKey: 'correspondence.title', to: '/correspondence', icon: Mail, advancedOnly: true },
       { labelKey: 'nav.collaboration', to: '/collaboration', icon: Users, moduleKey: 'collaboration', advancedOnly: true },
     ],
@@ -939,6 +951,12 @@ const ROUTE_BACKEND_MODULE: Record<string, string> = {
   '/commissioning': 'oe_commissioning',
   '/esg': 'oe_esg',
   '/forms': 'oe_forms',
+  // Delivery-lifecycle registers (v11.11 backend, surfaced in this wave).
+  '/site-prep': 'oe_site_prep',
+  '/site-inventory': 'oe_site_inventory',
+  '/temporary-works': 'oe_temporary_works',
+  '/interface-management': 'oe_interface_management',
+  '/defects-liability': 'oe_defects_liability',
 };
 
 // localStorage key for collapsed state
@@ -1139,8 +1157,11 @@ export function Sidebar({ onClose }: { onClose?: () => void }) {
   // Role-gate the admin grid. Items without a `roleGate` always show;
   // gated items only render when the current JWT role matches. The
   // backend `RequirePermission` decorator still enforces real access —
-  // this is just to keep the sidebar tidy for non-admin users.
-  const visibleAdminGridItems = adminGridItems.filter(
+  // this is just to keep the sidebar tidy for non-admin users. The
+  // hidden-state filter is applied further down (once `editMode` and
+  // `hiddenModules` are in scope) so these bottom tiles can be hidden and
+  // restored through the same Edit menu gesture as the nav rows.
+  const roleVisibleAdminGridItems = adminGridItems.filter(
     (item) => !item.roleGate || (userRole && (item.roleGate as string[]).includes(userRole)),
   );
 
@@ -1238,6 +1259,16 @@ export function Sidebar({ onClose }: { onClose?: () => void }) {
   // and every row) drops out entirely; in edit mode this is empty so the
   // group still renders — dimmed — and the user can switch it back on.
   const effectiveHiddenGroups = editMode ? [] : hiddenGroups;
+
+  // Bottom admin/setup tiles (Settings, Users, Modules, Governance, Audit,
+  // About). In edit mode we render every role-visible tile so hidden ones
+  // can be toggled back on; in normal mode the ones the user hid drop out.
+  // They share the same `hiddenModules` route list as the nav rows, so a
+  // hidden tile counts toward the "{N} hidden" badge and the single
+  // Save/Cancel gesture covers rows, sections and these tiles together.
+  const visibleAdminGridItems = editMode
+    ? roleVisibleAdminGridItems
+    : roleVisibleAdminGridItems.filter((item) => !hiddenModules.includes(item.to));
 
   // Custom-module request dialog — opens from the "Request a custom
   // module" CTA at the bottom of the nav (below the "+ Add module"
@@ -1940,6 +1971,9 @@ export function Sidebar({ onClose }: { onClose?: () => void }) {
           activeRoute={activeRoute}
           iconified={iconified}
           onNavigate={onClose}
+          editMode={editMode}
+          hiddenSet={editingHidden}
+          onToggleHidden={toggleItemHidden}
         />
 
         {/* Update notification — compact clickable card in the sidebar; the
@@ -2530,11 +2564,21 @@ function AdminGrid({
   activeRoute,
   iconified,
   onNavigate,
+  editMode,
+  hiddenSet,
+  onToggleHidden,
 }: {
   items: NavItem[];
   activeRoute?: string | null;
   iconified?: boolean;
   onNavigate?: () => void;
+  /** When true, each tile becomes a hide/show target: clicking it toggles
+   *  the tile's hidden state instead of navigating, it dims while hidden,
+   *  and an Eye / EyeOff indicator shows its state. Mirrors the per-row
+   *  editor on the nav list so the whole menu curates in one gesture. */
+  editMode?: boolean;
+  hiddenSet?: string[];
+  onToggleHidden?: (route: string) => void;
 }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -2576,36 +2620,60 @@ function AdminGrid({
   // Expanded mode: 2×N grid. Each tile is a real <button> so keyboard
   // focus + Enter activation Just Work; we navigate imperatively so the
   // button retains semantics (NavLink renders as <a>, which would
-  // confuse screen readers that expect a button grid).
+  // confuse screen readers that expect a button grid). In edit mode the
+  // tile stops navigating and instead toggles its own hidden state, dims
+  // while hidden and shows an Eye / EyeOff indicator — the bottom-cluster
+  // twin of the per-row editor above.
   return (
     <ul className="grid grid-cols-2 gap-1">
       {items.map((item) => {
         const Icon = item.icon;
         const isActive = activeRoute === item.to;
         const label = t(item.labelKey);
+        const editable = editMode && !!onToggleHidden;
+        const isHidden = editable ? (hiddenSet?.includes(item.to) ?? false) : false;
+        const editLabel = isHidden
+          ? t('sidebar.show_item', { defaultValue: 'Show {{label}}', label })
+          : t('sidebar.hide_item', { defaultValue: 'Hide {{label}}', label });
         return (
           <li key={item.to}>
             <button
               type="button"
               onClick={() => {
+                if (editable) {
+                  onToggleHidden!(item.to);
+                  return;
+                }
                 navigate(item.to);
                 onNavigate?.();
               }}
-              aria-label={label}
-              aria-current={isActive ? 'page' : undefined}
-              title={label}
+              aria-label={editable ? editLabel : label}
+              aria-current={!editMode && isActive ? 'page' : undefined}
+              aria-pressed={editable ? isHidden : undefined}
+              title={editable ? editLabel : label}
               className={clsx(
                 'group flex h-8 w-full items-center justify-start gap-1.5 rounded-md border px-2 text-left transition-colors duration-fast ease-oe',
                 'focus:outline-none focus-visible:ring-2 focus-visible:ring-oe-blue/40',
-                isActive
+                isActive && !editMode
                   ? 'border-transparent bg-oe-blue/[0.14] text-oe-blue shadow-[inset_0_0_0_1px_rgba(0,122,255,0.18)] dark:bg-oe-blue/25'
                   : 'border-border-light/60 bg-surface-primary text-content-secondary hover:bg-surface-secondary hover:text-content-primary hover:border-border-medium',
+                isHidden && 'opacity-50',
               )}
             >
-              <Icon size={14} strokeWidth={isActive ? 2 : 1.75} aria-hidden className="shrink-0" />
+              <Icon
+                size={14}
+                strokeWidth={isActive && !editMode ? 2 : 1.75}
+                aria-hidden
+                className="shrink-0"
+              />
               <span className="min-w-0 flex-1 text-[11px] font-medium leading-none whitespace-nowrap overflow-hidden text-ellipsis">
                 {label}
               </span>
+              {editable && (
+                <span aria-hidden className="shrink-0 text-content-quaternary">
+                  {isHidden ? <EyeOff size={11} strokeWidth={2} /> : <Eye size={11} strokeWidth={2} />}
+                </span>
+              )}
             </button>
           </li>
         );

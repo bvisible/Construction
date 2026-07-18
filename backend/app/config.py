@@ -241,6 +241,13 @@ class Settings(BaseSettings):
     app_debug: bool = True
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     allowed_origins: str = "http://localhost:5173"
+    # Optional allowlist for self-hosted AI provider endpoints (Ollama / vLLM).
+    # Empty (default) permits any loopback / private address so a local runtime
+    # works out of the box, while link-local and cloud-metadata addresses stay
+    # blocked. Set a comma-separated list of hostnames and/or CIDR ranges (e.g.
+    # "ollama.internal,10.20.0.0/16") to lock AI provider URLs to a known set;
+    # anything outside it is then rejected. Binds OE_AI_PROVIDER_ALLOWLIST.
+    ai_provider_allowlist: str = ""
 
     # ── Database ─────────────────────────────────────────────────────────
     # PostgreSQL is required; embedded PostgreSQL boots by default (no Docker),
@@ -357,6 +364,18 @@ class Settings(BaseSettings):
     # without chicken-and-egg. Self-hosters who explicitly want open
     # registration can set ``OE_REGISTRATION_MODE=open`` in their .env.
     registration_mode: Literal["open", "email-verify", "admin-approve", "closed"] = "admin-approve"
+
+    # ── Multi-tenant row-level security ──────────────────────────────────
+    # When True, each request sets a transaction-local ``app.current_tenant``
+    # GUC from the caller's tenant, and - once the non-superuser runtime role
+    # and per-table policies are in place - PostgreSQL row-level security fails
+    # closed on every tenant-scoped table, so one tenant can never read or write
+    # another's rows even if an app-layer filter is missed. Default False: the
+    # GUC is not set and behaviour is byte-for-byte unchanged, so turning RLS on
+    # is an explicit, reversible operator decision made only after the isolation
+    # tests pass on the target database. Global reference data (cost items,
+    # regional indices, catalogs) is never tenant-scoped. Env: ``OE_RLS_ENFORCE``.
+    rls_enforce: bool = False
 
     # ── AI / Vector ──────────────────────────────────────────────────────
     # Default: Qdrant (CWICR v3 pipeline - BAAI/bge-m3 + 30 per-language
@@ -612,6 +631,12 @@ class Settings(BaseSettings):
     @property
     def cors_origins(self) -> list[str]:
         return [o.strip() for o in self.allowed_origins.split(",")]
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def ai_provider_allowlist_hosts(self) -> list[str]:
+        """Parsed AI provider allowlist (hostnames / CIDRs), empties dropped."""
+        return [h.strip() for h in self.ai_provider_allowlist.split(",") if h.strip()]
 
     @model_validator(mode="after")
     def _refuse_default_jwt_in_non_dev(self) -> "Settings":

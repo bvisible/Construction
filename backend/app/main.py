@@ -57,7 +57,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import Settings, build_provenance_tag, desktop_mode, get_settings
 from app.core.deployment_posture import build_data_security_posture
 from app.core.module_loader import module_loader
-from app.dependencies import RequireRole, get_current_user_id
+from app.dependencies import RequireRole, get_current_user_id, rls_request_context
 
 logger = logging.getLogger(__name__)
 
@@ -1065,6 +1065,12 @@ def create_app() -> FastAPI:
         openapi_url="/api/openapi.json" if not settings.is_production else None,
         swagger_ui_oauth2_redirect_url=("/api/docs/oauth2-redirect" if not settings.is_production else None),
         redirect_slashes=False,
+        # Row-level-security: bind the caller's tenant to the request context on
+        # every route, so the after_begin GUC listener (app.core.rls) can scope
+        # tenant-owned tables in PostgreSQL. Anonymous callers bind no tenant.
+        # Inert until OE_RLS_ENFORCE is enabled and requests connect through the
+        # non-superuser role.
+        dependencies=[Depends(rls_request_context)],
         # NOTE: do NOT set default_response_class=ORJSONResponse here.
         # FastAPI's own deprecation warning explains why: "FastAPI now
         # serializes data directly to JSON bytes via Pydantic when a
@@ -1858,7 +1864,11 @@ def create_app() -> FastAPI:
         setattr(app.state, cache_key, {"data": result, "checked_at": time.time()})
         return result
 
-    @app.post("/api/system/upgrade", tags=["System"])
+    @app.post(
+        "/api/system/upgrade",
+        tags=["System"],
+        dependencies=[Depends(RequireRole("admin"))],
+    )
     async def trigger_upgrade(
         version: str | None = None,
         force: bool = False,
@@ -1880,10 +1890,18 @@ def create_app() -> FastAPI:
         their launcher (``openconstructionerp serve``) or, on managed
         installs, the host's systemd unit.
 
-        Gated by ``ALLOW_RUNTIME_UPGRADE=true`` (default off in
-        production) - VPS / staging installs use a deploy pipeline, not
-        in-app upgrades. Localhost dev / Windows-installer installs ship
-        with the flag on so the Settings panel works out of the box.
+        **Admin only.** Requires an authenticated user with the ``admin``
+        role (``RequireRole("admin")``); an unauthenticated or non-admin
+        caller is rejected before any pip process starts. This closes the
+        earlier gap where the route ran with no authentication at all, so a
+        quickstart install reachable on the network could be forced to
+        reinstall / downgrade by anyone.
+
+        Additionally gated by ``ALLOW_RUNTIME_UPGRADE`` (defaults on).
+        Managed deployments that upgrade through a deploy pipeline can set
+        ``ALLOW_RUNTIME_UPGRADE=false`` to disable the route entirely;
+        localhost dev and the desktop / Windows-installer builds leave it
+        on so the Settings panel works out of the box.
         """
         import os
         import subprocess
@@ -2663,6 +2681,19 @@ def create_app() -> FastAPI:
                     logger.info("Alembic version stamped to head %s on fresh DB", stamped)
             except Exception:
                 logger.debug("Alembic head stamp skipped (non-fatal)", exc_info=True)
+
+            # Provision multi-tenant row-level security (opt-in). Runs after
+            # create_all so every tenant table exists on both fresh and upgraded
+            # databases; a no-op that never touches the database while
+            # settings.rls_enforce is off, so it is inert on a default install.
+            try:
+                from app.core.rls_setup import provision_rls
+
+                rls_stats = await provision_rls(engine, Base)
+                if rls_stats.get("tables"):
+                    logger.info("RLS enforcement active: %d tenant tables policied", rls_stats["tables"])
+            except Exception:
+                logger.warning("RLS provisioning skipped (non-fatal)", exc_info=True)
         else:
             logger.info("Using external database (Alembic manages schema)")
 
