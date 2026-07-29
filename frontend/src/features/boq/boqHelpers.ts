@@ -229,6 +229,28 @@ export function saveCustomUnit(unit: string): void {
   apiPatch('/v1/users/me/custom-units/', { units: custom }).catch(() => undefined);
 }
 
+// //// NEOFFICE PATCH — "remark" lines.
+/**
+ * A cost line the estimator uses as free text rather than as work: no unit
+ * means no quantity, no rate and no amount. Swiss BOQs are full of these (a
+ * note under a chapter heading, a precision covering the next positions), and
+ * printing "0.00" in three columns for them reads as an unpriced line the
+ * estimate forgot. Leaving the unit empty is the signal estimators already use
+ * naturally, so there is nothing new to learn.
+ *
+ * Never true for a section, footer or resource row, so the masking those
+ * already have keeps working unchanged.
+ */
+export function isRemarkLine(d: Record<string, unknown> | undefined | null): boolean {
+  if (!d) return false;
+  if (d._isSection || d._isFooter || d._isResource || d._isAddResource || d._isVariantHeader) {
+    return false;
+  }
+  const u = d.unit;
+  return typeof u !== 'string' || u.trim() === '';
+}
+// //// END NEOFFICE PATCH
+
 // //// NEOFFICE PATCH — units that actually carry a construction BOQ, floated to
 // the top of the picker (see getUnitsForLocale). Everything else stays available
 // below; this is ordering, not filtering.

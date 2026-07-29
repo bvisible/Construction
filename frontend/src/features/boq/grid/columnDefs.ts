@@ -12,6 +12,7 @@ import {
   fmtWithCurrency,
   hasContributingResources,
   resourceAwareTotalInBase,
+  isRemarkLine,
 } from '../boqHelpers';
 import type { DisplayQuantityApi } from '@/shared/hooks/useDisplayQuantity';
 import { unitColumnValueSetter } from './cellEditors';
@@ -312,6 +313,7 @@ function isCostLine(d: Record<string, unknown> | undefined): boolean {
     !!d && !d._isSection && !d._isFooter && !d._isResource && !d._isAddResource && !d._isVariantHeader
   );
 }
+
 
 /**
  * A cost line with no quantity yet. Zero and missing both count - the line
@@ -630,7 +632,11 @@ export function getColumnDefs(context: BOQColumnContext): ColDef[] {
       headerName: t('boq.quantity', { defaultValue: 'Qty' }),
       field: 'quantity',
       width: 110,
-      editable: (params) => !params.data?._isSection && !params.data?._isFooter && !params.data?._isResource,
+      // //// NEOFFICE PATCH — a remark line (no unit) carries no quantity.
+      // //// END NEOFFICE PATCH
+      editable: (params) =>
+        !params.data?._isSection && !params.data?._isFooter && !params.data?._isResource
+        && !isRemarkLine(params.data),
       // Issue #90: Excel-style formulas in Qty (=2*PI()^2*3, =sqrt(144),
       // 12.5 x 4, …). The editor is CSP-safe (no eval); the resolved
       // numeric value goes into the column and the source formula is
@@ -688,6 +694,9 @@ export function getColumnDefs(context: BOQColumnContext): ColDef[] {
       width: 130,
       editable: (params) => {
         if (params.data?._isSection || params.data?._isFooter) return false;
+        // //// NEOFFICE PATCH — a remark line (no unit) carries no rate.
+        if (isRemarkLine(params.data)) return false;
+        // //// END NEOFFICE PATCH
         // Position rate is the sum of resource subtotals — never editable
         // when the position is resource-DRIVEN (carries a resource with a
         // non-zero quantity). A position with only blank / zero-quantity
@@ -784,6 +793,11 @@ export function getColumnDefs(context: BOQColumnContext): ColDef[] {
       valueGetter: (params) => {
         const d = params.data;
         if (!d || d._isFooter || d._isSection) return d?.total ?? 0;
+        // //// NEOFFICE PATCH — a remark line (no unit) has no amount: return
+        // null rather than 0 so the formatter leaves the cell blank instead of
+        // printing "0.00", and so the column footer does not count it.
+        if (isRemarkLine(d)) return null;
+        // //// END NEOFFICE PATCH
         const meta = (d.metadata || d.metadata_ || {}) as Record<string, unknown>;
         const resources = meta.resources;
         const ctx = params.context as BOQColumnContext | undefined;

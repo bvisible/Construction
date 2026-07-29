@@ -42,6 +42,7 @@ import {
   getUnitsForLocale,
   hasContributingResources,
   saveCustomUnit,
+  isRemarkLine,
 } from '../boqHelpers';
 import { RESOURCE_TYPES, getResourceTypeLabel } from '../boqResourceTypes';
 import { countComments } from '../CommentDrawer';
@@ -971,7 +972,16 @@ export function DescriptionCellRenderer(params: ICellRendererParams) {
   // comfortable / tall let the full multi-line Langtext show, honouring the
   // newlines stored in the description and scrolling within the (taller) row
   // when the text overflows.
-  const descMultiline = (ctx?.descDensity ?? 'compact') !== 'compact';
+  // //// NEOFFICE PATCH — a description that CONTAINS newlines is shown with
+  // them, whatever the density. The editor is a 14-row textarea, so an
+  // estimator writing a multi-line specification could type line breaks and
+  // then never see them: the default "compact" density truncates to one line,
+  // which reads as "this software cannot do line breaks" (client question:
+  // "how do I go to the next line in Description?"). Single-line descriptions
+  // keep the compact behaviour untouched.
+  // //// END NEOFFICE PATCH
+  const descHasNewline = typeof displayValue === 'string' && displayValue.includes('\n');
+  const descMultiline = (ctx?.descDensity ?? 'compact') !== 'compact' || descHasNewline;
   const descTextCls = descMultiline
     ? 'whitespace-pre-wrap break-words leading-snug min-w-0 w-full overflow-y-auto max-h-full'
     : 'truncate min-w-0';
@@ -5100,6 +5110,11 @@ export function ResourceFullWidthRenderer(params: ICellRendererParams) {
 
 export function QuantityCellRenderer(params: ICellRendererParams) {
   const { data, value, context } = params;
+  // //// NEOFFICE PATCH — a remark line (a position left without a unit) shows
+  // no quantity: it is free text under a chapter, not measured work. Printing
+  // "0.00" there reads as an unpriced line the estimate forgot.
+  // //// END NEOFFICE PATCH
+  if (isRemarkLine(data)) return <span />;
   if (!data || data._isSection || data._isFooter) {
     // Footer rows (Direct Cost / Net Total / VAT / Gross Total) must not
     // display a numeric Qty — totals don't have a meaningful quantity (Bug 15).
