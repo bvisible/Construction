@@ -27,7 +27,7 @@ from __future__ import annotations
 import logging
 import uuid
 from collections import defaultdict
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
@@ -37,7 +37,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.audit_log import log_activity
 from app.core.events import event_bus
 from app.core.permissions import ROLE_HIERARCHY, _resolve_role
-from app.modules.approval_routes import delegation_engine
+from app.modules.approval_routes import analytics, delegation_engine
 from app.modules.approval_routes.delegation_engine import DelegationView
 from app.modules.approval_routes.models import (
     INSTANCE_STATUSES,
@@ -51,11 +51,19 @@ from app.modules.approval_routes.models import (
 )
 from app.modules.approval_routes.repository import ApprovalRouteRepository
 from app.modules.approval_routes.schemas import (
+    AnalyticsBottleneck,
+    AnalyticsKpis,
+    AnalyticsRoleStat,
+    AnalyticsStepStat,
+    ApprovalAnalyticsResponse,
     DecisionSubmit,
     InstanceCreate,
     RouteCreate,
     RouteUpdate,
+    StepCreate,
 )
+from app.modules.approval_routes.simulate import step_cleared
+from app.modules.approval_routes.timeline import compute_timeline
 
 logger = logging.getLogger(__name__)
 
@@ -234,6 +242,55 @@ class ApprovalRouteService:
         )
         return route
 
+    async def clone_route(
+        self,
+        route_id: uuid.UUID,
+        *,
+        project_id: uuid.UUID,
+        name: str | None,
+        created_by: uuid.UUID | None,
+    ) -> Route:
+        """Copy a route (typically a read-only system preset) into a project.
+
+        The clone is an ordinary project-scoped route - no ``system_key`` - so
+        it can be edited straight away through :meth:`update_route`. This is
+        how a team "adopts" a tenant-wide preset in one click while keeping
+        the original preset untouched and reusable by every other project.
+        """
+        source = await self.get_route(route_id)
+        source_steps = await self.repo.list_steps(route_id)
+        if not source_steps:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Route has no steps to clone",
+            )
+
+        payload = RouteCreate(
+            project_id=project_id,
+            name=(name or source.name).strip() or source.name,
+            target_kind=source.target_kind,
+            is_active=True,
+            steps=[
+                StepCreate(
+                    ordinal=s.ordinal,
+                    approver_role=s.approver_role,
+                    approver_user_id=s.approver_user_id,
+                    mode=s.mode,
+                    required_approver_count=s.required_approver_count,
+                    sla_hours=s.sla_hours,
+                )
+                for s in source_steps
+            ],
+        )
+        clone = await self.create_route(payload, created_by=created_by)
+        logger.info(
+            "Approval route cloned: source=%s clone=%s project=%s",
+            route_id,
+            clone.id,
+            project_id,
+        )
+        return clone
+
     async def update_route(
         self,
         route_id: uuid.UUID,
@@ -345,6 +402,182 @@ class ApprovalRouteService:
     ) -> dict[uuid.UUID, list[StepState]]:
         """Batched accessor - kills the per-instance N+1 in :get:`/instances`."""
         return await self.repo.list_step_states_for_instances(instance_ids)
+
+    async def instance_timeline(self, instance_id: uuid.UUID) -> dict:
+        """Held-days / approval-timeline analytics for one instance.
+
+        Assembles the per-step held time, total cycle time and SLA breaches
+        from the instance timestamps, its route steps (for ordinal + SLA) and
+        the recorded decisions. Pure computation lives in
+        :func:`app.modules.approval_routes.timeline.compute_timeline`; this
+        method only loads the rows and maps step ids to ordinals.
+        """
+        instance = await self.get_instance(instance_id)
+        steps = await self.list_steps(instance.route_id)
+        states = await self.list_step_states(instance_id)
+
+        ordinal_by_step: dict[uuid.UUID, int] = {s.id: s.ordinal for s in steps}
+        sla_by_ordinal: dict[int, int | None] = {s.ordinal: s.sla_hours for s in steps}
+
+        # A step (one ordinal) may collect several decision rows when it needs
+        # multiple approvers; the step is "decided" at the last decision on it.
+        decided_by_ordinal: dict[int, datetime] = {}
+        for st in states:
+            if st.decided_at is None:
+                continue
+            ordinal = ordinal_by_step.get(st.step_id)
+            if ordinal is None:
+                continue
+            prev = decided_by_ordinal.get(ordinal)
+            if prev is None or st.decided_at > prev:
+                decided_by_ordinal[ordinal] = st.decided_at
+
+        decisions: list[tuple[int, datetime | None]] = [(s.ordinal, decided_by_ordinal.get(s.ordinal)) for s in steps]
+
+        timeline = compute_timeline(
+            status=instance.status,
+            started_at=instance.started_at,
+            completed_at=instance.completed_at,
+            reference=datetime.now(UTC),
+            decisions=decisions,
+            sla_hours_by_ordinal=sla_by_ordinal,
+        )
+        return timeline.as_dict()
+
+    async def project_analytics(
+        self,
+        *,
+        project_id: uuid.UUID,
+        target_kind: str | None = None,
+        days: int = 180,
+        started_after: datetime | None = None,
+        started_before: datetime | None = None,
+        cap: int = 5000,
+    ) -> ApprovalAnalyticsResponse:
+        """Aggregate a project's approval workflows into cycle-time analytics.
+
+        Reuses the per-instance assembly from :meth:`instance_timeline` (collapse
+        each ordinal to its latest decision) across every instance on the
+        project's own routes, then delegates the held-time maths to the pure
+        :mod:`app.modules.approval_routes.analytics` aggregate. No schema change -
+        every input already lives on Instance / Route / Step / StepState.
+        """
+        now = datetime.now(UTC)
+        # An explicit range wins over the rolling window; range_days then stays
+        # None so the response tells the UI which mode produced the numbers.
+        if started_after is None and started_before is None:
+            started_after = now - timedelta(days=days)
+            range_days: int | None = days
+        else:
+            range_days = None
+
+        # Only the project's OWN routes belong to its analytics (tenant-wide
+        # presets are excluded, matching the /instances drill-down in
+        # router.list_instances).
+        routes = await self.list_routes(
+            project_id=project_id,
+            target_kind=target_kind,
+            include_inactive=True,
+        )
+        own = [r for r in routes if r.project_id == project_id]
+        route_name = {r.id: r.name for r in own}
+        route_ids = list(route_name)
+
+        if not route_ids:
+            empty = analytics.aggregate([], reference=now)
+            return ApprovalAnalyticsResponse(
+                project_id=project_id,
+                generated_at=now,
+                range_days=range_days,
+                started_after=started_after,
+                started_before=started_before,
+                sample_size=0,
+                truncated=False,
+                kpis=AnalyticsKpis(**empty.kpis.as_dict()),
+                by_role=[],
+                by_step=[],
+                bottlenecks=[],
+            )
+
+        # Exact status counts - accurate even when the compute set below is
+        # capped, so the KPI headline never undercounts a busy project.
+        status_counts = await self.repo.count_instances_by_status_for_routes(
+            route_ids,
+            started_after=started_after,
+            started_before=started_before,
+        )
+
+        # Bounded compute set (cap + 1 so truncation is detectable).
+        instances = await self.repo.list_instances_for_routes(
+            route_ids,
+            started_after=started_after,
+            started_before=started_before,
+            limit=cap + 1,
+        )
+        truncated = len(instances) > cap
+        if truncated:
+            instances = instances[:cap]
+        sample_size = len(instances)
+
+        steps_by_route = await self.repo.list_steps_for_routes(route_ids)
+        states_by_instance = await self.repo.list_step_states_for_instances(
+            [i.id for i in instances],
+        )
+
+        inputs: list[analytics.InstanceInput] = []
+        for inst in instances:
+            steps = steps_by_route.get(inst.route_id, [])
+            ordinal_by_step = {s.id: s.ordinal for s in steps}
+            # A step (one ordinal) may collect several decision rows; it is
+            # "decided" at the latest one (mirrors instance_timeline).
+            decided_by_ordinal: dict[int, datetime] = {}
+            for st in states_by_instance.get(inst.id, []):
+                if st.decided_at is None:
+                    continue
+                ordinal = ordinal_by_step.get(st.step_id)
+                if ordinal is None:
+                    continue
+                prev = decided_by_ordinal.get(ordinal)
+                if prev is None or st.decided_at > prev:
+                    decided_by_ordinal[ordinal] = st.decided_at
+            inputs.append(
+                analytics.InstanceInput(
+                    instance_id=str(inst.id),
+                    route_id=str(inst.route_id),
+                    route_name=route_name.get(inst.route_id, ""),
+                    status=inst.status,
+                    started_at=inst.started_at,
+                    completed_at=inst.completed_at,
+                    current_step_ordinal=inst.current_step_ordinal,
+                    steps=tuple(analytics.StepMeta(s.ordinal, s.approver_role, s.sla_hours) for s in steps),
+                    decisions=tuple((s.ordinal, decided_by_ordinal.get(s.ordinal)) for s in steps),
+                ),
+            )
+
+        result = analytics.aggregate(inputs, reference=now)
+
+        # The five status counts come from the exact GROUP BY; every other KPI
+        # is compute-derived over the (bounded) sample.
+        kpis_dict = result.kpis.as_dict()
+        kpis_dict["total_instances"] = sum(status_counts.values())
+        kpis_dict["pending"] = status_counts.get("pending", 0)
+        kpis_dict["approved"] = status_counts.get("approved", 0)
+        kpis_dict["rejected"] = status_counts.get("rejected", 0)
+        kpis_dict["cancelled"] = status_counts.get("cancelled", 0)
+
+        return ApprovalAnalyticsResponse(
+            project_id=project_id,
+            generated_at=now,
+            range_days=range_days,
+            started_after=started_after,
+            started_before=started_before,
+            sample_size=sample_size,
+            truncated=truncated,
+            kpis=AnalyticsKpis(**kpis_dict),
+            by_role=[AnalyticsRoleStat(**r.as_dict()) for r in result.by_role],
+            by_step=[AnalyticsStepStat(**s.as_dict()) for s in result.by_step],
+            bottlenecks=[AnalyticsBottleneck(**b.as_dict()) for b in result.bottlenecks],
+        )
 
     async def list_instances(
         self,
@@ -967,53 +1200,35 @@ class ApprovalRouteService:
             instance_id=instance.id,
             step_id=step.id,
         )
-        # Only count decisive (approved) rows for advance purposes.
+        # Tally the decisive rows once, then defer the advance rule to
+        # ``simulate.step_cleared`` - the single source of truth shared with
+        # the dry-run simulator so the running engine and the preview can
+        # never disagree.
+        #
+        # Role semantics (the engine does not expand roles to members - that
+        # is the consumer module's job) are driven by ``mode``:
+        #   any      - first approval advances
+        #   all      - every eligible approver approves, no rejection rows
+        #   majority - > 50% of the eligible approvers approved, no rejections
+        # When the author declares the eligible population on the step
+        # (``required_approver_count``) it is evaluated against that. Without
+        # it, ``all`` / ``majority`` require more than one distinct approver as
+        # the safe, non-deadlocking fallback, so the first approver cannot
+        # close a gate that was meant to require several.
         approvals = [s for s in states if s.decision == "approved"]
         approver_ids: set[uuid.UUID | None] = {s.approver_user_id for s in approvals}
-
-        if step.approver_user_id is not None:
-            # User-pinned: one approval from that user advances.
-            cleared = step.approver_user_id in approver_ids
-        else:
-            # Role-based: the engine does not expand roles to members
-            # (that's the consumer module's job), so we use sensible
-            # defaults driven by ``mode``:
-            #
-            #   any       - first approval advances
-            #   all       - every eligible approver has to approve, with no
-            #               rejection rows (rejections short-circuit upstream)
-            #   majority  - > 50% of the eligible approvers approved
-            #               (rejections short-circuit)
-            #
-            # The consumer can override this by passing an explicit
-            # ``approver_user_id`` list when defining the route - at that
-            # point the step becomes user-pinned per row.
-            #
-            # ``all`` / ``majority`` must NOT clear on a single approval:
-            # that evaluated only the rows submitted so far, not the
-            # eligible population, so the very first approver closed a gate
-            # that was meant to require several. When the route author has
-            # declared the eligible population on the step
-            # (``required_approver_count``) we evaluate against it; without
-            # it we cannot know the true population, so we require more than
-            # one distinct approver to have approved (with no rejection) as
-            # the safe non-deadlocking fallback.
-            quorum = step.required_approver_count
-            approver_count = len({s.approver_user_id for s in approvals})
-            rejections = [s for s in states if s.decision == "rejected"]
-            if step.mode == "any":
-                cleared = len(approvals) >= 1
-            elif step.mode == "majority":
-                if quorum is not None and quorum >= 1:
-                    cleared = approver_count * 2 > quorum and len(rejections) == 0
-                else:
-                    total_acted = len([s for s in states if s.decision != "pending"])
-                    cleared = total_acted >= 2 and len(approvals) * 2 > total_acted
-            else:  # "all"
-                if quorum is not None and quorum >= 1:
-                    cleared = approver_count >= quorum and len(rejections) == 0
-                else:
-                    cleared = approver_count >= 2 and len(rejections) == 0
+        rejections = [s for s in states if s.decision == "rejected"]
+        total_acted = len([s for s in states if s.decision != "pending"])
+        cleared = step_cleared(
+            mode=step.mode,
+            user_pinned=step.approver_user_id is not None,
+            pinned_user_approved=step.approver_user_id in approver_ids,
+            approvals=len(approvals),
+            distinct_approvers=len(approver_ids),
+            rejections=len(rejections),
+            total_acted=total_acted,
+            quorum=step.required_approver_count,
+        )
 
         if not cleared:
             return None

@@ -27,6 +27,7 @@ import {
   Button,
   Card,
   Badge,
+  CollapsibleSection,
   EmptyState,
   Breadcrumb,
   RecoveryCard,
@@ -53,6 +54,7 @@ import { MoneyDisplay } from '@/shared/ui/MoneyDisplay';
 import { DateDisplay } from '@/shared/ui/DateDisplay';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { apiGet, getErrorMessage } from '@/shared/lib/api';
+import { onlyChangedFields } from '@/shared/lib/apiHelpers';
 import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { usePreferencesStore } from '@/stores/usePreferencesStore';
@@ -106,6 +108,8 @@ import {
   type EotStatus,
 } from './api';
 import { variationsGuide } from './variationsGuide';
+import { InsightsPanel, InsightsToggleButton, useModuleInsights } from '@/features/insights';
+import { buildVariationsInsights } from './variationsInsights';
 
 const VARIATIONS_TAB_IDS = ['notices', 'requests', 'orders', 'daywork', 'eot'] as const;
 type Tab = (typeof VARIATIONS_TAB_IDS)[number];
@@ -166,8 +170,16 @@ interface ProjectStub {
   currency?: string;
 }
 
+/**
+ * The failure is deliberately left to propagate.
+ *
+ * Swallowing it into an empty array made a project list that failed to load
+ * indistinguishable from an account with no projects, and the page then told
+ * the user to go and create one. That is worse than an error: it is confident,
+ * wrong, and it sends them off to fix a problem they do not have.
+ */
 function listProjectsLite(): Promise<ProjectStub[]> {
-  return apiGet<ProjectStub[]>('/v1/projects/?limit=200').catch(() => [] as ProjectStub[]);
+  return apiGet<ProjectStub[]>('/v1/projects/?limit=200');
 }
 
 /**
@@ -299,12 +311,12 @@ function HowVariationsWork() {
   ];
 
   return (
-    <div className="rounded-xl border border-border-light bg-surface-secondary/40 p-4">
-      <h2 className="flex items-center gap-1.5 text-sm font-semibold text-content-primary">
-        <Network size={15} className="text-oe-blue" />
-        {t('variations.flow_title', { defaultValue: 'How variations work, and what they connect to' })}
-      </h2>
-      <p className="mt-1 text-xs text-content-tertiary">
+    <CollapsibleSection
+      storageKey="variations.how"
+      icon={<Network size={15} className="text-oe-blue" />}
+      title={t('variations.flow_title', { defaultValue: 'How variations work, and what they connect to' })}
+    >
+      <p className="text-xs text-content-tertiary">
         {t('variations.flow_intro', {
           defaultValue:
             'Turn every site change into an agreed, priced variation order so nothing is lost at settlement. Start by raising a notice for the current project.',
@@ -351,7 +363,7 @@ function HowVariationsWork() {
         {' · '}
         <ModLink to="/reports">{t('variations.mod_reports', { defaultValue: 'Reports' })}</ModLink>
       </div>
-    </div>
+    </CollapsibleSection>
   );
 }
 
@@ -554,6 +566,39 @@ export function VariationsPage() {
     return items.filter((e) => (e.description || '').toLowerCase().includes(s));
   }, [eotQ.data, search]);
 
+  // Module Insights - the toggleable visualization panel for this module. It
+  // charts the variation requests already loaded (the entity that carries each
+  // change's estimated cost and schedule impact); when the project has none,
+  // buildVariationsInsights returns a labelled sample set so the panel is never
+  // empty on first open. Declared before the no-project early return below so
+  // the hook order stays stable.
+  const insights = useModuleInsights('variations', { defaultOpen: true });
+  const { datasets: insightDatasets, builtins: insightBuiltins } = useMemo(
+    () => buildVariationsInsights(requestsQ.data ?? [], currency, t),
+    [requestsQ.data, currency, t],
+  );
+
+  // A project list that failed to load is not an account without projects, and
+  // the two must not lead to the same screen. Only say there is nothing here
+  // once the list has actually come back.
+  if (!projectId && (projectsQ.isError || projectsQ.isPending)) {
+    return (
+      <div className="space-y-5 animate-fade-in">
+        <Breadcrumb items={[{ label: t('nav.variations', { defaultValue: 'Variations' }) }]} />
+        {projectsQ.isError ? (
+          <RecoveryCard
+            error={projectsQ.error}
+            onRetry={() => {
+              void projectsQ.refetch();
+            }}
+          />
+        ) : (
+          <SkeletonTable rows={4} />
+        )}
+      </div>
+    );
+  }
+
   if (!projectId) {
     return (
       <div className="space-y-5 animate-fade-in">
@@ -614,6 +659,7 @@ export function VariationsPage() {
         })}
         actions={
           <>
+            <InsightsToggleButton open={insights.open} onClick={insights.toggle} />
             <ModuleGuideButton content={variationsGuide} />
             <Button variant="primary" icon={<Plus size={14} />} onClick={() => setCreateOpen(true)}>
               {tab === 'notices'
@@ -628,6 +674,19 @@ export function VariationsPage() {
             </Button>
           </>
         }
+      />
+
+      {/* Module Insights panel - toggled by the header button. Placed high so
+          its charts (real, or labelled sample) are visible as the page opens. */}
+      <InsightsPanel
+        open={insights.open}
+        title={t('variations.insights.title', { defaultValue: 'Variations insights' })}
+        datasets={insightDatasets}
+        builtins={insightBuiltins}
+        custom={insights.custom}
+        onAdd={insights.addCustom}
+        onUpdate={insights.updateCustom}
+        onRemove={insights.removeCustom}
       />
 
       <HowVariationsWork />
@@ -2198,6 +2257,66 @@ function toDateInput(v: string | null | undefined): string {
   return v ? v.slice(0, 10) : '';
 }
 
+/* ── Form initializers ──────────────────────────────────────────────────
+ * Pure so they can serve twice: once to seed the form and once to hold the
+ * untouched baseline `submit` compares against. A single definition is the
+ * point. If the baseline were built any other way, a field the user never
+ * touched could still read as changed and get written back.
+ * ---------------------------------------------------------------------- */
+
+export function initNoticeForm(n: Notice | null) {
+  return {
+    title: n?.title ?? '',
+    description: n?.description ?? '',
+    recipient_type: (n?.recipient_type ?? 'owner') as Notice['recipient_type'],
+    recipient_name: n?.recipient_name ?? '',
+    target_response_date: toDateInput(n?.target_response_date),
+  };
+}
+
+export function initVrForm(r: VariationRequest | null, currency: string) {
+  return {
+    title: r?.title ?? '',
+    description: r?.description ?? '',
+    notice_id: r?.notice_id ?? '',
+    classification: (r?.classification ?? 'scope_change') as VariationRequest['classification'],
+    urgency: (r?.urgency ?? 'med') as VariationRequest['urgency'],
+    estimated_cost_impact: r != null ? String(r.estimated_cost_impact ?? '0') : '0',
+    estimated_schedule_days: r != null ? String(r.estimated_schedule_days ?? '0') : '0',
+    currency: r?.currency || currency,
+  };
+}
+
+export function initVoForm(o: VariationOrder | null, currency: string) {
+  return {
+    title: o?.title ?? '',
+    variation_request_id: o?.variation_request_id ?? '',
+    final_cost_impact: o != null ? String(o.final_cost_impact ?? '0') : '0',
+    final_schedule_days: o != null ? String(o.final_schedule_days ?? '0') : '0',
+    currency: o?.currency || currency,
+  };
+}
+
+export function initDayworkForm(d: DayworkSheet | null, currency: string) {
+  return {
+    work_date: toDateInput(d?.work_date),
+    description: d?.description ?? '',
+    currency: d?.currency || currency,
+  };
+}
+
+export function initEotForm(e: ExtensionOfTimeClaim | null) {
+  return {
+    description: e?.description ?? '',
+    root_cause_category: (e?.root_cause_category ??
+      'neutral') as ExtensionOfTimeClaim['root_cause_category'],
+    requested_days: e != null ? String(e.requested_days ?? '0') : '0',
+    critical_path_impact: e?.critical_path_impact ?? false,
+    claim_period_start: toDateInput(e?.claim_period_start),
+    claim_period_end: toDateInput(e?.claim_period_end),
+  };
+}
+
 /**
  * Dual-purpose modal: with no `editTarget` it creates a new sub-entity
  * (unchanged behaviour); with an `editTarget` it prefills the SAME form
@@ -2228,70 +2347,39 @@ function CreateModal({
   const [busy, setBusy] = useState(false);
   const isEdit = !!editTarget;
 
-  const [noticeForm, setNoticeForm] = useState(() => {
-    const n =
-      editTarget?.kind === 'notices' ? editTarget.row : null;
-    return {
-      title: n?.title ?? '',
-      description: n?.description ?? '',
-      recipient_type: (n?.recipient_type ?? 'owner') as Notice['recipient_type'],
-      recipient_name: n?.recipient_name ?? '',
-      target_response_date: toDateInput(n?.target_response_date),
-    };
-  });
+  // Each form keeps the state it was initialized with. Comparing against that
+  // baseline rather than against the raw row is what makes the change detection
+  // in `submit` trustworthy: both sides have been through the same defaulting
+  // and date formatting, so an untouched field always compares equal.
+  const noticeBase = useMemo(
+    () => initNoticeForm(editTarget?.kind === 'notices' ? editTarget.row : null),
+    [editTarget],
+  );
+  const [noticeForm, setNoticeForm] = useState(noticeBase);
 
-  const [vrForm, setVrForm] = useState(() => {
-    const r =
-      editTarget?.kind === 'requests' ? editTarget.row : null;
-    return {
-      title: r?.title ?? '',
-      description: r?.description ?? '',
-      notice_id: r?.notice_id ?? '',
-      classification: (r?.classification ??
-        'scope_change') as VariationRequest['classification'],
-      urgency: (r?.urgency ?? 'med') as VariationRequest['urgency'],
-      estimated_cost_impact:
-        r != null ? String(r.estimated_cost_impact ?? '0') : '0',
-      estimated_schedule_days:
-        r != null ? String(r.estimated_schedule_days ?? '0') : '0',
-      currency: r?.currency || currency,
-    };
-  });
+  const vrBase = useMemo(
+    () => initVrForm(editTarget?.kind === 'requests' ? editTarget.row : null, currency),
+    [editTarget, currency],
+  );
+  const [vrForm, setVrForm] = useState(vrBase);
 
-  const [voForm, setVoForm] = useState(() => {
-    const o = editTarget?.kind === 'orders' ? editTarget.row : null;
-    return {
-      title: o?.title ?? '',
-      variation_request_id: o?.variation_request_id ?? '',
-      final_cost_impact:
-        o != null ? String(o.final_cost_impact ?? '0') : '0',
-      final_schedule_days:
-        o != null ? String(o.final_schedule_days ?? '0') : '0',
-      currency: o?.currency || currency,
-    };
-  });
+  const voBase = useMemo(
+    () => initVoForm(editTarget?.kind === 'orders' ? editTarget.row : null, currency),
+    [editTarget, currency],
+  );
+  const [voForm, setVoForm] = useState(voBase);
 
-  const [dwForm, setDwForm] = useState(() => {
-    const d = editTarget?.kind === 'daywork' ? editTarget.row : null;
-    return {
-      work_date: toDateInput(d?.work_date),
-      description: d?.description ?? '',
-      currency: d?.currency || currency,
-    };
-  });
+  const dwBase = useMemo(
+    () => initDayworkForm(editTarget?.kind === 'daywork' ? editTarget.row : null, currency),
+    [editTarget, currency],
+  );
+  const [dwForm, setDwForm] = useState(dwBase);
 
-  const [eotForm, setEotForm] = useState(() => {
-    const e = editTarget?.kind === 'eot' ? editTarget.row : null;
-    return {
-      description: e?.description ?? '',
-      root_cause_category: (e?.root_cause_category ??
-        'neutral') as ExtensionOfTimeClaim['root_cause_category'],
-      requested_days: e != null ? String(e.requested_days ?? '0') : '0',
-      critical_path_impact: e?.critical_path_impact ?? false,
-      claim_period_start: toDateInput(e?.claim_period_start),
-      claim_period_end: toDateInput(e?.claim_period_end),
-    };
-  });
+  const eotBase = useMemo(
+    () => initEotForm(editTarget?.kind === 'eot' ? editTarget.row : null),
+    [editTarget],
+  );
+  const [eotForm, setEotForm] = useState(eotBase);
 
   const submit = async () => {
     setBusy(true);
@@ -2299,13 +2387,20 @@ function CreateModal({
       const editId = editTarget?.row.id ?? '';
       if (kind === 'notices') {
         if (isEdit && editTarget?.kind === 'notices') {
-          await updateNotice(editId, {
-            title: noticeForm.title.trim(),
-            description: noticeForm.description.trim(),
-            recipient_type: noticeForm.recipient_type,
-            recipient_name: noticeForm.recipient_name.trim(),
-            target_response_date: noticeForm.target_response_date || null,
-          });
+          await updateNotice(
+            editId,
+            onlyChangedFields(
+              {
+                title: noticeForm.title.trim(),
+                description: noticeForm.description.trim(),
+                recipient_type: noticeForm.recipient_type,
+                recipient_name: noticeForm.recipient_name.trim(),
+                target_response_date: noticeForm.target_response_date || null,
+              },
+              noticeForm,
+              noticeBase,
+            ),
+          );
         } else {
           await createNotice({
             project_id: projectId,
@@ -2324,15 +2419,22 @@ function CreateModal({
         });
       } else if (kind === 'requests') {
         if (isEdit && editTarget?.kind === 'requests') {
-          await updateVR(editId, {
-            title: vrForm.title.trim(),
-            description: vrForm.description.trim(),
-            classification: vrForm.classification,
-            urgency: vrForm.urgency,
-            estimated_cost_impact: Number(vrForm.estimated_cost_impact) || 0,
-            estimated_schedule_days: Number(vrForm.estimated_schedule_days) || 0,
-            currency: vrForm.currency,
-          });
+          await updateVR(
+            editId,
+            onlyChangedFields(
+              {
+                title: vrForm.title.trim(),
+                description: vrForm.description.trim(),
+                classification: vrForm.classification,
+                urgency: vrForm.urgency,
+                estimated_cost_impact: Number(vrForm.estimated_cost_impact) || 0,
+                estimated_schedule_days: Number(vrForm.estimated_schedule_days) || 0,
+                currency: vrForm.currency,
+              },
+              vrForm,
+              vrBase,
+            ),
+          );
         } else {
           await createVR({
             project_id: projectId,
@@ -2354,12 +2456,19 @@ function CreateModal({
         });
       } else if (kind === 'orders') {
         if (isEdit && editTarget?.kind === 'orders') {
-          await updateVO(editId, {
-            title: voForm.title.trim(),
-            final_cost_impact: Number(voForm.final_cost_impact) || 0,
-            final_schedule_days: Number(voForm.final_schedule_days) || 0,
-            currency: voForm.currency,
-          });
+          await updateVO(
+            editId,
+            onlyChangedFields(
+              {
+                title: voForm.title.trim(),
+                final_cost_impact: Number(voForm.final_cost_impact) || 0,
+                final_schedule_days: Number(voForm.final_schedule_days) || 0,
+                currency: voForm.currency,
+              },
+              voForm,
+              voBase,
+            ),
+          );
         } else {
           await createVO({
             project_id: projectId,
@@ -2378,11 +2487,18 @@ function CreateModal({
         });
       } else if (kind === 'daywork') {
         if (isEdit && editTarget?.kind === 'daywork') {
-          await updateDaywork(editId, {
-            work_date: dwForm.work_date || null,
-            description: dwForm.description.trim(),
-            currency: dwForm.currency,
-          });
+          await updateDaywork(
+            editId,
+            onlyChangedFields(
+              {
+                work_date: dwForm.work_date || null,
+                description: dwForm.description.trim(),
+                currency: dwForm.currency,
+              },
+              dwForm,
+              dwBase,
+            ),
+          );
         } else {
           await createDaywork({
             project_id: projectId,
@@ -2403,12 +2519,19 @@ function CreateModal({
         });
       } else if (kind === 'eot') {
         if (isEdit && editTarget?.kind === 'eot') {
-          await updateEoT(editId, {
-            description: eotForm.description.trim(),
-            root_cause_category: eotForm.root_cause_category,
-            requested_days: Number(eotForm.requested_days) || 0,
-            critical_path_impact: eotForm.critical_path_impact,
-          });
+          await updateEoT(
+            editId,
+            onlyChangedFields(
+              {
+                description: eotForm.description.trim(),
+                root_cause_category: eotForm.root_cause_category,
+                requested_days: Number(eotForm.requested_days) || 0,
+                critical_path_impact: eotForm.critical_path_impact,
+              },
+              eotForm,
+              eotBase,
+            ),
+          );
         } else {
           await createEoT({
             project_id: projectId,

@@ -58,6 +58,8 @@ import {
   PieChart,
   FoldVertical,
   UnfoldVertical,
+  ListTree,
+  ListCollapse,
 } from 'lucide-react';
 import { Button } from '@/shared/ui';
 import { useBoqDescDensityStore, type BoqDescDensity } from '@/stores/useBoqDescDensityStore';
@@ -81,7 +83,8 @@ export interface BOQToolbarProps {
   importInputRef: React.RefObject<HTMLInputElement | null>;
   onImportInputChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
   // Export
-  onExport: (format: 'excel' | 'csv' | 'pdf' | 'gaeb', content: DevisExportContent) => void;
+  // NEOFFICE — keeps our DevisExportContent toggles; 'bc3' added upstream (v12).
+  onExport: (format: 'excel' | 'csv' | 'pdf' | 'gaeb' | 'bc3', content: DevisExportContent) => void;
   /**
    * Open the embodied-carbon view for this BOQ. When provided, a "Carbon
    * footprint" action appears in the File group; the host wires it to
@@ -129,6 +132,19 @@ export interface BOQToolbarProps {
   // Expand / collapse every section at once
   onToggleCollapseAll?: () => void;
   allSectionsCollapsed?: boolean;
+  /**
+   * Show or hide the resource breakdown under every position at once. Showing
+   * also expands the sections, because a position inside a collapsed section
+   * renders nothing and the button would look broken.
+   */
+  onToggleAllResources?: () => void;
+  resourcesAllExpanded?: boolean;
+  /**
+   * How many positions carry resources. Zero disables the toggle: on a BOQ
+   * priced with flat unit rates there is no breakdown to show, and a live
+   * button that does nothing reads as a bug.
+   */
+  expandableResourceCount?: number;
   /**
    * ── Grand-Total summary, rendered as its own card to the right of the
    * toolbar card. Falls back to wrapping below on narrow screens. Pass `null`
@@ -205,6 +221,9 @@ export function BOQToolbar({
   onShowShortcuts,
   onToggleCollapseAll,
   allSectionsCollapsed,
+  onToggleAllResources,
+  resourcesAllExpanded,
+  expandableResourceCount,
   summary,
 }: BOQToolbarProps) {
   /* ── Export dropdown (portaled so it floats above the grid) ────────── */
@@ -247,7 +266,7 @@ export function BOQToolbar({
     };
   }, [showExportMenu]);
 
-  const handleExportItem = (format: 'excel' | 'csv' | 'pdf' | 'gaeb') => {
+  const handleExportItem = (format: 'excel' | 'csv' | 'pdf' | 'gaeb' | 'bc3') => {
     setShowExportMenu(false);
     onExport(format, exportContent);
   };
@@ -405,6 +424,30 @@ export function BOQToolbar({
               testId="boq-collapse-all-toggle"
             />
           )}
+          {onToggleAllResources && (
+            <IconBtn
+              icon={resourcesAllExpanded ? <ListCollapse size={15} /> : <ListTree size={15} />}
+              title={
+                expandableResourceCount === 0
+                  ? t('boq.no_resources_to_expand', {
+                      defaultValue: 'No position has a resource breakdown to show',
+                    })
+                  : resourcesAllExpanded
+                    ? t('boq.hide_all_resources', {
+                        defaultValue: 'Hide the resource breakdown everywhere',
+                      })
+                    : t('boq.show_all_resources', {
+                        defaultValue:
+                          'Open every position and show its resources ({{count}} priced)',
+                        count: expandableResourceCount ?? 0,
+                      })
+              }
+              onClick={onToggleAllResources}
+              active={resourcesAllExpanded}
+              disabled={expandableResourceCount === 0}
+              testId="boq-expand-all-resources-toggle"
+            />
+          )}
 
           <span className="mx-0.5 h-5 w-px shrink-0 bg-border-light" />
 
@@ -474,9 +517,13 @@ export function BOQToolbar({
                     <FileDown size={15} className="text-content-tertiary" />
                     {t('boq.export_format_pdf', { defaultValue: 'PDF' })}
                   </button>
-                  <button role="menuitem" onClick={() => handleExportItem('gaeb')} className="flex w-full items-center gap-2.5 px-3 py-2.5 text-sm text-content-primary hover:bg-surface-secondary transition-colors rounded-b-lg">
+                  <button role="menuitem" onClick={() => handleExportItem('gaeb')} className="flex w-full items-center gap-2.5 px-3 py-2.5 text-sm text-content-primary hover:bg-surface-secondary transition-colors">
                     <FileText size={15} className="text-content-tertiary" />
                     {t('boq.export_format_gaeb', { defaultValue: 'GAEB XML (.x83)' })}
+                  </button>
+                  <button role="menuitem" onClick={() => handleExportItem('bc3')} className="flex w-full items-center gap-2.5 px-3 py-2.5 text-sm text-content-primary hover:bg-surface-secondary transition-colors rounded-b-lg">
+                    <FileText size={15} className="text-content-tertiary" />
+                    {t('boq.export_format_bc3', { defaultValue: 'FIEBDC-3 (.bc3)' })}
                   </button>
                 </div>,
                 document.body,

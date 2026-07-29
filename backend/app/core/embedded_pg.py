@@ -38,6 +38,10 @@ logger = logging.getLogger(__name__)
 #: Module-level handle to the running server, kept so :func:`shutdown` can stop it.
 _server = None
 
+#: Set by :func:`retain` when something outside the application owns the cluster's
+#: lifetime, so an application shutdown inside that owner's run leaves it running.
+_retained = False
+
 _TRUTHY = {"1", "true", "yes", "on"}
 _FALSY = {"0", "false", "no", "off"}
 
@@ -176,12 +180,17 @@ def boot(data_dir: Path | str) -> bool:
     # ... contains non-ASCII characters`, then pixeltable crashes a second time
     # decoding that CP1254 error text as UTF-8, and the cluster is left stuck
     # "Recovering the local database" forever. Force the C locale for every PG
-    # child process, and on Windows -- where env vars do NOT override the OS
-    # locale that initdb reads -- pre-create the cluster ourselves with an
-    # explicit --locale=C so pixeltable's own (locale-inheriting) initdb is
-    # skipped. Both are no-ops once the cluster exists.
+    # child process, and pre-create the cluster ourselves with an explicit
+    # --locale=C so pixeltable's own (locale-inheriting) initdb is skipped: on
+    # Windows env vars do NOT override the OS locale that initdb reads.
+    #
+    # Order matters. Pre-creating the cluster is also what gives us a
+    # postgresql.conf to write before the postmaster first starts, which the
+    # settings below need to be effective on a fresh machine. All three are
+    # no-ops once the cluster exists and is configured.
     _apply_ascii_locale_env()
     _pre_initialize_cluster(resolved_pgdata)
+    _apply_server_settings(resolved_pgdata)
 
     emit_stage("pg", "start", "Starting embedded PostgreSQL")
 
@@ -528,23 +537,83 @@ def _clear_incomplete_cluster(pgdata: Path) -> None:
             logger.warning("could not remove %s while clearing an incomplete cluster: %r", entry, exc)
 
 
+#: Delimits the settings this module owns inside ``postgresql.conf``, so the
+#: block can be rewritten in place instead of appended to on every boot.
+_SETTINGS_BEGIN = "# BEGIN OpenConstructionERP settings (managed, do not edit)"
+_SETTINGS_END = "# END OpenConstructionERP settings"
+
+#: Lock slots are a shared pool sized ``max_locks_per_transaction`` times
+#: ``max_connections``, not a per-transaction allowance. The platform's schema
+#: runs to well over a thousand tables and indexes, and creating or reflecting it
+#: takes a lock on each one, so several connections doing that at once exhaust
+#: the default pool of 64 and PostgreSQL fails the statement with "out of shared
+#: memory". The extra slots cost a few megabytes, which is worth paying to keep
+#: the cluster usable on a 2 GB box.
+_SERVER_SETTINGS = (("max_locks_per_transaction", "512"),)
+
+
+def _apply_server_settings(pgdata: Path) -> bool:
+    """Write the settings the platform's schema needs into ``postgresql.conf``.
+
+    Returns ``True`` when the file was changed. Runs before every start and is
+    idempotent: the managed block is replaced rather than appended, so repeated
+    boots leave one copy. A cluster that does not exist yet, or a config we
+    cannot read or write, is left alone -- the settings are a widening of
+    PostgreSQL's defaults, so failing to apply them only returns the cluster to
+    the behaviour it had before.
+    """
+    conf = pgdata / "postgresql.conf"
+    try:
+        original = conf.read_text(encoding="utf-8")
+    except OSError:
+        return False
+
+    body = [f"{name} = {value}" for name, value in _SERVER_SETTINGS]
+    block = "\n".join([_SETTINGS_BEGIN, *body, _SETTINGS_END])
+
+    start = original.find(_SETTINGS_BEGIN)
+    if start == -1:
+        updated = original.rstrip("\n") + "\n\n" + block + "\n"
+    else:
+        end = original.find(_SETTINGS_END, start)
+        if end == -1:
+            # Truncated block from an interrupted write: replace to end of file.
+            updated = original[:start] + block + "\n"
+        else:
+            updated = original[:start] + block + original[end + len(_SETTINGS_END) :]
+
+    if updated == original:
+        return False
+    try:
+        conf.write_text(updated, encoding="utf-8")
+    except OSError as exc:  # noqa: BLE001
+        logger.warning("could not apply embedded PostgreSQL settings to %s: %r", conf, exc)
+        return False
+    logger.info("applied embedded PostgreSQL settings to %s", conf)
+    return True
+
+
 def _pre_initialize_cluster(pgdata: Path) -> bool:
-    """On Windows, create the PG cluster with an ASCII-safe locale, once.
+    """Create the PG cluster ourselves, once, before pixeltable starts it.
 
     Returns ``True`` if this call initialised the cluster, ``False`` if it was
-    already initialised, not applicable (non-Windows), or the pre-init failed --
-    in which case we leave it to pixeltable's own path, so we are never worse off
-    than before.
+    already initialised or the pre-init failed -- in which case we leave it to
+    pixeltable's own path, so we are never worse off than before.
 
-    Windows-only on purpose: on POSIX, initdb honours the ``LC_*``/``LANG``
-    environment, so :func:`_apply_ascii_locale_env` already steers it to C. On
-    Windows the C runtime's locale comes from the OS regional settings, not env
-    vars, so the only reliable way to dodge a non-ASCII OS locale is to pass
-    ``--locale=C`` to initdb explicitly, which we do here before pixeltable's
-    ``get_server()`` runs.
+    Two reasons to own this step rather than let ``get_server()`` do it:
+
+    * **Locale, on Windows.** initdb rejects a locale *name* containing non-ASCII
+      characters and reads it from the OS regional settings, which env vars do
+      not override, so a Turkish box needs an explicit ``--locale=C``.
+    * **Settings, everywhere.** ``get_server()`` runs initdb and starts the
+      postmaster in one call, leaving no point in between to write
+      ``postgresql.conf``. ``max_locks_per_transaction`` is a postmaster-level
+      setting, so a config written afterwards would not take effect until the
+      *next* boot -- meaning a first run on a fresh machine, which is exactly
+      ``make quickstart``, would still hit the lock ceiling this module exists to
+      raise. Initialising here means the config is in place before the postmaster
+      ever starts.
     """
-    if os.name != "nt":
-        return False
     if (pgdata / "PG_VERSION").exists():
         return False
     # A previous build (e.g. the released one without this fix) may have aborted
@@ -728,11 +797,34 @@ def auto_migrate_legacy_sqlite(data_dir: Path | str) -> str:
     return msg
 
 
-def shutdown() -> None:
-    """Stop the embedded cluster if this process booted one (safe to always call)."""
-    global _server
+def retain() -> None:
+    """Pin the cluster so an application shutdown in this process leaves it running.
+
+    The application stops the embedded cluster from its own shutdown handler,
+    which is right when the application booted it. It is wrong when something
+    longer-lived did: the test session boots one cluster for the whole run, and
+    without this pin the first test that exercises the application's shutdown
+    takes the database down for every test after it.
+
+    The owner keeps the cluster and stops it with ``shutdown(force=True)``.
+    """
+    global _retained
+    _retained = True
+
+
+def shutdown(*, force: bool = False) -> None:
+    """Stop the embedded cluster if this process booted one (safe to always call).
+
+    A cluster pinned by :func:`retain` is left alone unless ``force`` is passed,
+    which only its owner should do.
+    """
+    global _server, _retained
     if _server is None:
         return
+    if _retained and not force:
+        logger.debug("embedded PostgreSQL is retained by its owner, leaving it running")
+        return
+    _retained = False
     try:
         _server.cleanup()
         # Routine stop: keep it at debug so a shutdown that happens BECAUSE

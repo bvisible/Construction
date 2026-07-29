@@ -59,7 +59,9 @@ import {
   Palette,
   Footprints,
 } from 'lucide-react';
-import { Badge, EmptyState, Breadcrumb, ConfirmDialog, ModuleHelpButton, ModuleGuideButton, DismissibleInfo, IntroRichText } from '@/shared/ui';
+import { Badge, EmptyState, Breadcrumb, ConfirmDialog, ModuleHelpButton, ModuleGuideButton, DismissibleInfo, IntroRichText, ProjectFilePicker, projectDocumentToFile } from '@/shared/ui';
+import { BIM_VIEWER_FORMATS } from '@/shared/lib/projectFileFormats';
+import type { DocumentItem } from '@/features/documents/api';
 import { bimGuide } from './bimGuide';
 import { useConfirm } from '@/shared/hooks/useConfirm';
 import { useDisplayQuantity } from '@/shared/hooks/useDisplayQuantity';
@@ -496,6 +498,13 @@ function UploadPanel({
   const [dataFile, setDataFile] = useState<File | null>(null);
   const [geometryFile, setGeometryFile] = useState<File | null>(null);
   const [meshImportFile, setMeshImportFile] = useState<File | null>(null);
+  /** "Open from project files": lists the models already stored in this
+   *  project that the BIM viewer can take. Picking one downloads the bytes
+   *  and hands them to `handleFileSelect`, the same entry point a local pick
+   *  and a drag-drop both use, so RVT/IFC conversion, mesh import and the
+   *  DWG handoff all keep behaving identically. */
+  const [showProjectFilePicker, setShowProjectFilePicker] = useState(false);
+  const [pickingFileId, setPickingFileId] = useState<string | null>(null);
   const [installPromptState, setInstallPromptState] =
     useState<InstallPromptState | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -548,6 +557,35 @@ function UploadPanel({
     setUploadError(ext === '.rvt' ? t('bim.upload_rvt_note') : null);
     if (!modelName) setModelName(f.name.replace(/\.[^.]+$/, ''));
   }, [modelName, t, addToast, navigate, projectId, discipline]);
+
+  /** Adopt a model already stored in the project's Files area. The bytes are
+   *  downloaded and pushed through `handleFileSelect`, so a picked file takes
+   *  exactly the same route as a dropped one - including the DWG handoff to
+   *  DWG Takeoff and the in-browser mesh import. */
+  const handlePickProjectFile = useCallback(
+    async (doc: DocumentItem) => {
+      setPickingFileId(doc.id);
+      try {
+        const picked = await projectDocumentToFile(doc);
+        setShowProjectFilePicker(false);
+        handleFileSelect(picked);
+      } catch (err) {
+        addToast({
+          type: 'error',
+          title: t('project_files.pick_failed_title', { defaultValue: 'Could not open that file' }),
+          message:
+            err instanceof Error
+              ? err.message
+              : t('project_files.pick_failed_msg', {
+                  defaultValue: 'The file could not be read from the project. Try again.',
+                }),
+        });
+      } finally {
+        setPickingFileId(null);
+      }
+    },
+    [handleFileSelect, addToast, t],
+  );
 
   const resetForm = useCallback(() => {
     setFile(null); setDataFile(null); setGeometryFile(null); setModelName(''); setUploadError(null);
@@ -854,6 +892,12 @@ function UploadPanel({
                   <span className="text-[9px] font-mono px-1 py-0.5 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">.stl</span>
                   <span className="text-[9px] font-mono px-1 py-0.5 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">{t('bim.mesh_import.more_formats', { defaultValue: '+ more' })}</span>
                 </div>
+                <p className="text-[10px] text-content-quaternary leading-relaxed max-w-[17rem]">
+                  {t('bim.upload_format_note', {
+                    defaultValue:
+                      'IFC and RVT import with full properties, quantities and classifications. Mesh formats (glTF, OBJ, STL, DAE, FBX, PLY, 3DS) are geometry only - view and measure, no BIM data.',
+                  })}
+                </p>
               </>
             )}
             <input id="bim-upload-file-input" ref={fileInputRef} type="file" accept={`.rvt,.ifc,.dwg,.dxf,${MESH_IMPORT_ACCEPT}`} className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFileSelect(f); }} />
@@ -889,6 +933,31 @@ function UploadPanel({
             </label>
           </div>
         )}
+
+        {/* Second way in: a model already filed in this project's Files area.
+            Sits OUTSIDE the drop-zone <label> on purpose - a button nested in
+            that label would also trigger the hidden file input. The local
+            upload above is untouched; this only spares the user from hunting
+            down a file the project already holds. */}
+        <button
+          type="button"
+          onClick={() => setShowProjectFilePicker(true)}
+          disabled={!projectId}
+          data-testid="bim-open-from-project-files"
+          className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-border-medium bg-surface-primary px-3 py-2 text-xs font-semibold text-content-secondary transition-colors hover:border-oe-blue/40 hover:text-oe-blue disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <FolderOpen size={14} />
+          {t('project_files.open_from_project', { defaultValue: 'Open from project files' })}
+        </button>
+
+        <ProjectFilePicker
+          open={showProjectFilePicker}
+          onClose={() => setShowProjectFilePicker(false)}
+          projectId={projectId}
+          accepted={BIM_VIEWER_FORMATS}
+          onPick={handlePickProjectFile}
+          busyId={pickingFileId}
+        />
 
         <div>
           <label className="block text-[10px] font-semibold text-content-tertiary mb-1.5 uppercase tracking-wider">{t('bim.upload_model_name_label')}</label>
@@ -1571,12 +1640,21 @@ function LandingPage({ projectId, onUploadComplete: _onUploadComplete, breadcrum
                         <p className="text-sm font-semibold text-content-primary">{t('bim.landing_drop_here')}</p>
                         <p className="text-xs text-content-tertiary mt-1">{t('bim.landing_size_hint')}</p>
                       </div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center justify-center gap-2">
                         <span className="text-[10px] font-mono px-2 py-1 rounded-md bg-oe-blue/8 text-oe-blue border border-oe-blue/15 font-semibold">.rvt</span>
                         <span className="text-[10px] font-mono px-2 py-1 rounded-md bg-oe-blue/8 text-oe-blue border border-oe-blue/15 font-semibold">.ifc</span>
+                        <span className="text-[10px] font-mono px-2 py-1 rounded-md bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 font-semibold">.glb</span>
+                        <span className="text-[10px] font-mono px-2 py-1 rounded-md bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 font-semibold">.obj</span>
+                        <span className="text-[10px] font-mono px-2 py-1 rounded-md bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 font-semibold">{t('bim.mesh_import.more_formats', { defaultValue: '+ more' })}</span>
                       </div>
                       <p className="text-[10px] text-content-quaternary leading-relaxed mt-1 text-center">
                         RVT 2015–2026 &middot; IFC 2x3, 4.0, 4.1, 4.3
+                      </p>
+                      <p className="text-[10px] text-content-quaternary leading-relaxed max-w-[20rem] text-center">
+                        {t('bim.upload_format_note', {
+                          defaultValue:
+                            'IFC and RVT import with full properties, quantities and classifications. Mesh formats (glTF, OBJ, STL, DAE, FBX, PLY, 3DS) are geometry only - view and measure, no BIM data.',
+                        })}
                       </p>
                     </>
                   )}

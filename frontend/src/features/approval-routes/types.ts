@@ -44,6 +44,9 @@ export interface RouteStep {
   approver_role: string | null;
   approver_user_id: string | null;
   mode: RouteStepMode;
+  /** Eligible-approver population for a role-based all / majority step. null
+   *  when the author did not declare a quorum. */
+  required_approver_count: number | null;
   sla_hours: number | null;
 }
 
@@ -56,6 +59,10 @@ export interface ApprovalRoute {
   is_active: boolean;
   steps: RouteStep[];
   created_by: string | null;
+  /** Set only on platform-seeded presets (tenant-wide, read-only ISO 19650
+   *  review flows); null for every user-created route. The UI flags a preset
+   *  from this and the API rejects edits / deletes of a route that carries it. */
+  system_key: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -210,4 +217,134 @@ export interface Escalation {
   reason: string;
   chain_length: number;
   current_holder: string | null;
+}
+
+/* ── Dry-run simulation (inc3a/inc3c) ─────────────────────────────── */
+
+/** One step's hypothetical decision tally for a what-if dry run. Mirrors the
+ *  backend SimulateDecision. ``distinct_approvers`` defaults to ``approvals``
+ *  server-side when omitted. */
+export interface SimulateDecision {
+  ordinal: number;
+  approvals: number;
+  rejections: number;
+  distinct_approvers?: number | null;
+}
+
+/** Optional body for POST /routes/{id}/simulate. An empty body runs only the
+ *  happy path; supplying ``decisions`` adds a second what-if walk. */
+export interface SimulateRequest {
+  decisions: SimulateDecision[];
+}
+
+/** Per-step analysis of a route template in a dry run. Mirrors the backend
+ *  SimulatedStep. */
+export interface SimulatedStep {
+  ordinal: number;
+  mode: string;
+  approver_role: string | null;
+  approver_user_id: string | null;
+  quorum_required: number | null;
+  min_approvals_to_clear: number;
+  needs_multiple_approvers: boolean;
+  note: string;
+}
+
+/** Where one dry-run walk (happy path or scenario) ends up. ``outcome`` is
+ *  completed (reaches approved), rejected (a rejection short-circuits) or
+ *  stuck (a step never gathers enough approvals). */
+export type SimulationOutcomeKind = 'completed' | 'rejected' | 'stuck';
+
+export interface SimulationOutcome {
+  outcome: SimulationOutcomeKind;
+  stopped_at_ordinal: number | null;
+  trace: string[];
+}
+
+/** Result of dry-running a route template. Mirrors the backend
+ *  RouteSimulationResponse. */
+export interface RouteSimulation {
+  route_id: string;
+  target_kind: string;
+  step_count: number;
+  steps: SimulatedStep[];
+  happy_path: SimulationOutcome;
+  scenario: SimulationOutcome | null;
+  warnings: string[];
+}
+
+/* ── Approval-cycle analytics (item #11) ──────────────────────────── */
+
+/** Project-level KPI headline. Mirrors the backend AnalyticsKpis. */
+export interface ApprovalAnalyticsKpis {
+  total_instances: number;
+  pending: number;
+  approved: number;
+  rejected: number;
+  cancelled: number;
+  /** approved / (approved + rejected); null when there is no terminal decision. */
+  approval_rate: number | null;
+  avg_cycle_days: number | null;
+  median_cycle_days: number | null;
+  breached_steps_total: number;
+  instances_with_breach: number;
+  /** Pending instances whose current step is overdue right now. */
+  open_overdue_now: number;
+}
+
+/** Held-time stats for the decided steps attributed to one role. Mirrors
+ *  AnalyticsRoleStat. ``role`` is null for user-pinned steps. */
+export interface ApprovalAnalyticsRoleStat {
+  role: string | null;
+  decided_count: number;
+  avg_hours: number;
+  median_hours: number;
+  max_hours: number;
+  breach_count: number;
+  breach_rate: number;
+}
+
+/** Held-time stats for one route step (route + ordinal). Mirrors
+ *  AnalyticsStepStat. */
+export interface ApprovalAnalyticsStepStat {
+  route_id: string;
+  route_name: string;
+  ordinal: number;
+  approver_role: string | null;
+  decided_count: number;
+  avg_hours: number;
+  median_hours: number;
+  breach_count: number;
+  breach_rate: number;
+  sla_hours: number | null;
+}
+
+/** A ranked slow point - a role or a specific route step. Mirrors
+ *  AnalyticsBottleneck. ``ref`` is the role name or ``{route_id}:{ordinal}``. */
+export interface ApprovalAnalyticsBottleneck {
+  kind: 'role' | 'step';
+  label: string;
+  ref: string;
+  avg_hours: number;
+  median_hours: number;
+  breach_rate: number;
+  sample_size: number;
+}
+
+/** Full project-scoped approval-cycle analytics. Mirrors the backend
+ *  ApprovalAnalyticsResponse. */
+export interface ApprovalAnalytics {
+  project_id: string;
+  generated_at: string;
+  range_days: number | null;
+  started_after: string | null;
+  started_before: string | null;
+  /** Instances actually computed (post-cap). */
+  sample_size: number;
+  /** True when the compute cap was hit; status counts stay exact regardless. */
+  truncated: boolean;
+  kpis: ApprovalAnalyticsKpis;
+  by_role: ApprovalAnalyticsRoleStat[];
+  by_step: ApprovalAnalyticsStepStat[];
+  bottlenecks: ApprovalAnalyticsBottleneck[];
 }

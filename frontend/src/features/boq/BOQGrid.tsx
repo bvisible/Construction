@@ -98,6 +98,11 @@ import {
   saveCustomUnit,
 } from './boqHelpers';
 import { RESOURCE_TYPES, getResourceTypeLabel } from './boqResourceTypes';
+import {
+  expandableResourcePositionIds,
+  resourceExpansionState,
+  type ResourceExpansionState,
+} from './resourceExpansion';
 import { CURRENCY_GROUPS } from '@/features/projects/CreateProjectPage';
 import { useToastStore } from '@/stores/useToastStore';
 import { useBoqDescDensityStore, BOQ_DESC_ROW_HEIGHT } from '@/stores/useBoqDescDensityStore';
@@ -523,6 +528,12 @@ export interface BOQGridProps {
   bimModelId?: string | null;
   /** Highlight linked BIM elements in the 3D viewer (triggered from ordinal badge click). */
   onHighlightBIMElements?: (elementIds: string[]) => void;
+  /**
+   * Report how many positions can show resources and how many currently do, so
+   * the toolbar toggle can label itself and disable when there is nothing to
+   * open. Fires on mount and on every change to either number.
+   */
+  onResourceExpansionChange?: (state: ResourceExpansionState) => void;
 }
 
 /** Imperative handle exposed by BOQGrid for external control (e.g. clearing selection). */
@@ -544,6 +555,18 @@ export interface BOQGridHandle {
    * spent (graceful fall-back to the previous click-to-edit behaviour).
    */
   beginEditDescription: (positionId: string) => void;
+  /**
+   * Open or close the resource sub-rows of every position that has any, in one
+   * step - the toolbar's show/hide-all-resources toggle.
+   *
+   * Kept imperative rather than lifting ``expandedPositions`` to the page: the
+   * chevron only repaints because of an effect keyed on that state (see the
+   * note above it), ``openVariantPickerFor`` writes to it internally, and seven
+   * call sites read it back through the grid ``context``. A ref call leaves all
+   * of that untouched and still routes through the same setState, so the
+   * repaint effect fires for a bulk change exactly as it does for one row.
+   */
+  setAllResourcesExpanded: (expanded: boolean) => void;
 }
 
 /* ── Component ─────────────────────────────────────────────────────── */
@@ -611,6 +634,7 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
   boqVariables,
   bimModelId,
   onHighlightBIMElements,
+  onResourceExpansionChange,
 }, ref) {
   const { t, i18n } = useTranslation();
   // `t` is a fresh function on every render which would invalidate the
@@ -943,8 +967,8 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
    *  Variant qty/price edits land on ``metadata.variant`` AND materialize
    *  a corresponding entry in ``metadata.resources[]`` so the variant
    *  contributes to the position's unit_rate (sum-of-resources) the same
-   *  way every other resource does. Per the user's spec: "вариативный
-   *  ресурс точно такой же ресурс как и остальные". After the first edit
+   *  way every other resource does. Per spec, a variant resource is exactly
+   *  the same kind of resource as any other. After the first edit
    *  the synthetic header is suppressed (``hasResourceLevelVariants``
    *  branch) and the variant renders as a regular resource line with its
    *  own re-pick pill. */
@@ -1038,8 +1062,37 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
     [positions, onUpdatePosition],
   );
 
+  /* ── Which positions can show resources ────────────────────────── */
+
+  const expandableResourceIds = useMemo(
+    () => expandableResourcePositionIds(positions),
+    [positions],
+  );
+  // Read by the imperative handle below, which is built once (deps `[]`) and
+  // would otherwise capture the FIRST render's positions and expand a stale
+  // set forever. Assigned during render so it is current before any handler
+  // can fire.
+  const expandableResourceIdsRef = useRef<string[]>(expandableResourceIds);
+  expandableResourceIdsRef.current = expandableResourceIds;
+
   /* ── Imperative handle for parent components ───────────────────── */
   useImperativeHandle(ref, () => ({
+    setAllResourcesExpanded: (expanded: boolean) => {
+      // Mirrors toggleResources: an open editor left behind by a bulk
+      // expansion keeps its cell in edit mode over rows that just moved.
+      gridApiRef.current?.stopEditing();
+      setExpandedPositions((prev) => {
+        if (!expanded) return prev.size === 0 ? prev : new Set<string>();
+        const ids = expandableResourceIdsRef.current;
+        if (ids.length === 0) return prev;
+        if (ids.every((id) => prev.has(id))) return prev;
+        // Union rather than replace: an id can be in `prev` without being
+        // expandable right now (its resources were just deleted). Dropping it
+        // here would fight the chevron rather than agree with it, and the
+        // returned identity change is what drives the repaint effect.
+        return new Set([...prev, ...ids]);
+      });
+    },
     clearSelection: () => {
       gridApiRef.current?.deselectAll();
     },
@@ -1424,8 +1477,8 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
     // picker pill in EditableResourceRow and the position-level synthetic
     // header would just duplicate them. Suppress the header in that case so
     // a position can host MANY variant resources cleanly — each resource
-    // line is its own variant with its own picker. (User spec 2026-04-30:
-    // "у позиции может быть много вариативных ресурсов".)
+    // line is its own variant with its own picker. (Spec 2026-04-30: one
+    // position may host many variant resources.)
     const resourcesArr = (meta.resources as Array<Record<string, unknown>> | undefined) ?? [];
     const hasResourceLevelVariants = resourcesArr.some((r) => {
       const av = r?.available_variants;
@@ -1452,8 +1505,8 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
         _variantHeaderCount: posVariants!.length,
         _variantHeaderCurrency: (meta.currency as string | undefined) || currencyCode,
         // Variant resource qty is stored INDEPENDENTLY of the position qty
-        // (per the user's spec: "Объём вариативного ресурса никак не
-        // связан с объёмом позиции"). When ``metadata.variant.quantity``
+        // (per spec: the quantity of a variant resource is not tied to the
+        // quantity of the position). When ``metadata.variant.quantity``
         // hasn't been set (legacy pre-decouple imports OR brand-new pick),
         // default to 1 — the per-unit norm convention used by every other
         // resource line. Falling back to ``pos.quantity`` here was the bug
@@ -1819,6 +1872,16 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
       force: true,
     });
   }, [expandedPositions]);
+
+  /* ── Report expansion state to the toolbar toggle ─────────────────
+   * Counted against the expandable set, not the raw expanded set, so ids left
+   * behind by a delete or a refetch cannot report more open rows than exist
+   * and strand the toggle in its "all open" state. Keyed on both inputs
+   * because editing a position's resources changes what is expandable without
+   * anyone touching the expansion itself. */
+  useEffect(() => {
+    onResourceExpansionChange?.(resourceExpansionState(positions, expandedPositions));
+  }, [positions, expandedPositions, onResourceExpansionChange]);
 
   /* ── Pinned bottom rows (footer) ──────────────────────────────── */
   const pinnedBottomRowData = useMemo(() => footerRows, [footerRows]);

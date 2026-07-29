@@ -959,7 +959,7 @@ class AIService:
             status="processing",
         )
         job = await self.job_repo.create(job)
-        job_id = job.id  # Save before expire_all() in update_fields
+        job_id = job.id  # Save before the status write below
 
         # Build prompt with context
         extra_parts: list[str] = []
@@ -1152,7 +1152,7 @@ class AIService:
             status="processing",
         )
         job = await self.job_repo.create(job)
-        job_id = job.id  # Save before expire_all() in update_fields
+        job_id = job.id  # Save before the status write below
 
         # Build prompt - currency: explicit arg → project default → blank.
         currency_val = currency or await _resolve_project_currency(self.session, project_id) or ""
@@ -1468,7 +1468,7 @@ class AIService:
             status="processing",
         )
         job = await self.job_repo.create(job)
-        job_id = job.id  # Save before expire_all() in update_fields
+        job_id = job.id  # Save before the status write below
 
         # Currency: explicit arg → project default → blank token.
         currency_val = currency or await _resolve_project_currency(self.session, project_id) or ""

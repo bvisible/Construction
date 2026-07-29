@@ -33,7 +33,7 @@ import {
   Ban,
   Save,
 } from 'lucide-react';
-import { Button, Card, Badge, EmptyState, Breadcrumb, ConfirmDialog, RecoveryCard, SkeletonTable, IntroRichText, ModuleGuideButton, MoneyDisplay } from '@/shared/ui';
+import { Button, Card, Badge, EmptyState, Breadcrumb, ConfirmDialog, RecoveryCard, SkeletonTable, IntroRichText, ModuleGuideButton, MoneyDisplay, CollapsibleSection } from '@/shared/ui';
 import { RequiresProject } from '@/shared/auth/RequiresProject';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { SectionIntro } from '@/features/validation';
@@ -56,6 +56,8 @@ import {
 } from './api';
 import { NCR_STAGES, ncrStageIndex, ncrNextMoves } from './ncrFsm';
 import { ncrGuide } from './ncrGuide';
+import { InsightsPanel, InsightsToggleButton, useModuleInsights } from '@/features/insights';
+import { buildNCRInsights } from './ncrInsights';
 
 /* -- Constants ------------------------------------------------------------- */
 
@@ -1069,15 +1071,12 @@ function HowNcrWork() {
   ];
 
   return (
-    <section
-      aria-label={t('ncr.how_title', { defaultValue: 'How NCRs fit together' })}
-      className="rounded-xl border border-border-light bg-surface-secondary/40 p-4"
+    <CollapsibleSection
+      storageKey="ncr.how"
+      icon={<Network size={15} className="text-oe-blue" />}
+      title={t('ncr.how_title', { defaultValue: 'How NCRs fit together' })}
     >
-      <h2 className="flex items-center gap-1.5 text-sm font-semibold text-content-primary">
-        <Network size={15} className="text-oe-blue" />
-        {t('ncr.how_title', { defaultValue: 'How NCRs fit together' })}
-      </h2>
-      <p className="mt-1 text-xs text-content-tertiary">
+      <p className="text-xs text-content-tertiary">
         {t('ncr.how_intro', {
           defaultValue:
             'Log work that fails specification as a numbered report, fix the root cause and keep the cost trail attached. Start by raising an NCR for the non-conforming work.',
@@ -1128,7 +1127,7 @@ function HowNcrWork() {
           {t('ncr.mod_closeout', { defaultValue: 'Handover & Closeout' })}
         </ModLink>
       </div>
-    </section>
+    </CollapsibleSection>
   );
 }
 
@@ -1211,6 +1210,16 @@ export function NCRPage() {
     const closed = ncrs.filter((n) => n.status === 'closed').length;
     return { total, open, underReview, closed };
   }, [ncrs]);
+
+  // Module Insights - the toggleable visualization panel for this module. Built
+  // client-side from the NCRs already loaded; when the project has none,
+  // buildNCRInsights returns a labelled sample set so the panel is never empty.
+  // Declared with the other top-of-component hooks so the hook order stays stable.
+  const insights = useModuleInsights('ncr', { defaultOpen: true });
+  const { datasets: insightDatasets, builtins: insightBuiltins } = useMemo(
+    () => buildNCRInsights(ncrs, projectCurrency, t),
+    [ncrs, projectCurrency, t],
+  );
 
   // Invalidation
   const invalidateAll = useCallback(() => {
@@ -1418,6 +1427,7 @@ export function NCRPage() {
         })}
         actions={
           <>
+            <InsightsToggleButton open={insights.open} onClick={insights.toggle} />
             <ModuleGuideButton content={ncrGuide} />
             <Button
               variant="primary"
@@ -1431,6 +1441,20 @@ export function NCRPage() {
             </Button>
           </>
         }
+      />
+
+      {/* Module Insights panel - toggled by the header button. Placed high so
+          its charts (real, or labelled sample) are visible the moment the
+          register opens. */}
+      <InsightsPanel
+        open={insights.open}
+        title={t('ncr.insights.title', { defaultValue: 'NCR insights' })}
+        datasets={insightDatasets}
+        builtins={insightBuiltins}
+        custom={insights.custom}
+        onAdd={insights.addCustom}
+        onUpdate={insights.updateCustom}
+        onRemove={insights.removeCustom}
       />
 
       <SectionIntro

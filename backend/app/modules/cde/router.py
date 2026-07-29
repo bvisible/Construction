@@ -28,12 +28,26 @@ from app.dependencies import (
     SessionDep,
     verify_project_access,
 )
+from app.modules.cde.roles import (
+    CDE_STATE_ORDER,
+    FUNCTIONAL_ROLES,
+    RESPONSIBILITY_MATRIX,
+)
 from app.modules.cde.schemas import (
+    CDEApprovalPresetApplyRequest,
+    CDEApprovalPresetApplyResponse,
+    CDEApprovalPresetsResponse,
+    CDEReadinessResponse,
+    CdeSettingsResponse,
+    CdeSettingsUpdate,
     CDEStatsResponse,
     ContainerCreate,
     ContainerResponse,
     ContainerTransmittalLink,
     ContainerUpdate,
+    FunctionalRoleEntry,
+    FunctionalRolesResponse,
+    GoLiveGateStatus,
     RevisionCreate,
     RevisionResponse,
     StateTransitionEntry,
@@ -135,6 +149,31 @@ async def list_suitability_codes() -> SuitabilityCodesResponse:
     return SuitabilityCodesResponse(codes=all_entries, by_state=by_state)
 
 
+# ── Functional roles (ISO 19650) ─────────────────────────────────────────────
+
+
+@router.get(
+    "/functional-roles",
+    response_model=FunctionalRolesResponse,
+    include_in_schema=False,
+)
+@router.get("/functional-roles/", response_model=FunctionalRolesResponse)
+async def list_functional_roles() -> FunctionalRolesResponse:
+    """Return the four ISO 19650 functional roles and the responsibility matrix.
+
+    Reference data (Author / Reviewer / Approver / Viewer) with the CDE state each
+    role acts on and the gate it is accountable for. Labels are English defaults;
+    the frontend i18n-keys them by role key (``cde.role_<key>_*``). Mirrors the
+    suitability-codes endpoint - static ISO reference, no tenant data, no auth.
+    """
+    roles = [FunctionalRoleEntry(**role) for role in FUNCTIONAL_ROLES]
+    return FunctionalRolesResponse(
+        roles=roles,
+        states=list(CDE_STATE_ORDER),
+        matrix={state: dict(cols) for state, cols in RESPONSIBILITY_MATRIX.items()},
+    )
+
+
 # ── Stats ────────────────────────────────────────────────────────────────────
 
 
@@ -162,6 +201,173 @@ async def cde_stats(
     """
     await verify_project_access(project_id, user_id, session)
     return await service.get_stats(project_id)
+
+
+# ── Go-live readiness ─────────────────────────────────────────────────────────
+
+
+@router.get(
+    "/readiness",
+    response_model=CDEReadinessResponse,
+    dependencies=[Depends(RequirePermission("cde.read"))],
+    include_in_schema=False,
+)
+@router.get(
+    "/readiness/",
+    response_model=CDEReadinessResponse,
+    dependencies=[Depends(RequirePermission("cde.read"))],
+)
+async def cde_readiness(
+    user_id: CurrentUserId,
+    session: SessionDep,
+    project_id: uuid.UUID = Query(...),
+    service: CDEService = Depends(_get_service),
+) -> CDEReadinessResponse:
+    """Score how ready a project's CDE is to go live.
+
+    Returns a weighted readiness score and level plus a checklist of the ISO
+    19650 go-live milestones - containers created, structured naming, suitability
+    discipline, work shared and published, gates signed, revisions versioned -
+    each marked done or not, with the leading unmet ones as next actions.
+    """
+    await verify_project_access(project_id, user_id, session)
+    return await service.compute_readiness(project_id)
+
+
+# ── CDE settings (per-project setup wizard) ───────────────────────────────────
+
+
+@router.get(
+    "/settings",
+    response_model=CdeSettingsResponse,
+    dependencies=[Depends(RequirePermission("cde.read"))],
+    include_in_schema=False,
+)
+@router.get(
+    "/settings/",
+    response_model=CdeSettingsResponse,
+    dependencies=[Depends(RequirePermission("cde.read"))],
+)
+async def get_cde_settings(
+    user_id: CurrentUserId,
+    session: SessionDep,
+    project_id: uuid.UUID = Query(...),
+    service: CDEService = Depends(_get_service),
+) -> CdeSettingsResponse:
+    """Return a project's CDE setup settings (creating defaults on first read)."""
+    await verify_project_access(project_id, user_id, session)
+    row = await service.get_or_create_settings(project_id)
+    return CdeSettingsResponse.model_validate(row)
+
+
+@router.patch(
+    "/settings",
+    response_model=CdeSettingsResponse,
+    dependencies=[Depends(RequirePermission("cde.update"))],
+    include_in_schema=False,
+)
+@router.patch(
+    "/settings/",
+    response_model=CdeSettingsResponse,
+    dependencies=[Depends(RequirePermission("cde.update"))],
+)
+async def update_cde_settings(
+    data: CdeSettingsUpdate,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    project_id: uuid.UUID = Query(...),
+    service: CDEService = Depends(_get_service),
+) -> CdeSettingsResponse:
+    """Save one or more CDE setup fields for a project (wizard step save)."""
+    await verify_project_access(project_id, user_id, session)
+    row = await service.update_settings(project_id, data)
+    return CdeSettingsResponse.model_validate(row)
+
+
+# ── Go-live gate ──────────────────────────────────────────────────────────────
+
+
+@router.get(
+    "/go-live",
+    response_model=GoLiveGateStatus,
+    dependencies=[Depends(RequirePermission("cde.read"))],
+    include_in_schema=False,
+)
+@router.get(
+    "/go-live/",
+    response_model=GoLiveGateStatus,
+    dependencies=[Depends(RequirePermission("cde.read"))],
+)
+async def get_go_live_gate(
+    user_id: CurrentUserId,
+    session: SessionDep,
+    project_id: uuid.UUID = Query(...),
+    service: CDEService = Depends(_get_service),
+) -> GoLiveGateStatus:
+    """Whether the project's CDE is ready to open to the whole team.
+
+    Reports the go-live gate standing: whether the gate is enabled, the current
+    readiness level and score, the required minimum, and whether inviting the
+    whole team is currently allowed. Read-only.
+    """
+    await verify_project_access(project_id, user_id, session)
+    return await service.evaluate_go_live_gate(project_id)
+
+
+# ── Approval presets (ISO 19650 review flows) ─────────────────────────────────
+
+
+@router.get(
+    "/approval-presets",
+    response_model=CDEApprovalPresetsResponse,
+    dependencies=[Depends(RequirePermission("cde.read"))],
+    include_in_schema=False,
+)
+@router.get(
+    "/approval-presets/",
+    response_model=CDEApprovalPresetsResponse,
+    dependencies=[Depends(RequirePermission("cde.read"))],
+)
+async def list_cde_approval_presets(
+    user_id: CurrentUserId,
+    session: SessionDep,
+    project_id: uuid.UUID | None = Query(default=None),
+    service: CDEService = Depends(_get_service),
+) -> CDEApprovalPresetsResponse:
+    """List the ready-made ISO 19650 approval presets a CDE can adopt.
+
+    Tenant-wide reference data - no project needed to browse it. Pass
+    ``project_id`` (with access to that project) to also learn which preset,
+    if any, is already adopted there.
+    """
+    if project_id is not None:
+        await verify_project_access(project_id, user_id, session)
+    return await service.list_approval_presets(project_id)
+
+
+@router.post(
+    "/approval-presets/apply",
+    response_model=CDEApprovalPresetApplyResponse,
+    dependencies=[Depends(RequirePermission("cde.update"))],
+)
+async def apply_cde_approval_preset(
+    data: CDEApprovalPresetApplyRequest,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    project_id: uuid.UUID = Query(...),
+    service: CDEService = Depends(_get_service),
+) -> CDEApprovalPresetApplyResponse:
+    """Adopt a preset as the project's editable review route (one click).
+
+    Clones the tenant-wide preset into a project-scoped, editable Approval
+    routes route and records it on the project's CDE settings.
+    """
+    await verify_project_access(project_id, user_id, session)
+    return await service.apply_approval_preset(
+        project_id,
+        data.system_key,
+        actor_id=user_id,
+    )
 
 
 # ── Container List ────────────────────────────────────────────────────────────

@@ -30,6 +30,7 @@ import type { jsPDF as JsPDF } from 'jspdf';
 import type * as ExcelJS from 'exceljs';
 import type * as PdfJsLib from 'pdfjs-dist';
 import type { Measurement } from './takeoff-types';
+import { groupBands, sortByPaintOrder } from './takeoff-order';
 import type { ScaleConfig } from '../../../modules/pdf-takeoff/data/scale-helpers';
 import {
   pixelDistance,
@@ -95,6 +96,32 @@ export interface ExcelExportContext extends ExportContext {
 /** Predicate: is this measurement type an annotation (non-numeric)? */
 export const isAnnotationType = (type: string): boolean =>
   ANNOTATION_TYPES.has(type);
+
+/** Human wording for a stored scale provenance, for the exported sheet.
+ *
+ * The rest of the workbook is written in English regardless of UI locale, so
+ * this deliberately does not go through i18n. A row with no recorded source,
+ * or one carrying a value added server-side ahead of this client, reads
+ * "Unknown" rather than as an empty cell: a blank looks like a column that
+ * failed to populate, while "Unknown" is a statement about the measurement. */
+export function scaleSourceLabel(source: string | undefined | null): string {
+  switch (source) {
+    case 'manual_calibration':
+      return 'Calibrated on this sheet';
+    case 'preset':
+      return 'Document scale';
+    case 'inherited':
+      return "Inherited from the sheet's scale";
+    case 'page_text':
+      return 'Read from the drawing text';
+    case 'recovered_text':
+      return 'Recovered from the sheet by OCR';
+    case 'vision_read':
+      return 'Read from the drawing by the model';
+    default:
+      return 'Unknown';
+  }
+}
 
 /* ── Filename ────────────────────────────────────────────────────── */
 
@@ -253,7 +280,14 @@ export function renderMeasurementsOnCanvas(
     ctx.lineWidth = 2 * dpr;
   };
 
-  const visible = measurements.filter(
+  // Paint in the same z-order the on-screen canvas uses (issue #379) so the
+  // exported PDF matches the screen: an explicit `order` decides which shape
+  // draws on top; un-ordered rows keep array (creation) order. Banded by group
+  // like the canvas (issue #394); the bands are derived from the full
+  // measurement list rather than the page subset, because the band map is per
+  // document and deriving it per page would give the same group a different
+  // band on every sheet.
+  const visible = sortByPaintOrder(measurements, groupBands(measurements)).filter(
     (m) =>
       m.page === pageNumber &&
       !hiddenGroups.has(m.group) &&
@@ -721,6 +755,10 @@ export const EXCEL_COLUMNS = [
   { key: 'value', header: 'Value', width: 14 },
   { key: 'unit', header: 'Unit', width: 8 },
   { key: 'linkedBoq', header: 'Linked BOQ Position', width: 24 },
+  // Where each row's ratio came from. A quantity is only as trustworthy as the
+  // scale behind it, and this is the column that lets a reviewer sort a sheet
+  // by provenance instead of taking every number on equal footing.
+  { key: 'scaleSource', header: 'Scale From', width: 22 },
 ] as const;
 
 /**
@@ -760,8 +798,17 @@ export async function buildTakeoffWorkbook(
   headerRow.alignment = { vertical: 'middle' };
 
   // Group measurements by group name so subtotal rows live with their data.
+  // Walk the paint-order projection (issue #395), the same one the canvas, the
+  // hit-test, the sidebar and the annotated PDF use, so a takeoff the user
+  // rearranged exports in the order they arranged it. The projection is taken
+  // once over the whole list rather than per group: sortByPaintOrder falls back
+  // to the array index for rows with no explicit key, and only the global index
+  // reproduces what the canvas paints - bucketing first would restart that
+  // fallback inside every group and reorder rows whose explicit key was chosen
+  // relative to another group's rows. The group sections themselves stay
+  // alphabetical (sorted just below); only the rows within a section move.
   const byGroup = new Map<string, Measurement[]>();
-  for (const m of ctx.measurements) {
+  for (const m of sortByPaintOrder(ctx.measurements, groupBands(ctx.measurements))) {
     const g = m.group || 'General';
     const list = byGroup.get(g) ?? [];
     list.push(m);
@@ -782,6 +829,7 @@ export async function buildTakeoffWorkbook(
       value: '',
       unit: '',
       linkedBoq: '',
+      scaleSource: '',
     });
     headerRowVals.font = { bold: true, color: { argb: 'FFFFFFFF' } };
     headerRowVals.fill = {
@@ -807,6 +855,10 @@ export async function buildTakeoffWorkbook(
         value: cellValue,
         unit: isAnno ? m.unit : disp.unit,
         linkedBoq: m.linkedPositionOrdinal ?? '',
+        // Annotations carry no quantity, so no scale stands behind them.
+        // Everything else reports its provenance, and a row that never
+        // recorded one reports that plainly rather than reading as blank.
+        scaleSource: isAnno ? '' : scaleSourceLabel(m.scaleSource),
       });
     }
 
@@ -836,6 +888,7 @@ export async function buildTakeoffWorkbook(
         value: t === 'count' ? Math.round(total) : Number(disp.value.toFixed(3)),
         unit: t === 'count' ? 'pcs' : disp.unit,
         linkedBoq: '',
+        scaleSource: '',
       });
       subtotalRow.font = { bold: true };
       subtotalRow.fill = {

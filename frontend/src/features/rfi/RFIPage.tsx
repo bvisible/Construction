@@ -23,6 +23,7 @@ import {
   Check,
   Pencil,
   Network,
+  ListTodo,
 } from 'lucide-react';
 import {
   Button,
@@ -39,6 +40,7 @@ import {
   WideModalSection,
   WideModalField,
   ModuleGuideButton,
+  CollapsibleSection,
 } from '@/shared/ui';
 import { RequiresProject } from '@/shared/auth/RequiresProject';
 import { PageHeader } from '@/shared/ui/PageHeader';
@@ -67,6 +69,9 @@ import {
 } from './api';
 import { rfiGuide } from './rfiGuide';
 import { ApprovalTargetBadge } from '@/features/approval-routes';
+import { CreateTaskFromSourceDialog } from '@/features/tasks';
+import { InsightsPanel, InsightsToggleButton, useModuleInsights } from '@/features/insights';
+import { buildRFIInsights } from './rfiInsights';
 
 /* ── Constants ─────────────────────────────────────────────────────────── */
 
@@ -307,10 +312,64 @@ export function buildUpdatePayload(formData: RFIFormData): UpdateRFIPayload {
 }
 
 /**
+ * The body of an edit save: only the fields the user actually changed.
+ *
+ * ``buildUpdatePayload`` describes the whole form, and sending all of it back
+ * rewrites fields the user never opened with the values they held when this
+ * copy was read, undoing anyone else's edit to them without a word. The update
+ * route dumps with ``exclude_unset=True``, so a field left out of the body is
+ * left alone in the database, which is what makes omission the right tool.
+ *
+ * ``base`` must come from ``formFromRfi`` so both sides have been through the
+ * same defaulting. Hand-written rather than a generic key diff because the
+ * payload renames fields on the way out (``due_date`` becomes
+ * ``response_due_date``); a name-matched diff would find no form field behind
+ * the renamed key, read it as unchanged and drop the user's edit every time.
+ */
+export function buildRfiPatch(form: RFIFormData, base: RFIFormData): UpdateRFIPayload {
+  const full = buildUpdatePayload(form);
+  const patch: UpdateRFIPayload = {};
+  if (form.subject !== base.subject) patch.subject = full.subject;
+  if (form.question !== base.question) patch.question = full.question;
+  if (form.ball_in_court !== base.ball_in_court) patch.ball_in_court = full.ball_in_court;
+  if (form.assigned_to !== base.assigned_to) patch.assigned_to = full.assigned_to;
+  if (form.due_date !== base.due_date) patch.response_due_date = full.response_due_date;
+  if (form.priority !== base.priority) patch.priority = full.priority;
+  if (form.discipline !== base.discipline) patch.discipline = full.discipline;
+  if (form.cost_impact !== base.cost_impact) patch.cost_impact = full.cost_impact;
+  if (form.schedule_impact !== base.schedule_impact) patch.schedule_impact = full.schedule_impact;
+  // The sub-values are a function of their flag as well as their own field:
+  // turning the flag off nulls the value. So a toggled flag has to resend the
+  // value, otherwise the amount would survive an impact the user just denied.
+  if (form.cost_impact !== base.cost_impact || form.cost_impact_value !== base.cost_impact_value) {
+    patch.cost_impact_value = full.cost_impact_value;
+  }
+  if (
+    form.schedule_impact !== base.schedule_impact ||
+    form.schedule_impact_days !== base.schedule_impact_days
+  ) {
+    patch.schedule_impact_days = full.schedule_impact_days;
+  }
+  // Compared by content, not identity. Rebuilding the baseline makes a fresh
+  // array every time, so a reference test would resend the whole link list on
+  // every save and defeat the point.
+  if (
+    form.linked_drawing_ids.length !== base.linked_drawing_ids.length ||
+    form.linked_drawing_ids.some((id, i) => id !== base.linked_drawing_ids[i])
+  ) {
+    patch.linked_drawing_ids = form.linked_drawing_ids;
+  }
+  return patch;
+}
+
+/**
  * Seed the create/edit form from an existing RFI. The user-resolution
  * names (``*_name``) are left blank because the deep RFI carries only raw
  * ids; the UserSearchInput renders the id until the user re-picks, which
  * is acceptable for an edit flow (the value is preserved either way).
+ *
+ * Also the baseline an edit save compares against, so that the form and the
+ * baseline cannot drift apart. See {@link buildRfiPatch}.
  */
 export function formFromRfi(rfi: RFI): RFIFormData {
   return {
@@ -1254,6 +1313,7 @@ const RFIRow = React.memo(function RFIRow({
   onEdit,
   onClose,
   onCreateVariation,
+  onCreateTask,
   creatingVariation = false,
 }: {
   rfi: RFI;
@@ -1262,6 +1322,8 @@ const RFIRow = React.memo(function RFIRow({
   onEdit: (rfi: RFI) => void;
   onClose: (id: string) => void;
   onCreateVariation: (id: string) => void;
+  /** Open the "Create task" quick-create prefilled from this RFI. */
+  onCreateTask: (rfi: RFI) => void;
   // True while a create-variation request is in flight (any row). Disables
   // the button so a double-click cannot mint two change orders.
   creatingVariation?: boolean;
@@ -1490,6 +1552,18 @@ const RFIRow = React.memo(function RFIRow({
 
           {/* Actions */}
           <div className="flex items-center gap-2 pt-1">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={(e) => {
+                e.stopPropagation();
+                onCreateTask(rfi);
+              }}
+              icon={<ListTodo size={14} />}
+              title={t('rfi.create_task_hint', { defaultValue: 'Turn this RFI into a task' })}
+            >
+              {t('rfi.create_task', { defaultValue: 'Create task' })}
+            </Button>
             {rfi.status === 'open' && (
               <Button
                 variant="primary"
@@ -1640,12 +1714,12 @@ function RFIHowItWorks() {
   ];
 
   return (
-    <div className="rounded-xl border border-border-light bg-surface-secondary/40 p-4">
-      <h2 className="flex items-center gap-1.5 text-sm font-semibold text-content-primary">
-        <Network size={15} className="text-oe-blue" />
-        {t('rfi.flow_title', { defaultValue: 'How RFIs work and connect' })}
-      </h2>
-      <p className="mt-1 text-xs text-content-tertiary">
+    <CollapsibleSection
+      storageKey="rfi.how"
+      icon={<Network size={15} className="text-oe-blue" />}
+      title={t('rfi.flow_title', { defaultValue: 'How RFIs work and connect' })}
+    >
+      <p className="text-xs text-content-tertiary">
         {t('rfi.flow_intro', {
           defaultValue:
             'An RFI turns an open question into a documented answer you can build on. The quickest start is to raise one and set who owns the next move.',
@@ -1683,7 +1757,7 @@ function RFIHowItWorks() {
         <span aria-hidden="true">·</span>
         <ModLink to="/contracts">{t('rfi.link_contracts', { defaultValue: 'Contracts' })}</ModLink>
       </div>
-    </div>
+    </CollapsibleSection>
   );
 }
 
@@ -1699,6 +1773,7 @@ export function RFIPage() {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [editingRfi, setEditingRfi] = useState<RFI | null>(null);
   const [respondingRfi, setRespondingRfi] = useState<RFI | null>(null);
+  const [taskSourceRfi, setTaskSourceRfi] = useState<RFI | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   /* Debounced copy of the search input that drives the backend `?search=`
      query. Keeps typing fluid (no fetch storm) but still hits the server
@@ -1835,6 +1910,16 @@ export function RFIPage() {
         : 0;
     return { total, open, overdue, avgDays };
   }, [rfis, serverStats]);
+
+  // Module Insights - the toggleable visualization panel for this module. Built
+  // client-side from the RFIs already loaded; when the project has none,
+  // buildRFIInsights returns a labelled sample set so the panel is never empty.
+  // Declared with the other top-of-component hooks so the hook order stays stable.
+  const insights = useModuleInsights('rfi', { defaultOpen: true });
+  const { datasets: insightDatasets, builtins: insightBuiltins } = useMemo(
+    () => buildRFIInsights(rfis, '', t),
+    [rfis, t],
+  );
 
   // Invalidation
   const invalidateAll = useCallback(() => {
@@ -1995,12 +2080,11 @@ export function RFIPage() {
   const handleEditSubmit = useCallback(
     (formData: RFIFormData) => {
       if (!editingRfi) return;
+      // Rebuild the baseline the modal started from, so the save carries only
+      // what the user actually edited. See `buildRfiPatch`.
       updateMut.mutate({
         id: editingRfi.id,
-        data: {
-          ...buildUpdatePayload(formData),
-          linked_drawing_ids: formData.linked_drawing_ids,
-        },
+        data: buildRfiPatch(formData, formFromRfi(editingRfi)),
       });
     },
     [updateMut, editingRfi],
@@ -2085,6 +2169,7 @@ export function RFIPage() {
         subtitle={t('rfi.subtitle', { defaultValue: 'Submit, track, and resolve design and construction queries' })}
         actions={
           <>
+            <InsightsToggleButton open={insights.open} onClick={insights.toggle} />
             {/* How it works guide - explains the raise / attach / track /
                 respond flow and the impact-to-Variation handoff. Sits at the
                 head of the action cluster as the leading help pill. */}
@@ -2121,6 +2206,20 @@ export function RFIPage() {
             </Button>
           </>
         }
+      />
+
+      {/* Module Insights panel - toggled by the header button. Placed high so
+          its charts (real, or labelled sample) are visible the moment the
+          register opens. */}
+      <InsightsPanel
+        open={insights.open}
+        title={t('rfi.insights.title', { defaultValue: 'RFI insights' })}
+        datasets={insightDatasets}
+        builtins={insightBuiltins}
+        custom={insights.custom}
+        onAdd={insights.addCustom}
+        onUpdate={insights.updateCustom}
+        onRemove={insights.removeCustom}
       />
 
       {/* Canonical module info card — pain-named title + workflow body. */}
@@ -2441,6 +2540,7 @@ export function RFIPage() {
                     onEdit={handleEdit}
                     onClose={handleClose}
                     onCreateVariation={handleCreateVariation}
+                    onCreateTask={setTaskSourceRfi}
                     creatingVariation={createVariationMut.isPending}
                   />
                 ))}
@@ -2551,6 +2651,25 @@ export function RFIPage() {
           onClose={() => setRespondingRfi(null)}
           onSubmit={handleRespondSubmit}
           isPending={respondMut.isPending}
+        />
+      )}
+
+      {/* Create task quick action — prefilled from this RFI */}
+      {taskSourceRfi && (
+        <CreateTaskFromSourceDialog
+          projectId={taskSourceRfi.project_id || projectId}
+          sourceType="rfi"
+          sourceId={taskSourceRfi.id}
+          sourceLabel={`#${taskSourceRfi.rfi_number}`}
+          defaultTitle={taskSourceRfi.subject}
+          defaultDescription={t('rfi.task_desc_default', {
+            defaultValue: 'Follow up on RFI #{{number}}: {{subject}}',
+            number: taskSourceRfi.rfi_number,
+            subject: taskSourceRfi.subject,
+          })}
+          defaultDueDate={taskSourceRfi.response_due_date}
+          defaultAssigneeId={taskSourceRfi.ball_in_court || taskSourceRfi.assigned_to}
+          onClose={() => setTaskSourceRfi(null)}
         />
       )}
 

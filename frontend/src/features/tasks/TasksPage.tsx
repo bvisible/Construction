@@ -3,7 +3,7 @@
 import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useParams, useSearchParams, useNavigate } from 'react-router-dom';
+import { useParams, useSearchParams, useNavigate, Link } from 'react-router-dom';
 import clsx from 'clsx';
 import {
   ClipboardList,
@@ -53,9 +53,12 @@ import {
   type TaskStatus,
   type TaskPriority,
   type CreateTaskPayload,
+  type UpdateTaskPayload,
 } from './api';
 import { tasksGuide } from './tasksGuide';
 import { VoiceEntry, getField } from '@/features/voice';
+import { InsightsPanel, InsightsToggleButton, useModuleInsights } from '@/features/insights';
+import { buildTasksInsights } from './tasksInsights';
 
 /* ── Constants ─────────────────────────────────────────────────────────── */
 
@@ -221,6 +224,32 @@ const EMPTY_FORM: TaskFormData = {
   assigned_to: '',
   due_date: '',
 };
+
+/**
+ * The form state a task opens with.
+ *
+ * Pure and exported so the save can rebuild the same baseline the modal was
+ * seeded from and send only what the user actually changed. Both sides have to
+ * come from one definition: the assignee in particular is prefilled with a
+ * DISPLAY NAME resolved from two different places, and if the baseline resolved
+ * it any other way an untouched assignee would read as edited and demote a real
+ * user link to free text.
+ */
+export function taskFormData(task?: Task | null): TaskFormData {
+  if (!task) return EMPTY_FORM;
+  const meta = (task.metadata ?? {}) as Record<string, unknown>;
+  return {
+    title: task.title,
+    description: task.description || '',
+    task_type: task.task_type,
+    priority: task.priority,
+    assigned_to:
+      task.assigned_to_name ||
+      (typeof meta.assignee_name === 'string' ? meta.assignee_name : '') ||
+      '',
+    due_date: task.due_date || '',
+  };
+}
 
 function AddTaskModal({
   onClose,
@@ -584,18 +613,54 @@ const TaskCard = React.memo(function TaskCard({
       {/* Source / BIM indicators — inline, compact */}
       {(task.meeting_id || (task.metadata && typeof task.metadata.source === 'string') || (task.bim_element_ids && task.bim_element_ids.length > 0)) && (
         <div className="flex items-center gap-2 mt-1 ml-6">
-          {(task.meeting_id || (task.metadata && typeof task.metadata.source === 'string')) && (
-            <span className="inline-flex items-center gap-0.5 text-[9px] text-content-quaternary">
-              <Link2 size={8} className="shrink-0" />
-              {task.meeting_id
+          {(task.meeting_id || (task.metadata && typeof task.metadata.source === 'string')) &&
+            (() => {
+              // ``metadata.source`` is the cross-module back-link convention
+              // (see CreateTaskFromSourceDialog): 'rfi' / 'correspondence' /
+              // 'inbound_capture' / 'inspection'. ``source_id`` is the source
+              // record's id, when the caller stored one — it makes the chip
+              // a deep link back to where the task came from.
+              const src = task.metadata ? String(task.metadata.source ?? '') : '';
+              const srcId =
+                task.metadata && typeof task.metadata.source_id === 'string'
+                  ? task.metadata.source_id
+                  : '';
+              const label = task.meeting_id
                 ? t('tasks.from_meeting', { defaultValue: 'Meeting' })
-                : String(task.metadata?.source) === 'rfi'
+                : src === 'rfi'
                   ? t('tasks.from_rfi', { defaultValue: 'RFI' })
-                  : String(task.metadata?.source) === 'inspection'
+                  : src === 'inspection'
                     ? t('tasks.from_inspection', { defaultValue: 'Inspection' })
-                    : t('tasks.source_linked', { defaultValue: 'Linked' })}
-            </span>
-          )}
+                    : src === 'correspondence'
+                      ? t('tasks.from_correspondence', { defaultValue: 'Correspondence' })
+                      : src === 'inbound_capture'
+                        ? t('tasks.from_inbound_capture', { defaultValue: 'Captured message' })
+                        : t('tasks.source_linked', { defaultValue: 'Linked' });
+              // Correspondence and inbound_capture both surface only on the
+              // list page (no per-record detail route today), so both link
+              // there; RFI has a real detail route to deep-link into.
+              const to =
+                !task.meeting_id && srcId
+                  ? src === 'rfi'
+                    ? `/rfi/${srcId}`
+                    : src === 'correspondence' || src === 'inbound_capture'
+                      ? '/correspondence'
+                      : null
+                  : null;
+              const chip = (
+                <span className="inline-flex items-center gap-0.5 text-[9px] text-content-quaternary">
+                  <Link2 size={8} className="shrink-0" />
+                  {label}
+                </span>
+              );
+              return to ? (
+                <Link to={to} onClick={(e) => e.stopPropagation()} className="hover:underline">
+                  {chip}
+                </Link>
+              ) : (
+                chip
+              );
+            })()}
           <ViewInBIMButton
             elementIds={task.bim_element_ids ?? []}
             iconSize={8}
@@ -979,6 +1044,17 @@ export function TasksPage() {
     return map;
   }, [filtered, allStatuses]);
 
+  // Module Insights - the toggleable KPI and chart panel for this module. Its
+  // charts are built client-side from the tasks already loaded; when the
+  // project has none, buildTasksInsights returns a labelled sample set so the
+  // panel is never empty. Declared among the top-level hooks, above the single
+  // return below, so hook order stays stable on every render.
+  const insights = useModuleInsights('tasks', { defaultOpen: true });
+  const { datasets: insightDatasets, builtins: insightBuiltins } = useMemo(
+    () => buildTasksInsights(tasks, '', t),
+    [tasks, t],
+  );
+
   // Invalidation
   const invalidateAll = useCallback(() => {
     qc.invalidateQueries({ queryKey: ['tasks'] });
@@ -1090,15 +1166,25 @@ export function TasksPage() {
           ? assignee
           : null;
 
-      return updateTask(id, {
-        title: data.title,
-        description: data.description || undefined,
-        task_type: data.task_type,
-        priority: data.priority,
-        responsible_id,
-        metadata,
-        due_date: data.due_date || null,
-      });
+      // Only what the user actually edited goes back. Writing the whole form
+      // on every save rewrites fields nobody opened with the values they held
+      // when this list was last read, undoing anyone else's edit to them
+      // without a word. The update route dumps with `exclude_unset=True`, so a
+      // field left out of the body is left alone in the database.
+      const base = taskFormData(editingTask);
+      const patch: UpdateTaskPayload = {};
+      if (data.title !== base.title) patch.title = data.title;
+      if (data.description !== base.description) patch.description = data.description || undefined;
+      if (data.task_type !== base.task_type) patch.task_type = data.task_type;
+      if (data.priority !== base.priority) patch.priority = data.priority;
+      if (data.due_date !== base.due_date) patch.due_date = data.due_date || null;
+      // The assignee drives both the link and its display-name mirror, so the
+      // two travel together or not at all.
+      if (data.assigned_to !== base.assigned_to) {
+        patch.responsible_id = responsible_id;
+        patch.metadata = metadata;
+      }
+      return updateTask(id, patch);
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['tasks'] });
@@ -1363,6 +1449,7 @@ export function TasksPage() {
         })}
         actions={
           <>
+            <InsightsToggleButton open={insights.open} onClick={insights.toggle} />
             <ModuleGuideButton
               content={tasksGuide}
               onCta={() => setShowAddModal(true)}
@@ -1423,6 +1510,17 @@ export function TasksPage() {
             </Button>
           </>
         }
+      />
+
+      <InsightsPanel
+        open={insights.open}
+        title={t('tasks.insights.title', { defaultValue: 'Task insights' })}
+        datasets={insightDatasets}
+        builtins={insightBuiltins}
+        custom={insights.custom}
+        onAdd={insights.addCustom}
+        onUpdate={insights.updateCustom}
+        onRemove={insights.removeCustom}
       />
 
       {/* Cross-module navigation — connects the planning value chain.
@@ -1871,19 +1969,7 @@ export function TasksPage() {
           onSubmit={editingTask ? handleEditSubmit : handleCreateSubmit}
           isPending={createMut.isPending || editMut.isPending}
           projectName={projectName}
-          initialData={editingTask ? {
-            title: editingTask.title,
-            description: editingTask.description || '',
-            task_type: editingTask.task_type,
-            priority: editingTask.priority,
-            assigned_to:
-              editingTask.assigned_to_name ||
-              (typeof (editingTask.metadata as Record<string, unknown> | undefined)?.assignee_name === 'string'
-                ? ((editingTask.metadata as Record<string, unknown>).assignee_name as string)
-                : '') ||
-              '',
-            due_date: editingTask.due_date || '',
-          } : (typeFilter
+          initialData={editingTask ? taskFormData(editingTask) : (typeFilter
               // When the create dialog opens while a type tab is active
               // (Topic / Information / Decision / Personal / custom), pre-fill
               // task_type with that tab's value. Otherwise the new task lands

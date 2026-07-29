@@ -11,6 +11,9 @@ import uuid
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import noload
+from sqlalchemy.orm.attributes import set_committed_value
+from sqlalchemy.orm.util import identity_key
+from sqlalchemy.sql.elements import ClauseElement
 
 from app.modules.schedule.models import Activity, Schedule, ScheduleRelationship, WorkOrder
 
@@ -63,7 +66,15 @@ class ScheduleRepository:
         await self.session.execute(stmt)
         await self.session.flush()
         # Expire cached ORM instances so the next get_by_id re-reads from DB
-        self.session.expire_all()
+        instance = self.session.identity_map.get(identity_key(Schedule, schedule_id))
+        if instance is None:
+            return
+        computed = [name for name, value in fields.items() if isinstance(value, ClauseElement)]
+        for name, value in fields.items():
+            if name not in computed:
+                set_committed_value(instance, name, value)
+        if computed:
+            self.session.expire(instance, computed)
 
     async def delete(self, schedule_id: uuid.UUID) -> None:
         """Delete a schedule and all its activities (via CASCADE)."""
@@ -125,7 +136,15 @@ class ActivityRepository:
         await self.session.execute(stmt)
         await self.session.flush()
         # Expire cached ORM instances so the next get_by_id re-reads from DB
-        self.session.expire_all()
+        instance = self.session.identity_map.get(identity_key(Activity, activity_id))
+        if instance is None:
+            return
+        computed = [name for name, value in fields.items() if isinstance(value, ClauseElement)]
+        for name, value in fields.items():
+            if name not in computed:
+                set_committed_value(instance, name, value)
+        if computed:
+            self.session.expire(instance, computed)
 
     async def update_fields_if_revision(self, activity_id: uuid.UUID, expected_revision: int, **fields: object) -> bool:
         """Compare-and-swap update for the optimistic-concurrency guard.
@@ -154,10 +173,10 @@ class ActivityRepository:
         ``{"id": <uuid>, "color": "#ef4444", "metadata_": {...}}``. Uses
         SQLAlchemy's ORM-enabled bulk UPDATE by primary key (executemany under
         the hood), which collapses what would otherwise be N separate UPDATE
-        statements - and N ``expire_all()`` calls when looping over
-        :meth:`update_fields` - into one statement and a single cache
-        invalidation. Behaviour matches calling :meth:`update_fields` once per
-        row. No-op when ``updates`` is empty.
+        statements into one. Unlike :meth:`update_fields`, which syncs only the
+        row it wrote, this expires the whole identity map once, so callers must
+        read what they need before calling it rather than after. No-op when
+        ``updates`` is empty.
         """
         if not updates:
             return
@@ -288,7 +307,15 @@ class WorkOrderRepository:
         await self.session.execute(stmt)
         await self.session.flush()
         # Expire cached ORM instances so the next get_by_id re-reads from DB
-        self.session.expire_all()
+        instance = self.session.identity_map.get(identity_key(WorkOrder, work_order_id))
+        if instance is None:
+            return
+        computed = [name for name, value in fields.items() if isinstance(value, ClauseElement)]
+        for name, value in fields.items():
+            if name not in computed:
+                set_committed_value(instance, name, value)
+        if computed:
+            self.session.expire(instance, computed)
 
     async def delete(self, work_order_id: uuid.UUID) -> None:
         """Delete a work order."""

@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.http_headers import content_disposition_attachment
 from app.core.json_merge import merge_metadata
+from app.modules.forms.formula import compute_formulas
 from app.modules.forms.models import FormSubmission, FormTemplate
 from app.modules.forms.repository import FormsRepository
 from app.modules.forms.schemas import (
@@ -233,6 +234,10 @@ class FormsService:
             final_answers.update(answers)
 
         snapshot = list(submission.template_snapshot or [])
+        # Resolve computed (formula) fields from the entered answers before
+        # validating and freezing them, so the stored form carries the derived
+        # values and any formula-driven consistency is against real numbers.
+        final_answers = compute_formulas(snapshot, final_answers)
         check = validate_submission_answers(snapshot, final_answers)
         if not check.is_complete:
             raise HTTPException(

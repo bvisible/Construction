@@ -721,6 +721,7 @@ class CostItemService:
 
         items, total, has_more = await self.repo.search(
             q=query.q,
+            fuzzy=query.fuzzy,
             name=query.name,
             description=query.description,
             unit=query.unit,
@@ -877,7 +878,7 @@ class CostItemService:
                 detail="Cost item not found",
             )
 
-        # Save code before expire_all() invalidates the ORM object
+        # Save the code before the deactivating write below
         item_code = item.code
 
         await self.repo.update_fields(item_id, is_active=False)

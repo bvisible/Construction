@@ -9,9 +9,11 @@ Endpoints (auto-mounted at ``/api/v1/approval-routes/``)::
     GET    /routes/{route_id}                 - single template + steps
     PATCH  /routes/{route_id}                 - update mutable fields
     DELETE /routes/{route_id}                 - delete (rejected if instances exist)
+    POST   /routes/{route_id}/clone           - adopt a route (e.g. a preset) into a project, editable
     GET    /instances                         - list workflows (filterable)
     POST   /instances                         - start a workflow
     GET    /instances/{instance_id}           - single workflow + step states
+    GET    /instances/{instance_id}/timeline  - held-days / timeline analytics
     POST   /instances/{instance_id}/decide    - submit a decision
     POST   /instances/{instance_id}/cancel    - cancel a pending workflow
 
@@ -25,6 +27,7 @@ wide templates (``project_id IS NULL``) are visible to everyone with
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
@@ -42,6 +45,7 @@ from app.modules.approval_routes.models import (
     TARGET_KINDS,
 )
 from app.modules.approval_routes.schemas import (
+    ApprovalAnalyticsResponse,
     CancelInstance,
     DecisionSubmit,
     DelegationCreate,
@@ -50,13 +54,17 @@ from app.modules.approval_routes.schemas import (
     InstanceCreate,
     InstanceResponse,
     ReassignInstance,
+    RouteCloneRequest,
     RouteCreate,
     RouteResponse,
+    RouteSimulationResponse,
     RouteUpdate,
+    SimulateRequest,
     StepResponse,
     StepStateResponse,
 )
 from app.modules.approval_routes.service import ApprovalRouteService
+from app.modules.approval_routes.simulate import simulate_route
 
 router = APIRouter(tags=["approval_routes"])
 
@@ -72,6 +80,19 @@ def _safe_user_uuid(user_id: str | None) -> uuid.UUID | None:
         return uuid.UUID(str(user_id))
     except (ValueError, TypeError):
         return None
+
+
+def _reject_if_system_preset(route: object) -> None:
+    """Block edits / deletes of a platform-seeded preset route.
+
+    Presets are read-only, tenant-wide starting points; a team customises by
+    creating their own route rather than mutating the shared template.
+    """
+    if getattr(route, "system_key", None) is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This is a read-only system preset. Create your own route to customise it.",
+        )
 
 
 async def _route_to_response(
@@ -220,12 +241,42 @@ async def update_route(
     row = await service.get_route(route_id)
     if row.project_id is not None:
         await verify_project_access(row.project_id, user_id, session)
+    _reject_if_system_preset(row)
     updated = await service.update_route(
         route_id,
         payload,
         actor_id=_safe_user_uuid(user_id),
     )
     return await _route_to_response(updated, service)
+
+
+@router.post(
+    "/routes/{route_id}/clone",
+    response_model=RouteResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(RequirePermission("approval_routes.write"))],
+)
+async def clone_route(
+    route_id: uuid.UUID,
+    payload: RouteCloneRequest,
+    session: SessionDep,
+    user_id: CurrentUserId,
+    service: ApprovalRouteService = Depends(_get_service),
+) -> RouteResponse:
+    """Adopt a route (typically a read-only preset) into a project.
+
+    Copies the source route's steps into a new project-scoped route with no
+    ``system_key`` - editable straight away. The source route (a tenant-wide
+    preset or another project's route) is left untouched.
+    """
+    await verify_project_access(payload.project_id, user_id, session)
+    clone = await service.clone_route(
+        route_id,
+        project_id=payload.project_id,
+        name=payload.name,
+        created_by=_safe_user_uuid(user_id),
+    )
+    return await _route_to_response(clone, service)
 
 
 @router.delete(
@@ -242,7 +293,41 @@ async def delete_route(
     row = await service.get_route(route_id)
     if row.project_id is not None:
         await verify_project_access(row.project_id, user_id, session)
+    _reject_if_system_preset(row)
     await service.delete_route(route_id, actor_id=_safe_user_uuid(user_id))
+
+
+@router.post(
+    "/routes/{route_id}/simulate",
+    response_model=RouteSimulationResponse,
+    dependencies=[Depends(RequirePermission("approval_routes.read"))],
+)
+async def simulate_route_template(
+    route_id: uuid.UUID,
+    session: SessionDep,
+    user_id: CurrentUserId,
+    payload: SimulateRequest | None = None,
+    service: ApprovalRouteService = Depends(_get_service),
+) -> RouteSimulationResponse:
+    """Dry-run a route template without starting a real workflow.
+
+    Read-only. Reports, per step, how many approvals clear it and whether it
+    can ever clear, plus a happy-path walk to confirm the template reaches
+    ``approved``. Post a body with ``decisions`` to add a what-if walk (for
+    example, "what happens if step 2 is rejected"). Handy for checking a
+    preset or a hand-built route before anyone routes real work through it.
+    """
+    row = await service.get_route(route_id)
+    if row.project_id is not None:
+        await verify_project_access(row.project_id, user_id, session)
+    steps = await service.list_steps(route_id)
+    request = payload or SimulateRequest()
+    return simulate_route(
+        route_id=row.id,
+        target_kind=row.target_kind,
+        steps=list(steps),
+        decisions=request.decisions,
+    )
 
 
 # ── Instances (running workflows) ────────────────────────────────────
@@ -372,6 +457,73 @@ async def get_instance(
     if route.project_id is not None:
         await verify_project_access(route.project_id, user_id, session)
     return await _instance_to_response(instance, service)
+
+
+@router.get(
+    "/instances/{instance_id}/timeline",
+    dependencies=[Depends(RequirePermission("approval_routes.read"))],
+)
+async def get_instance_timeline(
+    instance_id: uuid.UUID,
+    session: SessionDep,
+    user_id: CurrentUserId,
+    service: ApprovalRouteService = Depends(_get_service),
+) -> dict:
+    """Held-days / approval-timeline analytics for one instance.
+
+    Returns per-step held time, total cycle time and SLA breaches so a report
+    can show who held the approval and for how long. Jurisdiction-neutral: the
+    windows are hours, not any national rule.
+    """
+    instance = await service.get_instance(instance_id)
+    route = await service.get_route(instance.route_id)
+    if route.project_id is not None:
+        await verify_project_access(route.project_id, user_id, session)
+    return await service.instance_timeline(instance_id)
+
+
+@router.get(
+    "/analytics",
+    response_model=ApprovalAnalyticsResponse,
+    dependencies=[Depends(RequirePermission("approval_routes.read"))],
+)
+async def get_project_analytics(
+    session: SessionDep,
+    user_id: CurrentUserId,
+    project_id: uuid.UUID = Query(...),
+    target_kind: str | None = Query(default=None),
+    days: int = Query(default=180, ge=1, le=730),
+    started_after: datetime | None = Query(default=None),
+    started_before: datetime | None = Query(default=None),
+    service: ApprovalRouteService = Depends(_get_service),
+) -> ApprovalAnalyticsResponse:
+    """Project-scoped approval-cycle analytics.
+
+    Aggregates the per-instance held-days timeline across the project's own
+    routes into KPI headline figures, per-role / per-step held time, SLA breach
+    counts and a bottleneck ranking. Read scope (VIEWER+); the project guard
+    runs before any query so another project's cycle data never leaks. A project
+    that owns no routes (or has no instances in range) returns a zeroed 200,
+    never a 404 - matching the /instances drill-down.
+    """
+    if target_kind is not None and target_kind not in TARGET_KINDS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Unknown target_kind: {target_kind!r}",
+        )
+    if started_after is not None and started_before is not None and started_after > started_before:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="started_after must not be after started_before",
+        )
+    await verify_project_access(project_id, user_id, session)
+    return await service.project_analytics(
+        project_id=project_id,
+        target_kind=target_kind,
+        days=days,
+        started_after=started_after,
+        started_before=started_before,
+    )
 
 
 @router.post(

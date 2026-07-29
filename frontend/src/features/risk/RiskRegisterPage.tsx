@@ -4,13 +4,13 @@ import { Fragment, useState, useMemo, useCallback, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams, useNavigate, Link } from 'react-router-dom';
-import { normalizeListResponse } from '@/shared/lib/apiHelpers';
+import { fetchAllPages } from '@/shared/lib/apiHelpers';
 import {
   ShieldAlert, Plus, ChevronRight, ArrowLeft, DollarSign,
   AlertTriangle, Shield, Trash2, X, Search, Filter, CalendarDays, TrendingUp,
   LayoutGrid, Activity, Network, ArrowRight,
 } from 'lucide-react';
-import { Button, Card, Badge, EmptyState, Breadcrumb, ConfirmDialog, DismissibleInfo, IntroRichText, RecoveryCard, SkeletonTable, SkeletonCard, ModuleGuideButton } from '@/shared/ui';
+import { Button, Card, Badge, EmptyState, Breadcrumb, ConfirmDialog, DismissibleInfo, IntroRichText, RecoveryCard, SkeletonTable, SkeletonCard, ModuleGuideButton, CollapsibleSection } from '@/shared/ui';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { MultiCurrencyTotal } from '@/shared/ui/MultiCurrencyTotal';
 import { RequiresProject } from '@/shared/auth/RequiresProject';
@@ -24,6 +24,8 @@ import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { useTabKeyboardNav } from '@/shared/hooks/useTabKeyboardNav';
 import { MonteCarloTab } from './MonteCarloTab';
 import { riskGuide } from './riskGuide';
+import { InsightsPanel, InsightsToggleButton, useModuleInsights } from '@/features/insights';
+import { buildRiskInsights } from './riskInsights';
 
 const RISK_TAB_IDS = ['register', 'montecarlo'] as const;
 type RiskTab = (typeof RISK_TAB_IDS)[number];
@@ -571,12 +573,12 @@ function HowRiskWork() {
   ];
 
   return (
-    <Card padding="md">
-      <h2 className="flex items-center gap-1.5 text-sm font-semibold text-content-primary">
-        <Network size={15} className="text-oe-blue" />
-        {t('risk.flow_title', { defaultValue: 'How the Risk Register fits together' })}
-      </h2>
-      <p className="mt-1 text-xs text-content-tertiary">
+    <CollapsibleSection
+      storageKey="risk.how"
+      icon={<Network size={15} className="text-oe-blue" />}
+      title={t('risk.flow_title', { defaultValue: 'How the Risk Register fits together' })}
+    >
+      <p className="text-xs text-content-tertiary">
         {t('risk.flow_intro', {
           defaultValue:
             'Surface project threats before they cost money: log them, score them on the matrix, simulate the range, then feed the impacts into planning and reporting.',
@@ -625,7 +627,7 @@ function HowRiskWork() {
           · <ModLink to="/reports">{t('risk.mod_reports', { defaultValue: 'Reports' })}</ModLink>
         </span>
       </div>
-    </Card>
+    </CollapsibleSection>
   );
 }
 
@@ -687,7 +689,21 @@ export function RiskRegisterPage() {
   const projectId = activeProjectId || projects[0]?.id || '';
   const project = useMemo(() => projects.find((p) => p.id === projectId), [projects, projectId]);
 
-  const { data: risks = [], isLoading, isError, error, refetch } = useQuery({ queryKey: ['risks', projectId], queryFn: () => apiGet<RiskItem[]>(`/v1/risk/?project_id=${projectId}&limit=100`), select: (d): RiskItem[] => normalizeListResponse(d), enabled: !!projectId });
+  // Read every page rather than the first one. This list feeds the Insights
+  // panel, whose "Total exposure" tile sums probability x impact_cost, so
+  // stopping at the route's 100-row ceiling made a money figure silently short
+  // on any project holding more risks than that, with nothing on screen saying
+  // so. The route caps `limit` at 100, which makes one request a page and not
+  // a data set.
+  const { data: risksPage, isLoading, isError, error, refetch } = useQuery({
+    queryKey: ['risks', projectId],
+    queryFn: () =>
+      fetchAllPages<RiskItem>((offset, limit) =>
+        apiGet<RiskItem[]>(`/v1/risk/?project_id=${projectId}&limit=${limit}&offset=${offset}`),
+      ),
+    enabled: !!projectId,
+  });
+  const risks = useMemo(() => risksPage?.items ?? [], [risksPage]);
   const { data: summary } = useQuery({ queryKey: ['risk-summary', projectId], queryFn: () => apiGet<RiskSummary>(`/v1/risk/summary/?project_id=${projectId}`), enabled: !!projectId });
   const { data: matrixData } = useQuery({ queryKey: ['risk-matrix', projectId], queryFn: () => apiGet<{ cells: MatrixCell[] }>(`/v1/risk/matrix/?project_id=${projectId}`), enabled: !!projectId });
 
@@ -698,6 +714,18 @@ export function RiskRegisterPage() {
   });
 
   const refresh = useCallback(() => { qc.invalidateQueries({ queryKey: ['risks'] }); qc.invalidateQueries({ queryKey: ['risk-summary'] }); qc.invalidateQueries({ queryKey: ['risk-matrix'] }); }, [qc]);
+
+  // Module Insights - the toggleable visualization panel for this module. Its
+  // charts are built client-side from the risks already loaded; when the
+  // project has none, buildRiskInsights returns a labelled sample set so the
+  // panel is never empty on first open. Open state and any user-built charts
+  // persist per module via useModuleInsights. Declared before the detail-view
+  // early return below so the hook order stays stable.
+  const insights = useModuleInsights('risk', { defaultOpen: true });
+  const { datasets: insightDatasets, builtins: insightBuiltins } = useMemo(
+    () => buildRiskInsights(risks, project?.currency || summary?.currency || 'EUR', t),
+    [risks, project, summary, t],
+  );
 
   // Client-side filtering
   const filteredRisks = useMemo(() => {
@@ -752,12 +780,29 @@ export function RiskRegisterPage() {
         })}
         actions={
           <>
+            {/* Insights toggle - shows or hides this module's visualization
+                panel. Leads the cluster so charts are one obvious click away. */}
+            <InsightsToggleButton open={insights.open} onClick={insights.toggle} />
             <ModuleGuideButton content={riskGuide} />
             <Button variant="primary" onClick={() => setShowCreate(true)} disabled={!projectId}>
               <Plus size={16} className="mr-1.5" />{t('risk.new', { defaultValue: 'Add Risk' })}
             </Button>
           </>
         }
+      />
+
+      {/* Module Insights panel - toggled by the header button. Placed high so
+          its charts (real, or labelled sample) are visible the moment the
+          register opens. */}
+      <InsightsPanel
+        open={insights.open}
+        title={t('risk.insights.title', { defaultValue: 'Risk insights' })}
+        datasets={insightDatasets}
+        builtins={insightBuiltins}
+        custom={insights.custom}
+        onAdd={insights.addCustom}
+        onUpdate={insights.updateCustom}
+        onRemove={insights.removeCustom}
       />
 
       <HowRiskWork />

@@ -18,12 +18,14 @@ import { useBrandingStore } from '@/stores/useBrandingStore';
 import { BrandingEditorModal } from '@/app/layout/CustomBranding';
 import { extractErrorMessageFromBody } from '@/shared/lib/api';
 import { isTauri } from '@/shared/lib/desktop';
+import { APP_VERSION } from '@/shared/lib/version';
 import { AuthBackground } from './AuthBackground';
 import {
   shouldAttemptDesktopBootstrap,
   shouldQueryFirstRun,
   type FirstRunStatus,
 } from './desktopBootstrap';
+import { safeNextPath } from './nextPath';
 import { SUPPORTED_LANGUAGES } from '@/app/i18n';
 import { useThemeStore } from '@/stores/useThemeStore';
 
@@ -87,26 +89,10 @@ export function LoginPage() {
     void useBrandingStore.getState().hydrateFromServer();
   }, []);
   // `?next=/path` lets guarded routes send the user back to where they wanted
-  // to go after login. Falls back to `/` for direct visits.
-  const nextPath = (() => {
-    try {
-      const params = new URLSearchParams(location.search);
-      const next = params.get('next');
-      // Never bounce back into an auth route after a successful login - a
-      // next=/login (or /onboarding before completion) would dead-end or
-      // re-loop. Only honour an internal, non-auth path.
-      const authRoutes = ['/login', '/register', '/forgot-password', '/reset-password', '/onboarding'];
-      if (
-        next &&
-        next.startsWith('/') &&
-        !next.startsWith('//') &&
-        !authRoutes.some((r) => next === r || next.startsWith(`${r}/`) || next.startsWith(`${r}?`))
-      ) {
-        return next;
-      }
-    } catch { /* ignore */ }
-    return '/';
-  })();
+  // to go after login. Falls back to `/` for direct visits. Shared with the
+  // authenticated-route guard (AuthedHome) so a redirect race between the two
+  // cannot silently drop the `next` (the demo deep-link bug).
+  const nextPath = safeNextPath(location.search);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -121,9 +107,13 @@ export function LoginPage() {
   const [demoOpen, setDemoOpen] = useState(true);
   const [demoHint, setDemoHint] = useState(false);
   const [demoLoading, setDemoLoading] = useState<string | null>(null);
-  // null = not probed yet; the demo block renders only once the server
-  // confirms demo accounts are available (see the first-run effect below).
-  const [demoEnabled, setDemoEnabled] = useState<boolean | null>(null);
+  // The demo sign-in is shown by DEFAULT and only hidden when the server
+  // explicitly reports demo is off (SEED_DEMO=false, or an admin turned it off
+  // in Settings). Starting true means a probe that fails or races the ~60s
+  // first-boot demo seeding can never leave the block hidden (see the effect
+  // below). This is deliberate: demo access is a headline feature of the open
+  // platform, so it should always be there on a fresh install.
+  const [demoEnabled, setDemoEnabled] = useState<boolean>(true);
   const langRef = useRef<HTMLDivElement>(null);
 
   // Desktop first-run: when running inside the Tauri shell with no stored
@@ -149,27 +139,34 @@ export function LoginPage() {
     setError('');
   }, []);
 
-  // Probe whether this server offers demo accounts (public, no auth). The
-  // "Try demo" block is shown only when the server confirms demo is enabled,
-  // so production installs (SEED_DEMO=false, or a "no demo" first-run choice)
-  // never present a demo sign-in the server would reject - and a click can
-  // never silently create a demo account. Older servers omit the field, which
-  // we treat as enabled. Runs on web and desktop alike; a probe failure
-  // leaves the block hidden (safe default).
+  // Probe whether this server has demo turned OFF (public, no auth). The block
+  // is shown by default (see the state above); this effect only ever HIDES it,
+  // and only when the server explicitly reports `demo_enabled: false` - a
+  // production install with SEED_DEMO=false, or an admin who turned demo off in
+  // Settings. Older servers omit the field, which keeps the block shown. The
+  // very first probe on a fresh install can race the ~60s demo seeding, so a
+  // failed probe is retried a few times and NEVER hides the block on its own.
   useEffect(() => {
     let cancelled = false;
-    void (async () => {
+    let attempts = 0;
+    const probe = async (): Promise<void> => {
+      attempts += 1;
       try {
         const res = await fetch('/api/v1/auth/first-run', {
           headers: { Accept: 'application/json' },
         });
-        if (!res.ok) return;
+        if (!res.ok) throw new Error(`first-run probe HTTP ${res.status}`);
         const status = (await res.json()) as FirstRunStatus;
         if (!cancelled) setDemoEnabled(status.demo_enabled !== false);
       } catch {
-        /* leave demoEnabled null -> demo block stays hidden */
+        // Transient failure (server still booting / seeding). Retry, but leave
+        // the optimistic default in place so demo never vanishes on a hiccup.
+        if (!cancelled && attempts < 6) {
+          window.setTimeout(() => void probe(), 1500);
+        }
       }
-    })();
+    };
+    void probe();
     return () => {
       cancelled = true;
     };
@@ -538,7 +535,7 @@ export function LoginPage() {
         <div className="mt-5 flex items-center gap-5 animate-stagger-in" style={{ animationDelay: '180ms' }}>
           {[
             { value: '120K+', label: t('login.stat_costs', { defaultValue: 'cost items' }) },
-            { value: '27', label: t('login.stat_langs', { defaultValue: 'languages' }) },
+            { value: '28', label: t('login.stat_langs', { defaultValue: 'languages' }) },
             { value: '48', label: t('login.stat_regions', { defaultValue: 'regions' }) },
             { value: '6', label: t('login.stat_cad', { defaultValue: 'CAD formats' }) },
             { value: '161', label: t('login.stat_modules', { defaultValue: 'modules' }) },
@@ -857,9 +854,10 @@ export function LoginPage() {
             </div>
           </div>
 
-          {/* Demo Access - shown only when the server confirms demo accounts
-              exist (SEED_DEMO on). Production installs hide it entirely. */}
-          {demoEnabled === true && (
+          {/* Demo Access - shown by default. Hidden only when the server
+              reports demo is off (SEED_DEMO=false, or an admin turned it off in
+              Settings), which flips demoEnabled to false in the effect above. */}
+          {demoEnabled && (
           <div className="relative mt-3 animate-stagger-in" style={{ animationDelay: '500ms' }}>
             <div className="login-glass-pro relative rounded-2xl overflow-hidden">
               <div
@@ -998,6 +996,12 @@ export function LoginPage() {
               <a href="https://github.com/datadrivenconstruction/OpenConstructionERP" target="_blank" rel="noopener noreferrer" className="hover:text-content-secondary transition-colors">GitHub</a>
             </div>
           </div>
+          {/* Running build version - always visible so it's obvious which
+              version is live on a fresh open. Matches the Sidebar / About
+              treatment (v{APP_VERSION}). */}
+          <div className="mt-3 text-center text-2xs font-mono text-content-quaternary/80 tabular-nums">
+            v{APP_VERSION}
+          </div>
         </div>
       </div>
 
@@ -1112,7 +1116,7 @@ export function LoginPage() {
                 {[
                   { value: '120,441', label: t('about.stat.costs', 'Cost items') },
                   { value: '48', label: t('about.stat.regions', 'Regional databases') },
-                  { value: '27', label: t('about.stat.languages', 'Languages') },
+                  { value: '28', label: t('about.stat.languages', 'Languages') },
                   { value: '100%', label: t('about.stat.free', 'Free & open source') },
                 ].map((stat) => (
                   <div key={stat.label} className="rounded-lg bg-surface-secondary/50 py-2.5">

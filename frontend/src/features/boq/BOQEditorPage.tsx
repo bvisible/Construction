@@ -69,6 +69,7 @@ const DEFAULT_EXPORT_CONTENT: DevisExportContent = {
   showMetre: true,
 };
 import type { BOQGridHandle } from './BOQGrid';
+import { allResourcesExpanded, type ResourceExpansionState } from './resourceExpansion';
 import { BatchActionBar } from './BatchActionBar';
 import { ScenarioDialog } from './ScenarioDialog';
 import { SendToTenderDialog } from './SendToTenderDialog';
@@ -110,7 +111,7 @@ import { CatalogPickerModal, type CatalogResource } from './CatalogPickerModal';
 import { CustomColumnsDialog } from './CustomColumnsDialog';
 import { BOQVariablesDialog } from './BOQVariablesDialog';
 import { CostPerAreaBenchmark } from './CostPerAreaBenchmark';
-import { RenumberDialog } from './RenumberDialog';
+import { RenumberDialog, type RenumberScheme, type RenumberCustom } from './RenumberDialog';
 import { LinkedPositionsModal } from './LinkedPositionsModal';
 
 /* ── Re-exports for tests ────────────────────────────────────────────── */
@@ -431,7 +432,7 @@ export function BOQEditorPage() {
   /** Stable ref for trackedDelete — allows keyboard shortcut access before declaration. */
   const trackedDeleteRef = useRef<((id: string) => void) | null>(null);
   /** Stable ref for handleExport — allows keyboard shortcut access before declaration. */
-  const handleExportRef = useRef<((format: 'excel' | 'csv' | 'pdf' | 'gaeb') => void) | null>(null);
+  const handleExportRef = useRef<((format: 'excel' | 'csv' | 'pdf' | 'gaeb' | 'bc3') => void) | null>(null);
   /** Stable ref for the AI-copilot toggle (Alt+I) — set after declaration so
    *  the keyboard handler can reach it without widening its dependency array. */
   const toggleAICopilotRef = useRef<(() => void) | null>(null);
@@ -755,8 +756,8 @@ export function BOQEditorPage() {
   const [renumberDialogOpen, setRenumberDialogOpen] = useState(false);
 
   const renumberMutation = useMutation({
-    mutationFn: ({ scheme, pad }: { scheme: 'gap10' | 'gap100' | 'sequential' | 'dotted'; pad: boolean }) =>
-      boqApi.renumberPositions(boqId!, { scheme, pad }),
+    mutationFn: ({ scheme, pad, start, step }: { scheme: RenumberScheme; pad: boolean; start?: number; step?: number }) =>
+      boqApi.renumberPositions(boqId!, { scheme, pad, start, step }),
     onSuccess: (result) => {
       invalidateAll();
       setRenumberDialogOpen(false);
@@ -898,8 +899,8 @@ export function BOQEditorPage() {
   }, []);
 
   const handleRenumberApply = useCallback(
-    (scheme: 'gap10' | 'gap100' | 'sequential' | 'dotted', pad: boolean) => {
-      renumberMutation.mutate({ scheme, pad });
+    (scheme: RenumberScheme, pad: boolean, custom: RenumberCustom) => {
+      renumberMutation.mutate({ scheme, pad, start: custom.start, step: custom.step });
     },
     [renumberMutation],
   );
@@ -1055,6 +1056,29 @@ export function BOQEditorPage() {
       return allIn ? new Set<string>() : new Set(allSectionIds);
     });
   }, [allSectionIds]);
+
+  /* ── Show / hide every position's resources at once ────────────────
+   * The grid owns the expansion state (see BOQGridHandle.setAllResourcesExpanded
+   * for why it is not lifted); the page only mirrors the counts so the toolbar
+   * can label the button and disable it on a BOQ with nothing to open.
+   *
+   * Showing also expands the sections. Resources live inside positions, and a
+   * position inside a collapsed section is not rendered, so "show all
+   * resources" with a collapsed section would open rows nobody can see and the
+   * button would read as broken. Hiding deliberately does NOT re-collapse the
+   * sections: the user asked to put the resources away, not to undo whatever
+   * grouping they had set up. */
+  const [resourceExpansion, setResourceExpansion] = useState<ResourceExpansionState>({
+    expandable: 0,
+    expanded: 0,
+  });
+  const resourcesAllExpanded = allResourcesExpanded(resourceExpansion);
+
+  const handleToggleAllResources = useCallback(() => {
+    const next = !allResourcesExpanded(resourceExpansion);
+    if (next) setCollapsedSections(new Set<string>());
+    boqGridRef.current?.setAllResourcesExpanded(next);
+  }, [resourceExpansion]);
 
   /* ── Search + quick QA filters (grid view only) ────────────────────── */
   const [boqSearch, setBoqSearch] = useState('');
@@ -2045,7 +2069,7 @@ export function BOQEditorPage() {
   /* ── Export / Version History state ─────────────────────────────────── */
 
   const [showVersionHistory, setShowVersionHistory] = useState(false);
-  const [exportWarning, setExportWarning] = useState<{ format: 'excel' | 'csv' | 'pdf' | 'gaeb'; score: number; content?: DevisExportContent } | null>(null);
+  const [exportWarning, setExportWarning] = useState<{ format: 'excel' | 'csv' | 'pdf' | 'gaeb' | 'bc3'; score: number; content?: DevisExportContent } | null>(null);
   const [gaebPreviewOpen, setGaebPreviewOpen] = useState(false);
 
   /* ── Computed data ─────────────────────────────────────────────────── */
@@ -3079,7 +3103,7 @@ export function BOQEditorPage() {
 
   /** Actually perform the export (download file). */
   const doExport = useCallback(
-    async (format: 'excel' | 'csv' | 'pdf' | 'gaeb', content: DevisExportContent = DEFAULT_EXPORT_CONTENT) => {
+    async (format: 'excel' | 'csv' | 'pdf' | 'gaeb' | 'bc3', content: DevisExportContent = DEFAULT_EXPORT_CONTENT) => {
       // Client-side Excel export via SheetJS
       if (format === 'excel' && positions.length > 0) {
         try {
@@ -3168,7 +3192,7 @@ export function BOQEditorPage() {
       if (r.ok) {
         const blob = await r.blob();
         const extensions: Record<string, string> = {
-          excel: 'xlsx', csv: 'csv', pdf: 'pdf', gaeb: 'xml',
+          excel: 'xlsx', csv: 'csv', pdf: 'pdf', gaeb: 'xml', bc3: 'bc3',
         };
         triggerDownload(blob, `${boq?.name ?? 'boq'}.${extensions[format] ?? format}`);
         addToast({ type: 'success', title: t('boq.file_downloaded', { defaultValue: 'File downloaded' }) });
@@ -3190,7 +3214,7 @@ export function BOQEditorPage() {
 
   /** Pre-export validation check: warn if quality < 60%, GAEB preview before export. */
   const handleExport = useCallback(
-    (format: 'excel' | 'csv' | 'pdf' | 'gaeb', content: DevisExportContent = DEFAULT_EXPORT_CONTENT) => {
+    (format: 'excel' | 'csv' | 'pdf' | 'gaeb' | 'bc3', content: DevisExportContent = DEFAULT_EXPORT_CONTENT) => {
       // Show GAEB confirmation dialog before quality check
       if (format === 'gaeb') {
         setGaebPreviewOpen(true);
@@ -4953,6 +4977,9 @@ export function BOQEditorPage() {
           onShowShortcuts={() => setShowShortcuts(true)}
           onToggleCollapseAll={handleToggleAllSections}
           allSectionsCollapsed={allSectionsCollapsed}
+          onToggleAllResources={handleToggleAllResources}
+          resourcesAllExpanded={resourcesAllExpanded}
+          expandableResourceCount={resourceExpansion.expandable}
           summary={hasPositions ? {
             sectionCount: miniSummaryStats.sectionCount,
             positionCount: miniSummaryStats.positionCount,
@@ -5018,6 +5045,10 @@ export function BOQEditorPage() {
           onDeleteSection={handleDeleteSection}
           collapsedSections={effectiveCollapsedSections}
           onToggleSection={toggleSection}
+          // `positions` here is the FILTERED set, so the toggle counts and acts
+          // on what the user can actually see - searching down to eight rows and
+          // hitting "show resources" opens those eight, not the whole BOQ.
+          onResourceExpansionChange={setResourceExpansion}
           highlightPositionId={newPositionId ?? bimScrollTargetId ?? undefined}
           currencySymbol={currencySymbol}
           currencyCode={currencyCode}

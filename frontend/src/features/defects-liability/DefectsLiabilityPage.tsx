@@ -17,14 +17,17 @@ import { useConfirm } from '@/shared/hooks/useConfirm';
 import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { getErrorMessage } from '@/shared/lib/api';
+import { onlyChangedFields } from '@/shared/lib/apiHelpers';
 import {
   fetchWarranties, createWarranty, updateWarranty, deleteWarranty,
   fetchDefects, createDefect, updateDefect, fetchRegister, fetchRetentionReadiness,
   WARRANTY_TYPES, WARRANTY_STATUSES, DEFECT_STATUSES, DEFECT_SEVERITIES,
-  type Warranty, type WarrantyCreate, type WarrantyType, type WarrantyStatus,
+  type Warranty, type WarrantyCreate, type WarrantyUpdate, type WarrantyType, type WarrantyStatus,
   type Defect, type DefectCreate, type DefectStatus, type DefectSeverity,
   type DlpRegister, type RetentionReleaseReadiness,
 } from './api';
+import { InsightsPanel, InsightsToggleButton, useModuleInsights } from '@/features/insights';
+import { buildDefectsLiabilityInsights } from './defectsLiabilityInsights';
 
 type BadgeVariant = 'neutral' | 'blue' | 'success' | 'warning' | 'error';
 
@@ -155,17 +158,30 @@ function buildWarrantyPayload(f: WarrantyFormState): WarrantyCreate {
 }
 
 function WarrantyModal({ editing, isPending, onClose, onSubmit }: {
-  editing: Warranty | null; isPending: boolean; onClose: () => void; onSubmit: (payload: WarrantyCreate) => void;
+  editing: Warranty | null; isPending: boolean; onClose: () => void;
+  /** A whole `WarrantyCreate` when creating; only the changed fields on edit. */
+  onSubmit: (payload: WarrantyCreate | WarrantyUpdate) => void;
 }) {
   const { t } = useTranslation();
-  const [form, setForm] = useState<WarrantyFormState>(() => warrantyToForm(editing));
+  // The state the form opened with, kept so the save can send only what the
+  // user actually changed. Writing the whole form back on every save rewrites
+  // fields nobody opened with the values they held when this list was last
+  // read, undoing anyone else's edit to them without a word. The update route
+  // dumps with `exclude_unset=True`, so an omitted field is left alone.
+  const base = useMemo(() => warrantyToForm(editing), [editing]);
+  const [form, setForm] = useState<WarrantyFormState>(base);
   const [touched, setTouched] = useState(false);
   const set = <K extends keyof WarrantyFormState>(k: K, v: WarrantyFormState[K]) => setForm((p) => ({ ...p, [k]: v }));
 
   const refError = touched && form.reference.trim().length === 0;
   const titleError = touched && form.title.trim().length === 0;
   const canSubmit = form.reference.trim().length > 0 && form.title.trim().length > 0;
-  const submit = () => { setTouched(true); if (canSubmit) onSubmit(buildWarrantyPayload(form)); };
+  const submit = () => {
+    setTouched(true);
+    if (!canSubmit) return;
+    const payload = buildWarrantyPayload(form);
+    onSubmit(editing ? onlyChangedFields(payload, form, base) : payload);
+  };
 
   return (
     <ModalShell
@@ -606,7 +622,7 @@ export function DefectsLiabilityPage() {
     onError: onMutationError,
   });
   const updateWarrantyMut = useMutation({
-    mutationFn: ({ id, payload }: { id: string; payload: WarrantyCreate }) => updateWarranty(projectId, id, payload),
+    mutationFn: ({ id, payload }: { id: string; payload: WarrantyUpdate }) => updateWarranty(projectId, id, payload),
     onSuccess: () => { invalidate(); setWarrantyModalOpen(false); setEditingWarranty(null); addToast({ type: 'success', title: t('defects_liability.warranty_updated', { defaultValue: 'Warranty updated' }) }); },
     onError: onMutationError,
   });
@@ -626,9 +642,11 @@ export function DefectsLiabilityPage() {
     onError: onMutationError,
   });
 
-  const handleWarrantySubmit = useCallback((payload: WarrantyCreate) => {
+  const handleWarrantySubmit = useCallback((payload: WarrantyCreate | WarrantyUpdate) => {
     if (editingWarranty) updateWarrantyMut.mutate({ id: editingWarranty.id, payload });
-    else createWarrantyMut.mutate(payload);
+    // Without an `editing` warranty the modal never trims the payload, so this
+    // branch always receives the whole `WarrantyCreate`.
+    else createWarrantyMut.mutate(payload as WarrantyCreate);
   }, [editingWarranty, createWarrantyMut, updateWarrantyMut]);
 
   const handleDeleteWarranty = useCallback(async (w: Warranty) => {
@@ -665,12 +683,46 @@ export function DefectsLiabilityPage() {
 
   const signalReady = !!registerQ.data && !!readinessQ.data && registerQ.data.total > 0;
 
+  // Module Insights - the toggleable visualization panel for this module. Its
+  // charts are built client-side from the defect notices already loaded; when
+  // the project has none, buildDefectsLiabilityInsights returns a labelled
+  // sample set so the panel is never empty on first open. Open state and any
+  // user-built charts persist per module via useModuleInsights. Declared among
+  // the top-level hooks (this component has no early return) so the hook order
+  // stays stable.
+  const insights = useModuleInsights('defects-liability', { defaultOpen: true });
+  const { datasets: insightDatasets, builtins: insightBuiltins } = useMemo(
+    () => buildDefectsLiabilityInsights(defects, '', t),
+    [defects, t],
+  );
+
   return (
     <div className="space-y-5 animate-fade-in">
       <PageHeader
         srTitle={t('defects_liability.title', { defaultValue: 'Warranties & Defects Liability' })}
         subtitle={t('defects_liability.subtitle', { defaultValue: 'Post-handover warranties, defect notices and retention release readiness' })}
-        actions={<Button variant="primary" size="sm" onClick={openCreateWarranty} disabled={!projectId} icon={<Plus size={14} />}>{t('defects_liability.new_warranty', { defaultValue: 'New warranty' })}</Button>}
+        actions={
+          <>
+            {/* Insights toggle - shows or hides this module's visualization
+                panel. Leads the cluster so charts are one obvious click away. */}
+            <InsightsToggleButton open={insights.open} onClick={insights.toggle} />
+            <Button variant="primary" size="sm" onClick={openCreateWarranty} disabled={!projectId} icon={<Plus size={14} />}>{t('defects_liability.new_warranty', { defaultValue: 'New warranty' })}</Button>
+          </>
+        }
+      />
+
+      {/* Module Insights panel - toggled by the header button. Placed high so
+          its charts (real, or labelled sample) are visible the moment the
+          register opens. */}
+      <InsightsPanel
+        open={insights.open}
+        title={t('defects_liability.insights.title', { defaultValue: 'Defect insights' })}
+        datasets={insightDatasets}
+        builtins={insightBuiltins}
+        custom={insights.custom}
+        onAdd={insights.addCustom}
+        onUpdate={insights.updateCustom}
+        onRemove={insights.removeCustom}
       />
 
       <RequiresProject emptyHint={t('defects_liability.select_project', { defaultValue: 'Open a project first to manage warranties and the defects liability period.' })}>

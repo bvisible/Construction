@@ -32,6 +32,7 @@ import {
   Button,
   Card,
   Badge,
+  CollapsibleSection,
   EmptyState,
   Breadcrumb,
   RecoveryCard,
@@ -53,6 +54,7 @@ import { PageHeader } from '@/shared/ui/PageHeader';
 import { ContractStatusPipeline } from './ContractStatusPipeline';
 import { ContractExpiryBadge } from './ContractExpiryBadge';
 import { ComplianceGate } from './ComplianceGate';
+import { ContractAnalyticsPanels } from './ContractAnalyticsPanels';
 import { contractsGuide } from './contractsGuide';
 import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
@@ -61,6 +63,7 @@ import { getErrorMessage } from '@/shared/lib/api';
 import { projectsApi } from '@/features/projects/api';
 import { listSubcontractors } from '@/features/subcontractors/api';
 import { fetchContacts } from '@/features/contacts/api';
+import { getRetentionLedger } from '@/features/finance/api';
 import {
   listContracts,
   listProgressClaims,
@@ -88,6 +91,8 @@ import {
   type CounterpartyType,
   type ContractDashboard,
 } from './api';
+import { InsightsPanel, InsightsToggleButton, useModuleInsights } from '@/features/insights';
+import { buildContractsInsights } from './contractsInsights';
 
 type Tab = 'contracts' | 'claims' | 'final_accounts';
 
@@ -200,6 +205,17 @@ function claimStatusLabel(t: TFunction, status: ClaimStatus): string {
   return t(`contracts.claim_status_${status}`, {
     defaultValue: CLAIM_STATUS_LABELS[status] ?? status,
   });
+}
+
+/** Human label for a retention ledger direction (payable / receivable). */
+function retentionDirectionLabel(t: TFunction, direction: string): string {
+  if (direction === 'payable') {
+    return t('contracts.retention_payable', { defaultValue: 'Payable' });
+  }
+  if (direction === 'receivable') {
+    return t('contracts.retention_receivable', { defaultValue: 'Receivable' });
+  }
+  return direction;
 }
 
 const inputCls =
@@ -365,12 +381,12 @@ function HowContractsWork() {
   ];
 
   return (
-    <Card padding="md">
-      <h2 className="flex items-center gap-1.5 text-sm font-semibold text-content-primary">
-        <Network size={15} className="text-oe-blue" />
-        {t('contracts.flow_title', { defaultValue: 'How contracts fit together' })}
-      </h2>
-      <p className="mt-1 text-xs text-content-tertiary">
+    <CollapsibleSection
+      storageKey="contracts.how"
+      icon={<Network size={15} className="text-oe-blue" />}
+      title={t('contracts.flow_title', { defaultValue: 'How contracts fit together' })}
+    >
+      <p className="text-xs text-content-tertiary">
         {t('contracts.flow_intro', {
           defaultValue:
             'A won deal or an awarded bid becomes a contract with a counterparty, billed through progress claims and settled in a final account. Variations keep the sum honest, and certified amounts reconcile against committed cost.',
@@ -427,7 +443,7 @@ function HowContractsWork() {
           </ModLink>
         </span>
       </div>
-    </Card>
+    </CollapsibleSection>
   );
 }
 
@@ -487,6 +503,21 @@ export function ContractsPage() {
     () => (projectsQ.data ?? []).find((p) => p.id === projectId),
     [projectsQ.data, projectId],
   );
+
+  // Module Insights - reads the loaded contract register (charts, KPIs). Kept
+  // among the top hooks, above every conditional render, so hook order is
+  // stable no matter which tab or drawer is open.
+  const insights = useModuleInsights('contracts', { defaultOpen: true });
+  const { datasets: insightDatasets, builtins: insightBuiltins } = useMemo(
+    () =>
+      buildContractsInsights(
+        contracts,
+        selectedProject?.currency || contracts[0]?.currency || '',
+        t,
+      ),
+    [contracts, selectedProject, t],
+  );
+
   const [claimsContractId, setClaimsContractId] = useState<string>('');
   const effectiveClaimsContract = claimsContractId || contracts[0]?.id || '';
 
@@ -576,6 +607,7 @@ export function ContractsPage() {
         })}
         actions={
           <>
+            <InsightsToggleButton open={insights.open} onClick={insights.toggle} />
             <ModuleGuideButton content={contractsGuide} />
             <Button
               variant="primary"
@@ -592,6 +624,17 @@ export function ContractsPage() {
             </Button>
           </>
         }
+      />
+
+      <InsightsPanel
+        open={insights.open}
+        title={t('contracts.insights.title', { defaultValue: 'Contract insights' })}
+        datasets={insightDatasets}
+        builtins={insightBuiltins}
+        custom={insights.custom}
+        onAdd={insights.addCustom}
+        onUpdate={insights.updateCustom}
+        onRemove={insights.removeCustom}
       />
 
       <DismissibleInfo
@@ -1335,6 +1378,16 @@ function ContractDetailDrawer({
     retry: false,
   });
 
+  // Real retention ledger for the whole project (per currency and direction),
+  // replacing the former single-scalar placeholder. Scoped to the contract's
+  // project since the finance ledger endpoint is project-wide.
+  const retentionQ = useQuery({
+    queryKey: ['finance', 'retention-ledger', contract?.project_id],
+    queryFn: () => getRetentionLedger(contract!.project_id),
+    enabled: !!contract?.project_id,
+    retry: false,
+  });
+
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ['contracts', 'list'] });
     qc.invalidateQueries({ queryKey: ['contracts', 'dashboard', contractId] });
@@ -1736,25 +1789,77 @@ function ContractDetailDrawer({
             )}
           </Card>
 
-          {/* Retention ledger placeholder */}
+          {/* Retention ledger - real per-currency/direction rollup pulled from
+              the finance ledger (project-wide), replacing the former single
+              retention_held scalar. */}
           <Card padding="sm">
-            <p className="text-xs font-semibold uppercase tracking-wide text-content-secondary mb-2">
-              {t('contracts.retention_ledger', { defaultValue: 'Retention ledger' })}
-            </p>
-            <div className="grid grid-cols-2 gap-3 text-sm">
-              <Field
-                label={t('contracts.held', { defaultValue: 'Held' })}
-                value={
-                  <MoneyDisplay
-                    amount={toNum(dashQ.data?.retention_held)}
-                    currency={contract.currency || undefined}
-                  />
-                }
-              />
-              <Field
-                label={t('contracts.release_event_short', {
-                  defaultValue: 'Release on',
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <p className="text-xs font-semibold uppercase tracking-wide text-content-secondary">
+                {t('contracts.retention_ledger', { defaultValue: 'Retention ledger' })}
+              </p>
+              <span className="text-2xs text-content-tertiary">
+                {t('contracts.retention_ledger_project_scope', {
+                  defaultValue: 'Across this project',
                 })}
+              </span>
+            </div>
+            {retentionQ.isError ? (
+              <p className="py-2 text-sm text-content-tertiary">
+                {t('contracts.retention_ledger_unavailable', {
+                  defaultValue: 'Retention ledger is unavailable right now.',
+                })}
+              </p>
+            ) : !retentionQ.data ? (
+              <p className="py-2 text-sm text-content-tertiary">
+                {t('common.loading', { defaultValue: 'Loading...' })}
+              </p>
+            ) : retentionQ.data.totals.length === 0 ? (
+              <p className="py-2 text-sm text-content-tertiary">
+                {t('contracts.retention_ledger_empty', {
+                  defaultValue: 'No retention held or scheduled yet.',
+                })}
+              </p>
+            ) : (
+              <div className="space-y-1">
+                <div className="grid grid-cols-[1fr_auto_auto] gap-x-4 text-2xs uppercase tracking-wide text-content-tertiary">
+                  <span>{t('contracts.retention_scope_col', { defaultValue: 'Scope' })}</span>
+                  <span className="text-right">
+                    {t('contracts.held', { defaultValue: 'Held' })}
+                  </span>
+                  <span className="text-right">
+                    {t('contracts.outstanding', { defaultValue: 'Outstanding' })}
+                  </span>
+                </div>
+                {retentionQ.data.totals.map((row) => (
+                  <div
+                    key={`${row.currency_code}-${row.direction}`}
+                    className="grid grid-cols-[1fr_auto_auto] items-center gap-x-4 text-sm"
+                  >
+                    <span className="truncate text-content-secondary">
+                      {retentionDirectionLabel(t, row.direction)}
+                      <span className="ml-1.5 font-mono text-2xs text-content-tertiary">
+                        {row.currency_code}
+                      </span>
+                    </span>
+                    <span className="text-right tabular-nums text-content-primary">
+                      <MoneyDisplay
+                        amount={row.held_to_date}
+                        currency={row.currency_code || undefined}
+                      />
+                    </span>
+                    <span className="text-right font-medium tabular-nums text-content-primary">
+                      <MoneyDisplay
+                        amount={row.outstanding}
+                        currency={row.currency_code || undefined}
+                      />
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="mt-3 border-t border-border-light pt-2">
+              <Field
+                label={t('contracts.release_event_short', { defaultValue: 'Release on' })}
                 value={contract.retention_release_event}
               />
             </div>
@@ -1828,6 +1933,15 @@ function ContractDetailDrawer({
                 )}
             </Card>
           )}
+
+          {/* Analytics & close-out — four read-only endpoints surfaced as
+              stacked panels (SoV status, completeness, EOT exposure, final-
+              account checklist). Each owns its query so one slow/forbidden
+              endpoint never blocks the others. */}
+          <ContractAnalyticsPanels
+            contractId={contractId}
+            currency={contract.currency}
+          />
         </div>
       </div>
 

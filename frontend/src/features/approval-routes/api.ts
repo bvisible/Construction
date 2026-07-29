@@ -22,6 +22,7 @@
 
 import { apiDelete, apiGet, apiPatch, apiPost } from '@/shared/lib/api';
 import type {
+  ApprovalAnalytics,
   ApprovalDelegation,
   ApprovalInstance,
   ApprovalRoute,
@@ -35,6 +36,8 @@ import type {
   InstanceCreatePayload,
   InstanceDecidePayload,
   InstanceReassignPayload,
+  RouteSimulation,
+  SimulateRequest,
 } from './types';
 
 const BASE = '/v1/approval-routes';
@@ -97,6 +100,21 @@ export async function updateRoute(
 
 export async function deleteRoute(routeId: string): Promise<void> {
   await apiDelete<void>(`${BASE}/routes/${routeId}`);
+}
+
+/** Dry-run a route template without starting a real workflow. Read-only.
+ *  Reports, per step, how many approvals clear it and whether it can ever
+ *  clear, plus a happy-path walk to confirm the template reaches ``approved``.
+ *  Pass ``decisions`` to add a what-if walk (e.g. "what if step 2 is
+ *  rejected"). */
+export async function simulateRoute(
+  routeId: string,
+  payload: SimulateRequest = { decisions: [] },
+): Promise<RouteSimulation> {
+  return apiPost<RouteSimulation, SimulateRequest>(
+    `${BASE}/routes/${routeId}/simulate`,
+    payload,
+  );
 }
 
 /* ── Running instances ──────────────────────────────────────────────── */
@@ -221,6 +239,29 @@ export async function revokeDelegation(delegationId: string): Promise<void> {
   await apiDelete<void>(`${BASE}/delegations/${delegationId}`);
 }
 
+/* ── Approval-cycle analytics (item #11) ────────────────────────────── */
+
+export interface AnalyticsParams {
+  projectId: string;
+  targetKind?: string | null;
+  /** Rolling window in days (backend default 180). */
+  days?: number;
+}
+
+/** Project-scoped approval-cycle analytics: KPI headline, per-role /
+ *  per-step held time, SLA breach counts and a bottleneck ranking. The
+ *  project guard runs server-side, so a caller only ever sees a project
+ *  they can access. */
+export async function getApprovalAnalytics(
+  p: AnalyticsParams,
+): Promise<ApprovalAnalytics> {
+  const qs = new URLSearchParams();
+  qs.set('project_id', p.projectId);
+  if (p.targetKind) qs.set('target_kind', p.targetKind);
+  if (p.days) qs.set('days', String(p.days));
+  return apiGet<ApprovalAnalytics>(`${BASE}/analytics?${qs.toString()}`);
+}
+
 /* ── React Query keys (single source of truth) ──────────────────────── */
 
 export const approvalRoutesKeys = {
@@ -231,6 +272,8 @@ export const approvalRoutesKeys = {
     ['approval-routes', 'routes', projectId ?? null, targetKind ?? null] as const,
   /** Single route detail. */
   route: (id: string) => ['approval-routes', 'route', id] as const,
+  /** Dry-run simulation of a single route template. */
+  simulation: (id: string) => ['approval-routes', 'simulation', id] as const,
   /** List of instances filtered by target. */
   instances: (
     targetKind?: string | null,
@@ -258,5 +301,18 @@ export const approvalRoutesKeys = {
       'delegations',
       role ?? 'mine',
       includeInactive ?? false,
+    ] as const,
+  /** Project-scoped approval-cycle analytics (by project + kind + window). */
+  analytics: (
+    projectId: string | null,
+    targetKind?: string | null,
+    days?: number,
+  ) =>
+    [
+      'approval-routes',
+      'analytics',
+      projectId ?? null,
+      targetKind ?? null,
+      days ?? null,
     ] as const,
 };

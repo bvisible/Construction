@@ -30,6 +30,8 @@ import {
   Pencil,
   Plug,
   Inbox,
+  Scale,
+  Landmark,
 } from 'lucide-react';
 import clsx from 'clsx';
 import {
@@ -64,8 +66,12 @@ import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { useActiveProjectId } from '@/shared/hooks/useActiveProjectId';
 import { useAuthStore } from '@/stores/useAuthStore';
+import { InsightsPanel, InsightsToggleButton, useModuleInsights } from '@/features/insights';
+import { buildFinanceInsights } from './financeInsights';
 import { ConnectorsTab } from './ConnectorsTab';
 import { InvoiceInboxTab } from './InvoiceInboxTab';
+import { StatementsTab } from './StatementsTab';
+import { RetentionLedgerTab } from './RetentionLedgerTab';
 import { financeGuide } from './financeGuide';
 
 /* ── Types ─────────────────────────────────────────────────────────────── */
@@ -213,7 +219,7 @@ interface EVMData {
 
 /* ── Constants ────────────────────────────────────────────────────────── */
 
-type FinanceTab = 'budgets' | 'invoices' | 'inbox' | 'payments' | 'evm' | 'connectors';
+type FinanceTab = 'budgets' | 'invoices' | 'inbox' | 'payments' | 'statements' | 'retention' | 'evm' | 'connectors';
 type InvoiceSubTab = 'payable' | 'receivable';
 
 /** Common currency shortlist for the create/edit selects. NOT a default —
@@ -645,7 +651,7 @@ export function FinancePage() {
   // (and any other caller) can drill straight into a specific Finance section.
   // The param is consumed and cleared with replace so a refresh / share keeps
   // the user wherever they navigated to next (CONN-74 consumer).
-  const VALID_TABS: readonly FinanceTab[] = ['budgets', 'invoices', 'inbox', 'payments', 'evm', 'connectors'];
+  const VALID_TABS: readonly FinanceTab[] = ['budgets', 'invoices', 'inbox', 'payments', 'statements', 'retention', 'evm', 'connectors'];
   useEffect(() => {
     const requested = searchParams.get('tab');
     if (requested && VALID_TABS.includes(requested as FinanceTab)) {
@@ -657,6 +663,33 @@ export function FinancePage() {
     // Run once on mount; the param is cleared immediately after it is read.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Module Insights panel. Charts the project's invoices - the register that
+  // carries every payable and receivable together with its status and due
+  // date - so a chart slice reads like the badge on the row it came from. The
+  // list is fetched here at page level with no direction filter (payables and
+  // receivables come together) under the ['finance-invoices', projectId] key
+  // prefix, so the tabs' own invalidations keep it fresh. Currency rides the
+  // dashboard query the summary cards already load, so it is a cache hit.
+  // These hooks sit with the other top-level hooks, above any conditional
+  // render, so the hook order stays stable.
+  const { data: insightInvoices = [] } = useQuery({
+    queryKey: ['finance-invoices', projectId, 'all'],
+    queryFn: () => apiGet<InvoiceWire[]>(`/v1/finance/?project_id=${projectId}`),
+    select: (d): Invoice[] => normalizeListResponse<InvoiceWire>(d).map(normaliseInvoice),
+    enabled: !!projectId,
+  });
+  const { data: insightDashboard } = useQuery({
+    queryKey: ['finance', 'dashboard', projectId],
+    queryFn: () =>
+      apiGet<FinanceDashboardData>(`/v1/finance/dashboard/?project_id=${projectId}`),
+    enabled: !!projectId,
+  });
+  const insights = useModuleInsights('finance', { defaultOpen: true });
+  const { datasets: insightDatasets, builtins: insightBuiltins } = useMemo(
+    () => buildFinanceInsights(insightInvoices, insightDashboard?.currency || 'EUR', t),
+    [insightInvoices, insightDashboard, t],
+  );
 
   const tabs: { key: FinanceTab; label: string; icon: React.ReactNode }[] = [
     {
@@ -678,6 +711,16 @@ export function FinancePage() {
       key: 'payments',
       label: t('finance.payments', { defaultValue: 'Payments' }),
       icon: <CreditCard size={15} />,
+    },
+    {
+      key: 'statements',
+      label: t('finance.stmt_tab', { defaultValue: 'Statements' }),
+      icon: <Scale size={15} />,
+    },
+    {
+      key: 'retention',
+      label: t('finance.retention_tab', { defaultValue: 'Retention' }),
+      icon: <Landmark size={15} />,
     },
     {
       key: 'evm',
@@ -711,10 +754,25 @@ export function FinancePage() {
         })}
         actions={
           <>
+            <InsightsToggleButton open={insights.open} onClick={insights.toggle} />
             {projectId && <FinanceModuleLinks projectId={projectId} />}
             <ModuleGuideButton content={financeGuide} />
           </>
         }
+      />
+
+      {/* Module Insights panel - toggled by the header button. Placed high so
+          its charts (real, or a labelled sample when the project has no
+          invoices yet) are visible the moment Finance opens. */}
+      <InsightsPanel
+        open={insights.open}
+        title={t('finance.insights.title', { defaultValue: 'Invoice insights' })}
+        datasets={insightDatasets}
+        builtins={insightBuiltins}
+        custom={insights.custom}
+        onAdd={insights.addCustom}
+        onUpdate={insights.updateCustom}
+        onRemove={insights.removeCustom}
       />
 
       {/* Canonical module intro — pain-named, copy from MODULE_INTRO_COPY.
@@ -781,6 +839,8 @@ export function FinancePage() {
           {projectId && activeTab === 'budgets' && <BudgetsTab projectId={projectId} />}
           {projectId && activeTab === 'invoices' && <InvoicesTab projectId={projectId} />}
           {projectId && activeTab === 'inbox' && <InvoiceInboxTab projectId={projectId} />}
+          {projectId && activeTab === 'statements' && <StatementsTab projectId={projectId} />}
+          {projectId && activeTab === 'retention' && <RetentionLedgerTab projectId={projectId} />}
           {projectId && activeTab === 'payments' && (
             <PaymentsTab
               projectId={projectId}

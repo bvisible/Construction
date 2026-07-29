@@ -56,6 +56,7 @@ export interface CorrespondenceFilters {
   project_id?: string;
   direction?: CorrespondenceDirection | '';
   type?: CorrespondenceType | '';
+  status?: CorrespondenceStatus | '';
 }
 
 export interface CreateCorrespondencePayload {
@@ -80,10 +81,19 @@ export interface UpdateCorrespondencePayload {
   subject?: string;
   direction?: CorrespondenceDirection;
   correspondence_type?: CorrespondenceType;
-  from_contact_id?: string;
+  /**
+   * `null` clears the sender. `undefined` cannot: `JSON.stringify` drops the
+   * key and the old value survives, so emptying the field would do nothing.
+   */
+  from_contact_id?: string | null;
   to_contact_ids?: string[];
-  date_sent?: string;
-  date_received?: string;
+  /**
+   * `null` clears the date. An empty string is rejected: the backend field
+   * sits behind a `^\d{4}-\d{2}-\d{2}$` pattern, so `''` is a 422 rather than
+   * "no date".
+   */
+  date_sent?: string | null;
+  date_received?: string | null;
   linked_document_ids?: string[];
   linked_transmittal_id?: string | null;
   linked_rfi_id?: string | null;
@@ -147,6 +157,7 @@ export async function fetchCorrespondence(
   if (filters?.project_id) params.set('project_id', filters.project_id);
   if (filters?.direction) params.set('direction', filters.direction);
   if (filters?.type) params.set('type', filters.type);
+  if (filters?.status) params.set('status', filters.status);
   // Raise from the server default cap (50) to its accepted ceiling (le=100) so
   // the list and client-side search cover up to 100 records instead of
   // silently dropping older rows.

@@ -74,6 +74,7 @@ vi.mock('../api', () => ({
   listDelegations: vi.fn(() => Promise.resolve([])),
   createDelegation: vi.fn(),
   revokeDelegation: vi.fn(),
+  getApprovalAnalytics: vi.fn(() => Promise.resolve(null)),
   approvalRoutesKeys: {
     meta: () => ['approval-routes', 'meta'] as const,
     routes: (projectId?: string | null, targetKind?: string | null) =>
@@ -101,6 +102,18 @@ vi.mock('../api', () => ({
         role ?? 'mine',
         includeInactive ?? false,
       ] as const,
+    analytics: (
+      projectId?: string | null,
+      targetKind?: string | null,
+      days?: number,
+    ) =>
+      [
+        'approval-routes',
+        'analytics',
+        projectId ?? null,
+        targetKind ?? null,
+        days ?? null,
+      ] as const,
   },
 }));
 
@@ -108,6 +121,10 @@ vi.mock('../api', () => ({
 
 vi.mock('../ApprovalInstancesList', () => ({
   ApprovalInstancesList: () => <div data-testid="instances-list-stub" />,
+}));
+
+vi.mock('../ApprovalAnalyticsPanel', () => ({
+  ApprovalAnalyticsPanel: () => <div data-testid="analytics-panel-stub" />,
 }));
 
 vi.mock('../RouteEditor', () => ({
@@ -134,9 +151,11 @@ const SAMPLE_ROUTE: ApprovalRoute = {
       approver_role: 'engineer',
       approver_user_id: null,
       mode: 'any',
+      required_approver_count: null,
       sla_hours: 24,
     },
   ],
+  system_key: null,
   created_at: '2026-05-20T00:00:00Z',
   updated_at: '2026-05-20T00:00:00Z',
   created_by: 'user-1',
@@ -232,5 +251,17 @@ describe('<ApprovalRoutesPage />', () => {
     expect(root.className).not.toContain('max-w-7xl');
     expect(root.className).not.toContain('px-4');
     expect(root.className).toContain('animate-fade-in');
+  });
+
+  it('shows the Analytics tab and its project selector when selected', async () => {
+    (listRoutes as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    renderPage();
+
+    const analyticsTab = await screen.findByRole('tab', { name: /Analytics/i });
+    fireEvent.click(analyticsTab);
+
+    // The page's own project selector renders alongside the (stubbed) panel.
+    expect(screen.getByRole('combobox')).toBeTruthy();
+    expect(screen.getByTestId('analytics-panel-stub')).toBeTruthy();
   });
 });

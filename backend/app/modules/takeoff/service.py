@@ -9,16 +9,19 @@ import logging
 import math
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
 import uuid
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
 from fastapi import HTTPException, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.takeoff.models import AiTakeoffRun, TakeoffDocument, TakeoffMeasurement
@@ -81,6 +84,31 @@ def _is_encrypted_pdf(content: bytes) -> bool:
     tail = content[-8192:] if len(content) > 8192 else content
     # Match both: /Encrypt N N R  AND  /Encrypt <<
     return bool(re.search(rb"/Encrypt\s+(?:\d|<<)", tail))
+
+
+def clear_stale_scale_source(fields: dict[str, Any]) -> dict[str, Any]:
+    """Drop a provenance label that a scale change has just invalidated.
+
+    A patch that moves ``scale_pixels_per_unit`` without saying where the new
+    ratio came from leaves the row with a new number and the old story about
+    it. Recording "not stated" is true; keeping the previous label is a claim
+    that has quietly become false, and a wrong provenance is worse than a
+    missing one because it is the one a later recompute would trust when
+    deciding which rows a bad calibration touched.
+
+    The check is on presence, not truthiness: clearing the ratio outright is
+    still a change of scale, and a falsy ``None`` must not slip past.
+
+    Args:
+        fields: The patch payload, dumped with ``exclude_unset`` so that a key
+            being absent really does mean the client said nothing about it.
+
+    Returns:
+        The same dict, mutated in place for the caller's convenience.
+    """
+    if "scale_pixels_per_unit" in fields and "scale_source" not in fields:
+        fields["scale_source"] = None
+    return fields
 
 
 _DEFAULT_MAX_UPLOAD_MB = 200
@@ -725,6 +753,127 @@ def _find_existing_takeoff_pdf(doc_id: str) -> Path | None:
     return None
 
 
+async def preserve_blobs_for_deleted_source(
+    session: AsyncSession,
+    *,
+    source_document_id: str,
+    source_file_path: str,
+) -> bool:
+    """Give takeoff its own copy of a blob whose Project-Files owner is going away.
+
+    From-source opens reference the stored Project-Files blob instead of copying
+    it, so one PDF is on disk once no matter how often it is opened in takeoff.
+    That makes the documents-module delete the moment where the takeoff document
+    would otherwise be left pointing at a file that is about to be unlinked, and
+    every measurement built on it unreadable.
+
+    So: before the source blob is removed, copy it into the takeoff documents
+    directory and repoint every takeoff document that referenced it. The copy is
+    written to a temporary name in the destination directory and moved into place
+    with :func:`os.replace`, so a partially written file is never visible under
+    the final path.
+
+    Unlike :meth:`TakeoffRepository.get_by_source_document_id`, the lookup here is
+    deliberately not scoped to a project, and the asymmetry is worth a sentence so
+    nobody "fixes" it. Today the only caller derives ``source_project_id`` from
+    the stored source row, so one source resolves to exactly one project and a
+    project filter would make no difference. But the service contract allows any
+    project (idempotency is per project - see
+    ``test_same_source_in_two_projects_is_two_rows``), so a filter added for
+    symmetry would be a trap that costs nothing until the day a second caller
+    passes something else, and then silently strands those rows on a deleted blob.
+    Matching on the blob alone is what the correctness argument actually needs.
+
+    Args:
+        session: The caller's session. The repoint is flushed into the caller's
+            transaction so it commits (or rolls back) atomically with the delete.
+        source_document_id: The documents-module id being deleted.
+        source_file_path: The blob the caller is about to unlink.
+
+    Returns:
+        ``True`` when the caller may go ahead and unlink the original: either
+        nothing referenced it, or every referencing takeoff document now owns a
+        copy. ``False`` when a copy failed, meaning the original must be left on
+        disk - an orphaned file is recoverable, a takeoff document pointing at a
+        deleted blob is not.
+    """
+    from sqlalchemy import select
+
+    rows = (
+        (await session.execute(select(TakeoffDocument).where(TakeoffDocument.source_document_id == source_document_id)))
+        .scalars()
+        .all()
+    )
+    if not rows:
+        return True
+
+    # Only documents actually sharing the blob need a copy, and the path
+    # comparison is what decides that - not source_document_id, which every row
+    # here already matches. A takeoff document whose file_path differs owns its
+    # bytes outright: it either predates zero-copy (uploaded before this change,
+    # so it was handed a copy at upload time) or was already preserved by an
+    # earlier run of this hook. Repointing those would move a row off a file it
+    # rightfully owns, so do not widen this filter.
+    origin = Path(source_file_path)
+    sharing = [doc for doc in rows if doc.file_path and Path(doc.file_path) == origin]
+    if not sharing:
+        return True
+
+    if not origin.is_file():
+        # Nothing to preserve. The rows keep their now-dangling path, which the
+        # download route already reports as a clean 404 rather than a 500.
+        logger.warning(
+            "takeoff.preserve_blobs_for_deleted_source: source blob %s is already "
+            "missing; %d takeoff document(s) keep a dangling path",
+            source_file_path,
+            len(sharing),
+        )
+        return True
+
+    documents_dir = _takeoff_documents_dir()
+    try:
+        documents_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        logger.exception(
+            "takeoff.preserve_blobs_for_deleted_source: cannot create %s; "
+            "keeping the source blob so takeoff stays readable",
+            documents_dir,
+        )
+        return False
+
+    for doc in sharing:
+        # Copy unconditionally, even if the destination already exists. A file
+        # sitting at this name is not proof it holds the right bytes, and
+        # serving the wrong PDF is worse than one redundant copy; os.replace
+        # makes overwriting atomic, so a reader never sees a partial file.
+        destination = documents_dir / f"{doc.id}.pdf"
+        tmp_fd, tmp_name = tempfile.mkstemp(dir=str(documents_dir), suffix=".pdf.part")
+        os.close(tmp_fd)
+        tmp_path = Path(tmp_name)
+        try:
+            shutil.copyfile(origin, tmp_path)
+            os.replace(tmp_path, destination)
+        except OSError:
+            with contextlib.suppress(OSError):
+                tmp_path.unlink()
+            logger.exception(
+                "takeoff.preserve_blobs_for_deleted_source: failed to copy %s for "
+                "takeoff document %s; keeping the source blob on disk",
+                source_file_path,
+                doc.id,
+            )
+            return False
+        doc.file_path = str(destination)
+
+    await session.flush()
+    logger.info(
+        "takeoff.preserve_blobs_for_deleted_source: preserved %s for %d takeoff document(s)",
+        source_file_path,
+        len(sharing),
+    )
+    return True
+
+
 def _describe_pdf_input(content: bytes, *, filename: str | None = None) -> str:
     """Build a short server-side diagnostic string for a PDF blob.
 
@@ -985,18 +1134,42 @@ def _use_in_process_pdf_parser() -> bool:
     return os.environ.get("OE_DESKTOP", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+#: Substrings that identify a reader that never loaded, as opposed to a
+#: document the reader loaded and could not read. Both native-extension
+#: failures and plain missing modules land here, because from the operator's
+#: side they are the same job: fix the install, do not re-export the drawing.
+_READER_IMPORT_MARKERS = (
+    "importerror",
+    "modulenotfounderror",
+    "no module named",
+    "undefined symbol",
+    "cannot open shared object file",
+    "dll load failed",
+    "symbol not found",
+    "incompatible architecture",
+)
+
+
+def _is_reader_import_failure(reader_error: str | None) -> bool:
+    """True when the parse died because the PDF reader itself would not load."""
+    if not reader_error:
+        return False
+    lowered = reader_error.lower()
+    return any(marker in lowered for marker in _READER_IMPORT_MARKERS)
+
+
 def _parse_pdf_in_process(
     pdf_path: Path,
     *,
     filename: str | None,
     max_pages: int,
-) -> tuple[int, list[dict], bool] | None:
+) -> tuple[int, list[dict], bool, str | None] | None:
     """Parse a PDF in the current process (frozen / desktop fallback).
 
     Mirrors the result contract of :func:`_parse_pdf_isolated`: returns
-    ``(page_count, page_data, truncated)`` for any completed parse - including
-    the unreadable-document ``(0, [], False)`` case - and ``None`` only when the
-    parser raised outright. Runs the same
+    ``(page_count, page_data, truncated, reader_error)`` for any completed
+    parse - including the unreadable-document ``(0, [], False, reason)`` case -
+    and ``None`` only when the parser raised outright. Runs the same
     :func:`app.modules.takeoff.pdf_extract_worker.extract_pdf_data` path, and
     therefore the same vector-density guard, as the child process, without the
     POSIX address-space cap that is meaningless on a single-user desktop.
@@ -1017,7 +1190,8 @@ def _parse_pdf_in_process(
     if not isinstance(pages, list):
         pages = []
     truncated = bool(result.get("truncated", False))
-    return page_count, pages, truncated
+    reader_error = result.get("reader_error") or None
+    return page_count, pages, truncated, reader_error
 
 
 async def _parse_pdf_isolated(
@@ -1026,12 +1200,12 @@ async def _parse_pdf_isolated(
     filename: str | None = None,
     max_pages: int | None = None,
     timeout_s: float | None = None,
-) -> tuple[int, list[dict], bool] | None:
+) -> tuple[int, list[dict], bool, str | None] | None:
     """Parse a PDF in a memory-capped child process, off the event loop.
 
-    Returns ``(page_count, page_data, truncated)`` on a clean run - including
-    the "unreadable document" case, which comes back as ``(0, [], False)`` so
-    the caller can apply its definitive parse-failure handling. Returns
+    Returns ``(page_count, page_data, truncated, reader_error)`` on a clean run
+    - including the "unreadable document" case, which comes back as
+    ``(0, [], False, reason)`` so the caller can say why. Returns
     ``None`` when the parse could not complete at all: a timeout, a crash /
     OOM (non-zero exit), unreadable worker output, or a launch failure. The
     caller treats ``None`` as "degrade and still persist the upload" rather
@@ -1103,7 +1277,21 @@ async def _parse_pdf_isolated(
     if not isinstance(pages, list):
         pages = []
     truncated = bool(data.get("truncated", False))
-    return page_count, pages, truncated
+    reader_error = data.get("reader_error") or None
+    if page_count == 0 and not pages:
+        # The child exited 0 and still read nothing, so the branch above that
+        # logs stderr on a bad exit code never fired and the traceback the
+        # worker wrote there was about to be thrown away. This is the one case
+        # where it is the only record of what actually went wrong - a reader
+        # that fails to import looks exactly like a corrupt file from here.
+        stderr = (proc.stderr or b"").decode("utf-8", "replace").strip()[-1200:]
+        logger.warning(
+            "takeoff.pdf_worker read no pages from a clean run (filename=%r) reader_error=%s worker stderr=%s",
+            filename,
+            reader_error or "<none reported>",
+            stderr or "<empty>",
+        )
+    return page_count, pages, truncated, reader_error
 
 
 # ── Revision compare (Item 17) ──────────────────────────────────────────────
@@ -1129,6 +1317,22 @@ def _measurement_compare_key(m: Any) -> str:
     group = (getattr(m, "group_name", None) or "").strip().lower()
     annotation = (getattr(m, "annotation", None) or "").strip().lower()
     return f"nat:{page}|{mtype}|{group}|{annotation}"
+
+
+# Safety ceiling for a single side of a revision compare. This is a memory
+# guard, not a page size: a compare is only meaningful over the COMPLETE
+# measurement set of both documents, so the normal path reads everything.
+# When a document is somehow larger than this, the compare says so through
+# ``summary.truncated`` rather than presenting a partial diff as a full one.
+MAX_COMPARE_MEASUREMENTS = 20000
+
+# Presentation of an offline-detector proposal. The group keeps proposals
+# visually separate from hand-drawn work on the canvas, and separate again
+# from the vision path's own purple group, so a reviewer can tell at a glance
+# which number came from where.
+_PROPOSAL_GROUP_NAME = "AI takeoff"
+_PROPOSAL_GROUP_COLOR = "#0EA5E9"
+_PROPOSAL_UNIT_BY_TYPE = {"area": "m2", "distance": "m", "count": "pcs"}
 
 
 def _measure_to_float(value: Any) -> float | None:
@@ -1175,11 +1379,22 @@ def _build_pdf_revision_narrative(
     *,
     measurement_tally: dict[str, Any],
     changed_linked_count: int,
+    truncation_note: str = "",
 ) -> str:
     """Plain-text description of a PDF revision delta for a draft variation.
 
     Built only from the deterministic summary tally (no AI), so the
     estimator sees what moved before confirming the variation.
+
+    Args:
+        measurement_tally: The compare summary's added/removed/modified counts.
+        changed_linked_count: How many changed measurements are priced.
+        truncation_note: Warning sentence appended when the underlying
+            compare was capped, so the draft variation states on its face
+            that its cost impact was computed from a partial compare.
+
+    Returns:
+        The description text for the draft variation request.
     """
 
     def _n(key: str) -> int:
@@ -1193,6 +1408,7 @@ def _build_pdf_revision_narrative(
         f"{_n('added')} measurements added, {_n('removed')} removed, "
         f"{_n('modified')} changed; "
         f"{changed_linked_count} priced (linked-to-BOQ) measurement values changed. "
+        f"{truncation_note}"
         "Review and confirm before submitting this variation."
     )
 
@@ -1215,8 +1431,17 @@ class TakeoffService:
         owner_id: str,
         project_id: str | None = None,
         source_document_id: str | None = None,
+        source_file_path: str | None = None,
     ) -> TakeoffDocument:
         """Upload and process a PDF document for takeoff.
+
+        ``source_file_path`` switches this from owning the bytes to borrowing
+        them. A direct upload leaves it ``None`` and the content is written to
+        the takeoff documents directory as usual. A from-source open passes the
+        already-stored Project-Files blob, which is then referenced rather than
+        copied - the document exists on disk once, however many times it is
+        opened in takeoff. ``content`` is still required either way, because the
+        pre-parser gates below inspect it.
 
         Pre-parser gates:
 
@@ -1283,14 +1508,26 @@ class TakeoffService:
         # isolated, memory-capped child process (``_parse_pdf_isolated``): a
         # huge, vector-dense or malformed PDF can crash or OOM that child, but
         # it can never take down the API worker (the P0 this fix closes).
-        documents_dir = _takeoff_documents_dir()
-        documents_dir.mkdir(parents=True, exist_ok=True)
         doc_id = uuid.uuid4()
-        file_path = documents_dir / f"{doc_id}.pdf"
-        file_path.write_bytes(content)
+        # A from-source open REFERENCES the Project-Files blob instead of
+        # copying it, so a PDF opened in takeoff exists on disk exactly once no
+        # matter how many times it is opened. ``wrote_own_file`` records the
+        # provenance of what ``file_path`` points at, because the cleanup paths
+        # below unlink it: doing that to a borrowed path would destroy the
+        # user's project document. The blob is kept alive across a delete of
+        # that document by :func:`preserve_blobs_for_deleted_source`.
+        wrote_own_file = source_file_path is None
+        if wrote_own_file:
+            documents_dir = _takeoff_documents_dir()
+            documents_dir.mkdir(parents=True, exist_ok=True)
+            file_path = documents_dir / f"{doc_id}.pdf"
+            file_path.write_bytes(content)
+        else:
+            file_path = Path(str(source_file_path))
 
         parse_degraded = False
         parse_truncated = False
+        parse_reader_error: str | None = None
         parsed = await _parse_pdf_isolated(file_path, filename=filename)
         if parsed is None:
             # The isolated parser could not complete (timeout / crash / OOM /
@@ -1306,7 +1543,7 @@ class TakeoffService:
                 size_bytes,
             )
         else:
-            page_count, page_data, parse_truncated = parsed
+            page_count, page_data, parse_truncated, parse_reader_error = parsed
 
         full_text = "\n\n".join(p["text"] for p in page_data if p.get("text"))
 
@@ -1356,14 +1593,32 @@ class TakeoffService:
             # historical 400. A DEGRADED parse (worker timeout / crash / OOM) is
             # NOT this case: it was persisted above so the user keeps the upload.
             # Remove the bytes we wrote before rejecting so nothing is orphaned.
-            with contextlib.suppress(OSError):
-                file_path.unlink()
+            # Only ever our own file: on the from-source path this points at the
+            # user's stored project document, which must survive a parse failure.
+            if wrote_own_file:
+                with contextlib.suppress(OSError):
+                    file_path.unlink()
             logger.warning(
                 "takeoff.upload_document produced zero pages and empty text for "
-                "filename=%r size=%dB - rejecting upload",
+                "filename=%r size=%dB reader_error=%s - rejecting upload",
                 filename,
                 size_bytes,
+                parse_reader_error or "<none reported>",
             )
+            # A reader that cannot load reads exactly like a corrupt file from
+            # here, and telling an operator to check a file that is fine sends
+            # them looking in the wrong place. The install check is not enough
+            # to catch this: it resolves the module without importing it, so a
+            # broken native wheel passes the check and fails the upload.
+            if _is_reader_import_failure(parse_reader_error):
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=(
+                        "The PDF reader could not be loaded on the server, so the file was "
+                        "never read. This is an installation problem, not a problem with the "
+                        f"document. Underlying error: {parse_reader_error}"
+                    ),
+                )
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Failed to parse PDF document. Please check the file and try again.",
@@ -1408,13 +1663,33 @@ class TakeoffService:
             source_document_id=source_document_id,
         )
 
-        return await self.repo.create(doc)
+        try:
+            return await self.repo.create(doc)
+        except IntegrityError:
+            # A concurrent from-source open won the (project_id,
+            # source_document_id) unique index (issue #369). The PDF bytes this
+            # losing insert wrote to disk above are orphaned by the coming
+            # rollback, so remove them, then re-raise for the caller to resolve
+            # to the winning row. Only the from-source path passes a
+            # source_document_id and can trip this; a direct upload has a NULL
+            # source id and never collides.
+            #
+            # In practice that means ``file_path`` here is the borrowed project
+            # blob, which must be left alone - the winning row references the
+            # very same file. The guard stays explicit rather than dropping the
+            # unlink outright, so a future caller that writes its own file and
+            # then loses a race still cleans up after itself.
+            if wrote_own_file:
+                with contextlib.suppress(OSError):
+                    file_path.unlink()
+            raise
 
     async def get_or_create_takeoff_from_source(
         self,
         *,
         source_document_id: str,
         source_project_id: str,
+        source_file_path: str,
         filename: str,
         content: bytes,
         size_bytes: int,
@@ -1432,20 +1707,39 @@ class TakeoffService:
         path (the same size/page-capped, memory-isolated parse and graceful
         degradation as a normal upload) and the new row is stamped with
         ``source_document_id`` so the next open reuses it.
+
+        ``source_file_path`` is required, not optional-with-a-default: the
+        caller has always resolved the blob already, and a default would let a
+        missed wiring silently fall back to duplicating the bytes with nothing
+        failing anywhere to reveal it.
         """
-        existing = await self.repo.get_by_source_document_id(
-            source_document_id, project_id=uuid.UUID(source_project_id)
-        )
+        project_uuid = uuid.UUID(source_project_id)
+        existing = await self.repo.get_by_source_document_id(source_document_id, project_id=project_uuid)
         if existing is not None:
             return existing
-        return await self.upload_document(
-            filename=filename,
-            content=content,
-            size_bytes=size_bytes,
-            owner_id=owner_id,
-            project_id=source_project_id,
-            source_document_id=source_document_id,
-        )
+        try:
+            return await self.upload_document(
+                filename=filename,
+                content=content,
+                size_bytes=size_bytes,
+                owner_id=owner_id,
+                project_id=source_project_id,
+                source_document_id=source_document_id,
+                source_file_path=source_file_path,
+            )
+        except IntegrityError:
+            # Lost the find-or-create race: a concurrent request created the
+            # takeoff document for this source first and the unique index
+            # rejected our insert (issue #369). Roll our failed transaction back
+            # and return the winner, so both callers converge on one row and no
+            # measurement is ever stranded on a duplicate. If the re-lookup
+            # still finds nothing the violation was something else, so re-raise
+            # it untouched.
+            await self.session.rollback()
+            existing = await self.repo.get_by_source_document_id(source_document_id, project_id=project_uuid)
+            if existing is not None:
+                return existing
+            raise
 
     async def get_document(self, doc_id: str) -> TakeoffDocument | None:
         return await self.repo.get_by_id(uuid.UUID(doc_id))
@@ -1732,6 +2026,11 @@ class TakeoffService:
             perimeter=data.perimeter,
             count_value=data.count_value,
             scale_pixels_per_unit=data.scale_pixels_per_unit,
+            # Only the drawing surface knows whether the user calibrated this
+            # page, picked a preset, or drew on a scale that was already set,
+            # so the source is taken from the request rather than guessed. An
+            # older client sends nothing and the row honestly reads NULL.
+            scale_source=data.scale_source,
             linked_boq_position_id=data.linked_boq_position_id,
             # A deduction only makes sense for an area; never tag a distance /
             # count / annotation as a void so the rollup can't subtract a
@@ -1824,24 +2123,104 @@ class TakeoffService:
             "source": "text_layer",
         }
 
+    async def _persist_proposals(
+        self,
+        doc: TakeoffDocument,
+        page: int,
+        candidates: list[dict[str, Any]],
+        *,
+        detector: str,
+        scale_pixels_per_unit: float | None,
+        user_id: str,
+    ) -> list[dict[str, Any]]:
+        """Store detector candidates as ``proposed`` rows and stamp their ids.
+
+        The offline detectors used to hand candidates straight to the canvas
+        and keep nothing, so a rejection was a local drop the server never
+        learned about and a reload resurrected everything the estimator had
+        already dismissed. Persisting them as ordinary measurement rows with
+        ``review_status='proposed'`` turns CLAUDE.md rule 7 from a rendering
+        behaviour into an auditable record, and it is what lets a colleague
+        open the same sheet and see the same queue.
+
+        The stored value is always re-derived here from geometry and scale.
+        The detectors already compute it in-process, so this is not a trust
+        boundary, but it keeps one function owning every billed number
+        (Audit B8) instead of two that can drift apart.
+
+        Returns the candidates with ``measurement_id`` added, so the caller's
+        existing response shape keeps working and the canvas can address a
+        proposal it wants to review.
+        """
+        if not candidates:
+            return candidates
+
+        rows: list[TakeoffMeasurement] = []
+        for cand in candidates:
+            m_type = str(cand.get("type") or "area")
+            count_value = cand.get("count")
+            points = cand.get("points") or []
+            value = recompute_measurement_value(
+                measurement_type=m_type,
+                points=points,
+                scale_pixels_per_unit=scale_pixels_per_unit,
+                count_value=count_value,
+                client_value=cand.get("value"),
+            )
+            rows.append(
+                TakeoffMeasurement(
+                    project_id=doc.project_id,
+                    document_id=str(doc.id),
+                    page=page,
+                    type=m_type,
+                    group_name=_PROPOSAL_GROUP_NAME,
+                    group_color=_PROPOSAL_GROUP_COLOR,
+                    points=points,
+                    measurement_value=value,
+                    count_value=count_value,
+                    measurement_unit=_PROPOSAL_UNIT_BY_TYPE.get(m_type),
+                    scale_pixels_per_unit=scale_pixels_per_unit,
+                    # A detector measures at whatever scale the page already
+                    # carries; it reads no scale of its own. NULL when the page
+                    # had none, because then nothing was inherited either.
+                    scale_source="inherited" if scale_pixels_per_unit else None,
+                    source="ai_takeoff",
+                    confidence=cand.get("confidence"),
+                    review_status="proposed",
+                    metadata_={"detector": detector, "reason": cand.get("reason")},
+                    created_by=user_id,
+                )
+            )
+
+        stored = await self.measurement_repo.create_bulk(rows)
+        return [{**cand, "measurement_id": str(row.id)} for cand, row in zip(candidates, stored, strict=True)]
+
     async def recognize_candidates(
         self,
         doc_id: str,
         page: int,
         scale_pixels_per_unit: float | None,
+        *,
+        user_id: str = "",
     ) -> dict[str, Any]:
         """Detect candidate measurements from a PDF page's vector layer.
 
         Offline, deterministic complement to ``analyze_document`` (which
         sends text to an LLM): reads the stored PDF off disk, harvests the
         page's vector drawings with PyMuPDF ``page.get_drawings()`` and runs
-        the pure :mod:`app.modules.takeoff.recognize` detectors. Nothing is
-        persisted - the candidates carry a confidence and a reason and are
-        confirmed by the user on the canvas (CLAUDE.md rule 7).
+        the pure :mod:`app.modules.takeoff.recognize` detectors.
+
+        Candidates are persisted as ``review_status='proposed'`` rows before
+        they are returned, so a rejection outlives the browser tab and a
+        colleague opening the same sheet sees the same queue. They are
+        proposals, never billed work: confirming one is a separate, explicit
+        act by a human (CLAUDE.md rule 7), and the unreviewed-proposals
+        validation rule blocks a bill push while any are still pending.
 
         Returns ``{candidates, page, source, notes}``. Honest failure modes:
-        PyMuPDF absent -> a 400 pointing at the optional ``cv`` extra; no
-        vector layer (a scanned/raster PDF) -> an empty candidate set with
+        PyMuPDF unimportable -> a 400 naming a broken install, since PyMuPDF
+        is a base dependency and not an optional extra; no vector layer and no
+        raster fallback (a scanned/raster PDF) -> an empty candidate set with
         ``notes='no_vector_layer'`` rather than fabricated geometry, with a
         pointer to the online ``analyze`` path.
         """
@@ -1916,6 +2295,14 @@ class TakeoffService:
         # Vector layer present -> deterministic vector detector.
         if drawings:
             candidates = _recognize.recognize_candidates(drawings, scale_pixels_per_unit)
+            candidates = await self._persist_proposals(
+                doc,
+                page,
+                candidates,
+                detector="vector_recognize",
+                scale_pixels_per_unit=scale_pixels_per_unit,
+                user_id=user_id,
+            )
             return {
                 "candidates": candidates,
                 "page": page,
@@ -1923,10 +2310,12 @@ class TakeoffService:
                 "notes": None if candidates else "no_features",
             }
 
-        # Scanned / raster page -> OpenCV room + wall detection (cv extra).
+        # Scanned / raster page -> OpenCV room + wall detection. OpenCV and
+        # numpy are base dependencies, so this runs in every default install;
+        # only the OCR engine sits behind the optional 'cv' extra.
         if raster_payload is not None:
             try:
-                import numpy as np  # noqa: PLC0415 - lazy: optional 'cv' extra
+                import numpy as np  # noqa: PLC0415 - base dep; lazy so a broken wheel degrades instead of failing at import
 
                 from app.modules.takeoff import raster_recognize as _raster  # noqa: PLC0415
 
@@ -1938,6 +2327,14 @@ class TakeoffService:
                 else:
                     image_bgr = arr.reshape(height, width)
                 candidates = _raster.recognize_raster(image_bgr, page_w_pt, page_h_pt, scale_pixels_per_unit)
+                candidates = await self._persist_proposals(
+                    doc,
+                    page,
+                    candidates,
+                    detector="raster_recognize",
+                    scale_pixels_per_unit=scale_pixels_per_unit,
+                    user_id=user_id,
+                )
                 return {
                     "candidates": candidates,
                     "page": page,
@@ -1945,13 +2342,14 @@ class TakeoffService:
                     "notes": None if candidates else "raster_no_features",
                 }
             except ImportError:
-                # OpenCV / numpy (the 'cv' extra) is not installed - degrade
+                # OpenCV / numpy ship with the platform, so an ImportError here
+                # means a broken install rather than a missing extra. Degrade
                 # honestly instead of pretending nothing was found.
                 return {
                     "candidates": [],
                     "page": page,
                     "source": "raster_recognize",
-                    "notes": "raster_no_cv",
+                    "notes": "raster_cv_unavailable",
                 }
             except Exception:
                 logger.exception("takeoff.recognize raster detection failed for doc %s page %s", doc_id, page)
@@ -1969,15 +2367,21 @@ class TakeoffService:
         page: int,
         seed_x: float,
         seed_y: float,
+        *,
+        user_id: str = "",
     ) -> dict[str, Any]:
         """Find every symbol on a page matching the one under ``(seed_x, seed_y)``.
 
         Seeded "count by example": the user clicks one symbol on the vector PDF
         page and this returns the centroids of all near-identical symbols so
-        they can confirm them as a single count measurement. Vector-only and
-        DB-free - nothing is persisted (CLAUDE.md rule 7). A scanned/raster
-        page (no vector layer) returns an empty hit set with
+        they can confirm them as a single count measurement. Vector-only. A
+        scanned/raster page (no vector layer) returns an empty hit set with
         ``note='no_vector_layer'`` rather than fabricated geometry.
+
+        The hits land as one ``proposed`` count row carrying every centroid,
+        which mirrors how the vision path stores a symbol class and keeps the
+        seeded search in the same review queue as every other proposal. The
+        row is a proposal, not billed work (CLAUDE.md rule 7).
         """
         from app.modules.takeoff import recognize as _recognize
 
@@ -2029,7 +2433,134 @@ class TakeoffService:
 
         result = _recognize.find_similar_symbols(drawings, seed_x, seed_y)
         result["page"] = page
+
+        hits = result.get("hits") or []
+        if hits:
+            # One row for the whole set, not one per hit: the estimator is
+            # counting a symbol type, and the confidence that matters is the
+            # weakest match in the group rather than the average, which would
+            # hide a doubtful hit behind a pile of certain ones.
+            stored = await self._persist_proposals(
+                doc,
+                page,
+                [
+                    {
+                        "type": "count",
+                        "points": [{"x": h["x"], "y": h["y"]} for h in hits],
+                        "value": float(len(hits)),
+                        "count": len(hits),
+                        "confidence": round(min(float(h["confidence"]) for h in hits), 2),
+                        "reason": f"{len(hits)} symbols matching the one clicked",
+                    }
+                ],
+                detector="similar_symbols",
+                scale_pixels_per_unit=None,
+                user_id=user_id,
+            )
+            result["measurement_id"] = stored[0]["measurement_id"]
         return result
+
+    async def list_document_proposals(
+        self,
+        doc_id: str,
+        *,
+        page: int | None = None,
+        review_status: str = "proposed",
+    ) -> dict[str, Any]:
+        """Return the review queue for one document, with its progress counts.
+
+        One queue for every proposal path. The counts come from a grouped
+        query rather than from the returned rows, so "12 of 34 reviewed" stays
+        correct when the caller scopes the list to a single page.
+        """
+        doc = await self.repo.get_by_id(uuid.UUID(doc_id))
+        if doc is None:
+            raise HTTPException(status_code=404, detail="Takeoff document not found")
+
+        proposals = await self.measurement_repo.list_proposals_for_document(
+            str(doc.id), page=page, review_status=review_status
+        )
+        counts = await self.measurement_repo.count_by_review_status(str(doc.id))
+        proposed = counts.get("proposed", 0)
+        confirmed = counts.get("confirmed", 0)
+        rejected = counts.get("rejected", 0)
+        return {
+            "proposals": proposals,
+            "page": page,
+            "proposed_count": proposed,
+            "confirmed_count": confirmed,
+            "rejected_count": rejected,
+            "reviewed_count": confirmed + rejected,
+            "total_count": proposed + confirmed + rejected,
+        }
+
+    async def review_measurement(
+        self,
+        measurement_id: uuid.UUID,
+        *,
+        action: str,
+        points: list[Any] | None = None,
+        note: str | None = None,
+        user_id: str = "",
+    ) -> TakeoffMeasurement:
+        """Accept or reject one proposal, keeping the row either way.
+
+        A rejection is kept rather than deleted. That is the whole point of
+        the queue: the record of what a human turned down is what makes the
+        detector auditable, and it is what a later suppression pass needs in
+        order to stop offering the same wrong thing twice.
+
+        Corrected geometry may ride along with an accept. The value is always
+        re-derived from those points server side (Audit B8), so an edit cannot
+        be used to talk the server into a number the geometry does not support.
+        """
+        if action not in {"accept", "reject"}:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="action must be 'accept' or 'reject'",
+            )
+
+        item = await self.measurement_repo.get_by_id(measurement_id)
+        if item is None:
+            raise HTTPException(status_code=404, detail="Measurement not found")
+        if item.review_status != "proposed":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"This measurement was already reviewed ({item.review_status}). "
+                    "Reload the queue to see the current state."
+                ),
+            )
+
+        meta = dict(item.metadata_ or {})
+        meta["reviewed_by"] = user_id
+        meta["reviewed_at"] = datetime.now(UTC).isoformat()
+        if note:
+            meta["review_note"] = note
+
+        fields: dict[str, Any] = {
+            "review_status": "confirmed" if action == "accept" else "rejected",
+        }
+        if action == "accept" and points:
+            meta["geometry_edited"] = True
+            fields["points"] = points
+            fields["measurement_value"] = recompute_measurement_value(
+                measurement_type=item.type,
+                points=points,
+                scale_pixels_per_unit=item.scale_pixels_per_unit,
+                count_value=item.count_value,
+                client_value=item.measurement_value,
+            )
+        # The mapped attribute name, not the DB column name: bare ``metadata``
+        # resolves to SQLAlchemy's own MetaData on the declarative class and
+        # blows up inside the update compiler rather than writing the column.
+        fields["metadata_"] = meta
+
+        await self.measurement_repo.update_fields(measurement_id, **fields)
+        updated = await self.measurement_repo.get_by_id(measurement_id)
+        if updated is None:  # pragma: no cover - the row was just written
+            raise HTTPException(status_code=404, detail="Measurement not found")
+        return updated
 
     async def update_measurement(
         self,
@@ -2091,6 +2622,8 @@ class TakeoffService:
             effective_type_for_deduction = fields.get("type") if "type" in fields else item.type
             if effective_type_for_deduction != "area":
                 fields["is_deduction"] = False
+
+        clear_stale_scale_source(fields)
 
         # Recompute measurement_value if any geometry-relevant field
         # is touched. We need the *effective post-update* state, so
@@ -2244,6 +2777,9 @@ class TakeoffService:
                 perimeter=data.perimeter,
                 count_value=data.count_value,
                 scale_pixels_per_unit=data.scale_pixels_per_unit,
+                # Same rule as the single create: the source travels with the
+                # ratio from the surface that knows it.
+                scale_source=data.scale_source,
                 linked_boq_position_id=data.linked_boq_position_id,
                 is_deduction=bool(data.is_deduction) and data.type == "area",
                 metadata_=data.metadata,
@@ -2297,7 +2833,9 @@ class TakeoffService:
                     "page": m.page,
                     "type": m.type,
                     "group_name": m.group_name,
-                    "group_color": m.group_color,
+                    # group_color is NULL for an uncoloured measurement (#378);
+                    # export a blank cell rather than a bare "None" string.
+                    "group_color": m.group_color or "",
                     "annotation": m.annotation or "",
                     "measurement_value": m.measurement_value,
                     "measurement_unit": m.measurement_unit,
@@ -2493,20 +3031,62 @@ class TakeoffService:
         Both document ids must reference documents the project owns; an
         empty result set is returned rather than an error when a document
         has no measurements (a freshly uploaded, not-yet-measured PDF).
-        """
-        from_measurements = await self.measurement_repo.list_for_project(
-            project_id,
-            document_id=from_document_id,
-            limit=500,
-        )
-        to_measurements = await self.measurement_repo.list_for_project(
-            project_id,
-            document_id=to_document_id,
-            limit=500,
-        )
 
-        from_by_key = {_measurement_compare_key(m): m for m in from_measurements}
-        to_by_key = {_measurement_compare_key(m): m for m in to_measurements}
+        Both sides are read in FULL, up to the
+        :data:`MAX_COMPARE_MEASUREMENTS` memory ceiling. A compare over two
+        differently sliced windows does not merely under-report, it invents
+        rows: a key that falls inside one document's window but outside the
+        other's is emitted as added or removed, and its money delta lands in
+        ``net_cost_impact``. When a document is bigger than the ceiling the
+        result carries ``summary.truncated = True`` plus the real row totals,
+        so no caller can mistake a partial compare for a complete one.
+        """
+        from_total = await self.measurement_repo.count_for_document(project_id, from_document_id)
+        to_total = await self.measurement_repo.count_for_document(project_id, to_document_id)
+        from_measurements = await self.measurement_repo.list_all_for_document(
+            project_id,
+            from_document_id,
+            max_rows=MAX_COMPARE_MEASUREMENTS,
+        )
+        to_measurements = await self.measurement_repo.list_all_for_document(
+            project_id,
+            to_document_id,
+            max_rows=MAX_COMPARE_MEASUREMENTS,
+        )
+        truncated = len(from_measurements) < from_total or len(to_measurements) < to_total
+        if truncated:
+            logger.warning(
+                "compare_documents: measurement set exceeds the %s row ceiling "
+                "(project=%s from=%s %s/%s rows to=%s %s/%s rows) - the compare is partial "
+                "and is reported as truncated",
+                MAX_COMPARE_MEASUREMENTS,
+                project_id,
+                from_document_id,
+                len(from_measurements),
+                from_total,
+                to_document_id,
+                len(to_measurements),
+                to_total,
+            )
+
+        # Measurements sharing a compare key collapse onto one entry by
+        # design (see _measurement_compare_key): a re-measured takeoff item
+        # keeps matching across revisions. Count the collapses anyway so the
+        # summary explains why the row tally is smaller than the row counts.
+        collapsed = 0
+
+        def _index(measurements: list[TakeoffMeasurement]) -> dict[str, TakeoffMeasurement]:
+            nonlocal collapsed
+            index: dict[str, TakeoffMeasurement] = {}
+            for m in measurements:
+                key = _measurement_compare_key(m)
+                if key in index:
+                    collapsed += 1
+                index[key] = m
+            return index
+
+        from_by_key = _index(from_measurements)
+        to_by_key = _index(to_measurements)
 
         rate_cache: dict[str, tuple[str | None, str | None]] = {}
 
@@ -2615,8 +3195,16 @@ class TakeoffService:
             "measurements": _tally(rows),
             "net_cost_impact": str(net_impact.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)) if has_cost else None,
             "cost_currency": cost_currency_out,
+            # *_measurement_count is what was actually compared,
+            # *_measurement_total is what the document really holds. They
+            # differ only when the compare hit the row ceiling.
             "from_measurement_count": len(from_measurements),
             "to_measurement_count": len(to_measurements),
+            "from_measurement_total": from_total,
+            "to_measurement_total": to_total,
+            "truncated": truncated,
+            "truncation_limit": MAX_COMPARE_MEASUREMENTS if truncated else None,
+            "collapsed_duplicate_keys": collapsed,
         }
 
         return {
@@ -2684,6 +3272,11 @@ class TakeoffService:
         confirms it in the variations module). Provenance is stamped into
         ``metadata.source = "pdf_revision_compare"``.
 
+        When the underlying compare was capped, the draft carries
+        ``metadata.compare_truncated`` plus the real row totals and says so
+        in its description: the estimator must never confirm a money figure
+        derived from a partial compare without knowing it was partial.
+
         Returns ``{variation_request_id, code, estimated_cost_impact,
         currency}``.
         """
@@ -2704,10 +3297,22 @@ class TakeoffService:
         except (InvalidOperation, ValueError, TypeError):
             estimated_cost_impact = Decimal("0")
 
+        truncated = bool(summary.get("truncated"))
+        truncation_note = ""
+        if truncated:
+            truncation_note = (
+                "WARNING: the source compare was truncated at "
+                f"{summary.get('truncation_limit')} measurements per document "
+                f"(baseline holds {summary.get('from_measurement_total')}, "
+                f"revision holds {summary.get('to_measurement_total')}), so this cost "
+                "impact covers only part of the drawing set. "
+            )
+
         resolved_title = title or "Drawing revision (PDF takeoff)"
         description = _build_pdf_revision_narrative(
             measurement_tally=measurement_tally,
             changed_linked_count=changed_linked_count,
+            truncation_note=truncation_note,
         )
 
         # Lazy import (mirrors the BOQService import) so the takeoff module
@@ -2730,6 +3335,9 @@ class TakeoffService:
                 "to_document_id": str(to_document_id),
                 "changed_measurement_ids": changed_measurement_ids,
                 "net_cost_impact": str(estimated_cost_impact),
+                "compare_truncated": truncated,
+                "compare_from_measurement_total": summary.get("from_measurement_total"),
+                "compare_to_measurement_total": summary.get("to_measurement_total"),
             },
         )
         variations_service = VariationsService(self.session)
@@ -3079,9 +3687,16 @@ class TakeoffService:
             page_height_pt=page_h_pt,
         )
 
-        scale_ratio = run_scale_ppu
-        if result.scale is not None and scale_ratio is None:
-            scale_ratio = _pr.scale_ratio_from_plan_scale(result.scale, page_w_pt, page_h_pt)
+        # //// NEOFFICE PATCH — pass the scalar snapshot (`run_scale_ppu`, taken
+        # before the status update) instead of `run.scale_pixels_per_unit`.
+        # ``update_fields`` above expires the ORM row, so touching the attribute
+        # here triggers a lazy reload in async context -> MissingGreenlet, which
+        # surfaced as a bogus "rasterize_failed". Upstream's plausibility belt is
+        # kept; only the value source changes.
+        scale_ratio, scale_drop = _pr.resolve_scale_ratio(run_scale_ppu, result.scale, page_w_pt, page_h_pt)
+        # //// END NEOFFICE PATCH
+        if scale_drop:
+            dropped.append(scale_drop)
 
         # //// NEOFFICE PATCH — reload run before the *sync* proposal builder.
         # The update_fields() calls above expire_all() the session; a sync method
@@ -3148,6 +3763,17 @@ class TakeoffService:
             TAKEOFF_CONFIDENCE_MEDIUM_THRESHOLD,
         )
 
+        # Which scale survived decides the provenance stamp.
+        # ``resolve_scale_ratio`` hands back the user's calibration untouched
+        # when it passes the plausibility belt, so an exact match identifies
+        # that branch; anything else that survived was read off the sheet by
+        # the model. NULL when no scale survived at all - then the areas are
+        # empty too, and claiming a source for a number we do not have would
+        # be the kind of confident fiction this column is meant to prevent.
+        scale_source: str | None = None
+        if scale_ratio is not None:
+            scale_source = "inherited" if scale_ratio == run.scale_pixels_per_unit else "vision_read"
+
         out: list[TakeoffMeasurement] = []
         run_meta_base = {"ai_takeoff_run_id": str(run.id), "page_width_pt": page_w_pt, "page_height_pt": page_h_pt}
 
@@ -3182,6 +3808,7 @@ class TakeoffService:
                     measurement_value=value,
                     measurement_unit="m2",
                     scale_pixels_per_unit=scale_ratio,
+                    scale_source=scale_source,
                     source="ai_plan_read",
                     confidence=confidence,
                     review_status="proposed",

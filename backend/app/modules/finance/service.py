@@ -287,9 +287,30 @@ class FinanceService:
                 ),
             )
 
-        # Auto-generate invoice number if not provided
+        # Auto-generate invoice number if not provided.
+        #
+        # A number supplied by the caller is checked, because nothing else
+        # checks it: there is no unique constraint on the column, so a repeat
+        # simply produced a second invoice carrying a number already in use.
+        # That is the key reconciliation, payment matching and every accounting
+        # export rely on, so the duplicate does not surface as a display quirk,
+        # it surfaces as two documents nobody can tell apart.
         invoice_number = data.invoice_number
-        if not invoice_number:
+        if invoice_number:
+            taken = await self.invoices.invoice_number_taken(
+                data.project_id,
+                data.invoice_direction,
+                invoice_number,
+            )
+            if taken:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=(
+                        f"Invoice number '{invoice_number}' is already used on this "
+                        "project. Leave it empty to have one generated."
+                    ),
+                )
+        else:
             invoice_number = await self.invoices.next_invoice_number(data.project_id, data.invoice_direction)
 
         # Server-side total computation: always override amount_total
@@ -522,6 +543,11 @@ class FinanceService:
         """
         invoice = await self.get_invoice(invoice_id)
         prior = invoice.status
+        # Read the number before the update expires the instance. Everything
+        # below the update that touches ``invoice`` runs after a re-``get``,
+        # which reloads the same identity-mapped row, but the audit call does
+        # not, and a lazy load there has no greenlet to run in.
+        invoice_number = invoice.invoice_number
         if prior not in ("draft", "pending"):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -545,7 +571,7 @@ class FinanceService:
                 from_status=prior,
                 to_status="sent",
                 reason=reason or "Invoice approved via approve_invoice()",
-                metadata={"invoice_number": invoice.invoice_number},
+                metadata={"invoice_number": invoice_number},
             )
         except Exception as exc:
             logger.warning(
@@ -594,6 +620,10 @@ class FinanceService:
         """
         invoice = await self.get_invoice(invoice_id)
         prior = invoice.status
+        # Same reason as in ``approve_invoice``: the update expires the
+        # instance, and the audit call below is the one place that reads it
+        # before the re-``get`` reloads it.
+        invoice_number = invoice.invoice_number
         if prior not in ("approved", "sent"):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -616,7 +646,7 @@ class FinanceService:
                 from_status=prior,
                 to_status="paid",
                 reason=reason or "Invoice paid via pay_invoice()",
-                metadata={"invoice_number": invoice.invoice_number},
+                metadata={"invoice_number": invoice_number},
             )
         except Exception as exc:
             logger.warning(

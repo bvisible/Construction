@@ -8,6 +8,11 @@
  * `frontend/src/modules/pdf-takeoff/TakeoffViewerModule.tsx`.
  */
 
+// Type-only, so it is erased at compile time and this file still pulls no
+// runtime graph. The scale-source vocabulary is the backend's, so it is
+// defined once next to the API contract rather than restated here.
+import type { ScaleSource } from '../api';
+
 export type MeasureTool =
   | 'select'
   | 'distance'
@@ -51,6 +56,14 @@ export interface Measurement {
   annotation: string;
   page: number;
   group: string;
+  /** This measurement's copy of its group's band, deciding where the group's
+   *  block sits relative to the other groups (issues #393/#394). Mirrored onto
+   *  every measurement so a pinned group order round-trips via the metadata blob
+   *  like the group colour scheme, with no schema change. The map held by the
+   *  viewer is authoritative; this is a cache of it, read back only when
+   *  rehydrating a document. Undefined means the group was never pinned and its
+   *  band is derived from first appearance. */
+  groupBand?: number;
   depth?: number;
   area?: number;
   text?: string;
@@ -74,6 +87,19 @@ export interface Measurement {
   /** Typical-multiplier: this measurement stands for N identical repeats
    *  (typical floors / bays). Effective qty = base x multiplier. Undefined = 1. */
   multiplier?: number;
+  /** Where this row's captured scale ratio came from, as the server recorded
+   *  it, or undefined when it was never recorded. Written together with the
+   *  ratio it describes and never on its own, so the two always refer to the
+   *  same capture. Surfaces render a missing value as "Unknown" rather than as
+   *  a blank, because "we do not know" is the useful answer when a sheet turns
+   *  out to be mis-scaled. */
+  scaleSource?: ScaleSource;
+  /** Explicit paint (z) order key (issue #379). Higher = painted later = on
+   *  top; drives the canvas paint pass, the click hit-test, the sidebar list
+   *  and the PDF export. Undefined = fall back to array (creation) order, so
+   *  measurements the user never reordered are unchanged. Round-trips via the
+   *  measurement metadata blob. */
+  order?: number;
   /** Free-form notes entered via the properties panel. */
   notes?: string;
   /** Opening deduction: an `area` measurement representing a void (door,

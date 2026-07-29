@@ -2920,6 +2920,46 @@ async def restore_snapshot(
 # ── Validation ────────────────────────────────────────────────────────────────
 
 
+async def _unreviewed_proposal_meta(
+    session: SessionDep,
+    project_id: uuid.UUID,
+    rule_sets: list[str],
+) -> dict[str, int]:
+    """Count takeoff rows still awaiting review, for the validation report.
+
+    A proposal is a suggestion, not a measurement, so it is deliberately kept
+    out of priced quantities. That exclusion is correct and silent, which is
+    the problem: a BOQ total can be short of what the drawings show with
+    nothing on the report to explain the difference.
+    ``ai_takeoff.unreviewed_proposals`` says so, but only if it is handed a
+    count.
+
+    Nothing is counted when ``rule_sets`` does not reach that rule. A project
+    that configures its own sets and leaves out the one the rule belongs to
+    has opted out of the warning, and a count nobody reads is a query per
+    validation for nothing. The registry is asked the same question the engine
+    asks, so this stays true if the rule is ever filed elsewhere.
+
+    Returns an empty dict when the count cannot be taken. The rule reads an
+    absent key as "no claim" rather than as zero, so a failed query stays
+    quiet instead of certifying a review queue nobody has looked at.
+    """
+    from app.core.validation.engine import rule_registry
+    from app.core.validation.rules import UNREVIEWED_PROPOSALS_META_KEY, TakeoffUnreviewedProposalsRule
+    from app.modules.takeoff.repository import MeasurementRepository
+
+    wanted = TakeoffUnreviewedProposalsRule.rule_id
+    if not any(rule.rule_id == wanted and rule.enabled for rule in rule_registry.get_rules_for_sets(rule_sets)):
+        return {}
+
+    try:
+        pending = await MeasurementRepository(session).count_unreviewed_for_project(project_id)
+    except Exception as exc:  # noqa: BLE001 - a missing count must not cost the whole report
+        logger.warning("BOQ validation could not count unreviewed takeoff proposals: %s", exc)
+        return {}
+    return {UNREVIEWED_PROPOSALS_META_KEY: pending}
+
+
 def _build_rule_sets(
     project_rule_sets: list[str],
     classification_standard: str,
@@ -3095,7 +3135,10 @@ async def _run_import_validation(
             project_id=str(boq_data.project_id),
             region=project.region,
             standard=project.classification_standard,
-            metadata={"locale": get_locale()},
+            metadata={
+                "locale": get_locale(),
+                **await _unreviewed_proposal_meta(session, boq_data.project_id, rule_sets),
+            },
         )
 
         summary = report.summary()
@@ -3250,7 +3293,10 @@ async def validate_boq(
         project_id=str(boq_data.project_id),
         region=project.region,
         standard=project.classification_standard,
-        metadata={"locale": get_locale()},
+        metadata={
+            "locale": get_locale(),
+            **await _unreviewed_proposal_meta(session, boq_data.project_id, rule_sets),
+        },
     )
 
     # Build response: summary + full results
@@ -4481,6 +4527,72 @@ async def export_boq_gaeb(
     return StreamingResponse(
         iter([xml_content]),
         media_type="application/xml; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+        },
+    )
+
+
+@router.get(
+    "/boqs/{boq_id}/export/bc3",
+    summary="Export BOQ as FIEBDC-3 / BC3 (no-slash alias)",
+    dependencies=[Depends(RequirePermission("boq.read"))],
+    include_in_schema=False,
+)
+@router.get(
+    "/boqs/{boq_id}/export/bc3/",
+    summary="Export BOQ as a FIEBDC-3 (BC3) budget - Spain / LATAM interchange",
+    dependencies=[Depends(RequirePermission("boq.read"))],
+)
+async def export_boq_bc3(
+    boq_id: uuid.UUID,
+    _user_id: CurrentUserId,
+    payload: CurrentUserPayload,
+    session: SessionDep,
+    service: BOQService = Depends(_get_service),
+) -> StreamingResponse:
+    """Export the BOQ as a FIEBDC-3 (BC3) budget file.
+
+    FIEBDC-3 is the standard construction-budget interchange format across
+    Spain and Hispanophone LATAM (mandated by AENOR for Spanish public
+    tenders). The file carries the full chapter / partida hierarchy with
+    codes, units, quantities, unit rates and long texts, and re-imports
+    losslessly through our own BC3 parser. Overhead / profit / VAT are left
+    to the receiving tool's coefficient settings, the FIEBDC convention.
+
+    The build is delegated to the pure, unit-tested ``build_bc3`` builder.
+    Encoding is CP1252 when the document fits it (widest desktop-tool
+    compatibility) and UTF-8 otherwise, declared honestly in the ``~V``
+    record; the ``Content-Type`` charset matches.
+    """
+    from app.config import get_settings
+    from app.modules.boq.exporters.bc3 import build_bc3
+    from app.modules.projects.repository import ProjectRepository
+
+    # IDOR guard: scope the export to the project owner/member, matching every
+    # other BOQ read endpoint.
+    await _verify_boq_owner(session, boq_id, _user_id, payload)
+    boq_data = await service.get_boq_structured(boq_id)
+
+    # Load project for label text + currency.
+    project_repo = ProjectRepository(session)
+    project = await project_repo.get_by_id(boq_data.project_id)
+    project_name = project.name if project else "OpenConstructionERP Project"
+    project_currency = (project.currency or "").strip()[:3].upper() if project else ""
+
+    data, http_charset = build_bc3(
+        boq_data,
+        project_name=project_name,
+        project_currency=project_currency,
+        program_version=getattr(get_settings(), "app_version", "") or "",
+    )
+
+    safe_name = boq_data.name.encode("ascii", errors="replace").decode("ascii").replace('"', "'")
+    filename = f"{safe_name}.bc3"
+
+    return StreamingResponse(
+        iter([data]),
+        media_type=f"text/plain; charset={http_charset}",
         headers={
             "Content-Disposition": f'attachment; filename="{filename}"',
         },
@@ -8953,8 +9065,13 @@ class RenumberRequest(BaseModel):
     (gap-of-10 scheme, padded ordinals) so existing clients keep working.
     """
 
-    scheme: Literal["gap10", "gap100", "sequential", "dotted"] = "gap10"
+    scheme: Literal["gap10", "gap100", "sequential", "dotted", "custom"] = "gap10"
     pad: bool = True
+    # ``custom`` scheme only: the first leaf number and the increment between
+    # positions, so the user can define any numbering they want (e.g. start=100,
+    # step=5 -> 01.100, 01.105, 01.110). Ignored by the fixed schemes above.
+    start: int = 10
+    step: int = 10
 
 
 @router.post(
@@ -8983,6 +9100,8 @@ async def renumber_positions(
       good for fixed-scope BOQs that won't get extra positions later.
     * ``dotted`` - ``1, 1.1, 1.2, 1.3`` - short-form decimal numbering
       common in NRM-style measurement.
+    * ``custom`` - user-defined ``start`` and ``step`` (e.g. start=100, step=5
+      -> ``01.100, 01.105, 01.110``) so any numbering can be dialled in.
 
     The ``pad`` option controls whether top-level section numbers are
     zero-padded to two digits (``01`` vs ``1``).
@@ -8995,14 +9114,23 @@ async def renumber_positions(
 
     # Step (gap) per scheme. Sequential and dotted have step=1; gap10/gap100
     # leave room to insert.
+    is_custom = opts.scheme == "custom"
     step_per_scheme: dict[str, int] = {
         "gap10": 10,
         "gap100": 100,
         "sequential": 1,
         "dotted": 1,
+        "custom": max(1, opts.step),
     }
     step = step_per_scheme[opts.scheme]
+    custom_start = max(0, opts.start)
     use_dotted = opts.scheme == "dotted"
+
+    def _leaf_value(idx: int) -> int:
+        """Numeric value for the idx-th (1-based) leaf within its parent group."""
+        if is_custom:
+            return custom_start + (idx - 1) * step
+        return idx * step
 
     def _fmt_section(idx: int) -> str:
         if not opts.pad:
@@ -9010,7 +9138,8 @@ async def renumber_positions(
         return f"{idx:02d}"
 
     def _fmt_leaf_value(parent_ord: str, value: int) -> str:
-        if use_dotted:
+        # dotted and custom keep the raw integer; the fixed gap schemes zero-pad.
+        if use_dotted or is_custom:
             return f"{parent_ord}.{value}"
         # Width: 2 digits for gap10/sequential, 3 digits for gap100
         width = 3 if opts.scheme == "gap100" else 2
@@ -9018,7 +9147,7 @@ async def renumber_positions(
 
     def _fmt_top_leaf(value: int) -> str:
         # Top-level leaves without a parent section.
-        if use_dotted:
+        if use_dotted or is_custom:
             return str(value)
         width = 4 if opts.scheme in ("gap10", "gap100") else 2
         return f"{value:0{width}d}"
@@ -9061,13 +9190,13 @@ async def renumber_positions(
                     new_ord = _fmt_section(section_idx)
                 else:
                     leaf_idx += 1
-                    new_ord = _fmt_leaf_value(parent_ordinal or "", leaf_idx * step)
+                    new_ord = _fmt_leaf_value(parent_ordinal or "", _leaf_value(leaf_idx))
             else:
                 leaf_idx += 1
                 if parent_ordinal:
-                    new_ord = _fmt_leaf_value(parent_ordinal, leaf_idx * step)
+                    new_ord = _fmt_leaf_value(parent_ordinal, _leaf_value(leaf_idx))
                 else:
-                    new_ord = _fmt_top_leaf(leaf_idx * step)
+                    new_ord = _fmt_top_leaf(_leaf_value(leaf_idx))
             updates.append((child.id, new_ord))
             _walk(str(child.id), new_ord)
 

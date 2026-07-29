@@ -11,7 +11,11 @@ import uuid
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from sqlalchemy.orm.attributes import set_committed_value
+from sqlalchemy.orm.util import identity_key
+from sqlalchemy.sql.elements import ClauseElement
 
+from app.core.orm_write import apply_update
 from app.modules.transmittals.logic import (
     DEFAULT_NUMBER_PAD,
     DEFAULT_NUMBER_PREFIX,
@@ -82,7 +86,15 @@ class TransmittalRepository:
         stmt = update(Transmittal).where(Transmittal.id == transmittal_id).values(**fields)
         await self.session.execute(stmt)
         await self.session.flush()
-        self.session.expire_all()
+        instance = self.session.identity_map.get(identity_key(Transmittal, transmittal_id))
+        if instance is None:
+            return
+        computed = [name for name, value in fields.items() if isinstance(value, ClauseElement)]
+        for name, value in fields.items():
+            if name not in computed:
+                set_committed_value(instance, name, value)
+        if computed:
+            self.session.expire(instance, computed)
 
     async def next_number(
         self,
@@ -117,10 +129,7 @@ class TransmittalRepository:
 
     async def update_recipient(self, recipient_id: uuid.UUID, **fields: object) -> None:
         """Update specific fields on a recipient."""
-        stmt = update(TransmittalRecipient).where(TransmittalRecipient.id == recipient_id).values(**fields)
-        await self.session.execute(stmt)
-        await self.session.flush()
-        self.session.expire_all()
+        await apply_update(self.session, TransmittalRecipient, recipient_id, **fields)
 
     async def delete_recipients(self, transmittal_id: uuid.UUID) -> None:
         """Delete all recipients for a transmittal."""

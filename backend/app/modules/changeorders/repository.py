@@ -12,7 +12,11 @@ from decimal import Decimal, InvalidOperation
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from sqlalchemy.orm.attributes import set_committed_value
+from sqlalchemy.orm.util import identity_key
+from sqlalchemy.sql.elements import ClauseElement
 
+from app.core.orm_write import apply_update
 from app.modules.changeorders.models import ChangeOrder, ChangeOrderItem
 
 
@@ -159,7 +163,15 @@ class ChangeOrderRepository:
         stmt = update(ChangeOrder).where(ChangeOrder.id == order_id).values(**fields)
         await self.session.execute(stmt)
         await self.session.flush()
-        self.session.expire_all()
+        instance = self.session.identity_map.get(identity_key(ChangeOrder, order_id))
+        if instance is None:
+            return
+        computed = [name for name, value in fields.items() if isinstance(value, ClauseElement)]
+        for name, value in fields.items():
+            if name not in computed:
+                set_committed_value(instance, name, value)
+        if computed:
+            self.session.expire(instance, computed)
 
     async def delete(self, order_id: uuid.UUID) -> None:
         """Hard delete a change order and its items."""
@@ -313,10 +325,7 @@ class ChangeOrderRepository:
 
     async def update_item_fields(self, item_id: uuid.UUID, **fields: object) -> None:
         """Update specific fields on a change order item."""
-        stmt = update(ChangeOrderItem).where(ChangeOrderItem.id == item_id).values(**fields)
-        await self.session.execute(stmt)
-        await self.session.flush()
-        self.session.expire_all()
+        await apply_update(self.session, ChangeOrderItem, item_id, **fields)
 
     async def delete_item(self, item_id: uuid.UUID) -> None:
         """Hard delete a change order item."""

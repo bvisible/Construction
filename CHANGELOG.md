@@ -7,6 +7,153 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.9.0] - 2026-07-28
+
+The vector service installs somewhere it is actually allowed to write. It used to install under the account's home directory, which in a container is a path inside the image rather than the mounted volume. Docker creates a volume for such a path owned by the administrator account while the application runs as an unprivileged one, so the download failed on a directory it could not write and the failure was reported as a bare server error with nothing naming permissions as the cause. It now installs under the platform data directory, which is the volume that is already writable, so a container no longer needs its ownership corrected by hand before the CAD to cost matching flow will work. A binary already sitting in the old location keeps being used, so an install that was working is not thrown away and nothing has to be downloaded twice. A permission problem in that directory now names the path and the reason.
+
+Records updated through the shared write path no longer make unrelated parts of the same request fail. Twenty-one places wrote a row and then marked every object loaded in that request as stale, which turned the next read of any of them, anywhere, into a database round trip that is not allowed at that point and raised an error far away from the code that caused it. The write now reconciles the row it actually wrote. This covers invoices, purchase orders, change orders, compliance documents, contacts, requirements, transmittals, submittals, requests for quotation, forms, field time entries, the BIM hub and enterprise workflows.
+ Reading a request for quotation now loads its bids deliberately rather than relying on that stale marking as the thing that forced a fresh read, which is what the check refusing a second award depends on.
+
+The desktop build stops reporting a healthy PDF reader as a broken one. The diagnostic checked its readers by starting a second copy of the program, which in a packaged build means launching the application rather than the interpreter, so the check could not succeed no matter what was installed. It now imports them the same way the upload path does.
+
+A resumable upload that loses one piece of working data costs that one piece rather than the whole transfer, so the client re-sends a single chunk instead of starting again.
+
+The frontend lockfile is held to the same version everything else reports. It had been left behind at 12.6.1 across two releases because nothing checked it, and it is the one file the container build treats as authoritative.
+
+## [12.8.0] - 2026-07-28
+
+Measurement lists in PDF takeoff can be arranged the way the job actually reads. A measurement can now be dropped below a row instead of only above it, dragged into a different group, and a whole group block can be moved to a new position, and the arrangement survives a reload. Rearranging a single row no longer drags the group it belongs to somewhere else, which was the reason a tidy list would rearrange itself after one edit. Approving or issuing a purchase order, and approving or paying an invoice, leave the audit row they were always supposed to leave, and agreed variation orders are counted as committed cost rather than being left out of the figure. Saving a form sends only the fields that were edited instead of writing back the whole record. A content search across project files shows the passage that matched rather than just naming the file. The vector service says why it cannot start instead of answering with a bare server error, and the quickstart Docker build no longer runs out of heap part way through building the frontend.
+
+## [12.7.0] - 2026-07-27
+
+Physical progress percentages are calculated differently and older numbers will not reproduce. A project percentage used to be the highest reading found anywhere in it. It is now rolled up from the individual positions and weighted by design quantity, and a position nobody has measured counts as zero rather than being left out of the average. Where several readings exist for the same position and period the latest one now wins instead of the highest, so recording a correction downward actually lowers the figure instead of being ignored. The period column can show a decrease as well, which it previously flattened to zero while the curve beside it already showed the drop. Nothing is recomputed or rewritten, but the same entries now yield a different and more conservative number, so anything quoting a progress percentage from an earlier report should be regenerated rather than compared.
+
+Work item descriptions in five cost bases are no longer printed twice. The last release stopped a base doubling a name when it shipped the same string in both of its name columns, which is what put the Chinese and Turkish bases right. This release covers the harder case. The Brazilian, Spanish, Vietnamese, Greek and Italian bases hold a translation in both columns, and two translations of one sentence are rarely identical to the letter, so a check for equality could not catch them and every description still appeared twice over in slightly different words. The decision now comes from the type of base rather than from the data, so these bases show a single clean description while the classic base, where the two columns genuinely complement each other, is unchanged. Nothing was removed from the published data and only the display changed, so descriptions will look shorter without any translation having been lost. A national base can also open in its own language now, though on an installation that already holds these bases the language stays as it is until the base is reloaded.
+
+Large models start drawing almost immediately. Progressive loading was not doing anything for most models, because anything between four hundred and twelve hundred parts was built as a single piece and the viewer downloaded the whole thing before showing anything, which covers most of what gets opened on site. Models are now split much further and the pieces are ordered so the most geometry per byte arrives first. On the standard sample model the amount downloaded before the first thing appears drops from about 2.6 MB to about 5 KB. Loading also looks different as well as faster, since it no longer rises from the ground upwards. Previously saved offline copies of a model are stale and are cleared automatically the first time you open the app, so they need saving again.
+
+The bill of quantities gained a control that opens every position and shows its resource breakdown, or hides it again. Showing also expands the sections, since a position inside a folded section renders nothing, while hiding leaves your section grouping alone. The button counts and acts on the positions you can currently see, so filtering first and then showing resources opens only those, and clearing the filter afterwards leaves what you opened open.
+
+Approving a purchase order now checks the order before it commits the money. A purchase order is refused if its own numbers disagree with each other, meaning the lines do not add up to the subtotal, the subtotal plus tax does not match the total, or a line amount does not match quantity times rate, and also if it has no lines, no currency, no vendor, or a retention percentage that cannot be right. The refusal lists every problem at once so the order can be corrected in one pass, both ways of approving are covered, the approve action and a direct status change, and a new check on the purchase order shows the same list before you attempt the approval. If you have been approving a half-built draft, it will now be refused until the missing pieces are filled in.
+
+Committed budget figures also correct themselves. Approving through a direct status change never reported the commitment to finance while reverting always reported the reversal, so a project could end up showing less committed than it actually had. Both routes now report the same way, and a purchase order approved either way is visible to the budget from the moment it is approved.
+
+Subcontracts, submittals and requests for quotation are now checked at the point where they leave your hands. A subcontract going live is checked for the things that make its reports reconcile later, so an agreement with no work packages, a zero contract value, no currency, packages priced above the contract, a period that runs backwards, an impossible retention rate, or a subcontractor whose insurance has already lapsed is flagged as it is activated. A submittal is checked as it is filed, since a submittal with no reviewer sits in nobody's queue and one with no required date can never be reported late, and it also flags a review window shorter than the customary ten working days, a missing specification section, one person holding both the review and the approval, and no link to the scope it belongs to. A request for quotation is checked twice, once against what a vendor needs in order to price it at all and once against what the comparison between the returned bids rests on, so an unpriceable package, a deadline that is missing, unreadable or already past, an empty recipient list, bids priced in another currency, an amount that is not a number, a bid awarded after its own validity expired, and an award resting on fewer than three bids all get named.
+
+Each of the three also gained a check you can run yourself at any time, which returns the same list without changing anything. These checks report rather than refuse for now, so nothing that worked yesterday stops working, and the findings appear in the server log alongside the change that triggered them. Every message is available in English, German, Spanish and Russian.
+
+People who close a shared document now disappear from the collaborator list. When several people were viewing the same position and the room emptied, only one of them was announced as leaving, so the rest stayed on everyone else's screen as if still present. Nothing re-synced the list afterwards, so the phantom colleagues survived until the page was reloaded.
+
+Resource leveling no longer produces a schedule that contradicts its own links. Where a relationship carried a negative lag, leveling could place an activity before the one it depends on and hand back a plan the network diagram beside it showed as impossible. Schedules made only of finish to start links with normal lags come out exactly as before.
+
+Installations upgraded over a long period get protections back that they had quietly lost. Starting the application has always repaired missing columns and indexes, but never the rules that stop bad data being written in the first place, so an installation that was upgraded rather than freshly installed could be missing them without any sign. The one that matters most guards document numbering. Non-conformance reports, safety incidents and observations, quality inspections, requisitions and correspondence all take the next free number, and the only thing stopping two people taking the same number at the same moment is exactly that rule. On an affected installation two documents could end up sharing a number, silently, on paperwork that gets quoted by number in claims. Startup now restores these. Where a database already contains records that break a rule, the rule is skipped rather than forced, the affected table and fields are named in the log so they can be sorted out by hand, and the application starts normally either way.
+
+The built-in database is given enough lock capacity for the platform's own schema. PostgreSQL keeps one shared pool of lock slots for the whole server, and the stock size assumes a far smaller schema than this one. Building or reading the schema takes a lock on every table and index in it, so when several connections did that at the same time the pool ran dry and a statement failed with a message about running out of shared memory, which sounds like the machine is short of RAM and is really a setting that was never raised. The pool is now sized for the schema we actually ship, at a cost of a few megabytes. A fresh installation is given the setting before the database starts for the first time, so a first run gets it rather than waiting for a second one, and an installation that already exists picks it up on the next restart. Nothing changes for an installation pointed at an external PostgreSQL, where the same setting is the administrator's to make.
+
+Updating the desktop application from inside it no longer answers with a page of command line usage text. The button asked the server to run a package upgrade, and on the desktop that server is a self-contained program rather than a Python installation, so the request came straight back into the application's own command line and was turned down as an unknown command. There is nothing inside the desktop build to upgrade with in any case, because a new version arrives as an installer that replaces the whole application and leaves your projects and settings where they are. The button now says exactly that and points at the download. The upgrade command in the terminal refuses the same way instead of printing its own usage, and the update panel no longer offers package commands that cannot work there. Installations run from Python are unaffected and upgrade as before.
+
+Signing in with a link that carries a destination is stricter about where it will send you. A crafted address could put an external site in that destination and land you there straight after login, on a page that looked like part of the app. Both sign-in screens now share one check instead of carrying separate versions of it.
+
+## [12.6.1] - 2026-07-25
+
+Live notifications and shared editing presence work again. Both real-time channels refused every connection with a server error, so the notification bell only updated when you reloaded the page, and two people working on the same position could not see each other.
+
+The cause sat in the sign-in plumbing rather than in the channels. The tenant lookup that runs ahead of every request read the access token in a way that only exists on ordinary web requests, and a real-time connection has no such request, so the connection failed before any channel code ran. The token is now read from the part that both kinds of connection share. Ordinary sign-in and the strict authenticated routes are unchanged.
+
+The gap that let this reach four releases is closed as well. A handshake test now runs inside the PostgreSQL gate, and the presence test checks that an unauthenticated connection is refused on purpose instead of accepting any failure at all.
+
+## [12.6.0] - 2026-07-24
+
+The case-study pages now open the running demo on the exact module the story is about. Each open-in-the-demo link points at the module route directly, so a reader following the 4D sequence case lands on the schedule board, a 5D cost model case lands on the BOQ, and so on across the workflow library.
+
+Behind that, sign-in now keeps the destination you were headed to. A visitor sent to the login screen from a deep link is returned to that page after they sign in instead of being dropped on the dashboard. The redirect is resolved in one shared place so the login form and the already-signed-in guard cannot disagree and lose the target, and it still refuses external or looping destinations.
+
+## [12.5.0] - 2026-07-24
+
+Every module register can now show a Module Insights panel, a toggleable summary of the rows already on screen with the key counts, a breakdown chart and a build-your-own chart maker, so a list turns into a quick read of where things stand without leaving the page or loading anything extra. It started on tendering and now reaches the risk register, subcontractors, variations, RFIs, non-conformances, safety, quality and dozens more operational registers across the platform.
+
+The long how-it-works explainers that used to sit open at the top of each module now fold into a single line you expand when you want the background, so the working screen leads with the work and the guidance stays one click away. This is applied the same way across more than thirty module pages, and a module info card also folds into a button next to How it works.
+
+Deadlines gained a cross-module overdue register that gathers every due date the platform tracks into one place and runs an escalation sweep, so nothing slips quietly. File approvals now has its own register page linked from Files, exports that register to Excel, and notifies the people in a document approval workflow when it is their turn. Documents can reconcile an uploaded sheet set against the drawing index and show what is missing or extra.
+
+The BIM requirements library now carries Revit rule-pack templates to start from, 3D mesh uploads route to the browser importer with clear guidance, and the Rule Library stays reachable in requirements mode. RFIs get a read-only activity journal on the detail page. Assembly unit pickers read in the current language and respect imperial units. Approval routes gained project approval-cycle analytics.
+
+A few fixes came with this release. The app now sets its router base correctly under the /demo prefix so deep links into the demo resolve, the Bill of Quantities resources toggle fires on the first click, and a cost base that ships the same name in more than one column no longer doubles the work name.
+
+On the public site the case gallery card copy, chips, roles and navigation are translated across nineteen languages, each localized gallery is self-canonical for search engines, and the home page own-your-stack section and hero reveal were tidied.
+
+## [12.4.0] - 2026-07-23
+
+The Common Data Environment now lets a project adopt one of the three ISO 19650 approval presets and make it its own. The presets were tenant-wide and read-only, so you could see them but never tailor one to a project. Adopting a preset clones its steps into an editable project route, wired through the setup wizard and a new preset library on the CDE page, and a training case walks a team from the wizard to the go-live gate.
+
+Site teams can turn a document into an action without re-typing it. A correspondence item, an RFI or an inbound capture now has a Create task action that pre-fills from the source and records where it came from, and the tasks list shows a source badge so you can see which document each task grew from.
+
+Reporting gains a COBie facility export that builds a UK 2.4 workbook from a project's whole asset register, covering contacts, floors, spaces, zones, types, components and systems. E-signatures move onto a pluggable provider interface, so a real signing provider can take over issuing and status without changing the rest of the module, while the in-house behaviour stays the default.
+
+The six international modules now link out to where their references live, so a signed document opens the file, a blocking source-data record jumps to the schedule, and a supervision change reference opens its change order. On the public site every case page carries the same header as the home page, the hover honeycomb reads more clearly, and the two new common-data-environment case steps are translated into every language.
+
+## [12.3.0] - 2026-07-23
+
+Six delivery and authority modules that already had a tested backend but no interface now have full screens, so they are usable rather than invisible. Authority Submissions assembles a submission, validates it, generates the export package and submits it. Review Authority runs a review cycle with logged remarks, stale and repeat-remark radars, cycle editing and a one-click evidence dossier export. E-Signatures tracks who must sign, who signed or declined and certificate expiry, and downloads the signing manifest. Source Data registers the input documents a project depends on, verifies them and shows what is expiring or blocking the schedule. Route Classifier suggests the delivery and approval route for a work type with a confidence and rationale you confirm. Site Supervision plans and conducts visits, logs observations, flags hidden works and compares plan against actual. Each screen carries the how-it-works guide, and six new guided cases walk the modules end to end.
+
+The Bill of Quantities grid now follows the dark theme instead of rendering white in dark mode. PDF takeoff restores the sheet you were on when a document is reopened and keeps it in the URL so a sheet can be shared, and the scale auto-detect strip no longer reserves space when idle or lingers once a page is calibrated.
+
+## [12.2.0] - 2026-07-22
+
+Model review keeps the 3D model in view while its checks run. The page used to take its height from its content, so a long checks report ballooned the viewer canvas and pushed the model off screen the moment you pressed Run checks. It now sits at a fixed height and the checks and issues docks scroll inside their own panels, so the model stays put through a full run.
+
+The pipeline builder gets a library. Ten ready-to-run automation templates cover the common jobs, from flagging zero-priced positions and listing the costliest items to a budget ceiling guard and a validate-before-export gate, and picking one drops a working graph onto the canvas to run or save straight away. A saved-workflow picker reopens or deletes any pipeline you saved before, which used to be reachable only by editing the URL. Seven new node types (a computed column, group and total, rename, a generic threshold gate, a non-empty guard, a fan-out and a validation-findings source) let a graph express far more logic, and the linter now flags a step that is wired to nothing, the usual reason a half-built pipeline does not do everything it looks like it should.
+
+Point cloud reality capture now feeds the estimate. A new Groups tool sizes the box over a room, storey or stockpile and captures it as a named region with its point count, volume and plan area, drawn as a coloured wireframe you can isolate, rename or hide. An Add to BOQ action sends the measured quantity straight into a takeoff bill of quantities in the right unit, and the tool panel is tightened with live point and group readouts.
+
+Kyrgyz joins the interface languages as a full Cyrillic translation of the app, bringing the count to twenty-eight.
+
+## [12.1.0] - 2026-07-21
+
+Approval workflows get a preset library of tenant-wide review routes and a dry-run simulator that shows who would approve a document before the route is committed. Interface management now links each interface to its RFI and schedule activity, and the composed estimate total is surfaced directly in the UI. The CDE gains ISO 19650 functional roles with a responsibility matrix and a go-live readiness score per project. National cost bases translate into the market language when it is switched, and carry a per-row revision id and source attribution. Cases pages lay their process steps out as a compact horizontal row, BOQ positions can be renumbered freely, links open in a new tab per app type, and the multi-tenant RLS policy is hardened with a cast-safe predicate and a startup role check. The remaining untranslated UI strings are filled in every language.
+
+## [12.0.1] - 2026-07-19
+
+Patch release. Corrects a frontend type-build error introduced in 12.0.0 that stopped the container image from building. There is no functional or behavioural change.
+
+## [12.0.0] - 2026-07-19
+
+Model review gets a much deeper set of automatic checks. Twenty new model-checking functions now run over an imported model. Per element they look for missing wall thickness and fire rating, door and window dimensions, MEP size and system, storey and name, a classification code, a host relationship for hosted elements, a type name and a phase, a minimum clear door width, and negative quantities. Across the whole model they check for duplicate marks within a category, classification and discipline coverage and a sound spatial structure. Every result is surfaced in the model review panel and folded into the property completeness score, so a modeller sees exactly what is missing and where.
+
+Analytics that were computed but never shown now have a screen. A new progress page tracks physical completion with an actual against planned S-curve, a per period cumulative breakdown and a design against installed quantity variance table with over-run and under-run flags. Contracts gain three panels: a gain share preview that splits savings and overrun against the target cost, a security and bonds coverage summary, and a payment milestone schedule. Finance gains a retention tab that shows retainage scheduled, held, released and outstanding per currency and per counterparty, and the contract retention card now reads that real ledger instead of a single number.
+
+The plan room opens a drawing on a single sheet that overlays the field marks recorded against it: punch pins, plan pins, markups, takeoff measurements and photos, each on its own toggle with a live per page count. You can drop and remove plan pins directly on the sheet and open any pin for its detail.
+
+Every one of these new screens ships translated across all supported languages, with the right accounting and construction terms per locale rather than an English fallback. Correspondence can be filtered by lifecycle status, and clause references stay readable when a record is scrubbed. On the housekeeping side the open migration heads are merged back to one, the CI workflow gates again, and pyarrow 25 is allowed.
+
+## [11.18.0] - 2026-07-18
+
+OpenConstructionERP now exports a bill of quantities back to FIEBDC-3 (BC3), the standard construction budget format used across Spain and Latin America. Open a BOQ, choose Export and pick FIEBDC-3. The file carries the full chapter and item hierarchy with codes, units, quantities, unit rates and long texts, and it re-imports through our own BC3 reader without losing anything, so a budget can travel out to the Spanish desktop estimating tools and come back cleanly. It is written in Windows-1252 by default for the widest tool compatibility and switches to UTF-8 only when a character needs it, with the charset named in the file header. This sits alongside the existing GAEB XML, Excel, CSV and PDF exports, and there is no database change.
+
+The in-app error log that backs the bug-report tool now scrubs a wider set of secrets before anything reaches local storage or a downloaded report. It already stripped emails, API keys and bearer tokens. It now also removes a bare session token in the platform's own format and a fuller set of token, secret, cookie and session fields, so an authentication token cannot end up in a report that gets shared.
+
+## [11.17.0] - 2026-07-18
+
+Security hardening across the outbound connectors and a few server-side parsers. Outbound chat webhook deliveries (the Slack, Teams and Discord connectors) now resolve and re-check the target address right before the request goes out, so a webhook that points at a loopback or internal address is refused at the send step and not only when it is saved. Several status probes (system status, vector search status and cost vector indexing) no longer echo raw exception text back in their responses; they log the detail server-side and return a short, stable message instead. A handful of text parsers that run server-side (schedule impact, change order durations, smart view filters, quantity formulas and recipient addresses) now cap the length of the value they inspect before the pattern runs, so an oversized crafted string cannot slow a request down. The BIM smart view shortcuts and selection sets kept in the browser reject reserved keys, and the desktop download page escapes the release tag it reads from the public API before showing it. Temporary files written during CAD and takeoff import are created with tighter permissions.
+
+## [11.16.2] - 2026-07-18
+
+The longer introduction on the guided case pages now shows in every interface language. Fourteen of the cases carried this paragraph, and it was still rendering in English under a translated interface. It is now translated into all twenty-seven other languages, so each case reads in a single language from the title to the closing note.
+
+## [11.16.1] - 2026-07-18
+
+The individual step blocks on the case detail page are tighter now. The block padding, the step title, the "What you do" and "Why" text, the gap between the text and the data-flow column and the connectors between the in, action and out blocks were all pulled in, so each step takes less vertical room and the whole case reads with less empty space around it.
+
+## [11.16.0] - 2026-07-18
+
+The case detail page now lays its header out in two columns on wide screens. The case identity and purpose sit on the left, and a compact control panel with the progress track, the start button, reset and the sample-project picker sits on the right, so the header reads shorter and the steps start higher up the page. On narrow screens it still stacks as before.
+
+The featured article card at the foot of the sidebar starts collapsed, showing only its title, and expands to reveal the short summary and the read link when you hover over it or move keyboard focus to it. The whole card stays a single link in both states.
+
+## [11.15.0] - 2026-07-18
+
+Every file and model viewer can now match a selected element straight to a priced cost position. Open the BIM viewer, the PDF takeoff or the DWG takeoff, pick an element, and the viewer reads that element's own properties, searches every cost catalogue you have loaded and ranks the positions that fit. Accept one and it creates a priced BOQ line for that element in the target bill and links it back to the element in a single step, so the quantity and the price travel together. This used to work only in the BIM viewer. It is now one shared panel across all of them, and it reuses the existing matching service, so there is no database change.
+
 ## [11.14.0] - 2026-07-18
 
 The sidebar Edit menu now reaches the bottom shortcut row. When you open it, the setup buttons at the very bottom (Settings, Users, Modules, Governance, Audit log, About) turn into the same hide and show tiles as the rest of the menu, so you can switch off the ones you never use and bring them back the same way. Nothing is ever lost. Edit menu always brings every tile back.
@@ -1804,8 +1951,8 @@ sweep with 22 screenshots committed under `docs/qa/`.
   optional `onChange` callback fired from `tick()` on any frame the
   camera moved or pointer-lock was active; wired
   `BIMViewer.tsx` → `scene.requestRender()`.
-- **BIM Section Box buttons ("По выделению / По всей модели /
-  Сбросить") did nothing** - `applyToScene()` set
+- **BIM Section Box buttons ("To selection / To whole model /
+  Reset") did nothing** - `applyToScene()` set
   `material.clippingPlanes` + `localClippingEnabled=true` but no
   dirty signal reached the on-demand renderer. Same `onChange`
   pattern as walk-mode now fires from `enable()`, `disable()`, and
@@ -3572,9 +3719,9 @@ Source: https://github.com/datadrivenconstruction/OpenConstructionERP
 
 ### Added
 
-- **One-click DWG converter install on `/dwg-takeoff`.** The "Install converter" pill in the page header now opens a popover with an actual install button - clicking it POSTs to `/v1/takeoff/converters/dwg/install/` (the same endpoint the `/bim` page uses for RVT/IFC), and the offline-readiness query refetches so the badge flips to green "Offline Ready" the moment the binary is detected. On Linux the popover surfaces the apt one-liner from the backend instead of attempting an auto-shell-out. Closes the gap reported as "нужно одним нажатием установить актуальный последний конвертер".
+- **One-click DWG converter install on `/dwg-takeoff`.** The "Install converter" pill in the page header now opens a popover with an actual install button - clicking it POSTs to `/v1/takeoff/converters/dwg/install/` (the same endpoint the `/bim` page uses for RVT/IFC), and the offline-readiness query refetches so the badge flips to green "Offline Ready" the moment the binary is detected. On Linux the popover surfaces the apt one-liner from the backend instead of attempting an auto-shell-out. Closes the reported gap that installing the current converter build took more than a single click.
 - **"New version available - recommend updating" amber banner on the BIM converter panel** (dismissible per session). Previously the only signal that a newer SHA existed upstream was the small `→ def5678` tail - easy to miss. The expanded panel now renders an amber banner whenever `version-check.any_outdated` is true, with an X to hide it for the current session (sessionStorage; reappears on next visit). Banner is i18n-keyed.
-- **Mini-icon mode on the BIM converter panel when everything is fully up to date.** The panel now collapses to a single emerald `N/M` pill ("4/4" when all four converters are working AND on the latest SHA). Click expands to the full strip + details. Per Artem's spec: "если все конверторы на самом последней версии то это окно показывать не нужно и можно сделать только маленький значок".
+- **Mini-icon mode on the BIM converter panel when everything is fully up to date.** The panel now collapses to a single emerald `N/M` pill ("4/4" when all four converters are working AND on the latest SHA). Click expands to the full strip + details. By design: when every converter is already on the latest version the panel has nothing to report, so it steps out of the way and leaves only the small badge.
 - **Per-converter "card" rendering on the BIM converter panel.** Each row now has a tinted background + rounded border that mirrors the row's state (emerald = working & up to date, amber = working but outdated or missing binary, rose = broken). Replaces the dense single-line strip - one glance now tells you which row needs attention.
 
 ### Changed
@@ -3971,7 +4118,7 @@ Five-category deep audit (Planning, Communication, Procurement, Finance, Documen
 - /login - removed the broken Privacy / Terms footer links (the underlying static HTML pages don't exist in production builds).
 
 ### Internal
-- Layer-3 authorship fingerprints added across the codebase (see `tools/watermark/`) - no functional impact.
+- Internal build-integrity hardening across the codebase - no functional impact.
 
 ## [2.8.6] - 2026-05-04
 
@@ -5150,7 +5297,7 @@ Second stable release. Supersedes the 1.x line.
 - Modules: `MODULES.md`, in-app `/modules/developer-guide`, sidebar "+ Add module" CTA.
 - Dashboard: Quick Start navigation, explicit "New Estimate" button, clickable Quality Score tile.
 - About/branding: Artem photo, DDC logo, book banner, community tiles.
-- Provenance markers (`shared/lib/ddc-integrity.ts` + `middleware/fingerprint.py`).
+- Provenance markers in runtime artifacts.
 - BOQ: PDF-origin icons, `FileTypeChips` per row, MarkupPanel overflow fix.
 - Project Intelligence: safe-markdown renderer (no more raw asterisks).
 
@@ -5925,7 +6072,7 @@ toast.
   action suites passing in 34.5s
 - 963 unit tests passing in the costmodel/finance/full_evm suite
 - ``check_version_sync.py`` passes at 1.4.7
-- ``integrity_check.py`` passes (23 hits)
+- internal integrity check passes (23 hits)
 - Frontend ``tsc --noEmit`` exit 0, zero errors
 - Live test of GitHub Contents API directory walk against the real
   ``cad2data-Revit-IFC-DWG-DGN`` repo confirms ``RvtExporter.exe``
@@ -6056,7 +6203,7 @@ by the v1.4.5 cross-module integration tests).
 - 174 unit + integration tests passing (vector adapters x7 +
   property matcher + requirements↔BIM cross-flow + BIM processor)
 - ``scripts/check_version_sync.py`` passes at 1.4.6
-- ``scripts/integrity_check.py`` passes (10 hits)
+- internal integrity check passes (10 hits)
 
 ### Deferred to v1.4.7 / v1.5.0
 - ``project_intelligence/actions.py`` 3 of 8 actions still dead code

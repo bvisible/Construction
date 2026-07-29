@@ -1,12 +1,13 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import { QueryClient, QueryClientProvider, MutationCache } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, MutationCache, QueryCache } from '@tanstack/react-query';
 import { BrowserRouter } from 'react-router-dom';
 import App from './app/App';
 // //// NEOFFICE PATCH — useAuthStore needed for Frappe-embedded boot
 import { useAuthStore } from '@/stores/useAuthStore';
 // //// END NEOFFICE PATCH
 import { useToastStore } from '@/stores/useToastStore';
+import { notifyQueryError } from '@/shared/lib/queryErrorToast';
 import './app/i18n';
 import './index.css';
 // //// NEOFFICE PATCH — Brand overrides (must load after index.css so cascade wins)
@@ -106,6 +107,13 @@ const queryClient = new QueryClient({
       retry: 0,
     },
   },
+  // Queries had no global error handling at all, so a request that came back
+  // with nothing showed as an empty screen: components read `data ?? []` and
+  // render the same table for "no rows" and "no answer". The handler decides
+  // what is worth saying; see `queryErrorToast.ts` for what it stays quiet on.
+  queryCache: new QueryCache({
+    onError: (error, query) => notifyQueryError(error, query),
+  }),
   mutationCache: new MutationCache({
     onSuccess: (_data, _variables, _context, mutation) => {
       // Global: after ANY successful mutation, invalidate related queries
@@ -159,11 +167,21 @@ window.addEventListener('vite:preloadError', () => {
   }
 });
 
+// The public demo is served under /demo (Caddy strips the prefix before it
+// reaches the backend, but the browser URL keeps it), so react-router needs a
+// matching basename there. Desktop and localhost serve at the root, where the
+// path never starts with /demo, so the basename stays undefined ("/").
+const routerBasename =
+  window.location.pathname === '/demo' || window.location.pathname.startsWith('/demo/')
+    ? '/demo'
+    : undefined;
+
 ReactDOM.createRoot(__rootEl).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
-      {/* //// NEOFFICE PATCH — Pass basename when Frappe-embedded */}
-      <BrowserRouter basename={__routerBasename} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      {/* //// NEOFFICE PATCH — Frappe-embedded basename ("/neoconstruction") wins;
+          otherwise fall back to upstream's /demo detection. //// END NEOFFICE PATCH */}
+      <BrowserRouter basename={__routerBasename ?? routerBasename} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <App />
       </BrowserRouter>
       {/* //// END NEOFFICE PATCH */}

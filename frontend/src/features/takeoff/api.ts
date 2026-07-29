@@ -16,13 +16,34 @@ export interface MeasurementPoint {
   y: number;
 }
 
+/**
+ * Where a measurement's scale ratio came from. Mirrors the server's closed set
+ * (``app/modules/takeoff/schemas.py``); a value outside it is rejected there.
+ *
+ * The set exists so a sheet found to be mis-scaled can be narrowed to the rows
+ * that actually inherited the bad ratio instead of sending the whole document
+ * back for a manual re-check.
+ */
+export type ScaleSource =
+  | 'page_text'
+  | 'recovered_text'
+  | 'vision_read'
+  | 'manual_calibration'
+  | 'preset'
+  | 'inherited';
+
 export interface MeasurementCreate {
   project_id: string;
   document_id?: string | null;
   page: number;
   type: string;
   group_name?: string;
-  group_color?: string;
+  /** Per-measurement colour override. ``null`` CLEARS it so the measurement
+   *  follows its group again (issue #396) - a real stored state, matching
+   *  {@link MeasurementResponse.group_color}. Omitted on create (nothing to
+   *  clear); sent explicitly on update, where an omitted key would mean
+   *  "leave unchanged". */
+  group_color?: string | null;
   annotation?: string | null;
   points: MeasurementPoint[];
   measurement_value?: number | null;
@@ -32,6 +53,12 @@ export interface MeasurementCreate {
   perimeter?: number | null;
   count_value?: number | null;
   scale_pixels_per_unit?: number | null;
+  /** Where ``scale_pixels_per_unit`` came from. Omit when the client cannot
+   *  attribute it: the server stores NULL, which reads as "not recorded", and
+   *  that is the honest answer. Never send a plausible-looking guess here - a
+   *  wrong provenance is worse than a missing one, because it is the one a
+   *  re-scale would trust when deciding which rows to recompute. */
+  scale_source?: ScaleSource | null;
   linked_boq_position_id?: string | null;
   /** Mark an area measurement as an opening / void; its area is subtracted
    *  from the group's gross area (net = gross - openings). Area-only. */
@@ -46,7 +73,9 @@ export interface MeasurementResponse {
   page: number;
   type: string;
   group_name: string;
-  group_color: string;
+  /** Per-measurement colour override; ``null`` when the user never recoloured
+   *  this measurement (issue #378), read as "fall back to the group colour". */
+  group_color: string | null;
   annotation: string | null;
   points: MeasurementPoint[];
   measurement_value: number | null;
@@ -56,6 +85,10 @@ export interface MeasurementResponse {
   perimeter: number | null;
   count_value: number | null;
   scale_pixels_per_unit: number | null;
+  /** Where the ratio above came from, or ``null`` when it was never recorded.
+   *  Typed loosely on the way in so a value added server-side ahead of this
+   *  client does not fail the parse; surfaces render an unknown value as-is. */
+  scale_source?: string | null;
   linked_boq_position_id: string | null;
   /** True when this area measurement is an opening / void subtracted from
    *  its group's gross area. False / absent for normal measurements. */
@@ -114,6 +147,10 @@ export interface RecognizeCandidate {
   count?: number | null;
   confidence: number;
   reason: string;
+  /** Id of the stored `proposed` row this candidate was persisted as. The
+   *  detector writes the row before answering, so a review decision is a
+   *  server call against this id rather than a change the reload forgets. */
+  measurement_id?: string | null;
 }
 
 export interface RecognizeResult {
@@ -141,6 +178,20 @@ export interface SimilarSymbolsResult {
   seed_found: boolean;
   page: number;
   note: string | null;
+  /** Id of the single stored `count` row covering the whole hit set. */
+  measurement_id?: string | null;
+}
+
+/** A review decision on one proposed measurement.
+ *
+ *  `points` is optional and only meaningful with `accept`: it corrects the
+ *  geometry before confirming. The server always re-derives the billed value
+ *  from the points it stores, so an edit cannot smuggle in a quantity the
+ *  shape does not support. */
+export interface MeasurementReviewRequest {
+  action: 'accept' | 'reject';
+  points?: MeasurementPoint[];
+  note?: string;
 }
 
 /* ── Vision-LLM plan reading (issue #194) ──────────────────────────────────
@@ -281,8 +332,18 @@ export interface TakeoffCompareResponse {
     measurements: Record<'added' | 'removed' | 'modified' | 'unchanged', number>;
     net_cost_impact: string | null;
     cost_currency: string | null;
+    /** How many measurements were actually compared. Below *_total when the
+     *  compare hit the row ceiling. */
     from_measurement_count: number;
     to_measurement_count: number;
+    /** How many measurements the document really holds. */
+    from_measurement_total: number;
+    to_measurement_total: number;
+    /** True when the compare stopped at the row ceiling, so changes past it
+     *  are absent from measurement_rows and from the tally. */
+    truncated: boolean;
+    /** The ceiling that was applied, or null when nothing was truncated. */
+    truncation_limit: number | null;
   };
 }
 
@@ -325,15 +386,50 @@ export function normalizeListResponse<T>(payload: unknown, keys: string[] = []):
 /* ── API functions ────────────────────────────────────────────────────── */
 
 export const takeoffApi = {
-  /** List measurements for a project, optionally filtered by document.
+  /** List ALL measurements for a project, optionally filtered by document.
    *  /markups page calls this on mount; returns empty when oe_takeoff
-   *  is disabled so the request never 404-logs to the network panel. */
+   *  is disabled so the request never 404-logs to the network panel.
+   *
+   *  The endpoint is paginated (default/max page size 500) and the client
+   *  used to fetch a single page, so a document past the page size silently
+   *  lost its oldest rows on reload and the hydrate path then erased their
+   *  local copies (issue #377). This pages to exhaustion - looping
+   *  ``offset += limit`` until a short page arrives - and concatenates, so
+   *  every consumer (takeoff hydrate, quantity summary, unified markups)
+   *  sees the complete set. The result is de-duplicated by ``id`` because a
+   *  row created mid-fetch can shift later pages and repeat across a page
+   *  boundary. It is all-or-nothing: any page request that fails rejects the
+   *  whole call rather than returning a partial set, because the hydrate path
+   *  treats the returned list as the complete server state. */
   list: async (projectId: string, documentId?: string): Promise<MeasurementResponse[]> => {
     if (!(await isModuleLoaded('oe_takeoff'))) return [];
-    let url = `/v1/takeoff/measurements/?project_id=${projectId}`;
-    if (documentId) url += `&document_id=${encodeURIComponent(documentId)}`;
-    const payload = await apiGet<unknown>(url);
-    return normalizeListResponse<MeasurementResponse>(payload, ['measurements']);
+    const base = `/v1/takeoff/measurements/?project_id=${projectId}`
+      + (documentId ? `&document_id=${encodeURIComponent(documentId)}` : '');
+    // ``le=500`` is the endpoint's hard cap; a large page keeps the
+    // mid-fetch shift window (a row deleted between pages) small.
+    const pageSize = 500;
+    const seen = new Set<string>();
+    const all: MeasurementResponse[] = [];
+    for (let offset = 0; ; offset += pageSize) {
+      // //// NEOFFICE PATCH — normalise every page. Requests can travel through
+      // the Frappe proxy, which wraps the payload (`{message: [...]}`), so a raw
+      // `apiGet<MeasurementResponse[]>` would iterate an object and silently
+      // yield nothing. normalizeListResponse unwraps it and is a no-op on a
+      // bare array (direct OCE calls behave exactly as upstream).
+      const payload = await apiGet<unknown>(`${base}&limit=${pageSize}&offset=${offset}`);
+      const page = normalizeListResponse<MeasurementResponse>(payload, ['measurements']);
+      // //// END NEOFFICE PATCH
+      for (const row of page) {
+        if (seen.has(row.id)) continue;
+        seen.add(row.id);
+        all.push(row);
+      }
+      // A page shorter than the requested size is the last one (the endpoint
+      // returns a bare list with no total, so a short page is the only
+      // termination signal; an exact multiple just costs one empty request).
+      if (page.length < pageSize) break;
+    }
+    return all;
   },
 
   /** Create a single measurement. */
@@ -370,7 +466,11 @@ export const takeoffApi = {
 
   /** Recognize candidate measurements from a page's vector layer (offline,
    *  issue #194). Returns confidence-scored area/length/count candidates that
-   *  the user confirms on the canvas; nothing is persisted server-side. */
+   *  the user confirms on the canvas. Each candidate is also stored as a
+   *  `proposed` row and carries its `measurement_id`, so a decision survives a
+   *  reload and a colleague opening the same sheet sees it. Nothing counts as
+   *  a quantity until it is accepted. Needs `takeoff.create`, not read: the
+   *  call writes rows. */
   recognize: (docId: string, page: number, scalePixelsPerUnit?: number) => {
     const sp = scalePixelsPerUnit && scalePixelsPerUnit > 0 ? scalePixelsPerUnit : 0;
     return apiPost<RecognizeResult>(
@@ -383,12 +483,28 @@ export const takeoffApi = {
   /** Seeded "count by example": the user clicks one symbol on a vector page
    *  and the backend returns the centroids of every near-identical symbol so
    *  they can be confirmed as a single count measurement. Coordinates are in
-   *  PDF points. Nothing is persisted server-side. */
+   *  PDF points. The whole hit set is stored as ONE `proposed` count row whose
+   *  id comes back as `measurement_id`; its confidence is the weakest match in
+   *  the set, not the average, so one poor hit cannot hide behind good ones.
+   *  Needs `takeoff.create`, not read: the call writes a row. */
   similarSymbols: (docId: string, page: number, seedX: number, seedY: number) =>
     apiPost<SimilarSymbolsResult>(
       `/v1/takeoff/documents/${encodeURIComponent(docId)}/similar-symbols/?page=${page}&seed_x=${seedX}&seed_y=${seedY}`,
       {},
       { longRunning: true }, // //// NEOFFICE: AI/vision render — 5-min timeout, not 45 s
+    ),
+
+  /** Accept or reject one proposed measurement.
+   *
+   *  Accepting flips the stored row to `confirmed`, which is what brings it
+   *  into totals, exports and the estimator; rejecting flips it to `rejected`
+   *  and keeps it, because the record of what a human turned down is the point
+   *  of the queue. Reviewing an already-reviewed row answers 409 rather than
+   *  silently overwriting a colleague's decision. */
+  reviewMeasurement: (measurementId: string, body: MeasurementReviewRequest) =>
+    apiPost<MeasurementResponse>(
+      `/v1/takeoff/measurements/${encodeURIComponent(measurementId)}/review/`,
+      body,
     ),
 
   /** Detect an explicit drawing scale from the document's text layer (tier-1,

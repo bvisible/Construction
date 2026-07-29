@@ -1132,8 +1132,8 @@ export function CostDatabaseSearchModal({
           // the expanded resource panel.
           // Append the variant as an additional resource line so the
           // position's total = sum of all resource totals (the contract
-          // the user expects: "если есть ресурсы — стоимость собирается
-          // из общей стоимости ресурсов"). Without this, position.unit_rate
+          // the user expects: when a position has resources, its cost is
+          // assembled from the resource total). Without this, position.unit_rate
           // would lose the variant's contribution and the resource panel
           // total would diverge from the cell display.
           //
@@ -1604,6 +1604,22 @@ export function CostDatabaseSearchModal({
                 : t('boq.search_and_add', { defaultValue: 'Search items and add them to your estimate' })}
             </p>
           </div>
+          {/* Always-visible way out to the import screen, so more regional
+              cost bases can be loaded without first emptying the search. */}
+          <button
+            type="button"
+            onClick={() => {
+              onClose();
+              navigate('/costs/import');
+            }}
+            className="mr-1 inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-border-light bg-surface-secondary px-2.5 py-1.5 text-xs font-medium text-content-secondary transition-colors hover:border-oe-blue/40 hover:text-oe-blue-text focus:outline-none focus-visible:ring-2 focus-visible:ring-oe-blue/40"
+            title={t('boq.import_database_cta', { defaultValue: 'Import a database' })}
+          >
+            <Plus size={14} aria-hidden="true" />
+            <span className="hidden sm:inline">
+              {t('boq.import_database_cta', { defaultValue: 'Import a database' })}
+            </span>
+          </button>
           <button onClick={onClose} aria-label={t('common.close', { defaultValue: 'Close' })} className="flex h-8 w-8 items-center justify-center rounded-lg text-content-tertiary hover:bg-surface-secondary">
             <X size={16} />
           </button>

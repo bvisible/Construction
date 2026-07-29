@@ -23,6 +23,7 @@ import {
   Package,
   Settings,
   TrendingUp,
+  Activity,
   Phone,
   ChevronDown,
   ChevronRight,
@@ -86,7 +87,6 @@ import {
   BarChart3,
   LineChart,
   Radar,
-  ScrollText,
   Network,
   CalendarRange,
   Gauge,
@@ -94,6 +94,7 @@ import {
   PackageCheck,
   Loader2,
   ScanEye,
+  AlarmClock,
   // Delivery-lifecycle register icons.
   Flag,
   Warehouse,
@@ -130,6 +131,10 @@ import {
 
 interface NavItem {
   labelKey: string;
+  /** Human English fallback shown until the `labelKey` locale string is
+   *  added, passed to i18next as `defaultValue` so the row never renders a
+   *  raw key (mirrors `NavGroup.defaultLabel`). */
+  defaultLabel?: string;
   to: string;
   icon: LucideIcon;
   badge?: string;
@@ -155,6 +160,11 @@ interface NavItem {
    *  sidebar. */
   adminOnly?: boolean;
 }
+
+/** An admin-grid tile. Extends NavItem with an optional `onClick`: when set,
+ *  the tile runs that action in place instead of navigating to `to`. Used for
+ *  the "Edit menu" tile, whose `to` is a non-routable sentinel. */
+type AdminGridItem = NavItem & { onClick?: () => void };
 
 interface NavGroup {
   id: string;
@@ -249,7 +259,26 @@ const navGroups: NavGroup[] = [
       { labelKey: 'nav.quantities', to: '/quantities', icon: Ruler },
     ],
   },
-  // ── 3. ESTIMATING ──────────────────────────────────────────────────
+  // ── 3. COST DATA ───────────────────────────────────────────────────
+  // Cross-project reference data: cost databases, catalogues, assemblies,
+  // and the cost-benchmark surface (re-added - it was dropped before).
+  // Sits ahead of Estimating for the same reason Takeoff does: the rates and
+  // catalogues have to be in place before there is anything to price a
+  // quantity against, so the menu reads in the order the work happens.
+  {
+    id: 'grp_cost_data',
+    labelKey: 'sidebar.group.cost_data',
+    defaultLabel: 'Cost Data',
+    defaultOpen: true,
+    items: [
+      { labelKey: 'costs.title', to: '/costs', icon: Database, tourId: 'costs' },
+      { labelKey: 'catalog.title', to: '/catalog', icon: Boxes },
+      { labelKey: 'nav.cost_explorer', to: '/cost-explorer', icon: Compass },
+      { labelKey: 'nav.assemblies', to: '/assemblies', icon: Layers },
+      { labelKey: 'nav.benchmarks', to: '/benchmarks', icon: BarChart3, moduleKey: 'cost-benchmark', advancedOnly: true },
+    ],
+  },
+  // ── 4. ESTIMATING ──────────────────────────────────────────────────
   // The project's cost work-product: BOQ, the BIM↔catalogue match, the
   // AI estimate and the estimation intelligence dashboard.
   {
@@ -265,7 +294,7 @@ const navGroups: NavGroup[] = [
       { labelKey: 'nav.methodologies', to: '/methodologies', icon: SlidersHorizontal },
     ],
   },
-  // ── 3b. ESTIMATE DETAIL ────────────────────────────────────────────
+  // ── 4b. ESTIMATE DETAIL ────────────────────────────────────────────
   // The advanced refinements layered on top of the BOQ: the basis of
   // estimate, preliminaries and allowances. Split out of Estimating so
   // that group stays at five rows (all advanced-mode only).
@@ -280,22 +309,6 @@ const navGroups: NavGroup[] = [
       { labelKey: 'nav.preliminaries', to: '/preliminaries', icon: ClipboardList, advancedOnly: true },
       { labelKey: 'nav.allowances', to: '/allowances', icon: Wallet, advancedOnly: true },
       { labelKey: 'nav.design_options', to: '/design-options', icon: Scale, advancedOnly: true },
-    ],
-  },
-  // ── 4. COST DATA ───────────────────────────────────────────────────
-  // Cross-project reference data: cost databases, catalogues, assemblies,
-  // and the cost-benchmark surface (re-added - it was dropped before).
-  {
-    id: 'grp_cost_data',
-    labelKey: 'sidebar.group.cost_data',
-    defaultLabel: 'Cost Data',
-    defaultOpen: true,
-    items: [
-      { labelKey: 'costs.title', to: '/costs', icon: Database, tourId: 'costs' },
-      { labelKey: 'catalog.title', to: '/catalog', icon: Boxes },
-      { labelKey: 'nav.cost_explorer', to: '/cost-explorer', icon: Compass },
-      { labelKey: 'nav.assemblies', to: '/assemblies', icon: Layers },
-      { labelKey: 'nav.benchmarks', to: '/benchmarks', icon: BarChart3, moduleKey: 'cost-benchmark', advancedOnly: true },
     ],
   },
   // ── 5. REALITY CAPTURE & 3D ─────────────────────────────────────────
@@ -369,6 +382,7 @@ const navGroups: NavGroup[] = [
     hideInSimple: true,
     items: [
       { labelKey: 'nav.5d_cost_model', to: '/5d', icon: TrendingUp, moduleKey: '5d', advancedOnly: true },
+      { labelKey: 'nav.progress', to: '/progress', icon: Activity, advancedOnly: true },
       { labelKey: 'nav.capacity_planning', to: '/portfolio/capacity', icon: CalendarRange, advancedOnly: true },
       { labelKey: 'nav.resource_leveling', to: '/portfolio/leveling', icon: Scale, advancedOnly: true },
       { labelKey: 'nav.risk_register', to: '/risks', icon: ShieldAlert, advancedOnly: true },
@@ -483,6 +497,7 @@ const navGroups: NavGroup[] = [
         adminOnly: true,
       },
       { labelKey: 'nav.find_records', to: '/find', icon: FileSearch, advancedOnly: true },
+      { labelKey: 'project_route.title', to: '/project-route', icon: SlidersHorizontal, advancedOnly: true },
     ],
   },
   // ── 11. FIELD OPERATIONS ───────────────────────────────────────────
@@ -520,6 +535,7 @@ const navGroups: NavGroup[] = [
       { labelKey: 'nav.service', to: '/service', icon: Wrench },
       { labelKey: 'nav.site_logistics', to: '/site-logistics', icon: Truck },
       { labelKey: 'site_inventory.title', to: '/site-inventory', icon: Warehouse },
+      { labelKey: 'site_supervision.title', to: '/site-supervision', icon: HardHat, advancedOnly: true },
       { labelKey: 'nav.portal', to: '/portal', icon: Globe },
     ],
   },
@@ -557,6 +573,8 @@ const navGroups: NavGroup[] = [
       { labelKey: 'construction_control.title', to: '/construction-control', icon: ClipboardList },
       { labelKey: 'ncr.title', to: '/ncr', icon: AlertOctagon },
       { labelKey: 'nav.punchlist', to: '/punchlist', icon: ListChecks },
+      { labelKey: 'deadlines.title', to: '/deadlines', icon: AlarmClock, defaultLabel: 'Deadlines' },
+      { labelKey: 'review_authority.title', to: '/review-authority', icon: FileCheck, advancedOnly: true },
     ],
   },
   // ── 13b. HANDOVER & COMMISSIONING ──────────────────────────────────
@@ -622,6 +640,7 @@ const navGroups: NavGroup[] = [
       { labelKey: 'rfi.title', to: '/rfi', icon: HelpCircle, advancedOnly: true },
       { labelKey: 'interface_management.title', to: '/interface-management', icon: Handshake },
       { labelKey: 'correspondence.title', to: '/correspondence', icon: Mail, advancedOnly: true },
+      { labelKey: 'authority_submission.title', to: '/authority-submissions', icon: Send, advancedOnly: true },
       { labelKey: 'nav.collaboration', to: '/collaboration', icon: Users, moduleKey: 'collaboration', advancedOnly: true },
     ],
   },
@@ -637,8 +656,11 @@ const navGroups: NavGroup[] = [
       { labelKey: 'submittals.title', to: '/submittals', icon: FileCheck, advancedOnly: true },
       { labelKey: 'transmittals.title', to: '/transmittals', icon: Send, advancedOnly: true },
       { labelKey: 'cde.title', to: '/cde', icon: Database },
+      { labelKey: 'source_data.title', to: '/source-data', icon: Database, advancedOnly: true },
+      { labelKey: 'signing.title', to: '/signing', icon: PenTool, advancedOnly: true },
       { labelKey: 'nav.photos', to: '/photos', icon: Camera },
       { labelKey: 'nav.markups', to: '/markups', icon: PenTool },
+      { labelKey: 'nav.plan_room', to: '/plan-room', icon: Layers, badge: 'BETA' },
     ],
   },
   // ── 17. REAL ESTATE ────────────────────────────────────────────────
@@ -790,23 +812,23 @@ const navGroups: NavGroup[] = [
 // a single Governance tile sits right after Modules in the flow.
 // Integrations is intentionally absent: it lives under Settings →
 // Integrations, so a tile would duplicate it.
+// Modules (/modules) and Governance (/governance) intentionally no longer
+// appear as their own sidebar tiles - they are reached from inside Settings
+// (Settings -> Modules / Governance links), which declutters the left menu.
+// Their routes stay live, so any deep link or the Settings entries still work.
+// Audit Log used to sit here as a role-gated tile. It moved into Settings
+// (Settings -> Audit log, Manager+ only) so the admin grid stays short and
+// the security surfaces live together under Settings. Its route
+// (`/admin/audit-log`) stays live for deep links. The slot it vacated now
+// holds the "Edit menu" action tile (see `editMenuGridItem` below), which
+// opens the sidebar customiser in place.
 const adminGridItems: NavItem[] = [
   { labelKey: 'sidebar.admin_grid.settings', to: '/settings', icon: Settings },
   { labelKey: 'sidebar.admin_grid.users', to: '/users', icon: Users },
-  { labelKey: 'sidebar.admin_grid.modules', to: '/modules', icon: Package },
-  {
-    labelKey: 'sidebar.admin_grid.governance',
-    to: '/governance',
-    icon: Scale,
-    roleGate: ['admin', 'manager'],
-  },
-  {
-    labelKey: 'sidebar.admin_grid.audit',
-    to: '/admin/audit-log',
-    icon: ScrollText,
-    roleGate: ['admin', 'manager'],
-  },
+  // Upstream v12 moved Modules / Governance / Audit into Settings (see the
+  // comment above); their routes stay live for deep links.
   // //// NEOFFICE PATCH — "About" entry removed (white-label, page deleted)
+  // //// END NEOFFICE PATCH
 ];
 
 /** Flat lookup of every NavItem in the sidebar, keyed by `to`. The
@@ -957,6 +979,13 @@ const ROUTE_BACKEND_MODULE: Record<string, string> = {
   '/temporary-works': 'oe_temporary_works',
   '/interface-management': 'oe_interface_management',
   '/defects-liability': 'oe_defects_liability',
+  // International delivery / authority modules (frontends added this wave).
+  '/authority-submissions': 'oe_authority_submission',
+  '/review-authority': 'oe_review_authority',
+  '/signing': 'oe_signing',
+  '/source-data': 'oe_source_data',
+  '/project-route': 'oe_project_route',
+  '/site-supervision': 'oe_site_supervision',
 };
 
 // localStorage key for collapsed state
@@ -1106,6 +1135,9 @@ export function Sidebar({ onClose }: { onClose?: () => void }) {
   const navigate = useNavigate();
   const location = useLocation();
   const { isModuleEnabled } = useModuleStore();
+  // Subscribed separately so the module-count summary at the foot of the nav
+  // recomputes whenever a module is switched on or off.
+  const enabledModules = useModuleStore((s) => s.enabledModules);
   // Hidden whole-sections (nav groups) the user has switched off via the
   // "Edit menu". Persisted in useModuleStore alongside module state; here we
   // read the list and the bulk setter the Save action commits to.
@@ -1269,6 +1301,79 @@ export function Sidebar({ onClose }: { onClose?: () => void }) {
   const visibleAdminGridItems = editMode
     ? roleVisibleAdminGridItems
     : roleVisibleAdminGridItems.filter((item) => !hiddenModules.includes(item.to));
+
+  // "Edit menu" action tile — fills the slot the Audit Log tile vacated when
+  // it moved into Settings. Clicking it opens the sidebar customiser in place
+  // (the same edit gesture whose Save / Cancel controls appear below the nav
+  // list). It is an action, not a route, so it carries `onClick` and a
+  // non-routable `to` sentinel, and it is dropped in edit mode (you are
+  // already editing). Slotted just before the About tile so the grid reads
+  // Settings · Users · Edit menu · About.
+  const editMenuGridItem: AdminGridItem = {
+    labelKey: 'sidebar.edit_menu',
+    to: '__edit_menu__',
+    icon: Pencil,
+    onClick: enterEditMode,
+  };
+  const adminGridWithEdit: AdminGridItem[] = useMemo(() => {
+    if (editMode) return visibleAdminGridItems;
+    const aboutIdx = visibleAdminGridItems.findIndex((item) => item.to === '/about');
+    if (aboutIdx === -1) return [...visibleAdminGridItems, editMenuGridItem];
+    return [
+      ...visibleAdminGridItems.slice(0, aboutIdx),
+      editMenuGridItem,
+      ...visibleAdminGridItems.slice(aboutIdx),
+    ];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editMode, visibleAdminGridItems, enterEditMode]);
+
+  // Module counter shown at the foot of the nav (before the "Add module"
+  // tile): how many module rows are visible in the menu right now versus how
+  // many the platform offers this user. "Total" counts every leaf menu row
+  // (static + dynamically registered module rows) the user is allowed to see
+  // (admin-only dev surfaces excluded for non-admins), regardless of whether
+  // it is currently switched on or hidden. "Shown" applies the same normal-mode
+  // visibility filter the nav render uses, so the pair updates live as modules
+  // are enabled/disabled or hidden/shown via Edit menu. It intentionally
+  // mirrors the predicate in the `navGroups.map` below; keep the two in step.
+  const moduleCounts = useMemo(() => {
+    let total = 0;
+    let shown = 0;
+    for (const group of navGroups) {
+      const groupHidden = hiddenGroups.includes(group.id);
+      const groupHiddenInSimple = Boolean(group.hideInSimple) && !isAdvanced;
+      const dynamicItems = getModuleNavItems(group.dynamicGroupKey ?? group.id).map((mi) => ({
+        to: mi.to,
+        moduleKey: mi.to.slice(1),
+        advancedOnly: mi.advancedOnly,
+        adminOnly: false,
+      }));
+      const staticItems = group.items.map((it) => ({
+        to: it.to,
+        moduleKey: it.moduleKey,
+        advancedOnly: it.advancedOnly,
+        adminOnly: it.adminOnly,
+      }));
+      for (const item of [...staticItems, ...dynamicItems]) {
+        // Admin-only rows are internal/dev surfaces, not product modules, so
+        // they do not count toward the platform total for a regular user.
+        if (item.adminOnly && userRole !== 'admin') continue;
+        total += 1;
+        const visible =
+          !groupHidden &&
+          !groupHiddenInSimple &&
+          (!item.moduleKey || isModuleEnabled(item.moduleKey)) &&
+          (!item.advancedOnly || isAdvanced) &&
+          !isRouteBackendDisabled(item.to) &&
+          !hiddenModules.includes(item.to);
+        if (visible) shown += 1;
+      }
+    }
+    return { total, shown };
+    // `enabledModules` is a dep so the count reacts to enable/disable; it feeds
+    // `isModuleEnabled` even though that function reference is stable.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAdvanced, userRole, hiddenModules, hiddenGroups, enabledModules, isRouteBackendDisabled]);
 
   // Custom-module request dialog — opens from the "Request a custom
   // module" CTA at the bottom of the nav (below the "+ Add module"
@@ -1634,7 +1739,7 @@ export function Sidebar({ onClose }: { onClose?: () => void }) {
                 >
                   <SidebarItem
                     item={item}
-                    label={t(item.labelKey)}
+                    label={t(item.labelKey, { defaultValue: item.defaultLabel })}
                     onClick={onClose}
                     badge={badgeMap[item.to]}
                     isPinned={true}
@@ -1780,7 +1885,7 @@ export function Sidebar({ onClose }: { onClose?: () => void }) {
                     >
                       <SidebarItem
                         item={item}
-                        label={t(item.labelKey)}
+                        label={t(item.labelKey, { defaultValue: item.defaultLabel })}
                         onClick={onClose}
                         badge={badgeMap[item.to]}
                         seq={seq}
@@ -1801,70 +1906,89 @@ export function Sidebar({ onClose }: { onClose?: () => void }) {
             </Fragment>
           );
         })}
-        {/* Menu editor controls — sit just above the add-module tiles so
-             users see them after scanning their actual menu. Iconified
-             mode hides this row entirely (no room for text and the
-             editor is mouse-driven on the visible labels anyway). In
-             normal mode: a small "Edit menu" ghost button + a "{N}
-             hidden" badge when applicable. In edit mode the buttons
-             flip to Save / Cancel. */}
-        {!iconified && (
+        {/* Menu editor controls — sit just above the add-module tiles.
+             Iconified mode hides this row entirely (no room for text and the
+             editor is mouse-driven on the visible labels anyway). The "Edit
+             menu" entry point now lives in the admin grid tile below, so in
+             normal mode this row only surfaces a "{N} hidden — show" restore
+             chip when the user has hidden something; otherwise it renders
+             nothing. In edit mode the row holds the Save / Cancel controls. */}
+        {/* Normal-mode restore chip: a single "{N} hidden — show" control that
+             reopens the editor so hidden items can be switched back on. The
+             Save / Cancel controls for edit mode are NOT here - they live in a
+             pinned bar directly beneath the "Edit menu" tile below (see the
+             admin grid), so the user always finds them without scrolling to
+             the end of the module list. */}
+        {!iconified && !editMode && hiddenModules.length + hiddenGroups.length > 0 && (
           <div className="pt-3 pb-1 px-3">
-            {editMode ? (
-              <div className="flex items-center gap-1.5 w-full">
-                <button
-                  type="button"
-                  onClick={saveEditMode}
-                  className="flex-1 flex items-center justify-center gap-1 rounded-lg border border-oe-blue/30 bg-oe-blue/10 px-2.5 py-2 text-xs font-medium text-oe-blue hover:bg-oe-blue/15 transition-colors"
-                >
-                  <Check size={12} strokeWidth={2.25} />
-                  <span>{t('sidebar.save', { defaultValue: 'Save' })}</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={cancelEditMode}
-                  className="flex-1 flex items-center justify-center gap-1 rounded-lg border border-border-light bg-surface-secondary/60 px-2.5 py-2 text-xs font-medium text-content-secondary hover:bg-surface-secondary hover:text-content-primary transition-colors"
-                >
-                  <X size={12} strokeWidth={2.25} />
-                  <span>{t('sidebar.cancel', { defaultValue: 'Cancel' })}</span>
-                </button>
-                {editingHidden.length + editingHiddenGroups.length > 0 && (
-                  <span className="shrink-0 text-2xs text-content-tertiary tabular-nums">
-                    {t('sidebar.hidden_count', {
-                      defaultValue: '{{count}} hidden',
-                      count: editingHidden.length + editingHiddenGroups.length,
-                    })}
-                  </span>
-                )}
-              </div>
-            ) : (
-              <div className="flex items-center gap-1.5 w-full">
-                <button
-                  type="button"
-                  onClick={enterEditMode}
-                  className="flex-1 flex items-center justify-center gap-1.5 rounded-lg border border-dashed border-border-light bg-surface-secondary/30 px-2.5 py-2 text-xs font-medium text-content-secondary hover:border-content-tertiary hover:bg-surface-secondary hover:text-content-primary transition-colors"
-                  title={t('sidebar.edit_menu_hint', {
-                    defaultValue: "Hide items you don't use",
-                  })}
-                >
-                  <Pencil size={12} strokeWidth={2} />
-                  <span>{t('sidebar.edit_menu', { defaultValue: 'Edit menu' })}</span>
-                </button>
-                {hiddenModules.length + hiddenGroups.length > 0 && (
-                  <span
-                    className="shrink-0 rounded-full bg-surface-tertiary/70 px-1.5 py-px text-[10px] font-medium text-content-tertiary tabular-nums"
-                    title={t('sidebar.show_hidden', { defaultValue: 'Show hidden' })}
-                  >
-                    {t('sidebar.hidden_count', {
-                      defaultValue: '{{count}} hidden',
-                      count: hiddenModules.length + hiddenGroups.length,
-                    })}
-                  </span>
-                )}
-              </div>
-            )}
+            <button
+              type="button"
+              onClick={enterEditMode}
+              className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-border-light bg-surface-secondary/30 px-2.5 py-1.5 text-[11px] font-medium text-content-secondary hover:border-content-tertiary hover:bg-surface-secondary hover:text-content-primary transition-colors"
+              title={t('sidebar.show_hidden', { defaultValue: 'Show hidden' })}
+            >
+              <Eye size={12} strokeWidth={2} />
+              <span>
+                {t('sidebar.hidden_count', {
+                  defaultValue: '{{count}} hidden',
+                  count: hiddenModules.length + hiddenGroups.length,
+                })}
+              </span>
+            </button>
           </div>
         )}
+        {/* Module counter — a small live "{shown} of {total} modules" chip
+             right before the Add-module tile, so a user can see at a glance
+             how many modules are open in this menu and how many the platform
+             offers in total. Updates automatically as modules are enabled /
+             disabled or hidden / shown. Iconified mode shows a compact
+             "shown/total" so the number is never lost. */}
+        <div className={clsx('pt-2 pb-0.5', iconified ? 'px-1' : 'px-3')}>
+          <div
+            className={clsx(
+              'flex items-center justify-center rounded-lg bg-surface-secondary/40 text-content-secondary',
+              iconified ? 'px-1 py-1 gap-0.5' : 'gap-1.5 px-2.5 py-1.5',
+            )}
+            title={t('sidebar.module_count_title', {
+              defaultValue: '{{shown}} of {{total}} modules are shown in this menu',
+              shown: moduleCounts.shown,
+              total: moduleCounts.total,
+            })}
+          >
+            <Boxes
+              size={iconified ? 13 : 12}
+              strokeWidth={2}
+              className="shrink-0 text-content-tertiary"
+              aria-hidden
+            />
+            {iconified ? (
+              <span className="text-[9px] font-semibold tabular-nums leading-none text-content-secondary">
+                {moduleCounts.shown}/{moduleCounts.total}
+              </span>
+            ) : (
+              <span className="text-[11px] font-medium tabular-nums">
+                <span className="font-semibold text-content-primary">{moduleCounts.shown}</span>
+                <span className="text-content-tertiary"> / {moduleCounts.total} </span>
+                {t('sidebar.module_count_label', { defaultValue: 'modules' })}
+              </span>
+            )}
+            {/* Manage-modules shortcut — a small gear button immediately to the
+                 right of the "{shown} / {total} modules" count that jumps to the
+                 Modules settings page, where modules can be switched on / off.
+                 Hidden in iconified mode where horizontal room is tight. */}
+            {!iconified && (
+              <NavLink
+                to="/modules"
+                onClick={onClose}
+                title={t('sidebar.manage_modules', { defaultValue: 'Manage modules' })}
+                aria-label={t('sidebar.manage_modules', { defaultValue: 'Manage modules' })}
+                className="ml-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-content-tertiary hover:bg-surface-secondary hover:text-content-primary transition-colors"
+              >
+                <Settings size={12} strokeWidth={2} aria-hidden />
+              </NavLink>
+            )}
+          </div>
+        </div>
         {/* Add-a-module CTA — dashed-border tile with a plus icon. Sits at
              the very end of the main nav groups so it reads as "keep going,
              there's more — build your own". Navigates into the in-app
@@ -1967,7 +2091,7 @@ export function Sidebar({ onClose }: { onClose?: () => void }) {
           )}
         />
         <AdminGrid
-          items={visibleAdminGridItems}
+          items={adminGridWithEdit}
           activeRoute={activeRoute}
           iconified={iconified}
           onNavigate={onClose}
@@ -1975,6 +2099,40 @@ export function Sidebar({ onClose }: { onClose?: () => void }) {
           hiddenSet={editingHidden}
           onToggleHidden={toggleItemHidden}
         />
+
+        {/* Menu-editor action bar - pinned directly beneath the "Edit menu"
+            tile so Save / Cancel stay in view the whole time the user is
+            editing, instead of being buried at the end of the scrolling
+            module list where they were easy to miss. Expanded sidebar only;
+            iconified mode has no room and the editor needs the labels. */}
+        {!iconified && editMode && (
+          <div className="mt-2.5 flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={saveEditMode}
+              className="flex-1 flex items-center justify-center gap-1 rounded-lg border border-oe-blue/30 bg-oe-blue/10 px-2.5 py-2 text-xs font-medium text-oe-blue hover:bg-oe-blue/15 transition-colors"
+            >
+              <Check size={12} strokeWidth={2.25} />
+              <span>{t('sidebar.save', { defaultValue: 'Save' })}</span>
+            </button>
+            <button
+              type="button"
+              onClick={cancelEditMode}
+              className="flex-1 flex items-center justify-center gap-1 rounded-lg border border-border-light bg-surface-secondary/60 px-2.5 py-2 text-xs font-medium text-content-secondary hover:bg-surface-secondary hover:text-content-primary transition-colors"
+            >
+              <X size={12} strokeWidth={2.25} />
+              <span>{t('sidebar.cancel', { defaultValue: 'Cancel' })}</span>
+            </button>
+            {editingHidden.length + editingHiddenGroups.length > 0 && (
+              <span className="shrink-0 text-2xs text-content-tertiary tabular-nums">
+                {t('sidebar.hidden_count', {
+                  defaultValue: '{{count}} hidden',
+                  count: editingHidden.length + editingHiddenGroups.length,
+                })}
+              </span>
+            )}
+          </div>
+        )}
 
         {/* Update notification — compact clickable card in the sidebar; the
             whole card opens a full-screen modal with highlights + install
@@ -2568,7 +2726,10 @@ function AdminGrid({
   hiddenSet,
   onToggleHidden,
 }: {
-  items: NavItem[];
+  /** Admin-grid tiles. Most are plain routes (`to`); a tile may instead
+   *  carry an `onClick` to run an in-place action (e.g. the "Edit menu"
+   *  tile that opens the sidebar customiser) rather than navigate. */
+  items: AdminGridItem[];
   activeRoute?: string | null;
   iconified?: boolean;
   onNavigate?: () => void;
@@ -2591,7 +2752,30 @@ function AdminGrid({
         {items.map((item) => {
           const Icon = item.icon;
           const isActive = activeRoute === item.to;
-          const label = t(item.labelKey);
+          const label = t(item.labelKey, { defaultValue: item.defaultLabel });
+          const tileClass = clsx(
+            'relative flex h-9 w-9 items-center justify-center rounded-md transition-colors duration-fast ease-oe',
+            isActive
+              ? 'bg-oe-blue/[0.14] text-oe-blue shadow-[inset_0_0_0_1px_rgba(0,122,255,0.18)] dark:bg-oe-blue/25'
+              : 'text-content-secondary hover:bg-surface-secondary hover:text-content-primary',
+          );
+          // Action tiles (e.g. "Edit menu") run in place — render a button so
+          // they never navigate and don't close the drawer.
+          if (item.onClick) {
+            return (
+              <li key={item.to}>
+                <button
+                  type="button"
+                  onClick={item.onClick}
+                  title={label}
+                  aria-label={label}
+                  className={tileClass}
+                >
+                  <Icon size={16} strokeWidth={1.75} aria-hidden />
+                </button>
+              </li>
+            );
+          }
           return (
             <li key={item.to}>
               <NavLink
@@ -2599,14 +2783,7 @@ function AdminGrid({
                 onClick={onNavigate}
                 title={label}
                 aria-label={label}
-                className={() =>
-                  clsx(
-                    'relative flex h-9 w-9 items-center justify-center rounded-md transition-colors duration-fast ease-oe',
-                    isActive
-                      ? 'bg-oe-blue/[0.14] text-oe-blue shadow-[inset_0_0_0_1px_rgba(0,122,255,0.18)] dark:bg-oe-blue/25'
-                      : 'text-content-secondary hover:bg-surface-secondary hover:text-content-primary',
-                  )
-                }
+                className={() => tileClass}
               >
                 <Icon size={16} strokeWidth={isActive ? 2 : 1.75} aria-hidden />
               </NavLink>
@@ -2629,7 +2806,7 @@ function AdminGrid({
       {items.map((item) => {
         const Icon = item.icon;
         const isActive = activeRoute === item.to;
-        const label = t(item.labelKey);
+        const label = t(item.labelKey, { defaultValue: item.defaultLabel });
         const editable = editMode && !!onToggleHidden;
         const isHidden = editable ? (hiddenSet?.includes(item.to) ?? false) : false;
         const editLabel = isHidden
@@ -2642,6 +2819,12 @@ function AdminGrid({
               onClick={() => {
                 if (editable) {
                   onToggleHidden!(item.to);
+                  return;
+                }
+                // Action tile (e.g. "Edit menu") runs in place; keep the
+                // drawer open so the customiser it toggles stays visible.
+                if (item.onClick) {
+                  item.onClick();
                   return;
                 }
                 navigate(item.to);

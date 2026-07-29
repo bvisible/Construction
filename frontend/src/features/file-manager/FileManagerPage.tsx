@@ -12,7 +12,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useQueries, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, ChevronRight, HardDrive, UploadCloud, Search, Send, Loader2 } from 'lucide-react';
+import { ArrowLeft, ChevronRight, HardDrive, UploadCloud, Search, Send, Loader2, ClipboardCheck } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import clsx from 'clsx';
 import { EmptyState, ModuleGuideButton } from '@/shared/ui';
@@ -897,6 +897,18 @@ export function FileManagerPage() {
               {t('files.transmittals.open_log', { defaultValue: 'Transmittal log' })}
             </span>
           </Link>
+          {/* Project-wide file-approvals register + one-click Excel export */}
+          <Link
+            to="/files/approvals"
+            data-guide="files-approvals-link"
+            className="hidden sm:inline-flex items-center gap-1.5 h-9 px-2.5 rounded-lg text-xs font-medium text-content-secondary hover:text-content-primary hover:bg-surface-secondary transition-colors"
+            title={t('files.approvals.register_title', { defaultValue: 'Approvals register' })}
+          >
+            <ClipboardCheck size={13} />
+            <span className="hidden md:inline">
+              {t('files.approvals.register_title', { defaultValue: 'Approvals register' })}
+            </span>
+          </Link>
           <button
             type="button"
             data-guide="files-upload-button"
@@ -981,6 +993,32 @@ export function FileManagerPage() {
                 onDragLeave={handlePageDragLeave}
                 onDrop={handlePageDrop}
               >
+                {/* A failed content search returns no hits, which the grid
+                    below would draw as "nothing matched" - the same picture a
+                    successful search of an unindexed project gives. Say which
+                    one it was, and offer the retry, because a search the user
+                    believes came back empty is worse than one that admits it
+                    broke. */}
+                {contentActive && contentSearch.isError && (
+                  <div
+                    role="alert"
+                    className="mx-3 mt-3 flex items-center justify-between gap-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200"
+                  >
+                    <span>
+                      {t('files.search.failed', {
+                        defaultValue:
+                          'The content search did not come back, so these results are incomplete.',
+                      })}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => void contentSearch.refetch()}
+                      className="shrink-0 rounded-md border border-amber-400 px-2 py-0.5 font-medium hover:bg-amber-100 dark:border-amber-800 dark:hover:bg-amber-900/40"
+                    >
+                      {t('common.retry', { defaultValue: 'Retry' })}
+                    </button>
+                  </div>
+                )}
                 {view === 'grid' ? (
                   <FileGrid
                     items={displayItems}
@@ -991,6 +1029,7 @@ export function FileManagerPage() {
                     favoriteKeys={favorites.keys}
                     onToggleFavorite={handleToggleFavorite}
                     onContextMenu={(row, x, y) => setMenu({ row, x, y })}
+                    searchQuery={contentActive ? query : undefined}
                   />
                 ) : (
                   <FileList
@@ -1004,6 +1043,7 @@ export function FileManagerPage() {
                     favoriteKeys={favorites.keys}
                     onToggleFavorite={handleToggleFavorite}
                     onContextMenu={(row, x, y) => setMenu({ row, x, y })}
+                    searchQuery={contentActive ? query : undefined}
                   />
                 )}
 

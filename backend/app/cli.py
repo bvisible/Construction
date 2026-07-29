@@ -24,6 +24,7 @@ WARNING / ERROR per check so you can diagnose install problems.
 from __future__ import annotations
 
 import argparse
+import importlib
 import logging
 import os
 import socket
@@ -481,6 +482,20 @@ def check_ai_provider_keys() -> Check:
     )
 
 
+def _pdf_reader_imports_in_process() -> bool:
+    """Whether the PDF upload path imports its readers in this process.
+
+    Mirrors ``app.modules.takeoff.service._use_in_process_pdf_parser``. It is
+    restated here rather than imported because ``doctor`` has to stay runnable
+    on an install too broken to import the takeoff service, which drags in the
+    ORM and the whole app package. ``test_cli_doctor_pdf_probe`` asserts the
+    two predicates agree, so they cannot drift apart unnoticed.
+    """
+    if getattr(sys, "frozen", False):
+        return True
+    return os.environ.get("OE_DESKTOP", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def check_optional_extras() -> list[Check]:
     """Report which optional extras are installed (mostly non-fatal)."""
     from importlib.util import find_spec
@@ -490,6 +505,46 @@ def check_optional_extras() -> list[Check]:
             return find_spec(mod) is not None
         except Exception:
             return False
+
+    def _import_error(mod: str) -> str | None:
+        """Import ``mod`` the same way the upload path will import it.
+
+        Returns None when the import succeeds, otherwise the last line of the
+        failure. Normally a child process is used, for two reasons: it is where
+        the upload path imports its PDF readers, so this reproduces the real
+        conditions; and a native extension that segfaults on load takes the
+        child down instead of the diagnostic that was sent to find it.
+
+        The frozen desktop build is the exception. There ``sys.executable`` is
+        the app binary, not an interpreter, so ``-c`` is never honoured - which
+        is exactly why the upload path parses in-process on desktop. Probing
+        with a child there would report every healthy desktop install as a
+        broken PDF reader, so the check follows the parser and imports in this
+        process instead.
+        """
+        import subprocess
+
+        if _pdf_reader_imports_in_process():
+            try:
+                importlib.import_module(mod)
+            except BaseException as exc:  # a bad native extension may SystemExit
+                return f"{type(exc).__name__}: {exc}"[:200]
+            return None
+
+        try:
+            proc = subprocess.run(
+                [sys.executable, "-c", f"import {mod}"],
+                capture_output=True,
+                timeout=60,
+                check=False,
+            )
+        except Exception as exc:  # could not even launch the child
+            return f"{type(exc).__name__}: {exc}"[:200]
+        if proc.returncode == 0:
+            return None
+        err = (proc.stderr or b"").decode("utf-8", "replace").strip()
+        last = err.splitlines()[-1] if err else f"exit {proc.returncode}"
+        return last[:200]
 
     out: list[Check] = []
 
@@ -522,18 +577,33 @@ def check_optional_extras() -> list[Check]:
             )
         )
 
-    # PDF takeoff: PyMuPDF (vector reader) + OpenCV (raster detector) are base
-    # deps now, so a healthy install always has them. PaddleOCR (dimension-text
-    # reading) is the only optional piece left.
-    if _present("pymupdf") or _present("fitz"):
-        out.append(Check("PDF takeoff", "ok", "pymupdf + opencv installed"))
+    # PDF takeoff. This one is checked by importing, not by locating: find_spec
+    # resolves a module without executing it, so a wheel whose native extension
+    # will not load passes the lookup and then fails every upload - which is
+    # exactly the "the check says the dependency is installed but uploads still
+    # fail" report this check exists to prevent. The import runs in a child of
+    # the same interpreter, which is where the upload path parses PDFs too, so
+    # a reader that is broken only there is still caught and a reader that
+    # crashes on import does not take the diagnostic down with it.
+    #
+    # pdfplumber is checked first because it is the reader the upload path
+    # tries first; PyMuPDF is the fallback. Checking only the fallback was the
+    # second half of the same blind spot.
+    pdf_readers = [("pdfplumber", "primary reader"), ("pymupdf", "fallback reader")]
+    pdf_failures = [(mod, role, err) for mod, role in pdf_readers if (err := _import_error(mod)) is not None]
+    if not pdf_failures:
+        out.append(Check("PDF takeoff", "ok", "pdfplumber + pymupdf import cleanly"))
     else:
+        broken = "; ".join(f"{mod} ({role}): {err}" for mod, role, err in pdf_failures)
+        # Losing only the fallback still leaves uploads working, so it is not
+        # the same severity as losing the reader every upload starts with.
+        both_gone = len(pdf_failures) == len(pdf_readers)
         out.append(
             Check(
                 "PDF takeoff",
-                "warn",
-                "PyMuPDF missing - PDF takeoff disabled (broken install?)",
-                "pip install --upgrade openconstructionerp",
+                "error" if both_gone else "warn",
+                f"PDF reader will not import: {broken}",
+                "pip install --force-reinstall --no-cache-dir openconstructionerp",
             )
         )
     if not _present("paddleocr"):
@@ -975,8 +1045,25 @@ def cmd_upgrade(args: argparse.Namespace) -> None:
     """
     import subprocess
 
+    # Imported here, not at module scope: this file keeps its top-level imports
+    # to the standard library so the CLI starts fast.
+    from app.core.self_upgrade import RELEASES_URL, is_frozen_build
+
     print()
     print(_bold(_u("OpenConstructionERP \u2014 upgrade", "OpenConstructionERP - upgrade")))
+
+    # In the PyInstaller desktop build ``sys.executable`` is the frozen binary,
+    # not an interpreter, so the tokens below would come straight back into this
+    # CLI as ``openconstructionerp pip install ...`` and argparse would answer
+    # ``invalid choice: 'pip'`` (issue #403). The bundle carries no pip; the
+    # installer replaces the whole app.
+    if is_frozen_build():
+        print()
+        print(_red(_bold("  This build cannot upgrade itself with pip.")))
+        print(_dim("Download the latest installer and run it over this install:"))
+        print(_dim(f"  {RELEASES_URL}"))
+        print(_dim("Your projects and settings stay where they are."))
+        sys.exit(1)
 
     target = "openconstructionerp"
     if args.version:

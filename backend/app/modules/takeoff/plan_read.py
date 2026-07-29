@@ -10,9 +10,10 @@ test. The vision model only PROPOSES (a scale reference, room polygons, symbol
 centroids); this module turns those proposals into checked geometry, and the
 service layer turns checked geometry into human-confirmed measurements.
 
-Nothing here calls a network or an AI provider. PyMuPDF is imported lazily by
-:func:`rasterize_page` (it is an optional ``cv`` extra, absent on a default
-install) so the rest of the module unit-tests with no dependency at all.
+Nothing here calls a network or an AI provider. PyMuPDF is a base dependency,
+but :func:`rasterize_page` imports it lazily so the rest of the module
+unit-tests with no dependency at all and a broken wheel surfaces as a clear
+error from one function rather than an import-time failure.
 
 Coordinate contract (matches the image, the canvas, and the PDF-point space):
 normalized ``[0, 1]``, origin top-left, ``x`` increases right, ``y`` increases
@@ -149,10 +150,11 @@ def rasterize_page(
         coordinate mapping.
 
     Raises:
-        ImportError: PyMuPDF (the optional ``cv`` extra) is not installed.
+        ImportError: PyMuPDF is unimportable. It ships with the platform, so
+            this means a broken install rather than a missing extra.
         ValueError: The page is out of range or the PDF cannot be opened.
     """
-    import pymupdf  # noqa: PLC0415 - lazy: optional 'cv' extra, absent on default installs
+    import pymupdf  # noqa: PLC0415 - base dep; lazy so a broken wheel degrades to a clear error here
 
     pdf = pymupdf.open(stream=content, filetype="pdf")
     try:
@@ -558,6 +560,45 @@ _COORD_GRID = 1000.0
 def _grid_to_unit(v: Any) -> float:
     """Map one 0-1000 grid coordinate to the [0, 1] range (clamped defensively)."""
     return min(1.0, max(0.0, float(v) / _COORD_GRID))
+def resolve_scale_ratio(
+    calibrated_ratio: float | None,
+    detected_scale: Any,
+    page_width_pt: float,
+    page_height_pt: float,
+) -> tuple[float | None, str | None]:
+    """Pick the ratio the proposals are measured in, plausibility belt included.
+
+    A calibration the user drew on the canvas outranks anything the model read,
+    which is the human-confirm order we want. What it lacked is the belt: a
+    calibration arrives with only a "> 0" check on it, while a model-derived
+    scale has already been through ``scale_is_plausible`` inside
+    ``parse_plan_read_response``. The ratio is squared into every room area, so
+    a calibration off by a factor of a thousand (mm entered where metres were
+    meant) turns every quantity into nonsense that still reads like a number.
+
+    An implausible calibration is dropped rather than replaced. Falling back to
+    the model's scale would quietly measure the drawing at a ratio the user
+    never chose; leaving the values empty says plainly that the scale has to be
+    set again, and empty values are already the normal no-scale outcome.
+
+    Args:
+        calibrated_ratio: The run's ``scale_pixels_per_unit``, when the user set one.
+        detected_scale: The parsed ``PlanScale``, or ``None`` when nothing was read.
+        page_width_pt: Page width in PDF points.
+        page_height_pt: Page height in PDF points.
+
+    Returns:
+        ``(ratio, drop_reason)``. The ratio is ``None`` when no usable scale
+        survives; ``drop_reason`` names a discarded calibration for the run
+        report and is ``None`` when nothing was thrown away.
+    """
+    if calibrated_ratio is not None:
+        if scale_is_plausible(calibrated_ratio, page_width_pt, page_height_pt):
+            return calibrated_ratio, None
+        return None, "scale:implausible_calibration"
+    if detected_scale is not None:
+        return scale_ratio_from_plan_scale(detected_scale, page_width_pt, page_height_pt), None
+    return None, None
 
 
 def _normalize_scale_dict(raw: dict[str, Any]) -> dict[str, Any]:

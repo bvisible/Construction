@@ -6017,106 +6017,63 @@ class ScheduleMissingDuration(ValidationRule):
 
 # ── AI Takeoff (vision-LLM plan reading, issue #194) ────────────────────────
 #
-# Validation is first-class for the vision path: the model's structured output
-# is checked before it can become a trusted suggestion. These three rules fire
-# over a plan-read run's proposals (the engine is fed
-# ``context.data = {"proposals": [...], "page_width_pt", "page_height_pt"}``).
-# They are a review/quality gate, not a hard block - the API layer also blocks
-# accept on a self-intersection ERROR verdict.
+# The scale-plausibility, self-intersection and low-confidence rules that used
+# to sit here are gone. Each re-implemented a check the takeoff service already
+# performs before a proposal is ever written, and each kept its own copy of the
+# thresholds, so the two could drift apart while both looked authoritative. The
+# belt is plan_read.scale_is_plausible and plan_read.polygon_self_intersects;
+# the per-row verdict and confidence they produce are what the canvas renders
+# and what the accept endpoint blocks on. What no other layer accounts for is a
+# review queue nobody worked, which is the rule below.
 
-# The whole page must imply a real-world span inside this belt. Mirrors
-# plan_read._MIN_PAGE_SPAN_M / _MAX_PAGE_SPAN_M so the rule and the service
-# agree on what counts as an absurd ratio.
-_AI_TAKEOFF_MIN_PAGE_SPAN_M = 0.5
-_AI_TAKEOFF_MAX_PAGE_SPAN_M = 5000.0
-# Proposals at or below this confidence are flagged for human review.
-_AI_TAKEOFF_LOW_CONFIDENCE = 0.62
-
-
-def _get_plan_read_proposals(context: ValidationContext) -> list[dict[str, Any]]:
-    """Pull the plan-read proposal list from the validation context."""
-    data = context.data
-    if isinstance(data, dict):
-        proposals = data.get("proposals")
-        if isinstance(proposals, list):
-            return proposals
-    if isinstance(data, list):
-        return data
-    return []
+#: Metadata key carrying the number of takeoff rows still awaiting review.
+#: Exported so the caller that gathers the count and the rule that reads it
+#: cannot drift apart on a spelling; a typo here would silence the rule
+#: permanently and look exactly like a clean review queue.
+UNREVIEWED_PROPOSALS_META_KEY = "unreviewed_takeoff_proposals"
 
 
-def _polygon_self_intersects(points: list[tuple[float, float]]) -> bool:
-    """Closed-polygon self-intersection test (parity with the TS source).
+class TakeoffUnreviewedProposalsRule(ValidationRule):
+    """Report quantities the detector proposed and nobody has decided on.
 
-    Twin of the frontend ``isSelfIntersecting`` and the service-side
-    ``plan_read.polygon_self_intersects`` so the dashboard finding matches the
-    canvas verdict.
+    A `proposed` row is a suggestion, not a measurement, so it is deliberately
+    excluded from totals, exports and the priced estimate. The correctness of
+    that exclusion is not in question here; what is missing without this rule
+    is any account of it. A user who ran plan reading, never worked the review
+    queue and then priced the project gets a number that is quietly short of
+    what the drawing shows, with nothing on screen to explain the difference.
+
+    Severity is WARNING on purpose. The estimator refuses to apply a run whose
+    report carries errors, and blocking the estimate would be the wrong answer:
+    pricing the confirmed subset is a legitimate thing to want, and the person
+    who left the queue unworked may have meant to. The report says what is not
+    included; the decision stays with them.
+
+    The count arrives in metadata rather than being queried here, because rules
+    receive data, not a database session. Absent the key the rule returns
+    nothing at all, which keeps it honest on the paths that do not supply it.
     """
-    n = len(points)
-    if n < 4:
-        return False
 
-    def _ccw(a: tuple[float, float], b: tuple[float, float], c: tuple[float, float]) -> bool:
-        return (c[1] - a[1]) * (b[0] - a[0]) > (b[1] - a[1]) * (c[0] - a[0])
-
-    def _cross(
-        a: tuple[float, float],
-        b: tuple[float, float],
-        c: tuple[float, float],
-        d: tuple[float, float],
-    ) -> bool:
-        return _ccw(a, c, d) != _ccw(b, c, d) and _ccw(a, b, c) != _ccw(a, b, d)
-
-    edges = [(points[i], points[(i + 1) % n]) for i in range(n)]
-    for i in range(n):
-        for j in range(i + 1, n):
-            if j == i or (i == 0 and j == n - 1) or j == i + 1:
-                continue
-            if _cross(*edges[i], *edges[j]):
-                return True
-    return False
-
-
-def _proposal_points(proposal: dict[str, Any]) -> list[tuple[float, float]]:
-    """Read ``[(x, y), ...]`` from a proposal's points, defensively."""
-    out: list[tuple[float, float]] = []
-    for pt in proposal.get("points") or []:
-        try:
-            if isinstance(pt, dict):
-                out.append((float(pt["x"]), float(pt["y"])))
-            elif isinstance(pt, (list, tuple)) and len(pt) >= 2:
-                out.append((float(pt[0]), float(pt[1])))
-        except (TypeError, ValueError, KeyError):
-            continue
-    return out
-
-
-class TakeoffScaleSanityRule(ValidationRule):
-    rule_id = "ai_takeoff.scale_sanity"
-    name = "AI Plan-Read Scale Sanity"
+    rule_id = "ai_takeoff.unreviewed_proposals"
+    name = "AI Takeoff Unreviewed Proposals"
     standard = "ai_takeoff"
-    severity = Severity.ERROR
-    category = RuleCategory.CONSISTENCY
-    description = "A detected scale must imply a plausible real-world page span"
+    severity = Severity.WARNING
+    category = RuleCategory.COMPLETENESS
+    description = "Detector proposals awaiting review are excluded from priced quantities"
 
     async def validate(self, context: ValidationContext) -> list[RuleResult]:
         locale = _get_locale(context)
-        data = context.data if isinstance(context.data, dict) else {}
-        ratio = _to_number(data.get("scale_ratio_px_per_unit"))
-        page_w = _to_number(data.get("page_width_pt")) or 0.0
-        page_h = _to_number(data.get("page_height_pt")) or 0.0
-        # Nothing to check when there is no scale (honest "no evidence").
-        if ratio is None or ratio is _NOT_A_NUMBER or ratio <= 0:
+        pending = _to_number(context.metadata.get(UNREVIEWED_PROPOSALS_META_KEY))
+        # No count supplied is not the same as a count of zero: stay silent
+        # rather than certify a project this caller never asked about.
+        if pending is None or pending is _NOT_A_NUMBER:
             return []
-        long_edge = max(float(page_w), float(page_h))  # type: ignore[arg-type]
-        if long_edge <= 0:
-            return []
-        span_m = long_edge / float(ratio)  # type: ignore[arg-type]
-        passed = _AI_TAKEOFF_MIN_PAGE_SPAN_M <= span_m <= _AI_TAKEOFF_MAX_PAGE_SPAN_M
+        count = int(pending)  # type: ignore[arg-type]
+        passed = count <= 0
         message = (
-            _ok(locale) if passed else translate("ai_takeoff.scale_sanity.fail", locale=locale, span=round(span_m, 2))
+            _ok(locale) if passed else translate("ai_takeoff.unreviewed_proposals.fail", locale=locale, count=count)
         )
-        suggestion = None if passed else translate("ai_takeoff.scale_sanity.suggestion", locale=locale)
+        suggestion = None if passed else translate("ai_takeoff.unreviewed_proposals.suggestion", locale=locale)
         return [
             RuleResult(
                 rule_id=self.rule_id,
@@ -6128,91 +6085,6 @@ class TakeoffScaleSanityRule(ValidationRule):
                 suggestion=suggestion,
             )
         ]
-
-
-class TakeoffPolygonSelfIntersectionRule(ValidationRule):
-    rule_id = "ai_takeoff.polygon_self_intersection"
-    name = "AI Plan-Read Polygon Self-Intersection"
-    standard = "ai_takeoff"
-    severity = Severity.ERROR
-    category = RuleCategory.STRUCTURE
-    description = "A proposed room polygon must not self-intersect"
-
-    async def validate(self, context: ValidationContext) -> list[RuleResult]:
-        locale = _get_locale(context)
-        results: list[RuleResult] = []
-        for prop in _get_plan_read_proposals(context):
-            if (prop.get("type") or "").lower() != "area":
-                continue
-            points = _proposal_points(prop)
-            bad = _polygon_self_intersects(points)
-            message = (
-                _ok(locale)
-                if not bad
-                else translate(
-                    "ai_takeoff.polygon_self_intersection.fail",
-                    locale=locale,
-                    name=prop.get("annotation") or prop.get("id", "?"),
-                )
-            )
-            suggestion = (
-                None if not bad else translate("ai_takeoff.polygon_self_intersection.suggestion", locale=locale)
-            )
-            results.append(
-                RuleResult(
-                    rule_id=self.rule_id,
-                    rule_name=self.name,
-                    severity=self.severity,
-                    category=self.category,
-                    passed=not bad,
-                    message=message,
-                    element_ref=prop.get("id"),
-                    suggestion=suggestion,
-                )
-            )
-        return results
-
-
-class TakeoffLowConfidenceReviewRule(ValidationRule):
-    rule_id = "ai_takeoff.low_confidence_review"
-    name = "AI Plan-Read Low Confidence Review"
-    standard = "ai_takeoff"
-    severity = Severity.WARNING
-    category = RuleCategory.QUALITY
-    description = "Low-confidence AI proposals are flagged for human review before accept"
-
-    async def validate(self, context: ValidationContext) -> list[RuleResult]:
-        locale = _get_locale(context)
-        results: list[RuleResult] = []
-        for prop in _get_plan_read_proposals(context):
-            conf = _to_number(prop.get("confidence"))
-            if conf is None or conf is _NOT_A_NUMBER:
-                continue
-            passed = float(conf) > _AI_TAKEOFF_LOW_CONFIDENCE  # type: ignore[arg-type]
-            message = (
-                _ok(locale)
-                if passed
-                else translate(
-                    "ai_takeoff.low_confidence_review.fail",
-                    locale=locale,
-                    name=prop.get("annotation") or prop.get("id", "?"),
-                    confidence=round(float(conf), 2),  # type: ignore[arg-type]
-                )
-            )
-            suggestion = None if passed else translate("ai_takeoff.low_confidence_review.suggestion", locale=locale)
-            results.append(
-                RuleResult(
-                    rule_id=self.rule_id,
-                    rule_name=self.name,
-                    severity=self.severity,
-                    category=self.category,
-                    passed=passed,
-                    message=message,
-                    element_ref=prop.get("id"),
-                    suggestion=suggestion,
-                )
-            )
-        return results
 
 
 # ── Field Time (labour + plant field timesheets) ────────────────────────────
@@ -7367,6 +7239,810 @@ class CatalogueRateOutlier(ValidationRule):
         return results
 
 
+# ── Sheet completeness (drawing index / issue register reconciliation) ───────
+#
+# These rules read a pre-computed EXPECTED sheet list and the ACTUAL project
+# ``Sheet`` rows off ``context.data`` and diff them (documents.sheet_index
+# owns the parse + set-diff). One finding row per gap, plus a single green row
+# when a facet is clean, mirroring how the estimate-audit rules read.
+
+
+def _reconcile_from_context(context: ValidationContext) -> Any:
+    """Diff the expected index against the actual sheets on ``context.data``.
+
+    The three sheet-completeness rules share one reconciliation. The engine
+    hands each rule the same :class:`ValidationContext`, so the result is
+    computed once and cached on ``context.metadata`` for the other two rules.
+    ``sheet_index`` is imported lazily so the core validation package keeps no
+    import-time dependency on the documents module.
+    """
+    meta = context.metadata if isinstance(context.metadata, dict) else {}
+    cached = meta.get("_sc_result")
+    if cached is not None:
+        return cached
+
+    from app.modules.documents.sheet_index import ExpectedSheet, normalize_sheet_number, reconcile
+
+    data = context.data if isinstance(context.data, dict) else {}
+    expected_raw = data.get("expected") or []
+    actual = data.get("actual") or []
+    expected = [
+        ExpectedSheet(
+            sheet_number=str(e.get("sheet_number") or ""),
+            sheet_number_norm=str(e.get("sheet_number_norm") or normalize_sheet_number(e.get("sheet_number"))),
+            sheet_title=e.get("sheet_title"),
+            revision=e.get("revision"),
+        )
+        for e in expected_raw
+        if isinstance(e, dict)
+    ]
+    result = reconcile(expected, actual)
+    if isinstance(context.metadata, dict):
+        context.metadata["_sc_result"] = result
+    return result
+
+
+class SheetCompletenessMissing(ValidationRule):
+    rule_id = "sheet_completeness.missing"
+    name = "Sheet in index is missing from the set"
+    standard = "sheet_completeness"
+    severity = Severity.ERROR
+    category = RuleCategory.COMPLETENESS
+    description = "Every sheet listed in the drawing index must exist in the uploaded set"
+
+    async def validate(self, context: ValidationContext) -> list[RuleResult]:
+        locale = _get_locale(context)
+        result = _reconcile_from_context(context)
+        out: list[RuleResult] = []
+        for num in result.missing:
+            out.append(
+                RuleResult(
+                    rule_id=self.rule_id,
+                    rule_name=self.name,
+                    severity=self.severity,
+                    category=self.category,
+                    passed=False,
+                    message=translate("sheet_completeness.missing.fail", locale=locale, sheet=num),
+                    element_ref=num,
+                    suggestion=translate("sheet_completeness.missing.suggestion", locale=locale),
+                )
+            )
+        if not out:
+            # One green summary row keeps the traffic-light dashboard tile.
+            out.append(
+                RuleResult(
+                    rule_id=self.rule_id,
+                    rule_name=self.name,
+                    severity=self.severity,
+                    category=self.category,
+                    passed=True,
+                    message=_ok(locale),
+                )
+            )
+        return out
+
+
+class SheetCompletenessExtra(ValidationRule):
+    rule_id = "sheet_completeness.extra"
+    name = "Uploaded sheet is not in the index"
+    standard = "sheet_completeness"
+    severity = Severity.WARNING  # a stray sheet is a flag, not a block
+    category = RuleCategory.COMPLETENESS
+    description = "Every uploaded sheet should be listed in the drawing index / issue register"
+
+    async def validate(self, context: ValidationContext) -> list[RuleResult]:
+        locale = _get_locale(context)
+        result = _reconcile_from_context(context)
+        out: list[RuleResult] = []
+        for num in result.extra:
+            out.append(
+                RuleResult(
+                    rule_id=self.rule_id,
+                    rule_name=self.name,
+                    severity=self.severity,
+                    category=self.category,
+                    passed=False,
+                    message=translate("sheet_completeness.extra.fail", locale=locale, sheet=num),
+                    element_ref=num,
+                    suggestion=translate("sheet_completeness.extra.suggestion", locale=locale),
+                )
+            )
+        if not out:
+            out.append(
+                RuleResult(
+                    rule_id=self.rule_id,
+                    rule_name=self.name,
+                    severity=self.severity,
+                    category=self.category,
+                    passed=True,
+                    message=_ok(locale),
+                )
+            )
+        return out
+
+
+class SheetRevisionMismatch(ValidationRule):
+    rule_id = "sheet_completeness.revision_mismatch"
+    name = "Sheet revision differs from the index"
+    standard = "sheet_completeness"
+    severity = Severity.WARNING
+    category = RuleCategory.CONSISTENCY
+    description = "A matched sheet should be at the revision the drawing index expects"
+
+    async def validate(self, context: ValidationContext) -> list[RuleResult]:
+        locale = _get_locale(context)
+        result = _reconcile_from_context(context)
+        out: list[RuleResult] = []
+        for row in result.rev_mismatch:
+            sheet = row.get("sheet_number", "?")
+            out.append(
+                RuleResult(
+                    rule_id=self.rule_id,
+                    rule_name=self.name,
+                    severity=self.severity,
+                    category=self.category,
+                    passed=False,
+                    message=translate(
+                        "sheet_completeness.revision_mismatch.fail",
+                        locale=locale,
+                        sheet=sheet,
+                        expected_rev=row.get("expected_rev", "?"),
+                        actual_rev=row.get("actual_rev", "?"),
+                    ),
+                    element_ref=sheet,
+                    details=dict(row),
+                    suggestion=translate("sheet_completeness.revision_mismatch.suggestion", locale=locale),
+                )
+            )
+        if not out:
+            out.append(
+                RuleResult(
+                    rule_id=self.rule_id,
+                    rule_name=self.name,
+                    severity=self.severity,
+                    category=self.category,
+                    passed=True,
+                    message=_ok(locale),
+                )
+            )
+        return out
+
+
+# ── Procurement (purchase-order commitment gate) ────────────────────────────
+#
+# A purchase order is where an estimate becomes committed money: approval
+# publishes ``procurement.po.approved`` and finance commits the amount against
+# the project budget. Nothing downstream re-derives that amount, so a PO whose
+# own arithmetic disagrees with itself commits one number and displays another.
+#
+# The deterministic checks live in ``app.modules.procurement.validators`` (pure
+# Decimal, no ORM) so they are unit-testable without a database; these classes
+# are thin translators from a ``Finding`` to a ``RuleResult``. The module is
+# imported lazily inside ``validate()`` so this core package never hard-depends
+# on a business module at import time -- a disabled procurement module must not
+# break rule loading.
+
+
+def _po_payload(context: ValidationContext) -> dict[str, Any]:
+    """Return the purchase-order payload dict from the context (empty if malformed)."""
+    data = context.data
+    return data if isinstance(data, dict) else {}
+
+
+class _ProcurementRule(ValidationRule):
+    """Shared body: run one pure check and translate its findings.
+
+    Subclasses supply ``rule_id``/``severity``/``category`` and :attr:`check_name`,
+    the name of the function in ``procurement.validators`` to run. Every rule
+    emits a single passing row when the check is clean, so a green PO produces one
+    explicit "checked, fine" line per rule rather than silence.
+    """
+
+    standard = "procurement"
+
+    #: Name of the ``procurement.validators`` function this rule delegates to.
+    check_name: str = ""
+
+    def _message_key(self, suffix: str) -> str:
+        return f"{self.rule_id}.{suffix}"
+
+    async def validate(self, context: ValidationContext) -> list[RuleResult]:
+        locale = _get_locale(context)
+        payload = _po_payload(context)
+        if not payload:
+            return []
+        from app.modules.procurement import validators as po_checks
+
+        findings = getattr(po_checks, self.check_name)(payload)
+        if not findings:
+            return [
+                RuleResult(
+                    rule_id=self.rule_id,
+                    rule_name=self.name,
+                    severity=self.severity,
+                    category=self.category,
+                    passed=True,
+                    message=_ok(locale),
+                )
+            ]
+        return [
+            RuleResult(
+                rule_id=self.rule_id,
+                rule_name=self.name,
+                severity=self.severity,
+                category=self.category,
+                passed=False,
+                message=translate(self._message_key("fail"), locale=locale, **finding.params),
+                element_ref=finding.element_ref,
+                details=dict(finding.details),
+                suggestion=translate(self._message_key("suggestion"), locale=locale),
+            )
+            for finding in findings
+        ]
+
+
+class ProcurementPOHasLines(_ProcurementRule):
+    """A purchase order must have at least one line before it is approved."""
+
+    rule_id = "procurement.po_has_lines"
+    name = "Purchase Order Has Lines"
+    severity = Severity.ERROR
+    category = RuleCategory.COMPLETENESS
+    description = "Flags a purchase order approved with no line items."
+    check_name = "check_has_lines"
+
+
+class ProcurementPOLineAmount(_ProcurementRule):
+    """Each line amount must equal quantity x unit rate."""
+
+    rule_id = "procurement.po_line_amount"
+    name = "Purchase Order Line Amount"
+    severity = Severity.ERROR
+    category = RuleCategory.CONSISTENCY
+    description = "Flags a line whose amount does not equal its quantity times its unit rate."
+    check_name = "check_line_amount"
+
+
+class ProcurementPOSubtotalMatchesLines(_ProcurementRule):
+    """The subtotal must equal the sum of the line amounts."""
+
+    rule_id = "procurement.po_subtotal_matches_lines"
+    name = "Purchase Order Subtotal Matches Lines"
+    severity = Severity.ERROR
+    category = RuleCategory.CONSISTENCY
+    description = "Flags a purchase order whose subtotal does not equal the sum of its lines."
+    check_name = "check_subtotal_matches_lines"
+
+
+class ProcurementPOTotalMatchesSubtotal(_ProcurementRule):
+    """The total must equal subtotal plus tax -- the number finance commits."""
+
+    rule_id = "procurement.po_total_matches_subtotal"
+    name = "Purchase Order Total Matches Subtotal Plus Tax"
+    severity = Severity.ERROR
+    category = RuleCategory.CONSISTENCY
+    description = "Flags a purchase order whose total does not equal its subtotal plus tax."
+    check_name = "check_total_matches_subtotal_plus_tax"
+
+
+class ProcurementPONoNegativeLine(_ProcurementRule):
+    """Quantities must be positive and unit rates must not be negative."""
+
+    rule_id = "procurement.po_no_negative_line"
+    name = "Purchase Order Line Signs"
+    severity = Severity.ERROR
+    category = RuleCategory.QUALITY
+    description = "Flags a line with a non-positive quantity or a negative unit rate."
+    check_name = "check_no_negative_line"
+
+
+class ProcurementPOCurrencySet(_ProcurementRule):
+    """A committed amount must carry a currency."""
+
+    rule_id = "procurement.po_currency_set"
+    name = "Purchase Order Currency Set"
+    severity = Severity.ERROR
+    category = RuleCategory.COMPLETENESS
+    description = "Flags a purchase order approved without a currency code."
+    check_name = "check_currency_set"
+
+
+class ProcurementPOVendorAssigned(_ProcurementRule):
+    """An approved commitment must name the party it is committed to."""
+
+    rule_id = "procurement.po_vendor_assigned"
+    name = "Purchase Order Vendor Assigned"
+    severity = Severity.ERROR
+    category = RuleCategory.COMPLETENESS
+    description = "Flags a purchase order approved without a vendor."
+    check_name = "check_vendor_assigned"
+
+
+class ProcurementPORetentionWithinBounds(_ProcurementRule):
+    """Retention must be a plausible percentage, not an amount typed as a rate."""
+
+    rule_id = "procurement.po_retention_within_bounds"
+    name = "Purchase Order Retention Within Bounds"
+    severity = Severity.ERROR
+    category = RuleCategory.QUALITY
+    description = "Flags a retention percentage that is negative or implausibly large."
+    check_name = "check_retention_within_bounds"
+
+
+class ProcurementPODeliveryAfterIssue(_ProcurementRule):
+    """Delivery cannot be scheduled before the order goes out."""
+
+    rule_id = "procurement.po_delivery_after_issue"
+    name = "Purchase Order Delivery After Issue"
+    severity = Severity.WARNING
+    category = RuleCategory.CONSISTENCY
+    description = "Flags a delivery date earlier than the issue date."
+    check_name = "check_delivery_not_before_issue"
+
+
+class ProcurementPOLineCostCoded(_ProcurementRule):
+    """A line without a cost code lands in the total and nowhere in the breakdown."""
+
+    rule_id = "procurement.po_line_cost_coded"
+    name = "Purchase Order Line Cost Coded"
+    severity = Severity.WARNING
+    category = RuleCategory.COMPLETENESS
+    description = "Flags a line with no WBS, cost category or cost-line link."
+    check_name = "check_line_cost_coded"
+
+
+# ── Subcontract agreements (activation gate) ────────────────────────────────
+#
+# An agreement leaving ``draft`` for ``active`` is the moment a subcontractor
+# may start work, claim against the scope and accrue retention. The schedule of
+# values divides by its total value and retention multiplies by its percentage,
+# so an agreement that goes live incoherent produces reports nobody can
+# reconcile weeks later, inside a payment claim.
+#
+# Deterministic checks live in ``app.modules.subcontractors.validators`` (pure
+# Decimal and date, no ORM); these classes translate a ``Finding`` into a
+# ``RuleResult``. The module is imported lazily inside ``validate()`` so this
+# core package never hard-depends on a business module at import time.
+
+
+class _SubcontractRule(ValidationRule):
+    """Shared body: run one pure check and translate its findings.
+
+    Subclasses supply ``rule_id``/``severity``/``category`` and
+    :attr:`check_name`, the name of the function in ``subcontractors.validators``
+    to run. A clean check emits one passing row, so a green agreement produces
+    an explicit "checked, fine" line per rule rather than silence.
+    """
+
+    standard = "subcontract"
+
+    #: Name of the ``subcontractors.validators`` function this rule delegates to.
+    check_name: str = ""
+
+    def _message_key(self, suffix: str) -> str:
+        return f"{self.rule_id}.{suffix}"
+
+    async def validate(self, context: ValidationContext) -> list[RuleResult]:
+        locale = _get_locale(context)
+        payload = context.data if isinstance(context.data, dict) else {}
+        if not payload:
+            return []
+        from app.modules.subcontractors import validators as sub_checks
+
+        findings = getattr(sub_checks, self.check_name)(payload)
+        if not findings:
+            return [
+                RuleResult(
+                    rule_id=self.rule_id,
+                    rule_name=self.name,
+                    severity=self.severity,
+                    category=self.category,
+                    passed=True,
+                    message=_ok(locale),
+                )
+            ]
+        return [
+            RuleResult(
+                rule_id=self.rule_id,
+                rule_name=self.name,
+                severity=self.severity,
+                category=self.category,
+                passed=False,
+                message=translate(self._message_key("fail"), locale=locale, **finding.params),
+                element_ref=finding.element_ref,
+                details=dict(finding.details),
+                suggestion=translate(self._message_key("suggestion"), locale=locale),
+            )
+            for finding in findings
+        ]
+
+
+class SubcontractAgreementHasScope(_SubcontractRule):
+    """An agreement going live must break its scope into work packages."""
+
+    rule_id = "subcontract.agreement_has_scope"
+    name = "Subcontract Agreement Has Scope"
+    severity = Severity.ERROR
+    category = RuleCategory.COMPLETENESS
+    description = "Flags an agreement activated with no work packages to claim against."
+    check_name = "check_has_scope"
+
+
+class SubcontractPackageScopeDescribed(_SubcontractRule):
+    """Each work package should say what the work actually is."""
+
+    rule_id = "subcontract.package_scope_described"
+    name = "Subcontract Work Package Scope Described"
+    severity = Severity.WARNING
+    category = RuleCategory.COMPLETENESS
+    description = "Flags a work package with a name but no scope description."
+    check_name = "check_package_scope_described"
+
+
+class SubcontractAgreementValuePositive(_SubcontractRule):
+    """The contract value must be greater than zero."""
+
+    rule_id = "subcontract.agreement_value_positive"
+    name = "Subcontract Agreement Value Positive"
+    severity = Severity.ERROR
+    category = RuleCategory.QUALITY
+    description = "Flags an agreement activated with a zero or negative contract value."
+    check_name = "check_value_positive"
+
+
+class SubcontractPackagesWithinValue(_SubcontractRule):
+    """The work packages must not be worth more than the contract itself."""
+
+    rule_id = "subcontract.packages_within_value"
+    name = "Subcontract Packages Within Contract Value"
+    severity = Severity.ERROR
+    category = RuleCategory.CONSISTENCY
+    description = "Flags work packages whose planned values exceed the agreement total."
+    check_name = "check_packages_within_value"
+
+
+class SubcontractAgreementDatesOrdered(_SubcontractRule):
+    """The contract cannot end before it starts."""
+
+    rule_id = "subcontract.agreement_dates_ordered"
+    name = "Subcontract Agreement Dates Ordered"
+    severity = Severity.ERROR
+    category = RuleCategory.CONSISTENCY
+    description = "Flags an agreement whose end date is earlier than its start date."
+    check_name = "check_dates_ordered"
+
+
+class SubcontractAgreementCurrencySet(_SubcontractRule):
+    """A live agreement must carry a currency."""
+
+    rule_id = "subcontract.agreement_currency_set"
+    name = "Subcontract Agreement Currency Set"
+    severity = Severity.ERROR
+    category = RuleCategory.COMPLETENESS
+    description = "Flags an agreement activated without a currency."
+    check_name = "check_currency_set"
+
+
+class SubcontractRetentionWithinBounds(_SubcontractRule):
+    """Retention must be a plausible percentage, not an amount typed as a rate."""
+
+    rule_id = "subcontract.retention_within_bounds"
+    name = "Subcontract Retention Within Bounds"
+    severity = Severity.ERROR
+    category = RuleCategory.QUALITY
+    description = "Flags a retention percentage that is negative or implausibly large."
+    check_name = "check_retention_within_bounds"
+
+
+class SubcontractInsuranceValidAtStart(_SubcontractRule):
+    """The subcontractor's insurance must still be valid when work starts."""
+
+    rule_id = "subcontract.insurance_valid_at_start"
+    name = "Subcontractor Insurance Valid At Start"
+    severity = Severity.ERROR
+    category = RuleCategory.COMPLIANCE
+    description = "Flags an agreement activated for a subcontractor whose insurance has lapsed."
+    check_name = "check_insurance_valid_at_start"
+
+
+# ── Submittals (submission gate) ────────────────────────────────────────────
+#
+# Submission is where a submittal stops being a draft and starts consuming
+# somebody else's review time, and it is the last point at which the person who
+# filed it is still looking at it. Everything afterwards is chasing: the
+# register sorts by spec section, the overdue view counts against the required
+# date, ball-in-court hands the item to the reviewer. Filed without those, the
+# submittal is invisible to every mechanism meant to move it.
+
+
+class _SubmittalRule(ValidationRule):
+    """Shared body: run one pure check in ``submittals.validators``."""
+
+    standard = "submittal"
+
+    #: Name of the ``submittals.validators`` function this rule delegates to.
+    check_name: str = ""
+
+    def _message_key(self, suffix: str) -> str:
+        return f"{self.rule_id}.{suffix}"
+
+    async def validate(self, context: ValidationContext) -> list[RuleResult]:
+        locale = _get_locale(context)
+        payload = context.data if isinstance(context.data, dict) else {}
+        if not payload:
+            return []
+        from app.modules.submittals import validators as sub_checks
+
+        findings = getattr(sub_checks, self.check_name)(payload)
+        if not findings:
+            return [
+                RuleResult(
+                    rule_id=self.rule_id,
+                    rule_name=self.name,
+                    severity=self.severity,
+                    category=self.category,
+                    passed=True,
+                    message=_ok(locale),
+                )
+            ]
+        return [
+            RuleResult(
+                rule_id=self.rule_id,
+                rule_name=self.name,
+                severity=self.severity,
+                category=self.category,
+                passed=False,
+                message=translate(self._message_key("fail"), locale=locale, **finding.params),
+                element_ref=finding.element_ref,
+                details=dict(finding.details),
+                suggestion=translate(self._message_key("suggestion"), locale=locale),
+            )
+            for finding in findings
+        ]
+
+
+class SubmittalReviewerAssigned(_SubmittalRule):
+    """A submitted submittal must name the reviewer it is waiting on."""
+
+    rule_id = "submittal.reviewer_assigned"
+    name = "Submittal Reviewer Assigned"
+    severity = Severity.ERROR
+    category = RuleCategory.COMPLETENESS
+    description = "Flags a submittal submitted with no reviewer, so it lands in nobody's court."
+    check_name = "check_reviewer_assigned"
+
+
+class SubmittalRequiredDatePresent(_SubmittalRule):
+    """A submitted submittal must carry the date the review is needed by."""
+
+    rule_id = "submittal.required_date_present"
+    name = "Submittal Required Date Present"
+    severity = Severity.ERROR
+    category = RuleCategory.COMPLETENESS
+    description = "Flags a submittal with no required date, which can never be reported late."
+    check_name = "check_required_date_present"
+
+
+class SubmittalRequiredDateAfterSubmitted(_SubmittalRule):
+    """The review cannot be due before the submittal was filed."""
+
+    rule_id = "submittal.required_date_after_submitted"
+    name = "Submittal Required Date After Submitted"
+    severity = Severity.ERROR
+    category = RuleCategory.CONSISTENCY
+    description = "Flags a submittal whose required date precedes its submission date."
+    check_name = "check_required_date_after_submitted"
+
+
+class SubmittalReviewWindowSufficient(_SubmittalRule):
+    """The reviewer needs a workable window, not a nominal one."""
+
+    rule_id = "submittal.review_window_sufficient"
+    name = "Submittal Review Window Sufficient"
+    severity = Severity.WARNING
+    category = RuleCategory.QUALITY
+    description = "Flags a review window shorter than the customary ten working days."
+    check_name = "check_review_window_sufficient"
+
+
+class SubmittalSpecSectionPresent(_SubmittalRule):
+    """A submittal should say which part of the specification it answers."""
+
+    rule_id = "submittal.spec_section_present"
+    name = "Submittal Spec Section Present"
+    severity = Severity.WARNING
+    category = RuleCategory.COMPLETENESS
+    description = "Flags a submittal with no spec section, which the register cannot file."
+    check_name = "check_spec_section_present"
+
+
+class SubmittalApproverDistinctFromReviewer(_SubmittalRule):
+    """Review and approval should not be the same person."""
+
+    rule_id = "submittal.approver_distinct_from_reviewer"
+    name = "Submittal Approver Distinct From Reviewer"
+    severity = Severity.WARNING
+    category = RuleCategory.COMPLIANCE
+    description = "Flags one person holding both the review and the approval role."
+    check_name = "check_approver_distinct_from_reviewer"
+
+
+class SubmittalLinkedScopePresent(_SubmittalRule):
+    """A submittal should point at the scope it belongs to."""
+
+    rule_id = "submittal.linked_scope_present"
+    name = "Submittal Linked Scope Present"
+    severity = Severity.WARNING
+    category = RuleCategory.COMPLETENESS
+    description = "Flags a submittal linked to no BOQ item, so it never rolls up to a package."
+    check_name = "check_linked_scope_present"
+
+
+# ── RFQ bidding (publish and award gates) ───────────────────────────────────
+#
+# Two moments that cannot be taken back, so two rule sets. ``rfq_issue`` asks
+# whether a vendor can bid at all, including whether the deadline is still in
+# the future. ``rfq_award`` asks whether the comparison that picked a winner
+# compared like with like; the deadline-in-the-future check is deliberately
+# absent there, because by award time the deadline has passed on purpose.
+
+
+class _RFQRule(ValidationRule):
+    """Shared body: run one pure check in ``rfq_bidding.validators``."""
+
+    standard = "rfq"
+
+    #: Name of the ``rfq_bidding.validators`` function this rule delegates to.
+    check_name: str = ""
+
+    def _message_key(self, suffix: str) -> str:
+        return f"{self.rule_id}.{suffix}"
+
+    async def validate(self, context: ValidationContext) -> list[RuleResult]:
+        locale = _get_locale(context)
+        payload = context.data if isinstance(context.data, dict) else {}
+        if not payload:
+            return []
+        from app.modules.rfq_bidding import validators as rfq_checks
+
+        findings = getattr(rfq_checks, self.check_name)(payload)
+        if not findings:
+            return [
+                RuleResult(
+                    rule_id=self.rule_id,
+                    rule_name=self.name,
+                    severity=self.severity,
+                    category=self.category,
+                    passed=True,
+                    message=_ok(locale),
+                )
+            ]
+        return [
+            RuleResult(
+                rule_id=self.rule_id,
+                rule_name=self.name,
+                severity=self.severity,
+                category=self.category,
+                passed=False,
+                message=translate(self._message_key("fail"), locale=locale, **finding.params),
+                element_ref=finding.element_ref,
+                details=dict(finding.details),
+                suggestion=translate(self._message_key("suggestion"), locale=locale),
+            )
+            for finding in findings
+        ]
+
+
+class RFQScopeDescribed(_RFQRule):
+    """An RFQ must say what is being priced."""
+
+    rule_id = "rfq.scope_described"
+    name = "RFQ Scope Described"
+    severity = Severity.ERROR
+    category = RuleCategory.COMPLETENESS
+    description = "Flags an RFQ with no scope of work and no description."
+    check_name = "check_scope_described"
+
+
+class RFQDeadlinePresent(_RFQRule):
+    """A published RFQ must state when bids close."""
+
+    rule_id = "rfq.deadline_present"
+    name = "RFQ Deadline Present"
+    severity = Severity.ERROR
+    category = RuleCategory.COMPLETENESS
+    description = "Flags an RFQ published without a submission deadline."
+    check_name = "check_deadline_present"
+
+
+class RFQDeadlineParseable(_RFQRule):
+    """The deadline must be a date the system can actually read."""
+
+    rule_id = "rfq.deadline_parseable"
+    name = "RFQ Deadline Parseable"
+    severity = Severity.ERROR
+    category = RuleCategory.STRUCTURE
+    description = "Flags a malformed deadline, which makes every bid submission fail."
+    check_name = "check_deadline_parseable"
+
+
+class RFQDeadlineInFuture(_RFQRule):
+    """Bids must still be open at the moment the RFQ goes out."""
+
+    rule_id = "rfq.deadline_in_future"
+    name = "RFQ Deadline In Future"
+    severity = Severity.ERROR
+    category = RuleCategory.CONSISTENCY
+    description = "Flags an RFQ published with a deadline that has already passed."
+    check_name = "check_deadline_in_future"
+
+
+class RFQHasRecipients(_RFQRule):
+    """A published RFQ must be addressed to somebody."""
+
+    rule_id = "rfq.has_recipients"
+    name = "RFQ Has Recipients"
+    severity = Severity.ERROR
+    category = RuleCategory.COMPLETENESS
+    description = "Flags an RFQ published to an empty recipient list."
+    check_name = "check_has_recipients"
+
+
+class RFQCurrencySet(_RFQRule):
+    """The RFQ must state the currency bids are to be priced in."""
+
+    rule_id = "rfq.currency_set"
+    name = "RFQ Currency Set"
+    severity = Severity.ERROR
+    category = RuleCategory.COMPLETENESS
+    description = "Flags an RFQ with no currency, so bids cannot be ranked against each other."
+    check_name = "check_currency_set"
+
+
+class RFQBidCurrencyMatches(_RFQRule):
+    """Every bid must be priced in the RFQ's currency."""
+
+    rule_id = "rfq.bid_currency_matches"
+    name = "RFQ Bid Currency Matches"
+    severity = Severity.ERROR
+    category = RuleCategory.CONSISTENCY
+    description = "Flags a bid priced in a currency other than the RFQ's."
+    check_name = "check_bid_currency_matches"
+
+
+class RFQBidAmountsParseable(_RFQRule):
+    """Every bid amount must be a number."""
+
+    rule_id = "rfq.bid_amounts_parseable"
+    name = "RFQ Bid Amounts Parseable"
+    severity = Severity.ERROR
+    category = RuleCategory.STRUCTURE
+    description = "Flags a bid whose amount is not a positive number and cannot be ranked."
+    check_name = "check_bid_amounts_parseable"
+
+
+class RFQBidsStillValid(_RFQRule):
+    """A bid should still be inside its validity period when it is awarded."""
+
+    rule_id = "rfq.bids_still_valid"
+    name = "RFQ Bids Still Valid"
+    severity = Severity.WARNING
+    category = RuleCategory.QUALITY
+    description = "Flags a bid awarded after its own validity period has expired."
+    check_name = "check_bids_still_valid"
+
+
+class RFQAwardHasCompetition(_RFQRule):
+    """An award should rest on a field of bids, not on one."""
+
+    rule_id = "rfq.award_has_competition"
+    name = "RFQ Award Has Competition"
+    severity = Severity.WARNING
+    category = RuleCategory.COMPLIANCE
+    description = "Flags an award made against fewer than three bids."
+    check_name = "check_award_has_competition"
+
+
 # ── Registration ────────────────────────────────────────────────────────────
 
 
@@ -7467,9 +8143,16 @@ def register_builtin_rules() -> None:
         (ScheduleHighFloat(), None),
         (ScheduleMissingDuration(), None),
         # AI Takeoff (vision-LLM plan reading, issue #194)
-        (TakeoffScaleSanityRule(), None),
-        (TakeoffPolygonSelfIntersectionRule(), None),
-        (TakeoffLowConfidenceReviewRule(), None),
+        # Registered into ai_estimator as well as its own standard. The
+        # ai_takeoff set has no caller anywhere in the backend, so a rule that
+        # lives only there never runs; ai_estimator is the path that prices
+        # confirmed quantities and therefore the one that owes the user an
+        # account of the quantities it left out.
+        # Both sets that actually price a project: boq_quality is the universal
+        # default every BOQ validation passes, ai_estimator is the estimate run.
+        # Filed under its own "ai_takeoff" standard the rule would never run,
+        # because no caller validates against that set.
+        (TakeoffUnreviewedProposalsRule(), ["boq_quality", "ai_estimator"]),
         # Field Time (cost-coded, signed labour + plant timesheets)
         (FieldTimeHoursPerDayMax(), None),
         (FieldTimeLineComplete(), None),
@@ -7483,6 +8166,64 @@ def register_builtin_rules() -> None:
         (NearDuplicateLine(), ["estimate_audit"]),
         (MissingCompanionItem(), ["estimate_audit"]),
         (CatalogueRateOutlier(), ["estimate_audit"]),
+        # Procurement (purchase-order commitment gate)
+        # Registered into the "procurement" set, which ProcurementService._validate
+        # passes explicitly on approve and on the read-only validate endpoint. A
+        # set nobody passes is a set that never runs (the ai_takeoff lesson), so
+        # the reachability of this one is pinned by a test, not by convention.
+        (ProcurementPOHasLines(), ["procurement"]),
+        (ProcurementPOLineAmount(), ["procurement"]),
+        (ProcurementPOSubtotalMatchesLines(), ["procurement"]),
+        (ProcurementPOTotalMatchesSubtotal(), ["procurement"]),
+        (ProcurementPONoNegativeLine(), ["procurement"]),
+        (ProcurementPOCurrencySet(), ["procurement"]),
+        (ProcurementPOVendorAssigned(), ["procurement"]),
+        (ProcurementPORetentionWithinBounds(), ["procurement"]),
+        (ProcurementPODeliveryAfterIssue(), ["procurement"]),
+        (ProcurementPOLineCostCoded(), ["procurement"]),
+        # Subcontract agreements (activation gate)
+        # Registered into the "subcontract" set, which
+        # SubcontractorService._validate_agreement passes on activation and on
+        # the read-only validate endpoint.
+        (SubcontractAgreementHasScope(), ["subcontract"]),
+        (SubcontractPackageScopeDescribed(), ["subcontract"]),
+        (SubcontractAgreementValuePositive(), ["subcontract"]),
+        (SubcontractPackagesWithinValue(), ["subcontract"]),
+        (SubcontractAgreementDatesOrdered(), ["subcontract"]),
+        (SubcontractAgreementCurrencySet(), ["subcontract"]),
+        (SubcontractRetentionWithinBounds(), ["subcontract"]),
+        (SubcontractInsuranceValidAtStart(), ["subcontract"]),
+        # Submittals (submission gate)
+        # Registered into the "submittal" set, which
+        # SubmittalService._validate_submittal passes on submit and on the
+        # read-only validate endpoint.
+        (SubmittalReviewerAssigned(), ["submittal"]),
+        (SubmittalRequiredDatePresent(), ["submittal"]),
+        (SubmittalRequiredDateAfterSubmitted(), ["submittal"]),
+        (SubmittalReviewWindowSufficient(), ["submittal"]),
+        (SubmittalSpecSectionPresent(), ["submittal"]),
+        (SubmittalApproverDistinctFromReviewer(), ["submittal"]),
+        (SubmittalLinkedScopePresent(), ["submittal"]),
+        # RFQ bidding (publish and award gates)
+        # Two sets rather than one set plus an operation flag: the deadline
+        # must be in the future when the RFQ is published and must be in the
+        # past by the time it is awarded, so one set cannot hold both without a
+        # rule that silently no-ops. Both sets are passed by
+        # RFQBiddingService, issue_rfq and award_bid respectively.
+        (RFQScopeDescribed(), ["rfq_issue", "rfq_award"]),
+        (RFQCurrencySet(), ["rfq_issue", "rfq_award"]),
+        (RFQDeadlineParseable(), ["rfq_issue", "rfq_award"]),
+        (RFQDeadlinePresent(), ["rfq_issue"]),
+        (RFQDeadlineInFuture(), ["rfq_issue"]),
+        (RFQHasRecipients(), ["rfq_issue"]),
+        (RFQBidCurrencyMatches(), ["rfq_award"]),
+        (RFQBidAmountsParseable(), ["rfq_award"]),
+        (RFQBidsStillValid(), ["rfq_award"]),
+        (RFQAwardHasCompetition(), ["rfq_award"]),
+        # Sheet completeness (drawing index / issue register reconciliation)
+        (SheetCompletenessMissing(), ["sheet_completeness"]),
+        (SheetCompletenessExtra(), ["sheet_completeness"]),
+        (SheetRevisionMismatch(), ["sheet_completeness"]),
     ]
 
     for rule, sets in rules:

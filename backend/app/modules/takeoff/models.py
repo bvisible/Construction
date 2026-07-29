@@ -82,6 +82,29 @@ class TakeoffDocument(Base):
     """Uploaded PDF document for quantity takeoff."""
 
     __tablename__ = "oe_takeoff_document"
+    __table_args__ = (
+        # One takeoff document per (project, source Project-Files document).
+        # POST /documents/from-source find-or-creates by (project_id,
+        # source_document_id): it does an unlocked SELECT then INSERT, so two
+        # concurrent opens of the same source PDF could both miss and both
+        # insert, minting duplicate rows that strand measurements on an
+        # unreachable document id (issue #369). This unique index is the
+        # database-level guard - the losing INSERT raises IntegrityError and the
+        # service resolves to the winning row. source_document_id is NULL for
+        # direct uploads, and PostgreSQL treats NULLs as distinct in a unique
+        # index, so ordinary uploads never collide; the constraint only ever
+        # binds the from-source rows that carry a non-NULL source id. Kept a
+        # plain (non-partial) unique index on purpose so the startup
+        # postgres_auto_migrate heal, which reconstructs plain indexes but skips
+        # partial/expression ones, materialises it on already-provisioned
+        # embedded and external databases too.
+        Index(
+            "uq_takeoff_document_project_source",
+            "project_id",
+            "source_document_id",
+            unique=True,
+        ),
+    )
 
     filename: Mapped[str] = mapped_column(String(500), nullable=False)
     pages: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -169,7 +192,16 @@ class TakeoffMeasurement(Base):
     page: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     type: Mapped[str] = mapped_column(String(50), nullable=False)  # distance, area, count, polyline, volume
     group_name: Mapped[str] = mapped_column(String(100), nullable=False, default="General")
-    group_color: Mapped[str] = mapped_column(String(20), nullable=False, default="#3B82F6")
+    # NULL = "no per-measurement colour override" (issue #378). Since #299 a
+    # stored value means the user recoloured THIS measurement; the client omits
+    # the field when they never did. The old blue default stamped an override
+    # onto every uncoloured measurement, so a cache-less load painted blue
+    # instead of following the group colour. The column is nullable with no
+    # default so a create that omits the colour stores a genuine NULL, which the
+    # renderers read as "fall back to the group colour". Existing rows that were
+    # stamped blue keep their value (backward-compatible); only new uncoloured
+    # rows are NULL. See migration v3254_takeoff_measurement_color_nullable.
+    group_color: Mapped[str | None] = mapped_column(String(20), nullable=True, default=None)
     annotation: Mapped[str | None] = mapped_column(String(500), nullable=True)
     points: Mapped[list] = mapped_column(  # type: ignore[assignment]
         JSON, nullable=False, default=list, server_default="[]"
@@ -198,6 +230,25 @@ class TakeoffMeasurement(Base):
     # rollup. Migrating it would force every existing PDF takeoff session
     # in production to be re-calibrated for no precision gain.
     scale_pixels_per_unit: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Where that ratio came from. A wrong scale is the single error that
+    # multiplies through every quantity on a sheet, and today a takeoff found
+    # to be mis-scaled cannot be narrowed to the affected rows: the number is
+    # stored, its origin is not. With this the recompute is scoped to the rows
+    # that actually inherited the bad calibration.
+    #
+    # Deliberately nullable with no backfill. Every row created before this
+    # column reads NULL, and NULL means "we do not know", which is the truth -
+    # inventing a plausible source for historical rows would defeat the point
+    # of a provenance field. Surfaces render NULL as "Unknown", never blank.
+    #
+    # The accepted values live in ``schemas.ScaleSource``:
+    #   page_text          read from the PDF's own text layer
+    #   recovered_text     read by OCR from a scanned sheet
+    #   vision_read        read by a vision model off the rendered page
+    #   manual_calibration the user drew a known dimension and set it
+    #   preset             a standard ratio picked from the list (1:50, 1:100)
+    #   inherited          taken from the page the measurement was drawn on
+    scale_source: Mapped[str | None] = mapped_column(String(24), nullable=True)
     linked_boq_position_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # ── Vision-LLM plan reading (issue #194) ───────────────────────────────
     # Provenance and review state. All three are additive with a server_default

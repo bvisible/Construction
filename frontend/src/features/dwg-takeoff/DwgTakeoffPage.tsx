@@ -67,8 +67,11 @@ import {
   GitCompare,
   FileStack,
   Hash,
+  FolderOpen,
 } from 'lucide-react';
-import { Badge, ConfirmDialog, DismissibleInfo, ElementInfoPopover, ModuleGuideButton, type DWGElementPayload } from '@/shared/ui';
+import { Badge, ConfirmDialog, DismissibleInfo, ElementInfoPopover, ModuleGuideButton, ProjectFilePicker, projectDocumentToFile, type DWGElementPayload } from '@/shared/ui';
+import { DWG_TAKEOFF_FORMATS } from '@/shared/lib/projectFileFormats';
+import type { DocumentItem } from '@/features/documents/api';
 import { useConfirm } from '@/shared/hooks/useConfirm';
 import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
@@ -82,6 +85,7 @@ import { installBIMConverter } from '@/features/bim/api';
 import { ConverterInstallProgressBar } from '@/features/bim/ConverterInstallProgressBar';
 import { AutoInstallConverterNotice } from '@/features/bim/AutoInstallConverterNotice';
 import { useAutoInstallConverter } from '@/features/bim/useAutoInstallConverter';
+import { ElementCostMatchPanel } from '@/features/match';
 import {
   fetchDrawing,
   fetchDrawings,
@@ -667,16 +671,25 @@ export function DwgTakeoffPage() {
   // ``clearProject`` wiped a stale id from localStorage), use the first
   // project from the server list. Without this, ``fetchDrawings('')``
   // short-circuits to ``[]`` and the DWG panel looks empty on every
-  // reload - reported as "при перезагрузке потеряются все документы".
+  // reload, reported as losing every document on reload.
   // The drawings themselves are always persisted server-side; only the
   // client-side project context was lost.
-  const { data: projects = [], isLoading: projectsLoading } = useQuery({
+  const {
+    data: projects = [],
+    isLoading: projectsLoading,
+    isError: projectsFailed,
+  } = useQuery({
     queryKey: ['projects'],
     queryFn: projectsApi.list,
     staleTime: 5 * 60_000,
   });
   const projectId = activeProjectId || projects[0]?.id || '';
-  const noProjects = !projectsLoading && projects.length === 0;
+  // The default above turns a failed request into an empty array, so this must
+  // require the query to have SUCCEEDED before it calls the account empty.
+  // Otherwise an unreachable backend renders "Create a project first" to
+  // someone who already has projects, and the obvious response to that advice
+  // is to create a duplicate.
+  const noProjects = !projectsLoading && !projectsFailed && projects.length === 0;
 
   // Persist the fallback choice so subsequent reloads and sibling
   // modules (BIM, BOQ, CDE) see the same active project instead of each
@@ -901,6 +914,13 @@ export function DwgTakeoffPage() {
   // collides with the main new-drawing upload flow above.
   const revisionInputRef = useRef<HTMLInputElement>(null);
   const [uploadFile, setUploadFile] = useState<File | null>(null);
+  /** "Open from project files" picker: lists the DWG/DXF already filed in
+   *  this project so the user does not have to find the drawing on their own
+   *  machine again. Picking one downloads its bytes into the SAME
+   *  `uploadFile` state a local pick fills, so the rest of the upload flow
+   *  (name, discipline, converter auto-install) is untouched. */
+  const [showProjectFilePicker, setShowProjectFilePicker] = useState(false);
+  const [pickingFileId, setPickingFileId] = useState<string | null>(null);
   /** Visual drop-zone hover state - flips on `dragenter`/`dragover` and
    *  back on `dragleave`/`drop`. The hero card and modal both bind to it
    *  so the dashed border highlights while a real file is hovering, not
@@ -2448,6 +2468,38 @@ export function DwgTakeoffPage() {
     setUploadName('');
     setUploadDiscipline('architectural');
   }, []);
+
+  /** Adopt a drawing already stored in the project's Files area. The bytes
+   *  are downloaded and handed to the SAME `uploadFile` state a local pick
+   *  fills, so conversion, naming and the converter auto-install all behave
+   *  identically whichever way the file arrived. */
+  const handlePickProjectFile = useCallback(
+    async (doc: DocumentItem) => {
+      setPickingFileId(doc.id);
+      try {
+        const file = await projectDocumentToFile(doc);
+        setUploadFile(file);
+        setUploadName((prev) => prev || doc.name.replace(/\.[^.]+$/, ''));
+        setShowProjectFilePicker(false);
+      } catch (err) {
+        addToast({
+          type: 'error',
+          title: t('project_files.pick_failed_title', {
+            defaultValue: 'Could not open that file',
+          }),
+          message:
+            err instanceof Error
+              ? err.message
+              : t('project_files.pick_failed_msg', {
+                  defaultValue: 'The file could not be read from the project. Try again.',
+                }),
+        });
+      } finally {
+        setPickingFileId(null);
+      }
+    },
+    [addToast, t],
+  );
 
   /* ── BOQ-link picker handlers ──────────────────────────────────────
    * Mirror the PDF-takeoff pattern: self-contained picker loads projects,
@@ -4572,6 +4624,60 @@ export function DwgTakeoffPage() {
                         </div>
                       )}
 
+                      {/* Match to a cost position - search every loaded cost catalogue by this
+                          entity's layer/type/size and apply a priced BOQ position, linked to the
+                          entity via a text_pin annotation. */}
+                      {projectId && (() => {
+                        const matchPayload = toDWGElementPayload(selectedEntity, effectiveScale, {
+                          calculatePerimeter,
+                          calculateArea,
+                          calculateDistance,
+                        });
+                        const matchMeasurement = extractEntityMeasurement(selectedEntity, effectiveScale);
+                        const matchQuantities: Record<string, number> = {};
+                        if (matchMeasurement && Number.isFinite(matchMeasurement.value)) {
+                          const isArea = matchMeasurement.kind === 'area'; // m2 -> area
+                          matchQuantities[isArea ? 'area_m2' : 'length_m'] = matchMeasurement.value;
+                        }
+                        return (
+                          <div className="mt-2 pt-2 border-t border-[#3a3a3a]">
+                            <p className="text-[10px] font-bold uppercase tracking-widest text-blue-300 mb-1.5">
+                              {t('match.apply_section_title', { defaultValue: 'Find a cost position' })}
+                            </p>
+                            <div className="h-96 rounded-sm border border-[#3a3a3a] overflow-hidden bg-surface-primary">
+                              <ElementCostMatchPanel
+                                key={selectedEntity.id}
+                                source="dwg"
+                                projectId={projectId}
+                                elementKey={selectedEntity.id}
+                                compact
+                                rawElementData={matchPayload as unknown as Record<string, unknown>}
+                                envelope={{
+                                  category: selectedEntity.type,
+                                  description: `${selectedEntity.type} · ${selectedEntity.layer}`,
+                                  properties: matchPayload.properties,
+                                  quantities: matchQuantities,
+                                  unitHint: matchMeasurement?.unit ?? null,
+                                }}
+                                quantityOverride={matchMeasurement ? matchMeasurement.value : null}
+                                onApplied={async (result) => {
+                                  // Native back-link: ensure a text_pin annotation for this entity
+                                  // and link it to the freshly created BOQ position, so the entity
+                                  // shows as linked on the canvas.
+                                  const annotationId = await ensureAnnotationForEntity(
+                                    selectedEntity,
+                                    matchMeasurement,
+                                  );
+                                  if (annotationId) {
+                                    await linkAnnotationToBoq(annotationId, result.position_id);
+                                  }
+                                }}
+                              />
+                            </div>
+                          </div>
+                        );
+                      })()}
+
                       {/* ── Polyline measurements ──────────────── */}
                       {selectedEntity.type === 'LWPOLYLINE' && selectedEntity.vertices && selectedEntity.vertices.length >= 2 && (() => {
                         const verts = selectedEntity.vertices!;
@@ -4813,6 +4919,23 @@ export function DwgTakeoffPage() {
               )}
             </button>
 
+            {/* Second way in: a drawing already filed in this project. The
+                local upload above stays exactly as it was - this only saves
+                the user from hunting down (and re-uploading) a file the
+                project already holds. */}
+            <button
+              type="button"
+              onClick={() => setShowProjectFilePicker(true)}
+              disabled={!projectId}
+              data-testid="dwg-open-from-project-files"
+              className="mt-2 inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-border-medium bg-surface-primary px-3 py-2 text-xs font-semibold text-content-secondary transition-colors hover:border-oe-blue/40 hover:text-oe-blue disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <FolderOpen size={14} />
+              {t('project_files.open_from_project', {
+                defaultValue: 'Open from project files',
+              })}
+            </button>
+
             {/* Auto-install of the local DWG converter (background, no click).
                 Shown when the user picks a .dwg and the converter is missing;
                 DXF uploads bypass it entirely. The notice renders only while
@@ -4988,6 +5111,17 @@ export function DwgTakeoffPage() {
           </div>
         </div>
       )}
+
+      {/* "Open from project files" - lists the DWG/DXF already stored in
+          this project so a filed drawing does not have to be re-uploaded. */}
+      <ProjectFilePicker
+        open={showProjectFilePicker}
+        onClose={() => setShowProjectFilePicker(false)}
+        projectId={projectId}
+        accepted={DWG_TAKEOFF_FORMATS}
+        onPick={handlePickProjectFile}
+        busyId={pickingFileId}
+      />
 
       {/* Delete drawing confirmation */}
       {confirmDeleteId && (
@@ -6232,9 +6366,9 @@ function UploadProgressInline() {
  *
  * These render in place of the DxfViewer when the selected drawing has
  * not yet reached `status="ready"`. Before P1 the page silently rendered
- * an empty viewer for the entire 3-8 minute DDC conversion window - the
- * user reported it as "показывает что проект загружен - но ничего не
- * показывается и только потом через 5 минут происходит загрузка".
+ * an empty viewer for the entire 3-8 minute DDC conversion window, reported
+ * as the project showing up as loaded while nothing is rendered, with the
+ * actual load only arriving minutes later.
  *
  * ConversionProgressCard intentionally does NOT show a determinate
  * percentage. The DDC pipeline does not expose granular progress, and a

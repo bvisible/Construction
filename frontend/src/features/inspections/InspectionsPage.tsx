@@ -35,7 +35,7 @@ import {
   Network,
   ArrowRight,
 } from 'lucide-react';
-import { Button, Card, Badge, EmptyState, Breadcrumb, ConfirmDialog, RecoveryCard, SkeletonTable, IntroRichText, ModuleGuideButton } from '@/shared/ui';
+import { Button, Card, Badge, EmptyState, Breadcrumb, ConfirmDialog, RecoveryCard, SkeletonTable, IntroRichText, ModuleGuideButton, CollapsibleSection } from '@/shared/ui';
 import { RequiresProject } from '@/shared/auth/RequiresProject';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { SectionIntro } from '@/features/validation';
@@ -61,6 +61,8 @@ import {
   type ChecklistEntryPayload,
 } from './api';
 import { inspectionsGuide } from './inspectionsGuide';
+import { InsightsPanel, InsightsToggleButton, useModuleInsights } from '@/features/insights';
+import { buildInspectionsInsights } from './inspectionsInsights';
 
 /* -- Constants ------------------------------------------------------------- */
 
@@ -187,6 +189,62 @@ function checklistToPayload(rows: ChecklistRow[]): ChecklistEntryPayload[] {
       critical: r.critical,
       notes: r.notes.trim() || undefined,
     }));
+}
+
+/**
+ * The form state an inspection opens with.
+ *
+ * Pure and module-level so the edit handler can rebuild the same baseline the
+ * modal started from and send only what the user actually changed. Prefilling
+ * from a row and then PATCHing every field back rewrites fields nobody opened
+ * with the values they held when the list was last read, quietly undoing an
+ * edit somebody else made in between.
+ *
+ * The checklist is flattened here (a stored item calls its text `description`,
+ * the form calls it `question`), so both sides see the same shape.
+ */
+export function inspectionFormData(inspection: Inspection): InspectionFormData {
+  return {
+    title: inspection.title,
+    inspection_type: inspection.inspection_type,
+    date: inspection.date || todayStr(),
+    inspector: inspection.inspector || '',
+    location: inspection.location || '',
+    checklist: inspection.checklist.map((c) => ({
+      question: c.description,
+      critical: c.critical,
+      notes: c.notes,
+    })),
+  };
+}
+
+/**
+ * The body of an edit save: only the fields the user actually changed.
+ *
+ * The update route dumps with `exclude_unset=True`, so a field left out of the
+ * body is left alone in the database, which is what makes omission the right
+ * tool. Hand-written rather than a generic key diff because the payload renames
+ * on the way out (`date` becomes `inspection_date`, `inspector` becomes
+ * `inspector_id`); a name-matched diff would find no form field behind the
+ * renamed key, read it as unchanged and drop the user's edit on every save.
+ */
+export function buildInspectionPatch(
+  form: InspectionFormData,
+  base: InspectionFormData,
+): UpdateInspectionPayload {
+  const data: UpdateInspectionPayload = {};
+  if (form.title !== base.title) data.title = form.title;
+  if (form.inspection_type !== base.inspection_type) data.inspection_type = form.inspection_type;
+  if (form.date !== base.date) data.inspection_date = form.date || null;
+  if (form.inspector !== base.inspector) data.inspector_id = form.inspector || null;
+  if (form.location !== base.location) data.location = form.location || null;
+  // Compared by content, not identity: rebuilding the baseline makes fresh row
+  // objects every time, so a reference test would resend the whole checklist on
+  // every save and defeat the point.
+  if (JSON.stringify(form.checklist) !== JSON.stringify(base.checklist)) {
+    data.checklist_data = checklistToPayload(form.checklist);
+  }
+  return data;
 }
 
 function CreateInspectionModal({
@@ -1076,15 +1134,12 @@ function HowInspectionsWork() {
   ];
 
   return (
-    <section
-      aria-label={t('inspections.how_title', { defaultValue: 'How inspections fit together' })}
-      className="rounded-xl border border-border-light bg-surface-secondary/40 p-4"
+    <CollapsibleSection
+      storageKey="inspections.how"
+      icon={<Network size={15} className="text-oe-blue" />}
+      title={t('inspections.how_title', { defaultValue: 'How inspections fit together' })}
     >
-      <h2 className="flex items-center gap-1.5 text-sm font-semibold text-content-primary">
-        <Network size={15} className="text-oe-blue" />
-        {t('inspections.how_title', { defaultValue: 'How inspections fit together' })}
-      </h2>
-      <p className="mt-1 text-xs text-content-tertiary">
+      <p className="text-xs text-content-tertiary">
         {t('inspections.how_intro', {
           defaultValue:
             'Schedule quality checks, record pass or fail on site, and turn every failure into a tracked defect. Start by scheduling an inspection for the work you need to verify.',
@@ -1135,7 +1190,7 @@ function HowInspectionsWork() {
           {t('inspections.mod_closeout', { defaultValue: 'Handover & Closeout' })}
         </ModLink>
       </div>
-    </section>
+    </CollapsibleSection>
   );
 }
 
@@ -1208,6 +1263,16 @@ export function InspectionsPage() {
     const failed = inspections.filter((i) => i.result === 'fail').length;
     return { total, scheduled, passed, failed };
   }, [inspections]);
+
+  // Module Insights - KPIs and charts over the loaded inspections. When the
+  // project has none, buildInspectionsInsights returns a labelled sample set so
+  // the panel is never empty on first open. Declared with the top-level hooks,
+  // above the single return, so the hook order stays stable.
+  const insights = useModuleInsights('inspections', { defaultOpen: true });
+  const { datasets: insightDatasets, builtins: insightBuiltins } = useMemo(
+    () => buildInspectionsInsights(inspections, '', t),
+    [inspections, t],
+  );
 
   // Invalidation
   const invalidateAll = useCallback(() => {
@@ -1307,16 +1372,11 @@ export function InspectionsPage() {
   const handleEditSubmit = useCallback(
     (formData: InspectionFormData) => {
       if (!editingInspection) return;
+      // Rebuild the baseline the modal started from, so the save carries only
+      // what the user actually edited. See `buildInspectionPatch`.
       editMut.mutate({
         id: editingInspection.id,
-        data: {
-          title: formData.title,
-          inspection_type: formData.inspection_type,
-          inspection_date: formData.date || null,
-          inspector_id: formData.inspector || null,
-          location: formData.location || null,
-          checklist_data: checklistToPayload(formData.checklist),
-        },
+        data: buildInspectionPatch(formData, inspectionFormData(editingInspection)),
       });
     },
     [editMut, editingInspection],
@@ -1528,6 +1588,7 @@ export function InspectionsPage() {
         })}
         actions={
           <>
+            <InsightsToggleButton open={insights.open} onClick={insights.toggle} />
             <ModuleGuideButton content={inspectionsGuide} />
             <Button
               variant="secondary"
@@ -1556,6 +1617,20 @@ export function InspectionsPage() {
             </Button>
           </>
         }
+      />
+
+      {/* Module Insights panel - toggled by the header button, placed high so
+          its charts (real, or labelled sample) show the moment the register
+          opens. */}
+      <InsightsPanel
+        open={insights.open}
+        title={t('inspections.insights.title', { defaultValue: 'Inspection insights' })}
+        datasets={insightDatasets}
+        builtins={insightBuiltins}
+        custom={insights.custom}
+        onAdd={insights.addCustom}
+        onUpdate={insights.updateCustom}
+        onRemove={insights.removeCustom}
       />
 
       <SectionIntro
@@ -1803,22 +1878,7 @@ export function InspectionsPage() {
           onSubmit={editingInspection ? handleEditSubmit : handleCreateSubmit}
           isPending={editingInspection ? editMut.isPending : createMut.isPending}
           projectName={projectName}
-          initialData={
-            editingInspection
-              ? {
-                  title: editingInspection.title,
-                  inspection_type: editingInspection.inspection_type,
-                  date: editingInspection.date || todayStr(),
-                  inspector: editingInspection.inspector || '',
-                  location: editingInspection.location || '',
-                  checklist: editingInspection.checklist.map((c) => ({
-                    question: c.description,
-                    critical: c.critical,
-                    notes: c.notes,
-                  })),
-                }
-              : null
-          }
+          initialData={editingInspection ? inspectionFormData(editingInspection) : null}
         />
       )}
 

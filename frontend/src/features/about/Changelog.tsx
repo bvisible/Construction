@@ -38,6 +38,132 @@ interface ChangelogEntry {
 // date, title and meaning intact; trim the prose, not the facts.
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '12.9.0',
+    date: '2026-07-28',
+    tag: 'FIX',
+    summary:
+      'The vector service now installs under the platform data directory instead of the account home, so a container no longer needs its ownership corrected by hand before CAD to cost matching will work, and a permission problem names the path and the reason. Twenty-one record updates stopped marking every loaded object stale, which had been raising errors far from the code that caused them, and the desktop diagnostic no longer reports a healthy PDF reader as broken.',
+  },
+  {
+    version: '12.8.0',
+    date: '2026-07-28',
+    tag: 'NEW',
+    summary:
+      'Measurements in PDF takeoff can be arranged freely: dropped below a row and not only above it, dragged into another group, and whole group blocks moved, with the arrangement surviving a reload. Purchase orders and invoices now leave the audit rows they were missing, agreed variation orders count as committed cost, forms save only the fields you actually edited, and the vector service explains why it will not start instead of returning a bare error.',
+  },
+  {
+    version: '12.7.0',
+    date: '2026-07-27',
+    tag: 'NEW',
+    summary:
+      'Progress percentages now roll up from the individual positions and weight by design quantity instead of taking the highest reading anywhere, so figures quoted from older reports need regenerating. Large models start drawing almost immediately, purchase orders and subcontracts are checked before they commit money, and the desktop update button no longer answers with command line usage text.',
+  },
+  {
+    version: '12.6.1',
+    date: '2026-07-25',
+    tag: 'FIX',
+    summary:
+      'Live notifications and shared editing presence work again: both real-time channels were refusing every connection, so the notification bell only updated on reload and two people on the same position could not see each other. The handshake is now covered by a test in the database gate so it cannot break unnoticed again.',
+  },
+  {
+    version: '12.6.0',
+    date: '2026-07-24',
+    tag: 'NEW',
+    summary:
+      'Case studies now open the running demo on the exact module the story is about, so a 4D sequence case lands on the schedule board and a 5D cost model case lands on the BOQ. Sign-in keeps your intended destination too: arriving at the login screen from a deep link returns you to that page after you sign in instead of dropping you on the dashboard.',
+  },
+  {
+    version: '12.5.0',
+    date: '2026-07-24',
+    tag: 'NEW',
+    summary:
+      'Every module register can show a Module Insights panel with key counts, a breakdown chart and a build-your-own chart maker, now across dozens of registers, and the long how-it-works explainers fold into a single expandable line. Deadlines gains a cross-module overdue register with an escalation sweep, file approvals gets its own register page with Excel export and workflow notifications, and documents can reconcile a sheet set against the drawing index. Fixes include the correct router base under the /demo prefix, the BOQ resources toggle firing on the first click, and cost bases no longer doubling work names.',
+  },
+  {
+    version: '12.4.0',
+    date: '2026-07-23',
+    tag: 'NEW',
+    summary:
+      'The Common Data Environment can adopt an ISO 19650 approval preset and clone it into an editable project route, wired through the setup wizard with a preset library and a training case. Correspondence, RFI and inbound items get a Create task action that pre-fills from the source and tags the task with where it came from. Reporting adds a COBie facility export over the whole asset register, and e-signatures move onto a pluggable provider interface. The six international modules link out to their files, schedule and change orders, and every public case page now carries the home-page header.',
+  },
+  {
+    version: '12.3.0',
+    date: '2026-07-23',
+    tag: 'NEW',
+    summary:
+      'Six delivery and authority modules that had a backend but no screens are now fully usable: authority submissions, authority review cycles with an evidence dossier, an e-signature registry, a source-data register, a work-type route classifier and site supervision, each with its guide and worked cases. The Bill of Quantities grid follows the dark theme, PDF takeoff restores and shares the current sheet through the URL, and the scale auto-detect strip stays quiet when idle or once a page is calibrated.',
+  },
+  {
+    version: '12.2.0',
+    date: '2026-07-22',
+    tag: 'NEW',
+    summary:
+      'Model review keeps the 3D model in view while checks run, instead of the viewer ballooning off screen when a long report renders. The pipeline builder gains ten ready-to-run templates, a saved-workflow picker that used to be reachable only by URL, and seven new node types, and it now flags steps wired to nothing. Point cloud adds a Groups tool that captures a region with its point count, volume and plan area and sends the quantity straight into a BOQ. Kyrgyz joins the interface languages as a full translation, bringing the count to twenty-eight.',
+  },
+  {
+    version: '12.1.0',
+    date: '2026-07-21',
+    tag: 'NEW',
+    summary:
+      'Approval routes get a tenant-wide preset library and a dry-run simulator, interface management links to RFIs and schedule activities, and the CDE adds ISO 19650 roles with a per-project go-live readiness score. National cost bases translate into the market language with a per-row revision id, cases show a compact process row, BOQ positions renumber freely, and the multi-tenant RLS policy is hardened.',
+  },
+  {
+    version: '12.0.1',
+    date: '2026-07-19',
+    tag: 'NEW',
+    summary:
+      'Patch release. Corrects a frontend type-build error introduced in 12.0.0 that stopped the container image from building, with no functional or behavioural change.',
+  },
+  {
+    version: '12.0.0',
+    date: '2026-07-19',
+    tag: 'NEW',
+    summary:
+      'Model review now runs twenty more automatic checks over an imported model, from missing element properties and dimensions to duplicate marks and classification coverage, all shown in the review panel and folded into the completeness score. New screens surface analytics that were computed but never shown: a physical progress page with an actual against planned S-curve and quantity variance, contract gain share, security coverage and milestone schedule panels, and a finance retention ledger, each translated into every language.',
+  },
+  {
+    version: '11.18.0',
+    date: '2026-07-18',
+    tag: 'NEW',
+    summary:
+      'Bills of quantities now export back to FIEBDC-3 (BC3), the Spanish and Latin American construction budget format, with the full chapter and item hierarchy, codes, units, quantities and rates, and a clean round-trip through the BC3 reader. The in-app error log also scrubs a wider set of secrets, including bare session tokens, before anything reaches local storage or a downloaded bug report.',
+  },
+  {
+    version: '11.17.0',
+    date: '2026-07-18',
+    tag: 'NEW',
+    summary:
+      'Security hardening across the outbound connectors and several server-side parsers. The Slack, Teams and Discord webhook connectors re-check the target address at send time, so a webhook pointed at an internal address is refused, not only when it is saved. Status probes no longer echo raw exception text and return a short, stable message instead. The schedule, change order, smart view, formula and email parsers cap the length they inspect before the pattern runs. Browser-stored BIM shortcuts and selection sets reject reserved keys, and the desktop download page escapes the release tag it reads from the public API.',
+  },
+  {
+    version: '11.16.2',
+    date: '2026-07-18',
+    tag: 'NEW',
+    summary:
+      'The longer case introduction now shows in every interface language. Fourteen guided cases carried this paragraph in English only; it is now translated into all twenty-seven other locales so each case reads in one language.',
+  },
+  {
+    version: '11.16.1',
+    date: '2026-07-18',
+    tag: 'NEW',
+    summary:
+      'The step blocks on the case detail page are more compact: smaller padding, title and body text, a tighter gap between the text and the data-flow column, and shorter connectors, so each step takes less room and the page reads denser with less empty space.',
+  },
+  {
+    version: '11.16.0',
+    date: '2026-07-18',
+    tag: 'NEW',
+    summary:
+      'The case detail page lays its header out in two columns on wide screens, with the case identity on the left and a compact control panel (progress, start, reset and the sample-project picker) on the right, so it reads shorter and denser. The featured article card in the sidebar now shows only its title and expands to reveal the summary and link when you hover or focus it.',
+  },
+  {
+    version: '11.15.0',
+    date: '2026-07-18',
+    tag: 'NEW',
+    summary:
+      'Match a selected element to a priced cost position from inside every viewer. In the BIM, PDF takeoff and DWG takeoff viewers, pick an element and the panel reads its properties, searches every loaded cost catalogue and ranks the positions that fit; accept one to create a priced BOQ line for that element and link it back in a single step.',
+  },
+  {
     version: '11.14.0',
     date: '2026-07-18',
     tag: 'NEW',

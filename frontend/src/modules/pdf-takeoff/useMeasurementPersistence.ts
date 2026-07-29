@@ -1,8 +1,26 @@
 // DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 // Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-import { useCallback, useContext, useEffect, useRef, useState } from 'react';
+import {
+  type Dispatch,
+  type SetStateAction,
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
 import { QueryClientContext } from '@tanstack/react-query';
-import { takeoffApi, type MeasurementCreate, type MeasurementResponse } from '@/features/takeoff/api';
+import {
+  takeoffApi,
+  type MeasurementCreate,
+  type MeasurementResponse,
+  type ScaleSource,
+} from '@/features/takeoff/api';
+import {
+  isScaleSource,
+  attributeScaleSource,
+  inferredCalibrationPages,
+} from '@/features/takeoff/lib/scaleSource';
 import {
   type PageScales,
   defaultScaleConfig,
@@ -31,6 +49,8 @@ interface Measurement {
   annotation: string;
   page: number;
   group: string;
+  /** Mirrored copy of the group's band (issue #393); see takeoff-types.ts. */
+  groupBand?: number;
   depth?: number;
   area?: number;
   text?: string;
@@ -66,6 +86,10 @@ interface Measurement {
    *  same way `fillAlpha` / `strokeWidth` do, so a re-coloured group survives a
    *  server sync and is visible to other users (not localStorage-only). */
   groupColor?: string;
+  /** Explicit paint (z) order key (issue #379). Round-trips via the metadata
+   *  blob like the appearance overrides so a bring-to-front / send-to-back
+   *  survives a server sync. Undefined = fall back to array (creation) order. */
+  order?: number;
   /** Opening deduction (area void). Stored as positive gross area; the
    *  rollup subtracts it. Round-trips so a void survives a server sync. */
   isDeduction?: boolean;
@@ -76,8 +100,14 @@ interface Measurement {
   linkedPositionOrdinal?: string;
   linkedBoqId?: string;
   linkedPositionLabel?: string;
-  /** AI-suggested but unconfirmed (issue #194): excluded from server sync
-   *  and localStorage until the user accepts it (which clears the flag). */
+  /** AI-suggested but unconfirmed (issue #194).
+   *
+   *  The row itself already exists server-side: every detector stores what it
+   *  proposes as `review_status='proposed'` before answering. This flag is
+   *  what keeps it OUT of the ordinary create/PATCH sync and out of
+   *  localStorage, because its lifecycle belongs to the review endpoint, not
+   *  to the canvas autosave. Accepting clears the flag and hands the row back
+   *  to the normal sync; rejecting takes it off the canvas entirely. */
   suggested?: boolean;
   /** Recognition confidence 0..1 on AI-sourced measurements. */
   confidence?: number;
@@ -95,6 +125,11 @@ interface Measurement {
   detectionDeclaredAreaM2?: number;
   detectionErrorPct?: number;
   // //// END NEOFFICE PATCH
+  /** Capture provenance for the scale this measurement was computed with,
+   *  read back off the server row so the properties panel can say where a
+   *  ratio came from. Mirrors the field of the same name on the shared
+   *  `Measurement` in `features/takeoff/lib/takeoff-types.ts`. */
+  scaleSource?: ScaleSource;
 }
 
 interface ScaleConfig {
@@ -281,6 +316,7 @@ function toApiFormat(
   projectId: string,
   documentId: string,
   pageScales?: PageScales,
+  inferredCalibrations?: ReadonlySet<number>,
 ): MeasurementCreate {
   // Area measurements carry the polygon area in `m.value`; volume
   // measurements carry the area separately in `m.area`. Persist the
@@ -326,6 +362,16 @@ function toApiFormat(
     // client value against the raw geometry (Audit B8) instead of
     // trusting it blindly.
     scale_pixels_per_unit: ppu,
+    // Where that ratio came from, so a sheet later found to be mis-scaled can
+    // be narrowed to the rows that inherited the bad one. Only the drawing
+    // surface knows this, so the client has to state it - but it states NULL
+    // rather than a guess when it cannot attribute the calibration, because a
+    // wrong provenance is the one a re-scale would trust.
+    scale_source: attributeScaleSource({
+      pixelsPerUnit: ppu,
+      pageHasOwnCalibration: scaleCalibrated,
+      calibrationIsInferred: inferredCalibrations?.has(m.page) ?? false,
+    }),
     // Opening deduction only applies to an area; the server enforces this
     // too but we keep the payload honest.
     is_deduction: m.type === 'area' ? Boolean(m.isDeduction) : false,
@@ -351,6 +397,14 @@ function toApiFormat(
       // Group colour (issue #313): mirrored onto each measurement so the group
       // colour scheme round-trips server-side like the per-measurement styles.
       group_custom_color: m.groupColor,
+      // Group band (issue #393): mirrored like the group colour so a pinned
+      // group order round-trips server-side. Without it a reload re-derives the
+      // bands from first appearance, and a document where a measurement has
+      // changed group derives a different answer than the one on screen.
+      group_band: m.groupBand,
+      // Paint (z) order key (issue #379); round-trips so a reorder survives a
+      // server sync and a cache-less reload.
+      order: m.order,
       area: areaValue ?? undefined,
       frontend_id: m.id,
       // Per-page calibration intent (issue #277): distinguishes a real
@@ -398,7 +452,13 @@ function syncSignature(m: Measurement): string {
     // never reached the server. They are now part of the signature so a
     // group / colour / annotation / notes edit re-syncs.
     g: m.group || 'General',
-    col: m.color || '#3B82F6',
+    // Per-measurement colour override (issues #299/#396). Unset must NOT fold
+    // into the default hex here: a row pinned to '#3B82F6' and the same row
+    // with the pin cleared used to hash identically, so clearing an override
+    // back to "follow the group" never marked the row dirty and no PATCH was
+    // ever sent. Null is the honest encoding of "no override" and it is what
+    // {@link toApiUpdate} puts on the wire.
+    col: m.color || null,
     // Appearance overrides (issues #311/#312/#332): an opacity or stroke-width
     // edit must re-sync so the server copy carries it.
     fa: m.fillAlpha ?? null,
@@ -415,6 +475,13 @@ function syncSignature(m: Measurement): string {
     // Group colour (issue #313): a group re-colour restyles every measurement
     // in the group, so include it here to trigger the PATCH that persists it.
     gc: m.groupColor ?? null,
+    // Group band (issue #393): pinning the group order rewrites only this key
+    // on every row, so include it here or the pin would never re-sync and the
+    // next load would re-derive a different group order.
+    gb: m.groupBand ?? null,
+    // Paint (z) order (issue #379): a bring-to-front / send-to-back changes
+    // only this key, so include it here or the reorder would never re-sync.
+    ord: m.order ?? null,
     a: m.annotation || m.label || null,
     n: m.text ?? null,
   });
@@ -444,15 +511,20 @@ function geometrySignature(m: Measurement): string {
  *  through this path) PLUS the non-geometry properties (group, colour,
  *  annotation/label, notes) that must now persist on an in-place edit.
  *
- *  ``metadata`` is sent merged: the server replaces the metadata blob
- *  wholesale, so we re-send the same fields {@link toApiFormat} writes on
- *  create (notes/dimensions/calibration intent/BOQ link mirror) to avoid
- *  dropping them on an annotation-only edit. */
+ *  The server MERGES the incoming metadata over the stored blob rather than
+ *  replacing it (``new = {**existing, **incoming}``), which it does so that
+ *  server-stamped keys the client never echoes back (recognition run id,
+ *  verdict, compare key) survive a client PATCH. Two consequences for anything
+ *  written here: re-sending the fields {@link toApiFormat} writes on create is
+ *  harmless, and an omitted key does NOT clear the stored one. Clearing a
+ *  metadata value therefore has to be an explicit ``null`` - ``undefined`` is
+ *  dropped by ``JSON.stringify`` and leaves the old value in place. */
 function toApiUpdate(
   m: Measurement,
   scale?: ScaleConfig,
   scaleCalibrated = false,
   geometryChanged = true,
+  calibrationIsInferred = false,
 ): Partial<MeasurementCreate> {
   const ppu = scale && scale.pixelsPerUnit > 0 ? scale.pixelsPerUnit : null;
   const areaValue =
@@ -474,9 +546,20 @@ function toApiUpdate(
     slope_factor: m.slopeFactor,
     wastage_pct: m.wastagePct,
     multiplier: m.multiplier,
-    // Group colour (issue #313): re-sent on PATCH so a group re-colour /
-    // rename persists server-side (the server replaces metadata wholesale).
-    group_custom_color: m.groupColor,
+    // Group colour (issues #313/#397): re-sent on PATCH so a group re-colour /
+    // rename persists server-side. Explicitly NULL when the row has no
+    // mirrored colour, because the server merges metadata: omitting the key
+    // would leave the previous group's colour stored, and the next load would
+    // fold that stale value back in and repaint the destination group.
+    group_custom_color: m.groupColor ?? null,
+    // Group band (issue #393): explicitly NULL for the same reason as the
+    // colour above. The server merges metadata, so omitting the key on a row
+    // whose group was never pinned would leave a band from an earlier state
+    // stored, and the next load would fold it back in and reorder the groups.
+    group_band: m.groupBand ?? null,
+    // Paint (z) order key (issue #379): re-sent on PATCH so a bring-to-front /
+    // send-to-back persists (the server replaces the metadata blob wholesale).
+    order: m.order,
     area: areaValue ?? undefined,
     frontend_id: m.id,
     linked_boq_id: m.linkedBoqId,
@@ -487,8 +570,12 @@ function toApiUpdate(
   // billed quantity and never touch the page scale.
   const body: Partial<MeasurementCreate> = {
     group_name: m.group || 'General',
-    // Only persist a user-chosen colour (issue #299); see toApiFormat.
-    group_color: m.color || undefined,
+    // Per-measurement colour override (issues #299/#396). On CREATE an omitted
+    // key and a null mean the same thing, so toApiFormat omits it. On UPDATE
+    // they do not: the update schema is exclude_unset, so an omitted key means
+    // "leave unchanged" and would preserve a pin the user just cleared. Send
+    // the clear explicitly.
+    group_color: m.color || null,
     annotation: m.annotation || m.label || null,
     linked_boq_position_id: m.linkedPositionId ?? null,
     is_deduction: m.type === 'area' ? Boolean(m.isDeduction) : false,
@@ -507,6 +594,16 @@ function toApiUpdate(
     body.depth = m.depth ?? null;
     body.count_value = m.type === 'count' ? Math.round(m.value) : null;
     body.scale_pixels_per_unit = ppu;
+    // The source describes the ratio on the line above, so the two are always
+    // written together and never apart. A reshape re-captures the geometry at
+    // whatever the page reads now, so its provenance is re-attributed now too;
+    // sending the ratio alone would leave a label describing a capture that no
+    // longer happened, which is exactly what the server-side guard clears.
+    body.scale_source = attributeScaleSource({
+      pixelsPerUnit: ppu,
+      pageHasOwnCalibration: scaleCalibrated,
+      calibrationIsInferred,
+    });
     // Per-page calibration intent (issue #277): re-sent with the geometry so a
     // reshape keeps the row's calibration provenance, but never on a
     // non-geometry edit (the server merges metadata, so omitting it preserves
@@ -521,6 +618,17 @@ function fromApiFormat(r: MeasurementResponse): Measurement {
   return {
     id: (meta.frontend_id as string) || r.id,
     serverId: r.id,
+    // Carry the review state across the reload. Without this a stored
+    // proposal came back looking exactly like agreed work: still translucent
+    // nowhere, still in the review bar nowhere, and no way left to reject it.
+    suggested: r.review_status === 'proposed' ? true : undefined,
+    confidence: r.confidence ?? undefined,
+    // Read-only provenance of the row's captured scale; the properties panel
+    // and the exports render a missing value as "Unknown" rather than blank.
+    // Narrowed rather than asserted: a value the server has that this build
+    // does not know about is treated as unknown, which is what the surfaces
+    // already render, instead of reaching a label lookup that assumes it.
+    scaleSource: isScaleSource(r.scale_source) ? r.scale_source : undefined,
     type: r.type as Measurement['type'],
     points: r.points as Point[],
     value: r.measurement_value ?? r.count_value ?? 0,
@@ -548,13 +656,13 @@ function fromApiFormat(r: MeasurementResponse): Measurement {
     wastagePct: (meta.wastage_pct as number) ?? undefined,
     multiplier: (meta.multiplier as number) ?? undefined,
     groupColor: (meta.group_custom_color as string) ?? undefined,
+    groupBand: (meta.group_band as number) ?? undefined,
+    order: (meta.order as number) ?? undefined,
     isDeduction: r.is_deduction ?? undefined,
     linkedPositionId: r.linked_boq_position_id ?? undefined,
     linkedBoqId: (meta.linked_boq_id as string) ?? undefined,
     linkedPositionOrdinal: (meta.linked_position_ordinal as string) ?? undefined,
     linkedPositionLabel: (meta.linked_position_label as string) ?? undefined,
-    suggested: r.review_status === 'proposed',
-    confidence: typeof r.confidence === 'number' ? r.confidence : undefined,
     source: r.source,
     reviewStatus: r.review_status,
     planReadRunId: (meta.ai_takeoff_run_id as string) ?? undefined,
@@ -666,7 +774,11 @@ interface UseMeasurementPersistenceOptions {
    *  and do NOT sync to the server. */
   documentId: string | null;
   measurements: Measurement[];
-  setMeasurements: (measurements: Measurement[]) => void;
+  /** The React state setter. Typed as the full dispatch (not just a plain
+   *  ``(m: Measurement[]) => void``) so the sync-result merges below can pass a
+   *  FUNCTIONAL updater and compute from the freshest state instead of a stale
+   *  render snapshot, preserving a concurrent user edit (issue #382). */
+  setMeasurements: Dispatch<SetStateAction<Measurement[]>>;
   /** Per-page (per-sheet) scale model. Persisted whole; a legacy
    *  single-scale document is migrated into the default on load. */
   pageScales: PageScales;
@@ -757,6 +869,11 @@ export function useMeasurementPersistence({
   // baseline lets the edit-PATCH effect tell a geometry reshape from a pure
   // colour / label / opacity edit so the latter never rewrites a calibration.
   const geomSigRef = useRef<Map<string, string>>(new Map());
+  /** Pages whose per-page calibration we only INFERRED while restoring, so a
+   *  measurement drawn on them is stamped with no scale source rather than
+   *  with a calibration nobody stated. Empty whenever the document carries an
+   *  authoritative page_scales column, because then nothing was guessed. */
+  const inferredCalibrationsRef = useRef<ReadonlySet<number>>(new Set<number>());
   const patchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inFlightPatchRef = useRef<Set<string>>(new Set());
   // Pending server-side deletions (issue #282): serverIds of rows deleted in
@@ -858,7 +975,24 @@ export function useMeasurementPersistence({
             setSyncedToServer(true);
             // Drop rows we have locally deleted but not yet synced (#282).
             const pending = pendingDeletesRef.current;
-            const mapped = serverData
+            // Array order is the implicit paint / hit-test / list z-order, and
+            // in-session new draws are APPENDED (newest on top). The list
+            // endpoint returns rows newest-first (created_at DESC), so hydrating
+            // it verbatim inverted the stacking on every reload (issue #375).
+            // Sort back to ascending creation order (id as a deterministic
+            // tie-break for rows sharing an exact timestamp) so a reload paints
+            // in the same order the session drew.
+            const ordered = [...serverData].sort((a, b) => {
+              const ta = Date.parse(a.created_at) || 0;
+              const tb = Date.parse(b.created_at) || 0;
+              if (ta !== tb) return ta - tb;
+              return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+            });
+            const mapped = ordered
+              // A rejected proposal is kept server-side as the record of a
+              // decision, not as work: putting it back on the canvas would
+              // undo the rejection every time somebody reloaded.
+              .filter((r) => r.review_status !== 'rejected')
               .map(fromApiFormat)
               .filter((m) => !(m.serverId && pending.has(m.serverId)));
 
@@ -888,6 +1022,12 @@ export function useMeasurementPersistence({
             // scale stamps. Reconcile with the localStorage copy so a real
             // calibration on either side survives while a stale local DEFAULT
             // never overrides an explicit server one.
+            // Only the per-measurement fallback guesses: it treats any legacy
+            // row off the factory ratio as calibrated. The document column
+            // states its calibrations outright, so nothing there is inferred.
+            inferredCalibrationsRef.current = doc?.page_scales
+              ? new Set<number>()
+              : inferredCalibrationPages(serverData);
             const serverScales = doc?.page_scales
               ? hydratePageScales(doc.page_scales, null)
               : pageScalesFromServer(serverData);
@@ -963,7 +1103,9 @@ export function useMeasurementPersistence({
   // the debounced auto-save, the manual ``saveNow`` button, and the teardown
   // flush so leaving a document always persists its latest measurements under
   // the right key. Reads refs (not the render closure) so a flush fired from a
-  // cleanup writes the correct document. Never persists AI suggestions.
+  // cleanup writes the correct document. Never persists AI suggestions: those
+  // rows live on the server under the review endpoint, so a localStorage copy
+  // would only be a second, staler answer about their state.
   const writeLocalNow = useCallback(() => {
     const key = localKeyRef.current;
     if (!key) return;
@@ -1073,7 +1215,15 @@ export function useMeasurementPersistence({
         // Per-page scale: toApiFormat resolves each row's own page scale
         // from pageScales, so a multi-sheet set syncs correct ratios. The
         // document_id sent is the stable UUID, never the filename (#238).
-        .map((m) => toApiFormat(m, projectIdNow, documentIdNow, pageScalesNow));
+        .map((m) =>
+          toApiFormat(
+            m,
+            projectIdNow,
+            documentIdNow,
+            pageScalesNow,
+            inferredCalibrationsRef.current,
+          ),
+        );
       const createPromise =
         toCreate.length > 0 ? takeoffApi.bulkCreate(toCreate) : null;
 
@@ -1081,21 +1231,34 @@ export function useMeasurementPersistence({
 
       if (createPromise) {
         const created = await createPromise;
-        // Update serverId on created measurements (map over the LATEST state).
-        setMeasurementsRef.current(
-          measurementsRef.current.map((m) => {
+        // Map each created row's frontend id -> its new serverId.
+        const newIdByFrontendId = new Map(
+          created.map((c) => [c.metadata?.frontend_id as string, c.id]),
+        );
+        // Seed the sync + geometry baselines for each freshly-synced row from
+        // the SNAPSHOT we actually sent (``current``), NOT from the live state:
+        // if the user edited the row during the round-trip, seeding from the
+        // sent snapshot leaves the row looking dirty so the edit re-PATCHes on
+        // the next tick instead of being lost (#194/#282/#382). The geometry
+        // baseline (#334) prevents the first appearance-only edit re-stamping
+        // the page scale.
+        for (const m of current) {
+          if (m.serverId || m.suggested) continue;
+          const newId = newIdByFrontendId.get(m.id);
+          if (!newId) continue;
+          syncSigRef.current.set(newId, syncSignature(m));
+          geomSigRef.current.set(newId, geometrySignature(m));
+        }
+        // Stamp the serverId with a FUNCTIONAL update (issue #382) so we merge
+        // into the FRESHEST state by id: a plain-value dispatch built from the
+        // stale ``measurementsRef`` snapshot would discard any user edit that
+        // landed while bulkCreate was in flight. Only the serverId is written;
+        // every other field is preserved from ``prev``.
+        setMeasurementsRef.current((prev) =>
+          prev.map((m) => {
             if (m.serverId) return m;
-            const match = created.find(
-              (c) => (c.metadata?.frontend_id as string) === m.id,
-            );
-            if (!match) return m;
-            // Seed the sync baseline for the freshly-synced row so a later
-            // edit PATCHes, but a no-op tick does not (#194/#282). Seed the
-            // geometry baseline too (#334) so the first appearance-only edit
-            // after a create does not re-stamp the page scale.
-            syncSigRef.current.set(match.id, syncSignature(m));
-            geomSigRef.current.set(match.id, geometrySignature(m));
-            return { ...m, serverId: match.id };
+            const newId = newIdByFrontendId.get(m.id);
+            return newId ? { ...m, serverId: newId } : m;
           }),
         );
         // Surface the new measurements in the unified Markups hub.
@@ -1192,6 +1355,7 @@ export function useMeasurementPersistence({
                 scaleForPage(pageScales, m.page),
                 pageIsCalibrated(pageScales, m.page),
                 geometryChanged,
+                inferredCalibrationsRef.current.has(m.page),
               ),
             );
             // Mark this signature as known-on-server so we don't re-PATCH it.
@@ -1218,9 +1382,15 @@ export function useMeasurementPersistence({
       );
 
       if (reconciled.length > 0) {
-        setMeasurementsRef.current(
-          measurementsRef.current.map((m) => {
-            const r = reconciled.find((x) => x.frontendId === m.id);
+        const reconciledById = new Map(reconciled.map((r) => [r.frontendId, r]));
+        // Functional update (issue #382): merge the server-authoritative value
+        // back into the FRESHEST state by id, so a concurrent edit to any other
+        // field (or any other row) made while the PATCH was in flight survives.
+        // A plain-value dispatch from the stale ``measurementsRef`` snapshot
+        // would overwrite the array wholesale and drop that edit.
+        setMeasurementsRef.current((prev) =>
+          prev.map((m) => {
+            const r = reconciledById.get(m.id);
             if (!r) return m;
             return {
               ...m,

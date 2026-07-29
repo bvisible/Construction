@@ -10,8 +10,14 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.modules.cde.models import (
+    CDE_DEFAULT_MIN_READINESS_LEVEL,
+    CDE_DEFAULT_SUITABILITY_SET,
+)
+from app.modules.cde.readiness import READINESS_LEVELS
+from app.modules.cde.roles import role_keys
 from app.modules.cde.suitability import validate_suitability_for_state
 
 # ── Container Create ──────────────────────────────────────────────────────
@@ -222,6 +228,65 @@ class SuitabilityCodesResponse(BaseModel):
     by_state: dict[str, list[SuitabilityCodeEntry]] = Field(default_factory=dict)
 
 
+# ── Functional roles (ISO 19650) ─────────────────────────────────────────
+
+
+class FunctionalRoleEntry(BaseModel):
+    """One ISO 19650 functional role and how it maps onto the CDE workflow."""
+
+    key: str
+    name: str
+    cde_role: str
+    gate: str | None = None
+    acts_on: list[str] = Field(default_factory=list)
+    permissions: list[str] = Field(default_factory=list)
+    summary: str
+
+
+class FunctionalRolesResponse(BaseModel):
+    """The four functional roles plus the responsibility matrix by CDE state."""
+
+    roles: list[FunctionalRoleEntry] = Field(default_factory=list)
+    states: list[str] = Field(default_factory=list)
+    matrix: dict[str, dict[str, str]] = Field(default_factory=dict)
+
+
+# ── Go-live readiness ─────────────────────────────────────────────────────
+
+
+class ReadinessSignalStatus(BaseModel):
+    """One readiness milestone and whether the project has satisfied it."""
+
+    key: str
+    label: str
+    weight: int
+    hint: str
+    done: bool
+
+
+class ReadinessNextAction(BaseModel):
+    """An unmet milestone surfaced as the next thing to do."""
+
+    key: str
+    label: str
+    hint: str
+
+
+class CDEReadinessResponse(BaseModel):
+    """A project's CDE go-live readiness picture.
+
+    ``score`` is a weighted percent in ``[0, 100]``; ``level`` is a coarse band
+    (not_started / forming / operational / mature). ``signals`` is the full
+    checklist; ``next_actions`` is the leading unmet milestones to nudge.
+    """
+
+    score: int
+    level: str
+    total_containers: int
+    signals: list[ReadinessSignalStatus] = Field(default_factory=list)
+    next_actions: list[ReadinessNextAction] = Field(default_factory=list)
+
+
 # ── Audit / history ──────────────────────────────────────────────────────
 
 
@@ -240,6 +305,151 @@ class StateTransitionEntry(BaseModel):
     reason: str | None = None
     signature: str | None = None
     transitioned_at: datetime
+
+
+# ── CDE settings (per-project setup) ─────────────────────────────────────
+
+
+def _validate_role_assignments(value: dict[str, Any]) -> dict[str, str]:
+    """Coerce and validate a functional-role -> user-id assignment map.
+
+    Keys must be one of the four ISO 19650 functional roles; unknown roles are
+    rejected so a typo cannot silently drop an assignment. Values are coerced to
+    strings (user ids). An empty map (nothing assigned yet) is valid.
+    """
+    allowed = set(role_keys())
+    out: dict[str, str] = {}
+    for key, val in value.items():
+        if key not in allowed:
+            raise ValueError(f"Unknown functional role {key!r}. Allowed roles: {sorted(allowed)}")
+        if val is None or (isinstance(val, str) and not val.strip()):
+            continue
+        out[key] = str(val)
+    return out
+
+
+class CdeSettingsUpdate(BaseModel):
+    """Partial update of a project's CDE settings (wizard save)."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    naming_convention: str | None = Field(default=None, max_length=500)
+    suitability_set: str | None = Field(default=None, max_length=50)
+    review_preset_key: str | None = Field(default=None, max_length=100)
+    role_assignments: dict[str, Any] | None = None
+    go_live_gate_enabled: bool | None = None
+    min_readiness_level: str | None = None
+    setup_completed: bool | None = None
+    setup_step: int | None = Field(default=None, ge=0, le=20)
+
+    @field_validator("min_readiness_level")
+    @classmethod
+    def _known_level(cls, v: str | None) -> str | None:
+        if v is not None and v not in READINESS_LEVELS:
+            raise ValueError(f"Unknown readiness level {v!r}. Allowed: {list(READINESS_LEVELS)}")
+        return v
+
+    @field_validator("role_assignments")
+    @classmethod
+    def _valid_roles(cls, v: dict[str, Any] | None) -> dict[str, Any] | None:
+        if v is None:
+            return None
+        return _validate_role_assignments(v)
+
+
+class CdeSettingsResponse(BaseModel):
+    """A project's CDE settings as returned by the API."""
+
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    id: UUID
+    project_id: UUID
+    naming_convention: str = ""
+    suitability_set: str = CDE_DEFAULT_SUITABILITY_SET
+    review_preset_key: str | None = None
+    # The project's own editable route cloned from ``review_preset_key`` (see
+    # CDEService.apply_approval_preset). NULL until a preset has been adopted.
+    review_route_id: UUID | None = None
+    role_assignments: dict[str, Any] = Field(default_factory=dict)
+    go_live_gate_enabled: bool = True
+    min_readiness_level: str = CDE_DEFAULT_MIN_READINESS_LEVEL
+    setup_completed: bool = False
+    setup_step: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+
+# ── Go-live gate ─────────────────────────────────────────────────────────
+
+
+class GoLiveGateStatus(BaseModel):
+    """Whether a project's CDE is ready to open to the whole team.
+
+    ``allowed`` is ``True`` when the gate is disabled, or when the project's
+    readiness ``level`` meets the required ``min_readiness_level``. ``reason`` is
+    a short human-readable explanation for the current standing.
+    """
+
+    project_id: UUID
+    gate_enabled: bool
+    allowed: bool
+    level: str
+    min_readiness_level: str
+    score: int
+    reason: str
+
+
+# ── Approval presets (ISO 19650 review flows) ─────────────────────────────
+
+
+class CDEApprovalPresetStep(BaseModel):
+    """One step of an approval preset, as it will apply once adopted."""
+
+    ordinal: int
+    approver_role: str | None = None
+    mode: str
+    required_approver_count: int | None = None
+    sla_hours: int | None = None
+
+
+class CDEApprovalPresetEntry(BaseModel):
+    """A ready-made, tenant-wide ISO 19650 approval/review configuration.
+
+    Merges the live route definition from ``approval_routes`` (name, steps)
+    with CDE-facing framing (which gate it covers, why a team would pick it).
+    """
+
+    system_key: str
+    route_id: UUID
+    name: str
+    gate: str
+    description: str
+    steps: list[CDEApprovalPresetStep] = Field(default_factory=list)
+
+
+class CDEApprovalPresetsResponse(BaseModel):
+    """The CDE approval-preset library plus which one (if any) is adopted."""
+
+    presets: list[CDEApprovalPresetEntry] = Field(default_factory=list)
+    active_system_key: str | None = None
+    active_route_id: UUID | None = None
+
+
+class CDEApprovalPresetApplyRequest(BaseModel):
+    """Adopt one preset as this project's active review route."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    system_key: str = Field(..., min_length=1, max_length=100)
+
+
+class CDEApprovalPresetApplyResponse(BaseModel):
+    """Result of adopting a preset: the new editable route plus settings."""
+
+    settings: CdeSettingsResponse
+    route_id: UUID
+    route_name: str
+    step_count: int
 
 
 # ── Transmittal link summary (back-reference from CDE) ───────────────────

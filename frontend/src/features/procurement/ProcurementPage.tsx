@@ -43,6 +43,8 @@ import { useAuthStore } from '@/stores/useAuthStore';
 import { getPOMatchStatus, type POLineMatchTag } from './api';
 import { procurementGuide } from './procurementGuide';
 import { SupplierScorecardModal } from './SupplierScorecardModal';
+import { InsightsPanel, InsightsToggleButton, useModuleInsights } from '@/features/insights';
+import { buildProcurementInsights } from './procurementInsights';
 import { VendorPrequalBadge } from './VendorPrequalBadge';
 import { RetainagePanel, RetainageBadge } from './RetainagePanel';
 import { POStatusPipeline } from './POStatusPipeline';
@@ -135,6 +137,55 @@ interface POLineItemForm {
   unit: string;
   unit_rate: string;
   amount: string;
+}
+
+/** The purchase-order fields the shared create / edit modal holds. */
+interface POFormState {
+  vendor_contact_id: string;
+  vendor_display: string;
+  po_type: 'standard' | 'blanket' | 'service';
+  delivery_date: string;
+  currency: string;
+  payment_terms: string;
+  notes: string;
+  items: POLineItemForm[];
+}
+
+/**
+ * The form state an existing purchase order opens with.
+ *
+ * Pure and exported so the save can rebuild the same baseline the modal was
+ * seeded from and send only what the user actually changed. Correcting a
+ * delivery date used to PATCH the vendor, the terms, the notes and every line
+ * back, exactly as they stood when this copy was fetched, undoing anyone else's
+ * edit to them without a word. The update route dumps with `exclude_unset=True`,
+ * so a field left out of the body is left alone in the database.
+ *
+ * The payment terms round-trip through a sentence (`Net 30`), so the number is
+ * dug back out here and nowhere else; two readings of that string would make an
+ * untouched field look edited.
+ */
+function poFormFromResponse(po: POResponse, projectCurrency: string): POFormState {
+  const payTermMatch = (po.payment_terms ?? '').match(/(\d+)/);
+  return {
+    vendor_contact_id: po.vendor_contact_id ?? '',
+    vendor_display: po.vendor_name ?? '',
+    po_type: po.po_type === 'blanket' || po.po_type === 'service' ? po.po_type : 'standard',
+    delivery_date: po.delivery_date ?? '',
+    currency: po.currency_code || projectCurrency || '',
+    payment_terms: payTermMatch?.[1] ?? '30',
+    notes: po.notes ?? '',
+    items:
+      po.items && po.items.length > 0
+        ? po.items.map((it) => ({
+            description: it.description ?? '',
+            quantity: it.quantity != null ? String(it.quantity) : '1',
+            unit: it.unit ?? '',
+            unit_rate: it.unit_rate != null ? String(it.unit_rate) : '',
+            amount: it.amount != null ? String(it.amount) : '',
+          }))
+        : [{ description: '', quantity: '1', unit: '', unit_rate: '', amount: '' }],
+  };
 }
 
 /**
@@ -261,6 +312,39 @@ export function ProcurementPage() {
     navigate(location.pathname, { replace: true, state: null });
   }, [navigate, location.pathname]);
 
+  // Module Insights panel. Charts the project's purchase orders - the register
+  // that carries each order's committed value, supplier and delivery status -
+  // so a chart slice reads like the status badge on the row it came from. The
+  // list reuses the ['procurement-po', projectId] query the Purchase Orders
+  // tab already loads (same key and queryFn, so it is a cache hit and the
+  // tab's own invalidations keep it fresh). Currency rides the finance
+  // dashboard query. These hooks sit with the other top-level hooks, above any
+  // conditional render, so the hook order stays stable.
+  const { data: insightOrders = [] } = useQuery({
+    queryKey: ['procurement-po', projectId],
+    queryFn: () =>
+      apiGet<{ items: Array<PurchaseOrder & { vendor_contact_id?: string | null }>; total: number }>(
+        `/v1/procurement/?project_id=${projectId}`,
+      ).then((res) =>
+        res.items.map((po) => ({
+          ...po,
+          vendor_name: po.vendor_name ?? po.vendor_contact_id ?? '',
+        })),
+      ),
+    enabled: !!projectId,
+  });
+  const { data: insightDashboard } = useQuery({
+    queryKey: ['finance', 'dashboard', projectId],
+    queryFn: () =>
+      apiGet<{ currency: string }>(`/v1/finance/dashboard/?project_id=${projectId}`),
+    enabled: !!projectId,
+  });
+  const insights = useModuleInsights('procurement', { defaultOpen: true });
+  const { datasets: insightDatasets, builtins: insightBuiltins } = useMemo(
+    () => buildProcurementInsights(insightOrders, insightDashboard?.currency || 'EUR', t),
+    [insightOrders, insightDashboard, t],
+  );
+
   const tabs: { key: ProcurementTab; label: string; icon: React.ReactNode }[] = [
     {
       key: 'purchase-orders',
@@ -293,7 +377,26 @@ export function ProcurementPage() {
         subtitle={t('procurement.subtitle', {
           defaultValue: 'Purchase orders and goods receipts',
         })}
-        actions={<ModuleGuideButton content={procurementGuide} />}
+        actions={
+          <>
+            <InsightsToggleButton open={insights.open} onClick={insights.toggle} />
+            <ModuleGuideButton content={procurementGuide} />
+          </>
+        }
+      />
+
+      {/* Module Insights panel - toggled by the header button. Placed high so
+          its charts (real, or a labelled sample when the project has no
+          purchase orders yet) are visible the moment Procurement opens. */}
+      <InsightsPanel
+        open={insights.open}
+        title={t('procurement.insights.title', { defaultValue: 'Procurement insights' })}
+        datasets={insightDatasets}
+        builtins={insightBuiltins}
+        custom={insights.custom}
+        onAdd={insights.addCustom}
+        onUpdate={insights.updateCustom}
+        onRemove={insights.removeCustom}
       />
 
       {/* Canonical info block - where procurement sits in the money flow,
@@ -444,7 +547,7 @@ function PurchaseOrdersTab({
   const todayStr = new Date().toISOString().split('T')[0];
   const emptyLine: POLineItemForm = { description: '', quantity: '1', unit: '', unit_rate: '', amount: '' };
 
-  const [poForm, setPoForm] = useState({
+  const [poForm, setPoForm] = useState<POFormState>({
     vendor_contact_id: '',
     vendor_display: '',
     po_type: 'standard' as 'standard' | 'blanket' | 'service',
@@ -454,6 +557,10 @@ function PurchaseOrdersTab({
     notes: '',
     items: [{ ...emptyLine }] as POLineItemForm[],
   });
+  // The state an edit prefill left the form in, so the save can send only what
+  // the user actually changed. `null` outside edit mode. See
+  // `poFormFromResponse`.
+  const [poBase, setPoBase] = useState<{ form: POFormState; tax: string } | null>(null);
   const [poErrors, setPoErrors] = useState<Record<string, string>>({});
   const [poTaxInput, setPoTaxInput] = useState('0');
   const firstFieldRef = useRef<HTMLDivElement>(null);
@@ -478,6 +585,7 @@ function PurchaseOrdersTab({
     setEditingPO(null);
     setPrefilledFromBuyList(false);
     setPoForm({ ...emptyPoForm, items: [{ ...emptyLine }] });
+    setPoBase(null);
     setPoTaxInput('0');
     setPoErrors({});
   };
@@ -615,28 +723,45 @@ function PurchaseOrdersTab({
      omit `status` from this body. There is no DELETE endpoint for a PO, so
      no delete control is offered (a 405 button would be worse UX). */
   const editPOMut = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: typeof poForm }) =>
-      apiPatch<{ vendor_warnings?: string[] }>(`/v1/procurement/${id}`, {
-        vendor_contact_id: data.vendor_contact_id || undefined,
-        po_type: data.po_type,
-        delivery_date: data.delivery_date || undefined,
-        currency_code: data.currency,
-        amount_subtotal: String(poSubtotal.toFixed(2)),
-        tax_amount: poTaxInput || '0',
-        amount_total: String(poTotal.toFixed(2)),
-        payment_terms: `Net ${data.payment_terms}`,
-        notes: data.notes || undefined,
-        items: data.items
+    mutationFn: ({ id, data }: { id: string; data: POFormState }) => {
+      // Only what the user actually edited goes back. The baseline is the state
+      // the prefill left the form in, so a field nobody opened is omitted and
+      // whatever somebody else did to it in the meantime survives.
+      const base = poBase?.form ?? data;
+      const baseTax = poBase?.tax ?? poTaxInput;
+      const itemsChanged = JSON.stringify(data.items) !== JSON.stringify(base.items);
+      const taxChanged = poTaxInput !== baseTax;
+      const body: Record<string, unknown> = {};
+      if (data.vendor_contact_id !== base.vendor_contact_id) {
+        body.vendor_contact_id = data.vendor_contact_id || undefined;
+      }
+      if (data.po_type !== base.po_type) body.po_type = data.po_type;
+      if (data.delivery_date !== base.delivery_date) {
+        body.delivery_date = data.delivery_date || undefined;
+      }
+      if (data.currency !== base.currency) body.currency_code = data.currency;
+      if (data.payment_terms !== base.payment_terms) {
+        body.payment_terms = `Net ${data.payment_terms}`;
+      }
+      if (data.notes !== base.notes) body.notes = data.notes || undefined;
+      if (itemsChanged) {
+        body.items = data.items
           .filter((li) => li.description.trim())
           .map((li, idx) => ({
             description: li.description,
             quantity: li.quantity || '1',
             unit: li.unit || undefined,
-            unit_rate: li.unit_rate || '0',
             amount: li.amount || '0',
+            unit_rate: li.unit_rate || '0',
             sort_order: idx,
-          })),
-      }),
+          }));
+        body.amount_subtotal = String(poSubtotal.toFixed(2));
+      }
+      if (taxChanged) body.tax_amount = poTaxInput || '0';
+      // The total is the sum of the two, so it moves whenever either does.
+      if (itemsChanged || taxChanged) body.amount_total = String(poTotal.toFixed(2));
+      return apiPatch<{ vendor_warnings?: string[] }>(`/v1/procurement/${id}`, body);
+    },
     onSuccess: (res) => {
       queryClient.invalidateQueries({ queryKey: ['procurement-po', projectId] });
       closeModal();
@@ -652,29 +777,13 @@ function PurchaseOrdersTab({
   const openEditMut = useMutation({
     mutationFn: (poId: string) => apiGet<POResponse>(`/v1/procurement/${poId}`),
     onSuccess: (po) => {
-      const payTermMatch = (po.payment_terms ?? '').match(/(\d+)/);
-      const poType: 'standard' | 'blanket' | 'service' =
-        po.po_type === 'blanket' || po.po_type === 'service' ? po.po_type : 'standard';
-      setPoForm({
-        vendor_contact_id: po.vendor_contact_id ?? '',
-        vendor_display: po.vendor_name ?? '',
-        po_type: poType,
-        delivery_date: po.delivery_date ?? '',
-        currency: po.currency_code || projectCurrency || '',
-        payment_terms: payTermMatch?.[1] ?? '30',
-        notes: po.notes ?? '',
-        items:
-          po.items && po.items.length > 0
-            ? po.items.map((it) => ({
-                description: it.description ?? '',
-                quantity: it.quantity != null ? String(it.quantity) : '1',
-                unit: it.unit ?? '',
-                unit_rate: it.unit_rate != null ? String(it.unit_rate) : '',
-                amount: it.amount != null ? String(it.amount) : '',
-              }))
-            : [{ ...emptyLine }],
-      });
-      setPoTaxInput(po.tax_amount != null ? String(po.tax_amount) : '0');
+      // Seeded from the same function the save compares against, so the two
+      // can never drift apart. See `poFormFromResponse`.
+      const seeded = poFormFromResponse(po, projectCurrency);
+      const tax = po.tax_amount != null ? String(po.tax_amount) : '0';
+      setPoForm(seeded);
+      setPoBase({ form: seeded, tax });
+      setPoTaxInput(tax);
       setPoErrors({});
       setEditingPO(po.id);
       setShowCreate(true);

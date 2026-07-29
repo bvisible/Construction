@@ -23,13 +23,30 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.cde_states import CDEState, CDEStateMachine
 from app.core.events import event_bus
 from app.core.json_merge import merge_metadata
-from app.modules.cde.models import DocumentContainer, DocumentRevision, StateTransition
+from app.modules.cde import readiness as cde_readiness
+from app.modules.cde.models import (
+    CdeSettings,
+    DocumentContainer,
+    DocumentRevision,
+    StateTransition,
+)
 from app.modules.cde.repository import ContainerRepository, RevisionRepository
+from app.modules.cde.roles import CDE_REVIEW_PRESET_KEYS, CDE_REVIEW_PRESET_META
 from app.modules.cde.schemas import (
+    CDEApprovalPresetApplyResponse,
+    CDEApprovalPresetEntry,
+    CDEApprovalPresetsResponse,
+    CDEApprovalPresetStep,
+    CDEReadinessResponse,
+    CdeSettingsResponse,
+    CdeSettingsUpdate,
     CDEStatsResponse,
     ContainerCreate,
     ContainerTransmittalLink,
     ContainerUpdate,
+    GoLiveGateStatus,
+    ReadinessNextAction,
+    ReadinessSignalStatus,
     RevisionCreate,
     StateTransitionRequest,
 )
@@ -541,9 +558,8 @@ class CDEService:
         )
         revision = await self.revision_repo.create(revision)
 
-        # Cache the revision id up-front so later update_fields() calls
-        # (which call ``session.expire_all()``) don't force a lazy reload
-        # of the primary key outside the async context.
+        # Cache the revision id up-front so the later update_fields() calls
+        # work from a plain value instead of re-reading ``revision``.
         revision_id = revision.id
 
         # Link mode is complete - the revision already points at the existing
@@ -590,7 +606,7 @@ class CDEService:
                 )
                 self.session.add(doc)
                 await self.session.flush()
-                # Read out doc.id before any expire_all() invalidates it.
+                # Read out doc.id once the flush has assigned it.
                 doc_id = doc.id
                 await self.revision_repo.update_fields(revision_id, document_id=str(doc_id))
                 logger.info(
@@ -694,6 +710,261 @@ class CDEService:
             by_state=raw["by_state"],
             by_discipline=raw["by_discipline"],
             latest_revisions=raw["latest_revisions"],
+        )
+
+    async def compute_readiness(self, project_id: uuid.UUID) -> CDEReadinessResponse:
+        """Score how ready a project's CDE is to go live.
+
+        Reads the project's real container / transition / revision state, maps it
+        onto the readiness engine's observed signal keys, and returns the weighted
+        score, level, full checklist and the leading unmet milestones. The scoring
+        itself is the pure :mod:`app.modules.cde.readiness` engine - this method
+        only translates database facts into the keys that engine recognises.
+        """
+        facts = await self.container_repo.readiness_facts_for_project(project_id)
+
+        observed: set[str] = set()
+        if facts["total"] > 0:
+            observed.add("containers_created")
+        if facts["has_naming"]:
+            observed.add("structured_naming")
+        if facts["has_suitability"]:
+            observed.add("suitability_assigned")
+        if facts["has_classification"]:
+            observed.add("classification_used")
+        states = facts["states"]
+        if states & {"shared", "published", "archived"}:
+            observed.add("shared_reached")
+        if states & {"published", "archived"}:
+            observed.add("published_reached")
+        if "archived" in states:
+            observed.add("lifecycle_archived")
+        if facts["has_signed_transition"]:
+            observed.add("gate_signed")
+        if facts["has_multi_revision"]:
+            observed.add("revision_controlled")
+
+        result = cde_readiness.evaluate(frozenset(observed))
+        return CDEReadinessResponse(
+            score=result.score,
+            level=result.level,
+            total_containers=facts["total"],
+            signals=[
+                ReadinessSignalStatus(
+                    key=s.signal.key,
+                    label=s.signal.label,
+                    weight=s.signal.weight,
+                    hint=s.signal.hint,
+                    done=s.done,
+                )
+                for s in result.signals
+            ],
+            next_actions=[ReadinessNextAction(key=s.key, label=s.label, hint=s.hint) for s in result.next_actions],
+        )
+
+    # ── CDE settings (per-project setup) ─────────────────────────────────
+
+    async def get_or_create_settings(self, project_id: uuid.UUID) -> CdeSettings:
+        """Return the project's CDE settings, creating a default row if absent.
+
+        Lazy get-or-create (mirrors ``get_or_create_match_settings``) so projects
+        that predate the setup wizard get a sensible default configuration on
+        first read rather than a 404. The caller owns the commit.
+        """
+        stmt = select(CdeSettings).where(CdeSettings.project_id == project_id)
+        row = (await self.session.execute(stmt)).scalar_one_or_none()
+        if row is not None:
+            return row
+        row = CdeSettings(project_id=project_id)
+        self.session.add(row)
+        await self.session.flush()
+        await self.session.refresh(row)
+        return row
+
+    async def update_settings(
+        self,
+        project_id: uuid.UUID,
+        data: CdeSettingsUpdate,
+    ) -> CdeSettings:
+        """Apply a partial update to a project's CDE settings.
+
+        Only fields explicitly supplied (``exclude_unset``) are written, so a
+        wizard step can save just the part it owns without clobbering the rest.
+        """
+        row = await self.get_or_create_settings(project_id)
+        fields = data.model_dump(exclude_unset=True)
+        for key, value in fields.items():
+            setattr(row, key, value)
+        await self.session.flush()
+        await self.session.refresh(row)
+        logger.info(
+            "CDE settings updated: project=%s fields=%s",
+            project_id,
+            list(fields.keys()),
+        )
+        return row
+
+    # ── Approval presets (ISO 19650 review flows) ─────────────────────────
+
+    async def list_approval_presets(self, project_id: uuid.UUID | None) -> CDEApprovalPresetsResponse:
+        """List the tenant-wide CDE approval presets a project can adopt.
+
+        Reads the live route + step definitions from ``approval_routes`` (the
+        source of truth) and merges in the CDE-facing gate/description framing
+        from :data:`app.modules.cde.roles.CDE_REVIEW_PRESET_META`. When
+        ``project_id`` is given, also reports which preset (if any) is
+        currently adopted so the UI can show an "Active" state.
+        """
+        from app.modules.approval_routes.service import ApprovalRouteService
+
+        engine = ApprovalRouteService(self.session)
+        routes = await engine.list_routes(project_id=None, target_kind="submittal", include_inactive=False)
+        by_key = {r.system_key: r for r in routes if r.system_key in CDE_REVIEW_PRESET_META}
+
+        presets: list[CDEApprovalPresetEntry] = []
+        for key in CDE_REVIEW_PRESET_KEYS:
+            route = by_key.get(key)
+            if route is None:
+                # Seed has not run yet (fresh DB) - skip rather than 500.
+                continue
+            meta = CDE_REVIEW_PRESET_META[key]
+            steps = await engine.list_steps(route.id)
+            presets.append(
+                CDEApprovalPresetEntry(
+                    system_key=key,
+                    route_id=route.id,
+                    name=route.name,
+                    gate=meta["gate"],
+                    description=meta["description"],
+                    steps=[
+                        CDEApprovalPresetStep(
+                            ordinal=s.ordinal,
+                            approver_role=s.approver_role,
+                            mode=s.mode,
+                            required_approver_count=s.required_approver_count,
+                            sla_hours=s.sla_hours,
+                        )
+                        for s in sorted(steps, key=lambda s: s.ordinal)
+                    ],
+                )
+            )
+
+        active_key: str | None = None
+        active_route_id: uuid.UUID | None = None
+        if project_id is not None:
+            settings = await self.get_or_create_settings(project_id)
+            active_key = settings.review_preset_key
+            active_route_id = settings.review_route_id
+
+        return CDEApprovalPresetsResponse(
+            presets=presets,
+            active_system_key=active_key,
+            active_route_id=active_route_id,
+        )
+
+    async def apply_approval_preset(
+        self,
+        project_id: uuid.UUID,
+        system_key: str,
+        *,
+        actor_id: str | None,
+    ) -> CDEApprovalPresetApplyResponse:
+        """Adopt a CDE approval preset as this project's editable review route.
+
+        Clones the tenant-wide preset (via ``approval_routes.clone_route``)
+        into a project-scoped route with no ``system_key`` - so it can be
+        tailored in the Approval routes editor right after adoption - and
+        records both the preset label and the new route on the project's CDE
+        settings. Adopting a second preset (or re-adopting the same one)
+        simply clones a fresh route each time; the previous clone is left in
+        place (it may already carry running instances) so nothing is lost.
+        """
+        from app.modules.approval_routes.service import ApprovalRouteService
+
+        if system_key not in CDE_REVIEW_PRESET_META:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Unknown CDE approval preset {system_key!r}",
+            )
+
+        engine = ApprovalRouteService(self.session)
+        routes = await engine.list_routes(project_id=None, target_kind="submittal", include_inactive=True)
+        source = next((r for r in routes if r.system_key == system_key), None)
+        if source is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Approval preset {system_key!r} is not seeded yet",
+            )
+
+        actor_uuid: uuid.UUID | None
+        try:
+            actor_uuid = uuid.UUID(str(actor_id)) if actor_id else None
+        except (ValueError, TypeError):
+            actor_uuid = None
+
+        clone = await engine.clone_route(
+            source.id,
+            project_id=project_id,
+            name=None,
+            created_by=actor_uuid,
+        )
+        clone_steps = await engine.list_steps(clone.id)
+
+        settings = await self.update_settings(
+            project_id,
+            CdeSettingsUpdate(review_preset_key=system_key),
+        )
+        settings.review_route_id = clone.id
+        await self.session.flush()
+        await self.session.refresh(settings)
+
+        logger.info(
+            "CDE approval preset applied: project=%s preset=%s route=%s",
+            project_id,
+            system_key,
+            clone.id,
+        )
+        return CDEApprovalPresetApplyResponse(
+            settings=CdeSettingsResponse.model_validate(settings),
+            route_id=clone.id,
+            route_name=clone.name,
+            step_count=len(clone_steps),
+        )
+
+    async def evaluate_go_live_gate(self, project_id: uuid.UUID) -> GoLiveGateStatus:
+        """Decide whether the CDE may be opened to the whole team.
+
+        The go-live gate is the anti-"showroom" protection: a team cannot invite
+        everyone onto a common data environment that has not actually been
+        exercised. When the gate is enabled, the project's readiness ``level``
+        must meet the configured ``min_readiness_level``; when it is disabled the
+        gate always allows. Read-only - it computes readiness but changes nothing.
+        """
+        settings = await self.get_or_create_settings(project_id)
+        readiness = await self.compute_readiness(project_id)
+        required = settings.min_readiness_level
+
+        if not settings.go_live_gate_enabled:
+            allowed = True
+            reason = "Go-live gate is disabled for this project."
+        else:
+            allowed = cde_readiness.meets_level(readiness.level, required)
+            if allowed:
+                reason = f"CDE readiness is '{readiness.level}', which meets the required '{required}'."
+            else:
+                reason = (
+                    f"CDE readiness is '{readiness.level}', below the required '{required}'. "
+                    "Exercise the CDE workflow further before inviting the whole team."
+                )
+
+        return GoLiveGateStatus(
+            project_id=project_id,
+            gate_enabled=settings.go_live_gate_enabled,
+            allowed=allowed,
+            level=readiness.level,
+            min_readiness_level=required,
+            score=readiness.score,
+            reason=reason,
         )
 
     # ── ISO 19650 naming convention ──────────────────────────────────────

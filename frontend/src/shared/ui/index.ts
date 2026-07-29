@@ -69,6 +69,12 @@ export { InfoHint } from './InfoHint';
 export { DismissibleInfo, IntroRichText } from './DismissibleInfo';
 export type { DismissibleInfoLink } from './DismissibleInfo';
 
+// Collapse the "how this module fits together" explainer blocks that lead many
+// module pages; the choice is remembered per key so it stays hidden once a user
+// knows the module.
+export { CollapsibleSection } from './CollapsibleSection';
+export type { CollapsibleSectionProps } from './CollapsibleSection';
+
 // Guidance primitives (clarity plan, Wave 0) — one shared way to explain
 // AI confidence, AI suggestions, errors, and jargon across every module.
 export { ConfidenceBadge, bandForScore, CONFIDENCE_HIGH_MIN, CONFIDENCE_MEDIUM_MIN } from './ConfidenceBadge';
@@ -242,3 +248,6 @@ export { OfflineFallback, markLastSync } from './OfflineFallback';
 
 export { Markdown, renderDocMarkdown } from './Markdown';
 export type { MarkdownProps } from './Markdown';
+
+export { ProjectFilePicker, projectDocumentToFile } from './ProjectFilePicker';
+export type { ProjectFilePickerProps } from './ProjectFilePicker';

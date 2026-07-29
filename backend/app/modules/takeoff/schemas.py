@@ -136,10 +136,19 @@ class RecognizeCandidate(BaseModel):
     count: int | None = None
     confidence: float = 0.0
     reason: str = ""
+    # Id of the ``proposed`` row this candidate was stored as, which is what
+    # the review endpoint addresses. Optional so a caller that only wants a
+    # geometry preview keeps parsing older payloads.
+    measurement_id: str | None = None
 
 
 class RecognizeResponse(BaseModel):
-    """Result of offline vector recognition for one page (nothing persisted)."""
+    """Result of offline vector recognition for one page.
+
+    Candidates are persisted as ``proposed`` rows before this returns, so a
+    review decision survives a reload and is visible to colleagues. They are
+    proposals, never billed work.
+    """
 
     candidates: list[RecognizeCandidate] = Field(default_factory=list)
     page: int
@@ -165,17 +174,22 @@ class SimilarSymbolHit(BaseModel):
 
 
 class SimilarSymbolsResponse(BaseModel):
-    """Result of a seeded similar-symbol search (nothing persisted).
+    """Result of a seeded similar-symbol search.
 
     ``note`` is ``no_vector_layer`` (the page is a scan with no drawing
     layer), ``no_symbol_at_point`` (nothing small enough under the click) or
     ``None`` on success.
+
+    A non-empty search is stored as one ``proposed`` count row carrying every
+    hit, and ``measurement_id`` addresses it for review. It stays ``None``
+    when nothing matched, since there is no proposal to review.
     """
 
     hits: list[SimilarSymbolHit] = Field(default_factory=list)
     seed_found: bool = False
     page: int
     note: str | None = None
+    measurement_id: str | None = None
 
 
 # ── Tier-1 scale detection from the PDF text layer ──────────────────────────
@@ -290,6 +304,34 @@ class PointSchema(BaseModel):
         return v
 
 
+# Where a measurement's scale ratio came from. The client is the only place
+# that knows this for a hand-drawn measurement - it is the surface where the
+# user calibrated, picked a preset, or drew on a page that already had a scale
+# - so it is sent rather than guessed server-side. Server-generated proposals
+# stamp their own source instead of trusting the request.
+#
+# A closed set rather than free text: this feeds a "recompute these rows"
+# decision, and a field that can hold anything is a field nothing can filter on.
+ScaleSource = Literal[
+    # Read from the PDF's own text layer (``scale_detect.py``).
+    "page_text",
+    # Read by OCR from a scanned sheet that has no text layer.
+    "recovered_text",
+    # Read by a vision model off the rendered page. Kept apart from
+    # ``page_text`` on purpose: the same "1:100" carries a different weight
+    # depending on whether it was parsed from the text layer or inferred from
+    # pixels, and collapsing the two would hide exactly the distinction this
+    # column exists to record.
+    "vision_read",
+    # The user drew a known dimension and set the scale from it.
+    "manual_calibration",
+    # A standard ratio picked from the list (1:50, 1:100).
+    "preset",
+    # Taken from the page the measurement was drawn on.
+    "inherited",
+]
+
+
 class TakeoffMeasurementCreate(BaseModel):
     """Create a new takeoff measurement."""
 
@@ -309,7 +351,15 @@ class TakeoffMeasurementCreate(BaseModel):
         ),
     )
     group_name: str = Field(default="General", max_length=100)
-    group_color: str = Field(default="#3B82F6", max_length=20)
+    # None = "no per-measurement colour override" (issue #378). Since #299 a
+    # stored ``group_color`` means the user explicitly recoloured THIS
+    # measurement; the client omits the field when they never did. Defaulting to
+    # the blue hex here re-stamped that override onto every uncoloured row, so a
+    # cache-less load painted blue instead of following the group colour. A
+    # None default stores a genuine NULL for an uncoloured measurement (the
+    # column is nullable), which the renderers read as "fall back to the group
+    # colour". The blue hex constant now lives only where a colour is truly meant.
+    group_color: str | None = Field(default=None, max_length=20)
     annotation: str | None = Field(default=None, max_length=500)
     points: list[PointSchema] = Field(
         default_factory=list,
@@ -322,6 +372,9 @@ class TakeoffMeasurementCreate(BaseModel):
     perimeter: float | None = None
     count_value: int | None = Field(default=None, ge=0)
     scale_pixels_per_unit: float | None = Field(default=None, gt=0)
+    # Optional, and NULL is a real answer: an older client does not send it,
+    # and recording "not stated" beats inventing a source that was never known.
+    scale_source: ScaleSource | None = None
     linked_boq_position_id: str | None = None
     is_deduction: bool = Field(
         default=False,
@@ -357,6 +410,9 @@ class TakeoffMeasurementUpdate(BaseModel):
     perimeter: float | None = None
     count_value: int | None = Field(default=None, ge=0)
     scale_pixels_per_unit: float | None = Field(default=None, gt=0)
+    # Recalibrating a measurement changes where its scale came from, so the
+    # source travels with the ratio on update as well as on create.
+    scale_source: ScaleSource | None = None
     linked_boq_position_id: str | None = None
     is_deduction: bool | None = None
     metadata: dict[str, Any] | None = None
@@ -373,7 +429,9 @@ class TakeoffMeasurementResponse(BaseModel):
     page: int = 1
     type: str
     group_name: str = "General"
-    group_color: str = "#3B82F6"
+    # None = no per-measurement colour override (issue #378); the client reads
+    # it as "use the group colour". A row recoloured by the user carries its hex.
+    group_color: str | None = None
     annotation: str | None = None
     points: list[dict[str, Any]] = Field(default_factory=list)
     measurement_value: float | None = None
@@ -383,6 +441,9 @@ class TakeoffMeasurementResponse(BaseModel):
     perimeter: float | None = None
     count_value: int | None = None
     scale_pixels_per_unit: float | None = None
+    # NULL on every row created before the column existed, and on any row whose
+    # client never stated a source. Surfaces show that as "Unknown".
+    scale_source: str | None = None
     linked_boq_position_id: str | None = None
     # #### NEOFFICE PATCH — expose review provenance from v7.6 plan-read rows
     # so the SPA can distinguish proposed AI candidates from confirmed/manual
@@ -446,7 +507,26 @@ class TakeoffMeasurementDiffRow(BaseModel):
 
 
 class TakeoffCompareResponse(BaseModel):
-    """Full revision-compare payload for two takeoff documents."""
+    """Full revision-compare payload for two takeoff documents.
+
+    ``summary`` carries:
+
+    * ``measurements`` - added / removed / modified / unchanged tally
+    * ``net_cost_impact`` / ``cost_currency`` - signed money delta
+    * ``from_measurement_count`` / ``to_measurement_count`` - rows actually
+      compared on each side
+    * ``from_measurement_total`` / ``to_measurement_total`` - rows each
+      document really holds
+    * ``truncated`` - True when a document exceeded the compare row ceiling,
+      so the diff covers only part of the drawing set. Clients MUST surface
+      this; a truncated compare read as a complete one lets a user conclude
+      "nothing changed" from measurements that were never looked at.
+    * ``truncation_limit`` - the ceiling that was hit, ``None`` otherwise
+    * ``collapsed_duplicate_keys`` - measurements that shared a compare key
+      and collapsed onto one diff row (by design, see
+      ``_measurement_compare_key``), which is why the row tally can be
+      smaller than the compared counts
+    """
 
     project_id: UUID
     from_document_id: str
@@ -664,6 +744,34 @@ class PlanReadRejectResponse(BaseModel):
     rejected: int = 0
     skipped: int = 0
     measurement_ids: list[str] = Field(default_factory=list)
+class MeasurementReviewRequest(BaseModel):
+    """Accept or reject one proposal, optionally correcting its geometry.
+
+    ``points`` rides along with an accept to mean "edit then accept": the
+    server replaces the geometry and re-derives the value from it, so the
+    correction cannot smuggle in a quantity the shape does not support.
+    """
+
+    action: Literal["accept", "reject"]
+    points: list[dict] | None = Field(default=None, max_length=10000)
+    note: str | None = Field(default=None, max_length=2000)
+
+
+class ProposalQueueResponse(BaseModel):
+    """The pending review queue for one document, with progress counts.
+
+    The counts always cover the whole document even when ``proposals`` is
+    scoped to one page, so the progress line does not change meaning when the
+    reviewer filters.
+    """
+
+    proposals: list[TakeoffMeasurementResponse] = Field(default_factory=list)
+    page: int | None = None
+    proposed_count: int = 0
+    confirmed_count: int = 0
+    rejected_count: int = 0
+    reviewed_count: int = 0
+    total_count: int = 0
 
 
 class PlanReadMetaResponse(BaseModel):

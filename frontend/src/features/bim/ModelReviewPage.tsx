@@ -15,7 +15,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { Cuboid, PanelRightClose, PanelRightOpen } from 'lucide-react';
+import {
+  Cuboid,
+  PanelLeftClose,
+  PanelLeftOpen,
+  PanelRightClose,
+  PanelRightOpen,
+} from 'lucide-react';
 
 import { BcfIssuesPanel } from '@/features/bcf';
 import type { Topic, Viewpoint } from '@/features/bcf/api';
@@ -32,6 +38,7 @@ import { useFloatingChatStore } from '@/features/erp-chat/useFloatingChat';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
 
 import { makeBcfBridge } from './bcfBridge';
+import { ModelChecksPanel } from './ModelChecksPanel';
 import { restoreBcfViewpoint } from './restoreViewpoint';
 import { useModelViewerData } from './useModelViewerData';
 
@@ -39,6 +46,7 @@ function ModelReviewInner({ projectId }: { projectId: string }) {
   const { t } = useTranslation();
   const [activeModelId, setActiveModelId] = useState<string | null>(null);
   const [issuesOpen, setIssuesOpen] = useState(true);
+  const [checksOpen, setChecksOpen] = useState(true);
 
   const { models, activeModel, elements, geometryUrl, isLoadingModels, isLoadingElements } =
     useModelViewerData(projectId, activeModelId);
@@ -147,8 +155,52 @@ function ModelReviewInner({ projectId }: { projectId: string }) {
     [stableIdToElementId],
   );
 
+  // Focus a model-check finding in the viewer: select its element (which also
+  // updates the BCF bridge's selected guids via handleSelectionChange) and,
+  // unless the caller opts out, frame it. Reuses the same live __oeBim managers
+  // and stable-id resolver as the viewpoint restore. Returns whether the
+  // element resolved to a mesh in the loaded model so the panel can hint when
+  // an off-view element cannot be shown.
+  const focusElementById = useCallback(
+    (elementId: string, opts?: { zoom?: boolean }): boolean => {
+      const scene = sceneRef.current;
+      if (!scene) return false;
+      const bim = (
+        window as unknown as {
+          __oeBim?: {
+            elementManager: ElementManager | null;
+            selectionManager: SelectionManager | null;
+          };
+        }
+      ).__oeBim;
+      const selectionManager = bim?.selectionManager ?? null;
+      const elementManager = bim?.elementManager ?? null;
+      if (!selectionManager) return false;
+      // Findings carry the BIMElement id (== the viewer's skeleton element id);
+      // resolve through the stable-id map so a stable_id / mesh_ref also lands.
+      const internalId = stableIdToElementId(elementId) ?? elementId;
+      selectionManager.selectByIds([internalId], { exclusive: true });
+      const mesh = elementManager?.getMesh(internalId) ?? null;
+      if (mesh && opts?.zoom !== false) scene.zoomToSelection([mesh]);
+      return Boolean(mesh);
+    },
+    [stableIdToElementId],
+  );
+
   return (
-    <div className="flex h-full flex-col">
+    // Full-bleed, DEFINITE height. The page lives inside the app shell's
+    // `min-h-screen` main, which only sets a height FLOOR - so a plain
+    // `h-full` here resolves to content height and the BIMViewer canvas
+    // (sized to its parent by a ResizeObserver) balloons the whole column
+    // to tens of thousands of px the moment a tall checks report renders.
+    // Pinning the root to `100vh - 56px` (the header offset, same as the
+    // main BIM workspace) gives the flex chain a real ceiling, so `flex-1`
+    // + `min-h-0` on the body row distribute correctly and the canvas stays
+    // bounded. The negative margins negate the padded `main` to go edge-to-edge.
+    <div
+      className="flex flex-col -mx-4 -mt-6 -mb-4 sm:-mx-7"
+      style={{ height: 'calc(100vh - 56px)' }}
+    >
       {/* Header: title + model picker + issues toggle */}
       <div className="flex items-center gap-3 border-b border-border-light px-4 py-2.5">
         <Cuboid size={18} className="shrink-0 text-oe-blue" />
@@ -178,6 +230,15 @@ function ModelReviewInner({ projectId }: { projectId: string }) {
         {activeModelId && <OfflineModelButton modelId={activeModelId} />}
         <button
           type="button"
+          onClick={() => setChecksOpen((v) => !v)}
+          className="flex items-center gap-1.5 rounded-lg border border-border-light px-2.5 py-1.5 text-sm text-content-secondary hover:bg-surface-hover"
+          aria-pressed={checksOpen}
+        >
+          {checksOpen ? <PanelLeftClose size={15} /> : <PanelLeftOpen size={15} />}
+          {t('bim.checks_title', { defaultValue: 'Checks' })}
+        </button>
+        <button
+          type="button"
           onClick={() => setIssuesOpen((v) => !v)}
           className="flex items-center gap-1.5 rounded-lg border border-border-light px-2.5 py-1.5 text-sm text-content-secondary hover:bg-surface-hover"
           aria-pressed={issuesOpen}
@@ -187,9 +248,27 @@ function ModelReviewInner({ projectId }: { projectId: string }) {
         </button>
       </div>
 
-      {/* Body: viewer + issues dock */}
+      {/* Body: checks dock + viewer + issues dock.
+          Every column carries ``min-h-0 overflow-hidden`` so a tall dock (a long
+          checks-findings list) scrolls INSIDE its own panel instead of
+          stretching the flex row. Without it the row grows to the dock's content
+          height and the viewer's ``h-full`` canvas balloons to thousands of px
+          tall, pushing the model off-screen the moment checks are run. */}
       <div className="flex min-h-0 flex-1">
-        <div className="relative min-w-0 flex-1">
+        {checksOpen && (
+          <aside className="flex w-[340px] shrink-0 flex-col border-e border-border-light bg-surface-primary min-h-0 overflow-hidden">
+            <ModelChecksPanel
+              // Re-key per model so the run/report state is scoped to it.
+              key={activeModelId ?? 'none'}
+              projectId={projectId}
+              modelId={activeModelId}
+              bridge={bridge}
+              viewerReady={sceneReady}
+              onFocusElement={focusElementById}
+            />
+          </aside>
+        )}
+        <div className="relative min-h-0 min-w-0 flex-1">
           {activeModelId ? (
             <BIMViewer
               modelId={activeModelId}
@@ -221,7 +300,7 @@ function ModelReviewInner({ projectId }: { projectId: string }) {
         </div>
 
         {issuesOpen && (
-          <div className="flex w-[380px] shrink-0 flex-col border-s border-border-light bg-surface-primary">
+          <div className="flex w-[380px] shrink-0 flex-col border-s border-border-light bg-surface-primary min-h-0 overflow-hidden">
             <BcfIssuesPanel
               projectId={projectId}
               bimModelId={activeModelId}

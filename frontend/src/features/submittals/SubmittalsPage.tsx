@@ -35,6 +35,7 @@ import {
   WideModalSection,
   WideModalField,
   ModuleGuideButton,
+  CollapsibleSection,
 } from '@/shared/ui';
 import { RequiresProject } from '@/shared/auth/RequiresProject';
 import { PageHeader } from '@/shared/ui/PageHeader';
@@ -63,6 +64,8 @@ import {
   ApprovalTargetBadge,
 } from '@/features/approval-routes';
 import { submittalsGuide } from './submittalsGuide';
+import { InsightsPanel, InsightsToggleButton, useModuleInsights } from '@/features/insights';
+import { buildSubmittalsInsights } from './submittalsInsights';
 
 /* ── Constants ─────────────────────────────────────────────────────────── */
 
@@ -147,6 +150,59 @@ const EMPTY_FORM: SubmittalFormData = {
 };
 
 /**
+ * The form state a submittal opens with.
+ *
+ * Pure and exported so the edit handler can rebuild the same baseline the
+ * modal started from and send only what the user actually changed. Prefilling
+ * from a row and then PATCHing every field back overwrites edits made by
+ * somebody else in between, on fields the user never opened.
+ *
+ * `description` is read back out of the backend `metadata` blob by
+ * `normaliseSubmittal()` rather than from a dedicated column, so it is already
+ * a flat string here and the form never has to know about the metadata shape.
+ */
+export function submittalFormData(existing?: Submittal): SubmittalFormData {
+  if (!existing) return EMPTY_FORM;
+  return {
+    title: existing.title,
+    spec_section: existing.spec_section ?? '',
+    type: existing.type,
+    date_required: existing.date_required ?? '',
+    description: existing.description ?? '',
+  };
+}
+
+/**
+ * The body of an edit save: only the fields the user actually changed.
+ *
+ * Everything on the form used to go back on every save, so correcting a spec
+ * section also rewrote the description exactly as it stood when the list was
+ * last read, quietly undoing anyone else's edit to it. The update route dumps
+ * with `exclude_unset=True`, so a field left out of the body is left alone in
+ * the database, which is what makes omission the right tool here.
+ *
+ * Clearing is still a change, and it has to be expressed as something the wire
+ * can carry. `undefined` cannot: `JSON.stringify` drops the key and the old
+ * value simply survives, which is why emptying the description or the date
+ * used to have no effect at all. An emptied date goes as `null` specifically,
+ * because the backend pattern rejects an empty string.
+ */
+export function buildSubmittalPatch(
+  form: SubmittalFormData,
+  base: SubmittalFormData,
+): UpdateSubmittalPayload {
+  const data: UpdateSubmittalPayload = {};
+  if (form.title !== base.title) data.title = form.title;
+  if (form.description !== base.description) data.description = form.description;
+  if (form.spec_section !== base.spec_section) data.spec_section = form.spec_section;
+  if (form.type !== base.type) data.submittal_type = form.type;
+  if (form.date_required !== base.date_required) {
+    data.date_required = form.date_required || null;
+  }
+  return data;
+}
+
+/**
  * SubmittalFormModal — unified create/edit form for submittals.
  *
  * Both modes share the same field list (title / spec_section / type /
@@ -174,19 +230,7 @@ function SubmittalFormModal({
   const idPrefix = isEdit ? 'edit-submittal' : 'submittal';
 
   const [form, setForm] = useState<SubmittalFormData>(() =>
-    isEdit && existing
-      ? {
-          title: existing.title,
-          spec_section: existing.spec_section ?? '',
-          type: existing.type,
-          date_required: existing.date_required ?? '',
-          // Pre-fill from the normalised API response: `description` is read
-          // back out of the backend `metadata` blob by `normaliseSubmittal()`
-          // (it is not a dedicated column), so the form data already sees a
-          // flat string here and never has to know about the metadata shape.
-          description: existing.description ?? '',
-        }
-      : EMPTY_FORM,
+    submittalFormData(isEdit ? existing : undefined),
   );
   // Per-field touched tracking so validation surfaces as the user leaves each
   // field (onBlur) instead of only after a submit attempt. Submitting marks
@@ -802,12 +846,12 @@ function SubmittalsHowItWorks() {
   ];
 
   return (
-    <div className="rounded-xl border border-border-light bg-surface-secondary/40 p-4">
-      <h2 className="flex items-center gap-1.5 text-sm font-semibold text-content-primary">
-        <Network size={15} className="text-oe-blue" />
-        {t('submittals.flow_title', { defaultValue: 'How submittals work and connect' })}
-      </h2>
-      <p className="mt-1 text-xs text-content-tertiary">
+    <CollapsibleSection
+      storageKey="submittals.how"
+      icon={<Network size={15} className="text-oe-blue" />}
+      title={t('submittals.flow_title', { defaultValue: 'How submittals work and connect' })}
+    >
+      <p className="text-xs text-content-tertiary">
         {t('submittals.flow_intro', {
           defaultValue:
             'A submittal proves the materials and shop drawings were approved before they reach site. Start by logging an item, then move it through review.',
@@ -847,7 +891,7 @@ function SubmittalsHowItWorks() {
         <span aria-hidden="true">·</span>
         <ModLink to="/qms">{t('submittals.link_qms', { defaultValue: 'Quality management' })}</ModLink>
       </div>
-    </div>
+    </CollapsibleSection>
   );
 }
 
@@ -948,6 +992,16 @@ export function SubmittalsPage() {
     ).length;
     return { total, pending, approved, rejected };
   }, [submittals]);
+
+  // Module Insights - KPIs and charts over the loaded submittals. When the
+  // project has none, buildSubmittalsInsights returns a labelled sample set so
+  // the panel is never empty on first open. Declared with the top-level hooks,
+  // above the single return, so the hook order stays stable.
+  const insights = useModuleInsights('submittals', { defaultOpen: true });
+  const { datasets: insightDatasets, builtins: insightBuiltins } = useMemo(
+    () => buildSubmittalsInsights(submittals, '', t),
+    [submittals, t],
+  );
 
   // Invalidation
   const invalidateAll = useCallback(() => {
@@ -1120,16 +1174,11 @@ export function SubmittalsPage() {
   const handleEditSubmit = useCallback(
     (formData: SubmittalFormData) => {
       if (!editingSubmittal) return;
-      updateMut.mutate({
-        id: editingSubmittal.id,
-        data: {
-          title: formData.title,
-          description: formData.description || undefined,
-          spec_section: formData.spec_section || undefined,
-          submittal_type: formData.type,
-          date_required: formData.date_required || undefined,
-        },
-      });
+      // Rebuild the baseline the modal started from, so the save carries only
+      // what the user actually edited. See `buildSubmittalPatch`.
+      const data = buildSubmittalPatch(formData, submittalFormData(editingSubmittal));
+
+      updateMut.mutate({ id: editingSubmittal.id, data });
     },
     [updateMut, editingSubmittal],
   );
@@ -1153,6 +1202,7 @@ export function SubmittalsPage() {
         })}
         actions={
           <>
+            <InsightsToggleButton open={insights.open} onClick={insights.toggle} />
             <ModuleGuideButton content={submittalsGuide} />
             <Button
               variant="primary"
@@ -1167,6 +1217,20 @@ export function SubmittalsPage() {
             </Button>
           </>
         }
+      />
+
+      {/* Module Insights panel - toggled by the header button, placed high so
+          its charts (real, or labelled sample) show the moment the register
+          opens. */}
+      <InsightsPanel
+        open={insights.open}
+        title={t('submittals.insights.title', { defaultValue: 'Submittal insights' })}
+        datasets={insightDatasets}
+        builtins={insightBuiltins}
+        custom={insights.custom}
+        onAdd={insights.addCustom}
+        onUpdate={insights.updateCustom}
+        onRemove={insights.removeCustom}
       />
 
       {/* Canonical module info card \u2014 pain-named title + workflow body. */}

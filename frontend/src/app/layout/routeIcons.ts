@@ -45,6 +45,7 @@ import {
   GitBranch,
   ClipboardList,
   TrendingUp,
+  Activity,
   CalendarRange,
   Scale,
   ShieldAlert,
@@ -86,6 +87,7 @@ import {
   Plus,
   PackageCheck,
   ScanEye,
+  AlarmClock,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -135,6 +137,7 @@ const ROUTE_ICON_MAP: Record<string, LucideIcon> = {
   '/tasks': ClipboardList,
   // ── 7. Cost Control & Risk ────────────────────────────────────────
   '/5d': TrendingUp,
+  '/progress': Activity,
   '/portfolio/capacity': CalendarRange,
   '/portfolio/leveling': Scale,
   '/risks': ShieldAlert,
@@ -167,6 +170,7 @@ const ROUTE_ICON_MAP: Record<string, LucideIcon> = {
   '/inspections': ClipboardCheck,
   '/ncr': AlertOctagon,
   '/punchlist': ListChecks,
+  '/deadlines': AlarmClock,
   '/issues': CircleDot,
   '/closeout': PackageCheck,
   // ── 13. Safety & ESG ──────────────────────────────────────────────
@@ -187,6 +191,7 @@ const ROUTE_ICON_MAP: Record<string, LucideIcon> = {
   '/cde': Database,
   '/photos': Camera,
   '/markups': PenTool,
+  '/plan-room': Layers,
   // ── 16. Real Estate ───────────────────────────────────────────────
   '/property-dev': Building2,
   '/accommodation': Building2,

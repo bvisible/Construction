@@ -1273,7 +1273,7 @@ export function ProjectDetailPage() {
   const setActiveProject = useProjectContextStore((s) => s.setActiveProject);
 
   const updateMutation = useMutation({
-    mutationFn: (data: { name: string; description?: string; region?: string; currency?: string }) =>
+    mutationFn: (data: { name?: string; description?: string; region?: string; currency?: string }) =>
       projectsApi.update(projectId!, data),
     onSuccess: (updated) => {
       queryClient.invalidateQueries({ queryKey: ['project', projectId] });
@@ -1382,33 +1382,56 @@ export function ProjectDetailPage() {
   }, [project, projectId, setActiveProject, addRecent]);
 
   // Fetch BOQ list
-  const { data: boqs, isLoading: boqsLoading } = useQuery({
+  const { data: boqs, isLoading: boqsLoading, isError: boqsFailed } = useQuery({
     queryKey: ['boqs', projectId],
     queryFn: () => fetchBoqs(projectId!),
     enabled: !!projectId,
   });
 
-  // Fetch details for each BOQ (positions count, grand total)
-  const { data: boqDetails } = useQuery({
+  // Fetch details for each BOQ (positions count, grand total).
+  //
+  // ``allSettled`` deliberately tolerates a single bad BOQ so one failure does
+  // not blank the whole page, but the rejected ones must be COUNTED rather than
+  // dropped: the totals below are money and a validation score, and summing
+  // them over the surviving subset while presenting the result as the project
+  // total is how a short number ends up looking authoritative.
+  const { data: boqDetailsResult } = useQuery({
     queryKey: ['boqDetails', projectId, boqs?.map((b) => b.id)],
     queryFn: async () => {
-      if (!boqs || boqs.length === 0) return [];
+      if (!boqs || boqs.length === 0) return { details: [] as BOQDetail[], failed: 0 };
       const results = await Promise.allSettled(boqs.map((b) => fetchBoqDetail(b.id)));
-      return results
-        .filter((r): r is PromiseFulfilledResult<BOQDetail> => r.status === 'fulfilled')
-        .map((r) => r.value);
+      return {
+        details: results
+          .filter((r): r is PromiseFulfilledResult<BOQDetail> => r.status === 'fulfilled')
+          .map((r) => r.value),
+        failed: results.filter((r) => r.status === 'rejected').length,
+      };
     },
     enabled: !!boqs && boqs.length > 0,
   });
 
-  // Aggregate stats
+  const boqDetails = boqDetailsResult?.details;
+
+  // Aggregate stats.
+  //
+  // ``unavailable`` means we have nothing trustworthy to show: the BOQ list
+  // itself failed, or it succeeded but every detail request behind it failed.
+  // ``partial`` means the numbers below are real but short. Both are rendered
+  // as such instead of as a confident figure, because a zero budget on a
+  // fetch error is indistinguishable from a genuinely empty project, and that
+  // ambiguity is the actual bug.
   const stats = useMemo(() => {
+    const failed = boqDetailsResult?.failed ?? 0;
+    const unavailable = boqsFailed || (failed > 0 && (boqDetails?.length ?? 0) === 0);
+
     if (!boqDetails || boqDetails.length === 0) {
       return {
         totalBudget: 0,
         boqCount: boqs?.length ?? 0,
         totalPositions: 0,
         avgValidationScore: 0,
+        unavailable,
+        partial: false,
       };
     }
 
@@ -1434,11 +1457,16 @@ export function ProjectDetailPage() {
 
     return {
       totalBudget,
-      boqCount: boqDetails.length,
+      // Count the BOQs the project actually has, not the ones whose detail
+      // happened to load - otherwise a failed detail silently shrinks the
+      // count as well as the money.
+      boqCount: boqs?.length ?? boqDetails.length,
       totalPositions,
       avgValidationScore,
+      unavailable: false,
+      partial: failed > 0,
     };
-  }, [boqDetails, boqs]);
+  }, [boqDetails, boqDetailsResult, boqs, boqsFailed]);
 
   // Map BOQ details by id for quick lookup
   const detailMap = useMemo(() => {
@@ -1693,14 +1721,30 @@ export function ProjectDetailPage() {
                   />
                   <Button
                     size="sm"
-                    onClick={() =>
-                      updateMutation.mutate({
-                        name: editForm.name,
-                        description: editForm.description,
-                        region: editForm.region,
-                        currency: editForm.currency,
-                      })
-                    }
+                    onClick={() => {
+                      // Only what the user actually edited goes back. Fixing a
+                      // typo in the name used to resend description, region and
+                      // currency as this page had loaded them, so a colleague's
+                      // concurrent edit to any of the three was silently
+                      // reverted. The route dumps with `exclude_unset=True`, so
+                      // an omitted field is left alone. Each comparison uses the
+                      // same expression that seeded the input.
+                      const data: {
+                        name?: string;
+                        description?: string;
+                        region?: string;
+                        currency?: string;
+                      } = {};
+                      if (editForm.name !== project.name) data.name = editForm.name;
+                      if (editForm.description !== (project.description || '')) {
+                        data.description = editForm.description;
+                      }
+                      if (editForm.region !== (project.region || '')) data.region = editForm.region;
+                      if (editForm.currency !== (project.currency || '')) {
+                        data.currency = editForm.currency;
+                      }
+                      updateMutation.mutate(data);
+                    }}
                     disabled={!editForm.name.trim() || updateMutation.isPending}
                   >
                     <Save size={14} className="mr-1" />
@@ -1990,32 +2034,45 @@ export function ProjectDetailPage() {
           return (
             <SummaryCard
               label={t('boq.grand_total')}
-              value={formatCurrency(stats.totalBudget, currency)}
+              value={stats.unavailable ? '\u2014' : formatCurrency(stats.totalBudget, currency)}
               icon={<DollarSign size={20} strokeWidth={1.75} />}
               variant="blue"
-              subtitle={costPerM2Str}
+              // A cost per m2 derived from a short total is worse than none:
+              // it looks precise. Drop it whenever the total is not whole.
+              subtitle={
+                stats.unavailable || stats.partial ? t('common.load_failed') : costPerM2Str
+              }
             />
           );
         })()}
         <SummaryCard
-          label="BOQs"
-          value={String(stats.boqCount)}
+          label={t('boq.title')}
+          value={stats.unavailable ? '\u2014' : String(stats.boqCount)}
           icon={<Table2 size={20} strokeWidth={1.75} />}
         />
         <SummaryCard
           label={t('projects.positions')}
-          value={String(stats.totalPositions)}
+          value={stats.unavailable ? '\u2014' : String(stats.totalPositions)}
           icon={<Layers size={20} strokeWidth={1.75} />}
+          subtitle={stats.partial ? t('common.load_failed') : undefined}
         />
         <SummaryCard
           label={t('validation.score')}
           value={
-            stats.avgValidationScore > 0
-              ? `${(stats.avgValidationScore * 100).toFixed(0)}%`
-              : 'N/A'
+            stats.unavailable
+              ? '\u2014'
+              : stats.avgValidationScore > 0
+                ? `${(stats.avgValidationScore * 100).toFixed(0)}%`
+                : 'N/A'
           }
           icon={<ShieldCheck size={20} strokeWidth={1.75} />}
-          variant={stats.avgValidationScore >= 0.8 ? 'success' : 'default'}
+          // Never award the green "healthy" variant off a partial sample.
+          variant={
+            !stats.unavailable && !stats.partial && stats.avgValidationScore >= 0.8
+              ? 'success'
+              : 'default'
+          }
+          subtitle={stats.partial ? t('common.load_failed') : undefined}
         />
       </div>
       )}

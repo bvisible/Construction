@@ -58,7 +58,11 @@ if not os.environ.get("DATABASE_URL", "").strip():
             "could not boot embedded PostgreSQL for the test session; set "
             "DATABASE_URL to point the suite at an external PostgreSQL instead"
         )
-    atexit.register(embedded_pg.shutdown)
+    # One cluster serves the whole session, so the application's shutdown handler
+    # must leave it alone: without this pin the first test that exercises the app
+    # lifespan stops the postmaster and every test after it errors on connect.
+    embedded_pg.retain()
+    atexit.register(lambda: embedded_pg.shutdown(force=True))
 
 # ── Rate-limiter relaxation for tests ──────────────────────────────────────
 # The integration suites repeatedly hit ``/auth/register`` and ``/auth/login``
@@ -240,11 +244,26 @@ def _keep_validation_rules_registered():
     an empty registry and reports every requested set as ``unsupported``. After
     each test put the engine and its registry back, and re-register the built-ins
     if they went missing (``register_builtin_rules`` is idempotent).
+
+    Registering on the way IN matters just as much, and used to be missing. The
+    application calls ``register_builtin_rules`` from its lifespan, which no test
+    process starts, so the registry began every run empty and was populated only
+    as a side effect of this fixture's teardown. The first test in the process to
+    ask for a rule set therefore got nothing: the engine marks an absent set as
+    unsupported and returns a clean report, which is indistinguishable from the
+    rules having run and found no problem. Whether a validation test was real then
+    depended on where pytest happened to order it. Measured 2026-07-27 with
+    ``tests/unit/test_validation_registry_populated.py``, which saw the registry
+    holding ``[]`` at the first test and every built-in set present by the second.
     """
     import app.core.validation.engine as _eng
 
     engine = _eng.validation_engine
     registry = engine.registry
+    if "boq_quality" not in registry.list_rule_sets():
+        from app.core.validation.rules import register_builtin_rules
+
+        register_builtin_rules()
     try:
         yield
     finally:

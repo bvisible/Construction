@@ -5,7 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
-import { normalizeListResponse } from '@/shared/lib/apiHelpers';
+import { fetchAllPages, normalizeListResponse } from '@/shared/lib/apiHelpers';
 import {
   ShieldAlert,
   Eye,
@@ -38,6 +38,7 @@ import {
   SkeletonTable,
   IntroRichText,
   ModuleGuideButton,
+  CollapsibleSection,
 } from '@/shared/ui';
 import { RequiresProject } from '@/shared/auth/RequiresProject';
 import { DateDisplay } from '@/shared/ui/DateDisplay';
@@ -51,6 +52,8 @@ import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useToastStore } from '@/stores/useToastStore';
 import { useTabKeyboardNav } from '@/shared/hooks/useTabKeyboardNav';
+import { InsightsPanel, InsightsToggleButton, useModuleInsights } from '@/features/insights';
+import { buildSafetyInsights } from './safetyInsights';
 
 /* ── Types ─────────────────────────────────────────────────────────────── */
 
@@ -368,19 +371,34 @@ function QualityDashboardSummary({
     enabled: !!projectId,
   });
 
+  // Both of these are counted below and rendered as a bare number on a dashboard
+  // tile. The routes cap `limit` at 100, so reading one page meant the "Pending
+  // Inspections" and "Open NCRs" tiles under-reported on any project past that
+  // mark, and the filtering happens after the cut rather than before it, so the
+  // shortfall does not even scale predictably. Read every page instead.
   const { data: inspections } = useQuery({
     queryKey: ['inspections-summary', projectId],
-    queryFn: () =>
-      apiGet<{ status: string }[]>(`/v1/inspections/?project_id=${projectId}&limit=100`),
-    select: (d): { status: string }[] => normalizeListResponse(d),
+    queryFn: async () =>
+      (
+        await fetchAllPages<{ status: string }>((offset, limit) =>
+          apiGet<{ status: string }[]>(
+            `/v1/inspections/?project_id=${projectId}&limit=${limit}&offset=${offset}`,
+          ),
+        )
+      ).items,
     enabled: !!projectId,
   });
 
   const { data: ncrs } = useQuery({
     queryKey: ['ncrs-summary', projectId],
-    queryFn: () =>
-      apiGet<{ status: string }[]>(`/v1/ncr/?project_id=${projectId}&limit=100`),
-    select: (d): { status: string }[] => normalizeListResponse(d),
+    queryFn: async () =>
+      (
+        await fetchAllPages<{ status: string }>((offset, limit) =>
+          apiGet<{ status: string }[]>(
+            `/v1/ncr/?project_id=${projectId}&limit=${limit}&offset=${offset}`,
+          ),
+        )
+      ).items,
     enabled: !!projectId,
   });
 
@@ -578,12 +596,12 @@ function HowSafetyWork() {
   ];
 
   return (
-    <Card padding="md">
-      <h2 className="flex items-center gap-1.5 text-sm font-semibold text-content-primary">
-        <Network size={15} className="text-oe-blue" />
-        {t('safety.flow_title', { defaultValue: 'How Safety fits together' })}
-      </h2>
-      <p className="mt-1 text-xs text-content-tertiary">
+    <CollapsibleSection
+      storageKey="safety.how"
+      icon={<Network size={15} className="text-oe-blue" />}
+      title={t('safety.flow_title', { defaultValue: 'How Safety fits together' })}
+    >
+      <p className="text-xs text-content-tertiary">
         {t('safety.flow_intro', {
           defaultValue:
             'Record what happened and what was spotted on site, watch the trend, and escalate the serious findings for formal follow-up. This page is where site safety starts.',
@@ -633,7 +651,7 @@ function HowSafetyWork() {
           · <ModLink to="/ncr">{t('safety.mod_ncr', { defaultValue: 'NCR' })}</ModLink>
         </span>
       </div>
-    </Card>
+    </CollapsibleSection>
   );
 }
 
@@ -708,6 +726,24 @@ export function SafetyPage() {
     orientation: 'horizontal',
   });
 
+  // Module Insights - the toggleable visualization panel for this module. The
+  // incidents list also feeds the child IncidentsTab; sharing the same query
+  // key means React Query serves both from a single fetch. Declared with the
+  // other top-level hooks (this component has no early return) so the hook
+  // order stays stable. When the project has no incidents, buildSafetyInsights
+  // returns a labelled sample set so the panel is never empty on first open.
+  const { data: insightIncidents = [] } = useQuery({
+    queryKey: ['safety-incidents', projectId],
+    queryFn: () => apiGet<IncidentWire[]>(`/v1/safety/incidents/?project_id=${projectId}`),
+    select: (d): Incident[] => normalizeListResponse<IncidentWire>(d).map(normaliseIncident),
+    enabled: !!projectId,
+  });
+  const insights = useModuleInsights('safety', { defaultOpen: true });
+  const { datasets: insightDatasets, builtins: insightBuiltins } = useMemo(
+    () => buildSafetyInsights(insightIncidents, '', t),
+    [insightIncidents, t],
+  );
+
   const tabs: { key: SafetyTab; label: string; icon: React.ReactNode }[] = [
     {
       key: 'incidents',
@@ -745,6 +781,9 @@ export function SafetyPage() {
         })}
         actions={
           <>
+            {/* Insights toggle - shows or hides this module's visualization
+                panel. Leads the cluster so charts are one obvious click away. */}
+            <InsightsToggleButton open={insights.open} onClick={insights.toggle} />
             <ModuleGuideButton content={safetyGuide} />
             {projectId && (
               <Button
@@ -760,6 +799,20 @@ export function SafetyPage() {
             )}
           </>
         }
+      />
+
+      {/* Module Insights panel - toggled by the header button. Placed high so
+          its charts (real, or labelled sample) are visible the moment the
+          safety register opens. */}
+      <InsightsPanel
+        open={insights.open}
+        title={t('safety.insights.title', { defaultValue: 'Safety insights' })}
+        datasets={insightDatasets}
+        builtins={insightBuiltins}
+        custom={insights.custom}
+        onAdd={insights.addCustom}
+        onUpdate={insights.updateCustom}
+        onRemove={insights.removeCustom}
       />
 
       <HowSafetyWork />

@@ -44,7 +44,9 @@ import {
   Hourglass,
   Trash2,
 } from 'lucide-react';
-import { Badge, Breadcrumb, Card, DismissibleInfo, EmptyState, ModuleGuideButton } from '@/shared/ui';
+import { Badge, Breadcrumb, Card, DismissibleInfo, EmptyState, ModuleGuideButton, ProjectFilePicker, projectDocumentToFile } from '@/shared/ui';
+import { POINTCLOUD_FORMATS } from '@/shared/lib/projectFileFormats';
+import type { DocumentItem } from '@/features/documents/api';
 import type { ScanDataset, ScanMetadata } from './api';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { useToastStore } from '@/stores/useToastStore';
@@ -267,22 +269,36 @@ function ScanDetails({ scan }: { scan: ScanDataset }) {
 }
 
 /* The three things reality capture unlocks once a scan is registered against the
-   model - shown as guidance cards so the BETA surface explains its own value. */
-const CAPABILITY_CARDS: { icon: typeof Ruler; title: string; body: string }[] = [
+   model - shown as guidance cards so the BETA surface explains its own value.
+
+   ``upcoming`` marks a card whose backend is not built yet. On-screen
+   measurement and cut/fill both need the ingest pipeline first, so the copy
+   would otherwise promise in the present tense something a user cannot reach
+   from this page. A card that reads as shipped and is not is worse than an
+   honest label: the rule here is that a feature a site engineer cannot follow
+   in a minute is not done, and one they cannot do at all must say so. */
+const CAPABILITY_CARDS: {
+  icon: typeof Ruler;
+  title: string;
+  body: string;
+  upcoming?: boolean;
+}[] = [
   {
     icon: Ruler,
-    title: 'Verify built quantities',
-    body: 'Compare the as-built cloud against the model to confirm the quantities you are pricing.',
+    title: 'Check quantities against reality',
+    body: 'Measure what was actually built from the scan and check it against your model, so you price the quantities that are really there.',
+    upcoming: true,
   },
   {
     icon: Layers,
-    title: 'Cut and fill into the estimate',
-    body: 'Survey-grade earthwork volumes feed straight into the BOQ with the accuracy tier attached.',
+    title: 'Measure earthwork volumes',
+    body: 'Get cut and fill volumes, how much soil to dig out or bring in, measured from the scan and ready for your estimate.',
+    upcoming: true,
   },
   {
     icon: ShieldCheck,
-    title: 'Document site conditions',
-    body: 'A dated, georeferenced record of what was actually on site, kept with the project.',
+    title: 'Keep a dated site record',
+    body: 'Save an exact, dated 3D snapshot of how the site looked on the day, ready to back up claims or progress checks later.',
   },
 ];
 
@@ -310,13 +326,25 @@ export function PointCloudPage() {
 
   // Mirror DWG Takeoff: fall back to the first server project when no project
   // is active so the page is never a dead end after a context reset.
-  const { data: projects = [], isLoading: projectsLoading } = useQuery({
+  const {
+    data: projects = [],
+    isLoading: projectsLoading,
+    isError: projectsFailed,
+  } = useQuery({
     queryKey: ['projects'],
     queryFn: projectsApi.list,
     staleTime: 5 * 60_000,
   });
   const projectId = activeProjectId || projects[0]?.id || '';
-  const noProjects = !projectsLoading && projects.length === 0;
+  /** "Open from project files": lists the scans already filed in this project
+   *  so a container that is already on the platform does not have to be
+   *  uploaded a second time. */
+  const [showProjectFilePicker, setShowProjectFilePicker] = useState(false);
+  const [pickingFileId, setPickingFileId] = useState<string | null>(null);
+  // Requires a SUCCESSFUL empty result, not merely a finished one: the default
+  // above makes a failed request look like an account with no projects, and
+  // the empty state then tells the user to create one they may already have.
+  const noProjects = !projectsLoading && !projectsFailed && projects.length === 0;
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ['pointcloud-scans', projectId],
@@ -376,6 +404,34 @@ export function PointCloudPage() {
       if (!scanName) setScanName(f.name.replace(/\.[^.]+$/, ''));
     },
     [scanName, t],
+  );
+
+  /** Adopt a scan already stored in the project's Files area. The bytes go
+   *  through `handleFileSelect`, the same entry point a local pick uses, so
+   *  the format guard and the name default behave identically. */
+  const handlePickProjectFile = useCallback(
+    async (doc: DocumentItem) => {
+      setPickingFileId(doc.id);
+      try {
+        const picked = await projectDocumentToFile(doc);
+        setShowProjectFilePicker(false);
+        handleFileSelect(picked);
+      } catch (err) {
+        addToast({
+          type: 'error',
+          title: t('project_files.pick_failed_title', { defaultValue: 'Could not open that file' }),
+          message:
+            err instanceof Error
+              ? err.message
+              : t('project_files.pick_failed_msg', {
+                  defaultValue: 'The file could not be read from the project. Try again.',
+                }),
+        });
+      } finally {
+        setPickingFileId(null);
+      }
+    },
+    [handleFileSelect, addToast, t],
   );
 
   const clearFile = useCallback(() => {
@@ -640,6 +696,29 @@ export function PointCloudPage() {
           }}
         />
       </label>
+
+      {/* Second way in: a scan already filed in this project. Sits OUTSIDE
+          the drop-zone <label> - a button nested in it would also trigger the
+          hidden file input. The local upload above is unchanged. */}
+      <button
+        type="button"
+        onClick={() => setShowProjectFilePicker(true)}
+        disabled={!projectId || uploading}
+        data-testid="pointcloud-open-from-project-files"
+        className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-border-medium bg-surface-primary px-3 py-2 text-xs font-semibold text-content-secondary transition-colors hover:border-oe-blue/40 hover:text-oe-blue disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        <FolderOpen size={14} />
+        {t('project_files.open_from_project', { defaultValue: 'Open from project files' })}
+      </button>
+
+      <ProjectFilePicker
+        open={showProjectFilePicker}
+        onClose={() => setShowProjectFilePicker(false)}
+        projectId={projectId}
+        accepted={POINTCLOUD_FORMATS}
+        onPick={handlePickProjectFile}
+        busyId={pickingFileId}
+      />
 
       {/* Capture metadata - the tier gates what the scan may drive. */}
       <div className="grid gap-3 sm:grid-cols-3">
@@ -1017,24 +1096,38 @@ export function PointCloudPage() {
              collapsed "Upload another scan" panel here at the bottom. ───── */}
       {activeScan && !noProjects && uploadSecondary}
 
-      <div className="grid gap-3 sm:grid-cols-3">
-        {CAPABILITY_CARDS.map((cap, i) => {
-          const Icon = cap.icon;
-          return (
-            <Card key={i} className={`space-y-2 ${GLASS_CARD}`}>
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-surface-secondary text-content-secondary">
-                <Icon size={16} />
-              </div>
-              <h3 className="text-sm font-semibold text-content-primary">
-                {t(`pointcloud.cap_${i}_title`, cap.title)}
-              </h3>
-              <p className="text-xs leading-relaxed text-content-tertiary">
-                {t(`pointcloud.cap_${i}_body`, cap.body)}
-              </p>
-            </Card>
-          );
-        })}
-      </div>
+      <section className="space-y-3">
+        <h2 className="text-sm font-semibold text-content-secondary">
+          {t('pointcloud.cap_section_title', {
+            defaultValue: 'What a scan does for your estimate',
+          })}
+        </h2>
+        <div className="grid gap-3 sm:grid-cols-3">
+          {CAPABILITY_CARDS.map((cap, i) => {
+            const Icon = cap.icon;
+            return (
+              <Card key={i} className={`space-y-2 ${GLASS_CARD}`}>
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-surface-secondary text-content-secondary">
+                  <Icon size={16} />
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 className="text-sm font-semibold text-content-primary">
+                    {t(`pointcloud.cap_${i}_title`, { defaultValue: cap.title })}
+                  </h3>
+                  {cap.upcoming ? (
+                    <span className="rounded-full border border-border-medium px-1.5 py-0.5 text-2xs font-medium uppercase tracking-wide text-content-tertiary">
+                      {t('pointcloud.cap_upcoming', { defaultValue: 'Not built yet' })}
+                    </span>
+                  ) : null}
+                </div>
+                <p className="text-xs leading-relaxed text-content-tertiary">
+                  {t(`pointcloud.cap_${i}_body`, { defaultValue: cap.body })}
+                </p>
+              </Card>
+            );
+          })}
+        </div>
+      </section>
     </div>
   );
 }

@@ -10,8 +10,11 @@ import uuid
 
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import set_committed_value
+from sqlalchemy.orm.util import identity_key
+from sqlalchemy.sql.elements import ClauseElement
 
-from app.modules.cde.models import DocumentContainer, DocumentRevision
+from app.modules.cde.models import DocumentContainer, DocumentRevision, StateTransition
 
 
 class ContainerRepository:
@@ -73,7 +76,15 @@ class ContainerRepository:
         stmt = update(DocumentContainer).where(DocumentContainer.id == container_id).values(**fields)
         await self.session.execute(stmt)
         await self.session.flush()
-        self.session.expire_all()
+        instance = self.session.identity_map.get(identity_key(DocumentContainer, container_id))
+        if instance is None:
+            return
+        computed = [name for name, value in fields.items() if isinstance(value, ClauseElement)]
+        for name, value in fields.items():
+            if name not in computed:
+                set_committed_value(instance, name, value)
+        if computed:
+            self.session.expire(instance, computed)
 
     async def stats_for_project(self, project_id: uuid.UUID) -> dict:
         """Compute aggregate statistics for a project's CDE containers.
@@ -130,6 +141,67 @@ class ContainerRepository:
             "by_state": by_state,
             "by_discipline": by_discipline,
             "latest_revisions": latest_revisions,
+        }
+
+    async def readiness_facts_for_project(self, project_id: uuid.UUID) -> dict:
+        """Raw facts a CDE go-live readiness score is derived from.
+
+        Returns primitives only (the readiness *semantics* live in the pure
+        :mod:`app.modules.cde.readiness` engine, called by the service):
+
+        * ``total`` - number of containers in the project
+        * ``has_naming`` / ``has_suitability`` / ``has_classification`` -
+          whether any container carries a structured originator code, a
+          suitability code, or a classification code
+        * ``states`` - the set of distinct CDE states present
+        * ``has_signed_transition`` - any gate crossing recorded with a signature
+        * ``has_multi_revision`` - any container with more than one revision
+        """
+        # One pass for the count-based facts. COUNT(col) counts non-nulls, so a
+        # positive count means at least one container carries that field.
+        agg_stmt = select(
+            func.count(),
+            func.count(DocumentContainer.originator_code),
+            func.count(DocumentContainer.suitability_code),
+            func.count(DocumentContainer.classification_code),
+        ).where(DocumentContainer.project_id == project_id)
+        total, naming_n, suit_n, class_n = (await self.session.execute(agg_stmt)).one()
+
+        # Distinct states present (drives shared/published/archived milestones).
+        states_stmt = select(DocumentContainer.cde_state).where(DocumentContainer.project_id == project_id).distinct()
+        states = {row[0] for row in (await self.session.execute(states_stmt)).all()}
+
+        # Any gate crossing signed off (join transition -> its container's project).
+        signed_stmt = (
+            select(StateTransition.id)
+            .join(DocumentContainer, StateTransition.container_id == DocumentContainer.id)
+            .where(
+                DocumentContainer.project_id == project_id,
+                StateTransition.signature.isnot(None),
+            )
+            .limit(1)
+        )
+        has_signed = (await self.session.execute(signed_stmt)).first() is not None
+
+        # Any container with more than one revision (versioning actually in use).
+        multi_rev_stmt = (
+            select(DocumentRevision.container_id)
+            .join(DocumentContainer, DocumentRevision.container_id == DocumentContainer.id)
+            .where(DocumentContainer.project_id == project_id)
+            .group_by(DocumentRevision.container_id)
+            .having(func.count() > 1)
+            .limit(1)
+        )
+        has_multi_rev = (await self.session.execute(multi_rev_stmt)).first() is not None
+
+        return {
+            "total": total,
+            "has_naming": naming_n > 0,
+            "has_suitability": suit_n > 0,
+            "has_classification": class_n > 0,
+            "states": states,
+            "has_signed_transition": has_signed,
+            "has_multi_revision": has_multi_rev,
         }
 
 
@@ -198,4 +270,12 @@ class RevisionRepository:
         stmt = update(DocumentRevision).where(DocumentRevision.id == revision_id).values(**fields)
         await self.session.execute(stmt)
         await self.session.flush()
-        self.session.expire_all()
+        instance = self.session.identity_map.get(identity_key(DocumentRevision, revision_id))
+        if instance is None:
+            return
+        computed = [name for name, value in fields.items() if isinstance(value, ClauseElement)]
+        for name, value in fields.items():
+            if name not in computed:
+                set_committed_value(instance, name, value)
+        if computed:
+            self.session.expire(instance, computed)

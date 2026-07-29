@@ -29,6 +29,7 @@ import {
   Network,
   Clock,
   AlertTriangle,
+  ListTodo,
 } from 'lucide-react';
 import {
   Button,
@@ -46,6 +47,7 @@ import {
   WideModalSection,
   WideModalField,
   ModuleGuideButton,
+  CollapsibleSection,
 } from '@/shared/ui';
 import { ContactSearchInput } from '@/shared/ui/ContactSearchInput';
 import { PageHeader } from '@/shared/ui/PageHeader';
@@ -69,6 +71,9 @@ import {
   type UpdateCorrespondencePayload,
 } from './api';
 import { correspondenceGuide } from './correspondenceGuide';
+import { CreateTaskFromSourceDialog } from '@/features/tasks';
+import { InsightsPanel, InsightsToggleButton, useModuleInsights } from '@/features/insights';
+import { buildCorrespondenceInsights } from './correspondenceInsights';
 
 /* ── Constants ─────────────────────────────────────────────────────────── */
 
@@ -302,6 +307,100 @@ const EMPTY_FORM: CorrespondenceFormData = {
   linked_transmittal_id: '',
   linked_rfi_id: '',
 };
+
+/**
+ * The form state an existing entry opens with.
+ *
+ * Pure and module-level so the edit handler can rebuild the same baseline the
+ * modal started from and send only what the user actually changed. Prefilling
+ * from a row and then PATCHing every field back rewrites fields nobody opened
+ * with the values they held when the list was last read, quietly undoing an
+ * edit somebody else made in between.
+ */
+export function correspondenceFormData(c: Correspondence): CorrespondenceFormData {
+  return {
+    subject: c.subject,
+    direction: c.direction,
+    type: c.correspondence_type,
+    from_contact: c.from_contact_id || '',
+    from_display: c.from_contact_id || '',
+    to_contacts: (c.to_contact_ids ?? []).join(', '),
+    to_display: (c.to_contact_ids ?? []).join(', '),
+    date_sent: c.date_sent || '',
+    date_received: c.date_received || '',
+    status: c.status,
+    response_required_by: c.response_required_by || '',
+    contract_clause_ref: c.contract_clause_ref || '',
+    notes: c.notes || '',
+    linked_document_ids: c.linked_document_ids ?? [],
+    linked_transmittal_id: c.linked_transmittal_id || '',
+    linked_rfi_id: c.linked_rfi_id || '',
+  };
+}
+
+/** Recipients are typed as one comma-separated line and sent as a list. */
+function recipientIds(form: CorrespondenceFormData): string[] {
+  return (form.to_display || form.to_contacts)
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+/**
+ * The body of an edit save: only the fields the user actually changed.
+ *
+ * Correcting a subject used to write the whole entry back, links and dates
+ * included, exactly as they stood when the list was last read. The update route
+ * dumps with `exclude_unset=True`, so a field left out of the body is left
+ * alone in the database, which is what makes omission the right tool.
+ *
+ * Hand-written rather than a generic key diff because the payload renames
+ * fields on the way out (`type` becomes `correspondence_type`, the recipient
+ * line becomes a list). A name-matched diff would find no form field behind the
+ * renamed key, read it as unchanged and drop the edit on every save.
+ *
+ * Clearing goes as `null`, never `undefined`: the key would be dropped by
+ * `JSON.stringify` and the old value would simply survive.
+ */
+export function buildCorrespondencePatch(
+  form: CorrespondenceFormData,
+  base: CorrespondenceFormData,
+): UpdateCorrespondencePayload {
+  const data: UpdateCorrespondencePayload = {};
+  if (form.subject !== base.subject) data.subject = form.subject;
+  if (form.direction !== base.direction) data.direction = form.direction;
+  if (form.type !== base.type) data.correspondence_type = form.type;
+  if (form.from_contact !== base.from_contact) data.from_contact_id = form.from_contact || null;
+  // Both fields feed one list, so either one moving has to resend it.
+  if (form.to_display !== base.to_display || form.to_contacts !== base.to_contacts) {
+    data.to_contact_ids = recipientIds(form);
+  }
+  if (form.date_sent !== base.date_sent) data.date_sent = form.date_sent || null;
+  if (form.date_received !== base.date_received) data.date_received = form.date_received || null;
+  if (form.status !== base.status) data.status = form.status;
+  if (form.response_required_by !== base.response_required_by) {
+    data.response_required_by = form.response_required_by || null;
+  }
+  if (form.contract_clause_ref !== base.contract_clause_ref) {
+    data.contract_clause_ref = form.contract_clause_ref || null;
+  }
+  if (form.notes !== base.notes) data.notes = form.notes || null;
+  // Compared by content, not identity: rebuilding the baseline makes a fresh
+  // array every time, so a reference test would resend the links on every save.
+  if (
+    form.linked_document_ids.length !== base.linked_document_ids.length ||
+    form.linked_document_ids.some((id, i) => id !== base.linked_document_ids[i])
+  ) {
+    data.linked_document_ids = form.linked_document_ids;
+  }
+  if (form.linked_transmittal_id !== base.linked_transmittal_id) {
+    data.linked_transmittal_id = form.linked_transmittal_id || null;
+  }
+  if (form.linked_rfi_id !== base.linked_rfi_id) {
+    data.linked_rfi_id = form.linked_rfi_id || null;
+  }
+  return data;
+}
 
 /* Minimal row shapes for the link pickers — only the fields we render. */
 interface PickerDocument {
@@ -845,6 +944,7 @@ const CorrespondenceRow = React.memo(function CorrespondenceRow({
   onDelete,
   onUploadAttachment,
   onDownloadAttachment,
+  onCreateTask,
 }: {
   item: Correspondence;
   onEdit: (item: Correspondence) => void;
@@ -853,6 +953,8 @@ const CorrespondenceRow = React.memo(function CorrespondenceRow({
   onUploadAttachment: (item: Correspondence, file: File) => Promise<void>;
   /** Download the attachment at the given index (Bearer-authed fetch). */
   onDownloadAttachment: (item: Correspondence, index: number, filename: string) => void;
+  /** Open the "Create task" quick-create prefilled from this entry. */
+  onCreateTask: (item: Correspondence) => void;
 }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
@@ -1181,6 +1283,21 @@ const CorrespondenceRow = React.memo(function CorrespondenceRow({
             <Button
               variant="secondary"
               size="sm"
+              icon={<ListTodo size={13} />}
+              onClick={(e) => {
+                e.stopPropagation();
+                onCreateTask(item);
+              }}
+              data-testid={`correspondence-create-task-${item.id}`}
+              title={t('correspondence.create_task_hint', {
+                defaultValue: 'Turn this entry into a task',
+              })}
+            >
+              {t('correspondence.create_task', { defaultValue: 'Create task' })}
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
               icon={<Pencil size={13} />}
               onClick={(e) => {
                 e.stopPropagation();
@@ -1321,12 +1438,12 @@ function HowCorrespondenceWorks() {
   ];
 
   return (
-    <section className="rounded-xl border border-border-light bg-surface-secondary/40 p-4">
-      <h2 className="flex items-center gap-1.5 text-sm font-semibold text-content-primary">
-        <Network size={15} className="text-oe-blue" />
-        {t('correspondence.how_title', { defaultValue: 'How correspondence fits together' })}
-      </h2>
-      <p className="mt-1 text-xs text-content-tertiary">
+    <CollapsibleSection
+      storageKey="correspondence.how"
+      icon={<Network size={15} className="text-oe-blue" />}
+      title={t('correspondence.how_title', { defaultValue: 'How correspondence fits together' })}
+    >
+      <p className="text-xs text-content-tertiary">
         {t('correspondence.how_intro', {
           defaultValue:
             'Log every formal letter, notice, email and memo, attach its source file and link it into one traceable thread you can rely on if a claim arises.',
@@ -1374,7 +1491,7 @@ function HowCorrespondenceWorks() {
           {t('correspondence.how_mod_submittals', { defaultValue: 'Submittals' })}
         </ModLink>
       </div>
-    </section>
+    </CollapsibleSection>
   );
 }
 
@@ -1391,9 +1508,11 @@ export function CorrespondencePage() {
   // State
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [editingItem, setEditingItem] = useState<Correspondence | null>(null);
+  const [taskSourceItem, setTaskSourceItem] = useState<Correspondence | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [directionFilter, setDirectionFilter] = useState<CorrespondenceDirection | ''>('');
   const [typeFilter, setTypeFilter] = useState<CorrespondenceType | ''>('');
+  const [statusFilter, setStatusFilter] = useState<CorrespondenceStatus | ''>('');
   const { confirm, ...confirmProps } = useConfirm();
 
   // Data
@@ -1417,12 +1536,13 @@ export function CorrespondencePage() {
     error,
     refetch,
   } = useQuery({
-    queryKey: ['correspondence', projectId, directionFilter, typeFilter],
+    queryKey: ['correspondence', projectId, directionFilter, typeFilter, statusFilter],
     queryFn: () =>
       fetchCorrespondence({
         project_id: projectId,
         direction: directionFilter || undefined,
         type: typeFilter || undefined,
+        status: statusFilter || undefined,
       }),
     enabled: !!projectId,
   });
@@ -1439,6 +1559,16 @@ export function CorrespondencePage() {
         (c.to_contact_ids ?? []).some((tc) => tc.toLowerCase().includes(q)),
     );
   }, [items, searchQuery]);
+
+  // ── Module Insights ──────────────────────────────────────────────────
+  // Built off the already-loaded register rows; the panel labels itself
+  // "Sample data" and shows illustrative entries until the register has real
+  // ones.
+  const insights = useModuleInsights('correspondence', { defaultOpen: true });
+  const { datasets: insightDatasets, builtins: insightBuiltins } = useMemo(
+    () => buildCorrespondenceInsights(items, '', t),
+    [items, t],
+  );
 
   // Invalidation
   const invalidateAll = useCallback(() => {
@@ -1506,10 +1636,7 @@ export function CorrespondencePage() {
       direction: formData.direction,
       correspondence_type: formData.type,
       from_contact_id: formData.from_contact || undefined,
-      to_contact_ids: (formData.to_display || formData.to_contacts)
-        .split(',')
-        .map((s) => s.trim())
-        .filter(Boolean),
+      to_contact_ids: recipientIds(formData),
       date_sent: formData.date_sent || undefined,
       date_received: formData.date_received || undefined,
       // Lifecycle + response deadline. status is always sent; the date and
@@ -1541,31 +1668,14 @@ export function CorrespondencePage() {
   const handleEditSubmit = useCallback(
     (formData: CorrespondenceFormData) => {
       if (!editingItem) return;
-      updateMut.mutate({ id: editingItem.id, data: buildPayload(formData) });
+      // Rebuild the baseline the modal started from, so the save carries only
+      // what the user actually edited. See `buildCorrespondencePatch`.
+      updateMut.mutate({
+        id: editingItem.id,
+        data: buildCorrespondencePatch(formData, correspondenceFormData(editingItem)),
+      });
     },
-    [updateMut, editingItem, buildPayload],
-  );
-
-  const formDataFromItem = useCallback(
-    (c: Correspondence): CorrespondenceFormData => ({
-      subject: c.subject,
-      direction: c.direction,
-      type: c.correspondence_type,
-      from_contact: c.from_contact_id || '',
-      from_display: c.from_contact_id || '',
-      to_contacts: (c.to_contact_ids ?? []).join(', '),
-      to_display: (c.to_contact_ids ?? []).join(', '),
-      date_sent: c.date_sent || '',
-      date_received: c.date_received || '',
-      status: c.status,
-      response_required_by: c.response_required_by || '',
-      contract_clause_ref: c.contract_clause_ref || '',
-      notes: c.notes || '',
-      linked_document_ids: c.linked_document_ids ?? [],
-      linked_transmittal_id: c.linked_transmittal_id || '',
-      linked_rfi_id: c.linked_rfi_id || '',
-    }),
-    [],
+    [updateMut, editingItem],
   );
 
   const handleDelete = useCallback(
@@ -1643,6 +1753,7 @@ export function CorrespondencePage() {
         })}
         actions={
           <>
+            <InsightsToggleButton open={insights.open} onClick={insights.toggle} />
             <ModuleGuideButton content={correspondenceGuide} />
             <Button
               variant="primary"
@@ -1657,6 +1768,17 @@ export function CorrespondencePage() {
             </Button>
           </>
         }
+      />
+
+      <InsightsPanel
+        open={insights.open}
+        title={t('correspondence.insights.title', { defaultValue: 'Correspondence insights' })}
+        datasets={insightDatasets}
+        builtins={insightBuiltins}
+        custom={insights.custom}
+        onAdd={insights.addCustom}
+        onUpdate={insights.updateCustom}
+        onRemove={insights.removeCustom}
       />
 
       {/* Canonical module info card \u2014 pain-named title + workflow body. */}
@@ -1786,6 +1908,28 @@ export function CorrespondencePage() {
             <ChevronDown size={14} />
           </div>
         </div>
+
+        {/* Status filter */}
+        <div className="relative">
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value as CorrespondenceStatus | '')}
+            aria-label={t('correspondence.filter_all_status', { defaultValue: 'All Statuses' })}
+            className="h-10 appearance-none rounded-lg border border-border bg-surface-primary pl-3 pr-9 text-sm text-content-primary focus:outline-none focus:ring-2 focus:ring-oe-blue sm:w-40"
+          >
+            <option value="">
+              {t('correspondence.filter_all_status', { defaultValue: 'All Statuses' })}
+            </option>
+            {(Object.keys(STATUS_LABELS) as CorrespondenceStatus[]).map((st) => (
+              <option key={st} value={st}>
+                {t(`correspondence.status_${st}`, { defaultValue: STATUS_LABELS[st] })}
+              </option>
+            ))}
+          </select>
+          <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-2.5 text-content-tertiary">
+            <ChevronDown size={14} />
+          </div>
+        </div>
       </div>
 
       {/* Table */}
@@ -1798,12 +1942,12 @@ export function CorrespondencePage() {
           <EmptyState
             icon={<Mail size={28} strokeWidth={1.5} />}
             title={
-              searchQuery || directionFilter || typeFilter
+              searchQuery || directionFilter || typeFilter || statusFilter
                 ? t('correspondence.no_results', { defaultValue: 'No matching entries' })
                 : t('correspondence.no_entries', { defaultValue: 'No correspondence yet' })
             }
             description={
-              searchQuery || directionFilter || typeFilter
+              searchQuery || directionFilter || typeFilter || statusFilter
                 ? t('correspondence.no_results_hint', {
                     defaultValue: 'Try adjusting your search or filters',
                   })
@@ -1812,7 +1956,7 @@ export function CorrespondencePage() {
                   })
             }
             action={
-              !searchQuery && !directionFilter && !typeFilter
+              !searchQuery && !directionFilter && !typeFilter && !statusFilter
                 ? {
                     label: t('correspondence.new_letter', { defaultValue: 'New Letter' }),
                     onClick: () => setShowCreateModal(true),
@@ -1865,6 +2009,7 @@ export function CorrespondencePage() {
                   onDelete={handleDelete}
                   onUploadAttachment={handleUploadAttachment}
                   onDownloadAttachment={handleDownloadAttachment}
+                  onCreateTask={setTaskSourceItem}
                 />
               ))}
             </Card>
@@ -1887,10 +2032,28 @@ export function CorrespondencePage() {
         <CreateCorrespondenceModal
           isEdit
           projectId={projectId}
-          initialData={formDataFromItem(editingItem)}
+          initialData={correspondenceFormData(editingItem)}
           onClose={() => setEditingItem(null)}
           onSubmit={handleEditSubmit}
           isPending={updateMut.isPending}
+        />
+      )}
+
+      {/* Create task quick action — prefilled from this correspondence entry */}
+      {taskSourceItem && (
+        <CreateTaskFromSourceDialog
+          projectId={taskSourceItem.project_id || projectId}
+          sourceType="correspondence"
+          sourceId={taskSourceItem.id}
+          sourceLabel={taskSourceItem.reference_number}
+          defaultTitle={taskSourceItem.subject}
+          defaultDescription={t('correspondence.task_desc_default', {
+            defaultValue: 'Follow up on correspondence {{ref}}: {{subject}}',
+            ref: taskSourceItem.reference_number,
+            subject: taskSourceItem.subject,
+          })}
+          defaultDueDate={taskSourceItem.response_required_by}
+          onClose={() => setTaskSourceItem(null)}
         />
       )}
 

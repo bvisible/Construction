@@ -26,7 +26,10 @@ import {
 import { APP_VERSION, APP_BUILD_FINGERPRINT } from '@/shared/lib/version';
 import { useToastStore } from '@/stores/useToastStore';
 import { useI18nReady } from '@/shared/lib/useI18nReady';
-import { isTauri, openAppInBrowser } from '@/shared/lib/desktop';
+// //// NEOFFICE PATCH — SupportUsButton / SubscribeButton not rendered in the
+// header (white-label). `openLink` IS used below, so it stays imported.
+import { isTauri, openAppInBrowser, openLink } from '@/shared/lib/desktop';
+// //// END NEOFFICE PATCH
 import { ProjectJourneyButton } from './ProjectJourney';
 import { getRouteIcon } from './routeIcons';
 
@@ -382,14 +385,21 @@ export function Header({ title, onMenuClick }: HeaderProps) {
 
 /* ── Module info re-opener (top bar) ──────────────────────────────────── */
 
-/** Small info icon after the module title, shown ONLY while the page's
- *  DismissibleInfo card is collapsed. Clicking it re-expands the card
- *  (and this icon disappears, because the card unregisters itself). */
+/** Small info icon after the module title. FALLBACK re-open control, shown
+ *  ONLY while the page's DismissibleInfo card is collapsed AND the page has no
+ *  "How it works" button (which hosts the primary re-open pill next to it -
+ *  founder 2026-07-23). This keeps a collapsed card reachable on the rare page
+ *  without a guide button, without doubling the affordance elsewhere. Clicking
+ *  re-expands the card (and this icon disappears, because the card
+ *  unregisters itself). */
 function ModuleInfoReopener() {
   const { t } = useTranslation();
   const hasCollapsed = useModuleInfoStore((s) => s.entries.length > 0);
+  const guidePresent = useModuleInfoStore((s) => s.guideKeys.length > 0);
   const expandAll = useModuleInfoStore((s) => s.expandAll);
-  if (!hasCollapsed) return null;
+  // The pill next to "How it works" owns re-open whenever a guide button is on
+  // the page; only fall back to this top-bar icon when there is none.
+  if (!hasCollapsed || guidePresent) return null;
   const label = t('common.module_info', { defaultValue: 'Module information' });
   return (
     <button
@@ -512,7 +522,7 @@ function BugReportMenu() {
     setOpen(false);
     const { url, body } = buildBugReportUrl(t);
     if (url) {
-      window.open(url, '_blank', 'noopener,noreferrer');
+      openLink(url);
       return;
     }
     void copyToClipboard(body).then((ok) => {
@@ -558,7 +568,7 @@ function BugReportMenu() {
       app_version: APP_VERSION,
       platform: navigator.userAgent.includes('Win') ? 'Windows' : navigator.userAgent.includes('Mac') ? 'macOS' : 'Linux',
     });
-    window.open(`https://openconstructionerp.com/contact.html?${params}`, '_blank');
+    openLink(`https://openconstructionerp.com/contact.html?${params}`);
   };
 
   const handleDownloadLog = () => {
@@ -784,7 +794,7 @@ function HelpMenu() {
       feedback: 'true',
       app_version: APP_VERSION,
     });
-    window.open(`https://openconstructionerp.com/contact.html?${params}`, '_blank');
+    openLink(`https://openconstructionerp.com/contact.html?${params}`);
   };
 
   return (
@@ -1142,6 +1152,11 @@ function buildBugReportUrl(
     `- User agent: ${navigator.userAgent}`,
     `- Build: ${APP_BUILD_FINGERPRINT}`,
     last ? `- Captured at: ${last.at}` : '',
+    // The page the error happened on, which is not always the page the user
+    // is filing from. Component/Page above name the current route and drive
+    // the title, so when the two disagree triage needs to see it rather than
+    // assume the stack belongs to the named surface (#391).
+    last ? `- Error page: ${last.url}` : '',
     '',
     '### Last error captured',
     errorBlock,

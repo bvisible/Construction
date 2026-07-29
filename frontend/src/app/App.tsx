@@ -17,7 +17,7 @@ const EmbeddedLayout =
     : AppLayout;
 // //// END NEOFFICE PATCH
 import { DashboardPage } from '@/features/dashboard';
-import { LoginPage, RegisterPage, ForgotPasswordPage } from '@/features/auth';
+import { LoginPage, RegisterPage, ForgotPasswordPage, AuthedHome } from '@/features/auth';
 import { ProjectsPage, CreateProjectPage, ProjectDetailPage, ProjectSettingsPage } from '@/features/projects';
 // Import the lightweight BOQ pages from their source modules directly,
 // NOT via the `@/features/boq` barrel.  The barrel re-exports
@@ -51,6 +51,7 @@ import { useAuthStore } from '@/stores/useAuthStore';
 import { useThemeStore } from '@/stores/useThemeStore';
 import { useBrandingStore } from '@/stores/useBrandingStore';
 import { usePreferencesStore } from '@/stores/usePreferencesStore';
+import { hydrateInfoBlocksFromServer } from '@/stores/useInfoBlockPrefsStore';
 import { ddcVerifyIntegrity, ddcInjectMeta, DDC_ORIGIN } from '@/shared/lib/ddc-integrity';
 import { NavigationProgress } from '@/shared/lib/navigationProgress';
 import { useKeyboardShortcuts } from '@/shared/hooks/useKeyboardShortcuts';
@@ -149,9 +150,18 @@ const PunchListPage = lazy(() =>
 const IssuesHubPage = lazy(() =>
   import('@/features/issues/IssuesHubPage').then((m) => ({ default: m.IssuesHubPage }))
 );
+const DeadlinesPage = lazy(() =>
+  import('@/features/deadlines/DeadlinesPage').then((m) => ({ default: m.DeadlinesPage }))
+);
 const BcfPage = lazy(() => import('@/features/bcf/BcfPage').then((m) => ({ default: m.BcfPage })));
 const ModelReviewPage = lazy(() =>
   import('@/features/bim/ModelReviewPage').then((m) => ({ default: m.ModelReviewPage }))
+);
+const PlanRoomPage = lazy(() =>
+  import('@/features/plan-room/PlanRoomPage').then((m) => ({ default: m.PlanRoomPage }))
+);
+const ProgressPage = lazy(() =>
+  import('@/features/progress/ProgressPage').then((m) => ({ default: m.ProgressPage }))
 );
 const CloseoutPage = lazy(() => import('@/features/closeout/CloseoutPage'));
 const InboxPage = lazy(() =>
@@ -189,6 +199,25 @@ const SubmittalsPage = lazy(() =>
 );
 const CorrespondencePage = lazy(() =>
   import('@/features/correspondence/CorrespondencePage').then((m) => ({ default: m.CorrespondencePage }))
+);
+// International delivery / authority modules (frontends added this wave).
+const AuthoritySubmissionPage = lazy(() =>
+  import('@/features/authority-submission/AuthoritySubmissionPage').then((m) => ({ default: m.AuthoritySubmissionPage }))
+);
+const ReviewAuthorityPage = lazy(() =>
+  import('@/features/review-authority/ReviewAuthorityPage').then((m) => ({ default: m.ReviewAuthorityPage }))
+);
+const SigningPage = lazy(() =>
+  import('@/features/signing/SigningPage').then((m) => ({ default: m.SigningPage }))
+);
+const SourceDataPage = lazy(() =>
+  import('@/features/source-data/SourceDataPage').then((m) => ({ default: m.SourceDataPage }))
+);
+const ProjectRoutePage = lazy(() =>
+  import('@/features/project-route/ProjectRoutePage').then((m) => ({ default: m.ProjectRoutePage }))
+);
+const SiteSupervisionPage = lazy(() =>
+  import('@/features/site-supervision/SiteSupervisionPage').then((m) => ({ default: m.SiteSupervisionPage }))
 );
 const CDEPage = lazy(() =>
   import('@/features/cde/CDEPage').then((m) => ({ default: m.CDEPage }))
@@ -294,6 +323,9 @@ const GlobalSearchPage = lazy(() =>
 );
 const TransmittalLogPage = lazy(() =>
   import('@/features/file-transmittals/TransmittalLogPage').then((m) => ({ default: m.TransmittalLogPage }))
+);
+const FileApprovalsRegisterPage = lazy(() =>
+  import('@/features/file-approvals/FileApprovalsRegisterPage').then((m) => ({ default: m.FileApprovalsRegisterPage }))
 );
 const SharePage = lazy(() =>
   import('@/features/file-manager/SharePage').then((m) => ({ default: m.SharePage }))
@@ -913,6 +945,10 @@ export default function App() {
   useEffect(() => {
     if (!isAuthenticated) return;
     void syncCustomUnitsFromServer();
+    // Per-user module info-card collapse state, so a card the user collapsed
+    // (into the pill next to "How it works") stays collapsed on every browser
+    // and device, not just the one they clicked on.
+    void hydrateInfoBlocksFromServer();
   }, [isAuthenticated]);
 
   // Pull the workspace white-label brand from the server so it follows the user
@@ -1028,24 +1064,27 @@ export default function App() {
           }
         />
 
+        {/* Auth — public */}
         {/* //// NEOFFICE PATCH — Frappe-embedded auth bypass (4 routes).
-            In embedded mode the user is already authenticated by Frappe,
-            so the OCE auth pages must never render — redirect to /. */}
+            In embedded mode the user is already authenticated by Frappe, so the
+            OCE auth pages must never render — redirect to /. Outside embedded
+            mode we keep upstream's behaviour (v12 renders <AuthedHome/> for an
+            already-authenticated visitor instead of a bare redirect). */}
         <Route
           path="/login"
-          element={isFrappeEmbedded ? <Navigate to="/" replace /> : (isAuthenticated ? <Navigate to="/" replace /> : <LoginPage />)}
+          element={isFrappeEmbedded ? <Navigate to="/" replace /> : (isAuthenticated ? <AuthedHome /> : <LoginPage />)}
         />
         <Route
           path="/login-next"
-          element={isFrappeEmbedded ? <Navigate to="/" replace /> : (isAuthenticated ? <Navigate to="/" replace /> : <Suspense fallback={<LoadingScreen />}><LoginPageNext /></Suspense>)}
+          element={isFrappeEmbedded ? <Navigate to="/" replace /> : (isAuthenticated ? <AuthedHome /> : <Suspense fallback={<LoadingScreen />}><LoginPageNext /></Suspense>)}
         />
         <Route
           path="/register"
-          element={isFrappeEmbedded ? <Navigate to="/" replace /> : (isAuthenticated ? <Navigate to="/" replace /> : <RegisterPage />)}
+          element={isFrappeEmbedded ? <Navigate to="/" replace /> : (isAuthenticated ? <AuthedHome /> : <RegisterPage />)}
         />
         <Route
           path="/forgot-password"
-          element={isFrappeEmbedded ? <Navigate to="/" replace /> : (isAuthenticated ? <Navigate to="/" replace /> : <ForgotPasswordPage />)}
+          element={isFrappeEmbedded ? <Navigate to="/" replace /> : (isAuthenticated ? <AuthedHome /> : <ForgotPasswordPage />)}
         />
         {/* //// END NEOFFICE PATCH */}
 
@@ -1095,6 +1134,8 @@ export default function App() {
         <Route path="/coordination" element={<P title="Model Coordination"><CoordinationHubPage /></P>} />
         <Route path="/bcf" element={<P title="Model Issues"><BcfPage /></P>} />
         <Route path="/model-review" element={<P title="Model Review"><ModelReviewPage /></P>} />
+        <Route path="/plan-room" element={<P title="Plan Room"><PlanRoomPage /></P>} />
+        <Route path="/progress" element={<P title="Progress"><ProgressPage /></P>} />
         <Route path="/assets" element={<P title="Asset Register"><AssetsPage /></P>} />
         <Route path="/bim/:modelId" element={<P title="BIM Viewer"><BIMPage /></P>} />
         <Route path="/projects/:projectId/bim" element={<P title="BIM Viewer"><BIMPage /></P>} />
@@ -1181,6 +1222,7 @@ export default function App() {
         <Route path="/files/trash" element={<P title="Recycle Bin"><TrashPage /></P>} />
         <Route path="/files/search" element={<P title="Search across projects"><GlobalSearchPage /></P>} />
         <Route path="/files/transmittals" element={<P title="Transmittals"><TransmittalLogPage /></P>} />
+        <Route path="/files/approvals" element={<P title="Approvals register"><FileApprovalsRegisterPage /></P>} />
         <Route path="/files" element={<P title="Project Files"><FileManagerPage /></P>} />
         <Route path="/projects/:projectId/files" element={<P title="Project Files"><FileManagerPage /></P>} />
 
@@ -1202,6 +1244,7 @@ export default function App() {
         <Route path="/markups" element={<P title="Markups"><MarkupsPage /></P>} />
         <Route path="/markups/compare" element={<P title="Compare Revisions"><PdfComparePage /></P>} />
         <Route path="/punchlist" element={<P title="Punch List"><PunchListPage /></P>} />
+        <Route path="/deadlines" element={<P title="Deadlines"><DeadlinesPage /></P>} />
         <Route path="/issues" element={<P title="Issues"><IssuesHubPage /></P>} />
         <Route path="/closeout" element={<P title="Handover & Closeout"><CloseoutPage /></P>} />
         <Route path="/field-reports" element={<P title="Field Reports"><FieldReportsPage /></P>} />
@@ -1225,6 +1268,18 @@ export default function App() {
         <Route path="/submittals" element={<P title="Submittals"><SubmittalsPage /></P>} />
         <Route path="/projects/:projectId/correspondence" element={<P title="Correspondence"><CorrespondencePage /></P>} />
         <Route path="/correspondence" element={<P title="Correspondence"><CorrespondencePage /></P>} />
+        <Route path="/projects/:projectId/authority-submissions" element={<P title="Authority Submissions"><AuthoritySubmissionPage /></P>} />
+        <Route path="/authority-submissions" element={<P title="Authority Submissions"><AuthoritySubmissionPage /></P>} />
+        <Route path="/projects/:projectId/review-authority" element={<P title="Review Authority"><ReviewAuthorityPage /></P>} />
+        <Route path="/review-authority" element={<P title="Review Authority"><ReviewAuthorityPage /></P>} />
+        <Route path="/projects/:projectId/signing" element={<P title="E-Signatures"><SigningPage /></P>} />
+        <Route path="/signing" element={<P title="E-Signatures"><SigningPage /></P>} />
+        <Route path="/projects/:projectId/source-data" element={<P title="Source Data"><SourceDataPage /></P>} />
+        <Route path="/source-data" element={<P title="Source Data"><SourceDataPage /></P>} />
+        <Route path="/projects/:projectId/project-route" element={<P title="Route Classifier"><ProjectRoutePage /></P>} />
+        <Route path="/project-route" element={<P title="Route Classifier"><ProjectRoutePage /></P>} />
+        <Route path="/projects/:projectId/site-supervision" element={<P title="Site Supervision"><SiteSupervisionPage /></P>} />
+        <Route path="/site-supervision" element={<P title="Site Supervision"><SiteSupervisionPage /></P>} />
         <Route path="/projects/:projectId/cde" element={<P title="CDE"><CDEPage /></P>} />
         <Route path="/cde" element={<P title="CDE"><CDEPage /></P>} />
         <Route path="/projects/:projectId/transmittals" element={<P title="Transmittals"><TransmittalsPage /></P>} />

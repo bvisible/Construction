@@ -229,15 +229,36 @@ export function saveCustomUnit(unit: string): void {
   apiPatch('/v1/users/me/custom-units/', { units: custom }).catch(() => undefined);
 }
 
+// //// NEOFFICE PATCH — composite yield / productivity units used in
+// rendement-style estimating (effort per produced unit, e.g. 0.175 h/m2 to form
+// a slab, and the inverse productivity form m2/h). These lived in a local UNITS
+// const in AssemblyEditorPage until upstream v12 centralised the unit list here,
+// so the patch moved with it. Assemblies already saved with them keep rendering.
+const YIELD_UNITS = [
+  // Effort per produced unit (labor / machine / tooling yield).
+  'h/m',
+  'h/m2',
+  'h/m3',
+  'h/ml',
+  'h/pcs',
+  'h/t',
+  // Productivity (produced units per hour) — inverse of the above.
+  'm/h',
+  'm2/h',
+  'm3/h',
+  'pcs/h',
+];
+// //// END NEOFFICE PATCH
+
 /**
- * Get units for the current locale. Includes base metric + locale-specific + user custom.
- * Always deduplicates and keeps base units first.
+ * Get units for the current locale. Includes base metric + locale-specific +
+ * NEOFFICE yield units + user custom. Always deduplicates and keeps base units first.
  */
 export function getUnitsForLocale(lang?: string): string[] {
   const code = (lang || 'en').split('-')[0] ?? 'en';
   const locale = LOCALE_UNITS[code] ?? [];
   const custom = loadCustomUnits();
-  const all = [...BASE_UNITS, ...locale, ...custom];
+  const all = [...BASE_UNITS, ...locale, ...YIELD_UNITS, ...custom];
   // Deduplicate preserving order
   return [...new Set(all)];
 }

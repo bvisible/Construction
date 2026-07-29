@@ -30,6 +30,7 @@ import {
   Button,
   Card,
   Badge,
+  CollapsibleSection,
   DismissibleInfo,
   EmptyState,
   Breadcrumb,
@@ -88,6 +89,8 @@ import {
   type PrequalStatus,
 } from '@/features/subcontractors/api';
 import { bidManagementGuide } from './bidManagementGuide';
+import { InsightsPanel, InsightsToggleButton, useModuleInsights } from '@/features/insights';
+import { buildBidManagementInsights } from './bidManagementInsights';
 
 const BID_TAB_IDS = ['packages', 'invitations', 'submissions', 'qa'] as const;
 type Tab = (typeof BID_TAB_IDS)[number];
@@ -181,7 +184,11 @@ interface ProjectStub {
 }
 
 function listProjectsLite(): Promise<ProjectStub[]> {
-  return apiGet<ProjectStub[]>('/v1/projects/?limit=200').catch(() => [] as ProjectStub[]);
+  // Left to fail on purpose. Swallowing it into an empty array made a project
+  // list that did not load look exactly like an account with no projects, and
+  // the page then told the user to go and create one they may well already
+  // have.
+  return apiGet<ProjectStub[]>('/v1/projects/?limit=200');
 }
 
 function listInvitationsForPackage(packageId: string): Promise<BidInvitation[]> {
@@ -425,12 +432,12 @@ function HowBidManagementWorks() {
   ];
 
   return (
-    <Card padding="md">
-      <h2 className="flex items-center gap-1.5 text-sm font-semibold text-content-primary">
-        <Network size={15} className="text-oe-blue" />
-        {t('bid_management.flow_title', { defaultValue: 'How bid management fits together' })}
-      </h2>
-      <p className="mt-1 text-xs text-content-tertiary">
+    <CollapsibleSection
+      storageKey="bid_management.how"
+      icon={<Network size={15} className="text-oe-blue" />}
+      title={t('bid_management.flow_title', { defaultValue: 'How bid management fits together' })}
+    >
+      <p className="text-xs text-content-tertiary">
         {t('bid_management.flow_intro', {
           defaultValue:
             'Bundle scope into packages, invite subcontractors, compare their bids like for like, then award. A won CRM deal feeds the work in, and the award flows on to Contracts. Use Tendering instead for a formal BOQ-driven tender.',
@@ -491,7 +498,7 @@ function HowBidManagementWorks() {
           </ModLink>
         </span>
       </div>
-    </Card>
+    </CollapsibleSection>
   );
 }
 
@@ -551,6 +558,40 @@ export function BidManagementPage() {
 
   const isLoading = packagesQ.isLoading || projectsQ.isLoading;
 
+  // Module Insights - the toggleable visualization panel for this module. Its
+  // charts are built client-side from the packages already loaded; when the
+  // project has none, buildBidManagementInsights returns a labelled sample set
+  // so the panel is never empty on first open. Open state and any user-built
+  // charts persist per module via useModuleInsights. Declared above the
+  // no-project early return below so the hook order stays stable.
+  const insights = useModuleInsights('bid-management', { defaultOpen: true });
+  const { datasets: insightDatasets, builtins: insightBuiltins } = useMemo(
+    () => buildBidManagementInsights(packagesQ.data ?? [], currentProject?.currency || '', t),
+    [packagesQ.data, currentProject, t],
+  );
+
+  // A project list that failed to load is not an account without projects. Only
+  // say there is nothing here once the list has actually come back.
+  if (!projectId && (projectsQ.isError || projectsQ.isPending)) {
+    return (
+      <div className="space-y-5 animate-fade-in">
+        <Breadcrumb
+          items={[{ label: t('nav.bid_management', { defaultValue: 'Bid Management' }) }]}
+        />
+        {projectsQ.isError ? (
+          <RecoveryCard
+            error={projectsQ.error}
+            onRetry={() => {
+              void projectsQ.refetch();
+            }}
+          />
+        ) : (
+          <SkeletonTable rows={4} />
+        )}
+      </div>
+    );
+  }
+
   if (!projectId) {
     return (
       <div className="space-y-5 animate-fade-in">
@@ -592,12 +633,29 @@ export function BidManagementPage() {
         })}
         actions={
           <>
+            {/* Insights toggle - shows or hides this module's visualization
+                panel. Leads the cluster so charts are one obvious click away. */}
+            <InsightsToggleButton open={insights.open} onClick={insights.toggle} />
             <Button variant="primary" icon={<Plus size={14} />} onClick={() => setCreateOpen(true)}>
               {t('bid_management.new_package', { defaultValue: 'New Package' })}
             </Button>
             <ModuleGuideButton content={bidManagementGuide} />
           </>
         }
+      />
+
+      {/* Module Insights panel - toggled by the header button. Placed high so
+          its charts (real, or labelled sample) are visible the moment the
+          register opens. */}
+      <InsightsPanel
+        open={insights.open}
+        title={t('bid_management.insights.title', { defaultValue: 'Bid insights' })}
+        datasets={insightDatasets}
+        builtins={insightBuiltins}
+        custom={insights.custom}
+        onAdd={insights.addCustom}
+        onUpdate={insights.updateCustom}
+        onRemove={insights.removeCustom}
       />
 
       <DismissibleInfo

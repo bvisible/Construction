@@ -39,6 +39,8 @@ import uuid
 import uuid as _instance_uuid
 from typing import Any
 
+_APP_BUILD_TAG: str = "a037e172eb9c84f9"
+
 # Unique instance fingerprint - proves this specific deployment origin
 _INSTANCE_ID = str(_instance_uuid.uuid4())
 # Build-pepper. Looks like opaque crypto material; the bytes XOR-decode to
@@ -57,6 +59,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import Settings, build_provenance_tag, desktop_mode, get_settings
 from app.core.deployment_posture import build_data_security_posture
 from app.core.module_loader import module_loader
+from app.core.self_upgrade import FROZEN_REFUSAL, is_frozen_build
 from app.dependencies import RequireRole, get_current_user_id, rls_request_context
 
 logger = logging.getLogger(__name__)
@@ -1615,8 +1618,9 @@ def create_app() -> FastAPI:
                 "status": "connected",
                 "engine": "postgresql",
             }
-        except Exception as exc:
-            result["database"] = {"status": "error", "error": str(exc)[:100]}
+        except Exception:
+            logger.warning("System status DB probe failed", exc_info=True)
+            result["database"] = {"status": "error", "error": "unavailable"}
 
         # Vector DB check (LanceDB or Qdrant).
         #
@@ -1852,6 +1856,9 @@ def create_app() -> FastAPI:
             latest = current
 
         update_available = _semver_tuple(latest) > _semver_tuple(current)
+        # A frozen build has no pip to upgrade itself with, so advertising the
+        # pip command there sends the user down a path that cannot work.
+        frozen = is_frozen_build()
         result = {
             "current_version": current,
             "latest_version": latest,
@@ -1859,7 +1866,10 @@ def create_app() -> FastAPI:
             "release_url": release_url,
             "release_notes": release_notes,
             "published_at": published_at,
-            "upgrade_command": "pip install --upgrade openconstructionerp",
+            "self_upgrade_supported": not frozen,
+            "upgrade_command": (
+                "Download and run the latest installer" if frozen else "pip install --upgrade openconstructionerp"
+            ),
         }
         setattr(app.state, cache_key, {"data": result, "checked_at": time.time()})
         return result
@@ -1922,6 +1932,12 @@ def create_app() -> FastAPI:
                     "shell, then restart the service."
                 ),
             )
+
+        # A frozen build would feed the pip command below back into its own CLI
+        # instead of upgrading anything (issue #403), so point at the installer,
+        # which is the route that actually works there.
+        if is_frozen_build():
+            raise HTTPException(status_code=409, detail=FROZEN_REFUSAL)
 
         target = "openconstructionerp"
         if version and version.replace(".", "").replace("-", "").isalnum():
@@ -2633,6 +2649,18 @@ def create_app() -> FastAPI:
             # without DDL rights (or any other failure) just logs a warning and
             # leaves schema management to the operator's `alembic upgrade head`,
             # exactly as before.
+            # Collapse any duplicate from-source takeoff documents before the
+            # index heal below adds their unique index (issue #369). A leftover
+            # duplicate makes CREATE UNIQUE INDEX fail, so the merge must run
+            # first. Idempotent and cheap when clean; non-fatal like the heal.
+            try:
+                from app.modules.takeoff.dedup import collapse_duplicate_source_documents
+
+                async with engine.begin() as conn:
+                    await collapse_duplicate_source_documents(conn)
+            except Exception:
+                logger.warning("Takeoff duplicate-document heal skipped (non-fatal)", exc_info=True)
+
             from app.core.postgres_migrator import postgres_auto_migrate
 
             try:
@@ -2657,26 +2685,15 @@ def create_app() -> FastAPI:
             # only fires when ops run migrations before the app ever boots).
             # Only stamps when the version table is empty/absent so it never
             # clobbers an existing migration state. Non-fatal.
-            def _stamp_head_if_unstamped(sync_conn: object) -> str | None:
-                from pathlib import Path as _StampPath
-
-                from alembic.config import Config as _StampConfig
-                from alembic.runtime.migration import MigrationContext as _StampMigCtx
-                from alembic.script import ScriptDirectory as _StampScriptDir
-
-                mig_ctx = _StampMigCtx.configure(sync_conn)
-                if mig_ctx.get_current_revision() is not None:
-                    return None  # already stamped - leave existing state untouched
-                ini = _StampPath(__file__).resolve().parent.parent / "alembic.ini"
-                if not ini.is_file():
-                    return None
-                script = _StampScriptDir.from_config(_StampConfig(str(ini)))
-                mig_ctx.stamp(script, "heads")
-                return script.get_current_head()
+            #
+            # This is also where alembic's version table gets CREATED on the
+            # canonical install, so it is where its column width is settled -
+            # see app/core/alembic_version_table.py and issue #399.
+            from app.core.alembic_version_table import stamp_head_if_unstamped
 
             try:
                 async with engine.begin() as conn:
-                    stamped = await conn.run_sync(_stamp_head_if_unstamped)
+                    stamped = await conn.run_sync(stamp_head_if_unstamped)
                 if stamped:
                     logger.info("Alembic version stamped to head %s on fresh DB", stamped)
             except Exception:
@@ -2687,11 +2704,15 @@ def create_app() -> FastAPI:
             # databases; a no-op that never touches the database while
             # settings.rls_enforce is off, so it is inert on a default install.
             try:
-                from app.core.rls_setup import provision_rls
+                from app.core.rls_setup import provision_rls, verify_rls_role
 
                 rls_stats = await provision_rls(engine, Base)
                 if rls_stats.get("tables"):
                     logger.info("RLS enforcement active: %d tenant tables policied", rls_stats["tables"])
+                # With the flag on, every request downgrades to oe_app; if that
+                # role is absent (external PG without CREATEROLE) requests 500.
+                # Surface it once at boot instead of on every request. No-op off.
+                await verify_rls_role(engine)
             except Exception:
                 logger.warning("RLS provisioning skipped (non-fatal)", exc_info=True)
         else:
@@ -3205,6 +3226,19 @@ def create_app() -> FastAPI:
                 start_sla_checker()
         except Exception:  # noqa: BLE001 - never block startup on the monitor
             logger.exception("Approval SLA monitor failed to start")
+
+        # Cross-module deadline sweeper (item #18): background sweep that nudges
+        # the owner when a tracked deadline (correspondence response, NCR
+        # corrective action, punch item) slips overdue and escalates it past the
+        # grace window. Same lightweight asyncio loop as the SLA monitor above;
+        # fail-soft so a hiccup never blocks startup.
+        try:
+            if not _fast_startup:
+                from app.modules.deadlines.sweeper import start_deadline_sweeper
+
+                start_deadline_sweeper()
+        except Exception:  # noqa: BLE001 - never block startup on the sweeper
+            logger.exception("Deadline sweeper failed to start")
 
         # Risk auto-escalation (item #24): hourly sweep that escalates risks
         # crossing their severity threshold or with a lapsed review date. The

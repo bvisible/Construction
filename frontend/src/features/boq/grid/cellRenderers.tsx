@@ -741,7 +741,22 @@ export function ExpandCellRenderer(params: ICellRendererParams) {
   return (
     <div className="flex items-center justify-center h-full w-full">
       <button
-        onClick={() => ctx?.onToggleResources?.(data.id)}
+        // One-click expand. Fire on mousedown, which runs BEFORE the blur that
+        // commits an in-progress cell edit and re-renders the rows — that
+        // re-render used to unmount this button between mousedown and mouseup,
+        // so the native click never fired and only the SECOND click worked.
+        // preventDefault stops the button stealing focus. The onClick path runs
+        // only for keyboard activation (detail === 0) so a real mouse click,
+        // already handled by mousedown, never double-toggles (which would net
+        // to a no-op).
+        onMouseDown={(e) => {
+          if (e.button !== 0) return;
+          e.preventDefault();
+          ctx?.onToggleResources?.(data.id);
+        }}
+        onClick={(e) => {
+          if (e.detail === 0) ctx?.onToggleResources?.(data.id);
+        }}
         style={{ width: 22, height: 22 }}
         className={`shrink-0 flex items-center justify-center rounded-md ring-1 transition-colors cursor-pointer hover:bg-oe-blue hover:text-white hover:ring-oe-blue ${
           isExpanded
@@ -919,7 +934,7 @@ export function DescriptionCellRenderer(params: ICellRendererParams) {
     // ``nativeEvent.stopImmediatePropagation()`` in onClick + onMouseDown
     // — that proved unreliable when the description column was editable
     // and AG Grid attached its listener earlier in the event chain.
-    // Reported by user: "всё равно не работает - может перекрывается".
+    // Reported: still not working, possibly overlapped by something.
     const stopAndToggle = (e: Event) => {
       e.stopPropagation();
       e.stopImmediatePropagation();
@@ -1021,8 +1036,8 @@ export function DescriptionCellRenderer(params: ICellRendererParams) {
       // the V badge is clicked. Capture-phase listener handles activation.
       tabIndex={-1}
       // Stack above any AG Grid focus / selection overlay that may sit
-      // on top of the cell content (cause of the "ничего не происходит"
-      // case where the click landed on an invisible overlay).
+      // on top of the cell content (cause of the "nothing happens" case
+      // where the click landed on an invisible overlay).
       style={{ position: 'relative', zIndex: 10 }}
       className="shrink-0 inline-flex h-[18px] w-[18px] items-center justify-center
                  rounded-md cursor-pointer
@@ -4671,8 +4686,8 @@ function VariantHeaderResourceRow({
     [ctx, positionId, unitLabel],
   );
 
-  // When qty is unset / 0 we hide qty / rate / total entirely — the user's
-  // spec: "если количества нет - то ничего и не показывай". The picker
+  // When qty is unset / 0 we hide qty / rate / total entirely, per spec:
+  // when there is no quantity, show nothing at all. The picker
   // and the editable name still render so the user can pick a variant or
   // promote the row before entering a quantity.
   const showNumbers = qty > 0;

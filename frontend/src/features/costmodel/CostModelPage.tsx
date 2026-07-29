@@ -30,7 +30,7 @@ import {
   Loader2,
   Network,
 } from 'lucide-react';
-import { Card, CardHeader, CardContent, Button, Badge, EmptyState, Skeleton, Breadcrumb, DismissibleInfo, IntroRichText, ModuleGuideButton } from '@/shared/ui';
+import { Card, CardHeader, CardContent, Button, Badge, EmptyState, Skeleton, Breadcrumb, DismissibleInfo, IntroRichText, ModuleGuideButton, CollapsibleSection } from '@/shared/ui';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { PlanningCrossLinks } from '@/features/schedule/PlanningCrossLinks';
 import { apiGet, apiPost, apiPatch } from '@/shared/lib/api';
@@ -45,6 +45,7 @@ import {
 } from './api';
 import { CostBenchmark } from './CostBenchmark';
 import { CostSpinePanel } from './CostSpinePanel';
+import { ContractExposurePanel } from './ContractExposurePanel';
 import { costmodelGuide } from './costmodelGuide';
 import { BudgetLineThresholdEditor, parseThreshold } from './BudgetLineThresholdEditor';
 import { getIntlLocale } from '@/shared/lib/formatters';
@@ -2565,6 +2566,9 @@ function FiveDDashboard({ project }: { project: Project }) {
         </CardContent>
       </Card>
 
+      {/* Contract Exposure (committed vs budget by cost group) */}
+      <ContractExposurePanel projectId={project.id} currency={currency} />
+
       {/* Editable Budget Lines */}
       {hasBudget && (
         <Card>
@@ -2692,12 +2696,12 @@ function HowCostModelConnects() {
   ];
 
   return (
-    <div className="rounded-xl border border-border-light bg-surface-secondary/40 p-4">
-      <h2 className="flex items-center gap-1.5 text-sm font-semibold text-content-primary">
-        <Network size={15} className="text-oe-blue" />
-        {t('costmodel.flow_title', { defaultValue: 'How the 5D cost model connects' })}
-      </h2>
-      <p className="mt-1 text-xs text-content-tertiary">
+    <CollapsibleSection
+      storageKey="costmodel.how"
+      icon={<Network size={15} className="text-oe-blue" />}
+      title={t('costmodel.flow_title', { defaultValue: 'How the 5D cost model connects' })}
+    >
+      <p className="text-xs text-content-tertiary">
         {t('costmodel.flow_intro', {
           defaultValue:
             'Turn your priced BOQ into a live budget and track it against actual cost and progress with earned value. Record the current period costs and progress to keep it current.',
@@ -2740,7 +2744,7 @@ function HowCostModelConnects() {
         {' · '}
         <ModLink to="/reports">{t('costmodel.mod_reports', { defaultValue: 'Reports' })}</ModLink>
       </div>
-    </div>
+    </CollapsibleSection>
   );
 }
 

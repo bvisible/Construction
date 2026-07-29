@@ -33,6 +33,9 @@ import { apiGet, triggerDownload } from '@/shared/lib/api';
 import { getIntlLocale } from '@/shared/lib/formatters';
 import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
+import { usePreferencesStore } from '@/stores/usePreferencesStore';
+import { getUnitsForLocale } from '@/features/boq/boqHelpers';
+import { unitGlyph, unitLabel } from '@/shared/lib/unitLabels';
 import {
   assembliesApi,
   type AssemblyComponent,
@@ -46,35 +49,10 @@ import { ParametersPanel } from './ParametersPanel';
 import { ExpandPreviewModal } from './ExpandPreviewModal';
 
 /* -- Constants ------------------------------------------------------------ */
-
-// Base quantity units first, then composite yield/productivity units used in
-// rendement-style estimating (effort per produced unit, e.g. 0.175 h/m2 to form
-// a slab, and the inverse productivity form m2/h). Existing units are kept in
-// place so assemblies already saved with them keep rendering unchanged.
-const UNITS = [
-  'm',
-  'm2',
-  'm3',
-  'kg',
-  't',
-  'pcs',
-  'lsum',
-  'h',
-  'set',
-  'lm',
-  // Effort per produced unit (labor / machine / tooling yield).
-  'h/m',
-  'h/m2',
-  'h/m3',
-  'h/ml',
-  'h/pcs',
-  'h/t',
-  // Productivity (produced units per hour) — inverse of the above.
-  'm/h',
-  'm2/h',
-  'm3/h',
-  'pcs/h',
-];
+// //// NEOFFICE PATCH — the yield/productivity units that used to live in a
+// local UNITS const moved to boqHelpers.getUnitsForLocale (upstream v12
+// centralised the unit list); this page now reads them from there.
+// //// END NEOFFICE PATCH
 
 /* -- Component ------------------------------------------------------------ */
 
@@ -83,6 +61,11 @@ export function AssemblyEditorPage() {
   const navigate = useNavigate();
   const { assemblyId } = useParams<{ assemblyId: string }>();
   const queryClient = useQueryClient();
+  // Seed new component units from the user's measurement system (imperial ->
+  // sqft, metric -> m2) the same way the BOQ editor does, so an imperial user
+  // no longer lands on a hardcoded metric unit. Storage stays free-text.
+  const measurementSystem = usePreferencesStore((s) => s.measurementSystem);
+  const defaultUnit = measurementSystem === 'imperial' ? 'sqft' : 'm2';
 
   const [applyModalOpen, setApplyModalOpen] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -213,7 +196,7 @@ export function AssemblyEditorPage() {
       > = {
         material: {
           description: t('assemblies.seed_material', { defaultValue: 'New material' }),
-          unit: assembly?.unit || 'm2',
+          unit: assembly?.unit || defaultUnit,
           metadata: { waste_pct: 0 },
         },
         labor: {
@@ -258,7 +241,7 @@ export function AssemblyEditorPage() {
         metadata: d.metadata,
       });
     },
-    [addComponentMutation, assembly?.unit, t],
+    [addComponentMutation, assembly?.unit, defaultUnit, t],
   );
 
   const openCatalogPicker = useCallback((rt: ResourceType | null = null) => {
@@ -348,8 +331,19 @@ export function AssemblyEditorPage() {
 
   if (!assembly) {
     return (
-      <div className="w-full py-16 text-center">
-        <p className="text-content-secondary">{t('assemblies.not_found', { defaultValue: 'Assembly not found' })}</p>
+      <div className="w-full py-16 flex flex-col items-center gap-3 text-center animate-fade-in">
+        <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-surface-tertiary text-content-tertiary">
+          <LayersIcon size={22} />
+        </div>
+        <p className="text-content-primary font-medium">{t('assemblies.not_found', { defaultValue: 'Assembly not found' })}</p>
+        <p className="text-sm text-content-tertiary max-w-sm">
+          {t('assemblies.not_found_hint', {
+            defaultValue: 'This assembly may have been deleted, or you may not have access to it.',
+          })}
+        </p>
+        <Button variant="secondary" size="sm" onClick={() => navigate('/assemblies')}>
+          {t('assemblies.back_to_list', { defaultValue: 'Back to assemblies' })}
+        </Button>
       </div>
     );
   }
@@ -417,7 +411,7 @@ export function AssemblyEditorPage() {
               <span className="capitalize">{assembly.category}</span>
             )}
             <span className="text-content-tertiary">/</span>
-            <span>{assembly.unit}</span>
+            <span title={unitLabel(assembly.unit, t)}>{unitGlyph(assembly.unit)}</span>
             <span className="text-content-tertiary">/</span>
             <span>{assembly.currency || 'EUR'}</span>
             {assembly.bid_factor !== 1.0 && (
@@ -803,6 +797,34 @@ export function AssemblyEditorPage() {
                     </tr>
                   </>
                 )}
+                {assembly.bid_factor !== 1.0 && (
+                  <tr className="border-t border-border-light bg-surface-tertiary/50">
+                    <td colSpan={7} className="px-4 py-2.5 text-right text-sm text-content-secondary">
+                      {t('assemblies.bid_factor', { defaultValue: 'Bid Factor' })} ({assembly.bid_factor})
+                    </td>
+                    <td className="px-4 py-2.5 text-right text-sm text-content-secondary tabular-nums">
+                      x {assembly.bid_factor}
+                    </td>
+                    <td />
+                  </tr>
+                )}
+                <tr className="border-t-2 border-border bg-surface-tertiary font-semibold">
+                  <td colSpan={7} className="px-4 py-3 text-right text-content-primary">
+                    {assembly.bid_factor !== 1.0
+                      ? t('assemblies.total_rate_adjusted', {
+                          defaultValue: 'Total Rate (\u00d7{{factor}} bid factor)',
+                          factor: assembly.bid_factor,
+                        })
+                      : t('assemblies.total_rate', { defaultValue: 'Total Rate' })}
+                  </td>
+                  <td className="px-4 py-3 text-right text-content-primary text-base tabular-nums">
+                    {fmt(adjustedTotal)}
+                    <span className="ml-1 text-xs font-normal text-content-tertiary">
+                      / {unitGlyph(assembly.unit)}
+                    </span>
+                  </td>
+                  <td />
+                </tr>
               </tfoot>
             )}
           </table>
@@ -1121,13 +1143,16 @@ function ComponentRow({
   onDelete: () => void;
   fmt: (n: number) => string;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { confirm, ...confirmProps } = useConfirm();
   const [editing, setEditing] = useState<string | null>(null);
   // Per-row "details" panel toggle. Closed by default to keep the
   // table compact; opens to reveal type-specific fields (waste_pct
   // for material, burden_pct for labor, fuel_cost for equipment …).
   const [detailsOpen, setDetailsOpen] = useState(false);
+  // Locale/imperial-aware unit list (same primitive as the BOQ editor) so the
+  // per-component unit dropdown offers imperial + locale tokens, not metric only.
+  const unitOptions = useMemo(() => getUnitsForLocale(i18n.language), [i18n.language]);
 
   const handleBlur = (field: string, value: string) => {
     setEditing(null);
@@ -1255,16 +1280,20 @@ function ComponentRow({
         </div>
       </td>
 
-      {/* Unit */}
+      {/* Unit — dense cell keeps the compact glyph (m2 -> m²); the friendly
+          localized name is a hover/aria title so the column stays narrow.
+          Option value stays the canonical token, storage is unchanged. */}
       <td className="px-4 py-2.5 text-center">
         <select
           value={component.unit}
           onChange={(e) => onUpdate({ unit: e.target.value })}
+          title={unitLabel(component.unit, t)}
+          aria-label={t('boq.unit', { defaultValue: 'Unit' })}
           className="bg-transparent text-sm text-center cursor-pointer border-none outline-none text-content-secondary hover:text-content-primary"
         >
-          {UNITS.map((u) => (
-            <option key={u} value={u}>
-              {u}
+          {unitOptions.map((u) => (
+            <option key={u} value={u} title={unitLabel(u, t)}>
+              {unitGlyph(u)}
             </option>
           ))}
         </select>
@@ -2004,6 +2033,7 @@ function BreakdownSidebar({
             </span>
             <span className="font-bold text-content-primary tabular-nums">
               {fmt(Number(cascade.grand_total))} {currency} / {unit}
+              {fmt(breakdown.withBid)} {currency} / {unitGlyph(unit)}
             </span>
           </div>
         </div>

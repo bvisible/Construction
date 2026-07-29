@@ -124,6 +124,21 @@ class RouteUpdate(BaseModel):
         return self
 
 
+class RouteCloneRequest(BaseModel):
+    """Adopt a route (typically a read-only system preset) into a project.
+
+    Copies the source route's steps into a brand-new, project-scoped route
+    that carries no ``system_key`` - so it is immediately editable through the
+    ordinary ``PATCH /routes/{id}`` surface. This is how a team "adopts" a
+    tenant-wide preset in one click without losing the ability to tailor it.
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    project_id: UUID
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+
+
 class RouteResponse(BaseModel):
     """Full read-side projection of a :class:`Route` + its steps."""
 
@@ -135,6 +150,10 @@ class RouteResponse(BaseModel):
     target_kind: str
     is_active: bool
     created_by: UUID | None
+    # Set only on platform-seeded presets (tenant-wide read-only review flows);
+    # NULL for every user-created route. The UI flags a preset from this and the
+    # API rejects edits / deletes of a route that carries it.
+    system_key: str | None = None
     created_at: datetime
     updated_at: datetime
     steps: list[StepResponse] = Field(default_factory=list)
@@ -283,3 +302,153 @@ class EscalationOut(BaseModel):
     reason: str
     chain_length: int
     current_holder: str | None
+
+
+# ── Dry-run simulation payloads ──────────────────────────────────────
+
+
+class SimulateDecision(BaseModel):
+    """One step's hypothetical decision tally for a what-if dry run.
+
+    ``distinct_approvers`` defaults to ``approvals`` (each approval treated as
+    a different person), which is the common case; set it lower to model the
+    same person approving twice against an all / majority gate.
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    ordinal: int = Field(ge=1, le=100)
+    approvals: int = Field(default=0, ge=0, le=100)
+    rejections: int = Field(default=0, ge=0, le=100)
+    distinct_approvers: int | None = Field(default=None, ge=0, le=100)
+
+
+class SimulateRequest(BaseModel):
+    """Optional body for ``POST /routes/{id}/simulate``.
+
+    An empty body runs only the happy path (every step approved by the minimum
+    number of approvers). Supplying ``decisions`` adds a second what-if walk;
+    steps left out of the list keep their happy-path minimum.
+    """
+
+    decisions: list[SimulateDecision] = Field(default_factory=list, max_length=20)
+
+    @model_validator(mode="after")
+    def _ordinals_unique(self) -> SimulateRequest:
+        ordinals = [d.ordinal for d in self.decisions]
+        if len(ordinals) != len(set(ordinals)):
+            raise ValueError("Each step ordinal may appear at most once in decisions")
+        return self
+
+
+class SimulatedStep(BaseModel):
+    """Per-step analysis of a route template in a dry run."""
+
+    ordinal: int
+    mode: str
+    approver_role: str | None
+    approver_user_id: UUID | None
+    quorum_required: int | None
+    min_approvals_to_clear: int
+    needs_multiple_approvers: bool
+    note: str
+
+
+class SimulationOutcome(BaseModel):
+    """Where one dry-run walk (happy path or scenario) ends up.
+
+    ``outcome`` is ``completed`` (reaches approved), ``rejected`` (a rejection
+    short-circuits the workflow) or ``stuck`` (a step never gathers enough
+    approvals). ``stopped_at_ordinal`` is the step it ended on (null when it
+    completed), and ``trace`` is a step-by-step human-readable explanation.
+    """
+
+    outcome: Literal["completed", "rejected", "stuck"]
+    stopped_at_ordinal: int | None
+    trace: list[str]
+
+
+class RouteSimulationResponse(BaseModel):
+    """Result of dry-running a route template."""
+
+    route_id: UUID
+    target_kind: str
+    step_count: int
+    steps: list[SimulatedStep]
+    happy_path: SimulationOutcome
+    scenario: SimulationOutcome | None = None
+    warnings: list[str] = Field(default_factory=list)
+
+
+# ── Approval-cycle analytics (item #11) ──────────────────────────────
+
+
+class AnalyticsKpis(BaseModel):
+    """Project-level headline figures over the analytics window."""
+
+    total_instances: int
+    pending: int
+    approved: int
+    rejected: int
+    cancelled: int
+    approval_rate: float | None
+    avg_cycle_days: float | None
+    median_cycle_days: float | None
+    breached_steps_total: int
+    instances_with_breach: int
+    open_overdue_now: int
+
+
+class AnalyticsRoleStat(BaseModel):
+    """Held-time stats for the decided steps attributed to one role."""
+
+    role: str | None
+    decided_count: int
+    avg_hours: float
+    median_hours: float
+    max_hours: int
+    breach_count: int
+    breach_rate: float
+
+
+class AnalyticsStepStat(BaseModel):
+    """Held-time stats for one route step (route + ordinal)."""
+
+    route_id: UUID
+    route_name: str
+    ordinal: int
+    approver_role: str | None
+    decided_count: int
+    avg_hours: float
+    median_hours: float
+    breach_count: int
+    breach_rate: float
+    sla_hours: int | None
+
+
+class AnalyticsBottleneck(BaseModel):
+    """A ranked slow point - a role or a specific route step."""
+
+    kind: Literal["role", "step"]
+    label: str
+    ref: str
+    avg_hours: float
+    median_hours: float
+    breach_rate: float
+    sample_size: int
+
+
+class ApprovalAnalyticsResponse(BaseModel):
+    """Full aggregate for one project's approval workflows."""
+
+    project_id: UUID
+    generated_at: datetime
+    range_days: int | None
+    started_after: datetime | None
+    started_before: datetime | None
+    sample_size: int  # instances actually computed (post-cap)
+    truncated: bool  # True when the compute cap was hit
+    kpis: AnalyticsKpis
+    by_role: list[AnalyticsRoleStat]
+    by_step: list[AnalyticsStepStat]
+    bottlenecks: list[AnalyticsBottleneck]

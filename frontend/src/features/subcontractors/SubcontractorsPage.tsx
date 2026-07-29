@@ -35,6 +35,7 @@ import {
   Button,
   Card,
   Badge,
+  CollapsibleSection,
   DismissibleInfo,
   IntroRichText,
   EmptyState,
@@ -55,6 +56,8 @@ import { ScorecardTile } from './ScorecardTile';
 import { LienWaiverPanel } from './LienWaiverPanel';
 import { AwardEligibilityBanner } from './AwardEligibilityBanner';
 import { subcontractorsGuide } from './subcontractorsGuide';
+import { InsightsPanel, InsightsToggleButton, useModuleInsights } from '@/features/insights';
+import { buildSubcontractorsInsights } from './subcontractorsInsights';
 import { useToastStore } from '@/stores/useToastStore';
 import { getErrorMessage } from '@/shared/lib/api';
 import {
@@ -263,14 +266,14 @@ function HowSubcontractorsWork() {
   ];
 
   return (
-    <Card padding="md">
-      <h2 className="flex items-center gap-1.5 text-sm font-semibold text-content-primary">
-        <Network size={15} className="text-oe-blue" />
-        {t('subcontractors.flow_title', {
-          defaultValue: 'How the subcontractor register fits together',
-        })}
-      </h2>
-      <p className="mt-1 text-xs text-content-tertiary">
+    <CollapsibleSection
+      storageKey="subcontractors.how"
+      icon={<Network size={15} className="text-oe-blue" />}
+      title={t('subcontractors.flow_title', {
+        defaultValue: 'How the subcontractor register fits together',
+      })}
+    >
+      <p className="text-xs text-content-tertiary">
         {t('subcontractors.flow_intro', {
           defaultValue:
             'Your register of every subcontractor, with their qualification, scope, payments and performance in one place. Prequalify a firm before you invite it to bid or award it a subcontract.',
@@ -326,7 +329,7 @@ function HowSubcontractorsWork() {
           </ModLink>
         </span>
       </div>
-    </Card>
+    </CollapsibleSection>
   );
 }
 
@@ -378,6 +381,20 @@ export function SubcontractorsPage() {
     });
   }, [subsQ.data, search, statusFilter]);
 
+  // Module Insights - the toggleable visualization panel for this module. Its
+  // charts are built client-side from the subcontractors already loaded; when
+  // the register is empty, buildSubcontractorsInsights returns a labelled
+  // sample set so the panel is never empty on first open. This page has no
+  // early return, but the hooks still lead the render body so their order
+  // stays fixed. The list record has no contract value (money lives on the
+  // per-firm Agreement, which this page does not load), so the charts use the
+  // register's own fields - trade, prequalification status, insurance, rating.
+  const insights = useModuleInsights('subcontractors', { defaultOpen: true });
+  const { datasets: insightDatasets, builtins: insightBuiltins } = useMemo(
+    () => buildSubcontractorsInsights(subsQ.data ?? [], '', t),
+    [subsQ.data, t],
+  );
+
   // For the "latest payment app" column we need a hint, but it would
   // require N+1 queries. We skip it in the row and surface it inside
   // the drawer instead.
@@ -398,6 +415,7 @@ export function SubcontractorsPage() {
         })}
         actions={
           <>
+            <InsightsToggleButton open={insights.open} onClick={insights.toggle} />
             <ModuleGuideButton content={subcontractorsGuide} />
             <Button
               variant="primary"
@@ -408,6 +426,20 @@ export function SubcontractorsPage() {
             </Button>
           </>
         }
+      />
+
+      {/* Module Insights panel - toggled by the header button. Placed high so
+          its charts (real, or labelled sample) are visible as the register
+          opens. */}
+      <InsightsPanel
+        open={insights.open}
+        title={t('subcontractors.insights.title', { defaultValue: 'Subcontractor insights' })}
+        datasets={insightDatasets}
+        builtins={insightBuiltins}
+        custom={insights.custom}
+        onAdd={insights.addCustom}
+        onUpdate={insights.updateCustom}
+        onRemove={insights.removeCustom}
       />
 
       <DismissibleInfo
