@@ -940,6 +940,104 @@ async def compose_labor_tariff_endpoint(
     return labor_tariff.compose(base, params, travel)
 
 
+class LaborTariffApplyRequest(BaseModel):
+    """Push the composed hourly tariff onto the labour components of a scope."""
+
+    project_id: str | None = None
+    assembly_id: str | None = None
+    site_address: str | None = None
+    #: "conducteur" (travel paid in full) or "passager" (excess only).
+    role: str = "conducteur"
+    #: Apply the SELLING price (cost + risk & profit, rounded) instead of the cost.
+    use_selling_price: bool = False
+    #: Only units in this list are touched (an hourly rate makes no sense on a m3 line).
+    units: list[str] = ["h", "hr", "heure", "heures"]
+    #: Report what would change without writing anything. Default: report only.
+    dry_run: bool = True
+
+
+@router.post("/labor-tariff/apply/")
+async def apply_labor_tariff(
+    request: LaborTariffApplyRequest,
+    session: SessionDep,
+    user_id: str = Depends(get_current_user_id),
+) -> dict[str, Any]:
+    """Re-price the labour components from the composed tariff.
+
+    The estimator's ask: "the labour price should be taken automatically from
+    the calculation in the Project section". Their assemblies currently carry a
+    flat hourly rate typed once (540 components at the same value), so every
+    change to the wage, the charges or the margin had to be re-typed everywhere.
+
+    Deliberately explicit rather than magic:
+      * ``dry_run`` is TRUE by default — the caller sees the count and the old
+        vs new rate before anything is written;
+      * only hourly units are touched, never a m3 or a forfait line;
+      * each updated row records what was applied (rate, role, timestamp) in
+        its metadata, so the change is auditable and a later run can tell which
+        rows it owns.
+    """
+    from sqlalchemy import select
+
+    from app.modules.assemblies.models import Assembly, Component as AssemblyComponent
+    from app.modules.neoffice import distance, labor_tariff
+
+    params = labor_tariff.TariffParams.from_mapping(
+        await _load_labor_params(session, user_id, request.project_id)
+    )
+    travel = None
+    if request.site_address:
+        travel = await distance.depot_to_site(request.site_address)
+    composed = labor_tariff.compose(params.salaire_base_horaire, params, travel)
+
+    role = "passager" if request.role == "passager" else "conducteur"
+    key = f"prix_horaire_{role}_chf" if request.use_selling_price else f"cout_horaire_{role}_chf"
+    new_rate = composed.get(key) or composed["cout_horaire_conducteur_chf"]
+
+    stmt = select(AssemblyComponent).where(AssemblyComponent.resource_type == "labor")
+    if request.assembly_id:
+        stmt = stmt.where(AssemblyComponent.assembly_id == request.assembly_id)
+    elif request.project_id:
+        stmt = stmt.join(Assembly, Assembly.id == AssemblyComponent.assembly_id).where(
+            Assembly.project_id == request.project_id
+        )
+    rows = (await session.execute(stmt)).scalars().all()
+
+    wanted_units = {u.strip().lower() for u in request.units}
+    changed: list[dict[str, str]] = []
+    for row in rows:
+        if (row.unit or "").strip().lower() not in wanted_units:
+            continue
+        old = str(row.unit_cost)
+        if old == str(new_rate):
+            continue
+        changed.append({"id": str(row.id), "old": old, "new": str(new_rate)})
+        if not request.dry_run:
+            row.unit_cost = str(new_rate)
+            meta = dict(row.metadata_ or {})
+            meta["neoffice_tariff"] = {
+                "rate": str(new_rate),
+                "role": role,
+                "selling_price": request.use_selling_price,
+                "applied_at": datetime.now(UTC).isoformat(),
+            }
+            row.metadata_ = meta
+
+    if not request.dry_run and changed:
+        await session.commit()
+
+    return {
+        "dry_run": request.dry_run,
+        "role": role,
+        "rate_applied": str(new_rate),
+        "using": "selling_price" if request.use_selling_price else "cost",
+        "labour_components_in_scope": len(rows),
+        "would_change" if request.dry_run else "changed": len(changed),
+        "sample": changed[:5],
+        "tariff": composed,
+    }
+
+
 @router.get("/labor-tariff/params/")
 async def get_labor_params(
     session: SessionDep,
