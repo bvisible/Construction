@@ -18,7 +18,9 @@ import { apiPost } from '@/shared/lib/api';
 import type { Project } from '../api';
 
 // Reference class shown in the headline: Q — ouvrier qualifié CFC (CN 2026 base).
-const REF_BASE_HOURLY = 34.0;
+// //// NEOFFICE PATCH — the base wage itself is no longer hard-coded here: it is
+// a calibrated parameter resolved server-side from the project (falling back to
+// the company defaults). //// END NEOFFICE PATCH
 const REF_CLASS = 'Q';
 
 interface TariffResult {
@@ -29,6 +31,14 @@ interface TariffResult {
   cout_horaire_sans_deplacement_chf: string;
   cout_horaire_conducteur_chf: string;
   cout_horaire_passager_chf: string;
+  // //// NEOFFICE PATCH — company overhead + selling price (client feedback:
+  // depot and office charges have to be visible, and the quoted price is the
+  // cost plus risk & profit, rounded). //// END NEOFFICE PATCH
+  charges_depot_horaire_chf?: string;
+  charges_bureau_horaire_chf?: string;
+  prix_horaire_conducteur_chf?: string;
+  prix_horaire_passager_chf?: string;
+  marge_mo_pct?: string;
 }
 
 // French decimal display (54.37 -> 54,37).
@@ -45,8 +55,13 @@ export function SiteTravelCard({ project }: { project: Project }) {
     queryKey: ['neoffice', 'labor-tariff', project.id, siteAddress],
     queryFn: () =>
       apiPost<TariffResult>('/v1/neoffice/labor-tariff/compose/', {
-        base_hourly: REF_BASE_HOURLY,
+        // //// NEOFFICE PATCH — scope the call to this project so its own
+        // calibration (and the company defaults it inherits) is what gets
+        // composed; the base wage now comes from that calibration, the constant
+        // below is only the fallback shown in the headline.
+        project_id: project.id,
         site_address: siteAddress,
+        // //// END NEOFFICE PATCH
       }),
     enabled: siteAddress.length > 3,
     staleTime: 1000 * 60 * 30,
@@ -113,12 +128,50 @@ export function SiteTravelCard({ project }: { project: Project }) {
               </div>
             </div>
           </div>
+          {/* //// NEOFFICE PATCH — selling price next to the cost. The estimator
+              quotes cost + risk & profit, rounded to CHF 0.50; showing only the
+              cost meant he had to redo that step by hand for every position.
+              Rendered only once a margin is actually calibrated. */}
+          {data.prix_horaire_conducteur_chf && Number(data.marge_mo_pct) > 0 && (
+            <div className="mt-2 flex flex-wrap items-baseline gap-x-3 gap-y-1 rounded-lg bg-surface-secondary/60 px-3 py-2 text-sm">
+              <span className="text-2xs font-medium text-content-tertiary">
+                {t('project.travel.selling', { defaultValue: 'Prix de vente' })}
+              </span>
+              <span className="tabular-nums text-content-primary">
+                <strong>{fr(data.prix_horaire_conducteur_chf)}</strong>
+                <span className="text-2xs font-normal text-content-tertiary"> CHF/h cond.</span>
+              </span>
+              <span className="text-content-quaternary">·</span>
+              <span className="tabular-nums text-content-primary">
+                <strong>{fr(data.prix_horaire_passager_chf)}</strong>
+                <span className="text-2xs font-normal text-content-tertiary"> CHF/h pass.</span>
+              </span>
+              <span className="text-2xs text-content-tertiary">
+                ({t('project.travel.margin', { defaultValue: 'marge' })}{' '}
+                {(Number(data.marge_mo_pct) * 100).toFixed(1).replace('.', ',')} %)
+              </span>
+            </div>
+          )}
+          {/* //// END NEOFFICE PATCH */}
           <div className="mt-2 text-2xs text-content-tertiary">
             {t('project.travel.rule', {
               defaultValue: 'Règle CN/CCT : {{offered}} min offerts, facturé au temps (min). Base sans déplacement {{base}} CHF/h.',
               offered: data.offered_min,
               base: fr(data.cout_horaire_sans_deplacement_chf),
             })}
+            {/* //// NEOFFICE PATCH — depot / office overhead, itemised. */}
+            {(Number(data.charges_depot_horaire_chf) > 0 ||
+              Number(data.charges_bureau_horaire_chf) > 0) && (
+              <>
+                {' '}
+                {t('project.travel.structure', {
+                  defaultValue: 'Dont dépôt {{depot}} + bureau {{bureau}} CHF/h.',
+                  depot: fr(data.charges_depot_horaire_chf),
+                  bureau: fr(data.charges_bureau_horaire_chf),
+                })}
+              </>
+            )}
+            {/* //// END NEOFFICE PATCH */}
           </div>
         </>
       )}

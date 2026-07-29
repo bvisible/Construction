@@ -1908,7 +1908,9 @@ export function ProjectDetailPage() {
           className="grid-cols-1 sm:grid-cols-2 lg:grid-cols-3"
         >
           {project && <SiteTravelCard project={project} />}
-          <LaborTariffSettings />
+          {/* //// NEOFFICE PATCH — scoped to this project: the fields it leaves
+              empty inherit the company defaults (Settings). //// END NEOFFICE PATCH */}
+          <LaborTariffSettings projectId={project?.id} />
         </WidgetSection>
         {/* //// END NEOFFICE PATCH */}
 

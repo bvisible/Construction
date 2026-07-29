@@ -832,30 +832,77 @@ async def compute_depot_to_site(
 # -> composed hourly cost (charges + repas + indemnité + déplacement). With a site
 # address it pulls the OSM distance and returns driver + passenger tariffs.
 class LaborTariffRequest(BaseModel):
-    base_hourly: float
+    base_hourly: float | None = None
     site_address: str | None = None
     depot_address: str | None = None
+    # When set, the project's own calibration is used (falling back to the
+    # company defaults for anything it does not override).
+    project_id: str | None = None
     charges_pct: str | None = None
     repas_jour: str | None = None
     indemnite_jour: str | None = None
     heures_jour: str | None = None
+    salaire_base_horaire: str | None = None
+    charges_depot_h: str | None = None
+    charges_bureau_h: str | None = None
+    marge_mo_pct: str | None = None
+    arrondi_chf: str | None = None
 
 
 class LaborParamsUpdate(BaseModel):
-    charges_pct: str
-    repas_jour: str
-    indemnite_jour: str
-    heures_jour: str
+    """Calibration payload. Every field is optional so a caller can patch a
+    single value without having to resend the whole set; anything omitted keeps
+    its stored value (and falls back to the documented default when unset)."""
+
+    charges_pct: str | None = None
+    repas_jour: str | None = None
+    indemnite_jour: str | None = None
+    heures_jour: str | None = None
+    salaire_base_horaire: str | None = None
+    charges_depot_h: str | None = None
+    charges_bureau_h: str | None = None
+    marge_mo_pct: str | None = None
+    marge_materiaux_pct: str | None = None
+    marge_machines_pct: str | None = None
+    marge_outillage_pct: str | None = None
+    marge_tiers_pct: str | None = None
+    arrondi_chf: str | None = None
 
 
-async def _load_labor_params(session: Any, user_id: str) -> dict[str, str]:
-    """Read the calibrated labour params stored on the user's metadata_ (or {})."""
+async def _load_company_params(session: Any, user_id: str) -> dict[str, str]:
+    """Company-wide calibration (stored on the user's metadata_)."""
     from app.modules.neoffice import labor_tariff
     from app.modules.users.models import User
 
     user = await session.get(User, user_id)
     meta = (user.metadata_ or {}) if user else {}
     return meta.get(labor_tariff.PARAMS_META_KEY, {}) or {}
+
+
+async def _load_project_params(session: Any, project_id: str | None) -> dict[str, str]:
+    """Per-project overrides (stored on the project's metadata_)."""
+    from app.modules.neoffice import labor_tariff
+    from app.modules.projects.models import Project
+
+    if not project_id:
+        return {}
+    project = await session.get(Project, project_id)
+    meta = (project.metadata_ or {}) if project else {}
+    return meta.get(labor_tariff.PARAMS_META_KEY, {}) or {}
+
+
+async def _load_labor_params(
+    session: Any, user_id: str, project_id: str | None = None
+) -> dict[str, str]:
+    """Effective calibration: company defaults, then the project's overrides.
+
+    This is the inheritance the estimator asked about ("where are the general
+    variables taken from when a project is created?"): one company-wide set
+    acts as the starting point, and a project only stores what it changes.
+    """
+    company = await _load_company_params(session, user_id)
+    project = await _load_project_params(session, project_id)
+    return {**company, **project}
 
 
 @router.post("/labor-tariff/compose/")
@@ -869,54 +916,89 @@ async def compose_labor_tariff_endpoint(
     Uses the instance's calibrated parameters, overridable per request."""
     from app.modules.neoffice import distance, labor_tariff
 
-    stored = await _load_labor_params(session, user_id)
+    stored = await _load_labor_params(session, user_id, request.project_id)
     overrides = {
         k: v for k, v in {
             "charges_pct": request.charges_pct,
             "repas_jour": request.repas_jour,
             "indemnite_jour": request.indemnite_jour,
             "heures_jour": request.heures_jour,
+            "salaire_base_horaire": request.salaire_base_horaire,
+            "charges_depot_h": request.charges_depot_h,
+            "charges_bureau_h": request.charges_bureau_h,
+            "marge_mo_pct": request.marge_mo_pct,
+            "arrondi_chf": request.arrondi_chf,
         }.items() if v is not None
     }
-    params = labor_tariff.TariffParams(**{**stored, **overrides})
+    params = labor_tariff.TariffParams.from_mapping({**stored, **overrides})
     travel = None
     if request.site_address:
         travel = await distance.depot_to_site(request.site_address, request.depot_address)
-    return labor_tariff.compose(request.base_hourly, params, travel)
+    # The base wage is a calibrated parameter now: the request may still pass one
+    # explicitly (a specific crew class), otherwise the calibration decides.
+    base = request.base_hourly if request.base_hourly is not None else params.salaire_base_horaire
+    return labor_tariff.compose(base, params, travel)
 
 
 @router.get("/labor-tariff/params/")
 async def get_labor_params(
     session: SessionDep,
+    project_id: str | None = None,
     user_id: str = Depends(get_current_user_id),
-) -> dict[str, str]:
-    """Return the calibrated labour composition params (defaults where unset)."""
+) -> dict[str, Any]:
+    """Return the effective labour params (defaults ← company ← project).
+
+    ``effective`` is what the tariff actually uses. ``company`` and ``project``
+    are returned alongside so the UI can show what a project overrides and
+    which values are simply inherited.
+    """
     from app.modules.neoffice import labor_tariff
 
-    return {**labor_tariff.DEFAULTS, **(await _load_labor_params(session, user_id))}
+    company = await _load_company_params(session, user_id)
+    project = await _load_project_params(session, project_id)
+    return {
+        "effective": {**labor_tariff.DEFAULTS, **company, **project},
+        "company": company,
+        "project": project,
+        "defaults": labor_tariff.DEFAULTS,
+    }
 
 
 @router.put("/labor-tariff/params/")
 async def put_labor_params(
     request: LaborParamsUpdate,
     session: SessionDep,
+    project_id: str | None = None,
     user_id: str = Depends(get_current_user_id),
 ) -> dict[str, str]:
-    """Persist the calibrated labour composition params (on the user's metadata_)."""
+    """Persist the calibration — company-wide, or for one project.
+
+    With ``project_id`` the values land on that project and only override what
+    was sent; without it they become the company defaults every new project
+    inherits. Fields left null keep their stored value, so the UI can patch a
+    single number without resending the whole form.
+    """
     from app.modules.neoffice import labor_tariff
+    from app.modules.projects.models import Project
     from app.modules.users.models import User
 
-    user = await session.get(User, user_id)
-    if user is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="user not found")
-    meta = dict(user.metadata_ or {})
-    meta[labor_tariff.PARAMS_META_KEY] = {
-        "charges_pct": request.charges_pct,
-        "repas_jour": request.repas_jour,
-        "indemnite_jour": request.indemnite_jour,
-        "heures_jour": request.heures_jour,
-    }
-    user.metadata_ = meta
+    sent = {k: v for k, v in request.model_dump().items() if v is not None}
+
+    if project_id:
+        target: Any = await session.get(Project, project_id)
+        if target is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="project not found")
+    else:
+        target = await session.get(User, user_id)
+        if target is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="user not found")
+
+    meta = dict(target.metadata_ or {})
+    stored = dict(meta.get(labor_tariff.PARAMS_META_KEY) or {})
+    stored.update(sent)
+    meta[labor_tariff.PARAMS_META_KEY] = stored
+    # Reassign (not mutate) so SQLAlchemy sees the JSON column as dirty.
+    target.metadata_ = meta
     await session.commit()
-    return meta[labor_tariff.PARAMS_META_KEY]
+    return stored
 # //// END NEOFFICE PATCH
