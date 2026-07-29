@@ -502,6 +502,17 @@ export function BOQEditorPage() {
             (gridApi as unknown as { clearSelection: () => void }).clearSelection();
           } catch { /* ignore */ }
         }
+        // //// NEOFFICE PATCH — the comment above promised a scroll but nothing
+        // ever scrolled: after adding a position the viewport stayed where the
+        // refetch left it (bottom of the sheet), so the estimator lost the row
+        // he had just created. Bring it back into view, same mechanism as the
+        // `?highlight=` deep-link path below.
+        const row = (
+          document.querySelector(`div.ag-row[row-id="${addedPosition.id}"]`) ??
+          document.querySelector(`tr[data-position-id="${addedPosition.id}"]`)
+        ) as HTMLElement | null;
+        row?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        // //// END NEOFFICE PATCH
       }, 500);
       // Issue #127 — when the create collided with an existing project code
       // and reuse applied, the backend returns a LINKED INSTANCE (its own
@@ -2464,6 +2475,11 @@ export function BOQEditorPage() {
   /** Section name modal */
   const [showSectionModal, setShowSectionModal] = useState(false);
   const [sectionNameInput, setSectionNameInput] = useState('');
+  // //// NEOFFICE PATCH — chapter number chosen by the user. Swiss estimators
+  // number chapters after the CAN/NPK trade code (Démolition = 112), not by
+  // creation order, so the auto "01, 02, 03" had to be overridable. Empty =
+  // keep the automatic numbering. //// END NEOFFICE PATCH
+  const [sectionOrdinalInput, setSectionOrdinalInput] = useState('');
   /**
    * Issue #136 — chosen parent for the new section ('' = top level).
    * Pre-fillable so the section row's "Add sub-section" action can open
@@ -2515,20 +2531,24 @@ export function BOQEditorPage() {
   const handleConfirmAddSection = useCallback(() => {
     if (!boqId) return;
     const pid = sectionParentInput || '';
+    // //// NEOFFICE PATCH — an explicit chapter number wins over the automatic
+    // one (see sectionOrdinalInput). //// END NEOFFICE PATCH
+    const chosenOrdinal = sectionOrdinalInput.trim();
     if (pid) {
       // Nested section — collision-free ordinal under the parent
       // (shared with handleAddSubSection).
       const all = boq?.positions ?? [];
       const parent = all.find((p) => p.id === pid);
       const parentOrdinal = parent?.ordinal ?? '01';
-      const ordinal = computeNextSubOrdinal(all, parentOrdinal);
+      const ordinal = chosenOrdinal || computeNextSubOrdinal(all, parentOrdinal);
       sectionMutation.mutate({ ordinal, description: sectionNameInput || '', parent_id: pid });
     } else {
-      const ordinal = String(grouped.sections.length + 1).padStart(2, '0');
+      const ordinal = chosenOrdinal || String(grouped.sections.length + 1).padStart(2, '0');
       sectionMutation.mutate({ ordinal, description: sectionNameInput || '' });
     }
     setShowSectionModal(false);
     setSectionNameInput('');
+    setSectionOrdinalInput('');
     setSectionParentInput('');
   }, [
     boqId,
@@ -2536,6 +2556,7 @@ export function BOQEditorPage() {
     grouped.sections.length,
     sectionMutation,
     sectionNameInput,
+    sectionOrdinalInput,
     sectionParentInput,
   ]);
 
@@ -5827,7 +5848,30 @@ export function BOQEditorPage() {
               className="w-full rounded-lg border border-border-light bg-surface-primary px-3 py-2 text-sm text-content-primary placeholder:text-content-tertiary focus:outline-none focus:ring-2 focus:ring-oe-blue/30 focus:border-oe-blue"
               placeholder={t('boq.section_name_placeholder', { defaultValue: 'e.g. Structural Works, MEP, Finishes...' })}
               autoFocus
+              // //// NEOFFICE PATCH — Chrome was offering saved credit cards over
+              // this field (reported by the client). A plain "off" is ignored by
+              // Chrome on fields it believes are payment/address, so use a token
+              // it does not recognise. //// END NEOFFICE PATCH
+              autoComplete="new-password"
+              name="neoffice-section-name"
             />
+            {/* //// NEOFFICE PATCH — optional chapter number. Swiss estimators
+                number chapters after the trade code (Démolition = 112), so the
+                automatic 01/02/03 must be overridable at creation time. */}
+            <label className="mt-3 block text-xs font-medium text-content-secondary">
+              {t('boq.section_ordinal_label', { defaultValue: 'Numéro du chapitre (optionnel)' })}
+            </label>
+            <input
+              type="text"
+              value={sectionOrdinalInput}
+              onChange={(e) => setSectionOrdinalInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') handleConfirmAddSection(); }}
+              className="mt-1 w-full rounded-lg border border-border-light bg-surface-primary px-3 py-2 text-sm text-content-primary placeholder:text-content-tertiary focus:outline-none focus:ring-2 focus:ring-oe-blue/30 focus:border-oe-blue"
+              placeholder={t('boq.section_ordinal_placeholder', { defaultValue: 'ex. 112 — laisser vide pour numéroter automatiquement' })}
+              autoComplete="new-password"
+              name="neoffice-section-ordinal"
+            />
+            {/* //// END NEOFFICE PATCH */}
             {/* Issue #136 — explicit parent picker so a sub-section at any
                 level (up to the {{max}} cap) can be created right here,
                 without hunting for the row right-click menu. */}

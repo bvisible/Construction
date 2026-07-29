@@ -1192,8 +1192,16 @@ function ComponentRow({
       onDragLeave={onDragLeave}
     >
       {/* Drag handle */}
-      <td className="px-1 py-2.5 cursor-grab active:cursor-grabbing">
-        <div className="flex items-center justify-center text-content-quaternary group-hover:text-content-tertiary transition-colors">
+      {/* //// NEOFFICE PATCH — the handle used to rest at `content-quaternary`,
+          which is close to invisible: the client rebuilt assemblies by hand for
+          two weeks because he never saw rows could be reordered. Rest one step
+          darker and add a title so the affordance reads without hovering.
+          //// END NEOFFICE PATCH */}
+      <td
+        className="px-1 py-2.5 cursor-grab active:cursor-grabbing"
+        title={t('assemblies.drag_to_reorder', { defaultValue: 'Glisser pour réordonner la ligne' })}
+      >
+        <div className="flex items-center justify-center text-content-tertiary group-hover:text-content-secondary transition-colors">
           <GripVertical size={14} />
         </div>
       </td>

@@ -229,6 +229,36 @@ export function saveCustomUnit(unit: string): void {
   apiPatch('/v1/users/me/custom-units/', { units: custom }).catch(() => undefined);
 }
 
+// //// NEOFFICE PATCH — units that actually carry a construction BOQ, floated to
+// the top of the picker (see getUnitsForLocale). Everything else stays available
+// below; this is ordering, not filtering.
+const COMMON_UNITS = [
+  // Quantities
+  'm2',
+  'm3',
+  'm',
+  'ml',
+  'pcs',
+  'pièce',
+  'h',
+  'kg',
+  't',
+  'forfait',
+  'fft',
+  'lot',
+  'j',
+  // Yields / productivity — heavily used for earthworks and concrete crews
+  // (m3/h is the client's most common one), so they belong up here rather
+  // than at the bottom with the long tail.
+  'm3/h',
+  'm2/h',
+  'm/h',
+  'h/m3',
+  'h/m2',
+  'h/m',
+];
+// //// END NEOFFICE PATCH
+
 // //// NEOFFICE PATCH — composite yield / productivity units used in
 // rendement-style estimating (effort per produced unit, e.g. 0.175 h/m2 to form
 // a slab, and the inverse productivity form m2/h). These lived in a local UNITS
@@ -258,7 +288,12 @@ export function getUnitsForLocale(lang?: string): string[] {
   const code = (lang || 'en').split('-')[0] ?? 'en';
   const locale = LOCALE_UNITS[code] ?? [];
   const custom = loadCustomUnits();
-  const all = [...BASE_UNITS, ...locale, ...YIELD_UNITS, ...custom];
+  // //// NEOFFICE PATCH — the full list is ~114 entries and the estimator has to
+  // scroll past mm2/dm3/hl to reach m2. We keep every unit (the product is not
+  // Protti-only) but float the ones a construction BOQ actually uses to the top,
+  // and a user's own custom units right after. Order only; nothing is removed.
+  const all = [...COMMON_UNITS, ...custom, ...BASE_UNITS, ...locale, ...YIELD_UNITS];
+  // //// END NEOFFICE PATCH
   // Deduplicate preserving order
   return [...new Set(all)];
 }
