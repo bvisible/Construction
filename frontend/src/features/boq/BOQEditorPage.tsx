@@ -5840,20 +5840,25 @@ export function BOQEditorPage() {
             <h3 id="boq-add-section-title" className="text-sm font-semibold text-content-primary mb-3">
               {t('boq.add_section', { defaultValue: 'Add Section' })}
             </h3>
+            {/* Issue #407 — this dialog is not inside a <form>, so an input with
+                no name and no id gets grouped page-wide by the browser's autofill
+                heuristics and was offering saved payment data over a chapter name.
+                A stable name/id plus an accessible name identify the field, which
+                is what actually defeats the heuristic; `autoComplete="off"` alone
+                is routinely overridden on fields the browser thinks are payment
+                or address fields. */}
             <input
               type="text"
+              id="boq-section-name"
+              name="boq-section-name"
+              autoComplete="off"
+              aria-label={t('boq.section_name_prompt', { defaultValue: 'Enter section name:' })}
               value={sectionNameInput}
               onChange={(e) => setSectionNameInput(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') handleConfirmAddSection(); }}
               className="w-full rounded-lg border border-border-light bg-surface-primary px-3 py-2 text-sm text-content-primary placeholder:text-content-tertiary focus:outline-none focus:ring-2 focus:ring-oe-blue/30 focus:border-oe-blue"
               placeholder={t('boq.section_name_placeholder', { defaultValue: 'e.g. Structural Works, MEP, Finishes...' })}
               autoFocus
-              // //// NEOFFICE PATCH — Chrome was offering saved credit cards over
-              // this field (reported by the client). A plain "off" is ignored by
-              // Chrome on fields it believes are payment/address, so use a token
-              // it does not recognise. //// END NEOFFICE PATCH
-              autoComplete="new-password"
-              name="neoffice-section-name"
             />
             {/* //// NEOFFICE PATCH — optional chapter number. Swiss estimators
                 number chapters after the trade code (Démolition = 112), so the
@@ -5863,13 +5868,18 @@ export function BOQEditorPage() {
             </label>
             <input
               type="text"
+              // Same anti-autofill shape upstream settled on for the name field
+              // (issue #407): a real id + name + `off`. Not a made-up token —
+              // `section-*` style values are malformed and a browser that cannot
+              // parse them falls back to the heuristics we are suppressing.
+              id="boq-section-ordinal"
+              name="boq-section-ordinal"
+              autoComplete="off"
               value={sectionOrdinalInput}
               onChange={(e) => setSectionOrdinalInput(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') handleConfirmAddSection(); }}
               className="mt-1 w-full rounded-lg border border-border-light bg-surface-primary px-3 py-2 text-sm text-content-primary placeholder:text-content-tertiary focus:outline-none focus:ring-2 focus:ring-oe-blue/30 focus:border-oe-blue"
               placeholder={t('boq.section_ordinal_placeholder', { defaultValue: 'ex. 112 — laisser vide pour numéroter automatiquement' })}
-              autoComplete="new-password"
-              name="neoffice-section-ordinal"
             />
             {/* //// END NEOFFICE PATCH */}
             {/* Issue #136 — explicit parent picker so a sub-section at any
