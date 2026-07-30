@@ -108,6 +108,9 @@ import { QualityScoreRing, TipsPanel, QuickAddFAB, EmptyBOQOnboarding, ExportWar
 import { ActivityPanel } from './ActivityPanel';
 import { CostDatabaseSearchModal, AssemblyPickerModal } from './BOQModals';
 import { CatalogPickerModal, type CatalogResource } from './CatalogPickerModal';
+// //// NEOFFICE PATCH — insert a CAN/NPK wording (with its assembly) into the devis.
+import { TextCatalogPickerModal } from '@/features/text-catalog';
+// //// END NEOFFICE PATCH
 import { CustomColumnsDialog } from './CustomColumnsDialog';
 import { BOQVariablesDialog } from './BOQVariablesDialog';
 import { CostPerAreaBenchmark } from './CostPerAreaBenchmark';
@@ -1210,6 +1213,8 @@ export function BOQEditorPage() {
   const [aiCopilotPositionId, setAiCopilotPositionId] = useState<string | null>(null);
   const [costDbModalOpen, setCostDbModalOpen] = useState(false);
   const [assemblyModalOpen, setAssemblyModalOpen] = useState(false);
+  // //// NEOFFICE PATCH //// END NEOFFICE PATCH
+  const [textCatalogModalOpen, setTextCatalogModalOpen] = useState(false);
   const [excelPasteOpen, setExcelPasteOpen] = useState(false);
   const [customColumnsOpen, setCustomColumnsOpen] = useState(false);
   const [variablesOpen, setVariablesOpen] = useState(false);
@@ -4950,6 +4955,7 @@ export function BOQEditorPage() {
           onAddSection={handleAddSection}
           onOpenCostDb={() => setCostDbModalOpen(true)}
           onOpenAssembly={() => setAssemblyModalOpen(true)}
+          onOpenTextCatalog={() => setTextCatalogModalOpen(true)}
           onImportClick={() => importInputRef.current?.click()}
           isImporting={isImporting}
           importInputRef={importInputRef}
@@ -5316,6 +5322,27 @@ export function BOQEditorPage() {
             setAssemblyModalOpen(false);
             invalidateAll();
             addToast({ type: 'success', title: t('boq.toasts.assembly_applied', { defaultValue: 'Assembly applied to BOQ' }) });
+          }}
+        />
+      )}
+
+      {/* ── NEOFFICE: CAN/NPK wording catalogue ──────────────────────── */}
+      {textCatalogModalOpen && boqId && (
+        <TextCatalogPickerModal
+          boqId={boqId}
+          onClose={() => setTextCatalogModalOpen(false)}
+          onInserted={(summary) => {
+            setTextCatalogModalOpen(false);
+            invalidateAll();
+            addToast({
+              type: 'success',
+              title: `${t('text_catalog.inserted', { defaultValue: 'Position insérée' })} ${summary.ordinal}`,
+              message: summary.assemblyApplied
+                ? `${t('text_catalog.inserted_with_assembly', {
+                    defaultValue: 'Analyse de prix reprise',
+                  })} (${summary.resourcesCopied})`
+                : undefined,
+            });
           }}
         />
       )}

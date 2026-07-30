@@ -60,6 +60,7 @@ import {
   UnfoldVertical,
   ListTree,
   ListCollapse,
+  BookText, // //// NEOFFICE
 } from 'lucide-react';
 import { Button } from '@/shared/ui';
 import { useBoqDescDensityStore, type BoqDescDensity } from '@/stores/useBoqDescDensityStore';
@@ -77,6 +78,8 @@ export interface BOQToolbarProps {
   onAddSection: () => void;
   onOpenCostDb: () => void;
   onOpenAssembly: () => void;
+  // //// NEOFFICE PATCH — CAN/NPK wording catalogue //// END NEOFFICE PATCH
+  onOpenTextCatalog?: () => void;
   // Import
   onImportClick: () => void;
   isImporting: boolean;
@@ -186,6 +189,7 @@ export function BOQToolbar({
   onAddSection,
   onOpenCostDb,
   onOpenAssembly,
+  onOpenTextCatalog,
   onImportClick,
   isImporting,
   importInputRef,
@@ -334,6 +338,21 @@ export function BOQToolbar({
             >
               <span className="hidden xl:inline">{t('boq.from_assembly', { defaultValue: 'From Assembly' })}</span>
             </Button>
+            {/* //// NEOFFICE PATCH — pick a CAN/NPK wording; its assembly follows. */}
+            {onOpenTextCatalog && (
+              <Button
+                variant="secondary"
+                size="sm"
+                icon={<BookText size={15} />}
+                onClick={onOpenTextCatalog}
+                title={t('text_catalog.from_catalog', { defaultValue: 'Depuis le catalogue de descriptions' })}
+              >
+                <span className="hidden xl:inline">
+                  {t('text_catalog.from_catalog_short', { defaultValue: 'Descriptions' })}
+                </span>
+              </Button>
+            )}
+            {/* //// END NEOFFICE PATCH */}
           </div>
 
           <div className="w-px h-6 bg-border-light hidden sm:block" />
