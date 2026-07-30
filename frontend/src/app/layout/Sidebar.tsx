@@ -102,6 +102,7 @@ import {
   Handshake,
   FileWarning,
   type LucideIcon,
+  BookText, // //// NEOFFICE — CAN/NPK wording catalogue
 } from 'lucide-react';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useModuleStore } from '@/stores/useModuleStore';
@@ -792,6 +793,9 @@ const navGroups: NavGroup[] = [
       // import patch needed in v3.x.
       // REVIEW: permanent (CH-specific).
       { labelKey: 'swiss_pack.nav', to: '/swiss-pack', icon: Building2 },
+      // //// NEOFFICE PATCH — CAN/NPK wording catalogue
+      { labelKey: 'text_catalog.nav', to: '/text-catalog', icon: BookText },
+      // //// END NEOFFICE PATCH
       // //// END NEOFFICE PATCH
       // All regional exchange modules injected dynamically from module registry
     ],

@@ -35,6 +35,9 @@ import { NlRuleBuilderPanel } from '@/features/compliance';
 import { useModuleRouteElements } from '@/modules/ModuleRoutes';
 // //// NEOFFICE PATCH — Swiss Pack feature import
 import { SwissPackPage } from '@/features/swiss-pack';
+// //// NEOFFICE PATCH — Swiss CAN/NPK wording catalogue (our own page).
+import { TextCatalogPage } from '@/features/text-catalog';
+// //// END NEOFFICE PATCH
 // //// END NEOFFICE PATCH
 // //// NEOFFICE PATCH — SettingsPage import dropped (route redirected to /ai-estimate).
 // ModulesPage / ModuleDeveloperGuide are NOT imported here either — they
@@ -1330,6 +1333,9 @@ export default function App() {
         <Route path="/modules/developer-guide" element={<P title="Module Developer Guide"><ModuleDeveloperGuide /></P>} />
         {/* //// NEOFFICE PATCH — Swiss Pack route */}
         <Route path="/swiss-pack" element={<P title="Suisse — Standards"><SwissPackPage /></P>} />
+        {/* //// NEOFFICE PATCH */}
+        <Route path="/text-catalog" element={<P title="Catalogue de descriptions"><TextCatalogPage /></P>} />
+        {/* //// END NEOFFICE PATCH */}
         {/* //// END NEOFFICE PATCH */}
 
         <Route path="/setup/databases" element={<P title="Databases & Resources"><DatabaseSetupPage /></P>} />
