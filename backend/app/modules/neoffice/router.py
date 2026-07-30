@@ -1100,3 +1100,321 @@ async def put_labor_params(
     await session.commit()
     return stored
 # //// END NEOFFICE PATCH
+
+
+# ── Swiss CAN / NPK text catalogue ──────────────────────────────────────────
+# A library of position TEXTS, not priced articles. See models.py for why this
+# cannot live in the cost catalogue (`oe_costs_item.rate` is NOT NULL).
+
+
+class TextCatalogCreate(BaseModel):
+    code: str
+    name: str
+    description: str = ""
+    standard: str = "CAN"
+    language: str = "fr"
+    project_id: str | None = None
+
+
+class TextPositionCreate(BaseModel):
+    code: str
+    title: str = ""
+    body: str = ""
+    #: Leave null/empty for a wording line; set it on a measurable sub-position.
+    unit: str | None = None
+    parent_id: str | None = None
+    assembly_id: str | None = None
+    sort_order: int = 0
+
+
+class TextPositionUpdate(BaseModel):
+    code: str | None = None
+    title: str | None = None
+    body: str | None = None
+    unit: str | None = None
+    assembly_id: str | None = None
+    sort_order: int | None = None
+
+
+class InsertIntoBoqRequest(BaseModel):
+    boq_id: str
+    #: Parent section the position is created under (optional).
+    parent_id: str | None = None
+    #: Ordinal to give the new BOQ position; auto if omitted.
+    ordinal: str | None = None
+    quantity: str = "0"
+
+
+def _position_payload(p: Any, children: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """Serialise one position.
+
+    ``children`` is passed IN rather than read off the relationship: touching
+    ``p.children`` inside an async request lazy-loads and raises MissingGreenlet
+    (the same trap that produced the bogus "rasterize_failed" in plan-read).
+    The tree endpoint loads every row of the catalogue in one query and nests
+    them in Python instead.
+    """
+    return {
+        "id": str(p.id),
+        "code": p.code,
+        "title": p.title,
+        "body": p.body,
+        "unit": p.unit,
+        "measurable": bool(p.unit and p.unit.strip()),
+        "assembly_id": str(p.assembly_id) if p.assembly_id else None,
+        "sort_order": p.sort_order,
+        "children": children or [],
+    }
+
+
+@router.get("/text-catalog/")
+async def list_text_catalogs(
+    session: SessionDep,
+    project_id: str | None = None,
+    user_id: str = Depends(get_current_user_id),
+) -> list[dict[str, Any]]:
+    """Catalogues visible here: the shared ones plus this project's own."""
+    from sqlalchemy import or_, select
+
+    from app.modules.neoffice.models import TextCatalog
+
+    stmt = select(TextCatalog)
+    stmt = stmt.where(
+        or_(TextCatalog.project_id.is_(None), TextCatalog.project_id == project_id)
+        if project_id else TextCatalog.project_id.is_(None)
+    )
+    rows = (await session.execute(stmt.order_by(TextCatalog.code))).scalars().all()
+
+    # Counted with an aggregate, not `len(c.positions)`: reading the
+    # relationship here lazy-loads inside the async request (MissingGreenlet).
+    from sqlalchemy import func
+
+    from app.modules.neoffice.models import TextPosition
+
+    counts = dict(
+        (str(cid), n)
+        for cid, n in (await session.execute(
+            select(TextPosition.catalog_id, func.count(TextPosition.id))
+            .group_by(TextPosition.catalog_id)
+        )).all()
+    )
+    return [
+        {
+            "id": str(c.id), "code": c.code, "name": c.name,
+            "description": c.description, "standard": c.standard,
+            "language": c.language,
+            "project_id": str(c.project_id) if c.project_id else None,
+            "position_count": counts.get(str(c.id), 0),
+        }
+        for c in rows
+    ]
+
+
+@router.post("/text-catalog/", status_code=status.HTTP_201_CREATED)
+async def create_text_catalog(
+    request: TextCatalogCreate,
+    session: SessionDep,
+    user_id: str = Depends(get_current_user_id),
+) -> dict[str, Any]:
+    """Create a text catalogue (e.g. "CAN 135 — Béton et béton armé")."""
+    from app.modules.neoffice.models import TextCatalog
+
+    catalog = TextCatalog(**request.model_dump())
+    session.add(catalog)
+    await session.commit()
+    await session.refresh(catalog)
+    return {"id": str(catalog.id), "code": catalog.code, "name": catalog.name}
+
+
+@router.get("/text-catalog/{catalog_id}/tree/")
+async def get_text_catalog_tree(
+    catalog_id: str,
+    session: SessionDep,
+    user_id: str = Depends(get_current_user_id),
+) -> dict[str, Any]:
+    """The catalogue as the estimator reads it: positions, each with its
+    sub-positions nested underneath and in their own order."""
+    from sqlalchemy import select
+
+    from app.modules.neoffice.models import TextCatalog, TextPosition
+
+    catalog = await session.get(TextCatalog, catalog_id)
+    if catalog is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="catalog not found")
+
+    # One query for the whole catalogue, nested in Python. Walking the ORM
+    # relationship would lazy-load each level and blow up on MissingGreenlet.
+    rows = (await session.execute(
+        select(TextPosition)
+        .where(TextPosition.catalog_id == catalog_id)
+        .order_by(TextPosition.sort_order, TextPosition.code)
+    )).scalars().all()
+
+    by_parent: dict[str | None, list[Any]] = {}
+    for row in rows:
+        by_parent.setdefault(str(row.parent_id) if row.parent_id else None, []).append(row)
+
+    def build(parent_key: str | None) -> list[dict[str, Any]]:
+        return [
+            _position_payload(row, build(str(row.id)))
+            for row in by_parent.get(parent_key, [])
+        ]
+
+    return {
+        "id": str(catalog.id),
+        "code": catalog.code,
+        "name": catalog.name,
+        "standard": catalog.standard,
+        "positions": build(None),
+    }
+
+
+@router.post("/text-catalog/{catalog_id}/positions/", status_code=status.HTTP_201_CREATED)
+async def create_text_position(
+    catalog_id: str,
+    request: TextPositionCreate,
+    session: SessionDep,
+    user_id: str = Depends(get_current_user_id),
+) -> dict[str, Any]:
+    """Add a position text, or a sub-position when ``parent_id`` is given."""
+    from app.modules.neoffice.models import TextCatalog, TextPosition
+
+    if await session.get(TextCatalog, catalog_id) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="catalog not found")
+
+    data = request.model_dump()
+    # An empty unit means "wording line" — store NULL rather than "" so the
+    # measurable/non-measurable distinction stays a single check everywhere.
+    if data.get("unit") is not None and not str(data["unit"]).strip():
+        data["unit"] = None
+    position = TextPosition(catalog_id=catalog_id, **data)
+    session.add(position)
+    await session.commit()
+    await session.refresh(position)
+    return _position_payload(position)
+
+
+@router.put("/text-catalog/positions/{position_id}/")
+async def update_text_position(
+    position_id: str,
+    request: TextPositionUpdate,
+    session: SessionDep,
+    user_id: str = Depends(get_current_user_id),
+) -> dict[str, Any]:
+    """Patch one position. Fields left null keep their stored value."""
+    from app.modules.neoffice.models import TextPosition
+
+    position = await session.get(TextPosition, position_id)
+    if position is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="position not found")
+
+    for key, value in request.model_dump(exclude_none=True).items():
+        if key == "unit" and not str(value).strip():
+            value = None
+        setattr(position, key, value)
+    await session.commit()
+    await session.refresh(position)
+    return _position_payload(position)
+
+
+@router.delete("/text-catalog/positions/{position_id}/", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_text_position(
+    position_id: str,
+    session: SessionDep,
+    user_id: str = Depends(get_current_user_id),
+) -> None:
+    """Delete a position (its sub-positions cascade)."""
+    from app.modules.neoffice.models import TextPosition
+
+    position = await session.get(TextPosition, position_id)
+    if position is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="position not found")
+    await session.delete(position)
+    await session.commit()
+
+
+@router.post("/text-catalog/positions/{position_id}/insert-into-boq/")
+async def insert_text_position_into_boq(
+    position_id: str,
+    request: InsertIntoBoqRequest,
+    session: SessionDep,
+    user_id: str = Depends(get_current_user_id),
+) -> dict[str, Any]:
+    """Create a BOQ position from a catalogue text, assembly included.
+
+    This is the payoff of the whole table: the estimator picks a wording from
+    the catalogue and gets the position AND its priced recipe in one move,
+    instead of retyping the text and rebuilding the assembly by hand.
+
+    The wording travels as `title` + `body` joined with a newline, because a CAN
+    text is written across several lines and the BOQ description column now
+    renders them (see the remark-line / multi-line work).
+    """
+    from app.modules.assemblies.models import Assembly, Component as AssemblyComponent
+    from app.modules.boq.models import Position as BoqPosition
+    from app.modules.neoffice.models import TextPosition
+
+    position = await session.get(TextPosition, position_id)
+    if position is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="position not found")
+
+    description = "\n".join(part for part in (position.title, position.body) if part).strip()
+    new_position = BoqPosition(
+        boq_id=request.boq_id,
+        parent_id=request.parent_id,
+        ordinal=request.ordinal or position.code,
+        description=description,
+        unit=position.unit or "",
+        quantity=request.quantity,
+        unit_rate="0",
+        metadata_={
+            "neoffice_text_position_id": str(position.id),
+            "neoffice_text_code": position.code,
+        },
+    )
+    session.add(new_position)
+    await session.flush()
+
+    resources: list[dict[str, Any]] = []
+    if position.assembly_id:
+        assembly = await session.get(Assembly, position.assembly_id)
+        if assembly is not None:
+            from sqlalchemy import select
+
+            components = (await session.execute(
+                select(AssemblyComponent).where(
+                    AssemblyComponent.assembly_id == position.assembly_id
+                )
+            )).scalars().all()
+            resources = [
+                {
+                    "description": c.description,
+                    "resource_type": c.resource_type,
+                    "unit": c.unit,
+                    "quantity": c.quantity,
+                    "unit_cost": c.unit_cost,
+                    "factor": c.factor,
+                }
+                for c in components
+            ]
+            meta = dict(new_position.metadata_ or {})
+            meta["resources"] = resources
+            meta["neoffice_assembly_id"] = str(position.assembly_id)
+            meta["neoffice_assembly_code"] = assembly.code
+            new_position.metadata_ = meta
+            new_position.unit_rate = str(assembly.total_rate or "0")
+            if not new_position.unit and assembly.unit:
+                new_position.unit = assembly.unit
+
+    await session.commit()
+    await session.refresh(new_position)
+    return {
+        "boq_position_id": str(new_position.id),
+        "ordinal": new_position.ordinal,
+        "description": new_position.description,
+        "unit": new_position.unit,
+        "unit_rate": new_position.unit_rate,
+        "assembly_applied": bool(position.assembly_id),
+        "resources_copied": len(resources),
+    }
+# //// END NEOFFICE PATCH
