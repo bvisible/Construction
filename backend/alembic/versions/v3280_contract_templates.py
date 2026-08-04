@@ -144,7 +144,13 @@ def upgrade() -> None:
             sa.ForeignKeyConstraint(
                 ["template_id"],
                 [f"{_TEMPLATE}.id"],
-                name="fk_oe_contracts_template_clause_template_id_oe_contracts_template",
+                # //// NEOFFICE PATCH — the upstream name is 65 characters and
+                # PostgreSQL truncates identifiers at 63, which SQLAlchemy
+                # refuses outright, so this migration cannot run on Postgres at
+                # all. Shortened to match the sibling constraints in this same
+                # table (pk_/uq_oe_contracts_template_clause_*). Reported upstream.
+                name="fk_oe_contracts_template_clause_template",
+                # //// END NEOFFICE PATCH
                 ondelete="CASCADE",
             ),
             sa.UniqueConstraint(
