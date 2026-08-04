@@ -186,6 +186,30 @@ def _canonicalize_db_url(url: str, *, driver: str) -> str:
         return url
 
 
+def _userinfo_split_at_the_wrong_at_sign(url: str) -> bool:
+    """True when a URL's host swallowed part of the password.
+
+    A URL splits its user info at the *first* ``@``, so a password containing
+    one moves everything after it into the host:
+    ``postgresql://oe:pa@ss@postgres/db`` parses with host ``ss@postgres``. A
+    host is not allowed to contain ``@``, so seeing one there is proof the URL
+    was assembled by interpolation rather than encoded, and the URL is
+    unusable however it was meant.
+
+    This is only a question worth asking when the same settings also carry the
+    parts, which is the case for a compose file that passes both so it can work
+    with an image older than itself.
+    """
+    if not url:
+        return False
+    try:
+        from sqlalchemy.engine import make_url
+
+        return "@" in (make_url(url).host or "")
+    except Exception:  # noqa: BLE001 - an unparseable URL is a different problem
+        return False
+
+
 class Settings(BaseSettings):
     """OpenConstructionERP application settings."""
 
@@ -601,6 +625,46 @@ class Settings(BaseSettings):
     def _canonical_sync_db_url(cls, value: str) -> str:
         """Accept any postgres:// form for the sync engine, normalize to psycopg2."""
         return _canonicalize_db_url(value, driver="psycopg2")
+
+    @model_validator(mode="after")
+    def _compose_db_url_from_parts(self) -> "Settings":
+        """Build the database URL from its parts when none was supplied whole.
+
+        A URL assembled by string interpolation is wrong for any password
+        containing ``@``: the user info is split at the first one, so
+        ``oe:pa@ss@postgres`` is read as user ``oe``, password ``pa`` and host
+        ``ss@postgres``, which resolves nowhere. The container then dies naming
+        a host nobody typed, while PostgreSQL stays healthy on the same
+        password because it receives it as a plain environment variable.
+
+        Compose files have no urlencode, so they cannot fix this themselves.
+        Accepting the parts here does, for every image and every deployment
+        rather than only the ones that run the shell entrypoint. Supplying
+        ``DATABASE_URL`` directly still wins, with one exception: a URL whose
+        host carries an ``@`` is the damage described above and cannot be what
+        anyone intended, so when the parts are there too they are used instead
+        of failing on a host nobody typed. That exception is what lets a
+        compose file pass both, which it has to do while images older than the
+        parts are still in circulation.
+        """
+        password = os.environ.get("OE_DB_PASSWORD", "")
+        supplied = [u for u in (self.database_url.strip(), self.database_sync_url.strip()) if u]
+        if supplied and not (password and any(_userinfo_split_at_the_wrong_at_sign(u) for u in supplied)):
+            return self
+        if not password:
+            return self
+        from urllib.parse import quote
+
+        authority = (
+            f"{quote(os.environ.get('OE_DB_USER', 'oe'), safe='')}"
+            f":{quote(password, safe='')}"
+            f"@{os.environ.get('OE_DB_HOST', 'postgres')}"
+            f":{os.environ.get('OE_DB_PORT', '5432')}"
+            f"/{os.environ.get('OE_DB_NAME', 'openestimate')}"
+        )
+        self.database_url = f"postgresql+asyncpg://{authority}"
+        self.database_sync_url = f"postgresql://{authority}"
+        return self
 
     @model_validator(mode="after")
     def _cross_fill_db_urls(self) -> "Settings":

@@ -48,3 +48,111 @@ jobs:
         # thread method because signal based timeouts are Unix-only and this
         # suite is expected to stay runnable on Windows developer machines.
         run: pytest tests/pg -q -p no:cacheprovider --timeout=300 --timeout-method=thread
+      # Checks on what the demo seeder writes. Two families so far. Vocabulary:
+      # the places where one list of allowed values is written down in a second
+      # place that can drift from it. The seeder builds ORM rows directly, so
+      # nothing it writes ever meets the Pydantic layer that owns the vocabulary,
+      # and it has twice stored values the API itself would refuse; the contacts
+      # importer had the same gap from the other side and rewrote what it did not
+      # recognise without saying so. Dates: rows whose timestamps have to agree
+      # with the arithmetic a screen does on them, after the RFI register spent
+      # months asserting a deadline that fell before the request. All five need
+      # no database and finish in about a second. They are attached here for the
+      # same reason as the cost base suite below, which is that tests/unit runs
+      # in no lane that blocks a merge.
+      # Two more families joined the list. Scaffolding text: the seed writers
+      # outnumber the twelve seeders the PG suite executes, so most of them have
+      # no runtime coverage at all and a source scan is the only thing that
+      # reads them; it caught rows whose own description said they were seeded.
+      # Insight dimensions: a chart that draws one category called "Not
+      # recorded" is usually the writer and the reader spelling the same field
+      # differently, which no amount of seeded data will fix and no existing
+      # test noticed.
+      # Real firm names: the repo-wide brand gate cannot express a name shorter
+      # than five characters, a name that is also an ordinary English word, or a
+      # name that is two words. Live contractors reached users through all three
+      # holes. The narrow file below can express them because it reads only demo
+      # seed sources, and it is attached here for the reason stated above: a test
+      # that blocks no merge is the same as a test that does not exist, which is
+      # exactly how a name rejected once already shipped in every wheel since.
+      - name: Run demo seed and import consistency tests
+        run: >-
+          pytest tests/unit/test_demo_contact_types.py
+          tests/unit/test_demo_variations_vocabulary.py
+          tests/unit/test_demo_correspondence_parties.py
+          tests/unit/test_contacts_import_vocabulary.py
+          tests/unit/test_demo_rfi_dates.py
+          tests/unit/test_demo_party_lookup.py
+          tests/unit/test_demo_seed_text_has_no_scaffolding_words.py
+          tests/unit/test_demo_insight_dimensions.py
+          tests/unit/test_demo_seed_has_no_real_firm_names.py
+          -q -p no:cacheprovider
+      # The region to currency table. Attached for the same reason as the suites
+      # around it, which is that tests/unit runs in no lane that blocks a merge.
+      # A CWICR parquet carries no currency column, so the region tag on the row is
+      # the only statement of which money the rate is in, and the importer stamps a
+      # whole file from one lookup in that table. The set of bases the importer
+      # accepts and the table it looks the currency up in were built from two
+      # different registries, and twelve of the thirty-eight loadable regions were
+      # missing from the table: importing one of those resolved to the empty string
+      # and wrote a catalogue of prices with no unit of money on them. That is how
+      # 55 718 rows came to carry no currency. The suite parametrises over every
+      # loadable base so a region that drops out of the table fails by its own
+      # name, and it asserts the read and write paths share one table object rather
+      # than two copies kept in step by a comment. No database, about eight seconds.
+      - name: Run cost region currency table tests
+        run: pytest tests/unit/costs/test_region_currency_fallback.py -q -p no:cacheprovider
+      # The DWG parser. Attached for the same reason as the two suites either side
+      # of it: tests/unit is in no lane that blocks a merge, and this is the parser
+      # whose vertex re-scan shipped quadratic in every release from 3.0.2 to 14.1.0
+      # without a gate noticing. Scaling asserts the exact per-row call count rather
+      # than an upper bound, because a bound of 3n is also satisfied by making the
+      # lookups lazy and adding the second pass back. Fidelity covers what the
+      # converted geometry has to preserve. Neither needs a database; together they
+      # take about fifteen seconds.
+      # Converter health belongs here too. The check classifies the exit code a
+      # converter binary leaves behind, and every code it does not recognise is
+      # reported as a working install, so a gap in that set is not a worse
+      # message but a false all-clear. One reached a user: Windows refused to
+      # start the binary and the status card showed no problem.
+      - name: Run DWG parser and CAD converter health tests
+        run: >-
+          pytest tests/unit/test_ddc_dwg_parser_scaling.py
+          tests/unit/test_ddc_dwg_parser_fidelity.py
+          tests/unit/test_cad_converter_loader_failures.py
+          -q -p no:cacheprovider
+      # The chat path for providers we call without a tool schema. Attached for
+      # the same reason as the suites above: tests/unit is in no lane that blocks
+      # a merge. Only Anthropic and OpenAI get tool definitions on the wire, so
+      # every other provider was being handed a system prompt advertising twenty
+      # tools it had no way to call, and models answered with their own call
+      # syntax as literal text in the user's chat bubble. The same branch returned
+      # before the shared persistence tail, so the turn was never stored and the
+      # thumbs feedback POST 404'd. One test asserts that a reply which merely
+      # LOOKS like a tool call still arrives byte for byte, because the tempting
+      # repair here is an output scrubber and a scrubber can eat a real answer.
+      # No database, about two seconds.
+      - name: Run erp_chat no-tool provider tests
+        run: pytest tests/unit/test_erp_chat_fallback_provider.py -q -p no:cacheprovider
+      # A cross-tenant read, so it is attached here rather than left to the
+      # sharded Backend CI job. The rating provenance record carries a raw
+      # COUNT(*) over the NCR, safety-incident and schedule tables filtered
+      # only by subcontractor and month, and it was reaching the wire through
+      # an endpoint that asks for the viewer role. This pins the redaction on
+      # the response schema, which is the single point all three rating routes
+      # pass through. It does not close the whole exposure: the counters beside
+      # it are max(accumulated, direct), and narrowing those needs a decision
+      # on whether a rating is per project, per tenant or deliberately shared.
+      - name: Run subcontractor rating disclosure tests
+        run: pytest tests/unit/test_subcontractor_rating_basis_privacy.py -q -p no:cacheprovider
+      # The cost base pipeline produces the parquet editions people download from us, so it
+      # needs a blocking gate. It needs no database; it is attached here because this is the
+      # only merge-blocking lane that runs pytest, and an ungated test is the situation this
+      # suite exists to end. Its own working-directory keeps the flat sibling imports and the
+      # conftest sys.path entry working exactly as they do locally. Deps are already present:
+      # pandas and pyarrow are base dependencies of the backend package installed above.
+      # A dedicated fast lane would be the better home; that is a new shared workflow and a
+      # separate decision.
+      - name: Run cost base pipeline suite
+        working-directory: tools/costbase_pipeline
+        run: pytest tests -q -p no:cacheprovider

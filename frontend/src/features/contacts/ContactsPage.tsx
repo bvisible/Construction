@@ -22,6 +22,7 @@ import {
   FileDown,
   Users,
   HardHat,
+  Landmark,
   Truck,
   Briefcase,
   User,
@@ -87,9 +88,11 @@ const CONTACT_TYPES: ContactType[] = [
   'customer',
   'lead',
   'client',
+  'contractor',
   'subcontractor',
   'supplier',
   'consultant',
+  'authority',
   'internal',
 ];
 
@@ -109,7 +112,9 @@ const TAG_GROUP_CAP = 8;
 
 const TYPE_BADGE_VARIANT: Record<ContactType, 'blue' | 'warning' | 'success' | 'neutral'> = {
   client: 'blue',
+  contractor: 'blue',
   subcontractor: 'warning',
+  authority: 'neutral',
   supplier: 'success',
   consultant: 'neutral',
   internal: 'neutral',
@@ -147,6 +152,48 @@ const PREQUAL_CONFIG: Record<
   },
 };
 
+/* Property Development lead / buyer statuses shown on the linked-records rail.
+ * The module-rows bridge types both as a plain string, so the maps are keyed
+ * loosely and fall back to the stored value. The buyer map deliberately
+ * mirrors the one in EditBuyerModal — ``completed`` reads as "Handover" over
+ * in Property Development, and the two screens must not disagree. */
+type StatusLabel = { labelKey: string; defaultLabel: string };
+
+const PROPDEV_LEAD_STATUS: Record<string, StatusLabel> = {
+  new: { labelKey: 'propdev.lead_status_new', defaultLabel: 'New' },
+  qualified: { labelKey: 'propdev.lead_status_qualified', defaultLabel: 'Qualified' },
+  viewing_scheduled: {
+    labelKey: 'propdev.lead_status_viewing_scheduled',
+    defaultLabel: 'Viewing Scheduled',
+  },
+  visited: { labelKey: 'propdev.lead_status_visited', defaultLabel: 'Visited' },
+  quotation_sent: {
+    labelKey: 'propdev.lead_status_quotation_sent',
+    defaultLabel: 'Quotation Sent',
+  },
+  negotiating: { labelKey: 'propdev.lead_status_negotiating', defaultLabel: 'Negotiating' },
+  converted: { labelKey: 'propdev.lead_status_converted', defaultLabel: 'Converted' },
+  lost: { labelKey: 'propdev.lead_status_lost', defaultLabel: 'Lost' },
+  disqualified: { labelKey: 'propdev.lead_status_disqualified', defaultLabel: 'Disqualified' },
+};
+
+const PROPDEV_BUYER_STATUS: Record<string, StatusLabel> = {
+  lead: { labelKey: 'propdev.stage_lead', defaultLabel: 'Lead' },
+  reserved: { labelKey: 'propdev.stage_reserved', defaultLabel: 'Reserved' },
+  contracted: { labelKey: 'propdev.stage_contracted', defaultLabel: 'Contracted' },
+  completed: { labelKey: 'propdev.stage_handover', defaultLabel: 'Handover' },
+  cancelled: { labelKey: 'propdev.stage_cancelled', defaultLabel: 'Cancelled' },
+};
+
+function statusLabel(
+  map: Record<string, StatusLabel>,
+  status: string,
+  t: (k: string, o?: Record<string, unknown>) => string,
+): string {
+  const entry = map[status];
+  return entry ? t(entry.labelKey, { defaultValue: entry.defaultLabel }) : status;
+}
+
 const inputCls =
   'h-10 w-full rounded-lg border border-border bg-surface-primary px-3 text-sm focus:outline-none focus:ring-2 focus:ring-oe-blue/30 focus:border-oe-blue';
 
@@ -154,7 +201,9 @@ const inputCls =
 
 const TYPE_CARD_CONFIG: Record<ContactType, { icon: React.ElementType; color: string }> = {
   client: { icon: Users, color: 'text-blue-600 bg-blue-50 border-blue-200 dark:text-blue-400 dark:bg-blue-950/30 dark:border-blue-800' },
+  contractor: { icon: Building2, color: 'text-sky-600 bg-sky-50 border-sky-200 dark:text-sky-400 dark:bg-sky-950/30 dark:border-sky-800' },
   subcontractor: { icon: HardHat, color: 'text-amber-600 bg-amber-50 border-amber-200 dark:text-amber-400 dark:bg-amber-950/30 dark:border-amber-800' },
+  authority: { icon: Landmark, color: 'text-slate-600 bg-slate-50 border-slate-200 dark:text-slate-300 dark:bg-slate-800/50 dark:border-slate-700' },
   supplier: { icon: Truck, color: 'text-green-600 bg-green-50 border-green-200 dark:text-green-400 dark:bg-green-950/30 dark:border-green-800' },
   consultant: { icon: Briefcase, color: 'text-gray-600 bg-gray-50 border-gray-200 dark:text-gray-400 dark:bg-gray-800/50 dark:border-gray-700' },
   internal: { icon: Users, color: 'text-indigo-600 bg-indigo-50 border-indigo-200 dark:text-indigo-400 dark:bg-indigo-950/30 dark:border-indigo-800' },
@@ -1187,15 +1236,18 @@ function ContactDetailDrawer({
                           )
                         }
                         className="flex w-full items-center justify-between gap-2 rounded-lg border border-border-light bg-surface-primary px-3 py-2 text-left hover:border-oe-blue/50 hover:bg-surface-secondary/50 transition-colors"
+                        title={lead.id}
                       >
                         <div className="min-w-0">
                           <p className="truncate text-sm font-medium text-content-primary">
-                            {lead.full_name || lead.email || lead.id.slice(0, 8)}
+                            {lead.full_name ||
+                              lead.email ||
+                              t('common.unnamed', { defaultValue: '(unnamed)' })}
                           </p>
                           <p className="text-xs text-content-tertiary">
                             {t('contacts.lead_meta', {
                               defaultValue: '{{status}} · score {{score}}',
-                              status: lead.status,
+                              status: statusLabel(PROPDEV_LEAD_STATUS, lead.status, t),
                               score: lead.lead_score,
                             })}
                           </p>
@@ -1222,12 +1274,17 @@ function ContactDetailDrawer({
                           )
                         }
                         className="flex w-full items-center justify-between gap-2 rounded-lg border border-border-light bg-surface-primary px-3 py-2 text-left hover:border-oe-blue/50 hover:bg-surface-secondary/50 transition-colors"
+                        title={buyer.id}
                       >
                         <div className="min-w-0">
                           <p className="truncate text-sm font-medium text-content-primary">
-                            {buyer.full_name || buyer.email || buyer.id.slice(0, 8)}
+                            {buyer.full_name ||
+                              buyer.email ||
+                              t('common.unnamed', { defaultValue: '(unnamed)' })}
                           </p>
-                          <p className="text-xs text-content-tertiary">{buyer.status}</p>
+                          <p className="text-xs text-content-tertiary">
+                            {statusLabel(PROPDEV_BUYER_STATUS, buyer.status, t)}
+                          </p>
                         </div>
                         <ExternalLink size={13} className="shrink-0 text-content-tertiary" />
                       </button>

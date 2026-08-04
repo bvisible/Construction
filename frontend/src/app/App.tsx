@@ -318,6 +318,9 @@ const ProjectIntelligencePage = lazy(() =>
 const FileManagerPage = lazy(() =>
   import('@/features/file-manager/FileManagerPage').then((m) => ({ default: m.FileManagerPage }))
 );
+const SheetsIndexPage = lazy(() =>
+  import('@/features/file-manager/SheetsIndexPage').then((m) => ({ default: m.SheetsIndexPage }))
+);
 const TrashPage = lazy(() =>
   import('@/features/file-trash/TrashPage').then((m) => ({ default: m.TrashPage }))
 );
@@ -627,6 +630,8 @@ const AllowancesPage = lazy(() =>
   import('@/features/allowances').then((m) => ({ default: m.AllowancesPage }))
 );
 const DesignOptionsPage = lazy(() => import('@/features/design-options'));
+const TeamsPage = lazy(() => import('@/features/teams'));
+const FormworkPage = lazy(() => import('@/features/formwork'));
 const WasteFactorsPage = lazy(() =>
   import('@/features/waste-factors').then((m) => ({ default: m.WasteFactorsPage }))
 );
@@ -1122,7 +1127,12 @@ export default function App() {
         <Route path="/chat/admin" element={<P title="Chat Observability"><ERPChatAdminStatsPage /></P>} />
         <Route path="/cad-takeoff" element={<Navigate to="/data-explorer" replace />} />
         <Route path="/cad-explorer" element={<Navigate to="/data-explorer" replace />} />
-        <Route path="/data-explorer" element={<P title="Data Explorer"><CadDataExplorerPage /></P>} />
+        {/* #149: this literal is both the browser-tab title and the lookup key
+            into Header's TITLE_I18N_MAP. Renaming it here without renaming the
+            map entry drops the lookup to `t(title, { defaultValue: title })`,
+            which ships the English string to all 28 other locales and throws
+            nothing. The two move together. */}
+        <Route path="/data-explorer" element={<P title="CAD-BIM BI Explorer"><CadDataExplorerPage /></P>} />
         <Route path="/match-elements" element={<P title="Match Elements"><MatchElementsPage /></P>} />
         <Route path="/pointcloud" element={<P title="Point Cloud"><PointCloudPage /></P>} />
         <Route path="/bim" element={<P title="BIM Viewer"><BIMPage /></P>} />
@@ -1167,6 +1177,7 @@ export default function App() {
         <Route path="/preliminaries" element={<P title="Preliminaries"><PreliminariesPage /></P>} />
         <Route path="/allowances" element={<P title="Allowances"><AllowancesPage /></P>} />
         <Route path="/design-options" element={<P title="Design Options"><DesignOptionsPage /></P>} />
+        <Route path="/formwork" element={<P title="Formwork"><FormworkPage /></P>} />
         <Route path="/price-index" element={<P title="Price Index"><PriceIndexPage /></P>} />
         <Route path="/labor-rates" element={<P title="Labor Rates"><LaborRatesPage /></P>} />
         <Route path="/resource-summary" element={<P title="Resource Summary"><ResourceSummaryPage /></P>} />
@@ -1228,6 +1239,11 @@ export default function App() {
         <Route path="/files/approvals" element={<P title="Approvals register"><FileApprovalsRegisterPage /></P>} />
         <Route path="/files" element={<P title="Project Files"><FileManagerPage /></P>} />
         <Route path="/projects/:projectId/files" element={<P title="Project Files"><FileManagerPage /></P>} />
+        {/* Drawing-sheet index. The page takes :projectId when it is there
+            and otherwise falls back to the active project, so both entries
+            work and the sidebar can link the bare path. */}
+        <Route path="/sheets" element={<P title="Drawing Sheets"><SheetsIndexPage /></P>} />
+        <Route path="/projects/:projectId/sheets" element={<P title="Drawing Sheets"><SheetsIndexPage /></P>} />
 
         <Route path="/risks" element={<P title="Risk Register"><RiskRegisterPage /></P>} />
         {/* Monte Carlo IA merge (#71): the standalone Risk Analysis tool
@@ -1315,6 +1331,10 @@ export default function App() {
         <Route path="/portfolio" element={<P title="Portfolio"><PortfolioPage /></P>} />
 
         <Route path="/users" element={<P title="User Management"><UserManagementPage /></P>} />
+        {/* Teams sit beside Users rather than under Governance: they are
+            per-project and edited by the project owner, not deployment-wide
+            policy set by an administrator. */}
+        <Route path="/teams" element={<P title="Teams and Visibility"><TeamsPage /></P>} />
         <Route path="/admin/audit-log" element={<P title="Audit Log"><AuditLogPage /></P>} />
         {/* Governance — merged home for Permissions, Approval Routes and
             Validation Rules (three /modules-style top tabs). The active

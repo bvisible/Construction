@@ -4,7 +4,7 @@
 
 Creates:
   1. "Wohnanlage Berlin-Mitte" - 48-unit residential complex (DACH, DIN 276, EUR)
-  2. "One Canary Square" - 12-storey office tower (UK, NRM 1, GBP)
+  2. "Halesworth Wharf Tower" - 12-storey office tower (UK, NRM 1, GBP)
 
 Each project contains a full BOQ with hierarchical sections, line-item positions,
 and markup lines (BGK/AGK/W&G for DACH; Preliminaries/OH&P/Reserves for UK).
@@ -347,12 +347,12 @@ def _build_berlin_markups(boq_id: uuid.UUID) -> list[BOQMarkup]:
 
 
 # ---------------------------------------------------------------------------
-# Demo 2 - One Canary Square (UK / NRM 1 / GBP)
+# Demo 2 - Halesworth Wharf Tower (UK / NRM 1 / GBP)
 # ---------------------------------------------------------------------------
 
 
-def _build_canary_positions(boq_id: uuid.UUID) -> list[Position]:
-    """Return all sections + positions for the Canary Wharf office tower."""
+def _build_halesworth_positions(boq_id: uuid.UUID) -> list[Position]:
+    """Return all sections + positions for the Halesworth Wharf office tower."""
     positions: list[Position] = []
     sort = 0
 
@@ -510,7 +510,7 @@ def _build_canary_positions(boq_id: uuid.UUID) -> list[Position]:
     return positions
 
 
-def _build_canary_markups(boq_id: uuid.UUID) -> list[BOQMarkup]:
+def _build_halesworth_markups(boq_id: uuid.UUID) -> list[BOQMarkup]:
     return [
         _make_markup(
             boq_id=boq_id,
@@ -612,11 +612,11 @@ async def main() -> None:
             await session.execute(select(Project).where(Project.name == "Wohnanlage Berlin-Mitte"))
         ).scalar_one_or_none()
 
-        existing_canary = (
-            await session.execute(select(Project).where(Project.name == "One Canary Square"))
+        existing_halesworth = (
+            await session.execute(select(Project).where(Project.name == "Halesworth Wharf Tower"))
         ).scalar_one_or_none()
 
-        if existing_berlin and existing_canary:
+        if existing_berlin and existing_halesworth:
             print("Both demo projects already exist. Nothing to do.")
             await engine.dispose()
             return
@@ -641,7 +641,7 @@ async def main() -> None:
                 id=uuid.uuid4(),
                 email="demo@openconstructionerp.com",
                 hashed_password="$2b$12$DEMO_HASH_NOT_FOR_PRODUCTION_USE_ONLY",
-                full_name="Demo User",
+                full_name="Elena Marchetti",
                 role="viewer",
                 locale="en",
                 is_active=True,
@@ -690,7 +690,7 @@ async def main() -> None:
                 metadata_={
                     "address": "Chausseestra\u00dfe 45, 10115 Berlin",
                     "client": "Berliner Wohnungsbaugesellschaft mbH",
-                    "architect": "Sauerbruch Hutton",
+                    "architect": "Kirchsteg Architekten",
                     "gfa_m2": 7800,
                     "units": 48,
                     "storeys": 6,
@@ -745,18 +745,18 @@ async def main() -> None:
             grand_totals.append(("Wohnanlage Berlin-Mitte", "EUR", grand1))
 
         # ==================================================================
-        # DEMO 2: One Canary Square
+        # DEMO 2: Halesworth Wharf Tower
         # ==================================================================
-        if existing_canary:
-            print("\n  [SKIP] 'One Canary Square' already exists.")
+        if existing_halesworth:
+            print("\n  [SKIP] 'Halesworth Wharf Tower' already exists.")
         else:
             print("\n" + "-" * 78)
-            print("  DEMO 2: One Canary Square \u2014 Office Tower")
+            print("  DEMO 2: Halesworth Wharf Tower \u2014 Office Tower")
             print("-" * 78)
 
             project2 = Project(
                 id=uuid.uuid4(),
-                name="One Canary Square",
+                name="Halesworth Wharf Tower",
                 description=(
                     "New-build 12-storey Grade A office tower with 2-level basement car park. "
                     "Steel frame, composite floors, unitised curtain walling. "
@@ -771,9 +771,9 @@ async def main() -> None:
                 status="active",
                 owner_id=owner_id,
                 metadata_={
-                    "address": "Canary Wharf, London E14",
-                    "client": "Canary Wharf Group plc",
-                    "architect": "Foster + Partners",
+                    "address": "Halesworth Quay, London E14",
+                    "client": "Halesworth Wharf Estates plc",
+                    "architect": "Wrenfield + Partners",
                     "gia_m2": 16400,
                     "nia_m2": 12800,
                     "storeys": 12,
@@ -805,12 +805,12 @@ async def main() -> None:
             await session.flush()
             print(f"  BOQ: {boq2.name}")
 
-            positions2 = _build_canary_positions(boq2_id)
+            positions2 = _build_halesworth_positions(boq2_id)
             for p in positions2:
                 session.add(p)
             await session.flush()
 
-            markups2 = _build_canary_markups(boq2_id)
+            markups2 = _build_halesworth_markups(boq2_id)
             for m in markups2:
                 session.add(m)
             await session.flush()
@@ -827,7 +827,7 @@ async def main() -> None:
             total_sections += sec_count
             total_positions += pos_count
             total_markups += len(markups2)
-            grand_totals.append(("One Canary Square", "GBP", grand2))
+            grand_totals.append(("Halesworth Wharf Tower", "GBP", grand2))
 
         # ------------------------------------------------------------------
         # Commit everything
@@ -840,7 +840,7 @@ async def main() -> None:
         print("\n" + "=" * 78)
         print("  SEED COMPLETE")
         print("=" * 78)
-        projects_created = sum(1 for x in [existing_berlin, existing_canary] if x is None)
+        projects_created = sum(1 for x in [existing_berlin, existing_halesworth] if x is None)
         print(f"  Projects created : {projects_created}")
         print(f"  Sections         : {total_sections}")
         print(f"  Positions        : {total_positions}")

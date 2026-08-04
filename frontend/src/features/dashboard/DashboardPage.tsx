@@ -45,6 +45,7 @@ import {
 } from 'lucide-react';
 import { Card, CardHeader, CardContent, Button, Badge, Skeleton, ActivityFeed as CrossModuleActivityFeed, EmptyState, ModuleHelpButton, ModuleGuideButton, PartnerLogoBadge } from '@/shared/ui';
 import { dashboardGuide } from './dashboardGuide';
+import { pricedPositions, type PositionCounts } from './pricedPositions';
 import { MultiCurrencyTotal } from '@/shared/ui/MultiCurrencyTotal';
 // NEOFFICE: WhatsNewCard (OCE release-notes banner) removed from the dashboard.
 // BIMCoverageCard is lazy-loaded below (upstream v11.9 moved it off the static imports).
@@ -63,6 +64,7 @@ import {
   DashboardRollupProvider,
   useDashboardRollupContext,
 } from './context/DashboardRollupContext';
+import { useDashboardRollup } from './hooks/useDashboardRollup';
 
 // Static Tailwind class strings (dynamic `lg:col-span-${n}` would be purged).
 const DASH_SPAN_CLASS: Record<number, string> = {
@@ -254,7 +256,19 @@ interface BOQWithTotal {
   name: string;
   status: string;
   grand_total: number;
-  positions: { total: number }[];
+  /**
+   * Whether this project has any BOQ positions at all, and whether any of
+   * them carry a price.
+   *
+   * These used to be a synthesized ``positions: { total: number }[]`` of
+   * length one, which read fine as a boolean but was also *counted* by the
+   * Priced positions tile as though it were the position list - one project
+   * with 1 priced and 99 unpriced positions counted as 1 of 1. Two booleans
+   * cannot be mistaken for a population. The real counts live on the
+   * ``boq_summary`` rollup and are passed to the tile directly.
+   */
+  hasPositions: boolean;
+  hasPricedPositions: boolean;
 }
 
 /** Per-currency BOQ value subtotal from ``boq_summary.by_currency``. */
@@ -537,9 +551,7 @@ function OnboardingSteps({
   const hasProjects = Boolean(projects && projects.length > 0);
   const hasBoqs = Boolean(boqs && boqs.length > 0);
   const hasVectors = Boolean(vectorCount && vectorCount > 0);
-  const hasQuantities = Boolean(
-    boqs && boqs.some((b) => b.positions && b.positions.some((p) => p.total > 0)),
-  );
+  const hasQuantities = Boolean(boqs && boqs.some((b) => b.hasPricedPositions));
 
   const aiConfigured = (() => {
     try {
@@ -816,19 +828,37 @@ interface ScheduleSummary {
 }
 
 function KpiRibbon({
-  boqs,
-  schedules,
+  loaded,
+  activeEstimates,
+  scheduleCount,
   projects,
   byCurrency,
   multiCurrency,
+  positionCounts,
 }: {
-  boqs?: BOQWithTotal[];
-  schedules?: ScheduleSummary[];
+  /** False while the rollup behind these tiles is still in flight; every
+   *  tile renders its skeleton rather than a zero. */
+  loaded: boolean;
+  /**
+   * Non-archived BOQs in scope, straight from ``boq_summary.active_boqs``.
+   * This used to be counted off the synthesized ``allBoqs`` stubs, which hold
+   * ONE entry per project rather than one per BOQ - so the tile reported the
+   * number of projects, and scoping it to a single project would have read
+   * "1 estimate" no matter how many that project has.
+   */
+  activeEstimates: number;
+  /** Schedules in scope, from ``schedule_critical.total_schedules``. */
+  scheduleCount: number;
   projects?: ProjectSummary[];
   /** Per-currency BOQ value subtotals from the rollup. */
   byCurrency?: CurrencyTotal[];
   /** True when projects span more than one currency. */
   multiCurrency?: boolean;
+  /**
+   * Real position totals from the ``boq_summary`` rollup, for the Priced
+   * positions tile. ``undefined`` while the rollup is in flight.
+   */
+  positionCounts?: PositionCounts;
 }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -843,30 +873,12 @@ function KpiRibbon({
     return [];
   }, [byCurrency]);
 
-  const activeEstimates = useMemo(() => {
-    if (!boqs) return 0;
-    // "Active" = anything not archived/closed/cancelled. Previously this
-    // counted only `draft` and silently dropped tendered/in-review BOQs,
-    // which made the tile misleading for late-stage projects.
-    const INACTIVE = new Set(['archived', 'closed', 'cancelled', 'rejected']);
-    return boqs.filter((b) => !INACTIVE.has((b.status ?? '').toLowerCase())).length;
-  }, [boqs]);
-
-  const scheduleCount = schedules?.length ?? 0;
-
-  const qualityScore = useMemo(() => {
-    if (!boqs || boqs.length === 0) return null;
-    // Compute average validation "completeness" from positions that have totals > 0
-    const withPositions = boqs.filter((b) => b.positions && b.positions.length > 0);
-    if (withPositions.length === 0) return null;
-    const totalPositions = withPositions.reduce((s, b) => s + b.positions.length, 0);
-    const positionsWithPrice = withPositions.reduce(
-      (s, b) => s + b.positions.filter((p) => p.total > 0).length,
-      0,
-    );
-    if (totalPositions === 0) return null;
-    return Math.round((positionsWithPrice / totalPositions) * 100);
-  }, [boqs]);
+  // Share of positions carrying a price, from the rollup's own position
+  // counts. It used to be derived from the synthesized ``positions`` stub,
+  // which holds one flag per project rather than one entry per position, so
+  // a project with 1 priced and 99 unpriced positions computed 1/1 = 100%.
+  // ``null`` = nothing to measure yet, rendered as an empty state below.
+  const priced = useMemo(() => pricedPositions(positionCounts), [positionCounts]);
 
   // Fallback currency for the rare case the rollup has no per-currency
   // buckets yet (no priced BOQs) \u2014 only used to label a zero figure.
@@ -902,13 +914,13 @@ function KpiRibbon({
   // ``null`` means "still loading" (skeleton); an empty bucket list shows a
   // labelled zero.
   const totalValueDisplay = useMemo<string | null>(() => {
-    if (!boqs) return null;
+    if (!loaded) return null;
     if (currencyTotals.length === 0) return formatMoney(0, fallbackCurrency);
     return currencyTotals
       .map((ct) => formatMoney(ct.total_value, ct.currency))
       .join(' \u00b7 ');
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [boqs, currencyTotals, fallbackCurrency]);
+  }, [loaded, currencyTotals, fallbackCurrency]);
 
   const cards = [
     {
@@ -923,8 +935,8 @@ function KpiRibbon({
     },
     {
       icon: <FileText size={20} strokeWidth={1.75} />,
-      value: boqs ? `${activeEstimates}` : null,
-      sublabel: boqs
+      value: loaded ? `${activeEstimates}` : null,
+      sublabel: loaded
         ? t('dashboard.kpi_estimates_unit', {
             defaultValue: 'estimate{{s}}',
             s: activeEstimates === 1 ? '' : 's',
@@ -936,8 +948,8 @@ function KpiRibbon({
     },
     {
       icon: <Calendar size={20} strokeWidth={1.75} />,
-      value: schedules ? `${scheduleCount}` : null,
-      sublabel: schedules
+      value: loaded ? `${scheduleCount}` : null,
+      sublabel: loaded
         ? scheduleCount > 0
           ? t('dashboard.kpi_schedule_active', { defaultValue: 'active' })
           : t('dashboard.kpi_no_schedules', { defaultValue: 'No schedules' })
@@ -948,23 +960,40 @@ function KpiRibbon({
     },
     {
       icon: <ShieldCheck size={20} strokeWidth={1.75} />,
-      // When no validation report exists yet we swap the "N/A" string for a
-      // dashed-circle icon - reads as "not measured" and doesn't compete
-      // with the percentage on validated tiles. The sublabel keeps the CTA.
-      value: qualityScore !== null
-        ? `${qualityScore}%`
-        : (<CircleDashed size={18} strokeWidth={1.75} className="text-content-quaternary opacity-70" />),
-      sublabel: qualityScore !== null
-        ? t('dashboard.kpi_priced_label', { defaultValue: 'priced' })
-        : t('dashboard.kpi_run_validation', { defaultValue: 'run validation' }),
+      // The percentage appears only when there are enough positions behind it
+      // to mean something; below that the dashed circle reads as "not
+      // measured". It covers an empty BOQ and a two-line BOQ alike, which is
+      // the point - "50%" over two positions is arithmetically true and
+      // useless, and the proxy this tile used to read rendered 1 of 1 as
+      // 100%, in green.
+      value: positionCounts === undefined || priced === null
+        ? null
+        : priced.pct !== null
+          ? `${priced.pct}%`
+          : (<CircleDashed size={18} strokeWidth={1.75} className="text-content-quaternary opacity-70" />),
+      // The counts are shown at every size, including "0 of 0 priced". They
+      // say what the percentage would have said, without the false
+      // precision, so zero needs no special case of its own.
+      sublabel: positionCounts === undefined || priced === null
+        ? ''
+        : t('dashboard.kpi_priced_of', {
+            defaultValue: '{{priced}} of {{total}} priced',
+            priced: priced.priced,
+            total: priced.total,
+          }),
       // Renamed 2026-05-11 from "Quality Score" → "Priced positions".
       // Previously the label implied DIN/NRM validation but the math was
       // just `positions_with_unit_rate / total_positions`. The renamed tile
       // is accurate to what it measures.
       label: t('dashboard.kpi_priced_positions', { defaultValue: 'Priced positions' }),
-      color: qualityScore !== null && qualityScore >= 80 ? 'text-semantic-success' : qualityScore !== null && qualityScore >= 50 ? 'text-[#b45309]' : 'text-content-tertiary',
-      bg: qualityScore !== null && qualityScore >= 80 ? 'bg-semantic-success-bg' : qualityScore !== null && qualityScore >= 50 ? 'bg-semantic-warning-bg' : 'bg-surface-secondary',
-      onClick: qualityScore === null ? () => navigate('/validation') : undefined,
+      // No percentage, no colour verdict. A green tile over four positions
+      // would be the same overclaim in a different form.
+      color: priced?.pct != null && priced.pct >= 80 ? 'text-semantic-success' : priced?.pct != null && priced.pct >= 50 ? 'text-[#b45309]' : 'text-content-tertiary',
+      bg: priced?.pct != null && priced.pct >= 80 ? 'bg-semantic-success-bg' : priced?.pct != null && priced.pct >= 50 ? 'bg-semantic-warning-bg' : 'bg-surface-secondary',
+      // An empty BOQ sends the user to the BOQ editor, which is where
+      // positions and rates are written. It used to send them to /validation,
+      // left over from when this tile was called "Quality Score".
+      onClick: priced !== null && priced.total === 0 ? () => navigate('/boq') : undefined,
     },
   ];
 
@@ -1346,12 +1375,8 @@ function NextSteps({
 
     const hasProjects = Boolean(projects && projects.length > 0);
     const hasBoqs = Boolean(boqs && boqs.length > 0);
-    const hasPositions = Boolean(
-      boqs && boqs.some((b) => b.positions && b.positions.length > 0),
-    );
-    const hasRates = Boolean(
-      boqs && boqs.some((b) => b.positions && b.positions.some((p) => p.total > 0)),
-    );
+    const hasPositions = Boolean(boqs && boqs.some((b) => b.hasPositions));
+    const hasRates = Boolean(boqs && boqs.some((b) => b.hasPricedPositions));
     const hasSchedules = Boolean(schedules && schedules.length > 0);
     const hasContacts = Boolean(allContacts && allContacts > 0);
 
@@ -1369,7 +1394,7 @@ function NextSteps({
 
     // If BOQ has no positions -- suggest adding them
     if (hasBoqs && !hasPositions) {
-      const firstBoq = boqs!.find((b) => !b.positions || b.positions.length === 0) ?? boqs![0];
+      const firstBoq = boqs!.find((b) => !b.hasPositions) ?? boqs![0];
       items.push({
         id: 'add-positions',
         icon: <FileText size={18} strokeWidth={1.75} />,
@@ -2009,6 +2034,35 @@ function DashboardPageInner() {
   const boqSummary = rollup.byWidget('boq_summary');
   const scheduleCritical = rollup.byWidget('schedule_critical');
 
+  /* ── Project scope for the project-facing surfaces ──────────────────────
+     The top-bar switcher writes `useProjectContextStore.activeProjectId`.
+     Until now the rollup above was fetched with no `project_ids`, so picking
+     a project updated the Today strip (which scopes itself, see the note on
+     `TodaySnapshot`) while every rollup-fed figure - Total Value, Active
+     Estimates, Schedule Status, Priced positions, Finance summary, the
+     operations tiles - kept reporting the whole workspace. That is issue
+     #412: one project selected, most of the page still answering for eleven.
+
+     The page has two audiences and they need different scopes, so we keep
+     two reads rather than one:
+       · `rollup` (unscoped)      - the onboarding checklist, System status
+                                    and the portfolio "Project Overview"
+                                    panel, all of which ask workspace-level
+                                    questions ("do you have a BOQ yet?").
+       · `scopedRollup` (below)   - everything that claims to describe the
+                                    project the user just picked.
+     With no active project `scopeProjectIds` is undefined, which produces
+     the same query key as the unscoped read, so portfolio mode still costs
+     exactly one request. */
+  const activeProjectId = useProjectContextStore((s) => s.activeProjectId);
+  const scopeProjectIds = useMemo(
+    () => (activeProjectId ? [activeProjectId] : undefined),
+    [activeProjectId],
+  );
+  const scopedRollup = useDashboardRollup({ projectIds: scopeProjectIds });
+  const scopedBoqSummary = scopedRollup.byWidget('boq_summary');
+  const scopedScheduleCritical = scopedRollup.byWidget('schedule_critical');
+
   // The rollup feeds the KPI ribbon and most wave-2 widgets in one request.
   // Its `error` was previously never read, so a failed rollup silently
   // rendered every dependent widget as empty/zero - indistinguishable from a
@@ -2154,14 +2208,12 @@ function DashboardPageInner() {
       // Per-project total in project currency, as Number - KpiRibbon and
       // AnalyticsSection sum these.
       grand_total: Number(row.total_value) || 0,
-      // Synthetic position list - one entry per ``position_count`` would
-      // bloat memory, so we mark a single representative position carrying
-      // the rolled-up total. OnboardingSteps + SystemStatusSummary only
-      // check ``positions.length > 0`` + ``positions.some(p => p.total > 0)``.
-      positions:
-        row.position_count > 0
-          ? [{ total: row.position_count - row.positions_zero_price > 0 ? 1 : 0 }]
-          : [],
+      // Two booleans, not a synthetic position list. OnboardingSteps and
+      // NextStepsPanel only ever ask "are there any positions" and "is
+      // anything priced", and answering with a one-element array invited
+      // the KPI tile to count it as the population (#187).
+      hasPositions: row.position_count > 0,
+      hasPricedPositions: row.position_count - row.positions_zero_price > 0,
     }));
     // If the user has at least one real BOQ but no per-project rollup row
     // covered it (defensive - should be impossible), insert a single fall-
@@ -2173,7 +2225,9 @@ function DashboardPageInner() {
         name: '',
         status: 'active',
         grand_total: Number(boqSummary.total_value_eur) || 0,
-        positions: boqSummary.position_count > 0 ? [{ total: 1 }] : [],
+        hasPositions: boqSummary.position_count > 0,
+        hasPricedPositions:
+          boqSummary.position_count - boqSummary.positions_zero_price > 0,
       });
     }
     return stubs;
@@ -2190,14 +2244,17 @@ function DashboardPageInner() {
     }));
   }, [scheduleCritical]);
 
-  // Per-currency BOQ value subtotals for the KPI ribbon + Analytics. We
-  // prefer the backend's ``by_currency`` / ``multi_currency`` fields; if an
-  // older backend omits them we reconstruct the buckets from the per-project
-  // rows (each carries its own currency). Either way we never sum across
-  // currencies into one scalar.
+  // Per-currency BOQ value subtotals for the KPI ribbon. We prefer the
+  // backend's ``by_currency`` / ``multi_currency`` fields; if an older backend
+  // omits them we reconstruct the buckets from the per-project rows (each
+  // carries its own currency). Either way we never sum across currencies into
+  // one scalar. Sourced from the SCOPED rollup: with a project picked the
+  // Total Value tile must show that project's money, and a single project has
+  // a single currency - the "multi-currency" chip beside a project name was
+  // the most visible symptom of #412.
   const boqCurrency = useMemo<{ byCurrency: CurrencyTotal[]; multiCurrency: boolean }>(() => {
-    if (!boqSummary) return { byCurrency: [], multiCurrency: false };
-    const extra = boqSummary as unknown as BoqCurrencyBreakdown;
+    if (!scopedBoqSummary) return { byCurrency: [], multiCurrency: false };
+    const extra = scopedBoqSummary as unknown as BoqCurrencyBreakdown;
     if (extra.by_currency && extra.by_currency.length > 0) {
       return {
         byCurrency: extra.by_currency,
@@ -2206,7 +2263,7 @@ function DashboardPageInner() {
     }
     // Fallback: group the per-project rows by their own currency.
     const sums = new Map<string, number>();
-    for (const row of boqSummary.by_project) {
+    for (const row of scopedBoqSummary.by_project) {
       const cur = row.currency || 'EUR';
       sums.set(cur, (sums.get(cur) ?? 0) + (Number(row.total_value) || 0));
     }
@@ -2214,7 +2271,7 @@ function DashboardPageInner() {
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([currency, total]) => ({ currency, total_value: total.toFixed(2) }));
     return { byCurrency, multiCurrency: byCurrency.length > 1 };
-  }, [boqSummary]);
+  }, [scopedBoqSummary]);
 
   // Fetch contacts count for NextSteps suggestions
   const { data: contactsList } = useQuery({
@@ -2311,13 +2368,26 @@ function DashboardPageInner() {
 
     inbox: <InboxPanel limit={8} />,
 
+    // Every tile in the ribbon answers for the project the top bar has
+    // selected, so all four read the SCOPED rollup (#412). With no project
+    // selected the scoped read resolves to the workspace figures it always
+    // showed.
     kpi: (
       <KpiRibbon
-        boqs={allBoqs}
-        schedules={allSchedules}
+        loaded={Boolean(scopedBoqSummary)}
+        activeEstimates={scopedBoqSummary?.active_boqs ?? 0}
+        scheduleCount={scopedScheduleCritical?.total_schedules ?? 0}
         projects={projects}
         byCurrency={boqCurrency.byCurrency}
         multiCurrency={boqCurrency.multiCurrency}
+        positionCounts={
+          scopedBoqSummary
+            ? {
+                position_count: scopedBoqSummary.position_count,
+                positions_zero_price: scopedBoqSummary.positions_zero_price,
+              }
+            : undefined
+        }
       />
     ),
 
@@ -2464,7 +2534,11 @@ function DashboardPageInner() {
   };
 
   return (
-    <DashboardRollupProvider>
+    // Scoped provider: every widget rendered in the grid below - Finance
+    // summary, the operations tiles - describes the project the top bar has
+    // selected (#412). `AnalyticsSection` is the deliberate exception and
+    // takes its own unscoped read, because it is the portfolio panel.
+    <DashboardRollupProvider projectIds={scopeProjectIds}>
     <div className="space-y-5 animate-fade-in">
       {/* Partner co-brand strip - only renders when a partner pack is
           active (env OE_PARTNER_PACK or first installed). Dismissable
@@ -2786,10 +2860,17 @@ function ProjectsList({ projects }: { projects?: ProjectSummary[] }) {
 function AnalyticsSection({ projects }: { projects: ProjectSummary[] }) {
   const { t } = useTranslation();
 
-  // Source aggregates from the dashboard rollup the parent provider already
-  // fetched - eliminates the per-project ``/v1/boq/boqs/?project_id=…`` fan
-  // -out this component used to do (v4.6.2 N+1 nuke 2026-05-24).
-  const { byWidget } = useDashboardRollupContext();
+  // Source aggregates from the dashboard rollup - eliminates the per-project
+  // ``/v1/boq/boqs/?project_id=…`` fan-out this component used to do (v4.6.2
+  // N+1 nuke 2026-05-24).
+  //
+  // Deliberately NOT the surrounding context: this panel is titled "Project
+  // Overview" and counts Total Projects / Total BOQs / per-project bars, so
+  // it is a portfolio reading by definition. The enclosing provider is now
+  // scoped to the active project (#412) and would have collapsed this panel
+  // to a single row. An unscoped read here shares its query key with the
+  // page-level unscoped rollup, so it costs no extra request.
+  const { byWidget } = useDashboardRollup();
   const boqSummary = byWidget('boq_summary');
 
   const stats = useMemo(() => {

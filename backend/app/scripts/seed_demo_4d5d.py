@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
 """Seed 4D Schedule, 5D Budget, and Tendering data for demo projects.
 
-Creates for Wohnanlage Berlin-Mitte and One Canary Square:
+Creates for Wohnanlage Berlin-Mitte and Halesworth Wharf Tower:
   - Schedule with activities per BOQ section (4D)
   - Budget lines per section (5D)
   - Cash flow periods (5D)
@@ -41,7 +41,7 @@ async def main() -> None:
 
     async with async_session_factory() as session:
         result = await session.execute(
-            select(Project).where(Project.name.in_(["Wohnanlage Berlin-Mitte", "One Canary Square"]))
+            select(Project).where(Project.name.in_(["Wohnanlage Berlin-Mitte", "Halesworth Wharf Tower"]))
         )
         projects = list(result.scalars().all())
 
@@ -237,15 +237,15 @@ async def main() -> None:
 
             companies = (
                 [
-                    ("Hochtief AG", "tender@hochtief.de", 0.98),
-                    ("Strabag SE", "bids@strabag.com", 1.05),
-                    ("Zublin GmbH", "vergabe@zueblin.de", 1.02),
+                    ("Kestenbruck Hochbau AG", "tender@kestenbruck-hochbau.de", 0.98),
+                    ("Malvenstett Bau SE", "bids@malvenstett-bau.de", 1.05),
+                    ("Verdenau Rohbau GmbH", "vergabe@verdenau-rohbau.de", 1.02),
                 ]
                 if is_berlin
                 else [
-                    ("Laing O'Rourke", "tenders@lor.com", 0.96),
-                    ("Balfour Beatty", "bids@bb.com", 1.08),
-                    ("Mace Group", "proc@mace.com", 1.01),
+                    ("Thornbeck Construction", "tenders@thornbeck-construction.co.uk", 0.96),
+                    ("Ellerdyne Contracting", "bids@ellerdyne-contracting.co.uk", 1.08),
+                    ("Merrivane Group", "proc@merrivane.co.uk", 1.01),
                 ]
             )
 

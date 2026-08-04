@@ -31,6 +31,7 @@ import { apiGet, apiPost } from '@/shared/lib/api';
 import { getIntlLocale } from '@/shared/lib/formatters';
 import { useToastStore } from '@/stores/useToastStore';
 import { REGION_MAP } from '@/stores/useCostDatabaseStore';
+import { highlightMatch } from './highlightMatch';
 import { VariantPicker } from '@/features/costs/VariantPicker';
 import {
   MultiVariantPicker,
@@ -138,8 +139,19 @@ export function AssemblyPickerModal({
   const [quantity, setQuantity] = useState<Record<string, number>>({});
   const addToast = useToastStore((s) => s.addToast);
 
+  // The sibling picker in this issue (AutocompleteInput) waits 300ms before it
+  // asks the server; this one asked on every keystroke. The estimator who
+  // reported #406 types the discriminating words rather than the head of the
+  // position, so "installation de chantier grue" was close to thirty searches
+  // for one lookup. Same delay as the sibling, so the two pickers feel alike.
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  useEffect(() => {
+    const handle = setTimeout(() => setDebouncedSearch(search), 300);
+    return () => clearTimeout(handle);
+  }, [search]);
+
   const { data: assemblies, isLoading } = useQuery({
-    queryKey: ['assemblies', search],
+    queryKey: ['assemblies', debouncedSearch],
     queryFn: () => apiGet<{ items: Array<{
       id: string;
       code: string;
@@ -149,7 +161,7 @@ export function AssemblyPickerModal({
       total_rate: number;
       currency: string;
       components: Array<{ description: string; unit: string; unit_cost: number; quantity: number }>;
-    }>; total: number }>(`/v1/assemblies/?q=${encodeURIComponent(search)}&limit=20`).then((r) => r.items),
+    }>; total: number }>(`/v1/assemblies/?q=${encodeURIComponent(debouncedSearch)}&limit=20`).then((r) => r.items),
     retry: false,
   });
 
@@ -216,6 +228,9 @@ export function AssemblyPickerModal({
             <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-content-quaternary" />
             <input
               type="text"
+              id="boq-assembly-search"
+              name="boq-assembly-search"
+              autoComplete="off"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder={t('assemblies.search_placeholder', { defaultValue: 'Search assemblies...' })}
@@ -236,12 +251,12 @@ export function AssemblyPickerModal({
             <div className="flex flex-col items-center justify-center py-12 text-center">
               <Layers size={32} className="text-content-quaternary mb-3" />
               <p className="text-sm font-medium text-content-secondary mb-1">
-                {search ? t('assemblies.no_search_match', { defaultValue: 'No assemblies match your search' }) : t('assemblies.no_assemblies', { defaultValue: 'No assemblies yet' })}
+                {debouncedSearch ? t('assemblies.no_search_match', { defaultValue: 'No assemblies match your search' }) : t('assemblies.no_assemblies', { defaultValue: 'No assemblies yet' })}
               </p>
               <p className="text-xs text-content-tertiary mb-3">
-                {search ? t('assemblies.try_different_term', { defaultValue: 'Try a different search term' }) : t('assemblies.create_from_catalog', { defaultValue: 'Create assemblies from the Resource Catalog' })}
+                {debouncedSearch ? t('assemblies.try_different_term', { defaultValue: 'Try a different search term' }) : t('assemblies.create_from_catalog', { defaultValue: 'Create assemblies from the Resource Catalog' })}
               </p>
-              {!search && (
+              {!debouncedSearch && (
                 <Button variant="secondary" size="sm" onClick={() => { onClose(); navigate('/catalog'); }}>
                   {t('catalog.go_to_catalog', { defaultValue: 'Go to Catalog' })}
                 </Button>
@@ -260,10 +275,12 @@ export function AssemblyPickerModal({
                       <div className="min-w-0 flex-1">
                         {/* Assembly names built from a catalogue share a long prefix and
                             differ at the end, so one truncated line made near-identical
-                            recipes unpickable. Clamp to two lines and keep the code
-                            baseline-aligned with the first of them. */}
+                            recipes unpickable. Clamp to two lines, keep the code
+                            baseline-aligned with the first of them, and mark the typed
+                            words so the reader sees which part of the name put this
+                            recipe in the list. */}
                         <div className="flex items-baseline gap-2 mb-0.5">
-                          <span className="text-sm font-semibold text-content-primary line-clamp-2" title={asm.name}>{asm.name}</span>
+                          <span className="text-sm font-semibold text-content-primary line-clamp-2" title={asm.name}>{highlightMatch(asm.name, search)}</span>
                           <span className="text-2xs font-mono text-content-quaternary shrink-0">{asm.code}</span>
                         </div>
                         <div className="flex items-center gap-2 text-xs text-content-tertiary">
@@ -1735,6 +1752,9 @@ export function CostDatabaseSearchModal({
                 <input
                   autoFocus
                   type="text"
+                  id="boq-cost-item-search"
+                  name="boq-cost-item-search"
+                  autoComplete="off"
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                   placeholder={t('boq.search_cost_items', { defaultValue: 'Search cost items by description...' })}

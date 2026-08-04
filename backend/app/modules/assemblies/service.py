@@ -2148,23 +2148,6 @@ class AssemblyService:
 
     # ── Usage counts ─────────────────────────────────────────────────────
 
-    async def get_component_counts(self, assembly_ids: list[uuid.UUID]) -> dict[str, int]:
-        """Count components per assembly via ONE grouped SQL query, so a
-        list/search view shows real counts without lazy-loading each
-        assembly's ``components`` (which raises MissingGreenlet out of the
-        async session and was silently degrading the count to 0)."""
-        if not assembly_ids:
-            return {}
-        from sqlalchemy import func, select as _select
-
-        rows = (
-            await self.session.execute(
-                _select(Component.assembly_id, func.count())
-                .where(Component.assembly_id.in_(assembly_ids))
-                .group_by(Component.assembly_id)
-            )
-        ).all()
-        return {str(aid): int(n) for aid, n in rows}
 
     async def get_usage_counts(
         self,

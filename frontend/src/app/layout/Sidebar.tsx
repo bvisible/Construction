@@ -240,6 +240,11 @@ const navGroups: NavGroup[] = [
       // and above Project files so the "learn by example" entry is seen first.
       { labelKey: 'nav.cases', to: '/cases', icon: Route },
       { labelKey: 'nav.project_files', to: '/files', icon: HardDrive },
+      // Drawing sheets indexed out of those files. Directly under Project
+      // files because that is where someone goes looking for a drawing.
+      // Reuses the page's own title key, which is already translated in all
+      // 29 locales, so the sidebar entry and the page heading cannot drift.
+      { labelKey: 'sheets.page_title', to: '/sheets', icon: FileText },
     ],
   },
   // ── 2. TAKEOFF ─────────────────────────────────────────────────────
@@ -310,6 +315,9 @@ const navGroups: NavGroup[] = [
       { labelKey: 'nav.preliminaries', to: '/preliminaries', icon: ClipboardList, advancedOnly: true },
       { labelKey: 'nav.allowances', to: '/allowances', icon: Wallet, advancedOnly: true },
       { labelKey: 'nav.design_options', to: '/design-options', icon: Scale, advancedOnly: true },
+      // Shares the page's own heading key rather than minting a second key
+      // holding the same word, the way the Teams row below does.
+      { labelKey: 'formwork.title', to: '/formwork', icon: Boxes, advancedOnly: true, defaultLabel: 'Formwork' },
     ],
   },
   // ── 5. REALITY CAPTURE & 3D ─────────────────────────────────────────
@@ -637,6 +645,18 @@ const navGroups: NavGroup[] = [
     hideInSimple: true,
     items: [
       { labelKey: 'contacts.title', to: '/contacts', icon: Users },
+      // Teams is the access side of "who is on this project": grouping people
+      // and narrowing records to those groups. ShieldCheck rather than Users
+      // so it does not read as a second contacts directory.
+      {
+        labelKey: 'teams.title',
+        // Matches the value seeded for `teams.title`, so the row does not
+        // change case the moment the locale key lands.
+        defaultLabel: 'Teams and visibility',
+        to: '/teams',
+        icon: ShieldCheck,
+        advancedOnly: true,
+      },
       { labelKey: 'meetings.title', to: '/meetings', icon: CalendarDays },
       { labelKey: 'rfi.title', to: '/rfi', icon: HelpCircle, advancedOnly: true },
       { labelKey: 'interface_management.title', to: '/interface-management', icon: Handshake },
@@ -917,6 +937,7 @@ const ROUTE_BACKEND_MODULE: Record<string, string> = {
   '/moc': 'oe_moc',
   '/supplier-catalogs': 'oe_supplier_catalogs',
   '/design-options': 'oe_design_options',
+  '/formwork': 'oe_formwork',
   // Real estate development
   '/property-dev': 'oe_property_dev',
   '/accommodation': 'oe_accommodation',
@@ -1993,6 +2014,35 @@ export function Sidebar({ onClose }: { onClose?: () => void }) {
             )}
           </div>
         </div>
+        {/* Edit-menu shortcut — deliberately the same action as the "Edit menu"
+             tile in the admin grid further down, repeated here directly under
+             the module count. That grid sits below the entire nav list, so on a
+             long menu it is off screen at exactly the moment a user has just
+             scrolled past thirty rows and concluded there are too many. Both
+             entry points call `enterEditMode`, so whichever one is found first
+             behaves identically. Dropped in edit mode, where the Save / Cancel
+             bar has already taken over. */}
+        {!editMode && (
+          <div className={clsx('pt-1.5 pb-0.5', iconified ? 'px-1 flex justify-center' : 'px-3')}>
+            <button
+              type="button"
+              onClick={enterEditMode}
+              title={t('sidebar.edit_menu', { defaultValue: 'Edit menu' })}
+              aria-label={iconified ? t('sidebar.edit_menu', { defaultValue: 'Edit menu' }) : undefined}
+              className={clsx(
+                'flex items-center rounded-lg border border-border-light bg-surface-secondary/30 text-content-secondary hover:border-content-tertiary hover:bg-surface-secondary hover:text-content-primary transition-colors',
+                iconified ? 'h-7 w-7 justify-center' : 'w-full justify-center gap-1.5 px-2.5 py-1.5',
+              )}
+            >
+              <Pencil size={12} strokeWidth={2} aria-hidden />
+              {!iconified && (
+                <span className="text-[11px] font-medium">
+                  {t('sidebar.edit_menu', { defaultValue: 'Edit menu' })}
+                </span>
+              )}
+            </button>
+          </div>
+        )}
         {/* Add-a-module CTA — dashed-border tile with a plus icon. Sits at
              the very end of the main nav groups so it reads as "keep going,
              there's more — build your own". Navigates into the in-app

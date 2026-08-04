@@ -38,6 +38,41 @@ interface ChangelogEntry {
 // date, title and meaning intact; trim the prose, not the facts.
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '14.3.0',
+    date: '2026-08-04',
+    tag: 'NEW',
+    summary:
+      'The parties to a contract can now be seen, added and removed from the contract itself, and the panel says which of the rows the signature block is built from. A contract with nobody in a signing role no longer has a signatory invented from its own title, the compliance gate no longer closes itself and the drawer behind it on any click inside, and removing a party no longer answers with a not found error.',
+  },
+  {
+    version: '14.2.2',
+    date: '2026-08-03',
+    tag: 'FIX',
+    summary:
+      'Counted labels now carry every plural form the language they appear in actually uses, instead of dropping to English when one form is missing, and three of them no longer assemble their own English sentence in code before a translator can see it. Demo records that named companies trading in the real world have been rewritten with invented names, the seeded catalogue no longer ships codes with a DEMO prefix, and the money field tooltips are translated.',
+  },
+  {
+    version: '14.2.1',
+    date: '2026-08-03',
+    tag: 'FIX',
+    summary:
+      'The desktop app starts its own database on Linux again. On Linux, PostgreSQL names its loadable modules the same way Python names an extension, so the tool that freezes the backend threw all of them away on the way into the Linux installer and the app stopped at "Starting the local database". The build now reads that directory itself and refuses to produce an installer without them.',
+  },
+  {
+    version: '14.2.0',
+    date: '2026-08-03',
+    tag: 'FIX',
+    summary:
+      'Choosing a project now moves the whole dashboard onto it, cost items imported without a currency have been given the one their region implies, and analytics panels say there is not enough data instead of drawing a chart of one row. The demo estate reads like a project rather than a fixture, and several hundred strings that were reaching every language as English are translated.',
+  },
+  {
+    version: '14.1.0',
+    date: '2026-08-01',
+    tag: 'NEW',
+    summary:
+      'Six registers became places to decide something rather than only look at data, with rates priced as of a date, bids put on the same basis before one is picked, and a matching engine that stores a run for a person to rule on. Stamp templates no longer cross between projects, budget lines carry their own project currency, self-hosted upgrades work again, and module analytics leaves an empty panel empty instead of filling it with plausible looking figures.',
+  },
+  {
     version: '14.0.0',
     date: '2026-07-29',
     tag: 'NEW',

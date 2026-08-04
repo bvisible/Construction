@@ -7,6 +7,102 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [14.3.0] - 2026-08-04
+
+The parties to a contract can now be seen, added and removed from the contract itself. The register behind them has had endpoints and no screen for a while, which stopped being academic once the signature block started being built from that list: a contract with nobody on it was refused for signature, and the message named a register there was no way to open. The panel lists each party with its role and says which of the rows are the ones asked to sign, so a register holding only a consultant does not look ready when the next press is going to be refused.
+
+A contract with no signing party used to have a signatory invented for it. Nothing on a contract row carries a name, so the gap was filled with the contract's own title, and the result was a signature record attesting that a party named after the document had signed it. That is gone, the session is refused instead, and the demo contracts carry their real parties.
+
+The compliance gate used to close itself on any click inside it and take the contract drawer down with it, because a portal delivers its events to the React parent rather than to whatever it was mounted under. Removing a party answered with a not found error and left the row on screen, from a path that was missing a segment.
+
+## [14.2.2] - 2026-08-03
+
+Counted labels now carry every plural form the language they appear in actually uses. When a count key is missing one of its forms, the translation layer does not quietly reach for the other form of the same language, it leaves the language altogether and prints the English text, so "1 selected" was showing up in English in Turkish, Kyrgyz and Mongolian, and Spanish, French, Italian and Portuguese were missing the form those languages use once a number gets large. Which forms a language needs is now read from the language itself rather than assumed from English, and there is a test that asks the same question per locale, so the next counted string cannot ship with a hole in it.
+
+Three of those labels were also gluing their own English sentence together in code before the translation layer ever saw it. A translator was being handed a finished phrase with nothing left to move, which is a problem in any language that puts the number somewhere else. Those now pass their numbers through as values.
+
+Some demo records named companies that trade in the real world. They appeared as bidders in tender lists, as the architect or engineer on a project, as a client, and in one project address that was a real building. Those have been replaced with invented names. They had gone unnoticed because a made up two word name is unique by construction, so searching it whole comes back empty and reads as a clean result, while each half on its own can still be a live firm. Names are checked one word at a time now, because that is how these were missed. This pass is not finished. What has been checked is fixed, the rest of the demo estate is still being worked through, and public bodies named as the procuring authority on a public project are a separate question we have not settled.
+
+The seeded catalogue no longer ships codes carrying a DEMO prefix, so a catalogue that started as demo data can be kept and built on rather than looking like something to throw away. The two currency tooltips in the money field are translated. On the desktop build, the check that confirms the database modules made it into the installer now finds them by where they sit rather than by what the file is called.
+
+## [14.2.1] - 2026-08-03
+
+The desktop app starts its own database on Linux again. On Ubuntu based distributions it stopped at "Starting the local database" and the log said PostgreSQL could not load dict_snowball, a module it needs while it builds the text search dictionaries during first setup. The module was in the package we bundle from, and it was being thrown away on the way into the installer.
+
+The tool that freezes the backend into a single executable was asked for the database files, and it returns everything that is not a shared library, deciding what counts as one from the file name. On Linux a Python extension ends in .so, and that is exactly how PostgreSQL names its own loadable modules there, so every one of them was dropped: the snowball dictionary, the procedural language, the vector extension and all twenty six character set converters. Windows and macOS name the same modules .dll and .dylib, which that rule does not cover, so those two installers were never affected and the fault looked like a Linux problem rather than a naming one.
+
+The build now reads the database directory itself and decides what each file is from where it sits, so nothing is judged by its name. It refuses to build at all if the modules are missing, and a second check opens the executable that came out and confirms they are inside it. A missing file used to surface on somebody's machine after they had downloaded and installed the app; now it stops the build that would have produced it.
+
+If you are on Linux and installed 14.2.0 or earlier, download this build. Nothing needs to be uninstalled first, and no data is affected, because the app never got as far as creating any.
+
+## [14.2.0] - 2026-08-03
+
+Fifty five thousand cost items were stored with no currency at all. A catalogue is imported one region at a time and the source file carries no currency column, so the region tag is the only statement of which money its rates are in. The table that turned a region into a currency was built from a different list than the one deciding which catalogues can be loaded, and twelve of the thirty eight loadable regions were missing from it, so importing one of those wrote a whole price list with no unit of money on it. Both sides now read the same table, the rows already stored are filled from their region, and a row whose region cannot be resolved is left blank on purpose rather than being given a plausible default. A blank is visibly unknown; a guessed currency is indistinguishable from one somebody chose.
+
+Choosing a project moves the whole dashboard onto it. The endpoint behind the tiles has always accepted a project filter and the page never sent one, so the Today strip reported the project while the value, estimate, schedule and finance tiles still reported the entire workspace. On a portfolio that meant a single project appearing to hold eleven estimates and a multi-currency total.
+
+The Priced positions tile no longer claims a project is fully costed when it holds one line. It was reading a per-project flag rather than the position counts, which rendered one priced line out of one as a green hundred percent. It now shows the counts, and shows a percentage only when there are enough positions for one to mean anything. An estimate with nothing in it reads as nought of nought rather than accusing anyone of not pricing lines they have not written.
+
+Charts stopped being drawn where there is nothing to draw. Both analytics surfaces had an empty state and then went straight to a real chart, so a single category rendered as a donut with one segment filling the circle and a single month rendered as a line with one point. The minimums now come from the same place the server uses when it decides whether a column is worth charting, and below them the panel says there is not enough data yet.
+
+The Cases hub pins to the project the rest of the application is on. It used to keep a private note of which project it was pinning to, so the top bar and the hub disagreed and neither moved the other. When a project is chosen and nothing is pinned to it yet, the hub says so instead of showing a zero next to the project name, which read as though the project had no cases available.
+
+The CAD and BIM data screen had three names. The browser tab called it one thing, its help article another and the sidebar a third, so a link and the page it opened disagreed and the reader had to check they had clicked the right one. Every reference now uses the name the sidebar uses, which is the one translated into all twenty nine languages.
+
+A running drawing conversion is no longer declared dead. The detector that clears abandoned jobs was reading a field a live conversion does not write, so a large drawing could be cancelled while it was still working. Conversions now report themselves alive, the detector reads that, and the spreadsheet a conversion leaves behind is cleared when it finishes. Large drawings also convert faster: the parser was re-reading the whole vertex table once per polyline, which is fine on a small file and quadratic on a real one.
+
+The model upload screen offers what it can actually take. It advertised six formats behind a chip that did nothing, stated a size cap that does not exist, and named one mesh format twice while omitting every other. All of it now comes from the single list the server actually accepts.
+
+The asset register pages instead of cutting the list off in silence, and its KPI tiles filter the register rather than sitting above an unrelated list. The discovery scorer stopped rejecting specialty equipment because of how it is mounted.
+
+Several screens stopped printing two different numbers for one thing. The bill of quantities editor had two producers for its total, the field time screen answered one question with two rules, the validation quality score contradicted its own pass count, and the cost explorer returned a different answer to the same query each time it was asked because equally ranked rows had no tie-break. The benchmark module stopped stating a number of reference projects nobody had counted, and the bill of quantities stopped adding fifteen percent overhead and ten percent profit that no one had entered.
+
+Schedule activities sort by their code rather than by the text of it, so ten no longer lands between one and two, and the Gantt month labels stay inside their own header cell at the zoom the chart opens on. A resource assignment can now name the project and the schedule activity it staffs, which is what makes it findable from either end.
+
+Contacts report an unknown role on import instead of quietly filing the record as a supplier, and contact roles are shown with a translated label rather than the stored value with its first letter capitalised. Deleted accounts no longer appear in user management. Subcontractor ratings stopped carrying an internal provenance record out to the client.
+
+The assistant stopped asking providers for tool calls it never offered them, which is what made some third-party models answer with an error rather than an answer. On the desktop build, the button that opens the application in a browser no longer fails without saying anything.
+
+The demo estate reads like a project rather than a fixture. Real company names are gone from the packs and the module seeds, records name the party they are actually about, requests for information are dated so the register's two numbers agree, service tickets are spread across the service level outcomes instead of every one of them being late, and the seeded rows no longer tell the reader they were seeded.
+
+Localisation is the largest part of this release by volume. Several hundred keys existed in no locale file at all and were reaching every language as English. Whole families had been shipped as English into twenty seven locales by an earlier machine pass and are now translated for real, along with two hundred and sixteen cells whose escape sequences had been doubled and rendered as visible characters. The service desk chip that states how a ticket stands against its response deadline was written as English literals rather than keys, so it read in English in every language; it is translated now, and each wrapper is written around what that language's own duration units actually substitute into it. Plural handling was corrected where a language needed forms the files did not have, and a number of terms were being translated in the wrong sense, among them median as mean, rate as level, plant as botany and lead as a metal. The guard that watches for this now reads locale sets rather than only counts, which is how two of the leaks above were found at all.
+
+Two things this release does not settle. On Linux the desktop build can still fail to start its bundled database and report a missing snowball dictionary. PostgreSQL resolves its library path relative to its own executable, so it is looking inside the extracted bundle, and the whole extension directory may be what is absent rather than that one file. Confirming a fix needs a Linux build, so it is being worked separately rather than guessed into a tag. Separately, the demo estate described above is written when demo data is first seeded, which means an installation that already holds the old rows keeps them. Seeding into an empty database is what brings the new ones.
+
+## [14.1.0] - 2026-08-01
+
+Stamp templates no longer cross between projects. A template saved in one project appeared in the markup toolbar of every other project on the installation, because the query asked for templates that are either built in or belong to this project and the built-in branch did not also require the template to have no project of its own. A template belonging to a project and marked as built in therefore satisfied the first branch from anywhere. Templates are now scoped as they were meant to be, so anyone who noticed unfamiliar stamps in a project's toolbar will find them gone, and templates saved in the wrong place will need saving again where they belong.
+
+Self-hosted upgrades work again. The revision chain had grown a second head, which makes the upgrade command refuse to run rather than pick one, so every installation that upgrades by walking the chain has been unable to since that point. The two heads are merged. Installations that deploy by building the schema directly were never affected and need to do nothing.
+
+Budget lines carry the currency of their project. The column was added with a default of EUR, which writes EUR into every row already in the table whether or not that was its currency, and code that created a budget line afterwards left the field blank. Blank rows are filled from the project they belong to, and only where the project states a currency and the line does not, so a line that was deliberately set to something other than its project's currency is left alone. Rows stamped EUR by the original migration cannot be told apart from rows a person set to EUR and are not touched.
+
+Six registers stopped being places to look at data and became places to decide something. Foreign exchange rates can be looked up as of a date rather than only as they stand today, which is what a valuation dated last quarter needs. Earned value produces the figures a project can actually be judged on rather than a partial set. Requests for quotation put returned bids on the same basis before one of them is picked, since bids priced in different currencies or against different scopes are not comparable by their totals. Credentials answer the question of who may not work today. Saved views and the timeline gained the service layer and validation they had been missing. The matching engine, which was seven hundred lines of good multilingual matching reachable only by a health check, is now a register where a run is stored and a person can rule on it.
+
+The deadline register reads from thirteen sources instead of three, and each of them is named in every language, so a date that appears in the list can be traced back to the thing that set it.
+
+Module analytics stopped drawing rows the project does not have. Where a panel had nothing to show it was filling the space with plausible looking figures, which is worse than an empty panel because it invites someone to act on them.
+
+The estimate catalogue picker behaves like a search box. It matches on the terms typed rather than on the whole string as one phrase, so a description found by its second and fourth words comes back instead of nothing, the matched words are marked in both pickers, and it no longer issues a query on every keystroke.
+
+Component lists in assemblies can be reordered without dragging, which is the only way to reorder them on a touch screen.
+
+Nine module titles named the wrong thing and ten strings were left half translated by an earlier machine pass. Both are corrected across the interface languages. The application ships 29 locales, and the places in the packaging and the interface that still described 27 have been brought up to date.
+
+Two deployment problems that produce confusing failures. A database password containing an at sign broke the connection string, and the quickstart image command named a target that does not match the image that is published. The quickstart stack can also sit behind a TLS proxy without the compose file being edited by hand.
+
+A CAD conversion no longer holds the drawing row for as long as it runs, so a large drawing being converted does not block work on the record it belongs to.
+
+The interface asks for a rating or a review on a four-day rhythm rather than at a moment of its own choosing.
+
+The file naming banner can fix the name it is complaining about instead of only reporting that the name is wrong.
+
+Pinned searches in Find Records are kept by the server rather than by the browser, so a pin survives a reload, a cleared browser and a move to another machine. Searches pinned before this change stay in the browser under the `oce.retrieval.saved` entry and are not imported, because a silent one-way import would copy one person's private list into a shared one without asking. Those pins can be re-created, and the leftover entry can be cleared from site data at any time. The recent-search list is unchanged and still belongs to the device.
+
+Inbox items on the dashboard can be acknowledged or assigned where they are shown, instead of opening the module the item came from and finding the record by hand.
+
+The resource matcher says when semantic matching is not part of the installation. It used to check only whether the vector server was reachable, so it offered to download and start one, and a user who accepted got a running server and the same empty results, because the missing piece was the client library rather than the server.
+
 ## [14.0.0] - 2026-07-29
 
 Mesh models now open in the browser instead of waiting on the server. The formats the server never actually converted have also stopped being advertised as though it did, so what the import dialog offers is now what it can deliver.
@@ -18,6 +114,8 @@ Three things a browser or an eye was getting wrong. The add-section field in the
 The quickstart Docker build survives a registry that stops answering. The frontend install step retries, skips the two calls it makes to the registry after the dependency tree is already written, and prints its own log from inside the container, so a failure there says what happened rather than ending on a bare error. When the image cannot be built at all, the command now names the target that builds it instead of leaving the reader with a compose error.
 
 The Kyrgyz translation no longer carries invisible characters that broke matching on otherwise identical strings.
+
+## [12.9.0] - 2026-07-28
 
 The vector service installs somewhere it is actually allowed to write. It used to install under the account's home directory, which in a container is a path inside the image rather than the mounted volume. Docker creates a volume for such a path owned by the administrator account while the application runs as an unprivileged one, so the download failed on a directory it could not write and the failure was reported as a bare server error with nothing naming permissions as the cause. It now installs under the platform data directory, which is the volume that is already writable, so a container no longer needs its ownership corrected by hand before the CAD to cost matching flow will work. A binary already sitting in the old location keeps being used, so an install that was working is not thrown away and nothing has to be downloaded twice. A permission problem in that directory now names the path and the reason.
 

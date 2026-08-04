@@ -1984,9 +1984,9 @@ export function ChangeOrdersPage() {
 
   // Module Insights - the toggleable KPI/chart panel for this module. Its
   // charts are built client-side from the change orders already loaded; when
-  // the project has none, buildChangeordersInsights supplies a labelled sample
-  // set so the panel is never empty on first open. Declared here, above the
-  // detail-view early return further down, so the hook order stays stable.
+  // the project has none the panel draws nothing rather than inventing rows to
+  // fill it. Declared here, above the detail-view early return further down, so
+  // the hook order stays stable.
   const insights = useModuleInsights('changeorders', { defaultOpen: true });
   const { datasets: insightDatasets, builtins: insightBuiltins } = useMemo(
     () => buildChangeordersInsights(orders, project?.currency || summary?.currency || '', t),
@@ -2320,7 +2320,13 @@ export function ChangeOrdersPage() {
                       onClick={() => setSelectedOrderId(order.id)}
                     >
                       <td className="px-4 py-3 font-mono text-xs text-content-secondary whitespace-nowrap">{order.code}</td>
-                      <td className="px-4 py-3 text-content-primary font-medium max-w-[200px] truncate">
+                      {/* The title is the one free-text column here. It was
+                          capped at a flat 200px, so it cut at the same ~40
+                          characters whether the window was 1120px or 1720px
+                          wide. w-full + max-w-0 hands it whatever the seven
+                          fixed columns do not use, and truncates only past
+                          that. */}
+                      <td className="px-4 py-3 text-content-primary font-medium w-full max-w-0 truncate" title={order.title}>
                         {order.title}
                       </td>
                       <td className="px-4 py-3">

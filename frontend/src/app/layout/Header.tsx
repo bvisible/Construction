@@ -71,7 +71,9 @@ const TITLE_I18N_MAP: Record<string, string> = {
   'PDF Takeoff': 'nav.takeoff',
   'DWG Takeoff': 'nav.dwg_takeoff',
   'CAD/BIM Takeoff': 'nav.cad_takeoff',
-  'Data Explorer': 'nav.cad_bim_explorer',
+  // #149: keyed on the <P title> App.tsx passes for /data-explorer. Both sides
+  // renamed together; a miss here falls back to the raw English title.
+  'CAD-BIM BI Explorer': 'nav.cad_bim_explorer',
   'BIM Viewer': 'nav.bim_viewer',
   'BIM Federations': 'nav.bim_federations',
   'BIM Rules': 'nav.bim_rules',
@@ -872,13 +874,14 @@ function HelpMenu() {
               role="menuitem"
               onClick={() => {
                 setOpen(false);
-                void openAppInBrowser().then((ok) => {
-                  if (!ok) {
+                void openAppInBrowser().then((result) => {
+                  if (!result.ok) {
                     addToast({
                       type: 'warning',
                       title: t('desktop.open_in_browser_failed', {
                         defaultValue: 'Could not open your browser',
                       }),
+                      message: result.reason,
                     });
                   }
                 });
@@ -1027,7 +1030,7 @@ const ROUTE_COMPONENT_MAP: ReadonlyArray<readonly [string, string]> = [
   ['/clash', 'Clash Detection'],
   ['/coordination', 'Model Coordination'],
   ['/assets', 'Asset Register'],
-  ['/data-explorer', 'Data Explorer'],
+  ['/data-explorer', 'CAD-BIM BI Explorer'],
   ['/match-elements', 'CAD-BIM Match to Cost'],
   ['/boq', 'BOQ'],
   ['/templates', 'BOQ Templates'],

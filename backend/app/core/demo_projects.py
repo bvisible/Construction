@@ -4,7 +4,7 @@
 
 Provides 5 complete demo projects with BOQ, Schedule, Budget, and Tendering data:
   1. residential-berlin  - Wohnanlage Berlin-Mitte (existing seed, re-created)
-  2. office-london       - One Canary Square (existing seed, re-created)
+  2. office-london       - Halesworth Wharf Tower (existing seed, re-created)
   3. medical-us          - Downtown Medical Center (new)
   4. warehouse-dubai     - Logistics Hub Jebel Ali (new)
   5. school-paris        - Ecole Primaire Belleville (new)
@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.boq.models import BOQ, BOQMarkup, Position
@@ -525,7 +525,7 @@ _BERLIN = DemoTemplate(
                 ),
                 ("420.4", "Heizkreisverteiler je Geschoss (Manifolds)", "pcs", 12, 1200.00, {"din276": "420"}),
                 ("420.5", "Heizkoerper Typ 22 Badzimmer (Radiators bathrooms)", "pcs", 48, 420.00, {"din276": "420"}),
-                ("420.6", "Thermostatventile Danfoss (Thermostatic valves)", "pcs", 192, 45.00, {"din276": "420"}),
+                ("420.6", "Thermostatventile Regulan (Thermostatic valves)", "pcs", 192, 45.00, {"din276": "420"}),
                 ("420.7", "Isolierte Rohrleitungen Heizung (Insulated pipework)", "m", 1600, 32.00, {"din276": "420"}),
                 ("420.8", "Gebaeudeautomation GLT Regelung (BMS controls)", "lsum", 1, 35000.00, {"din276": "420"}),
             ],
@@ -653,14 +653,14 @@ _BERLIN = DemoTemplate(
     total_months=22,
     tender_name="Rohbau (Structural)",
     tender_companies=[
-        ("Hochtief AG", "tender@hochtief.de", 0.98),
-        ("Strabag SE", "bids@strabag.com", 1.05),
-        ("Zueblin GmbH", "vergabe@zueblin.de", 1.02),
+        ("Verdanko Hochbau AG", "tender@verdanko-hochbau.example", 0.98),
+        ("Terrolt Bauunternehmung SE", "bids@terrolt-bau.example", 1.05),
+        ("Kessmar Rohbau GmbH", "vergabe@kessmar-rohbau.example", 1.02),
     ],
     project_metadata={
         "address": "Chausseestrasse 45, 10115 Berlin",
-        "client": "Berliner Wohnungsbaugesellschaft mbH",
-        "architect": "Sauerbruch Hutton",
+        "client": "Vennhof Wohnbaugesellschaft mbH",
+        "architect": "Rehwald Tannberg",
         "gfa_m2": 7800,
         "units": 48,
         "storeys": 6,
@@ -673,9 +673,9 @@ _BERLIN = DemoTemplate(
             "Erdarbeiten, Gruendung, Stahlbetonrohbau, Mauerwerk",
             "evaluating",
             [
-                ("Hochtief AG", "tender@hochtief.de", 0.98),
-                ("Strabag SE", "bids@strabag.com", 1.05),
-                ("Zueblin GmbH", "vergabe@zueblin.de", 1.02),
+                ("Verdanko Hochbau AG", "tender@verdanko-hochbau.example", 0.98),
+                ("Terrolt Bauunternehmung SE", "bids@terrolt-bau.example", 1.05),
+                ("Kessmar Rohbau GmbH", "vergabe@kessmar-rohbau.example", 1.02),
             ],
         ),
         (
@@ -683,9 +683,9 @@ _BERLIN = DemoTemplate(
             "WDVS, Putzarbeiten, Flachdachabdichtung, Begruenungen",
             "evaluating",
             [
-                ("Sto SE & Co. KGaA", "vergabe@sto.de", 0.97),
-                ("Caparol / DAW SE", "ausschreibung@caparol.de", 1.04),
-                ("Brillux GmbH", "tender@brillux.de", 1.01),
+                ("Sanverth Fassadensysteme SE & Co. KGaA", "vergabe@sanverth.example", 0.97),
+                ("Farbwerk Odenau SE", "ausschreibung@farbwerk-odenau.example", 1.04),
+                ("Lorvend Anstrichsysteme GmbH", "tender@lorvend.example", 1.01),
             ],
         ),
         (
@@ -693,9 +693,9 @@ _BERLIN = DemoTemplate(
             "Waermepumpe, Fussbodenheizung, Lueftung, Sanitaerinstallation",
             "evaluating",
             [
-                ("Imtech Deutschland", "vergabe@imtech.de", 0.99),
-                ("Caverion GmbH", "angebote@caverion.de", 1.06),
-                ("Goldbeck Gebaudetechnik", "hls@goldbeck.de", 1.03),
+                ("Norvent Gebaeudetechnik", "vergabe@norvent.example", 0.99),
+                ("Thalvent Gebaeudetechnik GmbH", "angebote@thalvent.example", 1.06),
+                ("Weidmar Gebaeudetechnik", "hls@weidmar.example", 1.03),
             ],
         ),
         (
@@ -703,9 +703,9 @@ _BERLIN = DemoTemplate(
             "Stark- und Schwachstrominstallation, Beleuchtung, E-Mobilitaet",
             "evaluating",
             [
-                ("Cegelec / VINCI Energies", "angebote@cegelec.de", 0.97),
-                ("Spie GmbH", "tender@spie.de", 1.05),
-                ("Wisag Elektrotechnik", "vergabe@wisag.de", 1.02),
+                ("Elvenau / Vercelin Energies", "angebote@elvenau.example", 0.97),
+                ("Alvenor Elektrotechnik GmbH", "tender@alvenor.example", 1.05),
+                ("Vellingrat Elektrotechnik", "vergabe@vellingrat-elektro.example", 1.02),
             ],
         ),
         (
@@ -713,9 +713,9 @@ _BERLIN = DemoTemplate(
             "Trockenbau, Estrich, Fliesen, Parkett, Malerarbeiten, Tueren",
             "evaluating",
             [
-                ("Lindner Group", "vergabe@lindner-group.com", 0.96),
-                ("Brochier Ausbau", "angebote@brochier.de", 1.04),
-                ("Wolff & Mueller Ausbau", "ausbau@wolff-mueller.de", 1.01),
+                ("Falkwerk Innenausbau Gruppe", "vergabe@falkwerk-gruppe.example", 0.96),
+                ("Trennfeld Ausbau", "angebote@trennfeld.example", 1.04),
+                ("Reinberg & Sauter Ausbau", "ausbau@reinberg-sauter.example", 1.01),
             ],
         ),
         (
@@ -723,8 +723,8 @@ _BERLIN = DemoTemplate(
             "Pflasterung, Bepflanzung, Spielplatz, Zaun, Beleuchtung",
             "evaluating",
             [
-                ("Galabau Meier GmbH", "angebote@galabau-meier.de", 0.99),
-                ("GreenTech Landschaftsbau", "vergabe@greentech-gala.de", 1.06),
+                ("Wandelrieth Landschaftsbau GmbH", "angebote@wandelrieth-galabau.example", 0.99),
+                ("Kranzhofen Landschaftsbau", "vergabe@kranzhofen-gala.example", 1.06),
             ],
         ),
     ],
@@ -736,7 +736,7 @@ _BERLIN = DemoTemplate(
 
 _LONDON = DemoTemplate(
     demo_id="office-london",
-    project_name="One Canary Square",
+    project_name="Halesworth Wharf Tower",
     project_description=(
         "New-build 12-storey Grade A office tower with 2-level basement car park. "
         "Steel frame, composite floors, unitised curtain walling. "
@@ -748,7 +748,7 @@ _LONDON = DemoTemplate(
     currency="GBP",
     locale="en",
     address={
-        "street": "1 Canada Square, Canary Wharf",
+        "street": "8 Thorne Quay, Eastferry Reach",
         "city": "London",
         "postcode": "E14 5AB",
         "country": "United Kingdom",
@@ -889,14 +889,14 @@ _LONDON = DemoTemplate(
     total_months=24,
     tender_name="Shell & Core Package",
     tender_companies=[
-        ("Laing O'Rourke", "tenders@lor.com", 0.96),
-        ("Balfour Beatty", "bids@bb.com", 1.08),
-        ("Mace Group", "proc@mace.com", 1.01),
+        ("Brenhall Construction", "tenders@brenhall.example", 0.96),
+        ("Tarnwick Infrastructure", "bids@tarnwick.example", 1.08),
+        ("Marlwen Group", "proc@marlwen.example", 1.01),
     ],
     project_metadata={
-        "address": "Canary Wharf, London E14",
-        "client": "Canary Wharf Group plc",
-        "architect": "Foster + Partners",
+        "address": "Eastferry Reach, London E14",
+        "client": "Vittram Estates plc",
+        "architect": "Calmoor + Partners",
         "gia_m2": 16400,
         "nia_m2": 12800,
         "storeys": 12,
@@ -1085,9 +1085,9 @@ _US_MEDICAL = DemoTemplate(
     total_months=22,
     tender_name="Structural Steel Package",
     tender_companies=[
-        ("Turner Construction", "bids@turnerconstruction.com", 0.97),
-        ("Skanska USA", "tenders@skanska.us", 1.04),
-        ("Whiting-Turner", "procurement@whiting-turner.com", 1.01),
+        ("Brackwell Construction", "bids@brackwell.example", 0.97),
+        ("Nordholt Construction USA", "tenders@nordholt.example", 1.04),
+        ("Ellsmere-Payne", "procurement@ellsmere-payne.example", 1.01),
     ],
     tender_packages=[
         (
@@ -1095,9 +1095,9 @@ _US_MEDICAL = DemoTemplate(
             "Structural steel frame, metal deck, connections, fireproofing",
             "evaluating",
             [
-                ("Turner Construction", "bids@turnerconstruction.com", 0.97),
-                ("Skanska USA", "tenders@skanska.us", 1.04),
-                ("Whiting-Turner", "procurement@whiting-turner.com", 1.01),
+                ("Brackwell Construction", "bids@brackwell.example", 0.97),
+                ("Nordholt Construction USA", "tenders@nordholt.example", 1.04),
+                ("Ellsmere-Payne", "procurement@ellsmere-payne.example", 1.01),
             ],
         ),
         (
@@ -1105,9 +1105,9 @@ _US_MEDICAL = DemoTemplate(
             "Mechanical, electrical, plumbing, fire protection, medical gas",
             "evaluating",
             [
-                ("JE Dunn Construction", "bids@jedunn.com", 0.98),
-                ("Hensel Phelps", "tenders@henselphelps.com", 1.05),
-                ("Robins & Morton", "procurement@robinsmorton.com", 1.02),
+                ("RM Falgren Construction", "bids@rmfalgren.example", 0.98),
+                ("Skelverne Builders", "tenders@skelverne.example", 1.05),
+                ("Rowan & Merrick", "procurement@rowanmerrick.example", 1.02),
             ],
         ),
     ],
@@ -1255,14 +1255,14 @@ _DUBAI = DemoTemplate(
     total_months=12,
     tender_name="Main Construction Package",
     tender_companies=[
-        ("Alec Engineering", "bids@alec.ae", 0.97),
-        ("Arabtec Construction", "tender@arabtec.com", 1.06),
-        ("Al Habtoor Leighton", "procurement@hlg.ae", 1.02),
+        ("Rimaya Engineering & Contracting", "bids@rimaya.example", 0.97),
+        ("Gulfmarq Construction", "tender@gulfmarq.example", 1.06),
+        ("Al Munthir Constructors", "procurement@almunthir.example", 1.02),
     ],
     project_metadata={
         "address": "Jebel Ali Free Zone, Dubai, UAE",
-        "client": "DP World Logistics",
-        "architect": "Khatib & Alami",
+        "client": "Marsa Gate Logistics",
+        "architect": "Miraaf Design Consultants",
         "gfa_m2": 45000,
         "clear_height_m": 12,
         "loading_docks": 8,
@@ -1885,14 +1885,14 @@ _PARIS = DemoTemplate(
     total_months=18,
     tender_name="Lot Gros Oeuvre (Structural/Foundations)",
     tender_companies=[
-        ("Bouygues Batiment", "appels@bouygues.fr", 0.98),
-        ("Eiffage Construction", "marches@eiffage.fr", 1.05),
-        ("Vinci Construction", "offres@vinci-construction.fr", 1.01),
+        ("Vaurenne Batiment", "appels@vaurenne.example", 0.98),
+        ("Tholmery Construction", "marches@tholmery.example", 1.05),
+        ("Vercelin Construction", "offres@vercelin-construction.example", 1.01),
     ],
     project_metadata={
         "address": "Rue de Belleville 120, 75020 Paris",
         "client": "Mairie de Paris - DASCO",
-        "architect": "Atelier du Pont",
+        "architect": "Atelier Tremoy",
         "sdp_m2": 4200,
         "classrooms": 15,
         "gymnasium_m2": 600,
@@ -1906,9 +1906,9 @@ _PARIS = DemoTemplate(
             "Terrassement, fondations, beton arme, maconnerie",
             "evaluating",
             [
-                ("Bouygues Batiment", "appels@bouygues.fr", 0.98),
-                ("Eiffage Construction", "marches@eiffage.fr", 1.05),
-                ("Vinci Construction", "offres@vinci-construction.fr", 1.01),
+                ("Vaurenne Batiment", "appels@vaurenne.example", 0.98),
+                ("Tholmery Construction", "marches@tholmery.example", 1.05),
+                ("Vercelin Construction", "offres@vercelin-construction.example", 1.01),
             ],
         ),
         (
@@ -1916,9 +1916,9 @@ _PARIS = DemoTemplate(
             "Structure CLT, lamelle-colle, toiture, etancheite, photovoltaique",
             "evaluating",
             [
-                ("Mathis (Groupe Dassault)", "appels@mathis.eu", 0.97),
-                ("Piveteaubois", "marches@piveteaubois.com", 1.04),
-                ("Rubner Holzbau", "offres@rubner.com", 1.02),
+                ("Charnay (Groupe Vireval)", "appels@charnay-bois.example", 0.97),
+                ("Fauveaubois", "marches@fauveaubois.example", 1.04),
+                ("Aldrein Holzbau", "offres@aldrein.example", 1.02),
             ],
         ),
         (
@@ -1926,9 +1926,9 @@ _PARIS = DemoTemplate(
             "Geothermie, plancher chauffant, ventilation, plomberie sanitaire",
             "evaluating",
             [
-                ("Dalkia (Groupe EDF)", "appels@dalkia.fr", 0.99),
-                ("Engie Solutions", "marches@engie.fr", 1.06),
-                ("Idex Energies", "offres@idex.fr", 1.03),
+                ("Calorna (Groupe Enervia)", "appels@calorna.example", 0.99),
+                ("Solvenar Solutions", "marches@solvenar.example", 1.06),
+                ("Novarem Energies", "offres@novarem.example", 1.03),
             ],
         ),
         (
@@ -1936,9 +1936,9 @@ _PARIS = DemoTemplate(
             "Courant fort, courant faible, SSI, photovoltaique raccordement",
             "evaluating",
             [
-                ("Cegelec (VINCI Energies)", "appels@cegelec.fr", 0.97),
-                ("Spie France", "marches@spie.fr", 1.05),
-                ("Eiffage Energie Systemes", "offres@eiffage-energie.fr", 1.02),
+                ("Elvenau (Vercelin Energies)", "appels@elvenau.example", 0.97),
+                ("Alvenor France", "marches@alvenor.example", 1.05),
+                ("Tholmery Energie Systemes", "offres@tholmery-energie.example", 1.02),
             ],
         ),
         (
@@ -1946,9 +1946,9 @@ _PARIS = DemoTemplate(
             "Cloisons, revetements sols/murs, menuiseries interieures, amenagements exterieurs",
             "evaluating",
             [
-                ("Malet (Groupe Fayat)", "appels@malet.fr", 0.98),
-                ("Bateg (Groupe Vinci)", "marches@bateg.fr", 1.04),
-                ("Sogea Ile-de-France", "offres@sogea-idf.fr", 1.01),
+                ("Ravineau (Groupe Tolbiac)", "appels@ravineau.example", 0.98),
+                ("Bregat (Groupe Vercelin)", "marches@bregat.example", 1.04),
+                ("Vaudrey Ile-de-France", "offres@vaudrey-idf.example", 1.01),
             ],
         ),
     ],
@@ -2292,8 +2292,8 @@ SHOWCASE_DEMO_IDS: tuple[str, ...] = (
 
 # Fresh-install seed: four demo projects covering the broadest spread of
 # archetypes (residential, industrial, healthcare/intl, education/fit-out)
-# without leaning on a single very large UK example. The London/One Canary
-# Square template stays available in DEMO_TEMPLATES for ad-hoc install via
+# without leaning on a single very large UK example. The London office-tower
+# template stays available in DEMO_TEMPLATES for ad-hoc install via
 # POST /api/demo/install/office-london, but it isn't auto-seeded because
 # operators consistently asked us to drop it from the default workspace.
 DEFAULT_DEMO_IDS: tuple[str, ...] = (
@@ -2617,7 +2617,7 @@ async def _get_or_create_owner(session: AsyncSession) -> uuid.UUID:
             id=_id(),
             email="demo@openconstructionerp.com",
             hashed_password="$2b$12$DEMO_HASH_NOT_FOR_PRODUCTION_USE_ONLY",
-            full_name="Demo User",
+            full_name="Elena Marchetti",
             role="admin",
             locale="en",
             is_active=True,
@@ -4697,19 +4697,26 @@ def _generate_module_data(
                 "notes": "Cost consultant / quantity surveyor",
             }
         )
-    if main_contractor_name:
-        contacts.append(
-            {
-                "contact_type": "contractor",
-                "company_name": main_contractor_name,
-                "first_name": "Project",
-                "last_name": "Director",
-                "primary_email": _email_for(main_contractor_name, "contact"),
-                "primary_phone": "",
-                "country_code": cc,
-                "notes": "Main contractor",
-            }
-        )
+    # Unconditional, where this used to be written only when the template named
+    # a firm. Every generated demo raises a main construction contract and a
+    # punch list, and both are with the main contractor, so a demo whose
+    # template happens not to name one still needs the party those rows point
+    # at. Without this row office-frankfurt seeded a main contract with no
+    # counterparty and a punch list that read Unassigned on every line, which is
+    # how the gap was found. Same reasoning as the authority contact below.
+    contractor_name = main_contractor_name or "Principal Contractor"
+    contacts.append(
+        {
+            "contact_type": "contractor",
+            "company_name": contractor_name,
+            "first_name": "Project",
+            "last_name": "Director",
+            "primary_email": _email_for(contractor_name, "contact"),
+            "primary_phone": "",
+            "country_code": cc,
+            "notes": "Main contractor",
+        }
+    )
     for i, (company, email) in enumerate(firms[:3]):
         contacts.append(
             {
@@ -4723,6 +4730,29 @@ def _generate_module_data(
                 "notes": f"{trades[i][1] if i < len(trades) else 'Works'} subcontractor",
             }
         )
+
+    # Every generated demo corresponds with a permitting body. The notice of
+    # commencement, its acknowledgement and the inspection report in the
+    # correspondence seed below are all to or from one, and without this row
+    # those three letters name a party that exists nowhere in the contact
+    # register, so nothing on the screen can link to it. The curated German
+    # demo has carried an authority contact for exactly this reason.
+    authority_city = (template.address or {}).get("city")
+    authority_slug = "".join(ch.lower() for ch in (authority_city or "") if ch.isalnum())[:24]
+    contacts.append(
+        {
+            "contact_type": "authority",
+            "company_name": (
+                f"{authority_city} Building Control Office" if authority_city else "Local Building Control Office"
+            ),
+            "first_name": "Building",
+            "last_name": "Inspector",
+            "primary_email": f"permits@{authority_slug or 'buildingcontrol'}.example",
+            "primary_phone": "",
+            "country_code": cc,
+            "notes": "Permitting and inspection authority",
+        }
+    )
 
     # ── Tasks (8-12 across the timeline) ─────────────────────────────────
     task_seeds = [
@@ -5078,21 +5108,28 @@ def _generate_module_data(
         )
 
     # ── Correspondence (6-10) ────────────────────────────────────────────
+    # The last element names the party the letter is with, as a contact role.
+    # It is a field on the seed rather than something read back out of the
+    # subject line. The subjects do name the party, and parsing them is the
+    # obvious shortcut, but they are English prose written to be read on a
+    # screen and they get reworded. A parser keyed on the word "Authority"
+    # would go on producing rows after a rewording, pointing at the wrong
+    # contact or at none, and there is no gate that would notice.
     corr_seeds = [
-        ("outgoing", "Notice of commencement to authority", "letter", 0),
-        ("incoming", "Authority acknowledgement of commencement", "letter", 7),
-        ("outgoing", "Submission of insurance and bonds", "letter", 12),
-        ("incoming", "Client instruction on scope clarification", "letter", 20),
-        ("outgoing", "Monthly progress report to client", "report", 30),
-        ("incoming", "Consultant design clarification", "email", 24),
-        ("outgoing", "Request for information log update", "email", 28),
-        ("incoming", "Subcontractor early-warning notice", "letter", 35),
-        ("outgoing", "Interim valuation cover letter", "letter", 31),
-        ("incoming", "Authority inspection report", "report", 45),
+        ("outgoing", "Notice of commencement to authority", "letter", 0, "authority"),
+        ("incoming", "Authority acknowledgement of commencement", "letter", 7, "authority"),
+        ("outgoing", "Submission of insurance and bonds", "letter", 12, "client"),
+        ("incoming", "Client instruction on scope clarification", "letter", 20, "client"),
+        ("outgoing", "Monthly progress report to client", "report", 30, "client"),
+        ("incoming", "Consultant design clarification", "email", 24, "consultant"),
+        ("outgoing", "Request for information log update", "email", 28, "consultant"),
+        ("incoming", "Subcontractor early-warning notice", "letter", 35, "subcontractor"),
+        ("outgoing", "Interim valuation cover letter", "letter", 31, "client"),
+        ("incoming", "Authority inspection report", "report", 45, "authority"),
     ]
     correspondence: list[dict] = []
     out_i = in_i = 0
-    for i, (direction, subject, ctype, day) in enumerate(corr_seeds):
+    for i, (direction, subject, ctype, day, party) in enumerate(corr_seeds):
         if direction == "outgoing":
             out_i += 1
             ref = f"OUT-{base.year}-{out_i:03d}"
@@ -5108,6 +5145,9 @@ def _generate_module_data(
                 "date_sent": _d(day) if direction == "outgoing" else None,
                 "date_received": _d(day) if direction == "incoming" else None,
                 "notes": f"{subject} - {proj}.",
+                # Resolved to a contact id by the writer, which is where the
+                # ids are minted. Not a column on the record.
+                "party": party,
             }
         )
 
@@ -5125,7 +5165,12 @@ def _generate_module_data(
                 "final_cost_impact": f"{amount}",
                 "final_schedule_days": 2 + (i % 4),
                 "currency": cur,
-                "status": ("issued", "agreed", "implemented")[i % 3],
+                # Must come from the variations module's own vocabulary
+                # (_VO_STATUS in modules/variations/schemas.py). "agreed" and
+                # "implemented" read naturally but are not in it, so two of
+                # every three demo orders carried a status the module rejects
+                # on write and cannot offer back in a status dropdown.
+                "status": ("issued", "in_progress", "completed")[i % 3],
                 "agreed_at": _d(40 + i * 12),
             }
         )
@@ -5169,7 +5214,13 @@ def _generate_module_data(
                 "equipment_count": equip,
                 "status": "closed" if i % 2 == 0 else "open",
                 "notes": notes,
-                "weather_summary": {"condition": cond, "temp_c": 12 + (i % 12)},
+                # The reader selects ``conditions``, plural
+                # (frontend/src/features/daily-diary/dailyDiaryInsights.ts). This
+                # wrote the singular, so every diary fell into the insights
+                # panel's "Not recorded" bucket and the weather breakdown drew
+                # one category over a register that was never actually missing
+                # the data.
+                "weather_summary": {"conditions": cond, "temp_c": 12 + (i % 12)},
             }
         )
 
@@ -5224,6 +5275,14 @@ def _generate_module_data(
                 "currency_code": cur,
                 "status": ("issued", "approved", "draft")[i % 3],
                 "notes": f"{firm} - supply for {trade}",
+                # The firm this order is with, as a contact role and a position
+                # in that role's list. The notes above name the same company in
+                # prose; this is the field the link is built from, so a reworded
+                # note cannot move the order to a different vendor. Only the
+                # first few firms get a contact seeded, and orders beyond that
+                # deliberately resolve to nothing rather than to the wrong firm.
+                "party": "subcontractor",
+                "party_index": i % len(firms) if firms else 0,
                 "items": [
                     {
                         "description": f"{item or trade} - supply",
@@ -5246,6 +5305,35 @@ def _generate_module_data(
             "title": f"Main construction contract - {proj}",
             "contract_type": "lump_sum",
             "counterparty_type": "contractor",
+            # The contact role to link to, kept separate from counterparty_type
+            # above even though the two words agree today. They are two
+            # vocabularies owned by two modules: the contracts one describes the
+            # contract, the contacts one describes the register. Reusing one as
+            # a key into the other would break silently the first time either
+            # adds a value the other does not have.
+            "party": "contractor",
+            "party_index": 0,
+            # Who actually signs. The counterparty pair above records one side
+            # and a category; the signature register needs both sides by name,
+            # because a contract one party has not executed is not executed.
+            # Without these rows the contract cannot be put up for signature at
+            # all, which made the whole signing path undemonstrable in a demo.
+            "parties": [
+                {
+                    "party_role": "employer",
+                    "party": "client",
+                    "party_index": 0,
+                    "display_name": client_name or f"{proj} Client",
+                    "is_primary": True,
+                },
+                {
+                    "party_role": "contractor",
+                    "party": "contractor",
+                    "party_index": 0,
+                    "display_name": contractor_name,
+                    "is_primary": False,
+                },
+            ],
             "total_value": f"{round(contract_total, 2)}",
             "currency": cur[:3],
             "status": "active",
@@ -5253,18 +5341,50 @@ def _generate_module_data(
             "end_date": _d(months * 30),
         }
     )
-    for i, (company, _) in enumerate(firms[:3]):
+    sub_firms = firms[:3]
+    for i, (company, _) in enumerate(sub_firms):
         trade = trades[i % len(trades)][1] if trades else "Works"
         sub_value = round((contract_total * 0.15) + i * 50000.0, 2)
+        # The last subcontract is still a draft. Every contract being active
+        # left the register with nothing standing at the step between agreeing
+        # a deal and billing it: the compliance gate and the signature only
+        # appear on a draft, so a demo where everything is signed can show the
+        # whole lifecycle except the part where the contract becomes binding.
+        sub_status = "draft" if i == len(sub_firms) - 1 else "active"
         contracts.append(
             {
                 "code": f"{demo_id}-SUB-{i + 1:02d}",
                 "title": f"Subcontract - {trade} ({company})",
                 "contract_type": "remeasurement",
                 "counterparty_type": "subcontractor",
+                # The subcontractor contacts are built from firms[:3] in this
+                # same order, so the nth subcontract is the nth firm's. Without
+                # the index all three would point at one company while their
+                # titles named three.
+                "party": "subcontractor",
+                "party_index": i,
+                # A subcontract is signed by the main contractor buying the
+                # work and the firm selling it, not by the employer, who is
+                # not a party to it.
+                "parties": [
+                    {
+                        "party_role": "contractor",
+                        "party": "contractor",
+                        "party_index": 0,
+                        "display_name": contractor_name,
+                        "is_primary": True,
+                    },
+                    {
+                        "party_role": "subcontractor",
+                        "party": "subcontractor",
+                        "party_index": i,
+                        "display_name": company,
+                        "is_primary": False,
+                    },
+                ],
                 "total_value": f"{sub_value}",
                 "currency": cur[:3],
-                "status": "active",
+                "status": sub_status,
                 "start_date": _d(14),
                 "end_date": _d(months * 30 - 14),
             }
@@ -5675,6 +5795,126 @@ def _generate_module_data(
 # ---------------------------------------------------------------------------
 
 
+def _seeded_party_id(contact_ids_by_type: dict[str, list[str]], role: str | None, index: int = 0) -> str | None:
+    """Id of the ``index``-th contact seeded with ``role``, or ``None`` if there is none.
+
+    Every register that names a counterparty resolves it through here, so the
+    lookup behaves the same in all of them and can be tested without a database.
+
+    ``role`` is a contact role and always arrives as an explicit field on the
+    seed row. It is never read back out of a title, a subject or a code: those
+    are English prose that gets reworded, and a parser keyed on a word in them
+    would go on producing rows pointing at the wrong party or at none, with no
+    gate able to see it.
+
+    ``index`` picks between several contacts holding the same role, so the
+    subcontract for a given firm points at that firm rather than at whichever
+    subcontractor happens to have been written first.
+
+    An index past the end returns ``None`` rather than falling back to the
+    first. The registers seed more rows than there are firms with contacts, and
+    a row whose title names one company while its link points at another is
+    worse than a row with no link: the empty cell is visibly missing, and the
+    wrong link reads as correct on every screen that shows it.
+
+    ``None`` is a real answer in the ordinary case too. The contacts block is
+    fail-soft, so when that module is not loaded nothing was seeded and every
+    caller simply stores no link.
+    """
+    ids = contact_ids_by_type.get(role or "") or []
+    if not ids or not 0 <= index < len(ids):
+        return None
+    return ids[index]
+
+
+def _uuid_or_none(value: str | None) -> uuid.UUID | None:
+    """Contact id as a UUID, for the columns typed that way rather than as text.
+
+    The registers disagree about how they store a contact reference: some
+    columns are ``String(36)`` and take the id as it comes, others are real
+    UUID columns. This converts for the second kind so a caller never has to
+    decide what ``None`` means twice.
+    """
+    return uuid.UUID(value) if value else None
+
+
+# ── RFI dates ────────────────────────────────────────────────────────────────
+# An RFI carries three dates the register does arithmetic on, and the seeder
+# used to put two of them on the project's story clock (``base``, a fixed
+# calendar date) while ``created_at`` fell back to the column default, which is
+# the moment the demo was installed. The screen measures both against today, so
+# every row asserted two things that could not both be true: raised 22 days ago,
+# and 113 days past a deadline. The answered half reported a response time of
+# zero, because ``responded_at`` sat months before the row existed and the
+# router clamps a negative span to zero.
+#
+# All three now hang off the day the RFI was raised, and the RFIs are placed
+# along the axis between the project start and today instead of all on one date.
+
+# How long after it was raised the reply is due, and the day the site needs the
+# answer by. Kept at the spacing the seeder already used between the two.
+_RFI_RESPONSE_DUE_DAYS = 10
+_RFI_DATE_REQUIRED_DAYS = 14
+
+# Days ago the nth still-open RFI was raised. The first is far enough back to
+# have passed its deadline, so the overdue pill has one honest row to sit on,
+# and the others are still inside theirs. Every one of them used to be overdue.
+_RFI_OPEN_RAISED_DAYS_AGO = (16, 9, 5, 2)
+
+# Where the nth answered RFI sits in the project so far, as a fraction of the
+# time elapsed, and how many days it took to answer. Both spread, so the
+# register reports a range of response times rather than one number.
+_RFI_ANSWERED_POSITION = (0.08, 0.24, 0.41, 0.57, 0.12, 0.33, 0.49, 0.66)
+_RFI_ANSWERED_TURNAROUND_DAYS = (6, 11, 4, 9, 7, 13, 5, 8)
+
+# A demo installed within days of its project start still needs room for the
+# story its rows tell, so the fractions above are taken against at least this.
+_RFI_MIN_PROJECT_DAYS = 30
+
+
+def _rfi_schedule(
+    *, answered: bool, ordinal: int, base: datetime, now: datetime
+) -> tuple[datetime, str, str, str | None]:
+    """Date one RFI: when it was raised, when a reply is due, when one came.
+
+    ``ordinal`` counts within the status, so the open rows and the answered
+    rows each spread across their own offsets instead of sharing a day.
+
+    Two things hold whatever the clock says, because they are what the screen
+    reads as a contradiction otherwise: the deadline falls after the day the
+    RFI was raised, and an answered one was answered some days after it was
+    raised rather than at the same instant.
+
+    ``base`` and ``now`` are naive, as the seeder's project start is. The
+    returned ``created_at`` is UTC-aware to match the timestamptz column.
+    Returns ``(created_at, response_due_date, date_required, responded_at)``,
+    the last three formatted as the date strings those columns store.
+    """
+    elapsed = max((now - base).days, _RFI_MIN_PROJECT_DAYS)
+    if answered:
+        position = _RFI_ANSWERED_POSITION[ordinal % len(_RFI_ANSWERED_POSITION)]
+        turnaround = _RFI_ANSWERED_TURNAROUND_DAYS[ordinal % len(_RFI_ANSWERED_TURNAROUND_DAYS)]
+        raised = base + timedelta(days=round(elapsed * position))
+        # Pull it back rather than let the answer land in the future, which is
+        # what the fractions above would do on a demo installed near the start.
+        latest = now - timedelta(days=turnaround)
+        if raised > latest:
+            raised = max(latest, base)
+        responded: datetime | None = raised + timedelta(days=turnaround)
+    else:
+        days_ago = _RFI_OPEN_RAISED_DAYS_AGO[ordinal % len(_RFI_OPEN_RAISED_DAYS_AGO)]
+        # Against the real span, not the floored one, so nothing is raised
+        # before the project it belongs to started.
+        raised = now - timedelta(days=min(days_ago, max((now - base).days, 0)))
+        responded = None
+    return (
+        raised.replace(tzinfo=UTC),
+        (raised + timedelta(days=_RFI_RESPONSE_DUE_DAYS)).strftime("%Y-%m-%d"),
+        (raised + timedelta(days=_RFI_DATE_REQUIRED_DAYS)).strftime("%Y-%m-%d"),
+        responded.strftime("%Y-%m-%d") if responded else None,
+    )
+
+
 async def _seed_module_data(
     session: AsyncSession,
     project_id: uuid.UUID,
@@ -5707,40 +5947,40 @@ async def _seed_module_data(
         "residential-berlin": [
             {
                 "contact_type": "client",
-                "company_name": "Berliner Wohnungsbaugesellschaft mbH",
+                "company_name": "Vennhof Wohnbaugesellschaft mbH",
                 "first_name": "Klaus",
                 "last_name": "Weber",
-                "primary_email": "k.weber@bwb-berlin.de",
+                "primary_email": "k.weber@vennhof-berlin.example",
                 "primary_phone": "+49 30 12345678",
                 "country_code": "DE",
                 "notes": "Main client contact",
             },
             {
                 "contact_type": "subcontractor",
-                "company_name": "Hochtief AG",
+                "company_name": "Verdanko Hochbau AG",
                 "first_name": "Hans",
                 "last_name": "Mueller",
-                "primary_email": "h.mueller@hochtief.de",
+                "primary_email": "h.mueller@verdanko-hochbau.example",
                 "primary_phone": "+49 201 8240",
                 "country_code": "DE",
                 "notes": "Structural works subcontractor",
             },
             {
                 "contact_type": "subcontractor",
-                "company_name": "Sto SE Fassadenbau",
+                "company_name": "Sanverth Fassadenbau",
                 "first_name": "Maria",
                 "last_name": "Schmidt",
-                "primary_email": "m.schmidt@sto.de",
+                "primary_email": "m.schmidt@sanverth.example",
                 "primary_phone": "+49 7744 570",
                 "country_code": "DE",
                 "notes": "WDVS facade contractor",
             },
             {
                 "contact_type": "consultant",
-                "company_name": "Sauerbruch Hutton Architekten",
+                "company_name": "Rehwald Tannberg Architekten",
                 "first_name": "Louisa",
-                "last_name": "Hutton",
-                "primary_email": "l.hutton@sauerbruch-hutton.de",
+                "last_name": "Tannberg",
+                "primary_email": "l.tannberg@rehwald-tannberg.example",
                 "primary_phone": "+49 30 39780",
                 "country_code": "DE",
                 "notes": "Lead architect",
@@ -5750,17 +5990,17 @@ async def _seed_module_data(
                 "company_name": "IB Hartmann Tragwerksplanung",
                 "first_name": "Thomas",
                 "last_name": "Hartmann",
-                "primary_email": "t.hartmann@ib-hartmann.de",
+                "primary_email": "t.hartmann@ib-hartmann.example",
                 "primary_phone": "+49 30 44520",
                 "country_code": "DE",
                 "notes": "Structural engineer",
             },
             {
                 "contact_type": "subcontractor",
-                "company_name": "Imtech HLS Berlin",
+                "company_name": "Norvent HLS Berlin",
                 "first_name": "Juergen",
                 "last_name": "Braun",
-                "primary_email": "j.braun@imtech.de",
+                "primary_email": "j.braun@norvent.example",
                 "primary_phone": "+49 30 55120",
                 "country_code": "DE",
                 "notes": "MEP subcontractor",
@@ -5769,70 +6009,70 @@ async def _seed_module_data(
         "office-london": [
             {
                 "contact_type": "client",
-                "company_name": "Canary Properties Ltd",
+                "company_name": "Vittram Properties Ltd",
                 "first_name": "James",
                 "last_name": "Harrison",
-                "primary_email": "j.harrison@canaryprops.co.uk",
+                "primary_email": "j.harrison@vittram-properties.example",
                 "primary_phone": "+44 20 7946 0958",
                 "country_code": "GB",
                 "notes": "Client development manager",
             },
             {
                 "contact_type": "consultant",
-                "company_name": "Arup Group Ltd",
+                "company_name": "Endaby Group Ltd",
                 "first_name": "Sarah",
                 "last_name": "Chen",
-                "primary_email": "s.chen@arup.com",
+                "primary_email": "s.chen@endaby.example",
                 "primary_phone": "+44 20 7636 1531",
                 "country_code": "GB",
                 "notes": "Structural engineer",
             },
             {
                 "contact_type": "consultant",
-                "company_name": "Hoare Lea M&E",
+                "company_name": "Rensley Building Services",
                 "first_name": "David",
                 "last_name": "Thompson",
-                "primary_email": "d.thompson@hoarelea.com",
+                "primary_email": "d.thompson@rensley.example",
                 "primary_phone": "+44 20 3668 7100",
                 "country_code": "GB",
                 "notes": "M&E consultant",
             },
             {
                 "contact_type": "subcontractor",
-                "company_name": "Severfield Steel",
+                "company_name": "Varnsted Steel",
                 "first_name": "Mark",
                 "last_name": "Jones",
-                "primary_email": "m.jones@severfield.com",
+                "primary_email": "m.jones@varnsted-steel.example",
                 "primary_phone": "+44 1845 577896",
                 "country_code": "GB",
                 "notes": "Structural steelwork contractor",
             },
             {
                 "contact_type": "subcontractor",
-                "company_name": "Permasteelisa UK",
+                "company_name": "Fennvale Facades UK",
                 "first_name": "Andrea",
                 "last_name": "Rossi",
-                "primary_email": "a.rossi@permasteelisa.com",
+                "primary_email": "a.rossi@fennvale.example",
                 "primary_phone": "+44 20 8317 3300",
                 "country_code": "GB",
                 "notes": "Curtain wall specialist",
             },
             {
                 "contact_type": "consultant",
-                "company_name": "Gardiner & Theobald",
+                "company_name": "Marbrey & Tolwyn",
                 "first_name": "Emma",
                 "last_name": "Wallace",
-                "primary_email": "e.wallace@gardiner.com",
+                "primary_email": "e.wallace@marbrey-tolwyn.example",
                 "primary_phone": "+44 20 7209 3000",
                 "country_code": "GB",
                 "notes": "Quantity surveyor",
             },
             {
                 "contact_type": "subcontractor",
-                "company_name": "Crown House Technologies",
+                "company_name": "Cardwen Building Technologies",
                 "first_name": "Robert",
                 "last_name": "White",
-                "primary_email": "r.white@crownhouse.co.uk",
+                "primary_email": "r.white@cardwen.example",
                 "primary_phone": "+44 121 717 4600",
                 "country_code": "GB",
                 "notes": "MEP contractor",
@@ -5844,57 +6084,57 @@ async def _seed_module_data(
                 "company_name": "Downtown Health System",
                 "first_name": "Patricia",
                 "last_name": "Martinez",
-                "primary_email": "p.martinez@downtownhealth.org",
+                "primary_email": "p.martinez@downtownhealth.example",
                 "primary_phone": "+1 555 234 5678",
                 "country_code": "US",
                 "notes": "VP of Facilities",
             },
             {
                 "contact_type": "consultant",
-                "company_name": "HKS Architects",
+                "company_name": "Vandermere Architects",
                 "first_name": "Michael",
                 "last_name": "Brooks",
-                "primary_email": "m.brooks@hks.com",
+                "primary_email": "m.brooks@vandermere.example",
                 "primary_phone": "+1 214 969 5599",
                 "country_code": "US",
                 "notes": "Healthcare architect of record",
             },
             {
                 "contact_type": "subcontractor",
-                "company_name": "Southland Industries",
+                "company_name": "Ardenmark Mechanical",
                 "first_name": "Richard",
                 "last_name": "Nguyen",
-                "primary_email": "r.nguyen@southlandind.com",
+                "primary_email": "r.nguyen@ardenmark.example",
                 "primary_phone": "+1 714 901 5800",
                 "country_code": "US",
                 "notes": "MEP contractor",
             },
             {
                 "contact_type": "subcontractor",
-                "company_name": "Turner Construction",
+                "company_name": "Brackwell Construction",
                 "first_name": "Jennifer",
                 "last_name": "Davis",
-                "primary_email": "j.davis@tcco.com",
+                "primary_email": "j.davis@brackwell.example",
                 "primary_phone": "+1 212 229 6000",
                 "country_code": "US",
                 "notes": "General contractor",
             },
             {
                 "contact_type": "consultant",
-                "company_name": "Aon Fire Protection Engineering",
+                "company_name": "Cindervale Fire Protection Engineering",
                 "first_name": "William",
                 "last_name": "Park",
-                "primary_email": "w.park@aon.com",
+                "primary_email": "w.park@cindervale.example",
                 "primary_phone": "+1 312 381 1000",
                 "country_code": "US",
                 "notes": "Fire protection consultant",
             },
             {
                 "contact_type": "supplier",
-                "company_name": "Siemens Healthineers",
+                "company_name": "Corvale Medical Imaging",
                 "first_name": "Lisa",
                 "last_name": "Chen",
-                "primary_email": "l.chen@siemens-healthineers.com",
+                "primary_email": "l.chen@corvale-imaging.example",
                 "primary_phone": "+1 610 448 4500",
                 "country_code": "US",
                 "notes": "Medical imaging equipment supplier",
@@ -5906,47 +6146,47 @@ async def _seed_module_data(
                 "company_name": "Mairie du 20e Arrondissement",
                 "first_name": "Sophie",
                 "last_name": "Dupont",
-                "primary_email": "s.dupont@paris.fr",
+                "primary_email": "s.dupont@paris-20e.example",
                 "primary_phone": "+33 1 43 15 20 20",
                 "country_code": "FR",
                 "notes": "Direction de la construction",
             },
             {
                 "contact_type": "consultant",
-                "company_name": "Chartier Dalix Architectes",
+                "company_name": "Vaissier Delonnay Architectes",
                 "first_name": "Frederic",
-                "last_name": "Chartier",
-                "primary_email": "f.chartier@chartier-dalix.com",
+                "last_name": "Vaissier",
+                "primary_email": "f.vaissier@vaissier-delonnay.example",
                 "primary_phone": "+33 1 44 54 07 00",
                 "country_code": "FR",
                 "notes": "Architect mandate",
             },
             {
                 "contact_type": "subcontractor",
-                "company_name": "Eiffage Construction IDF",
+                "company_name": "Tholmery Construction IDF",
                 "first_name": "Pierre",
                 "last_name": "Moreau",
-                "primary_email": "p.moreau@eiffage.com",
+                "primary_email": "p.moreau@tholmery.example",
                 "primary_phone": "+33 1 49 29 60 00",
                 "country_code": "FR",
                 "notes": "Gros oeuvre contractor",
             },
             {
                 "contact_type": "consultant",
-                "company_name": "BET Fluides Setec",
+                "company_name": "BET Fluides Marconnet",
                 "first_name": "Claire",
                 "last_name": "Martin",
-                "primary_email": "c.martin@setec.fr",
+                "primary_email": "c.martin@marconnet-fluides.example",
                 "primary_phone": "+33 1 82 51 00 00",
                 "country_code": "FR",
                 "notes": "MEP engineer",
             },
             {
                 "contact_type": "subcontractor",
-                "company_name": "Arbonis (CLT Timber)",
+                "company_name": "Boisferme (CLT Timber)",
                 "first_name": "Jean",
                 "last_name": "Lefebvre",
-                "primary_email": "j.lefebvre@arbonis.com",
+                "primary_email": "j.lefebvre@boisferme.example",
                 "primary_phone": "+33 5 58 05 55 00",
                 "country_code": "FR",
                 "notes": "CLT timber structure specialist",
@@ -5955,60 +6195,60 @@ async def _seed_module_data(
         "warehouse-dubai": [
             {
                 "contact_type": "client",
-                "company_name": "Al Futtaim Logistics",
+                "company_name": "Zafeer Logistics Group",
                 "first_name": "Ahmed",
-                "last_name": "Al Maktoum",
-                "primary_email": "a.almaktoum@alfuttaim.ae",
+                "last_name": "Al Nuraimi",
+                "primary_email": "a.alnuraimi@zafeer-logistics.example",
                 "primary_phone": "+971 4 222 7111",
                 "country_code": "AE",
                 "notes": "Project sponsor",
             },
             {
                 "contact_type": "consultant",
-                "company_name": "KEO International Consultants",
+                "company_name": "Meridiem Gulf Consultants",
                 "first_name": "Ravi",
                 "last_name": "Sharma",
-                "primary_email": "r.sharma@keo.com",
+                "primary_email": "r.sharma@meridiem-gulf.example",
                 "primary_phone": "+971 4 338 0738",
                 "country_code": "AE",
                 "notes": "Lead design consultant",
             },
             {
                 "contact_type": "subcontractor",
-                "company_name": "Al Jaber Engineering",
+                "company_name": "Nakheer Engineering",
                 "first_name": "Khalid",
-                "last_name": "Al Jaber",
-                "primary_email": "k.aljaber@ajec.ae",
+                "last_name": "Al Marri",
+                "primary_email": "k.almarri@nakheer.example",
                 "primary_phone": "+971 2 550 7777",
                 "country_code": "AE",
                 "notes": "Steel structure contractor",
             },
             {
                 "contact_type": "subcontractor",
-                "company_name": "Leminar Air Conditioning",
+                "company_name": "Zafran Air Conditioning",
                 "first_name": "Suresh",
                 "last_name": "Nair",
-                "primary_email": "s.nair@leminar.ae",
+                "primary_email": "s.nair@zafran-ac.example",
                 "primary_phone": "+971 4 371 5000",
                 "country_code": "AE",
                 "notes": "HVAC contractor",
             },
             {
                 "contact_type": "consultant",
-                "company_name": "Robert Bird Group",
+                "company_name": "Halvern Fyfe Group",
                 "first_name": "George",
                 "last_name": "Palmer",
-                "primary_email": "g.palmer@robertbird.com",
+                "primary_email": "g.palmer@halvern-fyfe.example",
                 "primary_phone": "+971 4 327 7670",
                 "country_code": "AE",
                 "notes": "Structural engineer",
             },
             {
                 "contact_type": "subcontractor",
-                "company_name": "Emirates Fire Fighting Equipment",
+                "company_name": "Gulf Shield Fire Systems",
                 "first_name": "Omar",
                 "last_name": "Hassan",
-                "primary_email": "o.hassan@effe.ae",
+                "primary_email": "o.hassan@gulfshield-fire.example",
                 "primary_phone": "+971 4 268 9090",
                 "country_code": "AE",
                 "notes": "Fire protection systems",
@@ -6029,7 +6269,7 @@ async def _seed_module_data(
                 "company_name": "Sueddeutsche Handelsimmobilien GmbH",
                 "first_name": "Marion",
                 "last_name": "Roesler",
-                "primary_email": "m.roesler@sueddeutsche-handelsimmobilien.de",
+                "primary_email": "m.roesler@sueddeutsche-handelsimmobilien.example",
                 "primary_phone": "+49 7131 562300",
                 "country_code": "DE",
                 "notes": "S01 Bauherr / owner (retail real-estate company), Bereichsleitung Expansion Sued",
@@ -6039,7 +6279,7 @@ async def _seed_module_data(
                 "company_name": "Sueddeutsche Lebensmittelmaerkte GmbH",
                 "first_name": "Thomas",
                 "last_name": "Gerlach",
-                "primary_email": "t.gerlach@sueddeutsche-lebensmittelmaerkte.de",
+                "primary_email": "t.gerlach@sueddeutsche-lebensmittelmaerkte.example",
                 "primary_phone": "+49 7131 894120",
                 "country_code": "DE",
                 "notes": "S02 Betreiber und Mieter / operator and tenant (store operations), Verkaufsleitung Region Unterland",
@@ -6049,7 +6289,7 @@ async def _seed_module_data(
                 "company_name": "Architekturbuero Sandweg + Partner Architekten PartG mbB",
                 "first_name": "Jens",
                 "last_name": "Sandweg",
-                "primary_email": "j.sandweg@sandweg-partner.de",
+                "primary_email": "j.sandweg@sandweg-partner.example",
                 "primary_phone": "+49 7131 204510",
                 "country_code": "DE",
                 "notes": "S03 Objektplanung LP 1-5, kuenstlerische Oberleitung, Bauueberwachung Bauherrenseite (architect)",
@@ -6059,7 +6299,7 @@ async def _seed_module_data(
                 "company_name": "Trautmann Ingenieure Tragwerksplanung GmbH",
                 "first_name": "Katrin",
                 "last_name": "Trautmann",
-                "primary_email": "k.trautmann@trautmann-ing.de",
+                "primary_email": "k.trautmann@trautmann-ing.example",
                 "primary_phone": "+49 7141 488120",
                 "country_code": "DE",
                 "notes": "S04 Tragwerksplanung (structural engineer), Ludwigsburg",
@@ -6069,7 +6309,7 @@ async def _seed_module_data(
                 "company_name": "Dr.-Ing. Carsten Mahler, Pruefingenieur fuer Standsicherheit",
                 "first_name": "Carsten",
                 "last_name": "Mahler",
-                "primary_email": "kontakt@pruefingenieur-mahler.de",
+                "primary_email": "kontakt@pruefingenieur-mahler.example",
                 "primary_phone": "+49 711 6339400",
                 "country_code": "DE",
                 "notes": "S05 Pruefstatiker (independent checking engineer), Stuttgart",
@@ -6079,7 +6319,7 @@ async def _seed_module_data(
                 "company_name": "Klein & Partner TGA-Planung GmbH",
                 "first_name": "Stefan",
                 "last_name": "Klein",
-                "primary_email": "s.klein@klein-tga.de",
+                "primary_email": "s.klein@klein-tga.example",
                 "primary_phone": "+49 7134 915020",
                 "country_code": "DE",
                 "notes": "S06 TGA-Planung HLSK/ELT, GEG-Nachweis, Entwaesserungsgesuch (MEP design), Weinsberg",
@@ -6089,7 +6329,7 @@ async def _seed_module_data(
                 "company_name": "Brandschutzconsult Erler & Partner Ingenieure",
                 "first_name": "Andreas",
                 "last_name": "Erler",
-                "primary_email": "a.erler@erler-brandschutz.de",
+                "primary_email": "a.erler@erler-brandschutz.example",
                 "primary_phone": "+49 7131 627340",
                 "country_code": "DE",
                 "notes": "S07 Brandschutzkonzept, Fachbauleitung Brandschutz (fire protection), Heilbronn",
@@ -6099,7 +6339,7 @@ async def _seed_module_data(
                 "company_name": "Baugrundinstitut Neckartal GmbH",
                 "first_name": "Helmut",
                 "last_name": "Volz",
-                "primary_email": "h.volz@baugrund-neckartal.de",
+                "primary_email": "h.volz@baugrund-neckartal.example",
                 "primary_phone": "+49 7133 209880",
                 "country_code": "DE",
                 "notes": "S08 Baugrundgutachter, geotechnische Pruefungen (geotechnical consultant), Lauffen am Neckar",
@@ -6109,7 +6349,7 @@ async def _seed_module_data(
                 "company_name": "Vermessungsbuero Stehle, OebVI",
                 "first_name": "Peter",
                 "last_name": "Stehle",
-                "primary_email": "info@vermessung-stehle.de",
+                "primary_email": "info@vermessung-stehle.example",
                 "primary_phone": "+49 7131 781220",
                 "country_code": "DE",
                 "notes": "S09 Amtlicher Lageplan, Absteckung, Gebaeudeeinmessung (licensed surveyor), Heilbronn",
@@ -6119,7 +6359,7 @@ async def _seed_module_data(
                 "company_name": "Ingenieurbuero Wanner Arbeitssicherheit",
                 "first_name": "Ralf",
                 "last_name": "Wanner",
-                "primary_email": "r.wanner@wanner-sigeko.de",
+                "primary_email": "r.wanner@wanner-sigeko.example",
                 "primary_phone": "+49 7062 915330",
                 "country_code": "DE",
                 "notes": "S10 SiGeKo nach BaustellV (health and safety coordinator), Ilsfeld",
@@ -6129,7 +6369,7 @@ async def _seed_module_data(
                 "company_name": "Trautwein Bau GmbH & Co. KG",
                 "first_name": "Dieter",
                 "last_name": "Seybold",
-                "primary_email": "d.seybold@trautwein-bau.de",
+                "primary_email": "d.seybold@trautwein-bau.example",
                 "primary_phone": "+49 791 946100",
                 "country_code": "DE",
                 "notes": "S11 Generalunternehmer Rohbau, Ausbau, Standard-TGA, Aussenanlagen-Option (general contractor), Schwaebisch Hall",
@@ -6139,7 +6379,7 @@ async def _seed_module_data(
                 "company_name": "Betonwerk Hohenlohe Fertigteile GmbH",
                 "first_name": "Frank",
                 "last_name": "Schenkel",
-                "primary_email": "f.schenkel@betonwerk-hohenlohe.de",
+                "primary_email": "f.schenkel@betonwerk-hohenlohe.example",
                 "primary_phone": "+49 7940 922070",
                 "country_code": "DE",
                 "notes": "S12 Nachunternehmer Stahlbeton-Fertigteile und Montage (precast subcontractor), Kuenzelsau",
@@ -6149,7 +6389,7 @@ async def _seed_module_data(
                 "company_name": "Flachdachtechnik Maurer GmbH",
                 "first_name": "Lukas",
                 "last_name": "Maurer",
-                "primary_email": "l.maurer@flachdach-maurer.de",
+                "primary_email": "l.maurer@flachdach-maurer.example",
                 "primary_phone": "+49 7946 911450",
                 "country_code": "DE",
                 "notes": "S13 Nachunternehmer Dachabdichtung und Trapezblech (roofing subcontractor), Bretzfeld",
@@ -6179,7 +6419,7 @@ async def _seed_module_data(
                 "company_name": "Stadt Heilbronn, Planungs- und Baurechtsamt",
                 "first_name": "Sachgebiet",
                 "last_name": "Gewerbebauten",
-                "primary_email": "baurechtsamt@heilbronn.de",
+                "primary_email": "baurechtsamt@stadt-heilbronn.example",
                 "primary_phone": "+49 7131 562700",
                 "country_code": "DE",
                 "notes": "S16 Untere Baurechtsbehoerde, Genehmigung und Abnahmen (building permit authority), Heilbronn",
@@ -6189,7 +6429,7 @@ async def _seed_module_data(
                 "company_name": "Neckar Netzgesellschaft mbH",
                 "first_name": "Anschlusswesen",
                 "last_name": "Gewerbe",
-                "primary_email": "netzanschluss@neckar-netz.de",
+                "primary_email": "netzanschluss@neckar-netz.example",
                 "primary_phone": "+49 7131 624000",
                 "country_code": "DE",
                 "notes": "S17 Verteilnetzbetreiber Strom (fictional DSO): Netzanschluss, Trafostation, PV-Einspeisung",
@@ -6207,12 +6447,21 @@ async def _seed_module_data(
         ],
     }
 
+    # Ids of the contacts written below, grouped by role, so records seeded
+    # afterwards can point at the party they are about instead of only naming
+    # it in prose. Declared outside the try because the contacts block is
+    # fail-soft: when the module is not loaded this stays empty and the later
+    # writers simply seed no link, rather than failing on a missing name.
+    contact_ids_by_type: dict[str, list[str]] = {}
+
     try:
         contact_list = _CONTACTS.get(demo_id) or generated.get("contacts", [])
         for c in contact_list:
+            contact_id = _id()
+            contact_ids_by_type.setdefault(c["contact_type"], []).append(str(contact_id))
             session.add(
                 Contact(
-                    id=_id(),
+                    id=contact_id,
                     contact_type=c["contact_type"],
                     company_name=c.get("company_name"),
                     first_name=c.get("first_name"),
@@ -6253,10 +6502,10 @@ async def _seed_module_data(
             {
                 "task_type": "decision",
                 "title": "WDVS Systemauswahl",
-                "description": "Choose between Sto StoTherm Classic vs Caparol Dalmatiner",
+                "description": "Choose between Sanverth ThermFix Classic vs Odenau Granulat",
                 "status": "completed",
                 "priority": "normal",
-                "result": "Sto StoTherm Classic selected - better thermal performance",
+                "result": "Sanverth ThermFix Classic selected - better thermal performance",
             },
             {
                 "task_type": "topic",
@@ -6277,7 +6526,7 @@ async def _seed_module_data(
             {
                 "task_type": "task",
                 "title": "Aufzugsangebot vergleichen",
-                "description": "Compare lift offers from KONE, Schindler, and ThyssenKrupp",
+                "description": "Compare lift offers from Ascentia, Verticore, and Hebwerk Nord",
                 "status": "open",
                 "priority": "normal",
                 "due_date": (base + timedelta(days=90)).strftime("%Y-%m-%d"),
@@ -6299,7 +6548,7 @@ async def _seed_module_data(
                 "status": "completed",
                 "priority": "high",
                 "due_date": (base - timedelta(days=21)).strftime("%Y-%m-%d"),
-                "result": "Permasteelisa appointed, contract signed",
+                "result": "Fennvale appointed, contract signed",
             },
             {
                 "task_type": "decision",
@@ -6332,7 +6581,7 @@ async def _seed_module_data(
                 "status": "completed",
                 "priority": "high",
                 "due_date": (base - timedelta(days=60)).strftime("%Y-%m-%d"),
-                "result": "Complete - GI report issued by Arup",
+                "result": "Complete - GI report issued by Endaby",
             },
             {
                 "task_type": "task",
@@ -6469,7 +6718,7 @@ async def _seed_module_data(
                 "description": "Select insulated panel system for -25C cold storage zone",
                 "status": "completed",
                 "priority": "high",
-                "result": "Kingspan QuadCore KS1000 selected - best U-value",
+                "result": "Isoveld CoreMax IC1000 selected - best U-value",
             },
             {
                 "task_type": "topic",
@@ -6601,7 +6850,7 @@ async def _seed_module_data(
                 "question": "Trading floor Level 3 requires 6kPa imposed load for equipment. "
                 "Standard floor design is 3.5kPa. Structural upgrade needed?",
                 "status": "answered",
-                "official_response": "Local strengthening at 12 locations. Arup SK-045 issued.",
+                "official_response": "Local strengthening at 12 locations. Endaby SK-045 issued.",
                 "cost_impact": True,
                 "cost_impact_value": "82000",
                 "schedule_impact": True,
@@ -6730,7 +6979,23 @@ async def _seed_module_data(
 
     try:
         rfi_list = _RFIS.get(demo_id) or generated.get("rfis", [])
+        rfi_now = datetime.now(UTC).replace(tzinfo=None)
+        answered_seen = 0
+        open_seen = 0
         for r in rfi_list:
+            # "closed" counts as open here for the same reason it did before:
+            # only an "answered" row is given a response, so only it can be
+            # dated by one.
+            answered = r["status"] == "answered"
+            if answered:
+                ordinal = answered_seen
+                answered_seen += 1
+            else:
+                ordinal = open_seen
+                open_seen += 1
+            raised_at, due_date, required_date, responded_at = _rfi_schedule(
+                answered=answered, ordinal=ordinal, base=base, now=rfi_now
+            )
             session.add(
                 RFI(
                     id=_id(),
@@ -6743,15 +7008,14 @@ async def _seed_module_data(
                     status=r["status"],
                     official_response=r.get("official_response"),
                     responded_by=owner_id if r["status"] == "answered" else None,
-                    responded_at=(
-                        (base + timedelta(days=5)).strftime("%Y-%m-%d") if r["status"] == "answered" else None
-                    ),
+                    responded_at=responded_at,
                     cost_impact=r.get("cost_impact", False),
                     cost_impact_value=r.get("cost_impact_value"),
                     schedule_impact=r.get("schedule_impact", False),
                     schedule_impact_days=r.get("schedule_impact_days"),
-                    date_required=(base + timedelta(days=14)).strftime("%Y-%m-%d"),
-                    response_due_date=(base + timedelta(days=10)).strftime("%Y-%m-%d"),
+                    date_required=required_date,
+                    response_due_date=due_date,
+                    created_at=raised_at,
                     created_by=owner_str,
                     metadata_={"demo_id": demo_id},
                 )
@@ -6771,9 +7035,9 @@ async def _seed_module_data(
                 "location": "Baubuero Chausseestr. 45",
                 "status": "completed",
                 "attendees": [
-                    {"name": "Klaus Weber", "company": "BWB", "status": "present"},
-                    {"name": "Hans Mueller", "company": "Hochtief", "status": "present"},
-                    {"name": "Louisa Hutton", "company": "SH Arch", "status": "present"},
+                    {"name": "Klaus Weber", "company": "VWB", "status": "present"},
+                    {"name": "Hans Mueller", "company": "Verdanko", "status": "present"},
+                    {"name": "Louisa Tannberg", "company": "RT Arch", "status": "present"},
                     {"name": "Thomas Hartmann", "company": "IB Hartmann", "status": "excused"},
                 ],
                 "agenda_items": [
@@ -6803,9 +7067,9 @@ async def _seed_module_data(
                 "location": "Baubuero Chausseestr. 45",
                 "status": "completed",
                 "attendees": [
-                    {"name": "Hans Mueller", "company": "Hochtief", "status": "present"},
-                    {"name": "Maria Schmidt", "company": "Sto", "status": "absent"},
-                    {"name": "Juergen Braun", "company": "Imtech", "status": "present"},
+                    {"name": "Hans Mueller", "company": "Verdanko", "status": "present"},
+                    {"name": "Maria Schmidt", "company": "Sanverth", "status": "absent"},
+                    {"name": "Juergen Braun", "company": "Norvent", "status": "present"},
                 ],
                 "agenda_items": [
                     {"number": "1", "topic": "Earthworks progress - 60% complete", "notes": "On programme"},
@@ -6824,11 +7088,11 @@ async def _seed_module_data(
                 "meeting_type": "design",
                 "title": "Fassadendetails Abstimmung",
                 "meeting_date": (base + timedelta(days=21)).strftime("%Y-%m-%d"),
-                "location": "Buero Sauerbruch Hutton",
+                "location": "Buero Rehwald Tannberg",
                 "status": "scheduled",
                 "attendees": [
-                    {"name": "Louisa Hutton", "company": "SH Arch", "status": "present"},
-                    {"name": "Maria Schmidt", "company": "Sto", "status": "present"},
+                    {"name": "Louisa Tannberg", "company": "RT Arch", "status": "present"},
+                    {"name": "Maria Schmidt", "company": "Sanverth", "status": "present"},
                 ],
                 "agenda_items": [
                     {"number": "1", "topic": "WDVS detail at window reveals"},
@@ -6843,13 +7107,13 @@ async def _seed_module_data(
                 "meeting_type": "design",
                 "title": "Stage 3 Design Coordination",
                 "meeting_date": (base - timedelta(days=14)).strftime("%Y-%m-%d"),
-                "location": "Arup London, 13 Fitzroy Street",
+                "location": "Endaby London, 40 Marchmont Row",
                 "status": "completed",
                 "attendees": [
-                    {"name": "James Harrison", "company": "Canary Properties", "status": "present"},
-                    {"name": "Anna Musterfrau", "company": "Arup", "status": "present"},
-                    {"name": "David Thompson", "company": "Hoare Lea", "status": "present"},
-                    {"name": "Emma Wallace", "company": "G&T", "status": "present"},
+                    {"name": "James Harrison", "company": "Vittram Properties", "status": "present"},
+                    {"name": "Anna Musterfrau", "company": "Endaby", "status": "present"},
+                    {"name": "David Thompson", "company": "Rensley", "status": "present"},
+                    {"name": "Emma Wallace", "company": "M&T", "status": "present"},
                 ],
                 "agenda_items": [
                     {"number": "1", "topic": "Structural steel tonnage update", "notes": "1285t confirmed"},
@@ -6878,9 +7142,9 @@ async def _seed_module_data(
                 "location": "Site office, E14",
                 "status": "completed",
                 "attendees": [
-                    {"name": "Mark Jones", "company": "Severfield", "status": "present"},
-                    {"name": "Andrea Rossi", "company": "Permasteelisa", "status": "present"},
-                    {"name": "Robert White", "company": "Crown House", "status": "present"},
+                    {"name": "Mark Jones", "company": "Varnsted", "status": "present"},
+                    {"name": "Andrea Rossi", "company": "Fennvale", "status": "present"},
+                    {"name": "Robert White", "company": "Cardwen", "status": "present"},
                 ],
                 "agenda_items": [
                     {"number": "1", "topic": "Construction programme review"},
@@ -6906,7 +7170,7 @@ async def _seed_module_data(
                 "status": "completed",
                 "attendees": [
                     {"name": "Patricia Martinez", "company": "DHS", "status": "present"},
-                    {"name": "Michael Brooks", "company": "HKS", "status": "present"},
+                    {"name": "Michael Brooks", "company": "Vandermere", "status": "present"},
                     {"name": "Dr. Sarah Kim", "company": "DHS Surgery", "status": "present"},
                 ],
                 "agenda_items": [
@@ -6940,8 +7204,8 @@ async def _seed_module_data(
                 "location": "Job trailer, site",
                 "status": "scheduled",
                 "attendees": [
-                    {"name": "Jennifer Davis", "company": "Turner", "status": "present"},
-                    {"name": "Richard Nguyen", "company": "Southland", "status": "present"},
+                    {"name": "Jennifer Davis", "company": "Brackwell", "status": "present"},
+                    {"name": "Richard Nguyen", "company": "Ardenmark", "status": "present"},
                 ],
                 "agenda_items": [
                     {"number": "1", "topic": "Foundation progress update"},
@@ -6960,8 +7224,8 @@ async def _seed_module_data(
                 "status": "completed",
                 "attendees": [
                     {"name": "Sophie Dupont", "company": "Mairie 20e", "status": "present"},
-                    {"name": "Pierre Moreau", "company": "Eiffage", "status": "present"},
-                    {"name": "Frederic Chartier", "company": "Chartier Dalix", "status": "present"},
+                    {"name": "Pierre Moreau", "company": "Tholmery", "status": "present"},
+                    {"name": "Frederic Vaissier", "company": "Vaissier Delonnay", "status": "present"},
                 ],
                 "agenda_items": [
                     {"number": "1", "topic": "Installation chantier - 90% complete", "notes": "Hoarding installed"},
@@ -6987,11 +7251,11 @@ async def _seed_module_data(
                 "meeting_type": "design",
                 "title": "Revue technique CLT - BET structure",
                 "meeting_date": (base + timedelta(days=14)).strftime("%Y-%m-%d"),
-                "location": "Agence Chartier Dalix",
+                "location": "Agence Vaissier Delonnay",
                 "status": "scheduled",
                 "attendees": [
-                    {"name": "Jean Lefebvre", "company": "Arbonis", "status": "present"},
-                    {"name": "Frederic Chartier", "company": "Chartier Dalix", "status": "present"},
+                    {"name": "Jean Lefebvre", "company": "Boisferme", "status": "present"},
+                    {"name": "Frederic Vaissier", "company": "Vaissier Delonnay", "status": "present"},
                 ],
                 "agenda_items": [
                     {"number": "1", "topic": "CLT panel shop drawing review"},
@@ -7006,13 +7270,13 @@ async def _seed_module_data(
                 "meeting_type": "site",
                 "title": "Project Kick-off Meeting",
                 "meeting_date": base.strftime("%Y-%m-%d"),
-                "location": "KEO office, Dubai Design District",
+                "location": "Meridiem Gulf office, Dubai Design District",
                 "status": "completed",
                 "attendees": [
-                    {"name": "Ahmed Al Maktoum", "company": "Al Futtaim", "status": "present"},
-                    {"name": "Ravi Sharma", "company": "KEO", "status": "present"},
-                    {"name": "Khalid Al Jaber", "company": "AJEC", "status": "present"},
-                    {"name": "George Palmer", "company": "RBG", "status": "present"},
+                    {"name": "Ahmed Al Nuraimi", "company": "Zafeer", "status": "present"},
+                    {"name": "Ravi Sharma", "company": "MGC", "status": "present"},
+                    {"name": "Khalid Al Marri", "company": "NKE", "status": "present"},
+                    {"name": "George Palmer", "company": "HFG", "status": "present"},
                 ],
                 "agenda_items": [
                     {"number": "1", "topic": "Programme overview - 12 months", "notes": "Handover March 2027"},
@@ -7042,8 +7306,8 @@ async def _seed_module_data(
                 "location": "Site office, Jebel Ali",
                 "status": "scheduled",
                 "attendees": [
-                    {"name": "Khalid Al Jaber", "company": "AJEC", "status": "present"},
-                    {"name": "Suresh Nair", "company": "Leminar", "status": "present"},
+                    {"name": "Khalid Al Marri", "company": "NKE", "status": "present"},
+                    {"name": "Suresh Nair", "company": "Zafran", "status": "present"},
                 ],
                 "agenda_items": [
                     {"number": "1", "topic": "Earthworks progress"},
@@ -7116,7 +7380,7 @@ async def _seed_module_data(
                 "severity": "minor",
                 "description": "Worker cut left hand while handling rebar ties. Cut treated on site with first aid.",
                 "treatment_type": "first_aid",
-                "injured_person_details": {"role": "Rebar fitter", "company": "Hochtief AG"},
+                "injured_person_details": {"role": "Rebar fitter", "company": "Verdanko Hochbau AG"},
                 "root_cause": "Worker removed gloves to tie wire, hand slipped on rebar end",
                 "corrective_actions": [
                     {
@@ -7198,7 +7462,7 @@ async def _seed_module_data(
                 "description": "Worker slipped on wet concrete near pour area. Bruised knee, "
                 "returned to work next day.",
                 "treatment_type": "first_aid",
-                "injured_person_details": {"role": "Laborer", "company": "Turner Construction"},
+                "injured_person_details": {"role": "Laborer", "company": "Brackwell Construction"},
                 "root_cause": "Inadequate housekeeping - water not channeled away from work path",
                 "corrective_actions": [
                     {
@@ -7249,7 +7513,7 @@ async def _seed_module_data(
                 "description": "Steel erector showed signs of heat exhaustion at 14:00 during "
                 "June operations. Temperature 48C. Worker evacuated and treated.",
                 "treatment_type": "medical_treatment",
-                "injured_person_details": {"role": "Steel erector", "company": "Al Jaber Engineering"},
+                "injured_person_details": {"role": "Steel erector", "company": "Nakheer Engineering"},
                 "root_cause": "Worker continued past midday ban period. Supervisor failed to enforce break.",
                 "corrective_actions": [
                     {
@@ -8163,6 +8427,16 @@ async def _seed_module_data(
                     status=insp["status"],
                     result=insp.get("result"),
                     checklist_data=insp.get("checklist_data", []),
+                    # Who carried out the inspection. A seed row may name the
+                    # role itself; the default is the consulting engineer,
+                    # because a quality inspection on these projects is a
+                    # checking engineer's job and one of the curated German
+                    # rows says exactly that in its title. An authority
+                    # inspection would set "party" rather than be detected
+                    # from the wording, which reworders would break.
+                    inspector_id=_uuid_or_none(
+                        _seeded_party_id(contact_ids_by_type, insp.get("party") or "consultant")
+                    ),
                     created_by=owner_str,
                     metadata_={"demo_id": demo_id},
                 )
@@ -8181,7 +8455,7 @@ async def _seed_module_data(
                 "due_date": (base + timedelta(days=60)).strftime("%Y-%m-%d"),
                 "currency_code": "EUR",
                 "status": "paid",
-                "notes": "Hochtief - 1. Abschlagsrechnung Erdarbeiten",
+                "notes": "Verdanko - 1. Abschlagsrechnung Erdarbeiten",
                 "line_items": [
                     {
                         "description": "Aushub Baugrube 2500 m3",
@@ -8206,7 +8480,7 @@ async def _seed_module_data(
                 "due_date": (base + timedelta(days=90)).strftime("%Y-%m-%d"),
                 "currency_code": "EUR",
                 "status": "approved",
-                "notes": "Hochtief - 2. Abschlagsrechnung Gruendung",
+                "notes": "Verdanko - 2. Abschlagsrechnung Gruendung",
                 "line_items": [
                     {
                         "description": "Bohrpfaehle d=600mm 480 m",
@@ -8231,7 +8505,7 @@ async def _seed_module_data(
                 "due_date": (base + timedelta(days=120)).strftime("%Y-%m-%d"),
                 "currency_code": "EUR",
                 "status": "submitted",
-                "notes": "Sto SE - 1. Abschlagsrechnung Fassade WDVS",
+                "notes": "Sanverth - 1. Abschlagsrechnung Fassade WDVS",
                 "line_items": [
                     {
                         "description": "WDVS Mineralwolle 160mm 2400 m2",
@@ -8251,7 +8525,7 @@ async def _seed_module_data(
                 "due_date": (base + timedelta(days=75)).strftime("%Y-%m-%d"),
                 "currency_code": "GBP",
                 "status": "paid",
-                "notes": "Severfield - Valuation 1 - Steel erection Levels 1-3",
+                "notes": "Varnsted - Valuation 1 - Steel erection Levels 1-3",
                 "line_items": [
                     {
                         "description": "Structural steel columns 160t",
@@ -8276,7 +8550,7 @@ async def _seed_module_data(
                 "due_date": (base + timedelta(days=105)).strftime("%Y-%m-%d"),
                 "currency_code": "GBP",
                 "status": "approved",
-                "notes": "Permasteelisa - Advance payment for curtain wall fabrication",
+                "notes": "Fennvale - Advance payment for curtain wall fabrication",
                 "line_items": [
                     {
                         "description": "Curtain wall advance - 30% of contract",
@@ -8314,7 +8588,7 @@ async def _seed_module_data(
                 "due_date": (base + timedelta(days=60)).strftime("%Y-%m-%d"),
                 "currency_code": "USD",
                 "status": "paid",
-                "notes": "Turner - Pay application #1 - Foundation & site work",
+                "notes": "Brackwell - Pay application #1 - Foundation & site work",
                 "line_items": [
                     {
                         "description": "Site preparation and earthwork",
@@ -8339,7 +8613,7 @@ async def _seed_module_data(
                 "due_date": (base + timedelta(days=90)).strftime("%Y-%m-%d"),
                 "currency_code": "USD",
                 "status": "approved",
-                "notes": "Southland Industries - MEP rough-in progress billing",
+                "notes": "Ardenmark Mechanical - MEP rough-in progress billing",
                 "line_items": [
                     {
                         "description": "Underground utilities 60%",
@@ -8364,10 +8638,10 @@ async def _seed_module_data(
                 "due_date": (base + timedelta(days=120)).strftime("%Y-%m-%d"),
                 "currency_code": "USD",
                 "status": "submitted",
-                "notes": "Siemens Healthineers - 3T MRI equipment deposit",
+                "notes": "Corvale Medical Imaging - 3T MRI equipment deposit",
                 "line_items": [
                     {
-                        "description": "Siemens MAGNETOM Vida 3T - 50% deposit",
+                        "description": "Corvale Aurantis 3T - 50% deposit",
                         "quantity": "1",
                         "unit": "pcs",
                         "unit_rate": "1250000.00",
@@ -8384,7 +8658,7 @@ async def _seed_module_data(
                 "due_date": (base + timedelta(days=75)).strftime("%Y-%m-%d"),
                 "currency_code": "EUR",
                 "status": "paid",
-                "notes": "Eiffage - Situation 1 - Terrassement et fondations",
+                "notes": "Tholmery - Situation 1 - Terrassement et fondations",
                 "line_items": [
                     {
                         "description": "Terrassement general 1200 m3",
@@ -8409,7 +8683,7 @@ async def _seed_module_data(
                 "due_date": (base + timedelta(days=105)).strftime("%Y-%m-%d"),
                 "currency_code": "EUR",
                 "status": "approved",
-                "notes": "Arbonis - Acompte panneaux CLT",
+                "notes": "Boisferme - Acompte panneaux CLT",
                 "line_items": [
                     {
                         "description": "CLT panels - 40% advance on fabrication",
@@ -8429,7 +8703,7 @@ async def _seed_module_data(
                 "due_date": (base + timedelta(days=60)).strftime("%Y-%m-%d"),
                 "currency_code": "AED",
                 "status": "paid",
-                "notes": "Al Jaber - IPC 1 - Earthworks and foundations",
+                "notes": "Nakheer - IPC 1 - Earthworks and foundations",
                 "line_items": [
                     {
                         "description": "Earthworks and grading 45000 m2",
@@ -8454,7 +8728,7 @@ async def _seed_module_data(
                 "due_date": (base + timedelta(days=90)).strftime("%Y-%m-%d"),
                 "currency_code": "AED",
                 "status": "approved",
-                "notes": "Al Jaber - IPC 2 - Steel structure fabrication deposit",
+                "notes": "Nakheer - IPC 2 - Steel structure fabrication deposit",
                 "line_items": [
                     {
                         "description": "Portal frame steel - 40% fabrication advance",
@@ -8800,7 +9074,34 @@ async def _seed_module_data(
 
     try:
         budget_list = _BUDGETS.get(demo_id) or generated.get("finance_budgets", [])
+        # ProjectBudget.currency_code carries no DB default - the model
+        # requires the writer to supply it from the project context. Neither
+        # the hand-authored _BUDGETS dicts nor the generated ones carry one,
+        # so every seeded line landed with "" and the finance table rendered
+        # a column of em-dashes instead of money. The template currency is
+        # the same value that went into Project.currency.
+        budget_currency = (template.currency or "").strip()[:3].upper()
+        # Skip categories this project already carries. Without this the insert
+        # was unguarded, and the guards above it do not cover it: the callers of
+        # ``_seed_module_data`` gate on a *representative* module (an RFI row),
+        # so any run that reaches this block a second time - a first run that
+        # failed after the budgets were written, or a re-enrichment - wrote the
+        # category again. ``ProjectBudget`` is unique on
+        # (project_id, wbs_id, category) but ``wbs_id`` is NULL here, and
+        # PostgreSQL treats NULLs as distinct, so the constraint does not catch
+        # it: the estate silently grew a second "KG 300 Bauwerk" line and the
+        # finance rollup double-counted it. Checking explicitly is the only
+        # thing that actually holds.
+        existing_categories = set(
+            (await session.execute(select(ProjectBudget.category).where(ProjectBudget.project_id == project_id)))
+            .scalars()
+            .all()
+        )
+        added_budgets = 0
         for bl in budget_list:
+            if bl["category"][:100] in existing_categories:
+                continue
+            added_budgets += 1
             session.add(
                 ProjectBudget(
                     id=_id(),
@@ -8809,6 +9110,7 @@ async def _seed_module_data(
                     # section label would roll back the whole demo install, so
                     # clip it defensively here.
                     category=bl["category"][:100],
+                    currency_code=bl.get("currency_code") or budget_currency,
                     original_budget=bl["original_budget"],
                     revised_budget=bl["revised_budget"],
                     committed=bl["committed"],
@@ -8817,7 +9119,9 @@ async def _seed_module_data(
                     metadata_={"demo_id": demo_id},
                 )
             )
-        results["finance_budgets"] = len(budget_list)
+        # Report what was written, not what was offered. Reporting the input
+        # length made a fully skipped re-run look like a fully successful one.
+        results["finance_budgets"] = added_budgets
     except Exception:
         logger.debug("Finance budget not loaded, skipping")
 
@@ -9132,6 +9436,21 @@ async def _seed_module_data(
                     location_x=p.get("location_x"),
                     location_y=p.get("location_y"),
                     resolution_notes=p.get("resolution_notes"),
+                    # The whole list read Unassigned on every row. It goes to
+                    # the main contractor, who allocates it onwards, which is
+                    # how a punch list actually works and is also the one
+                    # assignment that cannot contradict the row: there is a
+                    # single main contractor, whereas picking a trade firm
+                    # would sooner or later name a company whose trade is not
+                    # the trade in the row beside it.
+                    assigned_to=_seeded_party_id(contact_ids_by_type, p.get("party") or "contractor"),
+                    # A closed item was signed off by whoever checked it, and
+                    # an open one has not been checked by anybody yet.
+                    verified_by=(
+                        _seeded_party_id(contact_ids_by_type, "consultant")
+                        if p["status"] in ("closed", "verified")
+                        else None
+                    ),
                     created_by=owner_str,
                     metadata_={"demo_id": demo_id},
                 )
@@ -9154,7 +9473,11 @@ async def _seed_module_data(
                     {"trade": "Piling crew", "headcount": 8, "hours": "9"},
                     {"trade": "Excavation crew", "headcount": 6, "hours": "8"},
                 ],
-                "equipment_on_site": ["Liebherr LB 36 piling rig", "CAT 330 excavator", "Wellpoint dewatering system"],
+                "equipment_on_site": [
+                    "Korvex PB 36 piling rig",
+                    "Tramont T-330 excavator",
+                    "Wellpoint dewatering system",
+                ],
                 "status": "approved",
             },
             {
@@ -9218,7 +9541,7 @@ async def _seed_module_data(
                     {"trade": "Waste sorting", "headcount": 3, "hours": "8"},
                 ],
                 "equipment_on_site": [
-                    "Liebherr R 946 demolition excavator",
+                    "Korvex D 940 demolition excavator",
                     "Concrete crusher",
                     "Dust suppression system",
                 ],
@@ -9290,7 +9613,7 @@ async def _seed_module_data(
         "residential-berlin": [
             {
                 "submittal_number": "SUB-001",
-                "title": "WDVS Sto StoTherm Classic - product data",
+                "title": "WDVS Sanverth ThermFix Classic - product data",
                 "spec_section": "KG 330",
                 "submittal_type": "product_data",
                 "status": "approved",
@@ -9308,7 +9631,7 @@ async def _seed_module_data(
             },
             {
                 "submittal_number": "SUB-003",
-                "title": "Aufzug KONE MonoSpace - Werkplanung",
+                "title": "Aufzug Ascentia MonoLift - Werkplanung",
                 "spec_section": "KG 500",
                 "submittal_type": "shop_drawing",
                 "status": "under_review",
@@ -9676,6 +9999,16 @@ async def _seed_module_data(
     try:
         corr_list = _CORRESPONDENCE.get(demo_id) or generated.get("correspondence", [])
         for c in corr_list:
+            # Which contact this letter is with. The seed names a role and the
+            # id is resolved here, because the ids are minted a few blocks up
+            # and the generator that writes the letters runs before any row
+            # exists. Where a role has several contacts the first one is used,
+            # which keeps both ends of an exchange with the same party. The
+            # hand-curated demos carry no role, so they seed no link and are
+            # left exactly as they were.
+            party_ids = contact_ids_by_type.get(c.get("party") or "") or []
+            party_id = party_ids[0] if party_ids else None
+            outgoing = c["direction"] == "outgoing"
             session.add(
                 Correspondence(
                     id=_id(),
@@ -9686,6 +10019,8 @@ async def _seed_module_data(
                     correspondence_type=c["correspondence_type"],
                     date_sent=c.get("date_sent"),
                     date_received=c.get("date_received"),
+                    from_contact_id=None if outgoing else party_id,
+                    to_contact_ids=[party_id] if outgoing and party_id else [],
                     notes=c.get("notes"),
                     created_by=owner_str,
                     metadata_={"demo_id": demo_id},
@@ -9800,6 +10135,9 @@ async def _seed_module_data(
                 amount_total=f"{round(subtotal, 2)}",
                 status=po.get("status", "draft"),
                 notes=po.get("notes"),
+                vendor_contact_id=_seeded_party_id(
+                    contact_ids_by_type, po.get("party"), int(po.get("party_index", 0) or 0)
+                ),
                 created_by=owner_id,
                 metadata_={"project_id": str(project_id), "demo_id": demo_id},
             )
@@ -9825,18 +10163,43 @@ async def _seed_module_data(
 
     # ── Contracts (main + trade subcontracts) ─────────────────────────
     try:
-        from app.modules.contracts.models import Contract
+        from app.modules.contracts.models import Contract, ContractParty
 
         contract_list = generated.get("contracts", [])
         for ct in contract_list:
+            counterparty_id = _seeded_party_id(contact_ids_by_type, ct.get("party"), int(ct.get("party_index", 0) or 0))
+            contract_pk = _id()
+            for pt in ct.get("parties", []):
+                session.add(
+                    ContractParty(
+                        id=_id(),
+                        contract_id=contract_pk,
+                        party_role=pt["party_role"],
+                        # party_type names the register party_id points into,
+                        # and every one of these is resolved out of the contact
+                        # register above.
+                        party_type="contact",
+                        party_id=_uuid_or_none(
+                            _seeded_party_id(
+                                contact_ids_by_type,
+                                pt.get("party"),
+                                int(pt.get("party_index", 0) or 0),
+                            )
+                        ),
+                        display_name=pt["display_name"],
+                        is_primary=bool(pt.get("is_primary", False)),
+                        metadata_={"demo_id": demo_id},
+                    )
+                )
             session.add(
                 Contract(
-                    id=_id(),
+                    id=contract_pk,
                     project_id=project_id,
                     code=ct["code"],
                     title=ct.get("title", ""),
                     contract_type=ct.get("contract_type", "lump_sum"),
                     counterparty_type=ct.get("counterparty_type", "client"),
+                    counterparty_id=_uuid_or_none(counterparty_id),
                     total_value=Decimal(str(ct.get("total_value", "0"))),
                     currency=ct.get("currency", ""),
                     status=ct.get("status", "draft"),
@@ -10033,9 +10396,24 @@ async def _seed_module_data(
                 continue
     if _proj_value <= 0:
         _proj_value = 1_000_000.0
-    # Deterministic id/code seed so a re-seed (force_reinstall / qa-reset)
-    # overwrites the same rows instead of duplicating.
+    # Kept only to recognise rows written before the codes below carried the
+    # demo slug. Nothing new is named after the project UUID any more.
     _pkey = str(project_id)[:8]
+    # Codes on globally-unique registries (assemblies, equipment) still need a
+    # per-demo discriminator, but they are printed on cards and read out loud,
+    # so the discriminator is the demo's own slug rather than eight characters
+    # of its project UUID. Capped because Equipment.code is String(50) and a
+    # pack is free to register a long demo_id.
+    _demo_slug = demo_id.upper()[:30]
+    # The same codes used to carry ``_pkey``. Re-seeding an install that still
+    # holds those rows has to clear them too, or the old ones survive with a
+    # code the new run never writes and never deletes.
+    _legacy_code_prefix = f"DEMO-{_pkey}-"
+    # These codes also used to open with ``DEMO-``. That prefix is the part the
+    # estimator actually read off the card, so it is gone from what we write.
+    # An install seeded before the rename still holds it, and the re-seed has
+    # to clear both shapes or those rows outlive the run that owns them.
+    _legacy_slug_prefix = f"DEMO-{_demo_slug}-"
 
     # ── Assemblies (project recipes so /assemblies is never empty) ─────
     try:
@@ -10076,8 +10454,16 @@ async def _seed_module_data(
                 ],
             ),
         ]
-        _asm_codes = [f"DEMO-{_pkey}-ASM{i + 1}" for i in range(len(_asm_specs))]
-        await session.execute(delete(Assembly).where(Assembly.code.in_(_asm_codes)))
+        _asm_codes = [f"{_demo_slug}-ASM{i + 1}" for i in range(len(_asm_specs))]
+        await session.execute(
+            delete(Assembly).where(
+                or_(
+                    Assembly.code.in_(_asm_codes),
+                    Assembly.code.like(f"{_legacy_code_prefix}ASM%"),
+                    Assembly.code.like(f"{_legacy_slug_prefix}ASM%"),
+                ),
+            ),
+        )
         await session.flush()
         asm_count = 0
         for a_idx, (a_name, a_unit, comps) in enumerate(_asm_specs):
@@ -10107,7 +10493,7 @@ async def _seed_module_data(
                 id=_id(),
                 code=_asm_codes[a_idx],
                 name=a_name,
-                description=f"Demo project assembly for {template.project_name}",
+                description=f"Assembly used on {template.project_name}",
                 unit=a_unit,
                 category="structure",
                 classification={},
@@ -10138,10 +10524,20 @@ async def _seed_module_data(
             ("Tower crane", "crane", 980.0, 140.0),
             ("Mobile excavator", "excavator", 420.0, 60.0),
         ]
-        _eq_codes = [f"DEMO-{_pkey}-EQ{i + 1}" for i in range(len(_eq_specs))]
+        _eq_codes = [f"{_demo_slug}-EQ{i + 1}" for i in range(len(_eq_specs))]
         # Equipment.code is globally unique; rentals cascade-delete with the
-        # equipment unit. Clear by code to keep the re-seed idempotent.
-        await session.execute(delete(Equipment).where(Equipment.code.in_(_eq_codes)))
+        # equipment unit. Clear by code to keep the re-seed idempotent, and
+        # clear the pre-slug codes too so an existing install does not keep a
+        # fleet unit this run will never write to again.
+        await session.execute(
+            delete(Equipment).where(
+                or_(
+                    Equipment.code.in_(_eq_codes),
+                    Equipment.code.like(f"{_legacy_code_prefix}EQ%"),
+                    Equipment.code.like(f"{_legacy_slug_prefix}EQ%"),
+                ),
+            ),
+        )
         await session.flush()
         rental_count = 0
         for e_idx, (e_name, e_type, day_rate, hour_rate) in enumerate(_eq_specs):
@@ -10192,13 +10588,24 @@ async def _seed_module_data(
         # Idempotent: drop any prior demo subcontractor for this project (the
         # agreement/work-package/payment rows cascade off the agreement, which
         # cascades off the project; the subcontractor itself is project-agnostic
-        # so we scope it by a deterministic metadata marker via legal_name).
-        _sub_marker = f"{sub_name} [demo {_pkey}]"
-        await session.execute(delete(Subcontractor).where(Subcontractor.legal_name == _sub_marker))
-        await session.flush()
+        # so we scope it by the demo_id already stamped into its metadata).
+        #
+        # That scope used to be a marker appended to legal_name, which put text
+        # like "[demo 1a2b3c4d]" into the column the subcontractor register
+        # prints as the company name. metadata_ is a JSON column whose
+        # nested-key query syntax differs between SQLite and PostgreSQL, so the
+        # tag is filtered in Python here, the same way
+        # purge_demo_tagged_global_rows reads it. Keying on demo_id rather than
+        # on the project id also cleans up after a force_reinstall, which mints
+        # a new project and used to leave the previous row behind.
+        _prior_subs = (await session.execute(select(Subcontractor))).scalars().all()
+        _stale_sub_ids = [s.id for s in _prior_subs if (s.metadata_ or {}).get("demo_id") == demo_id]
+        if _stale_sub_ids:
+            await session.execute(delete(Subcontractor).where(Subcontractor.id.in_(_stale_sub_ids)))
+            await session.flush()
         sub = Subcontractor(
             id=_id(),
-            legal_name=_sub_marker,
+            legal_name=sub_name,
             trade_name=sub_name,
             trade_categories=[sub_trade],
             prequalification_status="approved",
@@ -10311,7 +10718,7 @@ async def _seed_module_data(
                     forecast_method="cpi",
                     confidence_range_low=str((eac * Decimal("0.97")).quantize(Decimal("0.01"))),
                     confidence_range_high=str((eac * Decimal("1.05")).quantize(Decimal("0.01"))),
-                    notes="Demo baseline forecast",
+                    notes="Baseline forecast at award",
                     metadata_={"demo_id": demo_id, "is_demo": True},
                 )
             )
@@ -11252,6 +11659,13 @@ async def install_demo_project(
             status=r_status,
             mitigation_strategy=r_mitig,
             contingency_plan="",
+            # Known defect, left in place deliberately rather than papered
+            # over. Every seeded risk carries this one string, which reads as
+            # accountable when nobody has been named. Varying it needs people,
+            # and there are none in scope here: the roster is ``_CONTACTS``,
+            # local to ``_seed_module_data``, which this function does not call
+            # until well after these rows are written. Fixing it properly means
+            # moving the roster or the risk block, not editing this line.
             owner_name="Project Manager",
             response_cost="0",
             currency=template.currency,

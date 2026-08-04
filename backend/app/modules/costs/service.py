@@ -41,6 +41,7 @@ async def _safe_publish(name: str, data: dict, source_module: str = "") -> None:
 
 
 from app.modules.costs.models import CostCatalog, CostItem
+from app.modules.costs.region_currency import REGION_CURRENCY
 from app.modules.costs.repository import CostItemRepository
 from app.modules.costs.schemas import (
     CostCatalogCreate,
@@ -52,6 +53,44 @@ from app.modules.costs.schemas import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _currency_for_region(currency: str | None, region: str | None) -> str:
+    """Return the currency a cost item should be stored with.
+
+    A price without a currency is not a price, so no write path may leave the
+    column empty while the row itself says which money it is in. The region tag
+    is that statement: a CWICR catalogue is imported per region and every rate
+    in it is denominated in that region's local currency, which is why
+    :data:`REGION_CURRENCY` is keyed by region and why the importer resolves it
+    once per import.
+
+    The service layer did not, and rows created through ``POST /v1/costs/`` and
+    the bulk import carried whatever the caller sent - an empty string by
+    schema default. An item inside a catalog inherited the catalog currency and
+    an item outside one inherited nothing.
+
+    Precedence, and why:
+
+    * A currency the caller supplied always wins. It is the most specific
+      statement about the row and may legitimately differ from the region's
+      (a Swiss firm quoting a German catalogue in CHF).
+    * Then the owning catalog's currency, applied by the caller before this
+      helper runs. A catalog is a container with a REQUIRED currency, so it is
+      a stronger signal than the region of a single row inside it.
+    * Then the region.
+    * Then empty, unchanged. An unrecognised region is left blank on purpose -
+      see :mod:`app.modules.costs.region_currency`. Stamping a default here
+      would turn "we do not know" into a wrong answer that reads exactly like a
+      right one.
+    """
+    if isinstance(currency, str) and currency.strip():
+        # Returned verbatim rather than normalised: filling a blank is this
+        # helper's job, rewriting a value the caller chose is not.
+        return currency
+    if isinstance(region, str) and region.strip():
+        return REGION_CURRENCY.get(region.strip().upper(), "")
+    return ""
 
 
 # ── Keyset cursor codec ────────────────────────────────────────────────────
@@ -527,6 +566,7 @@ class CostItemService:
                 )
             if not currency.strip():
                 currency = catalog.currency
+        currency = _currency_for_region(currency, data.region)
 
         item = CostItem(
             code=data.code,
@@ -937,6 +977,7 @@ class CostItemService:
             currency = data.currency
             if data.catalog_id is not None and not currency.strip():
                 currency = catalog_currencies.get(data.catalog_id, currency)
+            currency = _currency_for_region(currency, data.region)
 
             item = CostItem(
                 code=data.code,
@@ -1654,7 +1695,10 @@ class CostBenchmarkService:
             "p75": _percentile(values, 75),
             "max": values[-1],
             "confidence": self._confidence(count),
-            "note": (f"Based on {count} of your {'project' if count == 1 else 'projects'} with cost and area."),
+            # "1 of your projects" - the partitive stays plural at every count,
+            # so there is no singular form to switch to here.
+            "note": f"Based on {count} of your projects with cost and area.",
+            "note_code": "cost_and_area",
         }
 
         # ── 6. Position the caller's value, but only within ITS OWN currency.
@@ -1670,11 +1714,14 @@ class CostBenchmarkService:
         # misleading percentile.
         percentile_vs_own: float | None = None
         explanation = ""
+        explanation_code = ""
         if cost_per_m2 is not None:
             if requested_currency:
                 percentile_vs_own = _position_in_distribution(cost_per_m2, values)
+                explanation_code = self._explain_code(cost_per_m2, portfolio["median"])
                 explanation = self._explain(cost_per_m2, portfolio["median"], percentile_vs_own)
             else:
+                explanation_code = "specify_currency"
                 explanation = (
                     "Specify the currency of your value to position it against your "
                     f"portfolio. The distribution below is in {target_currency}."
@@ -1686,6 +1733,7 @@ class CostBenchmarkService:
             "own_portfolio": portfolio,
             "percentile_vs_own": percentile_vs_own,
             "explanation": explanation,
+            "explanation_code": explanation_code,
         }
 
     # ── Metric variants: regional overrun / recovery-rate benchmarks (#21) ──
@@ -1752,9 +1800,11 @@ class CostBenchmarkService:
         if metric == "overrun_pct":
             values = await self._overrun_values(projects)
             basis = "with an approved budget and a priced BOQ"
+            note_code = "budget_and_boq"
         else:  # recovery_rate
             values = await self._recovery_values(projects)
             basis = "with a recovery ledger"
+            note_code = "recovery_ledger"
 
         values = sorted(values)
         if not values:
@@ -1769,13 +1819,16 @@ class CostBenchmarkService:
             "p75": _percentile(values, 75),
             "max": values[-1],
             "confidence": self._confidence(count),
-            "note": (f"Based on {count} of your {'project' if count == 1 else 'projects'} {basis}."),
+            "note": f"Based on {count} of your projects {basis}.",
+            "note_code": note_code,
         }
 
         percentile_vs_own: float | None = None
         explanation = ""
+        explanation_code = ""
         if input_value is not None:
             percentile_vs_own = _position_in_distribution(input_value, values)
+            explanation_code = self._explain_code(input_value, portfolio["median"])
             explanation = self._explain(input_value, portfolio["median"], percentile_vs_own)
 
         return {
@@ -1785,6 +1838,7 @@ class CostBenchmarkService:
             "own_portfolio": portfolio,
             "percentile_vs_own": percentile_vs_own,
             "explanation": explanation,
+            "explanation_code": explanation_code,
         }
 
     async def _overrun_values(self, projects: list[Any]) -> list[Decimal]:
@@ -1903,13 +1957,28 @@ class CostBenchmarkService:
             return "medium"
         return "low"
 
+    # The English sentence is derived from the code rather than written beside
+    # it, so a change to the thresholds below cannot leave the two disagreeing.
+    # Only the code reaches the client's translator; this text is the fallback
+    # for any consumer reading ``explanation`` directly.
+    _EXPLAIN_SENTENCES = {
+        "below_median": "Your value sits below your own portfolio median.",
+        "above_median": "Your value sits above your own portfolio median.",
+        "at_median": "Your value sits right at your own portfolio median.",
+    }
+
     @staticmethod
-    def _explain(value: Decimal, median: Decimal, percentile: float) -> str:
+    def _explain_code(value: Decimal, median: Decimal) -> str:
+        """Which reading applies, as a stable token the client can translate."""
         if value < median:
-            return "Your value sits below your own portfolio median."
+            return "below_median"
         if value > median:
-            return "Your value sits above your own portfolio median."
-        return "Your value sits right at your own portfolio median."
+            return "above_median"
+        return "at_median"
+
+    @classmethod
+    def _explain(cls, value: Decimal, median: Decimal, percentile: float) -> str:
+        return cls._EXPLAIN_SENTENCES[cls._explain_code(value, median)]
 
     @staticmethod
     def _empty(metric: str = "cost_per_m2") -> dict[str, Any]:

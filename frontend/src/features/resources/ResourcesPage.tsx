@@ -51,6 +51,8 @@ import {
   WideModalField,
   ConfirmDialog,
   ModuleGuideButton,
+  SearchableSelect,
+  type SearchableSelectOption,
 } from '@/shared/ui';
 import { DateDisplay } from '@/shared/ui/DateDisplay';
 import { MoneyDisplay } from '@/shared/ui/MoneyDisplay';
@@ -93,6 +95,7 @@ import {
   type Skill,
 } from './api';
 import { projectsApi } from '@/features/projects/api';
+import { AssignmentTargetFields } from './AssignmentTargetFields';
 import { resourcesGuide } from './resourcesGuide';
 import { InsightsPanel, InsightsToggleButton, useModuleInsights } from '@/features/insights';
 import { buildResourcesInsights } from './resourcesInsights';
@@ -133,6 +136,32 @@ function resourceTypeLabel(t: TFn, v: ResourceType | string): string {
     subcontractor: t('resources.type_subcontractor', { defaultValue: 'Subcontractor' }),
   };
   return map[v] ?? v;
+}
+
+/**
+ * Resource rows for a SearchableSelect, grouped by kind and carrying the code.
+ *
+ * A flat "CODE - Name" list in a native <select> gives the user scrolling as
+ * their only tool, and an installation with a real resource register outgrows
+ * that quickly. The code moves to its own monospace column instead of being
+ * glued to the front of the name: it stays the thing that separates two
+ * resources sharing a name, but it stops pushing the names out of alignment.
+ */
+function resourceSelectOptions(t: TFn, list: Resource[]): SearchableSelectOption[] {
+  const order: Record<string, number> = { crew: 0, person: 1, equipment: 2, subcontractor: 3 };
+  return [...list]
+    .sort((a, b) => {
+      const byKind = (order[a.resource_type] ?? 9) - (order[b.resource_type] ?? 9);
+      return byKind !== 0 ? byKind : a.name.localeCompare(b.name);
+    })
+    .map((r) => ({
+      value: r.id,
+      label: r.name,
+      hint: r.code || undefined,
+      group: resourceTypeLabel(t, r.resource_type),
+      keywords: r.resource_type,
+      meta: r.status && r.status !== 'active' ? resourceStatusLabel(t, r.status) : undefined,
+    }));
 }
 
 function resourceStatusLabel(t: TFn, v: ResourceStatus | string): string {
@@ -490,9 +519,8 @@ export function ResourcesPage() {
 
   // Module Insights - the toggleable visualization panel for this module. Its
   // charts are built client-side from the resources already loaded; when there
-  // are none, buildResourcesInsights returns a labelled sample set so the panel
-  // is never empty on first open. Declared before the first return below so the
-  // hook order stays stable.
+  // are none the panel draws nothing rather than inventing rows to fill it.
+  // Declared before the first return below so the hook order stays stable.
   const resourcesCurrency = allResources.find((r) => r.currency)?.currency || '';
   const insights = useModuleInsights('resources', { defaultOpen: true });
   const { datasets: insightDatasets, builtins: insightBuiltins } = useMemo(
@@ -2813,21 +2841,18 @@ function FulfillRequestModal({
           required
           span={2}
         >
-          <select
+          <SearchableSelect
             value={form.resource_id}
-            onChange={(e) => setForm({ ...form, resource_id: e.target.value })}
-            className={inputCls}
+            onChange={(next) => setForm({ ...form, resource_id: next })}
+            options={resourceSelectOptions(t, resources)}
+            allowEmpty
+            emptyLabel={`— ${t('common.select', { defaultValue: 'Select' })} —`}
+            placeholder={t('resources.pick_resource', { defaultValue: 'Pick a resource' })}
+            searchPlaceholder={t('resources.search_resource', {
+              defaultValue: 'Search by name, code or kind…',
+            })}
             data-testid="fulfill-resource-select"
-          >
-            <option value="">
-              — {t('common.select', { defaultValue: 'Select' })} —
-            </option>
-            {resources.map((r) => (
-              <option key={r.id} value={r.id}>
-                {r.code} — {r.name} ({resourceTypeLabel(t, r.resource_type)})
-              </option>
-            ))}
-          </select>
+          />
         </WideModalField>
         <WideModalField
           label={t('resources.allocation', { defaultValue: 'Allocation %' })}
@@ -2986,6 +3011,9 @@ function AssignmentsTab({
     qc.invalidateQueries({ queryKey: ['resources', 'assignments'] });
     qc.invalidateQueries({ queryKey: ['resources', 'dashboard'] });
     qc.invalidateQueries({ queryKey: ['resources', 'conflicts'] });
+    // An edit can move a booking onto a different activity, which changes what
+    // the schedule grid's Resources column should say about two of them.
+    qc.invalidateQueries({ queryKey: ['resources', 'by-activity'] });
   };
 
   const deleteMut = useMutation({
@@ -3278,21 +3306,47 @@ function AssignmentsTab({
                                   className="inline-flex w-fit items-center gap-1 text-left text-2xs text-content-tertiary hover:text-oe-blue hover:underline"
                                   onClick={(e) => {
                                     e.stopPropagation();
-                                    // Emits ?taskId for the Tasks page; the deep-link
-                                    // consumer is owned by the tasks batch and lands
-                                    // separately - until then this opens the Tasks list.
-                                    navigate(
-                                      `/tasks?taskId=${encodeURIComponent(a.task_id as string)}`,
-                                    );
+                                    // The Tasks route reads no per-task parameter, so
+                                    // this opens the list and the title says so. It
+                                    // used to emit ?taskId for a consumer that was
+                                    // never built, which read as a working deep link
+                                    // and was not one.
+                                    navigate('/tasks');
                                   }}
-                                  title={t('resources.open_task', {
-                                    defaultValue: 'Open task',
+                                  title={t('resources.open_task_list', {
+                                    defaultValue: 'Open the task list',
                                   })}
                                 >
                                   {a.task_name ||
                                     t('resources.linked_task', {
                                       defaultValue: 'Linked task',
                                     })}
+                                </button>
+                              )}
+                              {a.activity_id && (
+                                <button
+                                  type="button"
+                                  className="inline-flex w-fit items-center gap-1 text-left text-2xs text-content-tertiary hover:text-oe-blue hover:underline"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    // /schedule does consume project_id: it pre-selects
+                                    // that project and lands on its schedules, which is
+                                    // as close to the activity as any route gets today.
+                                    navigate(
+                                      a.project_id
+                                        ? `/schedule?project_id=${encodeURIComponent(a.project_id)}`
+                                        : '/schedule',
+                                    );
+                                  }}
+                                  title={t('resources.open_activity', {
+                                    defaultValue: 'Open in the schedule',
+                                  })}
+                                  data-testid={`assign-activity-${a.id}`}
+                                >
+                                  <CalendarRange size={10} className="shrink-0" />
+                                  {t('resources.linked_activity', {
+                                    defaultValue: 'Linked activity',
+                                  })}
                                 </button>
                               )}
                             </div>
@@ -3480,6 +3534,8 @@ function EditAssignmentModal({
   const { t } = useTranslation();
   const addToast = useToastStore((s) => s.addToast);
   const [form, setForm] = useState({
+    project_id: assignment.project_id ?? '',
+    activity_id: assignment.activity_id ?? '',
     start_at: toDatetimeLocal(assignment.start_at),
     end_at: toDatetimeLocal(assignment.end_at),
     allocation_percent: assignment.allocation_percent,
@@ -3492,6 +3548,10 @@ function EditAssignmentModal({
   const mut = useMutation({
     mutationFn: () =>
       updateAssignment(assignment.id, {
+        // Explicit null, not undefined: the patch is applied with
+        // exclude_unset, so null is what clears a link the user removed.
+        project_id: form.project_id || null,
+        activity_id: form.activity_id || null,
         start_at: new Date(form.start_at).toISOString(),
         end_at: new Date(form.end_at).toISOString(),
         allocation_percent: form.allocation_percent,
@@ -3574,6 +3634,13 @@ function EditAssignmentModal({
         </div>
       )}
       <WideModalSection columns={2}>
+        <AssignmentTargetFields
+          projectId={form.project_id}
+          activityId={form.activity_id}
+          onChange={(next) => setForm({ ...form, ...next })}
+          projectTestId="assign-edit-project-select"
+          activityTestId="assign-edit-activity-select"
+        />
         <WideModalField label={t('resources.start', { defaultValue: 'Start' })} required>
           <input
             type="datetime-local"
@@ -4390,6 +4457,11 @@ function ProposeAssignmentModal({
     queryFn: () => listSkills({ limit: 200 }).catch(() => []),
   });
 
+  // The project the user is already working in is the overwhelmingly likely
+  // answer, so it seeds the picker; the activity is never seeded because
+  // nothing says which row of that project's schedule this booking is for.
+  const activeProjectId = useProjectContextStore((s) => s.activeProjectId);
+
   // datetime-local inputs are wall-clock and tz-naive. Seeding them from
   // a UTC ISO string and then re-parsing with `new Date` double-applies
   // the timezone offset, so a proposed assignment landed hours away from
@@ -4397,6 +4469,8 @@ function ProposeAssignmentModal({
   // helpers the other modals use.
   const [form, setForm] = useState({
     resource_id: resources[0]?.id || '',
+    project_id: activeProjectId ?? '',
+    activity_id: '',
     start_at: isoLocalNow(0),
     end_at: isoLocalNow(1),
     allocation_percent: 100,
@@ -4426,6 +4500,8 @@ function ProposeAssignmentModal({
       }
       await proposeAssignment({
         resource_id: form.resource_id,
+        project_id: form.project_id || null,
+        activity_id: form.activity_id || null,
         start_at: localDatetimeToIso(form.start_at),
         end_at: localDatetimeToIso(form.end_at),
         allocation_percent: form.allocation_percent,
@@ -4474,21 +4550,26 @@ function ProposeAssignmentModal({
           required
           span={2}
         >
-          <select
+          <SearchableSelect
             value={form.resource_id}
-            onChange={(e) => setForm({ ...form, resource_id: e.target.value })}
-            className={inputCls}
-          >
-            <option value="">
-              — {t('common.select', { defaultValue: 'Select' })} —
-            </option>
-            {resources.map((r) => (
-              <option key={r.id} value={r.id}>
-                {r.code} — {r.name}
-              </option>
-            ))}
-          </select>
+            onChange={(next) => setForm({ ...form, resource_id: next })}
+            options={resourceSelectOptions(t, resources)}
+            allowEmpty
+            emptyLabel={`— ${t('common.select', { defaultValue: 'Select' })} —`}
+            placeholder={t('resources.pick_resource', { defaultValue: 'Pick a resource' })}
+            searchPlaceholder={t('resources.search_resource', {
+              defaultValue: 'Search by name, code or kind…',
+            })}
+            data-testid="propose-resource-select"
+          />
         </WideModalField>
+        <AssignmentTargetFields
+          projectId={form.project_id}
+          activityId={form.activity_id}
+          onChange={(next) => setForm({ ...form, ...next })}
+          projectTestId="propose-project-select"
+          activityTestId="propose-activity-select"
+        />
         <WideModalField label={t('resources.start', { defaultValue: 'Start' })}>
           <input
             type="datetime-local"
