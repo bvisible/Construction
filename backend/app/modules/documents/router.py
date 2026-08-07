@@ -27,7 +27,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, Response, UploadFile, status
 from fastapi.responses import FileResponse
 
 from app.core.bulk_ops import BulkDeleteRequest
@@ -574,6 +574,7 @@ async def list_recent_photos(
     session: SessionDep,
     user_id: CurrentUserId = None,  # type: ignore[assignment]
     limit: int = Query(default=12, ge=1, le=48),
+    project_id: uuid.UUID | None = Query(default=None),
     service: PhotoService = Depends(_get_photo_service),
 ) -> list[RecentPhotoResponse]:
     """Most recent photos across every project the caller can access.
@@ -584,11 +585,16 @@ async def list_recent_photos(
     documentation from a project the caller cannot open. Ordered newest
     first by ``taken_at`` with ``created_at`` as the null fallback.
 
+    ``project_id`` narrows the feed to one project, which is what the
+    dashboard passes when a project is selected. It intersects with the
+    accessible set in the service rather than replacing it, so it can only
+    ever return fewer rows than the unfiltered call, never different ones.
+
     Each item carries the project name (joined server-side) and a
     relative thumbnail URL matching the existing ``/photos/{id}/thumb/``
     route the gallery already loads through ``AuthImage``.
     """
-    rows = await service.recent_across_projects(user_id, limit=limit)
+    rows = await service.recent_across_projects(user_id, limit=limit, project_id=project_id)
     return [
         RecentPhotoResponse(
             id=photo.id,
@@ -898,6 +904,7 @@ def _sheet_to_response(sheet: object) -> SheetResponse:
 @router.get("/sheets/", response_model=list[SheetResponse])
 async def list_sheets(
     session: SessionDep,
+    response: Response,
     project_id: uuid.UUID = Query(...),
     discipline: str | None = Query(default=None),
     revision: str | None = Query(default=None),
@@ -908,9 +915,15 @@ async def list_sheets(
     user_id: CurrentUserId = None,  # type: ignore[assignment]
     service: SheetService = Depends(_get_sheet_service),
 ) -> list[SheetResponse]:
-    """List sheets for a project with optional filters."""
+    """List sheets for a project with optional filters.
+
+    The body stays a bare array, matching every other list in this module, and
+    the number of sheets the filters matched is returned in ``X-Total-Count``.
+    ``limit`` caps at 500 and the register asks for exactly that, so without the
+    count a truncated page and a whole one are the same response.
+    """
     await verify_project_access(project_id, user_id, session)
-    sheets, _ = await service.list_sheets(
+    sheets, total = await service.list_sheets(
         project_id,
         offset=offset,
         limit=limit,
@@ -919,6 +932,7 @@ async def list_sheets(
         document_id=document_id,
         current_only=current_only,
     )
+    response.headers["X-Total-Count"] = str(total)
     return [_sheet_to_response(s) for s in sheets]
 
 

@@ -8,6 +8,8 @@
  *   world  = DXF model-space coordinates (bottom-left origin, Y up)
  */
 
+import type { DxfEntity } from '../api';
+
 export interface ViewportState {
   offsetX: number;
   offsetY: number;
@@ -19,6 +21,125 @@ export interface Extents {
   minY: number;
   maxX: number;
   maxY: number;
+}
+
+/**
+ * World-space bounding box of every entity, used to fit the drawing on load.
+ *
+ * Annotation is deliberately excluded, and that exclusion is the whole design.
+ * A glyph's drawn size depends on the scale, and the scale depends on this
+ * box, so letting text in closes a loop with no stable answer - the frame and
+ * the font chase each other. Bounding one end alone does not open the loop, it
+ * only moves the disagreement: bounding the box while the renderer drew
+ * unbounded put a 30720px glyph over an otherwise correctly framed drawing.
+ * Fitting to geometry cuts the dependency, which is what frees `textFontSize`
+ * to clamp text to a readable band on legibility grounds alone. It is also
+ * what makes the drawing fill the view, which is the complaint in #426.
+ *
+ * Two consequences, accepted rather than overlooked. A label near the edge can
+ * extend past the fitted view - ordinary in CAD viewers, and the price of the
+ * geometry filling the screen. And a drawing that is *only* annotation has no
+ * geometry to fit, so there, and only there, the text estimate is the content.
+ *
+ * Block definition members (`e.block`) are skipped for a different reason: they
+ * are not placed anywhere. Their coordinates are in their block's own space, so
+ * fitting to them frames a drawing nobody is looking at. Pass the output of
+ * `expandBlockReferences` alongside the entities to have block content counted
+ * where it actually sits.
+ */
+export function computeExtents(entities: DxfEntity[]): Extents {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+
+  const expand = (x: number, y: number) => {
+    if (x < minX) minX = x;
+    if (y < minY) minY = y;
+    if (x > maxX) maxX = x;
+    if (y > maxY) maxY = y;
+  };
+
+  for (const e of entities) {
+    if (e.type === 'TEXT' || e.block) continue;
+    if (e.start) expand(e.start.x, e.start.y);
+    if (e.end) expand(e.end.x, e.end.y);
+    if (e.vertices) {
+      for (const v of e.vertices) expand(v.x, v.y);
+    }
+    if (e.start && e.radius) {
+      expand(e.start.x - e.radius, e.start.y - e.radius);
+      expand(e.start.x + e.radius, e.start.y + e.radius);
+    }
+    if (e.type === 'ELLIPSE' && e.start) {
+      const r = Math.max(e.major_radius ?? 0, e.minor_radius ?? 0, e.radius ?? 0);
+      if (r > 0) {
+        expand(e.start.x - r, e.start.y - r);
+        expand(e.start.x + r, e.start.y + r);
+      }
+    }
+  }
+
+  if (isFinite(minX)) return { minX, minY, maxX, maxY };
+
+  // Nothing but annotation. Fitting to the geometry would be fitting to
+  // nothing, so here the estimate is all the content there is.
+  for (const e of entities) {
+    const box = textExtents(e);
+    if (box) {
+      expand(box.minX, box.minY);
+      expand(box.maxX, box.maxY);
+    }
+  }
+
+  if (isFinite(minX)) return { minX, minY, maxX, maxY };
+  return { minX: 0, minY: 0, maxX: 100, maxY: 100 };
+}
+
+/**
+ * Estimated world-space box of one TEXT/MTEXT entity, or null if it draws
+ * nothing. Reached only by the text-only fallback above.
+ *
+ * The estimate is rough and cannot be otherwise: `0.6 * height` per character
+ * is an average advance width, wrong in both directions for any proportional
+ * font, and the real width is only knowable by measuring against the font the
+ * canvas will actually use. That is tolerable here precisely because this is
+ * the fallback - it frames a drawing that would otherwise have no box at all,
+ * and being 20% out on such a file costs nothing. It would not be tolerable as
+ * an input to the normal fit, which is one more reason the normal fit does not
+ * use it. Multi-line strings are as wide as their longest line and stack
+ * *downwards*, matching how `renderText` lays them out; the box turns with
+ * `rotation`, since a half-turn string runs to the left of its insertion
+ * point; justification is ignored because the renderer ignores it too.
+ */
+function textExtents(e: DxfEntity): Extents | null {
+  if (e.type !== 'TEXT' || !e.start || !e.text) return null;
+  const h = e.height ?? 2.5;
+  const lines = e.text.split('\n');
+  const longest = lines.reduce((m, line) => Math.max(m, line.length), 0);
+  const width = h * longest * 0.6;
+  const up = h;
+  const down = (lines.length - 1) * h * 1.25; // matches renderText's line step
+
+  // Advance direction and the perpendicular ascender, in world units.
+  const rot = e.rotation ?? 0;
+  const cos = Math.cos(rot);
+  const sin = Math.sin(rot);
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const along of [0, width]) {
+    for (const across of [up, -down]) {
+      const x = e.start.x + along * cos - across * sin;
+      const y = e.start.y + along * sin + across * cos;
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+    }
+  }
+  return { minX, minY, maxX, maxY };
 }
 
 /** Convert screen (canvas) coordinates to DXF world coordinates. */

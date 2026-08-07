@@ -1622,6 +1622,7 @@ class PhotoService:
         user_id: str | None,
         *,
         limit: int = 12,
+        project_id: uuid.UUID | None = None,
     ) -> list[tuple[ProjectPhoto, str]]:
         """Return the most recent photos across every project the caller can see.
 
@@ -1630,6 +1631,14 @@ class PhotoService:
         leaks photos from a project the user cannot open. The accessible
         project-id set is resolved here and handed to the repository join,
         so the SQL can never return a row outside that set.
+
+        ``project_id`` narrows the answer to one project. It is applied as an
+        intersection with the accessible set and never as a replacement for
+        it, so asking for a project the caller cannot open returns nothing
+        rather than that project's photos. The caller is the dashboard, whose
+        card is project facing: clicking a photo opens that project's gallery,
+        so an unscoped answer put another project's site documentation under
+        the name of the one the reader had selected.
         """
         if not user_id:
             return []
@@ -1657,6 +1666,16 @@ class PhotoService:
                 (Project.owner_id == user_uuid) | (Project.id.in_(member_project_ids_subquery(user_uuid)))
             )
         accessible_ids = list((await self.session.execute(proj_stmt)).scalars().all())
+        if project_id is not None:
+            # Intersection, not replacement. An id the caller cannot reach
+            # falls out here and the empty list short-circuits below, which is
+            # the same answer an empty project gives. Narrowing must never be
+            # able to widen.
+            # Compared as text: the GUID column is VARCHAR(36) while the
+            # migrations declare a native uuid, so which Python type comes back
+            # is not something this line should have an opinion about.
+            wanted = str(project_id)
+            accessible_ids = [pid for pid in accessible_ids if str(pid) == wanted]
         if not accessible_ids:
             return []
 
@@ -1802,11 +1821,49 @@ def detect_discipline_from_sheet_number(sheet_number: str | None) -> str | None:
     return DISCIPLINE_PREFIX_MAP.get(prefix)
 
 
+# A title block lays its fields out in columns, and the text extractor joins
+# the cells that share a visual row into one line separated by runs of spaces.
+# So "SCALE: 1:50    DRAWN: AB    DATE: 2026-01-14" arrives as a single line and
+# a pattern that captures to the end of it captures three fields, not one.
+#
+# Two independent signals mark where the next field begins. A run of two or more
+# spaces is the column gap. A following label is the field name itself, and the
+# label carries no internal space so that "AS NOTED" is not mistaken for one.
+_FIELD_LABEL_BREAK = re.compile(r"[ \t]+(?=[A-Za-z][A-Za-z.]{0,14}[ \t]*[:=])")
+_COLUMN_GAP_BREAK = re.compile(r"[ \t]{2,}")
+
+
+def _trim_title_block_value(value: str, *, cut_on_column_gap: bool) -> str:
+    """Cut a captured title block value where the next field starts.
+
+    Args:
+        value: The raw capture, already bounded to a single line.
+        cut_on_column_gap: Whether a run of two or more spaces also ends the
+            value. True for narrow-vocabulary fields like the scale, where such
+            a run can only be a column gap. False for free text like the sheet
+            title, where wide letter spacing inside one cell can produce the
+            same run and cutting on it would truncate a real title.
+
+    Returns:
+        The value up to the first break, stripped.
+    """
+    cuts = [m.start() for m in (_FIELD_LABEL_BREAK.search(value),) if m is not None]
+    if cut_on_column_gap:
+        gap = _COLUMN_GAP_BREAK.search(value)
+        if gap is not None:
+            cuts.append(gap.start())
+    return (value[: min(cuts)] if cuts else value).strip()
+
+
 def detect_sheet_info(page_text: str) -> dict[str, str | None]:
     """Extract sheet number, title, scale, and revision from page text.
 
     Uses simple regex patterns on extracted text to find common title block fields.
     Does NOT rely on external OCR services - works on already-extracted text.
+
+    Scale reads both the ratio forms ("1:50", '1/4" = 1\'-0"') and the written
+    ones ("NTS", "N.T.S.", "VARIES", "AS NOTED"). Revision date is not read at
+    all, which is why a split row's ``revision_date`` is always null.
 
     Returns:
         Dict with keys: sheet_number, sheet_title, scale, revision
@@ -1842,21 +1899,42 @@ def detect_sheet_info(page_text: str) -> dict[str, str | None]:
     for pattern in title_patterns:
         match = re.search(pattern, page_text, re.IGNORECASE)
         if match:
-            title = match.group(1).strip()
+            # Free text, so only a following label ends it. A run of spaces
+            # inside a title can be letter spacing rather than a column gap.
+            title = _trim_title_block_value(match.group(1), cut_on_column_gap=False)
             if len(title) > 2:
                 result["sheet_title"] = title[:500]
             break
 
     # Scale patterns: "1:100", "1/4\" = 1'-0\"", "SCALE: 1:50"
+    #
+    # The labelled pattern is bounded to the label's own line. It used to allow
+    # \s inside the character class, which matches a newline, so the capture ran
+    # off the end of the line and the trailing \S* then took the first token of
+    # the next one. A title block reading "SCALE: 1:50" above "REV C" was stored
+    # as "1:50\nREV", and that string is what the sheet detail drawer prints.
+    # Horizontal whitespace only, on both sides of the separator, because a
+    # title block field and its value share a line and a scale value can contain
+    # spaces of its own ("1/4\" = 1'-0\"", "AS NOTED").
+    #
+    # The old pattern also had no "=" in its character class, so the imperial
+    # form was cut at the equals and stored as '1/4" ='. The third pattern below
+    # reads that form correctly but never ran, because the labelled pattern is
+    # tried first and the loop breaks on the first match.
     scale_patterns = [
-        r"(?:SCALE)\s*[:=]\s*([\d/:\"'\-\s]+\S*)",
+        r"(?:SCALE)[ \t]*[:=][ \t]*([^\r\n]+?)[ \t]*(?:\r?\n|$)",
         r"\b(1\s*:\s*\d{1,4})\b",
         r"(1/\d+\"\s*=\s*1'[\s-]*0\")",
     ]
-    for pattern in scale_patterns:
+    for idx, pattern in enumerate(scale_patterns):
         match = re.search(pattern, page_text, re.IGNORECASE)
         if match:
-            result["scale"] = match.group(1).strip()[:50]
+            value = match.group(1)
+            if idx == 0:
+                # Only the labelled pattern can run into a neighbouring column;
+                # the two below are bounded by their own character sets.
+                value = _trim_title_block_value(value, cut_on_column_gap=True)
+            result["scale"] = value.strip()[:50]
             break
 
     # Revision patterns: "REV A", "REVISION: 3", "Rev. B"
@@ -1981,6 +2059,74 @@ class SheetService:
 
     # ── Split PDF ──────────────────────────────────────────────────────────
 
+    async def _supersede_previous_sheets(
+        self,
+        project_id: uuid.UUID,
+        sheets: list[Sheet],
+    ) -> int:
+        """Point each incoming sheet at the one it replaces and retire that one.
+
+        Called with rows that are built but not yet inserted, so the links are
+        written before the insert and the retirements ride the same flush.
+
+        The rules, and why each one is the way it is:
+
+        A page with no readable ``sheet_number`` is never chained. There is no
+        key to chain it on, and treating "unreadable" as a value would collect
+        every unreadable page in the project into one bogus history.
+
+        A number carried by two pages of the SAME upload is a fault in the
+        drawing set, not something to resolve by guessing. The earlier page
+        takes the link, the predecessor retires because this upload does
+        supersede it, and the later page stays current and unlinked. The
+        register then shows two current rows for that number, which is the
+        truth about the file that was uploaded. It is logged, because the
+        alternative is that it looks like our duplication rather than theirs.
+
+        Nothing is deleted and nothing is overwritten. A retired row keeps every
+        column it had and only stops being current.
+
+        Args:
+            project_id: Project the upload belongs to.
+            sheets: Freshly built, not yet inserted rows.
+
+        Returns:
+            How many existing sheets were retired.
+        """
+        numbered = [s for s in sheets if s.sheet_number]
+        if not numbered:
+            return 0
+
+        predecessors = await self.repo.current_by_sheet_numbers(
+            project_id,
+            sorted({str(s.sheet_number) for s in numbered}),
+        )
+        if not predecessors:
+            return 0
+
+        claimed: set[str] = set()
+        retired = 0
+        for sheet in sorted(numbered, key=lambda s: s.page_number):
+            number = str(sheet.sheet_number)
+            previous = predecessors.get(number)
+            if previous is None:
+                continue
+            if number in claimed:
+                logger.warning(
+                    "Sheet number %s appears on more than one page of this upload "
+                    "for project %s; page %d is kept as a separate current sheet",
+                    number,
+                    project_id,
+                    sheet.page_number,
+                )
+                continue
+            claimed.add(number)
+            sheet.previous_version_id = previous.id
+            previous.is_current = False
+            retired += 1
+
+        return retired
+
     async def split_pdf_to_sheets(
         self,
         project_id: uuid.UUID,
@@ -1996,8 +2142,14 @@ class SheetService:
         4. Save page thumbnail as PNG
         5. Create Sheet record in database
 
+        A sheet number already current in this project is superseded rather than
+        duplicated, so uploading a revised set leaves one current row per number
+        with the earlier row retired and linked. See
+        ``_supersede_previous_sheets`` for the rules that decide this.
+
         Returns:
-            List of created Sheet records.
+            List of created Sheet records. Only the new rows, never the ones
+            they superseded.
         """
         try:
             import pdfplumber
@@ -2099,6 +2251,15 @@ class SheetService:
                 detail=f"Failed to process PDF file: {exc}",
             )
 
+        # A revised drawing set arrives as a new PDF, so without this every
+        # re-upload doubled the register: two rows per sheet number, both
+        # flagged current, distinguishable only by parent document. It also fed
+        # a doubled ACTUAL set into ``check_completeness``, which reads
+        # ``current_only=True`` and reconciles against a drawing index by
+        # number. Run before the insert so the retirements and the new rows
+        # land in one flush.
+        superseded = await self._supersede_previous_sheets(project_id, sheets)
+
         if sheets:
             sheets = await self.repo.create_many(sheets)
 
@@ -2125,8 +2286,9 @@ class SheetService:
             )
 
         logger.info(
-            "PDF split into %d sheets: %s for project %s",
+            "PDF split into %d sheets (%d earlier sheets superseded): %s for project %s",
             len(sheets),
+            superseded,
             safe_name,
             project_id,
         )

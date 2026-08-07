@@ -179,9 +179,13 @@ const routerBasename =
 ReactDOM.createRoot(__rootEl).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
-      {/* //// NEOFFICE PATCH — Frappe-embedded basename ("/neoconstruction") wins;
-          otherwise fall back to upstream's /demo detection. //// END NEOFFICE PATCH */}
-      <BrowserRouter basename={__routerBasename ?? routerBasename} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      {/* //// NEOFFICE PATCH — when Frappe serves the SPA it injects the
+          basename ("/neoconstruction"); that wins. Falling back to upstream's
+          own /demo detection keeps the standalone build working unchanged.
+          The v7_* future flags upstream dropped here were v6→v7 migration
+          switches; on react-router 7 they are the default and passing them
+          only earns a warning. //// END NEOFFICE PATCH */}
+      <BrowserRouter basename={__routerBasename ?? routerBasename}>
         <App />
       </BrowserRouter>
       {/* //// END NEOFFICE PATCH */}

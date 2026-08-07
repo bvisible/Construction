@@ -107,8 +107,14 @@ export interface DxfEntity {
    *  CSS font family so annotation text looks like the source drawing instead
    *  of always rendering in monospace. */
   font?: string;
-  /** Block name for INSERT entities */
+  /** Block name for INSERT entities: which definition this reference places. */
   block_name?: string;
+  /** INSERT x/y scale factors, a negative value meaning the block is mirrored
+   *  on that axis. Together with `rotation` and `start` they are the reference's
+   *  full transform, which `expandBlockReferences` composes onto the members of
+   *  `block_name` to put the definition's geometry in the world. */
+  x_scale?: number;
+  y_scale?: number;
   /** Whether the polyline/hatch is closed */
   closed?: boolean;
   /** Hatch pattern name */
@@ -121,6 +127,12 @@ export interface DxfEntity {
   ratio?: number;
   /** Layout name (DXF) or BlockId (DWG) the entity belongs to */
   layout?: string;
+  /** Block definition this entity is a member of. An entity carries either
+   *  `layout` or `block`, never both: `layout` means it is placed on a sheet,
+   *  `block` means it is part of a definition and its coordinates are in that
+   *  block's own space. A member is therefore never drawn or fitted where it
+   *  lies - only through the INSERTs that place it. */
+  block?: string;
 }
 
 export interface DxfLayer {

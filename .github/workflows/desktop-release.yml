@@ -15,6 +15,15 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      sidecar_only:
+        description: >-
+          Build and smoke-test the sidecar without bundling or releasing.
+          Leave this on to check a sidecar change: the bundle step names the
+          release after the git ref, so a manual run from a branch would
+          otherwise open a draft release called "main".
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -23,6 +32,12 @@ jobs:
   build-sidecar:
     name: Build Sidecar (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    # Measured over v14.3.0, v14.4.0, v14.5.0 and five sidecar-only runs:
+    # Linux 14.4 to 15.2 min, Windows 15.6 to 17.8, macOS 25.6 to 34.4. The cap
+    # is a little over twice the slowest observed leg, so it cannot fire on a
+    # healthy build. Without one the job inherits the six hour default, which is
+    # what a hung PyInstaller run costs across three parallel legs.
+    timeout-minutes: 75
     strategy:
       # Build every OS even if one fails, so a single-platform break never
       # cancels the others and we still ship the installers that did build.
@@ -79,9 +94,36 @@ jobs:
       - name: Build sidecar with PyInstaller
         run: |
           # PyInstaller is a build tool, not a runtime dependency, so it is
-          # installed separately and is intentionally absent from the lock.
-          pip install "pyinstaller>=6.0.0"
+          # installed separately and is intentionally absent from the lock. It
+          # is pinned all the same: PyInstaller decides how every collected
+          # binary is laid out and re-signed, so when a released build behaves
+          # differently from the one before it, the first question is whether
+          # the packer changed. A range cannot answer that question later.
+          pip install "pyinstaller==6.21.0"
           pyinstaller desktop/pyinstaller.spec --distpath desktop/dist --workpath desktop/build --noconfirm
+
+      # Ad-hoc sign the sidecar here, before anything runs it, rather than in
+      # the bundling job. The signature is part of the file, so it survives the
+      # artifact round trip (only the exec bit does not, which is why the other
+      # job still chmods). Signing here means the binary the next step executes
+      # is the binary users get, and it gives a signing change a test loop that
+      # does not involve the release path.
+      #
+      # An unsigned nested Mach-O breaks the .app bundle's signature seal, and
+      # on Apple Silicon a broken seal on a quarantined download makes
+      # Gatekeeper report the app as "damaged", the severe path that right-click
+      # Open cannot bypass, rather than the milder "unidentified developer".
+      # Giving the sidecar a valid ad-hoc cdhash lets Tauri's own ad-hoc bundle
+      # signing (bundle.macOS.signingIdentity "-") seal a valid bundle. This is
+      # not notarization: users still clear quarantine once (see the release
+      # notes and docs/desktop/INSTALL.md).
+      - name: Ad-hoc sign sidecar (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          f="desktop/dist/openconstructionerp-server"
+          codesign --force --sign - --timestamp=none "$f"
+          codesign --verify --verbose=2 "$f"
 
       - name: Check the sidecar carries a usable embedded database
         shell: bash
@@ -94,6 +136,112 @@ jobs:
         run: |
           python scripts/check_desktop_sidecar_bundle.py \
             "desktop/dist/openconstructionerp-server${{ matrix.ext }}"
+
+      # Run the thing we just built. Nothing in this workflow ever did, and that
+      # is how the 14.4.0 macOS break shipped: the app reached "Starting the
+      # application server" and stopped, on a clean machine, because the onefile
+      # bootloader extracts its archive at launch and dyld then refuses to map
+      # the Python framework out of it ("mapping process and mapped file
+      # (non-platform) have different Team IDs"). The process never reaches
+      # Python, so no amount of reading the archive can see the failure. Only
+      # executing the binary can. The archive check above answers a different
+      # question, whether a needed file is present at all, and both stay.
+      #
+      # "version" is the cheapest subcommand that still starts the interpreter
+      # and imports the app package. It opens no database and no socket, which
+      # is what makes it safe to gate a release on.
+      #
+      # Know what this step does NOT prove. A control run built from this
+      # workflow with the spec's codesign_identity reverted started here just
+      # fine, so this runner does not reproduce the user's failure: whether dyld
+      # enforces Team ID matching depends on the policy applied to the process,
+      # and a binary built locally and never quarantined is judged leniently.
+      # This step therefore catches "the build does not start at all", the issue
+      # #419 class. The Team ID question is answered by the archive inspection
+      # below, which reads a static property of the artifact instead of relying
+      # on this machine choosing to enforce it.
+      #
+      # This runs on all three platforms. The same "does it start at all"
+      # question catches the issue #419 class of break more directly than
+      # reading the archive does, and it costs seconds.
+      - name: Check the sidecar starts
+        shell: bash
+        timeout-minutes: 10
+        run: |
+          set -uo pipefail
+          bin="desktop/dist/openconstructionerp-server${{ matrix.ext }}"
+          chmod +x "$bin" 2>/dev/null || true
+          echo "Running: $bin version"
+          out=$("$bin" version 2>&1)
+          code=$?
+          echo "--- output ---"
+          echo "$out"
+          echo "--- exit $code ---"
+          if [ "$code" -ne 0 ]; then
+            echo "::error title=The desktop sidecar does not start::The sidecar built on ${{ matrix.os }} exits ${code} on its own runner. Shipping it would put this same failure on every user's machine at the 'Starting the application server' step. See the output above for the cause."
+            exit 1
+          fi
+          case "$out" in
+            *"OpenConstructionERP v"*)
+              echo "OK: the sidecar starts and reports its version." ;;
+            *)
+              echo "::error title=The desktop sidecar started but said nothing recognisable::Exit was 0 but the output does not carry a version line, so the interpreter may have started without the app package."
+              exit 1 ;;
+          esac
+
+      # Printed on every macOS run, green or red, because it is the evidence for
+      # the paragraph above. It describes the wrapper and the machine that built
+      # it, which is useful context and is not the thing dyld compares at launch.
+      # Note that the build machine's own Python framework is signed by the
+      # Python Software Foundation and does carry a Team ID; what reaches users
+      # is PyInstaller's re-signed copy of it, which is read by the next step.
+      - name: Record the macOS signing identities (diagnostic)
+        if: always() && runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -uo pipefail
+          echo "=== sidecar ==="
+          codesign -dvvv desktop/dist/openconstructionerp-server 2>&1 \
+            | grep -Ei 'identifier=|teamidentifier|flags=|signature' || true
+          echo "=== the build machine's Python framework, the copy PyInstaller collected ==="
+          fw="$(python -c 'import sys, os; print(os.path.join(sys.base_prefix, "Python"))')"
+          if [ -f "$fw" ]; then
+            codesign -dvvv "$fw" 2>&1 | grep -Ei 'identifier=|teamidentifier|flags=|signature' || true
+          else
+            echo "not found at $fw"
+          fi
+
+      # The step above describes the wrapper and the build machine. Neither is
+      # what dyld maps at launch. This reads the members sealed inside the
+      # onefile archive, which is where a foreign Team ID would actually travel
+      # to a user, and fails the build if any of them carries one.
+      #
+      # Read this gate narrowly. It is a regression tripwire, not a defence
+      # against the macOS start failure reported against 14.4.0. What it catches
+      # is the day a dependency or a packer upgrade starts shipping a
+      # vendor-signed binary inside the archive, which would introduce that
+      # failure for real.
+      #
+      # The earlier wording here said that build "was measured member by member
+      # and every one of its 402 Mach-O members was ad-hoc with no Team ID".
+      # That is wider than the measurement supports. The script counted only the
+      # members it could open and parse; anything it failed to extract dropped
+      # out of the total silently, and anything whose signature it could not
+      # parse was filed under "no Team ID". Neither was visible in the number.
+      # The file named in the user's error is a framework member, which is
+      # exactly the kind that would go missing that way, so --require-member
+      # below makes the run fail unless that member was actually opened.
+      # Whether 14.4.0 was clean is still an open question, not a settled one.
+      - name: Check what the sidecar archive carries
+        if: always() && runner.os == 'macOS'
+        shell: bash
+        timeout-minutes: 15
+        run: |
+          set -uo pipefail
+          python scripts/inspect_desktop_sidecar_signatures.py \
+            --fail-on-foreign-team-id \
+            --require-member Python.framework \
+            desktop/dist/openconstructionerp-server
 
       - name: Copy sidecar binary
         shell: bash
@@ -113,7 +261,19 @@ jobs:
   build-tauri:
     name: Build Desktop (${{ matrix.os }})
     needs: build-sidecar
+    # Skipped on a manual sidecar-only run. The step below names the release
+    # after the git ref, so a manual run from a branch would open a draft
+    # release called "main". A tag push never takes this branch: the input is
+    # empty there, so the condition is true.
+    if: github.event_name != 'workflow_dispatch' || inputs.sidecar_only != true
     runs-on: ${{ matrix.os }}
+    # Measured over the same three releases: Windows 27.8 to 29.6 min, macOS
+    # 26.4 to 36.2, Linux 119.2 to 123.5. Linux is not an outlier, it is the
+    # normal cost of building the Tauri bundle there with no Rust cache, and it
+    # is stable within four minutes across three releases. The cap is set from
+    # that leg rather than from the average, because a matrix job takes one
+    # number for every OS in it.
+    timeout-minutes: 240
     strategy:
       # Build every OS even if one fails, so a single-platform break never
       # cancels the others and we still ship the installers that did build.
@@ -167,23 +327,18 @@ jobs:
         if: runner.os != 'Windows'
         run: chmod +x desktop/src-tauri/binaries/*
 
-      # Ad-hoc code sign the sidecar on macOS BEFORE Tauri bundles it. The
-      # sidecar is an unsigned PyInstaller binary; an unsigned nested Mach-O
-      # breaks the .app bundle's code-signature seal, and on Apple Silicon a
-      # broken seal on a quarantined download makes Gatekeeper report the app
-      # as "damaged" (the severe path, which right-click Open cannot bypass)
-      # rather than the milder "unidentified developer". Giving the sidecar a
-      # valid ad-hoc cdhash here lets Tauri's own ad-hoc bundle signing
-      # (bundle.macOS.signingIdentity "-") seal a valid bundle. This is not
-      # notarization: users still clear quarantine once (see the release
-      # notes and docs/desktop/INSTALL.md), but the app stops being reported
-      # as damaged.
-      - name: Ad-hoc sign sidecar (macOS)
+      # The sidecar was already ad-hoc signed in the build-sidecar job, before
+      # that job ran it, and a code signature is part of the file so it survives
+      # the artifact round trip. This re-signs it anyway: the signature has to
+      # be valid at the moment Tauri seals the bundle around it, and confirming
+      # that here costs a second. Verify, do not assume.
+      - name: Confirm the sidecar signature survived the artifact round trip (macOS)
         if: runner.os == 'macOS'
         run: |
           set -euo pipefail
           for f in desktop/src-tauri/binaries/*; do
-            echo "Ad-hoc signing $f"
+            echo "=== $f as downloaded ==="
+            codesign --verify --verbose=2 "$f" || echo "signature did not verify, re-signing"
             codesign --force --sign - --timestamp=none "$f"
             codesign --verify --verbose=2 "$f"
           done
@@ -374,6 +529,12 @@ jobs:
     name: Sign Windows installers
     needs: build-tauri
     runs-on: windows-latest
+    # Measured at 0.3 to 0.6 min, because there are no signing secrets and the
+    # job downloads nothing. The cap is deliberately far above that: if the
+    # secrets ever arrive this job starts downloading and re-uploading two
+    # installers of about 350 MB each, and the timeout should not be the thing
+    # that discovers it.
+    timeout-minutes: 30
     steps:
       - name: Set up .NET 8
         uses: actions/setup-dotnet@v4
@@ -417,10 +578,19 @@ jobs:
           # Graceful skip: when the signing secret is not configured, on
           # forks, on pull requests, or before the founder adds the secret,
           # leave the build green with unsigned installers instead of failing.
+          #
+          # It says so as a warning rather than a log line. Every branch of
+          # this job exits zero, so the job is green whether it signed
+          # anything or not, and a plain echo inside a green job is read by
+          # nobody. The releases so far have all taken this branch and the
+          # run page gave no sign of it.
           if [ -z "${AZURE_KV_CLIENT_SECRET:-}" ]; then
-            echo "AZURE_KV_CLIENT_SECRET signing secret not set, skipping Windows code signing."
+            echo "::warning title=Windows installers are not code signed::AZURE_KV_CLIENT_SECRET is not set, so the .exe and .msi on this release are unsigned. Windows SmartScreen will warn every person who runs them. Set the five AZURE_KV_* secrets to sign."
+            echo "Windows code signing: SKIPPED, installers are unsigned." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
+
+          echo "Windows code signing: running against Azure Key Vault." >> "$GITHUB_STEP_SUMMARY"
 
           shopt -s nullglob
           files=(signing/*.exe signing/*.msi)

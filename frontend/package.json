@@ -1,7 +1,7 @@
 {
   "name": "openestimate-frontend",
   "private": true,
-  "version": "14.3.0",
+  "version": "14.6.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -45,7 +45,7 @@
     "react-i18next": "^15.7.4",
     "react-map-gl": "^8.1.1",
     "react-resizable-panels": "^4.12.0",
-    "react-router-dom": "^6.30.4",
+    "react-router-dom": "^7.18.2",
     "recharts": "^3.9.0",
     "three": "^0.185.0",
     "three-mesh-bvh": "^0.9.11",
@@ -95,6 +95,9 @@
     "@babel/core": "^7.29.6",
     "exceljs": {
       "uuid": "^11.1.1"
+    },
+    "minimatch@>=10": {
+      "brace-expansion": "^5.0.9"
     }
   }
 }

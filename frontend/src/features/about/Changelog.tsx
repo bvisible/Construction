@@ -38,6 +38,27 @@ interface ChangelogEntry {
 // date, title and meaning intact; trim the prose, not the facts.
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '14.6.0',
+    date: '2026-08-06',
+    tag: 'FIX',
+    summary:
+      'Tabbing from the unit column to quantity in a bill of quantities no longer opens the editor and closes it in the same keystroke, and Shift with Tab now walks backwards in all three hand-written editors instead of forwards. An inspection shows who carried it out by name rather than as an identifier, on the list, in the drawer and in the spreadsheet export, resolving against parties first and people second and keeping a typed name as typed.',
+  },
+  {
+    version: '14.5.0',
+    date: '2026-08-05',
+    tag: 'NEW',
+    summary:
+      'A firm can write its own cases instead of only reading ours, the credentials register can finally be opened from inside the product, and the securities that make a contract enforceable are held against the contract itself. Three modules ship for work that crosses borders: invoices filed where a government has to clear them, statutory withholding taken the way the governing statute defines it, and payment deadlines treated the way security of payment law treats them, all three over the API with their screens still to come. A drawing opened in DWG Take Off matches the file it came from again, approving a timesheet no longer fails because of the daywork sheet written after it, and roughly 320 new strings per language reach all 29 languages. The macOS start failure reported against 14.4.0 is not fixed here: the shipped file was read binary by binary and the explanation we had for it is wrong, which is said plainly rather than shipped as a fix.',
+  },
+  {
+    version: '14.4.0',
+    date: '2026-08-04',
+    tag: 'FIX',
+    summary:
+      'An upgrade that crosses several releases applies again, after a foreign key name too long for PostgreSQL rolled back every pending revision and left the contracts feature uninstallable there. The sheet register has a screen worth opening, a re-uploaded drawing set now retires the sheets it replaces instead of leaving two of each number both claiming to be current, and the list is ordered and counted in a way the database has to repeat. The assistant reaches live project data whatever provider is behind it, an assembly applied from a template no longer folds an unconverted amount into a converted total, and DWG Take Off frames a drawing by its geometry rather than by its labels, keeps block definitions out of the sheet picker and stops rendering a right angle as ninety radians. The worked example in the bill of quantities paste box shows its columns again, after every tab and newline in it had lost its backslash in English as well as in twelve translations, and the sheets register no longer labels a superseded sheet as the current one in twelve languages.',
+  },
+  {
     version: '14.3.0',
     date: '2026-08-04',
     tag: 'NEW',
