@@ -266,6 +266,11 @@ export interface CreatePositionData {
   quantity: number;
   unit_rate: number;
   classification?: Record<string, string>;
+  // //// NEOFFICE PATCH — free text line. The backend already stores an
+  // arbitrary metadata object on a position (we use neoffice_text_code
+  // there too); the create payload just never declared it.
+  // //// END NEOFFICE PATCH
+  metadata?: Record<string, unknown>;
   parent_id?: string;
   /** Issue #127 — reusable code. When it collides with an existing project
    *  code AND `link_mode` != "standalone", the backend returns 201 with a

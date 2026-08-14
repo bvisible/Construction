@@ -2619,6 +2619,65 @@ export function BOQEditorPage() {
     sectionParentInput,
   ]);
 
+  // //// NEOFFICE PATCH — free text line.
+  //
+  // A Swiss estimate carries lines that are not work: a remark, a condition,
+  // the wording a CAN page puts above its measured sub-positions. Cédric asked
+  // for it on 2026-08-13 and there was no way to do it — every row demands a
+  // unit and a quantity, and the schema rejects both an empty unit and a
+  // neutral one ("must start with a letter or digit").
+  //
+  // So the row is stored as an ordinary position carrying a marker in
+  // metadata, the same convention as neoffice_text_code. `txt` is a valid unit
+  // the validator accepts; it is never shown, because the grid, the totals and
+  // the exports all read the marker instead. Quantity and rate stay at zero so
+  // the line contributes nothing to any sum even where the marker is not read.
+  const handleAddTextLine = useCallback(
+    (parentId?: string) => {
+      if (!boqId) return;
+      // Land in a chapter, never at the root. A row with no parent is stored
+      // fine but the grid only renders what sits under a section, so the line
+      // vanished from view the moment it was created. Same resolution the
+      // position button uses: the selected row's chapter, else the last one.
+      let resolvedParent = parentId;
+      if (!resolvedParent) {
+        const lastSection = grouped.sections[grouped.sections.length - 1];
+        resolvedParent = lastSection?.section.id;
+      }
+      const siblings = (boq?.positions ?? []).filter(
+        (p) => (p.parent_id ?? undefined) === resolvedParent,
+      );
+      let maxTop = 0;
+      for (const p of siblings) {
+        const num = parseInt((p.ordinal ?? '').split('.').pop() ?? '', 10);
+        if (!isNaN(num) && num > maxTop) maxTop = num;
+      }
+      const next = (Math.floor(maxTop / 10) + 1) * 10;
+      const parentOrdinal = (boq?.positions ?? []).find((p) => p.id === resolvedParent)?.ordinal;
+      const ordinal = parentOrdinal
+        ? `${parentOrdinal}.${next}`
+        : String(next).padStart(4, '0');
+
+      addMutation.mutate({
+        boq_id: boqId,
+        ordinal,
+        description: '',
+        unit: 'txt',
+        quantity: 0,
+        unit_rate: 0,
+        parent_id: resolvedParent,
+        metadata: { neoffice_text_only: true },
+      });
+      addToast({
+        type: 'info',
+        title: t('boq.text_line_added', {
+          defaultValue: 'Ligne libre ajoutée — saisissez votre texte',
+        }),
+      });
+    },
+    [boqId, boq, grouped, addMutation, addToast, t],
+  );
+
   const handleAddPosition = useCallback(
     (parentId?: string) => {
       if (!boqId) return;
@@ -5020,6 +5079,8 @@ export function BOQEditorPage() {
           onShowVersionHistory={() => setShowVersionHistory(true)}
           onAddPosition={() => handleAddPosition()}
           onAddSection={handleAddSection}
+              /* //// NEOFFICE PATCH — free text line //// END NEOFFICE PATCH */
+              onAddTextLine={() => handleAddTextLine()}
           onOpenCostDb={() => setCostDbModalOpen(true)}
           onOpenAssembly={() => setAssemblyModalOpen(true)}
           onOpenTextCatalog={() => setTextCatalogModalOpen(true)}

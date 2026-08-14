@@ -5269,6 +5269,10 @@ export function QuantityCellRenderer(params: ICellRendererParams) {
  */
 export function UnitRateCellRenderer(params: ICellRendererParams) {
   const { data, value, context } = params;
+  // //// NEOFFICE PATCH — a free text line carries a filler unit and zeroes
+  // so the backend accepts it; none of that belongs on screen.
+  // //// END NEOFFICE PATCH
+  if (isRemarkLine(data)) return <span />;
   const ctx = context as FullGridContext | undefined;
   const t = ctx?.t ?? ((key: string, opts?: Record<string, string | number>) =>
     (opts?.defaultValue as string) ?? key);
@@ -5528,6 +5532,10 @@ export function UnitRateCellRenderer(params: ICellRendererParams) {
 
 export function UnitCellRenderer(params: ICellRendererParams) {
   const { data, value, context } = params;
+  // //// NEOFFICE PATCH — a free text line carries a filler unit and zeroes
+  // so the backend accepts it; none of that belongs on screen.
+  // //// END NEOFFICE PATCH
+  if (isRemarkLine(data)) return <span />;
   // Bug 9: render the raw unit code (e.g. "m2") with NO casing transform — must match
   // the agSelectCellEditor dropdown which lists lowercase values.
   if (!data || data._isSection || data._isFooter) {

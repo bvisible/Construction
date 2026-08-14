@@ -60,7 +60,8 @@ import {
   UnfoldVertical,
   ListTree,
   ListCollapse,
-  BookText, // //// NEOFFICE
+  BookText, // //// NEOFFICE,
+  Type,
 } from 'lucide-react';
 import { Button } from '@/shared/ui';
 import { useBoqDescDensityStore, type BoqDescDensity } from '@/stores/useBoqDescDensityStore';
@@ -76,6 +77,9 @@ export interface BOQToolbarProps {
   // Add actions
   onAddPosition: () => void;
   onAddSection: () => void;
+  // //// NEOFFICE PATCH — free text line (a remark or a CAN wording, no
+  // unit, no quantity, out of every total). //// END NEOFFICE PATCH
+  onAddTextLine?: () => void;
   onOpenCostDb: () => void;
   onOpenAssembly: () => void;
   // //// NEOFFICE PATCH — CAN/NPK wording catalogue //// END NEOFFICE PATCH
@@ -198,6 +202,7 @@ export function BOQToolbar({
   onShowVersionHistory,
   onAddPosition,
   onAddSection,
+  onAddTextLine,
   onOpenCostDb,
   onOpenAssembly,
   onOpenTextCatalog,
@@ -331,6 +336,18 @@ export function BOQToolbar({
             <Button variant="secondary" size="sm" icon={<Layers size={15} />} onClick={onAddSection} title={t('boq.add_section')}>
               <span className="hidden lg:inline">{t('boq.add_section')}</span>
             </Button>
+            {/* //// NEOFFICE PATCH — free text line //// END NEOFFICE PATCH */}
+            {onAddTextLine && (
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={<Type size={15} />}
+              onClick={onAddTextLine}
+              title={t('boq.add_text_line', { defaultValue: 'Ajouter une ligne libre (texte seul)' })}
+            >
+              <span className="hidden lg:inline">{t('boq.add_text_line_short', { defaultValue: 'Ligne libre' })}</span>
+            </Button>
+            )}
             <Button
               variant="secondary"
               size="sm"

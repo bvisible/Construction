@@ -248,7 +248,14 @@ export function isRemarkLine(d: Record<string, unknown> | undefined | null): boo
     return false;
   }
   const u = d.unit;
-  return typeof u !== 'string' || u.trim() === '';
+  if (typeof u !== 'string' || u.trim() === '') return true;
+  // A line the user added through "Ligne libre". The blank-unit test above
+  // never fires on a saved row: the backend requires a unit of at least one
+  // character and rejects a neutral one, so the row is stored with a filler
+  // unit and this marker instead. Reading the marker here is what makes every
+  // renderer that already calls isRemarkLine mask the row for free.
+  const meta = d.metadata as Record<string, unknown> | undefined;
+  return meta?.neoffice_text_only === true;
 }
 // //// END NEOFFICE PATCH
 
