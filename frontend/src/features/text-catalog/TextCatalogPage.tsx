@@ -17,7 +17,7 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { BookText, ChevronDown, ChevronRight, Plus, Trash2, Link2 } from 'lucide-react';
+import { BookText, ChevronDown, ChevronRight, Plus, Trash2, Link2, Pencil } from 'lucide-react';
 import { Button, Card } from '@/shared/ui';
 import { useToastStore } from '@/stores/useToastStore';
 import { textCatalogApi, type TextPosition } from './api';
@@ -39,6 +39,47 @@ function PositionRow({
   const [open, setOpen] = useState(true);
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState({ code: '', title: '', body: '', unit: '' });
+
+  // //// NEOFFICE PATCH — edit a position.
+  //
+  // Cédric asked where the catalogue is edited (2026-08-13). Adding and
+  // deleting were here; correcting a wording was not, although the API has
+  // always exposed updatePosition. A CAN text gets amended far more often than
+  // it gets recreated, so the gap meant deleting and retyping the whole row.
+  const [editing, setEditing] = useState(false);
+  const [editDraft, setEditDraft] = useState({
+    code: position.code,
+    title: position.title,
+    body: position.body ?? '',
+    unit: position.unit ?? '',
+  });
+
+  const save = useMutation({
+    mutationFn: () =>
+      textCatalogApi.updatePosition(position.id, {
+        code: editDraft.code,
+        title: editDraft.title,
+        body: editDraft.body,
+        // Same rule as creation: blank unit is what makes it a wording line.
+        unit: editDraft.unit.trim() || null,
+      }),
+    onSuccess: () => {
+      setEditing(false);
+      onChanged();
+      addToast({
+        type: 'success',
+        title: t('text_catalog.saved', { defaultValue: 'Position enregistrée' }),
+      });
+    },
+    onError: (e: unknown) => {
+      addToast({
+        type: 'error',
+        title: t('text_catalog.save_failed', { defaultValue: 'Enregistrement impossible' }),
+        message: e instanceof Error ? e.message : undefined,
+      });
+    },
+  });
+  // //// END NEOFFICE PATCH
 
   const createSub = useMutation({
     mutationFn: () =>
@@ -124,10 +165,24 @@ function PositionRow({
               {t('text_catalog.assembly', { defaultValue: 'analyse' })}
             </span>
           )}
+          {/* //// NEOFFICE PATCH — the row actions were opacity-0 until hover,
+              which is why the client could not find them and asked where the
+              catalogue is edited. They now sit at 40% and come up to full on
+              hover: present enough to be discovered, quiet enough not to
+              compete with the text. Same lesson as the drag handle in #408.
+              //// END NEOFFICE PATCH */}
+          <button
+            type="button"
+            onClick={() => setEditing((v) => !v)}
+            className="opacity-40 transition-opacity group-hover:opacity-100 text-content-tertiary hover:text-oe-blue"
+            title={t('text_catalog.edit', { defaultValue: 'Modifier cette position' })}
+          >
+            <Pencil size={14} />
+          </button>
           <button
             type="button"
             onClick={() => setAdding((v) => !v)}
-            className="opacity-0 transition-opacity group-hover:opacity-100 text-content-tertiary hover:text-oe-blue"
+            className="opacity-40 transition-opacity group-hover:opacity-100 text-content-tertiary hover:text-oe-blue"
             title={t('text_catalog.add_sub', { defaultValue: 'Ajouter une sous-position' })}
           >
             <Plus size={14} />
@@ -135,7 +190,7 @@ function PositionRow({
           <button
             type="button"
             onClick={() => remove.mutate()}
-            className="opacity-0 transition-opacity group-hover:opacity-100 text-content-tertiary hover:text-red-600"
+            className="opacity-40 transition-opacity group-hover:opacity-100 text-content-tertiary hover:text-red-600"
             title={t('common.delete', { defaultValue: 'Supprimer' })}
           >
             <Trash2 size={14} />
@@ -143,6 +198,59 @@ function PositionRow({
         </div>
       </div>
 
+      {/* //// NEOFFICE PATCH — edit form, same shape as the add form below so
+          the two read as one gesture. //// END NEOFFICE PATCH */}
+      {editing && (
+        <div
+          className="mb-2 space-y-2 rounded-lg border border-oe-blue/30 bg-oe-blue-subtle/10 p-3"
+          style={{ marginLeft: `${depth * 20 + 28}px` }}
+        >
+          <div className="flex gap-2">
+            <input
+              className="w-32 rounded border border-border-light bg-surface-primary px-2 py-1 font-mono text-xs"
+              value={editDraft.code}
+              onChange={(e) => setEditDraft({ ...editDraft, code: e.target.value })}
+              autoComplete="off"
+              aria-label={t('text_catalog.code', { defaultValue: 'Code' })}
+            />
+            <input
+              className="flex-1 rounded border border-border-light bg-surface-primary px-2 py-1 text-sm"
+              value={editDraft.title}
+              onChange={(e) => setEditDraft({ ...editDraft, title: e.target.value })}
+              autoComplete="off"
+              aria-label={t('text_catalog.title_ph', { defaultValue: 'Titre' })}
+            />
+            <input
+              className="w-24 rounded border border-border-light bg-surface-primary px-2 py-1 text-sm"
+              placeholder={t('text_catalog.unit_ph', { defaultValue: 'unité' })}
+              value={editDraft.unit}
+              onChange={(e) => setEditDraft({ ...editDraft, unit: e.target.value })}
+              autoComplete="off"
+              aria-label={t('text_catalog.unit_ph', { defaultValue: 'unité' })}
+            />
+          </div>
+          <textarea
+            className="w-full rounded border border-border-light bg-surface-primary px-2 py-1 text-xs"
+            rows={3}
+            value={editDraft.body}
+            onChange={(e) => setEditDraft({ ...editDraft, body: e.target.value })}
+            aria-label={t('text_catalog.body_ph', { defaultValue: 'Descriptif' })}
+          />
+          <p className="text-2xs text-content-tertiary">
+            {t('text_catalog.unit_rule', {
+              defaultValue: 'Laisser l’unité vide fait de cette ligne un libellé : ni quantité, ni prix.',
+            })}
+          </p>
+          <div className="flex justify-end gap-2">
+            <Button variant="secondary" size="sm" onClick={() => setEditing(false)}>
+              {t('common.cancel', { defaultValue: 'Annuler' })}
+            </Button>
+            <Button size="sm" onClick={() => save.mutate()} disabled={save.isPending}>
+              {t('common.save', { defaultValue: 'Enregistrer' })}
+            </Button>
+          </div>
+        </div>
+      )}
       {adding && (
         <div
           className="mb-2 space-y-2 rounded-lg border border-border-light bg-surface-secondary/40 p-3"

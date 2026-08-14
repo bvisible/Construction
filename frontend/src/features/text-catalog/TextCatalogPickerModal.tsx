@@ -47,9 +47,20 @@ function PickRow({
           {position.code}
         </span>
         <span className="min-w-0 flex-1">
+          {/* //// NEOFFICE PATCH — a wording line was drawn in the same faint
+              grey as a disabled control, and the client reported it as simply
+              missing (2026-08-13). It is not missing and it is not disabled
+              chrome: it is the sentence its sub-positions complete, and the
+              estimator navigates by it. Rendered at normal weight with a rule
+              down the left instead, so it reads as a heading rather than as
+              something that failed to load. Still not selectable — a wording
+              has no unit and cannot become a priced line.
+              //// END NEOFFICE PATCH */}
           <span
             className={`block text-sm ${
-              position.measurable ? 'text-content-primary' : 'text-content-tertiary'
+              position.measurable
+                ? 'text-content-primary'
+                : 'border-l-2 border-oe-blue/30 pl-2 font-medium text-content-secondary'
             }`}
           >
             {position.title}
