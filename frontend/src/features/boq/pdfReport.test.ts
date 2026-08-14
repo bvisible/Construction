@@ -332,6 +332,40 @@ describe('imperial unit + reciprocal-rate reconciliation', () => {
     return call?.body ?? [];
   }
 
+  // //// NEOFFICE PATCH — free text line in the PDF.
+  it('a free text line prints its wording and nothing else', async () => {
+    const { generateBOQPdf } = await import('./pdfReport');
+    generateBOQPdf(
+      baseOptions({
+        positions: [
+          makeSection({ id: 'sec-1', ordinal: '05', description: 'Frais secondaires' }),
+          makePosition({
+            id: 'txt-1',
+            parent_id: 'sec-1',
+            ordinal: '05.10',
+            description: "Les prix s'entendent hors taxes. Offre valable 30 jours.",
+            // The unit the backend forced on us: it must never reach the page.
+            unit: 'txt',
+            quantity: 0,
+            unit_rate: 0,
+            total: 0,
+            metadata: { neoffice_text_only: true },
+          }),
+        ],
+      }),
+    );
+
+    const row = boqTableRows().find((r) => r[0] === '05.10');
+    expect(row).toBeDefined();
+    expect(row![1]).toContain('hors taxes');
+    // Unit, quantity, rate and total are all blank — not "txt", not "0.00".
+    expect(row![2]).toBe('');
+    expect(row![COL_QTY]).toBe('');
+    expect(row![COL_RATE]).toBe('');
+    expect(row![COL_TOTAL]).toBe('');
+  });
+  // //// END NEOFFICE PATCH
+
   it('metric: qty * rate reconciles to the (invariant) total', async () => {
     const { generateBOQPdf } = await import('./pdfReport');
     generateBOQPdf(
