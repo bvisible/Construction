@@ -356,6 +356,9 @@ export function ResourceSummary({ boqId, locale = 'de-DE' }: { boqId: string; lo
               <Search size={13} className="absolute left-2 top-1/2 -translate-y-1/2 text-content-quaternary" />
               <input
                 type="text"
+                id="boq-resource-search"
+                name="boq-resource-search"
+                autoComplete="off"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder={t('boq.rs_search', { defaultValue: 'Search resources...' })}

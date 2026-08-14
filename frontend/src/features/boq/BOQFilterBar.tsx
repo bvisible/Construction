@@ -79,6 +79,9 @@ export function BOQFilterBar({
         />
         <input
           type="text"
+          id="boq-position-search"
+          name="boq-position-search"
+          autoComplete="off"
           value={search}
           onChange={(e) => onSearch(e.target.value)}
           placeholder={t('boq.filter_search_ph', { defaultValue: 'Search positions...' })}

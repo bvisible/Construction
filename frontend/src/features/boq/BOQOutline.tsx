@@ -135,6 +135,9 @@ export function BOQOutline({ positions, onJump }: BOQOutlineProps) {
               <input
                 autoFocus
                 type="text"
+                id="boq-outline-filter"
+                name="boq-outline-filter"
+                autoComplete="off"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder={t('boq.outline_filter_ph', { defaultValue: 'Filter sections...' })}
