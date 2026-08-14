@@ -541,7 +541,14 @@ function renderBOQTables(
       // chapter instead of being read as a section by isSection() (which treats an
       // empty unit as a section). Never a spurious "0.00".
       const uTrim = (p.unit ?? '').toString().trim().toLowerCase();
-      if (uTrim === '' || uTrim === 'desc') {
+      // //// NEOFFICE PATCH — the free text line added on 2026-08-14 lands here
+      // too. It cannot use the empty unit this block was written for (the
+      // backend rejects one), so it carries a filler unit plus a marker in
+      // metadata. Same output either way: number and wording, nothing else.
+      // //// END NEOFFICE PATCH
+      const isFreeText = ((p as { metadata?: Record<string, unknown> }).metadata
+        ?.neoffice_text_only) === true;
+      if (uTrim === '' || uTrim === 'desc' || isFreeText) {
         body.push([p.ordinal, p.description, '', '', '', '']);
         continue;
       }

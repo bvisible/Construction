@@ -85,6 +85,16 @@ const QTY_FMT = '#,##0.00';
  *
  * @see https://owasp.org/www-community/attacks/CSV_Injection
  */
+// //// NEOFFICE PATCH — a free text line (see BOQEditorPage.handleAddTextLine)
+// carries a filler unit the backend demanded and a marker in metadata. In a
+// spreadsheet the filler is worse than in the grid: it lands in a column the
+// client sorts and filters on. Blank it, along with the zeros that are not
+// measurements.
+function isFreeTextRow(p: { unit?: string | null; metadata?: Record<string, unknown> | null }): boolean {
+  return (p.metadata?.neoffice_text_only) === true;
+}
+// //// END NEOFFICE PATCH
+
 export function neutraliseFormula(value: unknown): string {
   if (value === null || value === undefined) return '';
   const s = String(value);
@@ -329,10 +339,10 @@ export function buildBOQSheetData(options: ExportOptions): {
       rows.push([
         neutraliseFormula(child.ordinal),
         neutraliseFormula(child.description),
-        neutraliseFormula(child.unit),
-        child.quantity,
-        showPrices ? child.unit_rate : null,
-        showPrices ? positionTotalForExport(child, options) : null,
+        isFreeTextRow(child) ? null : neutraliseFormula(child.unit),
+        isFreeTextRow(child) ? null : child.quantity,
+        isFreeTextRow(child) || !showPrices ? null : child.unit_rate,
+        isFreeTextRow(child) || !showPrices ? null : positionTotalForExport(child, options),
         // getVariantCellValue can return number, string, or null; only
         // strings need neutralisation.
         (() => {
@@ -391,10 +401,10 @@ export function buildBOQSheetData(options: ExportOptions): {
     rows.push([
       neutraliseFormula(pos.ordinal),
       neutraliseFormula(pos.description),
-      neutraliseFormula(pos.unit),
-      pos.quantity,
-      showPrices ? pos.unit_rate : null,
-      showPrices ? positionTotalForExport(pos, options) : null,
+      isFreeTextRow(pos) ? null : neutraliseFormula(pos.unit),
+      isFreeTextRow(pos) ? null : pos.quantity,
+      isFreeTextRow(pos) || !showPrices ? null : pos.unit_rate,
+      isFreeTextRow(pos) || !showPrices ? null : positionTotalForExport(pos, options),
       (() => {
         const v = getVariantCellValue(pos);
         return typeof v === 'string' ? neutraliseFormula(v) : v;
