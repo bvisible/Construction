@@ -49,6 +49,8 @@ import {
 } from './api';
 import { ParametersPanel } from './ParametersPanel';
 import { ExpandPreviewModal } from './ExpandPreviewModal';
+//// NEOFFICE PATCH — reverse link to the description catalogue. //// END
+import { textCatalogApi } from '@/features/text-catalog/api';
 
 /* -- Constants ------------------------------------------------------------ */
 // //// NEOFFICE PATCH — the yield/productivity units that used to live in a
@@ -86,6 +88,15 @@ export function AssemblyEditorPage() {
   // Drag state for component reordering
   const dragIdx = useRef<number | null>(null);
   const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
+
+  //// NEOFFICE PATCH — reverse of the catalogue's assembly_id link.
+  const usedByCatalogue = useQuery({
+    queryKey: ['text-catalog', 'by-assembly', assemblyId],
+    queryFn: () => textCatalogApi.usedByAssembly(assemblyId!),
+    enabled: !!assemblyId,
+    staleTime: 60_000,
+  });
+  //// END NEOFFICE PATCH
 
   const { data: assembly, isLoading } = useQuery({
     queryKey: ['assembly', assemblyId],
@@ -586,6 +597,38 @@ export function AssemblyEditorPage() {
           </div>
         </div>
       </div>
+
+      {/* //// NEOFFICE PATCH — which catalogue texts depend on this assembly.
+          Editing an assembly was editing something whose blast radius was
+          invisible: the description catalogue can bind a wording to it, and
+          nothing here said so. Silent when nothing is linked.
+          //// END NEOFFICE PATCH */}
+      {(usedByCatalogue.data?.length ?? 0) > 0 && (
+        <Card>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs">
+            <span className="font-medium text-content-secondary">
+              {t('assemblies.used_by_catalogue', {
+                defaultValue: 'Utilisée par le catalogue de descriptions :',
+              })}
+            </span>
+            {usedByCatalogue.data?.map((p) => (
+              <a
+                key={p.id}
+                href="/neoconstruction/text-catalog"
+                className="rounded-full border border-border-light px-2 py-0.5 text-content-secondary hover:border-oe-blue/40 hover:text-oe-blue"
+                title={`${p.catalog_code} — ${p.catalog_name}`}
+              >
+                <span className="font-mono">{p.code}</span> {p.title}
+              </a>
+            ))}
+            <span className="text-content-tertiary">
+              {t('assemblies.used_by_catalogue_hint', {
+                defaultValue: 'Modifier cette analyse change le prix repris à chaque insertion.',
+              })}
+            </span>
+          </div>
+        </Card>
+      )}
 
       {/* Tags Editor */}
       {showTagEditor && (

@@ -51,6 +51,10 @@ export interface InsertResult {
   // sub-positions; the caller needs to say so. //// END NEOFFICE PATCH
   is_wording?: boolean;
   children_inserted?: number;
+  //// NEOFFICE PATCH — how many rows received a price analysis. A wording has
+  //// none of its own; its sub-positions do, so a per-row count is the only
+  //// honest number. //// END NEOFFICE PATCH
+  assemblies_applied?: number;
 }
 
 const BASE = '/v1/neoffice/text-catalog';
@@ -102,10 +106,34 @@ export const textCatalogApi = {
   deletePosition: (positionId: string) =>
     apiDelete(`${BASE}/positions/${encodeURIComponent(positionId)}/`),
 
+  //// NEOFFICE PATCH — which catalogue texts depend on this assembly. Editing
+  //// an assembly used to be editing something whose blast radius was
+  //// invisible. //// END NEOFFICE PATCH
+  usedByAssembly: (assemblyId: string) =>
+    apiGet<
+      Array<{
+        id: string;
+        code: string;
+        title: string;
+        unit: string | null;
+        catalog_id: string;
+        catalog_code: string;
+        catalog_name: string;
+      }>
+    >(`${BASE}/by-assembly/${encodeURIComponent(assemblyId)}/`),
+
   /** Create a BOQ position from this wording, bringing its assembly along. */
   insertIntoBoq: (
     positionId: string,
-    data: { boq_id: string; parent_id?: string | null; ordinal?: string; quantity?: string },
+    data: {
+      boq_id: string;
+      parent_id?: string | null;
+      ordinal?: string;
+      quantity?: string;
+      //// NEOFFICE PATCH — false inserts the text without its price analysis.
+      with_assembly?: boolean;
+      //// END NEOFFICE PATCH
+    },
   ) =>
     apiPost<InsertResult>(
       `${BASE}/positions/${encodeURIComponent(positionId)}/insert-into-boq/`,

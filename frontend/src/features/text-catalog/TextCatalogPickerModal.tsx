@@ -125,6 +125,7 @@ export function TextCatalogPickerModal({
     assemblyApplied: boolean;
     isWording?: boolean;
     childrenInserted?: number;
+    assembliesApplied?: number;
   }) => void;
 }) {
   const { t } = useTranslation();
@@ -136,6 +137,12 @@ export function TextCatalogPickerModal({
   const [parentId, setParentId] = useState<string | null>(
     defaultParentId ?? sections[0]?.id ?? null,
   );
+  //// END NEOFFICE PATCH
+  //// NEOFFICE PATCH — take the price analysis, or don't. Cédric Protti,
+  //// 2026-08-18: "pourquoi les articles du catalogue ne pourraient-ils pas
+  //// être insérés avec ou sans l'analyse de prix ?". An estimator who prices
+  //// a job by hand does not want ours silently imposed on the row.
+  const [withAssembly, setWithAssembly] = useState(true);
   //// END NEOFFICE PATCH
 
   const catalogs = useQuery({
@@ -157,6 +164,7 @@ export function TextCatalogPickerModal({
         quantity: quantity || '0',
         //// NEOFFICE PATCH — send the chapter, or the row lands at the root.
         parent_id: parentId,
+        with_assembly: withAssembly,
         //// END NEOFFICE PATCH
       }),
     onSuccess: (res) =>
@@ -167,6 +175,7 @@ export function TextCatalogPickerModal({
         // //// NEOFFICE PATCH — a wording arrives with its sub-positions.
         isWording: res.is_wording,
         childrenInserted: res.children_inserted,
+        assembliesApplied: res.assemblies_applied,
         // //// END NEOFFICE PATCH
       }),
   });
@@ -260,6 +269,22 @@ export function TextCatalogPickerModal({
             )}
           </div>
           <div className="flex shrink-0 items-center gap-2">
+            {/* //// NEOFFICE PATCH — opt out of the price analysis. //// END */}
+            <label
+              className="flex cursor-pointer items-center gap-1.5 text-xs text-content-secondary"
+              title={t('text_catalog.with_assembly_hint', {
+                defaultValue:
+                  "Décochez pour n'insérer que le texte : la ligne arrive sans prix, à chiffrer vous-même.",
+              })}
+            >
+              <input
+                type="checkbox"
+                checked={withAssembly}
+                onChange={(e) => setWithAssembly(e.target.checked)}
+                className="h-3.5 w-3.5 rounded border-border-light"
+              />
+              {t('text_catalog.take_assembly', { defaultValue: 'Avec l’analyse de prix' })}
+            </label>
             <label className="flex items-center gap-1 text-xs text-content-secondary">
               {t('boq.quantity', { defaultValue: 'Quantité' })}
               <input
@@ -270,6 +295,18 @@ export function TextCatalogPickerModal({
                 autoComplete="off"
               />
             </label>
+            {/* //// NEOFFICE PATCH — reach the catalogue from where the gap
+                is noticed. The estimator discovers a missing or wrong wording
+                while inserting, not while browsing a settings page.
+                //// END NEOFFICE PATCH */}
+            <a
+              href="/neoconstruction/text-catalog"
+              target="_blank"
+              rel="noreferrer"
+              className="text-xs text-oe-blue underline-offset-2 hover:underline"
+            >
+              {t('text_catalog.manage', { defaultValue: 'Éditer le catalogue' })}
+            </a>
             <Button variant="secondary" onClick={onClose}>
               {t('common.cancel', { defaultValue: 'Annuler' })}
             </Button>

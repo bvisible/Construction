@@ -5490,7 +5490,7 @@ export function BOQEditorPage() {
                 summary.assemblyApplied
                   ? `${t('text_catalog.inserted_with_assembly', {
                       defaultValue: 'Analyse de prix reprise',
-                    })} (${summary.resourcesCopied})`
+                    })} ×${summary.assembliesApplied ?? 1}`
                   : null,
               ].filter(Boolean).join(' · ') || undefined,
               // //// END NEOFFICE PATCH

@@ -20,6 +20,11 @@ import { useTranslation } from 'react-i18next';
 import { BookText, ChevronDown, ChevronRight, Plus, Trash2, Link2, Pencil } from 'lucide-react';
 import { Button, Card } from '@/shared/ui';
 import { useToastStore } from '@/stores/useToastStore';
+//// NEOFFICE PATCH — attach a price analysis without leaving the catalogue.
+//// The link column always existed but could only be set from the assemblies
+//// screen, which made the two read as separate worlds.
+import { assembliesApi } from '@/features/assemblies/api';
+//// END NEOFFICE PATCH
 import { textCatalogApi, type TextPosition } from './api';
 
 /** One position row and, indented under it, its sub-positions. */
@@ -52,7 +57,20 @@ function PositionRow({
     title: position.title,
     body: position.body ?? '',
     unit: position.unit ?? '',
+    //// NEOFFICE PATCH — '' means "no analysis"; the API reads it as a detach.
+    assembly_id: position.assembly_id ?? '',
+    //// END NEOFFICE PATCH
   });
+
+  //// NEOFFICE PATCH — assemblies offered only while the form is open, so the
+  //// page does not pay for a list nobody asked for.
+  const assemblies = useQuery({
+    queryKey: ['assemblies', 'for-text-catalog'],
+    queryFn: () => assembliesApi.list({ limit: '500' }),
+    enabled: editing,
+    staleTime: 60_000,
+  });
+  //// END NEOFFICE PATCH
 
   const save = useMutation({
     mutationFn: () =>
@@ -62,6 +80,10 @@ function PositionRow({
         body: editDraft.body,
         // Same rule as creation: blank unit is what makes it a wording line.
         unit: editDraft.unit.trim() || null,
+        //// NEOFFICE PATCH — empty string detaches the analysis (the backend
+        //// treats it as a sentinel, since exclude_none swallows a JSON null).
+        assembly_id: editDraft.assembly_id,
+        //// END NEOFFICE PATCH
       }),
     onSuccess: () => {
       setEditing(false);
@@ -263,6 +285,42 @@ function PositionRow({
               defaultValue: 'Laisser l’unité vide fait de cette ligne un libellé : ni quantité, ni prix.',
             })}
           </p>
+
+          {/* //// NEOFFICE PATCH — bind a price analysis here. A wording has
+              nothing to price, so the field only shows on a measurable line;
+              offering it on a libellé would suggest a wording can carry a rate.
+              //// END NEOFFICE PATCH */}
+          {editDraft.unit.trim() !== '' && (
+            <label className="flex items-center gap-2 text-2xs text-content-secondary">
+              <span className="shrink-0">
+                {t('text_catalog.assembly_link', { defaultValue: 'Analyse de prix' })}
+              </span>
+              <select
+                className="min-w-0 flex-1 truncate rounded border border-border-light bg-surface-primary px-2 py-1 text-xs"
+                value={editDraft.assembly_id}
+                onChange={(e) => setEditDraft({ ...editDraft, assembly_id: e.target.value })}
+              >
+                <option value="">
+                  {t('text_catalog.no_assembly', { defaultValue: '— aucune —' })}
+                </option>
+                {assemblies.data?.items.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.code} — {a.name} ({a.unit})
+                  </option>
+                ))}
+              </select>
+              {editDraft.assembly_id && (
+                <a
+                  href={`/neoconstruction/assemblies?id=${editDraft.assembly_id}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="shrink-0 text-oe-blue underline-offset-2 hover:underline"
+                >
+                  {t('text_catalog.open_assembly', { defaultValue: 'Ouvrir' })}
+                </a>
+              )}
+            </label>
+          )}
           <div className="flex justify-end gap-2">
             <Button variant="secondary" size="sm" onClick={() => setEditing(false)}>
               {t('common.cancel', { defaultValue: 'Annuler' })}

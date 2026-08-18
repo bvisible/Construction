@@ -1569,6 +1569,10 @@ class AssemblyService:
 
         position_data = PositionCreate(
             boq_id=data.boq_id,
+            # //// NEOFFICE PATCH — pass the chapter through, or the applied
+            # assembly is stored at the root and never renders inside the
+            # estimate's structure. //// END NEOFFICE PATCH
+            parent_id=data.parent_id,
             ordinal=ordinal,
             description=f"{assembly.name} [{assembly.code}]",
             unit=assembly.unit,

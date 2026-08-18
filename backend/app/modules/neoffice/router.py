@@ -1143,6 +1143,11 @@ class InsertIntoBoqRequest(BaseModel):
     #: Ordinal to give the new BOQ position; auto if omitted.
     ordinal: str | None = None
     quantity: str = "0"
+    #: Copy the linked assembly (price analysis) onto the created rows.
+    #: Cédric Protti, 2026-08-18: "pourquoi les articles du catalogue ne
+    #: pourraient-ils pas être insérés avec ou sans l'analyse de prix ?".
+    #: Default True keeps the previous behaviour for existing callers.
+    with_assembly: bool = True
 
 
 def _position_payload(p: Any, children: list[dict[str, Any]] | None = None) -> dict[str, Any]:
@@ -1311,6 +1316,12 @@ async def update_text_position(
     for key, value in request.model_dump(exclude_none=True).items():
         if key == "unit" and not str(value).strip():
             value = None
+        # //// NEOFFICE PATCH — an empty string detaches. ``exclude_none``
+        # means a JSON null is indistinguishable from "field not sent", so
+        # without this sentinel a price analysis could be attached and never
+        # removed. //// END NEOFFICE PATCH
+        if key == "assembly_id" and not str(value).strip():
+            value = None
         setattr(position, key, value)
     await session.commit()
     await session.refresh(position)
@@ -1331,6 +1342,43 @@ async def delete_text_position(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="position not found")
     await session.delete(position)
     await session.commit()
+
+
+# //// NEOFFICE PATCH — added endpoint (no upstream equivalent).
+# The catalogue → assembly link was one-way: you could see that a wording
+# carries a price analysis, but from the assembly itself there was no way to
+# know which catalogue texts depend on it. Editing an assembly then meant
+# editing something whose blast radius you could not see.
+@router.get("/text-catalog/by-assembly/{assembly_id}/")
+async def text_positions_using_assembly(
+    assembly_id: str,
+    session: SessionDep,
+    user_id: str = Depends(get_current_user_id),
+) -> list[dict[str, Any]]:
+    """List the catalogue positions that reference this assembly."""
+    from sqlalchemy import select
+
+    from app.modules.neoffice.models import TextCatalog, TextPosition
+
+    rows = (await session.execute(
+        select(TextPosition, TextCatalog)
+        .join(TextCatalog, TextCatalog.id == TextPosition.catalog_id)
+        .where(TextPosition.assembly_id == assembly_id)
+        .order_by(TextPosition.code)
+    )).all()
+    return [
+        {
+            "id": str(p.id),
+            "code": p.code,
+            "title": p.title,
+            "unit": p.unit,
+            "catalog_id": str(c.id),
+            "catalog_code": c.code,
+            "catalog_name": c.name,
+        }
+        for p, c in rows
+    ]
+# //// END NEOFFICE PATCH
 
 
 @router.post("/text-catalog/positions/{position_id}/insert-into-boq/")
@@ -1403,6 +1451,12 @@ async def insert_text_position_into_boq(
     session.add(new_position)
     await session.flush()
 
+    # (catalogue row, created BOQ row) pairs. The assembly copy below runs over
+    # this list rather than on ``new_position`` alone: a wording carries no
+    # assembly of its own, its measurable children do — so keying the copy on
+    # the parent silently dropped every price analysis the sub-positions had.
+    created: list[tuple[Any, Any]] = [(position, new_position)]
+
     # A wording on its own is what the client called useless. Bring the
     # measurable children across in catalogue order, under the same parent so
     # they read as one block.
@@ -1418,24 +1472,41 @@ async def insert_text_position_into_boq(
         for child in children:
             if not (child.unit or "").strip():
                 continue  # a nested wording: leave it, one level is the real case
-            session.add(_row(child, request.parent_id, as_text=False))
+            child_row = _row(child, request.parent_id, as_text=False)
+            session.add(child_row)
+            created.append((child, child_row))
             children_inserted += 1
         if children_inserted:
             await session.flush()
     # //// END NEOFFICE PATCH
 
+    # //// NEOFFICE PATCH — the price analysis is now optional, and it is
+    # applied per created row instead of only to the one the user clicked.
+    #
+    # Two things were wrong. The copy keyed on ``position.assembly_id``, but a
+    # wording never has an assembly — its measurable children do. So inserting
+    # a whole CAN position dropped every analysis the sub-positions carried
+    # (135.046.01 has one). And there was no way to decline the copy, which is
+    # precisely what the client asked for: "insérés avec ou sans l'analyse de
+    # prix" — an estimator who prices by hand does not want ours imposed.
+    # //// END NEOFFICE PATCH
     resources: list[dict[str, Any]] = []
-    if position.assembly_id:
-        assembly = await session.get(Assembly, position.assembly_id)
-        if assembly is not None:
-            from sqlalchemy import select
+    assemblies_applied = 0
+    if request.with_assembly:
+        from sqlalchemy import select
 
+        for src, row in created:
+            if not src.assembly_id:
+                continue
+            assembly = await session.get(Assembly, src.assembly_id)
+            if assembly is None:
+                continue
             components = (await session.execute(
                 select(AssemblyComponent).where(
-                    AssemblyComponent.assembly_id == position.assembly_id
+                    AssemblyComponent.assembly_id == src.assembly_id
                 )
             )).scalars().all()
-            resources = [
+            row_resources = [
                 {
                     "description": c.description,
                     "resource_type": c.resource_type,
@@ -1446,14 +1517,17 @@ async def insert_text_position_into_boq(
                 }
                 for c in components
             ]
-            meta = dict(new_position.metadata_ or {})
-            meta["resources"] = resources
-            meta["neoffice_assembly_id"] = str(position.assembly_id)
+            meta = dict(row.metadata_ or {})
+            meta["resources"] = row_resources
+            meta["neoffice_assembly_id"] = str(src.assembly_id)
             meta["neoffice_assembly_code"] = assembly.code
-            new_position.metadata_ = meta
-            new_position.unit_rate = str(assembly.total_rate or "0")
-            if not new_position.unit and assembly.unit:
-                new_position.unit = assembly.unit
+            row.metadata_ = meta
+            row.unit_rate = str(assembly.total_rate or "0")
+            if not row.unit and assembly.unit:
+                row.unit = assembly.unit
+            assemblies_applied += 1
+            if row is new_position:
+                resources = row_resources
 
     await session.commit()
     await session.refresh(new_position)
@@ -1463,8 +1537,12 @@ async def insert_text_position_into_boq(
         "description": new_position.description,
         "unit": new_position.unit,
         "unit_rate": new_position.unit_rate,
-        "assembly_applied": bool(position.assembly_id),
+        "assembly_applied": assemblies_applied > 0,
         "resources_copied": len(resources),
+        # //// NEOFFICE PATCH — how many rows actually received an analysis,
+        # so the toast can be honest when the children carried them and the
+        # clicked wording did not. //// END NEOFFICE PATCH
+        "assemblies_applied": assemblies_applied,
         # //// NEOFFICE PATCH — so the toast can say what actually landed:
         # a wording brings its measurable children with it.
         "is_wording": is_wording,

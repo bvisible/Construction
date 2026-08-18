@@ -454,6 +454,15 @@ class ApplyToBOQRequest(BaseModel):
     # Empty = use each parameter's stored default. Component ``quantity_formula``
     # lines are then computed against the resolved parameter values.
     parameter_values: dict[str, float] = Field(default_factory=dict)
+    # //// NEOFFICE PATCH — land the position inside a chapter.
+    # Upstream sends no parent at all, so an applied assembly is stored with
+    # parent_id NULL. The grid only draws what sits under a chapter, so the row
+    # surfaced above the whole estimate, detached from the structure the
+    # estimator built. Same defect already fixed on the free-line button and on
+    # the description-catalogue insert; this is the third path.
+    # Optional: omitting it keeps the previous root behaviour for old callers.
+    parent_id: UUID | None = Field(default=None, description="Chapter the position lands in")
+    # //// END NEOFFICE PATCH
 
 
 # ── Parametric validation & expand preview (Issue #365) ──────────────────────
