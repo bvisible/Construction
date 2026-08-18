@@ -171,26 +171,36 @@ function PositionRow({
               hover: present enough to be discovered, quiet enough not to
               compete with the text. Same lesson as the drag handle in #408.
               //// END NEOFFICE PATCH */}
+          {/* //// NEOFFICE PATCH — named buttons, not bare icons.
+              Cédric, 2026-08-18: "J'ai passé beaucoup de temps à chercher ou
+              éditer ces catalogues […] l'IA me donne une marche à suivre, mais
+              je ne trouve pas les boutons." Three grey glyphs at the end of a
+              row do not answer "where do I edit". They now carry their verb.
+              A competent user, assisted, still failing to find a control means
+              the control is wrong — not the user.
+              //// END NEOFFICE PATCH */}
           <button
             type="button"
             onClick={() => setEditing((v) => !v)}
-            className="opacity-40 transition-opacity group-hover:opacity-100 text-content-tertiary hover:text-oe-blue"
+            className="inline-flex items-center gap-1 rounded-md border border-border-light px-1.5 py-0.5 text-2xs font-medium text-content-secondary hover:border-oe-blue/40 hover:text-oe-blue"
             title={t('text_catalog.edit', { defaultValue: 'Modifier cette position' })}
           >
-            <Pencil size={14} />
+            <Pencil size={11} />
+            {t('common.edit', { defaultValue: 'Modifier' })}
           </button>
           <button
             type="button"
             onClick={() => setAdding((v) => !v)}
-            className="opacity-40 transition-opacity group-hover:opacity-100 text-content-tertiary hover:text-oe-blue"
+            className="inline-flex items-center gap-1 rounded-md border border-border-light px-1.5 py-0.5 text-2xs font-medium text-content-secondary hover:border-oe-blue/40 hover:text-oe-blue"
             title={t('text_catalog.add_sub', { defaultValue: 'Ajouter une sous-position' })}
           >
-            <Plus size={14} />
+            <Plus size={11} />
+            {t('text_catalog.add_sub_short', { defaultValue: 'Sous-position' })}
           </button>
           <button
             type="button"
             onClick={() => remove.mutate()}
-            className="opacity-40 transition-opacity group-hover:opacity-100 text-content-tertiary hover:text-red-600"
+            className="inline-flex items-center rounded-md border border-transparent px-1 py-0.5 text-content-quaternary hover:border-red-200 hover:text-red-600"
             title={t('common.delete', { defaultValue: 'Supprimer' })}
           >
             <Trash2 size={14} />
@@ -387,6 +397,43 @@ export function TextCatalogPage() {
           <Plus size={14} /> {t('text_catalog.new_catalog', { defaultValue: 'Nouveau catalogue' })}
         </Button>
       </div>
+
+      {/* //// NEOFFICE PATCH — say what this screen is for, on the screen.
+          The client spent hours looking for how to edit a catalogue. The
+          subtitle explained the data model; it never said which gesture does
+          what. This does, in the order the work happens.
+          //// END NEOFFICE PATCH */}
+      <Card padding="md">
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-content-secondary">
+          <span className="font-medium text-content-primary">
+            {t('text_catalog.howto_title', { defaultValue: 'Comment ça marche' })}
+          </span>
+          <span>
+            <strong>1.</strong>{' '}
+            {t('text_catalog.howto_1', {
+              defaultValue: '« Nouveau catalogue » crée un chapitre CAN (135, 112…).',
+            })}
+          </span>
+          <span>
+            <strong>2.</strong>{' '}
+            {t('text_catalog.howto_2', {
+              defaultValue: '« + Position » ajoute un libellé — laissez l’unité vide.',
+            })}
+          </span>
+          <span>
+            <strong>3.</strong>{' '}
+            {t('text_catalog.howto_3', {
+              defaultValue: '« Sous-position » sur un libellé ajoute une ligne mesurable (avec unité).',
+            })}
+          </span>
+          <span>
+            <strong>4.</strong>{' '}
+            {t('text_catalog.howto_4', {
+              defaultValue: 'Dans un devis : « Descriptions » insère un libellé et ses sous-positions.',
+            })}
+          </span>
+        </div>
+      </Card>
 
       {creating && (
         <Card padding="md">

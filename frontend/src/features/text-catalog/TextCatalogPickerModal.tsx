@@ -27,19 +27,22 @@ function PickRow({
   onPick: (p: TextPosition) => void;
 }) {
   const { t } = useTranslation();
+  // //// NEOFFICE PATCH — a wording is selectable now. It used to be disabled
+  // on the grounds that it has no unit and cannot be priced, which is true and
+  // beside the point: it carries the verb of the CAN item, and the sub-position
+  // alone states a thickness without stating what work. Picking it inserts it
+  // as a free text line and brings its measurable children underneath.
+  // //// END NEOFFICE PATCH
   const isSelected = selectedId === position.id;
   return (
     <>
       <button
         type="button"
-        disabled={!position.measurable}
-        onClick={() => position.measurable && onPick(position)}
+        onClick={() => onPick(position)}
         className={`flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left transition-colors ${
           isSelected
             ? 'bg-oe-blue-subtle/50 ring-1 ring-oe-blue/40'
-            : position.measurable
-              ? 'hover:bg-surface-secondary'
-              : 'cursor-default'
+            : 'hover:bg-surface-secondary'
         }`}
         style={{ paddingLeft: `${depth * 18 + 8}px` }}
       >
@@ -107,7 +110,13 @@ export function TextCatalogPickerModal({
 }: {
   boqId: string;
   onClose: () => void;
-  onInserted: (summary: { ordinal: string; resourcesCopied: number; assemblyApplied: boolean }) => void;
+  onInserted: (summary: {
+    ordinal: string;
+    resourcesCopied: number;
+    assemblyApplied: boolean;
+    isWording?: boolean;
+    childrenInserted?: number;
+  }) => void;
 }) {
   const { t } = useTranslation();
   const [catalogId, setCatalogId] = useState<string | null>(null);
@@ -134,6 +143,10 @@ export function TextCatalogPickerModal({
         ordinal: res.ordinal,
         resourcesCopied: res.resources_copied,
         assemblyApplied: res.assembly_applied,
+        // //// NEOFFICE PATCH — a wording arrives with its sub-positions.
+        isWording: res.is_wording,
+        childrenInserted: res.children_inserted,
+        // //// END NEOFFICE PATCH
       }),
   });
 
@@ -198,7 +211,7 @@ export function TextCatalogPickerModal({
               </>
             ) : (
               t('text_catalog.pick_measurable', {
-                defaultValue: 'Choisissez une sous-position (celles qui ont une unité).',
+                defaultValue: 'Choisissez un libellé — ses sous-positions suivront — ou une sous-position seule.',
               })
             )}
           </div>

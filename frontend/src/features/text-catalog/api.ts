@@ -47,6 +47,10 @@ export interface InsertResult {
   unit_rate: string;
   assembly_applied: boolean;
   resources_copied: number;
+  // //// NEOFFICE PATCH — a wording insert also brings its measurable
+  // sub-positions; the caller needs to say so. //// END NEOFFICE PATCH
+  is_wording?: boolean;
+  children_inserted?: number;
 }
 
 const BASE = '/v1/neoffice/text-catalog';

@@ -25,6 +25,7 @@ import {
   DollarSign,
   Calculator,
   Percent,
+  BookText,
 } from 'lucide-react';
 import { Button } from '@/shared/ui';
 import type { QualityBreakdown, Tip } from './boqHelpers';
@@ -271,12 +272,17 @@ export function QuickAddFAB({
   onAddPosition,
   onAddSection,
   onImportFromCosts,
+  onImportFromTextCatalog,
   sidePanelOpen,
   t,
 }: {
   onAddPosition: () => void;
   onAddSection: () => void;
   onImportFromCosts: () => void;
+  // //// NEOFFICE PATCH — the client asked for the wording catalogue in the
+  // quick-add menu (2026-08-18): it is his most frequent gesture, and it was
+  // only reachable from the toolbar. //// END NEOFFICE PATCH
+  onImportFromTextCatalog?: () => void;
   sidePanelOpen?: boolean;
   t: (key: string, options?: Record<string, string>) => string;
 }) {
@@ -294,6 +300,19 @@ export function QuickAddFAB({
   }, []);
 
   const actions = [
+    // //// NEOFFICE PATCH — first, because it is the most used entry point for
+    // a Swiss estimator working from a CAN catalogue. //// END NEOFFICE PATCH
+    ...(onImportFromTextCatalog
+      ? [{
+          id: 'text-catalog',
+          icon: <BookText size={16} />,
+          label: t('boq.quick_add_wording', { defaultValue: 'Depuis le catalogue de descriptions' }),
+          description: t('boq.quick_add_wording_desc', {
+            defaultValue: 'Insérer un libellé CAN et ses sous-positions',
+          }),
+          onClick: onImportFromTextCatalog,
+        }]
+      : []),
     {
       id: 'position',
       icon: <ListPlus size={16} />,

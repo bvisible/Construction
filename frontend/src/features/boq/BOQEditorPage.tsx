@@ -5464,11 +5464,23 @@ export function BOQEditorPage() {
             addToast({
               type: 'success',
               title: `${t('text_catalog.inserted', { defaultValue: 'Position insérée' })} ${summary.ordinal}`,
-              message: summary.assemblyApplied
-                ? `${t('text_catalog.inserted_with_assembly', {
-                    defaultValue: 'Analyse de prix reprise',
-                  })} (${summary.resourcesCopied})`
-                : undefined,
+              // //// NEOFFICE PATCH — say what actually landed. Picking a
+              // wording inserts it plus its measurable sub-positions, and the
+              // estimator should not have to scroll to find that out.
+              message: [
+                summary.childrenInserted
+                  ? t('text_catalog.inserted_children', {
+                      defaultValue: '{{count}} sous-position(s) reprise(s)',
+                      count: summary.childrenInserted,
+                    })
+                  : null,
+                summary.assemblyApplied
+                  ? `${t('text_catalog.inserted_with_assembly', {
+                      defaultValue: 'Analyse de prix reprise',
+                    })} (${summary.resourcesCopied})`
+                  : null,
+              ].filter(Boolean).join(' · ') || undefined,
+              // //// END NEOFFICE PATCH
             });
           }}
         />
@@ -5489,6 +5501,8 @@ export function BOQEditorPage() {
         onAddPosition={() => handleAddPosition()}
         onAddSection={handleAddSection}
         onImportFromCosts={() => setCostDbModalOpen(true)}
+        /* //// NEOFFICE PATCH — wording catalogue in the quick-add menu */
+        onImportFromTextCatalog={() => setTextCatalogModalOpen(true)}
         sidePanelOpen={aiChatOpen || costFinderOpen || smartPanelOpen}
         t={t}
       />

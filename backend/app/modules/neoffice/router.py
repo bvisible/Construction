@@ -1358,22 +1358,71 @@ async def insert_text_position_into_boq(
     if position is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="position not found")
 
-    description = "\n".join(part for part in (position.title, position.body) if part).strip()
-    new_position = BoqPosition(
-        boq_id=request.boq_id,
-        parent_id=request.parent_id,
-        ordinal=request.ordinal or position.code,
-        description=description,
-        unit=position.unit or "",
-        quantity=request.quantity,
-        unit_rate="0",
-        metadata_={
-            "neoffice_text_position_id": str(position.id),
-            "neoffice_text_code": position.code,
-        },
-    )
+    # //// NEOFFICE PATCH — inserting a wording line, and its sub-positions with it.
+    #
+    # Cédric, 2026-08-18: "Impossible d'insérer le libellé. Le sous-article seul
+    # est inutile dans le devis." He is right, and the design was wrong.
+    #
+    # A CAN page splits one item in two. The wording carries the verb —
+    # "Fourniture et mise en place d'un béton de propreté sur fond de
+    # terrassement" — and the sub-position carries only what varies: "Sous
+    # radier, ép. 5 cm". Insert the sub-position alone and the estimate says
+    # what thickness, never what work. So the wording is not decoration to be
+    # skipped; it is half the sentence.
+    #
+    # It could not be inserted because it has no unit, and a BOQ row demands
+    # one. The free text line built on 2026-08-14 solves exactly that: a filler
+    # unit the screen hides plus a marker in metadata. A wording now inserts as
+    # one of those, and its measurable children follow underneath, which also
+    # answers "peut-on insérer plusieurs lignes en même temps" for the case that
+    # actually occurs — taking a whole CAN position.
+    is_wording = not (position.unit or "").strip()
+
+    def _row(src: "TextPosition", parent_id: str | None, as_text: bool) -> "BoqPosition":
+        desc = "\n".join(part for part in (src.title, src.body) if part).strip()
+        meta: dict[str, Any] = {
+            "neoffice_text_position_id": str(src.id),
+            "neoffice_text_code": src.code,
+        }
+        if as_text:
+            # Same contract as the toolbar's "Ligne libre": filler unit, marker,
+            # zeroes, so it weighs nothing and shows nothing but its text.
+            meta["neoffice_text_only"] = True
+        return BoqPosition(
+            boq_id=request.boq_id,
+            parent_id=parent_id,
+            ordinal=request.ordinal if (src is position and request.ordinal) else src.code,
+            description=desc,
+            unit="txt" if as_text else (src.unit or ""),
+            quantity="0" if as_text else request.quantity,
+            unit_rate="0",
+            metadata_=meta,
+        )
+
+    new_position = _row(position, request.parent_id, as_text=is_wording)
     session.add(new_position)
     await session.flush()
+
+    # A wording on its own is what the client called useless. Bring the
+    # measurable children across in catalogue order, under the same parent so
+    # they read as one block.
+    children_inserted = 0
+    if is_wording:
+        from sqlalchemy import select as _select
+
+        children = (await session.execute(
+            _select(TextPosition)
+            .where(TextPosition.parent_id == position.id)
+            .order_by(TextPosition.sort_order, TextPosition.code)
+        )).scalars().all()
+        for child in children:
+            if not (child.unit or "").strip():
+                continue  # a nested wording: leave it, one level is the real case
+            session.add(_row(child, request.parent_id, as_text=False))
+            children_inserted += 1
+        if children_inserted:
+            await session.flush()
+    # //// END NEOFFICE PATCH
 
     resources: list[dict[str, Any]] = []
     if position.assembly_id:
@@ -1416,5 +1465,10 @@ async def insert_text_position_into_boq(
         "unit_rate": new_position.unit_rate,
         "assembly_applied": bool(position.assembly_id),
         "resources_copied": len(resources),
+        # //// NEOFFICE PATCH — so the toast can say what actually landed:
+        # a wording brings its measurable children with it.
+        "is_wording": is_wording,
+        "children_inserted": children_inserted,
+        # //// END NEOFFICE PATCH
     }
 # //// END NEOFFICE PATCH
