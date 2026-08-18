@@ -5458,6 +5458,19 @@ export function BOQEditorPage() {
         <TextCatalogPickerModal
           boqId={boqId}
           onClose={() => setTextCatalogModalOpen(false)}
+          /* //// NEOFFICE PATCH — hand over the chapters. Insertion used to
+             send no parent at all, so a CAN position landed at the root and
+             surfaced above the whole estimate instead of inside the chapter
+             the estimator was working in. Same rule as the free-line button:
+             default to the last chapter, but here it is shown and changeable. */
+          sections={grouped.sections.map((g) => ({
+            id: g.section.id,
+            label: `${g.section.ordinal ?? ''} ${g.section.description ?? ''}`.trim(),
+          }))}
+          defaultParentId={
+            grouped.sections[grouped.sections.length - 1]?.section.id ?? null
+          }
+          /* //// END NEOFFICE PATCH */
           onInserted={(summary) => {
             setTextCatalogModalOpen(false);
             invalidateAll();

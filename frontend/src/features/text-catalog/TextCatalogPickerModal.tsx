@@ -107,9 +107,18 @@ export function TextCatalogPickerModal({
   boqId,
   onClose,
   onInserted,
+  // //// NEOFFICE PATCH — the estimate's chapters, so the picked position can
+  // land inside one. Without a parent the row is stored at the root: the grid
+  // only draws what sits under a chapter, so it surfaced above the whole
+  // estimate, detached from the structure the estimator built.
+  sections = [],
+  defaultParentId = null,
+  // //// END NEOFFICE PATCH
 }: {
   boqId: string;
   onClose: () => void;
+  sections?: Array<{ id: string; label: string }>;
+  defaultParentId?: string | null;
   onInserted: (summary: {
     ordinal: string;
     resourcesCopied: number;
@@ -122,6 +131,12 @@ export function TextCatalogPickerModal({
   const [catalogId, setCatalogId] = useState<string | null>(null);
   const [picked, setPicked] = useState<TextPosition | null>(null);
   const [quantity, setQuantity] = useState('0');
+  //// NEOFFICE PATCH — where the position lands. Defaults to the chapter the
+  //// estimator is standing in, so the common case needs no extra choice.
+  const [parentId, setParentId] = useState<string | null>(
+    defaultParentId ?? sections[0]?.id ?? null,
+  );
+  //// END NEOFFICE PATCH
 
   const catalogs = useQuery({
     queryKey: ['neoffice', 'text-catalogs'],
@@ -137,7 +152,13 @@ export function TextCatalogPickerModal({
 
   const insert = useMutation({
     mutationFn: () =>
-      textCatalogApi.insertIntoBoq(picked!.id, { boq_id: boqId, quantity: quantity || '0' }),
+      textCatalogApi.insertIntoBoq(picked!.id, {
+        boq_id: boqId,
+        quantity: quantity || '0',
+        //// NEOFFICE PATCH — send the chapter, or the row lands at the root.
+        parent_id: parentId,
+        //// END NEOFFICE PATCH
+      }),
     onSuccess: (res) =>
       onInserted({
         ordinal: res.ordinal,
@@ -186,6 +207,29 @@ export function TextCatalogPickerModal({
               </option>
             ))}
           </select>
+
+          {/* //// NEOFFICE PATCH — say, and let the estimator change, where the
+              position lands. Silent insertion at the root is what made the
+              lines appear above the whole estimate. */}
+          {sections.length > 0 && (
+            <>
+              <span className="ml-3 text-xs text-content-secondary">
+                {t('text_catalog.insert_into', { defaultValue: 'Insérer dans' })}
+              </span>
+              <select
+                className="min-w-0 max-w-xs flex-1 truncate rounded border border-border-light bg-surface-primary px-2 py-1 text-sm"
+                value={parentId ?? ''}
+                onChange={(e) => setParentId(e.target.value || null)}
+              >
+                {sections.map((sec) => (
+                  <option key={sec.id} value={sec.id}>
+                    {sec.label}
+                  </option>
+                ))}
+              </select>
+            </>
+          )}
+          {/* //// END NEOFFICE PATCH */}
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
