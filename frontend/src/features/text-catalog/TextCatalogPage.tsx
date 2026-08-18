@@ -112,9 +112,21 @@ function PositionRow({
 
   return (
     <div>
+      {/* //// NEOFFICE PATCH — double-click the row to edit. "On voit mais on
+          ne peut pas éditer" (Jérémy, 2026-08-18): the "Modifier" button does
+          work, but the gesture an estimator actually tries first is clicking
+          the text itself — which is what the BOQ grid already does ("Double-
+          cliquez sur une description pour modifier le texte complet"). A
+          catalogue of texts that ignores a click on its text reads as
+          read-only. Title attribute says so out loud.
+          //// END NEOFFICE PATCH */}
       <div
-        className="group flex items-start gap-2 rounded-lg px-2 py-1.5 hover:bg-surface-secondary/50"
+        className="group flex cursor-text items-start gap-2 rounded-lg px-2 py-1.5 hover:bg-surface-secondary/50"
         style={{ paddingLeft: `${depth * 20 + 8}px` }}
+        onDoubleClick={() => setEditing(true)}
+        title={t('text_catalog.dblclick_to_edit', {
+          defaultValue: 'Double-cliquez pour modifier cette position',
+        })}
       >
         <button
           type="button"
