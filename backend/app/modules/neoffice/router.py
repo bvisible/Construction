@@ -1372,7 +1372,7 @@ async def insert_text_positions_into_boq(
     """Create one BOQ row per selected catalogue position, in catalogue order."""
     from sqlalchemy import select
 
-    from app.modules.assemblies.models import Assembly, AssemblyComponent
+    from app.modules.assemblies.models import Assembly, Component as AssemblyComponent
     from app.modules.boq.models import Position as BoqPosition
     from app.modules.neoffice.models import TextPosition
 
