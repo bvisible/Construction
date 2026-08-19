@@ -8,7 +8,7 @@
  * not work. It is still shown, greyed and non-clickable, because the estimator
  * navigates by it — hiding it would break the reading order of a CAN page.
  */
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { BookText, Link2, X } from 'lucide-react';
@@ -18,13 +18,13 @@ import { textCatalogApi, type TextPosition } from './api';
 function PickRow({
   position,
   depth,
-  selectedId,
-  onPick,
+  selected,
+  onToggle,
 }: {
   position: TextPosition;
   depth: number;
-  selectedId: string | null;
-  onPick: (p: TextPosition) => void;
+  selected: Set<string>;
+  onToggle: (p: TextPosition) => void;
 }) {
   const { t } = useTranslation();
   // //// NEOFFICE PATCH — a wording is selectable now. It used to be disabled
@@ -33,12 +33,17 @@ function PickRow({
   // alone states a thickness without stating what work. Picking it inserts it
   // as a free text line and brings its measurable children underneath.
   // //// END NEOFFICE PATCH
-  const isSelected = selectedId === position.id;
+  //// NEOFFICE PATCH — checkboxes, not one pick. Cédric Protti, 2026-08-19:
+  //// "Si nous avons besoin d'une seule sous-position, nous devons effacer
+  //// manuellement celles qui sont en trop." Checking a wording checks its
+  //// children too, because taking a whole CAN item stays the common case —
+  //// but each of them can now be unchecked. //// END NEOFFICE PATCH
+  const isSelected = selected.has(position.id);
   return (
     <>
       <button
         type="button"
-        onClick={() => onPick(position)}
+        onClick={() => onToggle(position)}
         className={`flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left transition-colors ${
           isSelected
             ? 'bg-oe-blue-subtle/50 ring-1 ring-oe-blue/40'
@@ -46,6 +51,13 @@ function PickRow({
         }`}
         style={{ paddingLeft: `${depth * 18 + 8}px` }}
       >
+        <input
+          type="checkbox"
+          checked={isSelected}
+          readOnly
+          tabIndex={-1}
+          className="mt-1 h-3.5 w-3.5 shrink-0 rounded border-border-light"
+        />
         <span className="mt-0.5 shrink-0 font-mono text-xs tabular-nums text-content-secondary">
           {position.code}
         </span>
@@ -97,7 +109,7 @@ function PickRow({
         </span>
       </button>
       {position.children.map((c) => (
-        <PickRow key={c.id} position={c} depth={depth + 1} selectedId={selectedId} onPick={onPick} />
+        <PickRow key={c.id} position={c} depth={depth + 1} selected={selected} onToggle={onToggle} />
       ))}
     </>
   );
@@ -130,8 +142,12 @@ export function TextCatalogPickerModal({
 }) {
   const { t } = useTranslation();
   const [catalogId, setCatalogId] = useState<string | null>(null);
-  const [picked, setPicked] = useState<TextPosition | null>(null);
-  const [quantity, setQuantity] = useState('0');
+  //// NEOFFICE PATCH — a set, not one position. And no quantity field:
+  //// "les quantités changent toujours […] il est judicieux que les quantités
+  //// soient gérées uniquement dans la fenêtre du devis" (Cédric, 2026-08-19).
+  //// Rows land at zero and are typed in the grid, next to the others.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  //// END NEOFFICE PATCH
   //// NEOFFICE PATCH — where the position lands. Defaults to the chapter the
   //// estimator is standing in, so the common case needs no extra choice.
   const [parentId, setParentId] = useState<string | null>(
@@ -157,26 +173,35 @@ export function TextCatalogPickerModal({
     enabled: !!activeId,
   });
 
+  //// NEOFFICE PATCH — checking a wording checks its children, unchecking it
+  //// releases them. Taking a whole CAN item stays one gesture; keeping only
+  //// one sub-position is now also one gesture instead of an insert followed
+  //// by deletions. //// END NEOFFICE PATCH
+  const toggle = useCallback((p: TextPosition) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      const ids = [p.id, ...p.children.map((c) => c.id)];
+      if (next.has(p.id)) ids.forEach((id) => next.delete(id));
+      else ids.forEach((id) => next.add(id));
+      return next;
+    });
+  }, []);
+
   const insert = useMutation({
     mutationFn: () =>
-      textCatalogApi.insertIntoBoq(picked!.id, {
+      textCatalogApi.insertManyIntoBoq({
         boq_id: boqId,
-        quantity: quantity || '0',
-        //// NEOFFICE PATCH — send the chapter, or the row lands at the root.
         parent_id: parentId,
+        position_ids: [...selected],
         with_assembly: withAssembly,
-        //// END NEOFFICE PATCH
       }),
     onSuccess: (res) =>
       onInserted({
-        ordinal: res.ordinal,
-        resourcesCopied: res.resources_copied,
-        assemblyApplied: res.assembly_applied,
-        // //// NEOFFICE PATCH — a wording arrives with its sub-positions.
-        isWording: res.is_wording,
-        childrenInserted: res.children_inserted,
+        ordinal: res.codes.join(', '),
+        resourcesCopied: 0,
+        assemblyApplied: res.assemblies_applied > 0,
+        childrenInserted: res.inserted,
         assembliesApplied: res.assemblies_applied,
-        // //// END NEOFFICE PATCH
       }),
   });
 
@@ -207,7 +232,7 @@ export function TextCatalogPickerModal({
             value={activeId ?? ''}
             onChange={(e) => {
               setCatalogId(e.target.value);
-              setPicked(null);
+              setSelected(new Set());
             }}
           >
             {catalogs.data?.map((c) => (
@@ -249,24 +274,21 @@ export function TextCatalogPickerModal({
             </div>
           )}
           {tree.data?.positions.map((p) => (
-            <PickRow key={p.id} position={p} depth={0} selectedId={picked?.id ?? null} onPick={setPicked} />
+            <PickRow key={p.id} position={p} depth={0} selected={selected} onToggle={toggle} />
           ))}
         </div>
 
         <div className="flex items-center justify-between gap-3 border-t border-border-light px-4 py-3">
           <div className="min-w-0 text-xs text-content-tertiary">
-            {picked ? (
-              <>
-                <span className="font-mono">{picked.code}</span> · {picked.unit}
-                {picked.assembly_id && (
-                  <> · {t('text_catalog.with_assembly', { defaultValue: 'avec son analyse de prix' })}</>
-                )}
-              </>
-            ) : (
-              t('text_catalog.pick_measurable', {
-                defaultValue: 'Choisissez un libellé — ses sous-positions suivront — ou une sous-position seule.',
-              })
-            )}
+            {selected.size > 0
+              ? t('text_catalog.n_selected', {
+                  defaultValue: '{{count}} ligne(s) sélectionnée(s) — quantités à saisir dans le devis',
+                  count: selected.size,
+                })
+              : t('text_catalog.pick_measurable', {
+                  defaultValue:
+                    'Cochez ce que vous voulez insérer. Cocher un libellé coche ses sous-positions.',
+                })}
           </div>
           <div className="flex shrink-0 items-center gap-2">
             {/* //// NEOFFICE PATCH — opt out of the price analysis. //// END */}
@@ -285,16 +307,6 @@ export function TextCatalogPickerModal({
               />
               {t('text_catalog.take_assembly', { defaultValue: 'Avec l’analyse de prix' })}
             </label>
-            <label className="flex items-center gap-1 text-xs text-content-secondary">
-              {t('boq.quantity', { defaultValue: 'Quantité' })}
-              <input
-                className="w-24 rounded border border-border-light bg-surface-primary px-2 py-1 text-right text-sm tabular-nums"
-                inputMode="decimal"
-                value={quantity}
-                onChange={(e) => setQuantity(e.target.value)}
-                autoComplete="off"
-              />
-            </label>
             {/* //// NEOFFICE PATCH — reach the catalogue from where the gap
                 is noticed. The estimator discovers a missing or wrong wording
                 while inserting, not while browsing a settings page.
@@ -310,7 +322,7 @@ export function TextCatalogPickerModal({
             <Button variant="secondary" onClick={onClose}>
               {t('common.cancel', { defaultValue: 'Annuler' })}
             </Button>
-            <Button onClick={() => insert.mutate()} disabled={!picked || insert.isPending}>
+            <Button onClick={() => insert.mutate()} disabled={selected.size === 0 || insert.isPending}>
               {t('text_catalog.insert', { defaultValue: 'Insérer' })}
             </Button>
           </div>

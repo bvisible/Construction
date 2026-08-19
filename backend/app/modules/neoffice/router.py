@@ -1345,6 +1345,119 @@ async def delete_text_position(
 
 
 # //// NEOFFICE PATCH — added endpoint (no upstream equivalent).
+# Insert an explicit selection rather than a wording and everything under it.
+#
+# Cédric Protti, 2026-08-19: "Si nous avons besoin d'une seule sous-position,
+# nous devons effacer manuellement celles qui sont en trop." Taking the whole
+# CAN position is the common case, not the only one, and deleting rows to
+# undo an insert is work the software created.
+#
+# The caller sends exactly the rows it wants, already ordered. No implicit
+# children: what is checked is what lands. Quantity is deliberately absent —
+# see the same feedback: "les quantités soient gérées uniquement dans la
+# fenêtre du devis".
+class InsertManyRequest(BaseModel):
+    boq_id: str
+    parent_id: str | None = None
+    position_ids: list[str]
+    with_assembly: bool = True
+
+
+@router.post("/text-catalog/insert-many-into-boq/")
+async def insert_text_positions_into_boq(
+    request: InsertManyRequest,
+    session: SessionDep,
+    user_id: str = Depends(get_current_user_id),
+) -> dict[str, Any]:
+    """Create one BOQ row per selected catalogue position, in catalogue order."""
+    from sqlalchemy import select
+
+    from app.modules.assemblies.models import Assembly, AssemblyComponent
+    from app.modules.boq.models import Position as BoqPosition
+    from app.modules.neoffice.models import TextPosition
+
+    if not request.position_ids:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="no position selected"
+        )
+
+    rows = (await session.execute(
+        select(TextPosition)
+        .where(TextPosition.id.in_(request.position_ids))
+        .order_by(TextPosition.code)
+    )).scalars().all()
+    if not rows:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="positions not found")
+
+    created: list[tuple[Any, Any]] = []
+    for src in rows:
+        is_wording = not (src.unit or "").strip()
+        desc = "\n".join(part for part in (src.title, src.body) if part).strip()
+        meta: dict[str, Any] = {
+            "neoffice_text_position_id": str(src.id),
+            "neoffice_text_code": src.code,
+        }
+        if is_wording:
+            meta["neoffice_text_only"] = True
+        row = BoqPosition(
+            boq_id=request.boq_id,
+            parent_id=request.parent_id,
+            ordinal=src.code,
+            description=desc,
+            unit="txt" if is_wording else (src.unit or ""),
+            # Zero on purpose: the estimator types the quantity in the grid,
+            # where it can be seen next to the others.
+            quantity="0",
+            unit_rate="0",
+            metadata_=meta,
+        )
+        session.add(row)
+        created.append((src, row))
+    await session.flush()
+
+    assemblies_applied = 0
+    if request.with_assembly:
+        for src, row in created:
+            if not src.assembly_id:
+                continue
+            assembly = await session.get(Assembly, src.assembly_id)
+            if assembly is None:
+                continue
+            components = (await session.execute(
+                select(AssemblyComponent).where(
+                    AssemblyComponent.assembly_id == src.assembly_id
+                )
+            )).scalars().all()
+            meta = dict(row.metadata_ or {})
+            meta["resources"] = [
+                {
+                    "description": c.description,
+                    "resource_type": c.resource_type,
+                    "unit": c.unit,
+                    "quantity": c.quantity,
+                    "unit_cost": c.unit_cost,
+                    "factor": c.factor,
+                }
+                for c in components
+            ]
+            meta["neoffice_assembly_id"] = str(src.assembly_id)
+            meta["neoffice_assembly_code"] = assembly.code
+            row.metadata_ = meta
+            row.unit_rate = str(assembly.total_rate or "0")
+            if not row.unit and assembly.unit:
+                row.unit = assembly.unit
+            assemblies_applied += 1
+
+    await session.commit()
+    return {
+        "inserted": len(created),
+        "assemblies_applied": assemblies_applied,
+        "codes": [src.code for src, _ in created],
+    }
+# //// END NEOFFICE PATCH
+
+
+# //// NEOFFICE PATCH — added endpoint (no upstream equivalent).
 # The catalogue → assembly link was one-way: you could see that a wording
 # carries a price analysis, but from the assembly itself there was no way to
 # know which catalogue texts depend on it. Editing an assembly then meant

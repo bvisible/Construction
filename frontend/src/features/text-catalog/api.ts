@@ -106,6 +106,20 @@ export const textCatalogApi = {
   deletePosition: (positionId: string) =>
     apiDelete(`${BASE}/positions/${encodeURIComponent(positionId)}/`),
 
+  //// NEOFFICE PATCH — insert an explicit selection. No quantity: the
+  //// estimator types it in the grid, where the other quantities are.
+  insertManyIntoBoq: (data: {
+    boq_id: string;
+    parent_id?: string | null;
+    position_ids: string[];
+    with_assembly?: boolean;
+  }) =>
+    apiPost<{ inserted: number; assemblies_applied: number; codes: string[] }>(
+      `${BASE}/insert-many-into-boq/`,
+      data,
+    ),
+  //// END NEOFFICE PATCH
+
   //// NEOFFICE PATCH — which catalogue texts depend on this assembly. Editing
   //// an assembly used to be editing something whose blast radius was
   //// invisible. //// END NEOFFICE PATCH
