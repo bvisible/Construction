@@ -1019,6 +1019,8 @@ async def apply_labor_tariff(
 
     wanted_units = {u.strip().lower() for u in request.units}
     changed: list[dict[str, str]] = []
+    #//// Neoffice — assemblies whose stored total_rate must be rebuilt.
+    touched_assemblies: set[str] = set()
     for row in rows:
         if (row.unit or "").strip().lower() not in wanted_units:
             continue
@@ -1028,6 +1030,20 @@ async def apply_labor_tariff(
         changed.append({"id": str(row.id), "old": old, "new": str(new_rate)})
         if not request.dry_run:
             row.unit_cost = str(new_rate)
+            # //// NEOFFICE PATCH — recompute the line total, or the row shows a
+            # new hourly rate beside a total still built on the old one. The
+            # component total is factor * quantity * unit_cost (see
+            # assemblies/service.py); writing unit_cost alone left every touched
+            # row internally inconsistent, and the assembly total below with it.
+            try:
+                _f = Decimal(str(row.factor or "1"))
+                _q = Decimal(str(row.quantity or "0"))
+                _line = _f * _q * Decimal(str(new_rate))
+                row.total = str(_line) if _line.is_finite() else "0"
+            except (ArithmeticError, ValueError):
+                row.total = "0"
+            touched_assemblies.add(str(row.assembly_id))
+            # //// END NEOFFICE PATCH
             meta = dict(row.metadata_ or {})
             meta["neoffice_tariff"] = {
                 "rate": str(new_rate),
@@ -1135,6 +1151,37 @@ async def apply_labor_tariff(
         )
     # //// END NEOFFICE PATCH
 
+    # //// NEOFFICE PATCH — rebuild the stored total of every assembly touched.
+    # Assembly.total_rate is persisted, not derived on read, so re-pricing a
+    # component without it leaves the header showing yesterday's figure.
+    # Same arithmetic as assemblies/service.py: sum(component totals) * bid_factor.
+    assemblies_retotalled = 0
+    if not request.dry_run and touched_assemblies:
+        await session.flush()
+        for aid in touched_assemblies:
+            asm = await session.get(Assembly, aid)
+            if asm is None:
+                continue
+            comps = (await session.execute(
+                select(AssemblyComponent).where(AssemblyComponent.assembly_id == aid)
+            )).scalars().all()
+            subtotal = Decimal("0")
+            for c in comps:
+                try:
+                    v = Decimal(str(c.total or "0"))
+                except (ArithmeticError, ValueError):
+                    continue
+                if v.is_finite():
+                    subtotal += v
+            try:
+                bf = Decimal(str(asm.bid_factor or "1"))
+            except (ArithmeticError, ValueError):
+                bf = Decimal("1")
+            product = subtotal * bf
+            asm.total_rate = str(product) if product.is_finite() else "0"
+            assemblies_retotalled += 1
+    # //// END NEOFFICE PATCH
+
     if not request.dry_run and (changed or resources_changed):
         await session.commit()
 
@@ -1152,6 +1199,7 @@ async def apply_labor_tariff(
         ("resources_would_change" if request.dry_run else "resources_changed"): len(resources_changed),
         "resources_sample": resources_changed[:5],
         "double_count_check": double_count,
+        "assemblies_retotalled": assemblies_retotalled,
         # //// END NEOFFICE PATCH
         "tariff": composed,
     }
