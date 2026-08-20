@@ -20,11 +20,13 @@ function PickRow({
   depth,
   selected,
   onToggle,
+  onToggleAll,
 }: {
   position: TextPosition;
   depth: number;
   selected: Set<string>;
   onToggle: (p: TextPosition) => void;
+  onToggleAll: (p: TextPosition) => void;
 }) {
   const { t } = useTranslation();
   // //// NEOFFICE PATCH — a wording is selectable now. It used to be disabled
@@ -87,6 +89,22 @@ function PickRow({
           )}
         </span>
         <span className="flex shrink-0 items-center gap-1.5">
+          {/* //// NEOFFICE PATCH — whole-item shortcut, on the wordings that
+              have children. Replaces the old always-on cascade. //// END */}
+          {position.children.length > 0 && (
+            <span
+              role="button"
+              tabIndex={0}
+              onClick={(e) => { e.stopPropagation(); onToggleAll(position); }}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); onToggleAll(position); } }}
+              className="rounded border border-border-light px-1.5 py-0.5 text-2xs text-content-tertiary hover:border-oe-blue/40 hover:text-oe-blue"
+              title={t('text_catalog.pick_all_children', {
+                defaultValue: 'Cocher ce libellé et toutes ses sous-positions',
+              })}
+            >
+              {t('text_catalog.pick_all', { defaultValue: 'tout' })}
+            </span>
+          )}
           {position.assembly_id && (
             <span
               className="inline-flex items-center gap-1 rounded-full bg-oe-blue-subtle/40 px-1.5 py-0.5 text-2xs font-medium text-oe-blue-text"
@@ -109,7 +127,7 @@ function PickRow({
         </span>
       </button>
       {position.children.map((c) => (
-        <PickRow key={c.id} position={c} depth={depth + 1} selected={selected} onToggle={onToggle} />
+        <PickRow key={c.id} position={c} depth={depth + 1} selected={selected} onToggle={onToggle} onToggleAll={onToggleAll} />
       ))}
     </>
   );
@@ -141,7 +159,15 @@ export function TextCatalogPickerModal({
   }) => void;
 }) {
   const { t } = useTranslation();
-  const [catalogId, setCatalogId] = useState<string | null>(null);
+  //// NEOFFICE PATCH — reopen on the catalogue last used. Cédric Protti,
+  //// 2026-08-20: "il faudrait que la fenêtre s'ouvre sur le dernier catalogue
+  //// utilisé". An estimator works a chapter at a time; re-picking it on every
+  //// insert is a click that carries no decision.
+  const LAST_CATALOG_KEY = 'neoffice.textCatalog.lastId';
+  const [catalogId, setCatalogId] = useState<string | null>(() => {
+    try { return localStorage.getItem(LAST_CATALOG_KEY); } catch { return null; }
+  });
+  //// END NEOFFICE PATCH
   //// NEOFFICE PATCH — a set, not one position. And no quantity field:
   //// "les quantités changent toujours […] il est judicieux que les quantités
   //// soient gérées uniquement dans la fenêtre du devis" (Cédric, 2026-08-19).
@@ -165,7 +191,12 @@ export function TextCatalogPickerModal({
     queryKey: ['neoffice', 'text-catalogs'],
     queryFn: () => textCatalogApi.list(),
   });
-  const activeId = catalogId ?? catalogs.data?.[0]?.id ?? null;
+  //// NEOFFICE — a remembered catalogue that no longer exists must not leave the
+  //// dialog empty; fall back to the first one.
+  const activeId =
+    (catalogId && catalogs.data?.some((c) => c.id === catalogId) ? catalogId : null)
+    ?? catalogs.data?.[0]?.id
+    ?? null;
 
   const tree = useQuery({
     queryKey: ['neoffice', 'text-catalog-tree', activeId],
@@ -180,8 +211,28 @@ export function TextCatalogPickerModal({
   const toggle = useCallback((p: TextPosition) => {
     setSelected((prev) => {
       const next = new Set(prev);
+      //// NEOFFICE PATCH — one row per click, children left alone.
+      //// Checking a wording used to check its sub-positions too, on the
+      //// grounds that taking a whole CAN item is the common case. Cédric
+      //// Protti, 2026-08-20: "lorsqu'on sélectionne un article, l'ensemble des
+      //// sous-articles sont sélectionnés. Si il y en a beaucoup, c'est long à
+      //// les décocher." Unchecking many is more work than checking a few, and
+      //// "Tout cocher" below covers the whole-item case in one gesture.
+      //// END NEOFFICE PATCH
+      if (next.has(p.id)) next.delete(p.id);
+      else next.add(p.id);
+      return next;
+    });
+  }, []);
+
+  //// NEOFFICE PATCH — take the whole CAN item in one click when that IS the
+  //// intent, without imposing it on every click. //// END NEOFFICE PATCH
+  const toggleWithChildren = useCallback((p: TextPosition) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
       const ids = [p.id, ...p.children.map((c) => c.id)];
-      if (next.has(p.id)) ids.forEach((id) => next.delete(id));
+      const allIn = ids.every((id) => next.has(id));
+      if (allIn) ids.forEach((id) => next.delete(id));
       else ids.forEach((id) => next.add(id));
       return next;
     });
@@ -232,6 +283,7 @@ export function TextCatalogPickerModal({
             value={activeId ?? ''}
             onChange={(e) => {
               setCatalogId(e.target.value);
+              try { localStorage.setItem(LAST_CATALOG_KEY, e.target.value); } catch { /* private mode */ }
               setSelected(new Set());
             }}
           >
@@ -274,7 +326,7 @@ export function TextCatalogPickerModal({
             </div>
           )}
           {tree.data?.positions.map((p) => (
-            <PickRow key={p.id} position={p} depth={0} selected={selected} onToggle={toggle} />
+            <PickRow key={p.id} position={p} depth={0} selected={selected} onToggle={toggle} onToggleAll={toggleWithChildren} />
           ))}
         </div>
 

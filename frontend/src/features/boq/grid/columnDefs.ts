@@ -469,7 +469,12 @@ export function getColumnDefs(context: BOQColumnContext): ColDef[] {
     {
       headerName: t('boq.ordinal', { defaultValue: 'Pos.' }),
       field: 'ordinal',
-      width: 88,
+      //// NEOFFICE — 88px cut a sub-position number in half. Cédric Protti,
+      //// 2026-08-20: "la colonne des numéros d'articles est trop étroite
+      //// pour les afficher lorsqu'il y a des sous-articles". A CAN
+      //// sub-position reads 135.046.01 — eleven characters, monospaced.
+      //// The column stays resizable, this only moves the starting point.
+      width: 124,
       minWidth: 70,
       editable: (params) => {
         // Any position number is user-editable (sections included); only the

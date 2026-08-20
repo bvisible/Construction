@@ -708,6 +708,27 @@ export function ActionsCellRenderer(params: ICellRendererParams) {
           <span className="text-[9px] font-bold tabular-nums">{commentCount}</span>
         </button>
       )}
+      {/* //// NEOFFICE PATCH — a visible bin on the row. Deleting a position was
+          only reachable through the ⋯ menu, while a chapter carries its own bin
+          on the row. Cédric Protti, 2026-08-20: "pour pouvoir supprimer une
+          position rapidement, serait-il possible aussi de pouvoir le faire
+          comme un chapitre (signe poubelle) ?" — same action, same place.
+          //// END NEOFFICE PATCH */}
+      {!data._isResource && !data._isAddResource && !data._isVariantHeader && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            ctx?.onDeletePosition?.(data.id as string);
+          }}
+          className="flex h-6 w-6 items-center justify-center rounded
+                     text-content-tertiary/50 hover:text-red-600
+                     hover:bg-red-50 transition-all"
+          title={t('boq.delete_position', { defaultValue: 'Supprimer cette position' })}
+          aria-label={t('boq.delete_position', { defaultValue: 'Supprimer cette position' })}
+        >
+          <Trash2 size={13} />
+        </button>
+      )}
       {/* More actions button — triggers context menu */}
       <button
         onClick={(e) => {
