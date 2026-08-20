@@ -3042,7 +3042,20 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
                       label={t('boq.add_child_position', { defaultValue: 'Add Child Partida' })}
                       disabled={capped}
                       title={capped ? depthCapTooltip : undefined}
-                      onClick={() => { onAddChildPosition(d.id as string); closeContextMenu(); }}
+                      //// NEOFFICE PATCH — expand the parent first, or the new
+                      //// row is created and never drawn. insertResourceRows
+                      //// returns early for a position that is not in
+                      //// expandedPositions, and that Set starts empty, so a
+                      //// position that had no children yet is collapsed by
+                      //// definition. Cédric Protti, 2026-08-20: "on sélectionne
+                      //// ajouter une sous-poste, rien ne se passe" — the row was
+                      //// there all along, under a parent nothing had opened.
+                      onClick={() => {
+                        setExpandedPositions((prev) => new Set(prev).add(d.id as string));
+                        onAddChildPosition(d.id as string);
+                        closeContextMenu();
+                      }}
+                      //// END NEOFFICE PATCH
                     />
                   );
                 })()}

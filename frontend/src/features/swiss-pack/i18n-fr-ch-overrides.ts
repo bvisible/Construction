@@ -186,6 +186,12 @@ const frCHOverrides: Record<string, string> = {
   "boq.add_all_to_boq": "Tout ajouter au devis",
   "boq.add_n_positions": "Ajouter {{count}} au devis",
   "boq.add_position_to_section": "Ajouter une position à ce chapitre",
+  // Cédric Protti, 2026-08-20: "le bouton « + Ajouter un poste » devrait
+  // s'appeler « + Ajouter une position »" and "ajouter une sous-poste (qui
+  // serait s'appeler sous-position)". The validated glossary keeps Position;
+  // upstream fr.ts says "poste", which is a different trade's word.
+  "boq.add_child_position": "Ajouter une sous-position",
+  "boq.add_position": "Ajouter une position",
   "boq.add_section": "Ajouter un chapitre",
   "boq.add_selected": "Ajouter la sélection au devis",
   "boq.add_to_section_hint": "Choisissez où les nouveaux éléments seront placés dans le devis",
