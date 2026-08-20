@@ -120,6 +120,22 @@ export const textCatalogApi = {
     ),
   //// END NEOFFICE PATCH
 
+  //// NEOFFICE PATCH — the other direction: file estimate lines as catalogue
+  //// text. Wording gets written where the work is understood.
+  saveFromBoq: (data: { catalog_id: string; position_ids: string[]; overwrite?: boolean }) =>
+    apiPost<{ catalog_id: string; catalog_name: string; saved: number; codes: string[]; skipped: string[] }>(
+      `${BASE}/save-from-boq/`,
+      data,
+    ),
+
+  //// NEOFFICE PATCH — renumber sort_order to match a new order.
+  reorder: (catalogId: string, positionIds: string[]) =>
+    apiPost<{ reordered: number }>(
+      `${BASE}/${encodeURIComponent(catalogId)}/reorder/`,
+      { position_ids: positionIds },
+    ),
+  //// END NEOFFICE PATCH
+
   //// NEOFFICE PATCH — which catalogue texts depend on this assembly. Editing
   //// an assembly used to be editing something whose blast radius was
   //// invisible. //// END NEOFFICE PATCH

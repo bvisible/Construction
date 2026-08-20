@@ -110,6 +110,7 @@ import { CostDatabaseSearchModal, AssemblyPickerModal } from './BOQModals';
 import { CatalogPickerModal, type CatalogResource } from './CatalogPickerModal';
 // //// NEOFFICE PATCH — insert a CAN/NPK wording (with its assembly) into the devis.
 import { TextCatalogPickerModal } from '@/features/text-catalog';
+import { textCatalogApi } from '@/features/text-catalog/api';  //// Neoffice — save a line back to the catalogue
 // //// END NEOFFICE PATCH
 import { CustomColumnsDialog } from './CustomColumnsDialog';
 import { BOQVariablesDialog } from './BOQVariablesDialog';
@@ -1248,6 +1249,21 @@ export function BOQEditorPage() {
   const [costDbModalOpen, setCostDbModalOpen] = useState(false);
   const [assemblyModalOpen, setAssemblyModalOpen] = useState(false);
   // //// NEOFFICE PATCH //// END NEOFFICE PATCH
+  //// NEOFFICE PATCH — save an estimate line back into the catalogue.
+  const [saveToCatalogFor, setSaveToCatalogFor] = useState<string | null>(null);
+  const [saveToCatalogId, setSaveToCatalogId] = useState<string | null>(null);
+  const textCatalogs = useQuery({
+    queryKey: ['neoffice', 'text-catalogs'],
+    queryFn: () => textCatalogApi.list(),
+    enabled: saveToCatalogFor !== null,
+  });
+  useEffect(() => {
+    const first = textCatalogs.data?.[0];
+    if (saveToCatalogFor && !saveToCatalogId && first) {
+      setSaveToCatalogId(first.id);
+    }
+  }, [saveToCatalogFor, saveToCatalogId, textCatalogs.data]);
+  //// END NEOFFICE PATCH
   const [textCatalogModalOpen, setTextCatalogModalOpen] = useState(false);
   const [excelPasteOpen, setExcelPasteOpen] = useState(false);
   const [customColumnsOpen, setCustomColumnsOpen] = useState(false);
@@ -5242,6 +5258,7 @@ export function BOQEditorPage() {
           onLinkQuantity={handleLinkQuantity}
           onDrivePositions={handleDrivePositions}
           onAddChildPosition={(parentId) => handleAddPosition(parentId)}
+          onSaveToTextCatalog={(positionId) => setSaveToCatalogFor(positionId)}
           onAddSubSection={handleAddSubSection}
           maxNestingDepth={maxNestingDepth}
           onShowLinks={handleShowLinks}
@@ -5451,6 +5468,75 @@ export function BOQEditorPage() {
             addToast({ type: 'success', title: t('boq.toasts.assembly_applied', { defaultValue: 'Assembly applied to BOQ' }) });
           }}
         />
+      )}
+
+      {/* //// NEOFFICE PATCH — file an estimate line into the description
+          catalogue. Asks which catalogue rather than guessing: an estimator has
+          one per CAN chapter, and silently picking the first would file the
+          concrete wording under site installation.
+          //// END NEOFFICE PATCH */}
+      {saveToCatalogFor && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+             onClick={() => setSaveToCatalogFor(null)}>
+          <div role="dialog" aria-modal="true"
+               className="w-full max-w-md rounded-xl bg-surface-primary p-5 shadow-xl"
+               onClick={(e) => e.stopPropagation()}>
+            <h3 className="mb-3 text-sm font-semibold text-content-primary">
+              {t('boq.save_to_text_catalog', {
+                defaultValue: 'Enregistrer dans le catalogue de descriptions',
+              })}
+            </h3>
+            <label className="block text-2xs text-content-secondary">
+              {t('text_catalog.catalog', { defaultValue: 'Catalogue' })}
+              <select
+                className="mt-1 w-full rounded border border-border-light bg-surface-primary px-2 py-1 text-sm"
+                value={saveToCatalogId ?? ''}
+                onChange={(e) => setSaveToCatalogId(e.target.value)}
+              >
+                {(textCatalogs.data ?? []).map((c) => (
+                  <option key={c.id} value={c.id}>{c.code} — {c.name}</option>
+                ))}
+              </select>
+            </label>
+            <p className="mt-2 text-2xs text-content-tertiary">
+              {t('boq.save_to_text_catalog_hint', {
+                defaultValue:
+                  'La première ligne de la description devient le titre, le reste le descriptif. Une position sans unité arrive comme libellé.',
+              })}
+            </p>
+            <div className="mt-4 flex justify-end gap-2">
+              <Button variant="secondary" size="sm" onClick={() => setSaveToCatalogFor(null)}>
+                {t('common.cancel', { defaultValue: 'Annuler' })}
+              </Button>
+              <Button
+                size="sm"
+                disabled={!saveToCatalogId}
+                onClick={async () => {
+                  try {
+                    const res = await textCatalogApi.saveFromBoq({
+                      catalog_id: saveToCatalogId as string,
+                      position_ids: [saveToCatalogFor],
+                    });
+                    addToast({
+                      type: res.saved ? 'success' : 'info',
+                      title: res.saved
+                        ? t('boq.saved_to_text_catalog', { defaultValue: 'Enregistré dans le catalogue' })
+                        : t('boq.already_in_text_catalog', { defaultValue: 'Ce code existe déjà dans ce catalogue' }),
+                      message: res.saved ? `${res.codes.join(', ')} → ${res.catalog_name}` : undefined,
+                    });
+                    setSaveToCatalogFor(null);
+                  } catch (e) {
+                    addToast({ type: 'error',
+                      title: t('boq.save_to_text_catalog_failed', { defaultValue: 'Échec de l’enregistrement' }),
+                      message: e instanceof Error ? e.message : undefined });
+                  }
+                }}
+              >
+                {t('common.save', { defaultValue: 'Enregistrer' })}
+              </Button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* ── NEOFFICE: CAN/NPK wording catalogue ──────────────────────── */}

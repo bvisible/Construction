@@ -33,6 +33,7 @@ import {
   ChevronDown,
   ChevronRight,
   BookmarkPlus,
+  BookText,  //// Neoffice — save to the description catalogue
   ExternalLink,
   Wrench,
   X,
@@ -349,6 +350,8 @@ export interface BOQGridProps {
   onAddPosition: (sectionId?: string) => void;
   onSelectSuggestion: (positionId: string, item: CostAutocompleteItem) => void;
   onSaveToDatabase: (positionId: string) => void;
+  //// Neoffice — file a line's wording into the description catalogue.
+  onSaveToTextCatalog?: (positionId: string) => void;
   onAddComment?: (positionId: string) => void;
   onFormulaApplied: (positionId: string, formula: string, result: number) => void;
   onReorderSections?: (fromId: string, toId: string) => void;
@@ -578,6 +581,7 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
   onAddPosition,
   onSelectSuggestion: _onSelectSuggestion,
   onSaveToDatabase,
+  onSaveToTextCatalog,
   onAddComment,
   onFormulaApplied,
   onReorderSections,
@@ -3114,6 +3118,21 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
                   label={t('boq.save_to_database', { defaultValue: 'Save to Catalog' })}
                   onClick={() => { onSaveToDatabase(d.id as string); closeContextMenu(); }}
                 />
+                {/* //// NEOFFICE PATCH — file this line's wording into the
+                    description catalogue. The entry above saves it to the COST
+                    database, which is a different library: one holds prices, the
+                    other holds the words. Cédric Protti, 2026-08-20: "Il n'est
+                    pas possible d'enregistrer dans le catalogue des descriptions
+                    une position […] depuis le devis."
+                    //// END NEOFFICE PATCH */}
+                {onSaveToTextCatalog && (
+                  <CtxItem icon={<BookText size={14}/>}
+                    label={t('boq.save_to_text_catalog', {
+                      defaultValue: 'Enregistrer dans le catalogue de descriptions',
+                    })}
+                    onClick={() => { onSaveToTextCatalog(d.id as string); closeContextMenu(); }}
+                  />
+                )}
                 {onSaveAsAssembly && (
                   <CtxItem icon={<Layers size={14}/>}
                     label={t('boq.save_as_assembly', { defaultValue: 'Save as Assembly' })}

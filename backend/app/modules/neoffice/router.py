@@ -1512,6 +1512,162 @@ async def delete_text_position(
 
 
 # //// NEOFFICE PATCH — added endpoint (no upstream equivalent).
+# Cédric Protti, 2026-08-20: "Ce serait bien de pouvoir déplacer les positions
+# (comme dans le devis) pour pouvoir changer l'ordre si on crée une nouvelle
+# position." A new position lands at the end; a CAN chapter has an order that
+# matters to whoever reads the estimate.
+class ReorderTextPositionsRequest(BaseModel):
+    #: Positions in their new order. Only rows sharing one parent are accepted:
+    #: reordering across levels is a move, not a sort, and needs its own gesture.
+    position_ids: list[str]
+
+
+@router.post("/text-catalog/{catalog_id}/reorder/")
+async def reorder_text_positions(
+    catalog_id: str,
+    request: ReorderTextPositionsRequest,
+    session: SessionDep,
+    user_id: str = Depends(get_current_user_id),
+) -> dict[str, Any]:
+    """Renumber sort_order to match the order given."""
+    from sqlalchemy import select
+
+    from app.modules.neoffice.models import TextPosition
+
+    rows = (await session.execute(
+        select(TextPosition)
+        .where(TextPosition.id.in_(request.position_ids))
+        .where(TextPosition.catalog_id == catalog_id)
+    )).scalars().all()
+    if not rows:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="positions not found")
+
+    parents = {str(r.parent_id) if r.parent_id else None for r in rows}
+    if len(parents) > 1:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="all positions must share the same parent",
+        )
+
+    by_id = {str(r.id): r for r in rows}
+    order = 0
+    for pid in request.position_ids:
+        row = by_id.get(pid)
+        if row is None:
+            continue
+        order += 1
+        row.sort_order = order
+    await session.commit()
+    return {"reordered": order}
+# //// END NEOFFICE PATCH
+
+
+# //// NEOFFICE PATCH — added endpoint (no upstream equivalent).
+# The other direction: a line written in the estimate becomes catalogue text.
+# Cédric Protti, 2026-08-20: "Il n'est pas possible d'enregistrer dans le
+# catalogue des descriptions une position, une sous-position, ou les deux […]
+# depuis le devis." Wording gets written where the work is understood — in the
+# estimate — and the library is what should collect it, not the other way round.
+class SaveToTextCatalogRequest(BaseModel):
+    catalog_id: str
+    #: BOQ positions to file, in the order given. A parent lands first and its
+    #: children hang under it.
+    position_ids: list[str]
+    #: Reuse an existing code instead of failing on a duplicate.
+    overwrite: bool = False
+
+
+@router.post("/text-catalog/save-from-boq/")
+async def save_boq_positions_to_catalog(
+    request: SaveToTextCatalogRequest,
+    session: SessionDep,
+    user_id: str = Depends(get_current_user_id),
+) -> dict[str, Any]:
+    """File one or more BOQ positions into a description catalogue."""
+    from sqlalchemy import select
+
+    from app.modules.boq.models import Position as BoqPosition
+    from app.modules.neoffice.models import TextCatalog, TextPosition
+
+    catalog = await session.get(TextCatalog, request.catalog_id)
+    if catalog is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="catalog not found")
+
+    rows = (await session.execute(
+        select(BoqPosition).where(BoqPosition.id.in_(request.position_ids))
+    )).scalars().all()
+    if not rows:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="positions not found")
+    by_id = {str(r.id): r for r in rows}
+    ordered = [by_id[i] for i in request.position_ids if i in by_id]
+
+    existing = {
+        p.code: p
+        for p in (await session.execute(
+            select(TextPosition).where(TextPosition.catalog_id == request.catalog_id)
+        )).scalars().all()
+    }
+    next_order = max((p.sort_order for p in existing.values()), default=0)
+
+    # A BOQ description is one blob: first line is the title, the rest is the
+    # body. That is how the catalogue splits them, and how insertion rebuilds
+    # them, so a round trip through both keeps the same shape.
+    created: list[str] = []
+    skipped: list[str] = []
+    boq_to_text: dict[str, str] = {}
+    for row in ordered:
+        code = (row.ordinal or "").strip()
+        if not code:
+            skipped.append(str(row.id))
+            continue
+        if code in existing and not request.overwrite:
+            skipped.append(code)
+            continue
+
+        desc = (row.description or "").strip()
+        head, _, tail = desc.partition("\n")
+        meta = row.metadata_ or {}
+        is_text = meta.get("neoffice_text_only") is True
+        unit = None if is_text else ((row.unit or "").strip() or None)
+        if unit == "txt":
+            unit = None
+
+        target = existing.get(code)
+        if target is not None:
+            target.title = head
+            target.body = tail
+            target.unit = unit
+        else:
+            next_order += 1
+            parent_txt = boq_to_text.get(str(row.parent_id)) if row.parent_id else None
+            target = TextPosition(
+                catalog_id=request.catalog_id,
+                parent_id=parent_txt,
+                code=code,
+                title=head,
+                body=tail,
+                unit=unit,
+                assembly_id=meta.get("neoffice_assembly_id"),
+                sort_order=next_order,
+            )
+            session.add(target)
+            existing[code] = target
+        await session.flush()
+        boq_to_text[str(row.id)] = str(target.id)
+        created.append(code)
+
+    await session.commit()
+    return {
+        "catalog_id": request.catalog_id,
+        "catalog_name": catalog.name,
+        "saved": len(created),
+        "codes": created,
+        "skipped": skipped,
+    }
+# //// END NEOFFICE PATCH
+
+
+# //// NEOFFICE PATCH — added endpoint (no upstream equivalent).
 # Insert an explicit selection rather than a wording and everything under it.
 #
 # Cédric Protti, 2026-08-19: "Si nous avons besoin d'une seule sous-position,
