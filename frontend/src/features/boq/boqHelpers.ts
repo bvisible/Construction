@@ -255,7 +255,15 @@ export function isRemarkLine(d: Record<string, unknown> | undefined | null): boo
   // unit and this marker instead. Reading the marker here is what makes every
   // renderer that already calls isRemarkLine mask the row for free.
   const meta = d.metadata as Record<string, unknown> | undefined;
-  return meta?.neoffice_text_only === true;
+  if (meta?.neoffice_text_only !== true) return false;
+  //// NEOFFICE PATCH — the marker only holds while the row still carries the
+  //// filler unit. It used to outrank the unit outright, so a text line stayed
+  //// a text line whatever you typed: Cédric Protti, 2026-08-20, "lorsqu'on
+  //// importe une position sans unité (txt), il n'est pas possible d'en définir
+  //// une différente". The unit is the switch between a wording and a
+  //// measurable position, and it has to work in both directions.
+  return u.trim().toLowerCase() === 'txt';
+  //// END NEOFFICE PATCH
 }
 // //// END NEOFFICE PATCH
 

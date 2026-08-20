@@ -78,8 +78,15 @@ function PositionRow({
         code: editDraft.code,
         title: editDraft.title,
         body: editDraft.body,
-        // Same rule as creation: blank unit is what makes it a wording line.
-        unit: editDraft.unit.trim() || null,
+        //// NEOFFICE PATCH — '' and not null. Blank unit is what makes a line
+        //// a wording, but the PUT dumps with exclude_none, so a JSON null is
+        //// indistinguishable from "field not sent" and the unit was never
+        //// cleared. Cédric Protti, 2026-08-20: "Si on crée une position avec
+        //// une unité, il n'est plus possible par la suite de transformer cette
+        //// position en libellé sans unité." Same trap already fixed for
+        //// assembly_id on 2026-08-19 and not carried across to unit.
+        unit: editDraft.unit.trim(),
+        //// END NEOFFICE PATCH
         //// NEOFFICE PATCH — empty string detaches the analysis (the backend
         //// treats it as a sentinel, since exclude_none swallows a JSON null).
         assembly_id: editDraft.assembly_id,

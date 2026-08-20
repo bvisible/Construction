@@ -2129,6 +2129,24 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
       const update: UpdatePositionData = { [field]: newValue };
       const old: UpdatePositionData = { [field]: oldValue };
 
+      //// NEOFFICE PATCH — typing a real unit on a free text line turns it into
+      //// a measurable position, so the marker that made it text has to go with
+      //// it. isRemarkLine() already ignores a stale marker once the filler
+      //// unit is gone, but leaving it stored means the row's metadata says one
+      //// thing and its unit another — and the next reader believes the
+      //// metadata. Cédric Protti, 2026-08-20.
+      if (field === 'unit') {
+        const typed = String(newValue ?? '').trim().toLowerCase();
+        const meta = data.metadata as Record<string, unknown> | undefined;
+        if (meta?.neoffice_text_only === true && typed !== '' && typed !== 'txt') {
+          const cleaned = { ...meta };
+          delete cleaned.neoffice_text_only;
+          (update as Record<string, unknown>).metadata = cleaned;
+          (old as Record<string, unknown>).metadata = meta;
+        }
+      }
+      //// END NEOFFICE PATCH
+
       // Position quantity is a multiplier on the per-unit unit_rate.
       // Resources are stored as PER-UNIT norms (qty per 1 unit of
       // position) — same convention as integrated 5D estimating suites —
