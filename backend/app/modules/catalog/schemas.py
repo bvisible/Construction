@@ -221,6 +221,10 @@ class CatalogSearchQuery(BaseModel):
     @field_serializer("min_price", "max_price", when_used="json")
     def _ser_money(self, v: Decimal | None) -> str | None:
         return _serialise_money(v)
+    #//// Neoffice — column sort chosen by the reader (see repository.search).
+    sort_by: str | None = None
+    sort_dir: str = "asc"
+    #//// End Neoffice
 
 
 class CatalogSearchResponse(BaseModel):

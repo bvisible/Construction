@@ -9,7 +9,7 @@ No business logic - pure data access.
 import uuid
 from decimal import Decimal
 
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import Numeric, cast, func, or_, select, update  #//// Neoffice — numeric sort on a String price column
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import set_committed_value
 from sqlalchemy.orm.util import identity_key
@@ -62,6 +62,15 @@ class CatalogResourceRepository:
         max_price: float | Decimal | None = None,
         offset: int = 0,
         limit: int = 50,
+        #//// Neoffice — let the caller choose the ordering.
+        #//// Cédric Protti, 2026-08-20: "Quelle est la logique du classement
+        #//// des ressources ? Serait-il possible de les classer en cliquant sur
+        #//// la ligne de titre soit en fonction du nom, du code, etc…". The
+        #//// answer was usage_count desc, which is a relevance order nobody can
+        #//// guess by looking at it. None keeps that default.
+        sort_by: str | None = None,
+        sort_dir: str = "asc",
+        #//// End Neoffice
     ) -> tuple[list[CatalogResource], int]:
         """Search catalog resources with multiple filters.
 
@@ -118,8 +127,29 @@ class CatalogResourceRepository:
         count_stmt = select(func.count()).select_from(base.subquery())
         total = (await self.session.execute(count_stmt)).scalar_one()
 
-        # Fetch (ordered by usage_count desc for relevance)
-        stmt = base.order_by(CatalogResource.usage_count.desc()).offset(offset).limit(limit)
+        # Fetch (ordered by usage_count desc for relevance, unless asked otherwise)
+        #//// Neoffice — an explicit sort wins over the relevance default.
+        #//// base_price is a String column on this model, so ordering it as text
+        #//// would put 9 after 42. Cast to numeric for that one.
+        _SORTABLE = {
+            "name": CatalogResource.name,
+            "resource_code": CatalogResource.resource_code,
+            "category": CatalogResource.category,
+            "resource_type": CatalogResource.resource_type,
+            "unit": CatalogResource.unit,
+            "usage_count": CatalogResource.usage_count,
+            "region": CatalogResource.region,
+        }
+        if sort_by == "base_price":
+            col = cast(CatalogResource.base_price, Numeric)
+        else:
+            col = _SORTABLE.get(sort_by or "")
+        if col is not None:
+            order = col.desc() if sort_dir == "desc" else col.asc()
+        else:
+            order = CatalogResource.usage_count.desc()
+        #//// End Neoffice
+        stmt = base.order_by(order).offset(offset).limit(limit)
         result = await self.session.execute(stmt)
         items = list(result.scalars().all())
 

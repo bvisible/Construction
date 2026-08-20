@@ -673,6 +673,11 @@ async def search_catalog(
     max_price: float | None = Query(default=None, ge=0, description="Max base price"),
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
+    #//// Neoffice — clickable column sort. Default (None) keeps the historical
+    #//// relevance order, usage_count desc, so existing callers are untouched.
+    sort_by: str | None = Query(default=None, description="name, resource_code, category, resource_type, unit, base_price, usage_count, region"),
+    sort_dir: str = Query(default="asc", pattern="^(asc|desc)$"),
+    #//// End Neoffice
 ) -> CatalogSearchResponse:
     """Search and list catalog resources with optional filters."""
     from app.modules.catalog.schemas import CatalogSearchQuery
@@ -687,6 +692,8 @@ async def search_catalog(
         max_price=max_price,
         limit=limit,
         offset=offset,
+        sort_by=sort_by,      #//// Neoffice
+        sort_dir=sort_dir,    #//// Neoffice
     )
     items, total = await service.search_resources(query)
     return CatalogSearchResponse(

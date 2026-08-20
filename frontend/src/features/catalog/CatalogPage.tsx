@@ -27,6 +27,7 @@ import {
   Database,
   Upload,
   Trash2,
+  Pencil,  //// Neoffice — edit a resource in place
   House,
   TrendingUp,
   AlertTriangle,
@@ -37,7 +38,7 @@ import { CurrencyPicker } from '@/shared/ui/CurrencyPicker';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { catalogGuide } from './catalogGuide';
 import { useConfirm } from '@/shared/hooks/useConfirm';
-import { apiGet, apiPost, apiPatch, apiDelete } from '@/shared/lib/api';
+import { apiGet, apiPost, apiPatch, apiPut, apiDelete } from '@/shared/lib/api';  //// Neoffice — apiPut for the resource edit
 import { getIntlLocale } from '@/shared/lib/formatters';
 import { useToastStore } from '@/stores/useToastStore';
 import { usePreferencesStore } from '@/stores/usePreferencesStore';
@@ -191,6 +192,9 @@ function buildSearchUrl(
   unit: string,
   region: string,
   offset: number,
+  //// Neoffice — chosen column order; null keeps the relevance default.
+  sortBy?: string | null,
+  sortDir?: 'asc' | 'desc',
 ): string {
   const params = new URLSearchParams();
   if (q) params.set('q', q);
@@ -200,6 +204,9 @@ function buildSearchUrl(
   if (region) params.set('region', region);
   params.set('limit', String(PAGE_SIZE));
   params.set('offset', String(offset));
+  //// Neoffice — omitted entirely when no column is chosen, so the server keeps
+  //// its historical usage_count ordering for every other caller.
+  if (sortBy) { params.set('sort_by', sortBy); params.set('sort_dir', sortDir ?? 'asc'); }
   return `/v1/catalog/?${params.toString()}`;
 }
 
@@ -646,6 +653,8 @@ function ResourceRow({
   onSelect,
   onCopy,
   copiedId,
+  onEdit,
+  onDelete,
   t: translate,
 }: {
   resource: CatalogResource;
@@ -655,6 +664,13 @@ function ResourceRow({
   onSelect: () => void;
   onCopy: () => void;
   copiedId: string | null;
+  //// NEOFFICE PATCH — amend or remove one resource. Cédric Protti,
+  //// 2026-08-20: "Peut-on facilement supprimer une ressource ? Je ne trouve
+  //// comment l'exécuter." The API had no PUT or DELETE at all until today, and
+  //// the screen still had nowhere to reach them from.
+  onEdit: () => void;
+  onDelete: () => void;
+  //// END NEOFFICE PATCH
   t: ReturnType<typeof useTranslation>['t'];
 }) {
   const typeColors: Record<string, string> = {
@@ -785,6 +801,25 @@ function ResourceRow({
               ) : (
                 <Copy size={14} />
               )}
+            </button>
+            {/* //// NEOFFICE PATCH — edit and delete, named by their icon's
+                title. Sitting beside copy and expand so the row's actions read
+                as one group. //// END NEOFFICE PATCH */}
+            <button
+              className="flex h-7 w-7 items-center justify-center rounded-md text-content-tertiary hover:bg-surface-secondary hover:text-oe-blue transition-colors"
+              aria-label={translate('common.edit', { defaultValue: 'Modifier' })}
+              title={translate('catalog.edit_resource', { defaultValue: 'Modifier cette ressource' })}
+              onClick={(e) => { e.stopPropagation(); onEdit(); }}
+            >
+              <Pencil size={14} />
+            </button>
+            <button
+              className="flex h-7 w-7 items-center justify-center rounded-md text-content-tertiary hover:bg-red-50 hover:text-red-600 transition-colors"
+              aria-label={translate('common.delete', { defaultValue: 'Supprimer' })}
+              title={translate('catalog.delete_resource', { defaultValue: 'Supprimer cette ressource' })}
+              onClick={(e) => { e.stopPropagation(); onDelete(); }}
+            >
+              <Trash2 size={14} />
             </button>
             <button
               className="flex h-7 w-7 items-center justify-center rounded-md text-content-tertiary hover:bg-surface-secondary hover:text-content-primary transition-colors"
@@ -1451,6 +1486,19 @@ export function CatalogPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  //// NEOFFICE PATCH — edit / delete one resource, and a chosen column order.
+  //// Three of Cédric Protti's resource points (2026-08-20), on the screen he
+  //// said had to be sorted out before the assemblies could be rebuilt.
+  const [editing, setEditing] = useState<CatalogResource | null>(null);
+  const [deleting, setDeleting] = useState<CatalogResource | null>(null);
+  const [sortBy, setSortBy] = useState<string | null>(null);
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+  const toggleSort = (col: string) => {
+    if (sortBy === col) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    else { setSortBy(col); setSortDir('asc'); }
+    setOffset(0);
+  };
+  //// END NEOFFICE PATCH
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [showImportGrid, setShowImportGrid] = useState(false);
@@ -1507,9 +1555,11 @@ export function CatalogPage() {
   }, [regionStats]);
 
   // Fetch resources
-  const searchUrl = buildSearchUrl(debouncedQuery, resourceType, category, unit, region, offset);
+  const searchUrl = buildSearchUrl(debouncedQuery, resourceType, category, unit, region, offset, sortBy, sortDir);
   const { data, isLoading, isFetching } = useQuery({
-    queryKey: ['catalog', debouncedQuery, resourceType, category, unit, region, offset],
+    //// Neoffice — the sort belongs in the key, or changing a column re-uses the
+    //// previous page's cached rows and the table looks like it ignored the click.
+    queryKey: ['catalog', debouncedQuery, resourceType, category, unit, region, offset, sortBy, sortDir],
     queryFn: () => apiGet<CatalogSearchResponse>(searchUrl),
     placeholderData: (prev) => prev,
   });
@@ -2083,25 +2133,79 @@ export function CatalogPage() {
                       </button>
                     </th>
                     <th className="px-4 py-3 font-medium text-content-secondary">
-                      {t('catalog.name', { defaultValue: 'Name' })}
+                      {/* //// Neoffice — sortable header */}
+                      <button
+                        type="button"
+                        onClick={() => toggleSort('name')}
+                        className="inline-flex items-center gap-1 hover:text-oe-blue transition-colors"
+                        title={t('catalog.sort_by_column', { defaultValue: 'Trier sur cette colonne' })}
+                      >
+                        {t('catalog.name', { defaultValue: 'Name' })}
+                        {sortBy === 'name' && (sortDir === 'asc' ? <ChevronUp size={12} /> : <ChevronDown size={12} />)}
+                      </button>
                     </th>
                     <th className="px-4 py-3 font-medium text-content-secondary w-36">
-                      {t('catalog.code', { defaultValue: 'Code' })}
+                      {/* //// Neoffice — sortable header */}
+                      <button
+                        type="button"
+                        onClick={() => toggleSort('resource_code')}
+                        className="inline-flex items-center gap-1 hover:text-oe-blue transition-colors"
+                        title={t('catalog.sort_by_column', { defaultValue: 'Trier sur cette colonne' })}
+                      >
+                        {t('catalog.code', { defaultValue: 'Code' })}
+                        {sortBy === 'resource_code' && (sortDir === 'asc' ? <ChevronUp size={12} /> : <ChevronDown size={12} />)}
+                      </button>
                     </th>
                     <th className="px-3 py-3 font-medium text-content-secondary w-28">
-                      {t('catalog.category', { defaultValue: 'Category' })}
+                      {/* //// Neoffice — sortable header */}
+                      <button
+                        type="button"
+                        onClick={() => toggleSort('category')}
+                        className="inline-flex items-center gap-1 hover:text-oe-blue transition-colors"
+                        title={t('catalog.sort_by_column', { defaultValue: 'Trier sur cette colonne' })}
+                      >
+                        {t('catalog.category', { defaultValue: 'Category' })}
+                        {sortBy === 'category' && (sortDir === 'asc' ? <ChevronUp size={12} /> : <ChevronDown size={12} />)}
+                      </button>
                     </th>
                     <th className="px-4 py-3 font-medium text-content-secondary w-16 text-center">
-                      {t('boq.unit', { defaultValue: 'Unit' })}
+                      {/* //// Neoffice — sortable header */}
+                      <button
+                        type="button"
+                        onClick={() => toggleSort('unit')}
+                        className="inline-flex items-center gap-1 hover:text-oe-blue transition-colors"
+                        title={t('catalog.sort_by_column', { defaultValue: 'Trier sur cette colonne' })}
+                      >
+                        {t('boq.unit', { defaultValue: 'Unit' })}
+                        {sortBy === 'unit' && (sortDir === 'asc' ? <ChevronUp size={12} /> : <ChevronDown size={12} />)}
+                      </button>
                     </th>
                     <th className="px-4 py-3 font-medium text-content-secondary w-32 text-right">
-                      {t('catalog.price_avg', { defaultValue: 'Price (avg)' })}
+                      {/* //// Neoffice — sortable header */}
+                      <button
+                        type="button"
+                        onClick={() => toggleSort('base_price')}
+                        className="inline-flex items-center gap-1 hover:text-oe-blue transition-colors"
+                        title={t('catalog.sort_by_column', { defaultValue: 'Trier sur cette colonne' })}
+                      >
+                        {t('catalog.price_avg', { defaultValue: 'Price (avg)' })}
+                        {sortBy === 'base_price' && (sortDir === 'asc' ? <ChevronUp size={12} /> : <ChevronDown size={12} />)}
+                      </button>
                     </th>
                     <th className="px-4 py-3 font-medium text-content-secondary w-48">
                       {t('catalog.price_range', { defaultValue: 'Price Range' })}
                     </th>
                     <th className="px-4 py-3 font-medium text-content-secondary w-16 text-center">
-                      {t('catalog.usage', { defaultValue: 'Usage' })}
+                      {/* //// Neoffice — sortable header */}
+                      <button
+                        type="button"
+                        onClick={() => toggleSort('usage_count')}
+                        className="inline-flex items-center gap-1 hover:text-oe-blue transition-colors"
+                        title={t('catalog.sort_by_column', { defaultValue: 'Trier sur cette colonne' })}
+                      >
+                        {t('catalog.usage', { defaultValue: 'Usage' })}
+                        {sortBy === 'usage_count' && (sortDir === 'asc' ? <ChevronUp size={12} /> : <ChevronDown size={12} />)}
+                      </button>
                     </th>
                     <th className="px-2 py-3 w-16" />
                   </tr>
@@ -2119,6 +2223,8 @@ export function CatalogPage() {
                         onSelect={() => toggleSelect(resource.id)}
                         onCopy={() => handleCopyRate(resource)}
                         copiedId={copiedId}
+                        onEdit={() => setEditing(resource)}
+                        onDelete={() => setDeleting(resource)}
                         t={t}
                       />
                     );
@@ -2261,6 +2367,135 @@ export function CatalogPage() {
             >
               <X size={14} />
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* //// NEOFFICE PATCH — edit one resource. The Excel import seeded rates
+          that are out of date, and until today there was no way to correct one:
+          the only delete upstream offers wipes a whole region.
+          //// END NEOFFICE PATCH */}
+      {editing && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setEditing(null)}>
+          <div role="dialog" aria-modal="true"
+               className="w-full max-w-lg rounded-xl bg-surface-primary p-5 shadow-xl"
+               onClick={(e) => e.stopPropagation()}>
+            <h3 className="mb-4 text-sm font-semibold text-content-primary">
+              {t('catalog.edit_resource', { defaultValue: 'Modifier cette ressource' })}
+            </h3>
+            <form
+              onSubmit={async (e) => {
+                e.preventDefault();
+                const f = new FormData(e.currentTarget as HTMLFormElement);
+                try {
+                  await apiPut(`/v1/catalog/${editing.id}`, {
+                    resource_code: String(f.get('code') || '').trim(),
+                    name: String(f.get('name') || '').trim(),
+                    category: String(f.get('category') || '').trim(),
+                    unit: String(f.get('unit') || '').trim(),
+                    base_price: String(f.get('price') || '0').trim(),
+                  });
+                  addToast({ type: 'success', title: t('catalog.saved', { defaultValue: 'Ressource enregistrée' }) });
+                  setEditing(null);
+                  queryClient.invalidateQueries({ queryKey: ['catalog'] });
+                } catch (err) {
+                  addToast({ type: 'error', title: t('catalog.save_failed', { defaultValue: 'Échec de l’enregistrement' }),
+                             message: err instanceof Error ? err.message : undefined });
+                }
+              }}
+              className="space-y-3"
+            >
+              <div className="grid grid-cols-3 gap-2">
+                <label className="col-span-1 text-2xs text-content-secondary">
+                  {t('catalog.code', { defaultValue: 'Code' })}
+                  <input name="code" defaultValue={editing.resource_code} autoComplete="off"
+                         className="mt-1 w-full rounded border border-border-light bg-surface-primary px-2 py-1 font-mono text-xs" />
+                </label>
+                <label className="col-span-2 text-2xs text-content-secondary">
+                  {t('catalog.name', { defaultValue: 'Nom' })}
+                  <input name="name" defaultValue={editing.name} autoComplete="off"
+                         className="mt-1 w-full rounded border border-border-light bg-surface-primary px-2 py-1 text-sm" />
+                </label>
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                <label className="text-2xs text-content-secondary">
+                  {t('catalog.category', { defaultValue: 'Catégorie' })}
+                  {/* //// Neoffice — a datalist, not a select: the existing
+                      categories are offered, a new one can still be typed.
+                      Cédric: "il n'y a pas de menu déroulant sous le champ
+                      Catégorie". //// END */}
+                  <input name="category" defaultValue={editing.category} list="neo-cat-list" autoComplete="off"
+                         className="mt-1 w-full rounded border border-border-light bg-surface-primary px-2 py-1 text-sm" />
+                  <datalist id="neo-cat-list">
+                    {categories.map((c) => <option key={c} value={c} />)}
+                  </datalist>
+                </label>
+                <label className="text-2xs text-content-secondary">
+                  {t('boq.unit', { defaultValue: 'Unité' })}
+                  <input name="unit" defaultValue={editing.unit} autoComplete="off"
+                         className="mt-1 w-full rounded border border-border-light bg-surface-primary px-2 py-1 text-sm" />
+                </label>
+                <label className="text-2xs text-content-secondary">
+                  {t('catalog.price', { defaultValue: 'Prix' })}
+                  <input name="price" defaultValue={String(editing.base_price)} inputMode="decimal" autoComplete="off"
+                         className="mt-1 w-full rounded border border-border-light bg-surface-primary px-2 py-1 text-right text-sm tabular-nums" />
+                </label>
+              </div>
+              <div className="flex justify-end gap-2 pt-2">
+                <Button type="button" variant="secondary" size="sm" onClick={() => setEditing(null)}>
+                  {t('common.cancel', { defaultValue: 'Annuler' })}
+                </Button>
+                <Button type="submit" size="sm">
+                  {t('common.save', { defaultValue: 'Enregistrer' })}
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* //// NEOFFICE PATCH — delete confirmation. Says what stays: an assembly
+          component keeps the rate it already copied, so removing a resource
+          never silently re-prices a finished estimate.
+          //// END NEOFFICE PATCH */}
+      {deleting && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setDeleting(null)}>
+          <div role="dialog" aria-modal="true"
+               className="w-full max-w-md rounded-xl bg-surface-primary p-5 shadow-xl"
+               onClick={(e) => e.stopPropagation()}>
+            <h3 className="mb-2 text-sm font-semibold text-content-primary">
+              {t('catalog.delete_resource', { defaultValue: 'Supprimer cette ressource' })}
+            </h3>
+            <p className="mb-1 text-sm text-content-secondary">
+              <span className="font-mono text-xs">{deleting.resource_code}</span> — {deleting.name}
+            </p>
+            <p className="mb-4 text-2xs text-content-tertiary">
+              {t('catalog.delete_resource_hint', {
+                defaultValue:
+                  'Les analyses de prix qui l’utilisent gardent le tarif déjà repris : supprimer une ressource ne change aucun devis existant.',
+              })}
+            </p>
+            <div className="flex justify-end gap-2">
+              <Button variant="secondary" size="sm" onClick={() => setDeleting(null)}>
+                {t('common.cancel', { defaultValue: 'Annuler' })}
+              </Button>
+              <Button
+                size="sm"
+                onClick={async () => {
+                  try {
+                    await apiDelete(`/v1/catalog/${deleting.id}`);
+                    addToast({ type: 'success', title: t('catalog.deleted', { defaultValue: 'Ressource supprimée' }) });
+                    setDeleting(null);
+                    queryClient.invalidateQueries({ queryKey: ['catalog'] });
+                  } catch (err) {
+                    addToast({ type: 'error', title: t('catalog.delete_failed', { defaultValue: 'Échec de la suppression' }),
+                               message: err instanceof Error ? err.message : undefined });
+                  }
+                }}
+              >
+                {t('common.delete', { defaultValue: 'Supprimer' })}
+              </Button>
+            </div>
           </div>
         </div>
       )}

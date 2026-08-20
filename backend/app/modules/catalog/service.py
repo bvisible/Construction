@@ -183,6 +183,8 @@ class CatalogResourceService:
             max_price=query.max_price,
             offset=query.offset,
             limit=query.limit,
+            sort_by=query.sort_by,
+            sort_dir=query.sort_dir,
         )
 
     async def get_stats(self, region: str | None = None) -> CatalogStatsResponse:
