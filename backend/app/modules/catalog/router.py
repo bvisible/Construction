@@ -39,6 +39,7 @@ Endpoints:
 import asyncio
 import logging
 import uuid
+from decimal import Decimal  #//// Neoffice — price-band guard on update
 from pathlib import Path
 from typing import Any
 
@@ -55,6 +56,7 @@ from app.dependencies import (
 )
 from app.modules.catalog.schemas import (
     CatalogResourceCreate,
+    CatalogResourceUpdate,  #//// Neoffice — amend one resource
     CatalogResourceResponse,
     CatalogSearchResponse,
     CatalogStatsResponse,
@@ -851,6 +853,85 @@ async def create_catalog_resource(
     """Create a new custom catalog resource."""
     resource = await service.create_resource(data)
     return CatalogResourceResponse.model_validate(resource)
+
+
+#//// Neoffice — added endpoints (no upstream equivalent).
+#//// Upstream can create a resource and delete a whole region, but not amend or
+#//// remove a single one. Cédric Protti, 2026-08-20, on the Excel import that
+#//// seeded his catalogue: "Les ressources de la feuille Excel ne sont pas à
+#//// jour. Je dois les modifier." Correcting one wrong rate meant wiping a
+#//// region and re-importing, which loses every hand-made resource beside it.
+
+
+@router.put("/{resource_id}", response_model=CatalogResourceResponse)
+async def update_catalog_resource(
+    resource_id: uuid.UUID,
+    data: CatalogResourceUpdate,
+    service: CatalogResourceService = Depends(_get_service),
+    _user: str = Depends(RequirePermission("catalog.create")),
+) -> CatalogResourceResponse:
+    """Patch one catalog resource. Omitted fields keep their stored value."""
+    resource = await service.get_resource(resource_id)
+
+    changes = data.model_dump(exclude_none=True)
+    if "resource_code" in changes and changes["resource_code"] != resource.resource_code:
+        clash = await service.repo.get_by_code(changes["resource_code"])
+        if clash is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"resource_code '{changes['resource_code']}' already exists",
+            )
+
+    for key, value in changes.items():
+        # Money columns are String(50) on this model (SQLite compatibility),
+        # so a Decimal has to be written back as text or SQLAlchemy stores a
+        # repr and every later read comes back unparseable.
+        if key in ("base_price", "min_price", "max_price"):
+            value = str(value)
+        setattr(resource, key, value)
+
+    # The price band is an invariant upstream enforces on create; a patch that
+    # moved one bound could otherwise leave base outside [min, max] and make
+    # every downstream range filter meaningless. Widen rather than refuse: the
+    # estimator is correcting a rate, not describing a band.
+    #
+    # Compare as numbers, not as the strings the columns hold: "9" > "42"
+    # lexicographically, which would silently corrupt the band it exists to
+    # protect.
+    def _num(v: Any) -> Decimal:
+        try:
+            return Decimal(str(v or "0"))
+        except (ArithmeticError, ValueError):
+            return Decimal("0")
+
+    base, lo, hi = _num(resource.base_price), _num(resource.min_price), _num(resource.max_price)
+    if lo and base < lo:
+        resource.min_price = str(base)
+    if hi and base > hi:
+        resource.max_price = str(base)
+
+    await service.repo.session.commit()
+    await service.repo.session.refresh(resource)
+    return CatalogResourceResponse.model_validate(resource)
+
+
+@router.delete("/{resource_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_catalog_resource(
+    resource_id: uuid.UUID,
+    service: CatalogResourceService = Depends(_get_service),
+    _user: str = Depends(RequirePermission("catalog.create")),
+) -> None:
+    """Delete one catalog resource.
+
+    The assemblies that reference it keep the figures they already copied —
+    an assembly component stores its own rate — so deleting a resource does
+    not silently rewrite a priced estimate. ``GET /{id}/used-by/`` says what
+    depends on it before you decide.
+    """
+    resource = await service.get_resource(resource_id)
+    await service.repo.session.delete(resource)
+    await service.repo.session.commit()
+#//// End Neoffice
 
 
 # ── Extract from cost items ──────────────────────────────────────────────

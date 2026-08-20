@@ -96,6 +96,35 @@ class CatalogResourceCreate(BaseModel):
 # ── Response ──────────────────────────────────────────────────────────────
 
 
+#//// Neoffice — added schema (no upstream equivalent).
+#//// Upstream exposes create and bulk-delete-by-region, but nothing to amend
+#//// one resource. Cédric Protti, 2026-08-20: "Peut-on facilement supprimer une
+#//// ressource ? Je ne trouve comment l'exécuter. Les ressources de la feuille
+#//// Excel ne sont pas à jour. Je dois les modifier." Without this the only way
+#//// to correct a wrong rate was to delete a whole region and re-import.
+#//// Every field optional: send what changes, keep the rest.
+class CatalogResourceUpdate(BaseModel):
+    """Patch one catalog resource. Omitted fields keep their stored value."""
+
+    resource_code: str | None = Field(default=None, min_length=1, max_length=100)
+    name: str | None = Field(default=None, min_length=1, max_length=500)
+    resource_type: str | None = Field(default=None, min_length=1, max_length=20)
+    category: str | None = Field(default=None, min_length=1, max_length=100)
+    unit: str | None = Field(default=None, min_length=1, max_length=20)
+    base_price: Decimal | None = Field(default=None, ge=0)
+    min_price: Decimal | None = Field(default=None, ge=0)
+    max_price: Decimal | None = Field(default=None, ge=0)
+    currency: str | None = Field(default=None, max_length=10)
+    region: str | None = Field(default=None, max_length=50)
+    is_active: bool | None = None
+    specifications: dict[str, Any] | None = None
+
+    @field_serializer("base_price", "min_price", "max_price", when_used="json")
+    def _ser_money(self, v: Decimal | None) -> str | None:
+        return _serialise_money(v) if v is not None else None
+#//// End Neoffice
+
+
 class CatalogResourceResponse(BaseModel):
     """Catalog resource in API responses.
 
