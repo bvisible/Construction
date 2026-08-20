@@ -16,6 +16,7 @@ import hmac
 import logging
 import os
 import uuid
+from decimal import Decimal  #//// Neoffice — price band on the resource pass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -954,6 +955,19 @@ class LaborTariffApplyRequest(BaseModel):
     units: list[str] = ["h", "hr", "heure", "heures"]
     #: Report what would change without writing anything. Default: report only.
     dry_run: bool = True
+    #: //// NEOFFICE PATCH — also re-price the catalogue's labour resources.
+    #: Cédric Protti, 2026-08-20, twice in one mail: "une ressource « Main
+    #: d'oeuvre » devrait être mise à jour automatiquement avec les indications
+    #: données sur la page principale de l'affaire". Re-pricing the assemblies
+    #: alone left the library they are built from stale, so the next assembly
+    #: an estimator composed picked the old rate back up.
+    #: Off by default: an existing caller keeps its exact behaviour.
+    include_catalog_resources: bool = False
+    #: Region to confine the resource pass to. None = every region.
+    resource_region: str | None = None
+    #: Write even though hourly overhead lines would price the structure twice.
+    allow_double_count: bool = False
+    #: //// END NEOFFICE PATCH
 
 
 @router.post("/labor-tariff/apply/")
@@ -1023,7 +1037,105 @@ async def apply_labor_tariff(
             }
             row.metadata_ = meta
 
-    if not request.dry_run and changed:
+    # //// NEOFFICE PATCH — the same pass over the resource catalogue.
+    # An assembly component stores its own rate, so re-pricing components fixes
+    # today's assemblies and nothing else: the library they are composed from
+    # kept the old figure and handed it straight back to the next assembly.
+    # Same three guarantees as above — dry-run first, hourly units only, and an
+    # audit stamp so a later run knows which rows it owns.
+    resources_changed: list[dict[str, str]] = []
+    resources_in_scope = 0
+    if request.include_catalog_resources:
+        from app.modules.catalog.models import CatalogResource
+
+        rstmt = select(CatalogResource).where(CatalogResource.resource_type == "labor")
+        if request.resource_region:
+            rstmt = rstmt.where(CatalogResource.region == request.resource_region)
+        resources = (await session.execute(rstmt)).scalars().all()
+        resources_in_scope = len(resources)
+        for res in resources:
+            if (res.unit or "").strip().lower() not in wanted_units:
+                continue
+            old_price = str(res.base_price)
+            if old_price == str(new_rate):
+                continue
+            resources_changed.append(
+                {"id": str(res.id), "code": res.resource_code, "old": old_price, "new": str(new_rate)}
+            )
+            if not request.dry_run:
+                # Money columns on this model are String(50) — write text, and
+                # widen the band rather than leave base outside [min, max].
+                res.base_price = str(new_rate)
+                try:
+                    band_lo = Decimal(str(res.min_price or "0"))
+                    band_hi = Decimal(str(res.max_price or "0"))
+                    rate = Decimal(str(new_rate))
+                except (ArithmeticError, ValueError):
+                    band_lo = band_hi = rate = Decimal("0")
+                if band_lo and rate < band_lo:
+                    res.min_price = str(rate)
+                if band_hi and rate > band_hi:
+                    res.max_price = str(rate)
+                meta = dict(res.metadata_ or {})
+                meta["neoffice_tariff"] = {
+                    "rate": str(new_rate),
+                    "role": role,
+                    "selling_price": request.use_selling_price,
+                    "applied_at": datetime.now(UTC).isoformat(),
+                }
+                res.metadata_ = meta
+    # //// END NEOFFICE PATCH
+
+    # //// NEOFFICE PATCH — refuse to double-count the structure costs.
+    #
+    # The composed tariff already carries the depot and office overhead
+    # (charges_depot_h + charges_bureau_h). Protti's assemblies ALSO carry a
+    # separate "FG administratif" line per productive hour, inherited from the
+    # Excel sheet. Pushing the tariff while those lines stand prices every hour
+    # twice — measured on 2026-08-20: 95.65 + 18.94 = 114.59 CHF/h, +28 % on a
+    # real estimate, and nothing on screen would say so.
+    #
+    # The estimator decided to drop those lines (option B, 2026-08-20), but the
+    # order matters and an ordering rule that lives only in a mail is a rule
+    # that gets forgotten. Report it always; refuse to write while it holds,
+    # unless the caller says it knows.
+    structure_h = params.charges_depot_h + params.charges_bureau_h
+    overhead_rows: list[Any] = []
+    if structure_h > 0:
+        ostmt = select(AssemblyComponent).where(
+            AssemblyComponent.resource_type == "overhead"
+        )
+        if request.assembly_id:
+            ostmt = ostmt.where(AssemblyComponent.assembly_id == request.assembly_id)
+        elif request.project_id:
+            ostmt = ostmt.join(
+                Assembly, Assembly.id == AssemblyComponent.assembly_id
+            ).where(Assembly.project_id == request.project_id)
+        overhead_rows = [
+            r for r in (await session.execute(ostmt)).scalars().all()
+            if (r.unit or "").strip().lower() in wanted_units
+        ]
+
+    double_count = {
+        "hourly_overhead_lines": len(overhead_rows),
+        "tariff_structure_chf_h": str(structure_h),
+        "explanation": (
+            "The composed tariff already carries the depot and office overhead. "
+            "These hourly overhead lines carry it a second time — remove them "
+            "before applying, or pass allow_double_count to proceed anyway."
+        ) if overhead_rows else None,
+    }
+    if overhead_rows and not request.dry_run and not request.allow_double_count:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "structure_cost_counted_twice",
+                **double_count,
+            },
+        )
+    # //// END NEOFFICE PATCH
+
+    if not request.dry_run and (changed or resources_changed):
         await session.commit()
 
     return {
@@ -1034,6 +1146,13 @@ async def apply_labor_tariff(
         "labour_components_in_scope": len(rows),
         "would_change" if request.dry_run else "changed": len(changed),
         "sample": changed[:5],
+        # //// NEOFFICE PATCH — the resource pass reports separately, so a caller
+        # can see at a glance whether the library moved as well as the assemblies.
+        "catalog_resources_in_scope": resources_in_scope,
+        ("resources_would_change" if request.dry_run else "resources_changed"): len(resources_changed),
+        "resources_sample": resources_changed[:5],
+        "double_count_check": double_count,
+        # //// END NEOFFICE PATCH
         "tariff": composed,
     }
 
