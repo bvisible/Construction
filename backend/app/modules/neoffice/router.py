@@ -1691,6 +1691,12 @@ class InsertManyRequest(BaseModel):
     #: of the chapter. Cédric Protti, 2026-08-20: "les lignes s'insèrent au
     #: début du chapitre et il faut les déplacer soi-même au bon endroit".
     after_position_id: str | None = None
+    #: Also insert the catalogue's own heading ("100 Installation de chantier")
+    #: as a text line above the selection. Cédric Protti, 2026-08-20: "il
+    #: faudrait aussi pouvoir insérer la ligne du chapitre […] comme cela nous
+    #: ne sommes pas obligés d'écrire à chaque nouveau chapitre le texte depuis
+    #: le bouton du devis."
+    include_catalog_heading: bool = False
 
 
 #//// Neoffice — where a freshly created row sits among its siblings.
@@ -1748,11 +1754,48 @@ async def insert_text_positions_into_boq(
     if not rows:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="positions not found")
 
+    #//// Neoffice — the catalogue the selection belongs to, for its heading.
+    from app.modules.neoffice.models import TextCatalog
+
+    catalog = await session.get(TextCatalog, rows[0].catalog_id)
+    if catalog is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="catalog not found")
+
     #//// Neoffice — open the gap before creating, so the new rows take the
     #//// freed slots in the order the user checked them.
-    slot = await _slot_after(session, request.boq_id, request.after_position_id, len(rows))
+    #//// Neoffice — the heading takes a slot too, so the gap has to allow for it.
+    heading_wanted = request.include_catalog_heading
+    slot = await _slot_after(
+        session, request.boq_id, request.after_position_id, len(rows) + (1 if heading_wanted else 0)
+    )
 
     created: list[tuple[Any, Any]] = []
+
+    #//// Neoffice — the catalogue's own heading, as a free text line above the
+    #//// positions. It carries no unit and no price: it names the chapter, it
+    #//// does not measure anything.
+    heading_code = None
+    if heading_wanted:
+        heading = BoqPosition(
+            boq_id=request.boq_id,
+            parent_id=request.parent_id,
+            ordinal=catalog.code,
+            description=catalog.name,
+            unit="txt",
+            quantity="0",
+            unit_rate="0",
+            metadata_={
+                "neoffice_text_only": True,
+                "neoffice_text_catalog_id": str(catalog.id),
+                "neoffice_text_code": catalog.code,
+            },
+        )
+        if slot is not None:
+            heading.sort_order = slot
+            slot += 1
+        session.add(heading)
+        heading_code = catalog.code
+    #//// End Neoffice
     for src in rows:
         is_wording = not (src.unit or "").strip()
         desc = "\n".join(part for part in (src.title, src.body) if part).strip()
@@ -1816,9 +1859,10 @@ async def insert_text_positions_into_boq(
 
     await session.commit()
     return {
-        "inserted": len(created),
+        "inserted": len(created) + (1 if heading_code else 0),
         "assemblies_applied": assemblies_applied,
-        "codes": [src.code for src, _ in created],
+        "codes": ([heading_code] if heading_code else []) + [src.code for src, _ in created],
+        "heading_inserted": heading_code,
     }
 # //// END NEOFFICE PATCH
 

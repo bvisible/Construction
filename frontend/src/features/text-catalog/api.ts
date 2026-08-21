@@ -116,6 +116,8 @@ export const textCatalogApi = {
     //// NEOFFICE — slot the rows after this one instead of at the top of the
     //// chapter. Cédric Protti, 2026-08-20.
     after_position_id?: string | null;
+    //// NEOFFICE — insert the catalogue's own heading as a text line too.
+    include_catalog_heading?: boolean;
   }) =>
     apiPost<{ inserted: number; assemblies_applied: number; codes: string[] }>(
       `${BASE}/insert-many-into-boq/`,

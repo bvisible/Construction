@@ -187,6 +187,11 @@ export function TextCatalogPickerModal({
   //// être insérés avec ou sans l'analyse de prix ?". An estimator who prices
   //// a job by hand does not want ours silently imposed on the row.
   const [withAssembly, setWithAssembly] = useState(true);
+  //// NEOFFICE PATCH — insert the catalogue's heading line with the selection.
+  //// Cédric Protti, 2026-08-20: "il faudrait aussi pouvoir insérer la ligne du
+  //// chapitre […] comme cela nous ne sommes pas obligés d'écrire à chaque
+  //// nouveau chapitre le texte depuis le bouton du devis." //// END
+  const [withHeading, setWithHeading] = useState(false);
   //// END NEOFFICE PATCH
 
   const catalogs = useQuery({
@@ -250,6 +255,7 @@ export function TextCatalogPickerModal({
         //// NEOFFICE — the row the estimator had selected when opening the
         //// dialog; the insert lands just under it rather than at the top.
         after_position_id: afterPositionId ?? null,
+        include_catalog_heading: withHeading,
       }),
     onSuccess: (res) =>
       onInserted({
@@ -349,6 +355,22 @@ export function TextCatalogPickerModal({
           </div>
           <div className="flex shrink-0 items-center gap-2">
             {/* //// NEOFFICE PATCH — opt out of the price analysis. //// END */}
+            {/* //// NEOFFICE PATCH — the chapter heading as a text line. //// END */}
+            <label
+              className="flex cursor-pointer items-center gap-1.5 text-xs text-content-secondary"
+              title={t('text_catalog.with_heading_hint', {
+                defaultValue:
+                  "Ajoute le titre du catalogue (ex. « 100 Installation de chantier ») comme ligne de texte au-dessus.",
+              })}
+            >
+              <input
+                type="checkbox"
+                checked={withHeading}
+                onChange={(e) => setWithHeading(e.target.checked)}
+                className="h-3.5 w-3.5 rounded border-border-light"
+              />
+              {t('text_catalog.take_heading', { defaultValue: 'Avec la ligne du chapitre' })}
+            </label>
             <label
               className="flex cursor-pointer items-center gap-1.5 text-xs text-content-secondary"
               title={t('text_catalog.with_assembly_hint', {

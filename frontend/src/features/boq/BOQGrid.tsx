@@ -1798,6 +1798,29 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
         } as GridRow);
         if (collapsedSections.has(pos.id)) return;
         for (const child of kids) emit(child, depth + 1);
+        //// NEOFFICE PATCH — a subtotal line at the END of the chapter. Cédric
+        //// Protti, 2026-08-20: "Il manque la possibilité de créer une ligne
+        //// indiquant le total d'un chapitre." The figure already sits on the
+        //// chapter's own banner, but a bordereau is read top to bottom and the
+        //// total belongs where the reader arrives, not where they started.
+        //// Marked _isFooter so it inherits the styling and, more importantly,
+        //// is excluded from selection, drag and editing like the grand totals.
+        if (kids.length > 0) {
+          rows.push({
+            _isFooter: true,
+            _footerType: 'section_subtotal',
+            _isSectionSubtotal: true,
+            id: `${pos.id}__subtotal`,
+            _depth: depth + 1,
+            ordinal: '',
+            description: `${t('boq.section_subtotal', { defaultValue: 'Total' })} ${pos.ordinal ?? ''} ${pos.description ?? ''}`.trim(),
+            unit: '',
+            quantity: 0,
+            unit_rate: 0,
+            total: subtotal,
+          } as GridRow);
+        }
+        //// END NEOFFICE PATCH
       } else {
         insertResourceRows(rows, pos, depth);
         // Inject the inline AI copilot directly beneath this position when it
@@ -2244,10 +2267,20 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
           }
         });
 
-        // If parent changed, update position's parent_id first
-        if (newParentId && movedData.parent_id !== newParentId && onUpdatePosition) {
-          onUpdatePosition(movedData.id, { parent_id: newParentId }, { parent_id: movedData.parent_id });
+        //// NEOFFICE PATCH — reparent EVERY row that moved, not only the one
+        //// under the cursor. With rowDragMultiRow, event.nodes carries the whole
+        //// dragged set; dropping four rows into another chapter used to move
+        //// four rows visually and refile exactly one.
+        const movedNodes = (event as { nodes?: Array<{ data?: Record<string, unknown> }> }).nodes;
+        const dragged = movedNodes?.length ? movedNodes.map((n) => n.data) : [movedData];
+        if (newParentId && onUpdatePosition) {
+          for (const d of dragged) {
+            if (!d || d._isSection || d._isFooter || !d.id) continue;
+            if (d.parent_id === newParentId) continue;
+            onUpdatePosition(d.id as string, { parent_id: newParentId }, { parent_id: d.parent_id as string });
+          }
         }
+        //// END NEOFFICE PATCH
 
         // Collect the current row order from the grid (excluding footer and section rows)
         const reorderedIds: string[] = [];
@@ -2995,6 +3028,14 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
             isRowSelectable: (node: { data?: Record<string, unknown> }) => !node.data?._isFooter && !node.data?._isSection && !node.data?._isResource && !node.data?._isAddResource,
           }}
           onSelectionChanged={handleSelectionChanged}
+          // //// NEOFFICE PATCH — drag every selected row at once. Cédric Protti,
+          // 2026-08-20: "On ne peut pas sélectionner plusieurs lignes pour les
+          // déplacer ensemble." rowSelection was already multiRow and the drop
+          // handler already re-reads the whole order from the grid, so the move
+          // itself was never the problem — only the option was missing, plus
+          // reparenting every moved row instead of just the one the mouse held.
+          // //// END NEOFFICE PATCH
+          rowDragMultiRow
           rowDragManaged
           animateRows
           singleClickEdit
