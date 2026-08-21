@@ -1310,6 +1310,9 @@ class InsertIntoBoqRequest(BaseModel):
     #: Ordinal to give the new BOQ position; auto if omitted.
     ordinal: str | None = None
     quantity: str = "0"
+    #: Slot the row immediately AFTER this BOQ position (same rule as the
+    #: batch insert above).
+    after_position_id: str | None = None
     #: Copy the linked assembly (price analysis) onto the created rows.
     #: Cédric Protti, 2026-08-18: "pourquoi les articles du catalogue ne
     #: pourraient-ils pas être insérés avec ou sans l'analyse de prix ?".
@@ -1684,6 +1687,39 @@ class InsertManyRequest(BaseModel):
     parent_id: str | None = None
     position_ids: list[str]
     with_assembly: bool = True
+    #: Slot the rows immediately AFTER this BOQ position instead of at the top
+    #: of the chapter. Cédric Protti, 2026-08-20: "les lignes s'insèrent au
+    #: début du chapitre et il faut les déplacer soi-même au bon endroit".
+    after_position_id: str | None = None
+
+
+#//// Neoffice — where a freshly created row sits among its siblings.
+#//// Our endpoints build BoqPosition rows directly, so they never went through
+#//// BOQService.create_position and never got its after_position_id handling —
+#//// which is why every insert landed at the top of the chapter. Same rule
+#//// reimplemented here: open a gap of ``count`` slots after the anchor, and
+#//// return the first free sort_order. Returns None when there is no anchor,
+#//// meaning "append", which is what the caller does by default.
+async def _slot_after(session: Any, boq_id: str, after_position_id: str | None, count: int) -> int | None:
+    """Open ``count`` slots right after ``after_position_id``; None = append."""
+    if not after_position_id:
+        return None
+    from sqlalchemy import select, update
+
+    from app.modules.boq.models import Position as BoqPosition
+
+    anchor = await session.get(BoqPosition, after_position_id)
+    # A stale or cross-BOQ anchor falls back to appending rather than
+    # scrambling the order of a bill it does not belong to.
+    if anchor is None or str(anchor.boq_id) != str(boq_id):
+        return None
+    base = int(anchor.sort_order or 0)
+    await session.execute(
+        update(BoqPosition)
+        .where(BoqPosition.boq_id == boq_id, BoqPosition.sort_order > base)
+        .values(sort_order=BoqPosition.sort_order + count)
+    )
+    return base + 1
 
 
 @router.post("/text-catalog/insert-many-into-boq/")
@@ -1712,6 +1748,10 @@ async def insert_text_positions_into_boq(
     if not rows:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="positions not found")
 
+    #//// Neoffice — open the gap before creating, so the new rows take the
+    #//// freed slots in the order the user checked them.
+    slot = await _slot_after(session, request.boq_id, request.after_position_id, len(rows))
+
     created: list[tuple[Any, Any]] = []
     for src in rows:
         is_wording = not (src.unit or "").strip()
@@ -1734,6 +1774,9 @@ async def insert_text_positions_into_boq(
             unit_rate="0",
             metadata_=meta,
         )
+        if slot is not None:
+            row.sort_order = slot
+            slot += 1
         session.add(row)
         created.append((src, row))
     await session.flush()
@@ -1883,7 +1926,15 @@ async def insert_text_position_into_boq(
             metadata_=meta,
         )
 
+    #//// Neoffice — same placement rule as the batch insert. A wording brings
+    #//// its children, so the gap has to cover them too, not just the one row.
+    _child_guess = 1 + (len(position.children) if getattr(position, "children", None) else 0)
+    _slot = await _slot_after(session, request.boq_id, request.after_position_id, _child_guess)
+
     new_position = _row(position, request.parent_id, as_text=is_wording)
+    if _slot is not None:
+        new_position.sort_order = _slot
+        _slot += 1
     session.add(new_position)
     await session.flush()
 
@@ -1909,6 +1960,9 @@ async def insert_text_position_into_boq(
             if not (child.unit or "").strip():
                 continue  # a nested wording: leave it, one level is the real case
             child_row = _row(child, request.parent_id, as_text=False)
+            if _slot is not None:
+                child_row.sort_order = _slot
+                _slot += 1
             session.add(child_row)
             created.append((child, child_row))
             children_inserted += 1

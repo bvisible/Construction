@@ -473,6 +473,22 @@ export function BOQEditorPage() {
     return null;
   }, [selectedPositionIds, activePositionId, boq?.positions]);
   const boqGridRef = useRef<BOQGridHandle>(null);
+  //// NEOFFICE PATCH — zoom on the estimate area. Cédric Protti, 2026-08-20:
+  //// "Ce serait utile de pouvoir zoomer en + et - la zone du devis." A CAN
+  //// description runs long and the browser's own zoom shrinks the whole app,
+  //// sidebar included. This scales the grid alone, and persists so it survives
+  //// a reload. //// END NEOFFICE PATCH
+  const [boqZoom, setBoqZoom] = useState<number>(() => {
+    const v = Number(localStorage.getItem('neoffice.boq.zoom'));
+    return Number.isFinite(v) && v >= 0.7 && v <= 1.4 ? v : 1;
+  });
+  const changeZoom = useCallback((delta: number) => {
+    setBoqZoom((z) => {
+      const next = Math.min(1.4, Math.max(0.7, Math.round((z + delta) * 20) / 20));
+      try { localStorage.setItem('neoffice.boq.zoom', String(next)); } catch { /* private mode */ }
+      return next;
+    });
+  }, []);
 
   /** Tracks the pending deferred delete so it can be cancelled by undo. */
   const pendingDeleteRef = useRef<{
@@ -5225,6 +5241,26 @@ export function BOQEditorPage() {
             setBoqFilter('all');
           }}
         />
+        {/* //// NEOFFICE PATCH — zoom controls + scaled wrapper. transform-origin
+            top-left so the grid grows to the right and down, never off-screen to
+            the left; width compensated so the horizontal scrollbar still spans
+            the real content. //// END NEOFFICE PATCH */}
+        <div className="mb-1 flex items-center justify-end gap-1">
+          <button type="button" onClick={() => changeZoom(-0.1)}
+            className="flex h-6 w-6 items-center justify-center rounded border border-border-light text-content-tertiary hover:text-oe-blue"
+            title={t('boq.zoom_out', { defaultValue: 'Réduire' })} aria-label={t('boq.zoom_out', { defaultValue: 'Réduire' })}>−</button>
+          <button type="button" onClick={() => setBoqZoom(1)}
+            className="min-w-[3rem] rounded border border-border-light px-1 text-2xs tabular-nums text-content-tertiary hover:text-oe-blue"
+            title={t('boq.zoom_reset', { defaultValue: 'Taille normale' })}>{Math.round(boqZoom * 100)}%</button>
+          <button type="button" onClick={() => changeZoom(0.1)}
+            className="flex h-6 w-6 items-center justify-center rounded border border-border-light text-content-tertiary hover:text-oe-blue"
+            title={t('boq.zoom_in', { defaultValue: 'Agrandir' })} aria-label={t('boq.zoom_in', { defaultValue: 'Agrandir' })}>+</button>
+        </div>
+        <div style={boqZoom === 1 ? undefined : {
+          transform: `scale(${boqZoom})`,
+          transformOrigin: 'top left',
+          width: `${100 / boqZoom}%`,
+        }}>
         <BOQGrid
           ref={boqGridRef}
           positions={filteredGridPositions}
@@ -5304,7 +5340,8 @@ export function BOQEditorPage() {
           onHighlightBIMElements={(elementIds) => {
             setBOQLinkSelection(null, elementIds);
           }}
-        /></div>
+        />
+        </div></div>
       ) : (
         <div className="rounded-xl border border-border-light bg-surface-elevated shadow-xs overflow-hidden p-8">
           <EmptyBOQOnboarding
@@ -5581,7 +5618,17 @@ export function BOQEditorPage() {
             label: `${g.section.ordinal ?? ''} ${g.section.description ?? ''}`.trim(),
           }))}
           defaultParentId={
-            grouped.sections[grouped.sections.length - 1]?.section.id ?? null
+            //// NEOFFICE — le chapitre de la ligne sélectionnée passe devant le
+            //// dernier chapitre : l'estimateur insère là où il travaille.
+            (selectedPosition && !isSection(selectedPosition)
+              ? selectedPosition.parent_id
+              : selectedPosition?.id)
+            ?? grouped.sections[grouped.sections.length - 1]?.section.id
+            ?? null
+          }
+          //// NEOFFICE — et sous la ligne qu'il avait sélectionnée.
+          afterPositionId={
+            selectedPosition && !isSection(selectedPosition) ? selectedPosition.id : null
           }
           /* //// END NEOFFICE PATCH */
           onInserted={(summary) => {

@@ -143,12 +143,14 @@ export function TextCatalogPickerModal({
   // estimate, detached from the structure the estimator built.
   sections = [],
   defaultParentId = null,
+  afterPositionId = null,
   // //// END NEOFFICE PATCH
 }: {
   boqId: string;
   onClose: () => void;
   sections?: Array<{ id: string; label: string }>;
   defaultParentId?: string | null;
+  afterPositionId?: string | null;
   onInserted: (summary: {
     ordinal: string;
     resourcesCopied: number;
@@ -245,6 +247,9 @@ export function TextCatalogPickerModal({
         parent_id: parentId,
         position_ids: [...selected],
         with_assembly: withAssembly,
+        //// NEOFFICE — the row the estimator had selected when opening the
+        //// dialog; the insert lands just under it rather than at the top.
+        after_position_id: afterPositionId ?? null,
       }),
     onSuccess: (res) =>
       onInserted({

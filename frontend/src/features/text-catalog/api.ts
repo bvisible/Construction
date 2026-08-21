@@ -113,6 +113,9 @@ export const textCatalogApi = {
     parent_id?: string | null;
     position_ids: string[];
     with_assembly?: boolean;
+    //// NEOFFICE — slot the rows after this one instead of at the top of the
+    //// chapter. Cédric Protti, 2026-08-20.
+    after_position_id?: string | null;
   }) =>
     apiPost<{ inserted: number; assemblies_applied: number; codes: string[] }>(
       `${BASE}/insert-many-into-boq/`,
