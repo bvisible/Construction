@@ -416,19 +416,19 @@ def upgrade() -> None:
                 "is_360",
                 sa.Boolean(),
                 nullable=False,
-                server_default=sa.text("0") if is_sqlite else sa.text("false"),
+                server_default=sa.text("false") if is_sqlite else sa.text("false"),
             ),
             sa.Column(
                 "is_drone",
                 sa.Boolean(),
                 nullable=False,
-                server_default=sa.text("0") if is_sqlite else sa.text("false"),
+                server_default=sa.text("false") if is_sqlite else sa.text("false"),
             ),
             sa.Column(
                 "is_archived",
                 sa.Boolean(),
                 nullable=False,
-                server_default=sa.text("0") if is_sqlite else sa.text("false"),
+                server_default=sa.text("false") if is_sqlite else sa.text("false"),
             ),
             sa.Column(
                 "metadata",

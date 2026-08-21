@@ -291,7 +291,7 @@ def upgrade() -> None:
                 "is_system",
                 sa.Boolean(),
                 nullable=False,
-                server_default=sa.text("0") if bind.dialect.name == "sqlite" else sa.text("false"),
+                server_default=sa.text("false") if bind.dialect.name == "sqlite" else sa.text("false"),
             ),
             sa.Column("created_by", sa.String(length=36), nullable=True),
             sa.Column(

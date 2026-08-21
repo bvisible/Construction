@@ -287,7 +287,7 @@ def upgrade() -> None:
                 "active",
                 sa.Boolean(),
                 nullable=False,
-                server_default=sa.text("1") if is_sqlite else sa.text("true"),
+                server_default=sa.text("true") if is_sqlite else sa.text("true"),
             ),
             sa.Column(
                 "effective_from",

@@ -117,7 +117,7 @@ def upgrade() -> None:
                 "is_builtin",
                 sa.Boolean(),
                 nullable=False,
-                server_default=sa.text("1") if is_sqlite else sa.text("true"),
+                server_default=sa.text("true") if is_sqlite else sa.text("true"),
             ),
             sa.UniqueConstraint("name", name="uq_oe_assemblies_template_name"),
         )

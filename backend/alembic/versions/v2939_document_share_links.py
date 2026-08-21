@@ -104,7 +104,7 @@ def upgrade() -> None:
                 "revoked",
                 sa.Boolean(),
                 nullable=False,
-                server_default=sa.text("0") if is_sqlite else sa.text("false"),
+                server_default=sa.text("false") if is_sqlite else sa.text("false"),
             ),
         )
 

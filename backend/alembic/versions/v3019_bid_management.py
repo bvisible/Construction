@@ -193,7 +193,7 @@ def upgrade() -> None:
                 "alternative_allowed",
                 sa.Boolean(),
                 nullable=False,
-                server_default=sa.text("0") if is_sqlite else sa.text("false"),
+                server_default=sa.text("false") if is_sqlite else sa.text("false"),
             ),
             sa.Column("order_index", sa.Integer(), nullable=False, server_default="0"),
             sa.Column(
@@ -207,7 +207,7 @@ def upgrade() -> None:
                 "is_mandatory",
                 sa.Boolean(),
                 nullable=False,
-                server_default=sa.text("1") if is_sqlite else sa.text("true"),
+                server_default=sa.text("true") if is_sqlite else sa.text("true"),
             ),
         )
 
@@ -384,13 +384,13 @@ def upgrade() -> None:
                 "is_valid",
                 sa.Boolean(),
                 nullable=False,
-                server_default=sa.text("0") if is_sqlite else sa.text("false"),
+                server_default=sa.text("false") if is_sqlite else sa.text("false"),
             ),
             sa.Column(
                 "open_after_deadline",
                 sa.Boolean(),
                 nullable=False,
-                server_default=sa.text("0") if is_sqlite else sa.text("false"),
+                server_default=sa.text("false") if is_sqlite else sa.text("false"),
             ),
             sa.Column("envelope_payload", sa.JSON(), nullable=False, server_default="{}"),
             sa.UniqueConstraint("invitation_id", name="uq_oe_bid_management_submission_invitation_id"),
@@ -451,7 +451,7 @@ def upgrade() -> None:
                 "alternative_offered",
                 sa.Boolean(),
                 nullable=False,
-                server_default=sa.text("0") if is_sqlite else sa.text("false"),
+                server_default=sa.text("false") if is_sqlite else sa.text("false"),
             ),
             sa.Column(
                 "alternative_description",
@@ -515,7 +515,7 @@ def upgrade() -> None:
                 "is_public",
                 sa.Boolean(),
                 nullable=False,
-                server_default=sa.text("0") if is_sqlite else sa.text("false"),
+                server_default=sa.text("false") if is_sqlite else sa.text("false"),
             ),
             sa.Column(
                 "visible_to_bidder_ids",

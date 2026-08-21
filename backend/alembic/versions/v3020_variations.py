@@ -258,7 +258,7 @@ def upgrade() -> None:
                 "is_critical_path",
                 sa.Boolean(),
                 nullable=False,
-                server_default=sa.text("0") if is_sqlite else sa.text("false"),
+                server_default=sa.text("false") if is_sqlite else sa.text("false"),
             ),
             sa.Column("justification", sa.Text(), nullable=False, server_default=""),
         )
@@ -412,7 +412,7 @@ def upgrade() -> None:
                 "critical_path_impact",
                 sa.Boolean(),
                 nullable=False,
-                server_default=sa.text("0") if is_sqlite else sa.text("false"),
+                server_default=sa.text("false") if is_sqlite else sa.text("false"),
             ),
             sa.Column("status", sa.String(40), nullable=False, server_default="draft"),
             sa.Column("decision_at", sa.String(40), nullable=True),

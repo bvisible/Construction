@@ -312,7 +312,7 @@ def upgrade() -> None:
                 "is_active",
                 sa.Boolean(),
                 nullable=False,
-                server_default=sa.text("1") if is_sqlite else sa.text("true"),
+                server_default=sa.text("true") if is_sqlite else sa.text("true"),
             ),
         )
 
@@ -435,7 +435,7 @@ def upgrade() -> None:
                 "closure_checklist_passed",
                 sa.Boolean(),
                 nullable=False,
-                server_default=sa.text("0") if is_sqlite else sa.text("false"),
+                server_default=sa.text("false") if is_sqlite else sa.text("false"),
             ),
             sa.Column(
                 "closure_notes",
@@ -664,7 +664,7 @@ def upgrade() -> None:
                 "is_passed",
                 sa.Boolean(),
                 nullable=False,
-                server_default=sa.text("1") if is_sqlite else sa.text("true"),
+                server_default=sa.text("true") if is_sqlite else sa.text("true"),
             ),
             sa.Column("evidence_url", sa.String(1000), nullable=True),
             sa.Column(
