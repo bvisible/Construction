@@ -114,6 +114,8 @@ import {
   type Reservation,
   type ReservationStatus,
 } from './api';
+import { getIntlLocale } from '@/shared/lib/formatters';
+import { getNumberLocale } from '@/stores/usePreferencesStore';
 
 const RULE_TYPES: PricingRuleType[] = [
   'early_bird',
@@ -178,7 +180,7 @@ function fmtMoney(amount: string | number, currency: string): string {
   const n = typeof amount === 'string' ? Number(amount) : amount;
   if (!Number.isFinite(n)) return String(amount);
   try {
-    return new Intl.NumberFormat(undefined, {
+    return new Intl.NumberFormat(getNumberLocale(), {
       style: 'currency',
       currency: currency || 'EUR',
       maximumFractionDigits: 2,
@@ -1851,7 +1853,7 @@ function SimulatorTab({ devId }: { devId: string }): JSX.Element {
                         key={String(q.computed_at)}
                         value={String(q.computed_at)}
                       >
-                        {new Date(q.computed_at).toLocaleString()} —{' '}
+                        {new Date(q.computed_at).toLocaleString(getIntlLocale())} —{' '}
                         {fmtMoney(q.total, q.currency)}
                       </option>
                     ))}

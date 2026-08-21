@@ -46,7 +46,7 @@ import { DateDisplay } from '@/shared/ui/DateDisplay';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { apiGet, getErrorMessage } from '@/shared/lib/api';
 import { useToastStore } from '@/stores/useToastStore';
-import { useProjectContextStore } from '@/stores/useProjectContextStore';
+import { useActiveProjectId } from '@/shared/hooks/useActiveProjectId';
 import { useTabKeyboardNav } from '@/shared/hooks/useTabKeyboardNav';
 import { useDisplayQuantity } from '@/shared/hooks/useDisplayQuantity';
 import {
@@ -91,6 +91,8 @@ import {
 import { bidManagementGuide } from './bidManagementGuide';
 import { InsightsPanel, InsightsToggleButton, useModuleInsights } from '@/features/insights';
 import { buildBidManagementInsights } from './bidManagementInsights';
+import { fmtFixed } from '@/shared/lib/formatters';
+import { getNumberLocale } from '@/stores/usePreferencesStore';
 
 const BID_TAB_IDS = ['packages', 'invitations', 'submissions', 'qa'] as const;
 type Tab = (typeof BID_TAB_IDS)[number];
@@ -505,7 +507,7 @@ function HowBidManagementWorks() {
 export function BidManagementPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const activeProjectId = useProjectContextStore((s) => s.activeProjectId);
+  const activeProjectId = useActiveProjectId();
 
   const projectsQ = useQuery({
     queryKey: ['bid-management', 'projects'],
@@ -1358,15 +1360,15 @@ function LevelingTable({
                             <MoneyDisplay amount={Number(row.normalized_total) || 0} currency={currency} />
                           </td>
                           <td className="px-3 py-1.5 text-right tabular-nums">
-                            {Number(row.commercial_score).toFixed(1)}
+                            {fmtFixed(Number(row.commercial_score), 1)}
                           </td>
                           {hasTechnicalScores && (
                             <td className="px-3 py-1.5 text-right tabular-nums">
-                              {Number(row.technical_score).toFixed(1)}
+                              {fmtFixed(Number(row.technical_score), 1)}
                             </td>
                           )}
                           <td className="px-3 py-1.5 text-right tabular-nums font-semibold">
-                            {Number(row.total_score).toFixed(1)}
+                            {fmtFixed(Number(row.total_score), 1)}
                           </td>
                         </tr>
                       );
@@ -2141,7 +2143,7 @@ function PackageDrawer({
                           <tr key={li.id} className="border-t border-border-light">
                             <td className="py-1 font-mono">{li.code || '—'}</td>
                             <td className="py-1 truncate max-w-[300px]">{li.description || '—'}</td>
-                            <td className="py-1 text-right tabular-nums">{d.value.toLocaleString()}</td>
+                            <td className="py-1 text-right tabular-nums">{d.value.toLocaleString(getNumberLocale())}</td>
                             <td className="py-1 text-content-secondary">{li.unit ? d.unit : '—'}</td>
                           </tr>
                         );
@@ -2535,7 +2537,7 @@ function RecordBidModal({
                       <td className="px-3 py-1.5 text-right tabular-nums text-xs text-content-secondary">
                         {(() => {
                           const d = q.convert(Number(li.quantity), li.unit || '');
-                          return `${d.value.toLocaleString()} ${li.unit ? d.unit : ''}`.trim();
+                          return `${d.value.toLocaleString(getNumberLocale())} ${li.unit ? d.unit : ''}`.trim();
                         })()}
                       </td>
                       <td className="px-3 py-1.5 text-right">

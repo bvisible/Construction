@@ -58,8 +58,8 @@ const playbook: Playbook = {
       whyKey: "cases.build_a_5d_cost_loaded_model.step.boq.why",
       whyDefault:
         "Cost-loading a model built on gaps just spreads those gaps across the programme. A complete priced bill is the foundation the whole cash curve stands on.",
-      moduleLabel: "BOQ",
-      moduleLabelKey: "nav.boq",
+      moduleLabel: "Bill of Quantities",
+      moduleLabelKey: "boq.title",
       to: "/boq",
     },
     {
@@ -136,7 +136,7 @@ const playbook: Playbook = {
       whyKey: "cases.build_a_5d_cost_loaded_model.step.schedule.why",
       whyDefault:
         "A cash curve driven by the actual programme tells the client and the bank when the money is really needed. When the programme slips, the forecast spend moves with it instead of lying to everyone.",
-      moduleLabel: "Schedule",
+      moduleLabel: "4D Schedule",
       moduleLabelKey: "nav.schedule",
       to: "/schedule",
     },

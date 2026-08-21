@@ -9,6 +9,7 @@ import {
 } from './api';
 import { resourceAwareTotalInBase } from './boqHelpers';
 import { toDisplayQuantity, toDisplayRate } from '@/shared/lib/unitConversion';
+import { fmtPercent } from '@/shared/lib/formatters';
 
 /* ── Types ──────────────────────────────────────────────────────────────── */
 
@@ -343,6 +344,10 @@ function renderCoverPage(
   // NEOFFICE — a price-free export (bordereau) hides every cost figure.
   const showPrices = options.showPrices !== false;
   const metaItems: Array<[string, string]> = [
+    //// NEOFFICE — nos libellés traduits (L.*) et notre bloc conditionnel
+    //// « sans prix » sont conservés ; on adopte le fmtPercent d'upstream, qui
+    //// formate le pourcentage selon la locale du lecteur au lieu d'un toFixed
+    //// qui écrit toujours un point décimal.
     [L.date, formatDate(options.date, locale)],
     [L.sections, String(sectionCount)],
     [L.positions, String(itemCount)],
@@ -352,7 +357,7 @@ function renderCoverPage(
           [L.directCost, formatCurrency(options.directCost, options.currency, locale)] as [string, string],
           [L.markups, options.markupTotals.map((m) => `${m.name} ${m.percentage}%`).join(', ') || L.none] as [string, string],
           [L.netTotal, formatCurrency(options.netTotal, options.currency, locale)] as [string, string],
-          [L.vat, `${(options.vatRate * 100).toFixed(0)}% (${formatCurrency(options.vatAmount, options.currency, locale)})`] as [string, string],
+          [L.vat, `${fmtPercent(options.vatRate * 100, 0)} (${formatCurrency(options.vatAmount, options.currency, locale)})`] as [string, string],
         ]
       : []),
   ];
@@ -724,7 +729,8 @@ function renderSummary(
     ]);
   }
 
-  const vatLabel = `${L.vat} (${(options.vatRate * 100).toFixed(0)}%)`;
+  //// NEOFFICE — libellé traduit + formatage de pourcentage d'upstream.
+  const vatLabel = `${L.vat} (${fmtPercent(options.vatRate * 100, 0)})`;
 
   autoTable(doc, {
     startY: afterSectionsY + 10,

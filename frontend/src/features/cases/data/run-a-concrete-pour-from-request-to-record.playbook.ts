@@ -43,7 +43,7 @@ const playbook: Playbook = {
       whyKey: "cases.run_a_concrete_pour_from_request_to_record.step.request.why",
       whyDefault:
         "A pour called at short notice is a pour that skips checks. Requesting it properly gives the inspection its window and the batching plant its lead time, so nothing is rushed on the day.",
-      moduleLabel: "Forms",
+      moduleLabel: "Forms & checklists",
       moduleLabelKey: "nav.forms",
       to: "/forms",
     },
@@ -89,7 +89,7 @@ const playbook: Playbook = {
       whyDefault:
         "The tickets and samples captured during the pour are the proof the right concrete went in. Reconstructed afterwards they are worthless, so they have to be taken as it happens.",
       moduleLabel: "Construction Control",
-      moduleLabelKey: "nav.construction_control",
+      moduleLabelKey: "construction_control.title",
       to: "/projects/:projectId/construction-control",
     },
     {
@@ -111,7 +111,7 @@ const playbook: Playbook = {
       whyDefault:
         "A pour is not finished when the concrete sets, it is finished when it is proven to strength on record. That record is what the structural sign-off and the eventual handover depend on.",
       moduleLabel: "Construction Control",
-      moduleLabelKey: "nav.construction_control",
+      moduleLabelKey: "construction_control.title",
       to: "/projects/:projectId/construction-control",
     },
   ],

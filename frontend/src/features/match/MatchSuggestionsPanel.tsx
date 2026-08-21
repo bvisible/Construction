@@ -55,6 +55,8 @@ import type {
   MatchSource,
   MatchStatus,
 } from './types';
+import { fmtFixed } from '@/shared/lib/formatters';
+import { getNumberLocale } from '@/stores/usePreferencesStore';
 
 /* ── Props ─────────────────────────────────────────────────────────────── */
 
@@ -121,7 +123,7 @@ function formatBoostDelta(delta: number): string {
   // Boosts are deltas added/subtracted from the base vector score.
   // Show explicit sign + 2 decimals so users can see "+0.05" / "-0.10".
   const sign = delta >= 0 ? '+' : '';
-  return `${sign}${delta.toFixed(2)}`;
+  return `${sign}${fmtFixed(delta, 2)}`;
 }
 
 function formatScore(score: number): string {
@@ -725,9 +727,9 @@ function CatalogBindingBar({
         <span className={labelClass} data-testid="match-catalog-badge">
           {catalogId}
           <span className="font-sans text-[10px] text-content-secondary">
-            · {catalogCount.toLocaleString()}
+            · {catalogCount.toLocaleString(getNumberLocale())}
             {vectorizedCount > 0 && (
-              <> / {vectorizedCount.toLocaleString()} vec</>
+              <> / {vectorizedCount.toLocaleString(getNumberLocale())} vec</>
             )}
           </span>
         </span>
@@ -795,11 +797,11 @@ function CatalogBindingBar({
                       {db.id}
                     </span>
                     <span className="text-[10px] text-content-secondary">
-                      {db.count.toLocaleString()}
+                      {db.count.toLocaleString(getNumberLocale())}
                     </span>
                     {db.vectorized_count > 0 ? (
                       <span className="ml-auto inline-flex items-center gap-1 text-[10px] text-emerald-700 dark:text-emerald-300">
-                        <Check size={10} strokeWidth={2.5} /> {db.vectorized_count.toLocaleString()} vec
+                        <Check size={10} strokeWidth={2.5} /> {db.vectorized_count.toLocaleString(getNumberLocale())} vec
                       </span>
                     ) : (
                       <span className="ml-auto text-[10px] text-amber-700 dark:text-amber-300">
@@ -1044,7 +1046,7 @@ const CandidateCard = memo(function CandidateCard({
       {/* Mid row: unit / unit-rate / region */}
       <div className="flex items-center gap-2 text-[11px] text-content-secondary">
         <span className="font-medium text-content-primary">
-          {Number(candidate.unit_rate).toFixed(2)} {candidate.currency}
+          {fmtFixed(Number(candidate.unit_rate), 2)} {candidate.currency}
         </span>
         <span>·</span>
         <span>
@@ -1161,7 +1163,7 @@ function ScoreBadge({
               {t('match.vector_score', { defaultValue: 'Vector' })}
             </span>
             <span className="font-mono">
-              {candidate.vector_score.toFixed(2)}
+              {fmtFixed(candidate.vector_score, 2)}
             </span>
           </div>
           {boosts.length === 0 ? (

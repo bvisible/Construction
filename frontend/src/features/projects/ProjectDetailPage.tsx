@@ -80,6 +80,8 @@ import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { useRecentStore } from '@/stores/useRecentStore';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useToastStore } from '@/stores/useToastStore';
+import { fmtPercent, fmtFixed } from '@/shared/lib/formatters';
+import { getNumberLocale } from '@/stores/usePreferencesStore';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -218,7 +220,7 @@ function formatCurrency(value: number, currency?: string): string {
     return '—';
   }
   try {
-    return new Intl.NumberFormat(i18n.language, {
+    return new Intl.NumberFormat(getNumberLocale(), {
       style: 'currency',
       currency: trimmed,
       minimumFractionDigits: 2,
@@ -837,7 +839,7 @@ function DropZone({
           {t('import.drop_or_browse', { defaultValue: 'Drop your file here, or click to browse' })}
         </p>
         <p className="mt-1 text-xs text-content-tertiary">
-          {t('import.supported_formats', { defaultValue: 'Supports Excel, CSV, PDF, photos, and CAD/BIM files (Revit, IFC, DWG, DGN)' })}
+          {t('import.supported_formats', { defaultValue: 'Supports Excel, CSV, PDF, photos, and CAD/BIM files (Revit®, IFC, DWG, DGN)' })}
         </p>
       </div>
       <input
@@ -957,7 +959,7 @@ function ImportDialog({
                       {selectedFile.name}
                     </p>
                     <p className="text-xs text-content-tertiary">
-                      {(selectedFile.size / 1024).toFixed(1)} KB
+                      {fmtFixed(selectedFile.size / 1024, 1)} KB
                     </p>
                   </div>
                   {!mutation.isPending && (
@@ -988,7 +990,7 @@ function ImportDialog({
                         return (
                           <div className="space-y-1.5">
                             <p>{t('import.cad_converter_missing', { defaultValue: 'CAD converter not installed.' })}</p>
-                            <p className="text-xs text-semantic-error/80">
+                            <p className="text-xs text-semantic-error">
                               Download DDC converters from{' '}
                               <a
                                 href="https://github.com/datadrivenconstruction/ddc-community-toolkit/releases"
@@ -1019,7 +1021,7 @@ function ImportDialog({
                 <CheckCircle2 size={20} className="shrink-0 text-semantic-success" />
                 <div>
                   <p className="text-sm font-medium text-semantic-success">{t('import.complete', { defaultValue: 'Import complete' })}</p>
-                  <p className="text-xs text-semantic-success/80">
+                  <p className="text-xs text-semantic-success">
                     {t('import.positions_imported', { defaultValue: '{{count}} positions imported', count: result.imported })}
                     {(result.skipped ?? 0) > 0 && `, ${t('import.rows_skipped', { defaultValue: '{{count}} rows skipped', count: result.skipped })}`}
                   </p>
@@ -1079,7 +1081,7 @@ function ImportDialog({
                   <p className="text-xs font-medium text-semantic-error mb-2">{t('import.error_details', { defaultValue: 'Error details:' })}</p>
                   <div className="max-h-32 overflow-y-auto space-y-1">
                     {result.errors.map((err, i) => (
-                      <p key={`${err.row || err.item || ''}-${i}`} className="text-xs text-semantic-error/80">
+                      <p key={`${err.row || err.item || ''}-${i}`} className="text-xs text-semantic-error">
                         {err.row ? `${t('import.error_row', { defaultValue: 'Row {{row}}', row: err.row })}: ` : err.item ? `${err.item}: ` : ''}
                         {err.error}
                       </p>
@@ -2067,7 +2069,7 @@ export function ProjectDetailPage() {
             stats.unavailable
               ? '\u2014'
               : stats.avgValidationScore > 0
-                ? `${(stats.avgValidationScore * 100).toFixed(0)}%`
+                ? fmtPercent(stats.avgValidationScore * 100, 0)
                 : 'N/A'
           }
           icon={<ShieldCheck size={20} strokeWidth={1.75} />}
@@ -2148,7 +2150,7 @@ export function ProjectDetailPage() {
                         {t('projects.dash_budget_consumed', { defaultValue: 'Budget Consumed' })}
                       </p>
                       <p className="mt-0.5 text-xl font-bold text-content-primary tabular-nums leading-tight">
-                        {parseFloat(dashboardData.budget.consumed_pct).toFixed(1)}%
+                        {fmtPercent(parseFloat(dashboardData.budget.consumed_pct))}
                       </p>
                       <p className="text-xs text-content-secondary mt-1 tabular-nums">
                         {formatCurrency(parseFloat(dashboardData.budget.actual), currency)}{' '}
@@ -2197,7 +2199,7 @@ export function ProjectDetailPage() {
                         {t('projects.dash_schedule_progress', { defaultValue: 'Schedule Progress' })}
                       </p>
                       <p className="mt-0.5 text-xl font-bold text-content-primary tabular-nums leading-tight">
-                        {parseFloat(dashboardData.schedule.progress_pct).toFixed(1)}%
+                        {fmtPercent(parseFloat(dashboardData.schedule.progress_pct))}
                       </p>
                       <p className="text-xs text-content-secondary mt-1">
                         {dashboardData.schedule.completed}/{dashboardData.schedule.total_activities}{' '}
@@ -2230,7 +2232,7 @@ export function ProjectDetailPage() {
                         {t('projects.dash_quality', { defaultValue: 'Quality Score' })}
                       </p>
                       <p className="mt-0.5 text-xl font-bold text-content-primary tabular-nums leading-tight">
-                        {(parseFloat(dashboardData.quality.validation_score) * 100).toFixed(0)}%
+                        {fmtPercent(parseFloat(dashboardData.quality.validation_score) * 100, 0)}
                       </p>
                       <p className="text-xs text-content-secondary mt-1">
                         {dashboardData.quality.open_defects > 0
@@ -2393,7 +2395,7 @@ export function ProjectDetailPage() {
                       </svg>
                       <div className="absolute inset-0 flex items-center justify-center">
                         <span className="text-base font-bold text-content-primary tabular-nums">
-                          {parseFloat(dashboardData.schedule.progress_pct).toFixed(0)}%
+                          {fmtPercent(parseFloat(dashboardData.schedule.progress_pct), 0)}
                         </span>
                       </div>
                     </div>

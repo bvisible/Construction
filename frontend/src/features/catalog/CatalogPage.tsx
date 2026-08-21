@@ -38,8 +38,11 @@ import { CurrencyPicker } from '@/shared/ui/CurrencyPicker';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { catalogGuide } from './catalogGuide';
 import { useConfirm } from '@/shared/hooks/useConfirm';
-import { apiGet, apiPost, apiPatch, apiPut, apiDelete } from '@/shared/lib/api';  //// Neoffice — apiPut for the resource edit
-import { getIntlLocale } from '@/shared/lib/formatters';
+//// NEOFFICE — apiPut pour l'édition d'une ressource, ajouté à la liste
+//// d'imports qu'upstream a élargie de son côté (formatage localisé).
+import { apiGet, apiPost, apiPatch, apiPut, apiDelete } from '@/shared/lib/api';
+import { fmtPercent, getIntlLocale, fmtFixed } from '@/shared/lib/formatters';
+import { getNumberLocale } from '@/stores/usePreferencesStore';
 import { useToastStore } from '@/stores/useToastStore';
 import { usePreferencesStore } from '@/stores/usePreferencesStore';
 import { REGION_MAP } from '@/stores/useCostDatabaseStore';
@@ -230,7 +233,7 @@ function toComponentResourceType(value: string): ResourceType | undefined {
 /* ── Number formatting ─────────────────────────────────────────────────── */
 
 const fmt = (n: number) =>
-  new Intl.NumberFormat(getIntlLocale(), {
+  new Intl.NumberFormat(getNumberLocale(), {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   }).format(n);
@@ -456,7 +459,7 @@ function RegionTabBar({
           <span
             className={`text-2xs tabular-nums ${activeRegion === '' ? 'text-oe-blue' : 'text-content-quaternary'}`}
           >
-            {totalItems > 0 ? totalItems.toLocaleString() : ''}
+            {totalItems > 0 ? totalItems.toLocaleString(getNumberLocale()) : ''}
           </span>
         </button>
 
@@ -486,7 +489,7 @@ function RegionTabBar({
               <span
                 className={`text-2xs tabular-nums ${isActive ? 'text-oe-blue' : 'text-content-quaternary'}`}
               >
-                {count > 0 ? count.toLocaleString() : '0'}
+                {count > 0 ? count.toLocaleString(getNumberLocale()) : '0'}
               </span>
             </button>
           );
@@ -520,7 +523,7 @@ function RegionTabBar({
               <span
                 className={`text-2xs tabular-nums ${isActive ? 'text-oe-blue' : 'text-content-quaternary'}`}
               >
-                {count > 0 ? count.toLocaleString() : ''}
+                {count > 0 ? count.toLocaleString(getNumberLocale()) : ''}
               </span>
             </button>
           );
@@ -949,7 +952,7 @@ function ResourceDetailPanel({
             <div className="flex items-center gap-2 mb-1">
               <span className="text-2xs text-content-tertiary">{resource.currency}</span>
               {priceSpread > 0 && (
-                <span className="text-2xs text-content-quaternary">{t('catalog.spread', { defaultValue: 'spread' })} {priceSpread.toFixed(0)}%</span>
+                <span className="text-2xs text-content-quaternary">{t('catalog.spread', { defaultValue: 'spread' })} {fmtPercent(priceSpread, 0)}</span>
               )}
             </div>
             <div className="h-2 w-full rounded-full bg-surface-tertiary overflow-hidden">
@@ -973,9 +976,9 @@ function ResourceDetailPanel({
           {/* Usage */}
           <div className="rounded-lg bg-surface-primary border border-border-light p-2.5">
             <div className="text-2xs text-content-quaternary uppercase tracking-wider mb-1">{t('catalog.usage', { defaultValue: 'Usage' })}</div>
-            <div className="text-xs font-medium text-content-primary">{resource.usage_count.toLocaleString()} {t('catalog.references', { defaultValue: 'references' })}</div>
+            <div className="text-xs font-medium text-content-primary">{resource.usage_count.toLocaleString(getNumberLocale())} {t('catalog.references', { defaultValue: 'references' })}</div>
             {specs.used_in_work_items ? (
-              <div className="text-2xs text-content-tertiary mt-0.5">{Number(specs.used_in_work_items).toLocaleString()} {t('catalog.work_items', { defaultValue: 'work items' })}</div>
+              <div className="text-2xs text-content-tertiary mt-0.5">{Number(specs.used_in_work_items).toLocaleString(getNumberLocale())} {t('catalog.work_items', { defaultValue: 'work items' })}</div>
             ) : null}
           </div>
 
@@ -1013,7 +1016,7 @@ function ResourceDetailPanel({
                 <div className="flex items-center gap-1.5">
                   <span className="text-content-tertiary">{t('common.saved', { defaultValue: 'Saved' })}:</span>
                   <span className="text-content-secondary">
-                    {new Date(String(specs.saved_at)).toLocaleDateString(undefined, {
+                    {new Date(String(specs.saved_at)).toLocaleDateString(getIntlLocale(), {
                       year: 'numeric',
                       month: 'short',
                       day: 'numeric',
@@ -1040,7 +1043,7 @@ function ResourceDetailPanel({
                   <div key={k} className="flex justify-between gap-2 py-0.5">
                     <span className="text-content-quaternary capitalize">{k.replace(/_/g, ' ').replace('parent ', '')}</span>
                     <span className="text-content-secondary truncate max-w-[150px] text-right" title={String(v)}>
-                      {!isNaN(Number(v)) ? Number(Number(v).toFixed(2)).toLocaleString() : String(v)}
+                      {!isNaN(Number(v)) ? Number(Number(v).toFixed(2)).toLocaleString(getNumberLocale()) : String(v)}
                     </span>
                   </div>
                 ))}
@@ -1692,9 +1695,9 @@ export function CatalogPage() {
         srTitle={t('catalog.title', { defaultValue: 'Resource Catalog' })}
         subtitle={
           regionInfo
-            ? `${regionInfo.name}, ${total.toLocaleString()} ${t('catalog.resources', { defaultValue: 'resources' })}`
+            ? `${regionInfo.name}, ${total.toLocaleString(getNumberLocale())} ${t('catalog.resources', { defaultValue: 'resources' })}`
             : total > 0
-              ? `${total.toLocaleString()} ${t('catalog.resources_found', { defaultValue: 'resources found' })}`
+              ? `${total.toLocaleString(getNumberLocale())} ${t('catalog.resources_found', { defaultValue: 'resources found' })}`
               : t('catalog.search_hint', {
                   defaultValue: 'Browse materials, equipment, labor, and operators',
                 })
@@ -1722,7 +1725,7 @@ export function CatalogPage() {
                   const info = REGION_MAP[rs.region];
                   return (
                     <option key={rs.region} value={rs.region}>
-                      {info?.name ?? rs.region} ({rs.count.toLocaleString()})
+                      {info?.name ?? rs.region} ({rs.count.toLocaleString(getNumberLocale())})
                     </option>
                   );
                 })}
@@ -1850,7 +1853,7 @@ export function CatalogPage() {
                       isActive ? 'text-white/70' : 'text-content-quaternary'
                     }`}
                   >
-                    {count.toLocaleString()}
+                    {count.toLocaleString(getNumberLocale())}
                   </span>
                 )}
               </button>
@@ -1993,7 +1996,7 @@ export function CatalogPage() {
                 {t('catalog.all_categories', { defaultValue: 'All categories' })}
               </span>
               <span className="text-2xs text-content-tertiary tabular-nums shrink-0 ml-2">
-                {totalCount.toLocaleString()}
+                {totalCount.toLocaleString(getNumberLocale())}
               </span>
             </button>
             {(stats?.by_category ?? []).map((c) => {
@@ -2014,7 +2017,7 @@ export function CatalogPage() {
                     {t(`catalog.category_${c.category.toLowerCase().replace(/[^a-z0-9]+/g, '_')}`, { defaultValue: c.category })}
                   </span>
                   <span className={`text-2xs tabular-nums shrink-0 ml-2 ${isActive ? 'text-content-secondary' : 'text-content-tertiary'}`}>
-                    {c.count.toLocaleString()}
+                    {c.count.toLocaleString(getNumberLocale())}
                   </span>
                 </button>
               );
@@ -2250,7 +2253,7 @@ export function CatalogPage() {
                     defaultValue: '{{from}}-{{to}} of {{total}}',
                     from: offset + 1,
                     to: Math.min(offset + PAGE_SIZE, total),
-                    total: total.toLocaleString(),
+                    total: total.toLocaleString(getNumberLocale()),
                   })}
                 </p>
                 {totalPages > 1 && (
@@ -2597,7 +2600,7 @@ function PriceAdjustModal({
     setConfirmed(false);
   }, [useIndex, indexRegion, baseYear, targetYear]);
 
-  const percentage = ((factor - 1) * 100).toFixed(1);
+  const percentage = fmtFixed((factor - 1) * 100, 1);
   const isIncrease = factor > 1;
   const isDecrease = factor < 1;
   const isLargeChange = Math.abs(factor - 1) > 0.2;
@@ -2737,12 +2740,12 @@ function PriceAdjustModal({
                     const items = [];
                     for (let y = baseYear; y < targetYear; y++) {
                       const rate = idx?.rates[String(y)] ?? idx?.rates[String(Math.min(y, 2026))] ?? 3.0;
-                      items.push(<span key={y} className="inline-flex items-center gap-1 rounded bg-surface-secondary px-2 py-0.5 text-2xs"><span className="text-content-tertiary">{y}</span><span className="font-medium text-amber-600">+{rate.toFixed(1)}%</span></span>);
+                      items.push(<span key={y} className="inline-flex items-center gap-1 rounded bg-surface-secondary px-2 py-0.5 text-2xs"><span className="text-content-tertiary">{y}</span><span className="font-medium text-amber-600">+{fmtPercent(rate)}</span></span>);
                     }
                     return items;
                   })()}
                   <span className="inline-flex items-center gap-1 rounded bg-amber-100 dark:bg-amber-900/20 px-2 py-0.5 text-2xs font-bold text-amber-700 dark:text-amber-300">
-                    = ×{factor.toFixed(4)} (+{percentage}%)
+                    = ×{fmtFixed(factor, 4)} (+{percentage}%)
                   </span>
                 </div>
               )}
@@ -2895,7 +2898,7 @@ function PriceAdjustModal({
             <p className="text-sm text-content-secondary">
               {t('catalog.adjust_preview', {
                 defaultValue: 'This will affect approximately {{num}} resources',
-                num: estimatedCount.toLocaleString(),
+                num: estimatedCount.toLocaleString(getNumberLocale()),
               })}
             </p>
             {factor !== 1 && (
@@ -2903,7 +2906,7 @@ function PriceAdjustModal({
                 {t('catalog.adjust_example', {
                   defaultValue: 'Example: {{oldPrice}} -> {{newPrice}}',
                   oldPrice: '100.00',
-                  newPrice: (100 * factor).toFixed(2),
+                  newPrice: fmtFixed(100 * factor, 2),
                 })}
               </p>
             )}
@@ -2951,7 +2954,7 @@ function PriceAdjustModal({
         {/* Footer */}
         <div className="flex items-center justify-between px-6 py-4 border-t border-border-light bg-surface-secondary/30">
           <span className="text-xs text-content-tertiary">
-            {t('catalog.factor_label', { defaultValue: 'Factor' })}: {factor.toFixed(2)}{' '}
+            {t('catalog.factor_label', { defaultValue: 'Factor' })}: {fmtFixed(factor, 2)}{' '}
             ({isIncrease ? '+' : ''}{percentage}%)
           </span>
           <div className="flex items-center gap-2">

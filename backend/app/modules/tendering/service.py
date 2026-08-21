@@ -72,6 +72,125 @@ def _round2_dec(value: Decimal) -> Decimal:
     return value.quantize(_CENTS, rounding=ROUND_HALF_UP)
 
 
+def _positions_in_scope(positions: list, metadata: dict | None) -> list:
+    """Narrow a package's BOQ positions to the lines it was raised over.
+
+    A tender package can cover part of a bill: ``create_from_boq`` freezes the
+    chosen sections into ``line_item_template``, and the demo installer records
+    the same thing as a plain ``scope_position_ids`` list. Both comparison
+    screens read the package's whole BOQ, so without this narrowing the lines
+    nobody was asked to price still land on the reference side, where every
+    bidder reads as having omitted them. A package over a quarter of a bill
+    then levels a bid of 812,400 to roughly four times that, because each
+    out-of-scope line is imputed at the bidder's own mean rate, and compares it
+    against a budget four times its own.
+
+    Metadata that declares no scope means the package covers everything its
+    BOQ holds, which is what every package created before this carried. A scope
+    that matches nothing in the BOQ is stale metadata rather than an empty
+    package, so it is ignored too: an empty matrix would be a worse answer than
+    a wide one.
+
+    Args:
+        positions: BOQ positions as loaded for the package.
+        metadata: The package's metadata mapping, possibly empty.
+
+    Returns:
+        The positions in scope, in their original order.
+    """
+    scope = _scope_position_ids(metadata)
+    if not scope:
+        return positions
+    narrowed = [p for p in positions if str(p.id) in scope]
+    return narrowed or positions
+
+
+def _scope_position_ids(metadata: dict | None) -> set[str]:
+    """The position ids a package declares, from either shape the metadata takes.
+
+    Empty means the package declares no scope, which every package created
+    before the scope was recorded carries and which means the whole bill.
+    """
+    meta = metadata or {}
+    scope: set[str] = set()
+
+    raw = meta.get("scope_position_ids")
+    if isinstance(raw, list):
+        scope.update(str(v) for v in raw if v)
+
+    template = meta.get("line_item_template")
+    if isinstance(template, list):
+        for item in template:
+            if isinstance(item, dict) and item.get("position_id"):
+                scope.add(str(item["position_id"]))
+
+    return scope
+
+
+def _scope_sections(positions: list, metadata: dict | None) -> dict:
+    """Describe a package's scope in the bill's own terms.
+
+    Answers the question the comparison screens compute silently: which sections
+    was this package raised over, and how much of the bill is that. Kept pure so
+    it can be read and tested without a database, the way the scope filter above
+    it is.
+
+    ``create_from_boq`` records the chosen sections as ``source_section_ids``.
+    Packages that predate that, and the ones the demo installer writes, record
+    only a flat position list, so the sections are derived by walking each
+    in-scope position up to its top-level ancestor. That gives the same answer
+    whenever the scope was built from whole sections, and an honest
+    approximation when it was not, which ``sections_recorded`` reports.
+
+    Returns:
+        A mapping with ``sections_recorded``, ``covers_whole_bill``,
+        ``included_position_count`` and ``sections``, each section carrying its
+        id, ordinal, description and how many in-scope positions sit under it.
+    """
+    by_id = {str(p.id): p for p in positions}
+    parent_of = {str(p.id): (str(p.parent_id) if getattr(p, "parent_id", None) else None) for p in positions}
+
+    scope = _scope_position_ids(metadata)
+    in_scope = {pid for pid in scope if pid in by_id}
+    counted = in_scope or set(by_id)
+
+    def top_level(pid: str) -> str:
+        seen: set[str] = set()
+        while parent_of.get(pid) and pid not in seen:
+            seen.add(pid)
+            pid = parent_of[pid] or pid
+        return pid
+
+    per_section: dict[str, int] = {}
+    for pid in counted:
+        root = top_level(pid)
+        per_section[root] = per_section.get(root, 0) + 1
+
+    meta = metadata if isinstance(metadata, dict) else {}
+    recorded = meta.get("source_section_ids")
+    sections_recorded = isinstance(recorded, list) and any(str(v) in by_id for v in recorded)
+    if sections_recorded:
+        section_ids = [str(v) for v in recorded if str(v) in by_id]  # type: ignore[union-attr]
+    else:
+        section_ids = sorted(per_section, key=lambda pid: str(getattr(by_id[pid], "ordinal", "") or ""))
+
+    return {
+        "sections_recorded": sections_recorded,
+        "covers_whole_bill": not in_scope or len(in_scope) == len(positions),
+        "included_position_count": len(counted),
+        "sections": [
+            {
+                "id": by_id[sid].id,
+                "ordinal": str(getattr(by_id[sid], "ordinal", "") or ""),
+                "description": str(getattr(by_id[sid], "description", "") or ""),
+                "position_count": per_section.get(sid, 0),
+            }
+            for sid in section_ids
+            if sid in by_id
+        ],
+    }
+
+
 async def _safe_publish(name: str, data: dict, source_module: str = "") -> None:
     try:
         event_bus.publish_detached(name, data, source_module=source_module)
@@ -99,6 +218,7 @@ from app.modules.tendering.schemas import (
     LevelingMatrixResponse,
     LevelingMatrixRow,
     PackageCreate,
+    PackageScopeResponse,
     PackageUpdate,
     RecipientCreate,
     RecipientResponse,
@@ -303,6 +423,51 @@ class TenderingService:
         )
         return package
 
+    async def package_scope(self, package_id: uuid.UUID) -> "PackageScopeResponse":
+        """Report which part of the bill a package was raised over.
+
+        ``create_from_boq`` records the chosen sections as ``source_section_ids``
+        and has never had a reader, so a package covering one trade looked on
+        screen exactly like a package covering the whole bill. Comparison and
+        levelling already narrow to that scope, which means the number a bidder
+        is measured against depends on a fact the reader could not see.
+
+        Packages that predate the metadata, and the ones the demo installer
+        writes, record the scope as a flat position list instead. For those the
+        sections are derived by walking each in-scope position up to its
+        top-level ancestor, and ``sections_recorded`` says so.
+
+        Raises 404 when the package does not exist, and answers with an empty
+        scope rather than an error when its BOQ cannot be read, because a bill
+        that has since been deleted is not a reason to refuse the question.
+        """
+        from app.modules.tendering.schemas import PackageScopeSection
+
+        package = await self.get_package(package_id)
+        answer = PackageScopeResponse(package_id=package_id, boq_id=package.boq_id)
+        if package.boq_id is None:
+            answer.covers_whole_bill = False
+            return answer
+
+        from app.modules.boq.service import BOQService
+
+        try:
+            boq_data = await BOQService(self.session).get_boq_with_positions(package.boq_id)
+        except HTTPException:
+            logger.info("Package %s names a BOQ that cannot be read", package_id)
+            return answer
+
+        positions = list(boq_data.positions)
+        answer.boq_name = getattr(boq_data, "name", "") or ""
+        answer.boq_position_count = len(positions)
+
+        described = _scope_sections(positions, package.metadata_)
+        answer.sections_recorded = described["sections_recorded"]
+        answer.covers_whole_bill = described["covers_whole_bill"]
+        answer.included_position_count = described["included_position_count"]
+        answer.sections = [PackageScopeSection(**section) for section in described["sections"]]
+        return answer
+
     async def get_package(self, package_id: uuid.UUID) -> TenderPackage:
         """Get a package by ID. Raises 404 if not found."""
         package = await self.repo.get_package_by_id(package_id)
@@ -506,7 +671,7 @@ class TenderingService:
         boq_service = BOQService(self.session)
         try:
             boq_data = await boq_service.get_boq_with_positions(package.boq_id)
-            budget_positions = boq_data.positions
+            budget_positions = _positions_in_scope(boq_data.positions, package.metadata_)
         except HTTPException:
             budget_positions = []
 
@@ -1501,7 +1666,7 @@ class TenderingService:
         boq_service = BOQService(self.session)
         try:
             boq_data = await boq_service.get_boq_with_positions(package.boq_id)
-            ref_positions = boq_data.positions
+            ref_positions = _positions_in_scope(boq_data.positions, package.metadata_)
         except HTTPException:
             ref_positions = []
 

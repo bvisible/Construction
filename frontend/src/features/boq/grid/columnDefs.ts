@@ -16,6 +16,7 @@ import {
 } from '../boqHelpers';
 import type { DisplayQuantityApi } from '@/shared/hooks/useDisplayQuantity';
 import { unitColumnValueSetter } from './cellEditors';
+import { parseDecimalInput } from './parseDecimal';
 import {
   buildFormulaContext,
   evaluateFormulaStrict,
@@ -24,6 +25,7 @@ import {
   type FormulaVariable,
 } from './formula';
 import type { Position } from '../api';
+import { fmtFixed } from '@/shared/lib/formatters';
 
 /**
  * How the Material / Labor / Equipment cost-driver split is shown in the BOQ
@@ -36,6 +38,44 @@ import type { Position } from '../api';
  *  - `off`     neither pill nor columns.
  */
 export type ResourceSplitMode = 'pill' | 'columns' | 'off';
+
+/* ── Ordinal edit gesture arming ─────────────────────────────────────
+ * The grid runs with grid-level ``singleClickEdit`` so data-entry columns
+ * (qty, rate, unit) edit on one click. AG Grid combines that option with the
+ * column one as an OR (``gos.get('singleClickEdit') || colDef.singleClickEdit``),
+ * so a column-level ``singleClickEdit: false`` can NEVER opt back out - the
+ * previous attempt to make the Ordnungszahl double-click-only was a no-op
+ * and a stray single click kept opening an invisible editor over the OZ.
+ *
+ * Instead the ordinal column is editable only while "armed", and only the
+ * gestures we bless arm it: double-click, F2, Enter. The arm is a SELF-
+ * EXPIRING timestamp, not a boolean anyone has to remember to clear - it
+ * survives exactly the synchronous ``startRowOrCellEdit`` that follows the
+ * gesture, then dies on its own. No close path (Escape, blur, commit,
+ * invalid revert, thrown editor) can leak it into a stuck state, and no
+ * later single click can reuse it.
+ */
+let ordinalEditArmedUntil = 0;
+
+/** Bless the next (synchronous) edit start on the ordinal column. */
+function armOrdinalEdit(): void {
+  ordinalEditArmedUntil = Date.now() + 250;
+}
+
+/** True while a blessed gesture's edit start is in flight. */
+function isOrdinalEditArmed(): boolean {
+  return Date.now() < ordinalEditArmedUntil;
+}
+
+/** Test seam: report/clear the arm without waiting out the timestamp. */
+export function __ordinalEditArmState(): { armed: boolean; reset: () => void } {
+  return {
+    armed: isOrdinalEditArmed(),
+    reset: () => {
+      ordinalEditArmedUntil = 0;
+    },
+  };
+}
 
 /** Toolbar cycle order: pill -> columns -> off -> pill. */
 export function nextResourceSplitMode(mode: ResourceSplitMode): ResourceSplitMode {
@@ -102,6 +142,32 @@ export interface BOQColumnContext {
    * callers can use them unconditionally once present).
    */
   displayQuantity?: DisplayQuantityApi;
+  /**
+   * Length (characters) of the longest position ordinal in the grid.
+   * BOQGrid derives it from the loaded positions so the "Pos." column can
+   * be sized to show the FULL Ordnungszahl: a German GAEB OZ like
+   * "01.01.0010" was ellipsised to "01.01.0…" by the old fixed 88px.
+   * Omitted / 0 keeps the compact default width.
+   */
+  maxOrdinalChars?: number;
+}
+
+/**
+ * Pixel width for the ordinal ("Pos.") column that fits the longest ordinal
+ * currently in the grid without truncation.
+ *
+ * The cell renders the OZ in ``font-mono text-xs`` (12px, ~7.5px advance per
+ * character, upper bound across the mono stacks we ship) plus fixed chrome:
+ * 8px cell padding each side and the 10px validation dot with its 4px gap.
+ * Clamped to [88, 180] so short ordinals keep the historic compact column
+ * and a pathological ordinal cannot eat the viewport - the column stays
+ * user-resizable either way.
+ */
+export function ordinalColumnWidth(maxOrdinalChars: number): number {
+  const CHAR_PX = 7.5;
+  const CHROME_PX = 30; // 2 x 8px padding + 10px status dot + 4px gap
+  const fitted = Math.ceil(maxOrdinalChars * CHAR_PX) + CHROME_PX;
+  return Math.max(88, Math.min(180, fitted));
 }
 
 // Note: `currencyFormatter` was previously applied to the unit_rate column
@@ -469,22 +535,61 @@ export function getColumnDefs(context: BOQColumnContext): ColDef[] {
     {
       headerName: t('boq.ordinal', { defaultValue: 'Pos.' }),
       field: 'ordinal',
-      //// NEOFFICE — 88px cut a sub-position number in half. Cédric Protti,
-      //// 2026-08-20: "la colonne des numéros d'articles est trop étroite
-      //// pour les afficher lorsqu'il y a des sous-articles". A CAN
-      //// sub-position reads 135.046.01 — eleven characters, monospaced.
-      //// The column stays resizable, this only moves the starting point.
-      width: 124,
-      minWidth: 70,
+      //// NEOFFICE — notre width:124 fixe (20/08, plainte de Cédric sur
+      //// les numéros tronqués) est ABANDONNÉ au profit de la solution
+      //// upstream ci-dessous, qui est meilleure : elle calcule la largeur
+      //// depuis la donnée réelle et la pose aussi en minWidth, sinon
+      //// sizeColumnsToFit la reprend. Même problème, meilleure réponse.
+      // Sized to the data so the full Ordnungszahl is readable: the fixed
+      // 88px default truncated a standard German GAEB OZ ("01.01.0010")
+      // exactly where the column exists to show it.
+      width: ordinalColumnWidth(context.maxOrdinalChars ?? 0),
+      // The same number is the floor, not just the starting width. The grid
+      // runs sizeColumnsToFit on ready and after every column change, which
+      // redistributes width down to each column's minWidth - a 70px floor
+      // handed the fitted width straight back and re-ellipsised the OZ on a
+      // narrow viewport. An ordinal is an addressable identifier: it has to
+      // be readable to be typed back into an inquiry, so the column gives up
+      // no more width than the longest one in the grid needs. It stays
+      // user-resizable upwards via `resizable: true`.
+      minWidth: ordinalColumnWidth(context.maxOrdinalChars ?? 0),
+      // The grid is singleClickEdit for data-entry columns (qty, rate), but
+      // the Ordnungszahl is the client-issued identity of the line - a stray
+      // click must never open an invisible editor over it. Column-level
+      // ``singleClickEdit: false`` cannot override the grid-level option
+      // (AG Grid ORs them), so the column is instead editable only while a
+      // blessed gesture (double-click / F2 / Enter, below) has armed it.
       editable: (params) => {
-        // Any position number is user-editable (sections included); only the
-        // totals footer stays locked, so users can type whatever ordinal they want.
+        // Only the totals footer stays permanently locked; any position
+        // number (sections included) is editable through the gestures.
         if (params.data?._isFooter) return false;
-        return true;
+        return isOrdinalEditArmed();
+      },
+      // Double-click is otherwise DEAD in a singleClickEdit grid (AG Grid
+      // only starts dblclick-editing when singleClickEdit is off), so the
+      // gesture is wired explicitly: arm, then start the edit ourselves.
+      onCellDoubleClicked: (params) => {
+        if (params.data?._isFooter) return;
+        const rowIndex = params.node?.rowIndex;
+        if (typeof rowIndex !== 'number' || rowIndex < 0) return;
+        armOrdinalEdit();
+        params.api.startEditingCell({ rowIndex, colKey: 'ordinal' });
+      },
+      // F2 on the focused cell runs AG Grid's own start-edit path; arming
+      // just before letting it through makes ``editable`` say yes for
+      // exactly that start. (Enter is not an edit key here - the grid has
+      // ``enterNavigatesVertically``, so Enter moves down instead.)
+      // Printable keys stay unarmed on purpose - type-to-replace on a
+      // mis-focused cell is exactly the stray-rewrite accident.
+      suppressKeyboardEvent: (params) => {
+        if (!params.editing && params.event.key === 'F2') {
+          armOrdinalEdit();
+        }
+        return false;
       },
       headerTooltip: t('boq.ordinal_edit_hint', {
         defaultValue:
-          'Click any position number to type your own. Use Renumber to apply a scheme to all.',
+          'Double-click a position number (or press F2) to type your own. Escape cancels. Use Renumber to apply a scheme to all.',
       }),
       cellClass: (params) => {
         const base = 'font-mono text-xs text-right !pr-2';
@@ -658,8 +763,14 @@ export function getColumnDefs(context: BOQColumnContext): ColDef[] {
       // with no imperial mapping (pcs, %, hr ...), so this is a no-op
       // unless the user is in imperial AND the unit is convertible.
       valueParser: (params) => {
-        const val = parseFloat(params.newValue);
-        if (isNaN(val)) return params.oldValue;
+        // Cold path (editor bypassed / programmatic string commit): parse
+        // locale-aware and strict - parseFloat('48,60') is 48, a silent
+        // near-100x error for a German entry.
+        const val =
+          typeof params.newValue === 'number'
+            ? params.newValue
+            : parseDecimalInput(String(params.newValue ?? ''));
+        if (val === null || !isFinite(val)) return params.oldValue;
         const ctx = params.context as BOQColumnContext | undefined;
         const unit = (params.data?.unit as string | undefined) ?? '';
         return ctx?.displayQuantity ? ctx.displayQuantity.toMetric(val, unit) : val;
@@ -727,8 +838,13 @@ export function getColumnDefs(context: BOQColumnContext): ColDef[] {
       // unit; convert it back to the metric-canonical per-unit rate before
       // storing. ``toMetricRate`` is identity for metric / unmapped units.
       valueParser: (params) => {
-        const val = parseFloat(params.newValue);
-        if (isNaN(val)) return params.oldValue;
+        // Same locale-aware strict parse as the quantity column - the rate
+        // is the cell a German estimator types `48,60` into most often.
+        const val =
+          typeof params.newValue === 'number'
+            ? params.newValue
+            : parseDecimalInput(String(params.newValue ?? ''));
+        if (val === null || !isFinite(val)) return params.oldValue;
         const ctx = params.context as BOQColumnContext | undefined;
         const unit = (params.data?.unit as string | undefined) ?? '';
         return ctx?.displayQuantity ? ctx.displayQuantity.toMetricRate(val, unit) : val;
@@ -971,7 +1087,7 @@ export interface CustomColumnEngineContext {
  */
 function formatCalculatedNumber(value: number, decimals: number): string {
   const safe = Math.max(0, Math.min(6, decimals));
-  return value.toFixed(safe);
+  return fmtFixed(value, safe);
 }
 
 /**
@@ -1219,11 +1335,11 @@ export function getCustomColumnDefs(
                 allSum += rq * rr;
               }
               if (allSum <= 0) return '';
-              return ((contribution / allSum) * 100).toFixed(dec);
+              return fmtFixed((contribution / allSum) * 100, dec);
             }
             // resource_sum on a resource row = this resource's
             // contribution to the position unit rate.
-            return contribution.toFixed(dec);
+            return fmtFixed(contribution, dec);
           }
 
           // Position row: existing aggregation across the position's
@@ -1245,10 +1361,10 @@ export function getCustomColumnDefs(
           if (col.derived === 'percentage_of_unit_rate') {
             if (allSum <= 0) return '';
             const pct = (matched / allSum) * 100;
-            return pct.toFixed(dec);
+            return fmtFixed(pct, dec);
           }
           // resource_sum
-          return matched.toFixed(dec);
+          return fmtFixed(matched, dec);
         };
         const roleLabel = roleSet ? Array.from(roleSet).join(' / ') : 'matching';
         base.tooltipValueGetter = () => {
@@ -1326,10 +1442,18 @@ export function getCustomColumnDefs(
       };
 
       if (colType === 'number') {
-        base.cellEditor = 'agNumberCellEditor';
+        // Text editor, not agNumberCellEditor: the stock number editor is an
+        // <input type=number> which drops a German decimal comma at the
+        // keystroke level (48,60 -> 4860). The strict locale-aware parser
+        // below reads the text instead; clearing the cell still stores ''.
+        base.cellEditor = 'agTextCellEditor';
         base.valueParser = (params) => {
-          const val = parseFloat(params.newValue);
-          return isNaN(val) ? '' : val;
+          const raw = String(params.newValue ?? '').trim();
+          if (raw === '') return '';
+          const val = parseDecimalInput(raw);
+          // Unparseable input keeps the previous value - the old parseFloat
+          // fallback silently CLEARED the cell on a typo.
+          return val === null ? params.oldValue : val;
         };
       } else if (colType === 'select' && col.options?.length) {
         base.cellEditor = 'agSelectCellEditor';

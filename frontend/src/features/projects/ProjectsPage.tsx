@@ -14,7 +14,8 @@ import { Button, Card, Badge, EmptyState, Skeleton, SkeletonGrid, Breadcrumb, Pr
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { DismissibleInfo, IntroRichText } from '@/shared/ui/DismissibleInfo';
 import { useWidgetSettingsStore } from '@/stores/useWidgetSettingsStore';
-import { getIntlLocale } from '@/shared/lib/formatters';
+import { fmtNumber, getIntlLocale, fmtFixed } from '@/shared/lib/formatters';
+import { getNumberLocale } from '@/stores/usePreferencesStore';
 import { projectsApi, type Project } from './api';
 import { apiGet, apiPatch, apiPost, apiDelete } from '@/shared/lib/api';
 import { useToastStore } from '@/stores/useToastStore';
@@ -117,10 +118,17 @@ function getRegionAvatarClass(region?: string): string {
   return REGION_AVATAR_PALETTE[h % REGION_AVATAR_PALETTE.length] ?? 'bg-oe-blue-subtle text-oe-blue-text';
 }
 
-const currencyFmt = new Intl.NumberFormat(getIntlLocale(), {
-  minimumFractionDigits: 0,
-  maximumFractionDigits: 0,
-});
+/**
+ * A whole-number amount in the reader's language.
+ *
+ * This used to be an `Intl.NumberFormat` built at module scope. The language
+ * switcher deliberately does not reload the app, so a formatter built when
+ * the chunk first loaded kept writing in whatever language the page opened
+ * in: a German reader who arrived in English saw `12,550,880` beside rows
+ * formatted `12.550.880`. Reading the locale per call is what every other
+ * helper in `shared/lib/formatters` already does.
+ */
+const currencyFmt = { format: (value: number) => fmtNumber(value, 0) };
 
 export function ProjectsPage() {
   const { t } = useTranslation();
@@ -485,9 +493,9 @@ export function ProjectsPage() {
 
   const formatBigValue = (v: number) =>
     v >= 1_000_000
-      ? `${(v / 1_000_000).toFixed(1)}M`
+      ? `${fmtFixed(v / 1_000_000, 1)}M`
       : v >= 1_000
-        ? `${(v / 1_000).toFixed(0)}K`
+        ? `${fmtFixed(v / 1_000, 0)}K`
         : currencyFmt.format(v);
 
   // Render a money figure with its ISO currency code, never a bare number.
@@ -669,7 +677,7 @@ export function ProjectsPage() {
                 {t('projects.stats_boqs', { defaultValue: 'Total BOQs' })}
               </div>
               <div className="mt-1 text-xl font-bold text-content-primary tabular-nums leading-none">
-                {boqStats ? stats.totalBoqs.toLocaleString() : (
+                {boqStats ? stats.totalBoqs.toLocaleString(getNumberLocale()) : (
                   <Skeleton width={40} height={20} className="inline-block align-middle" />
                 )}
               </div>
@@ -677,7 +685,7 @@ export function ProjectsPage() {
                 {boqStats && stats.totalProjects > 0
                   ? t('projects.stats_boqs_per_project', {
                       defaultValue: '{{avg}} per project',
-                      avg: stats.avgBoqsPerProject.toFixed(1),
+                      avg: fmtFixed(stats.avgBoqsPerProject, 1),
                     })
                   : ''}
               </div>

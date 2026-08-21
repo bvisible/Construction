@@ -1,0 +1,1179 @@
+// DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
+// Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
+//
+// One amount, one reading, on every surface that shows it.
+//
+// The defect this was written from: the same record rendered `$180,174.28` on
+// the bill of quantities and `180.174,28 $` on the finance register, inside one
+// English UI. Nothing was random about it. The bill formats through
+// `shared/lib/money`, which resolves the locale from the UI language, and the
+// finance register formats through `<MoneyDisplay>`, which read a separate
+// `numberLocale` preference whose default was the literal `'de-DE'`. Both
+// surfaces were doing exactly what they were told; they were told different
+// things.
+//
+// So this file asks the question the sibling gates cannot. They ask whether a
+// call names a locale at all - `numbersAreWrittenInTheAppLanguage` catches the
+// missing argument, `formattersReadTheLocalePerCall` catches the argument read
+// once at chunk load. A call that confidently passes the WRONG locale satisfies
+// both. That is the shape of this bug, and it is why finding it needed a
+// screenshot rather than a gate.
+//
+// Two halves, in one file because they are one question:
+//
+//   * the rendering half checks that the money surfaces agree with the common
+//     path, in a form derived from the locale rather than compared to a string.
+//     A test that knows `$180,174.28` passes again the moment the seed amount
+//     changes; a test that knows en-US groups with commas, points its decimals
+//     and leads with the symbol keeps working on any amount.
+//   * the census half checks that there is only one place the answer can come
+//     from. Fixing the two rows in the screenshot would have left every other
+//     surface free to invent its own locale, and we would be back here.
+import { describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { join, relative } from 'node:path';
+import { render, cleanup } from '@testing-library/react';
+import i18next from 'i18next';
+
+import { MoneyDisplay } from '@/shared/ui/MoneyDisplay';
+import { QuantityDisplay } from '@/shared/ui/QuantityDisplay';
+import { formatCurrency } from '@/shared/lib/money';
+import { fmtWithCurrency } from '@/features/boq/boqHelpers';
+import { usePreferencesStore } from '@/stores/usePreferencesStore';
+
+const SRC = join(__dirname, '..', '..', '..');
+
+/**
+ * The fixed point of the whole file: the language the reader picked, and the
+ * locale tag their numbers therefore have to be written in. Taken straight
+ * from `LOCALE_MAP` in `intlLocale.ts`, deliberately restated here rather than
+ * imported - a test that derives its expectation from the same function it is
+ * checking passes whatever that function returns.
+ */
+const LANGUAGES: [string, string][] = [
+  ['en', 'en-US'],
+  ['de', 'de-DE'],
+  ['fr', 'fr-FR'],
+  ['ja', 'ja-JP'],
+];
+
+/** Amounts, not an amount. The assertion must not depend on which one. */
+const AMOUNTS = [180174.28, 225297.6, 3088.4, 0, -1234.5];
+
+const originalLanguage = i18next.language;
+
+function speak(language: string) {
+  // The store is read through a selector, and `useIntlLocale` reads i18next at
+  // render, so both are in place before the component mounts.
+  i18next.language = language;
+}
+
+beforeEach(() => {
+  localStorage.clear();
+  usePreferencesStore.getState().resetPreferences();
+});
+
+afterEach(() => {
+  cleanup();
+});
+
+afterAll(() => {
+  i18next.language = originalLanguage;
+});
+
+/* ── The reading a locale actually prescribes ─────────────────────────────── */
+
+interface Shape {
+  group: string | undefined;
+  decimal: string | undefined;
+  symbolLeads: boolean;
+}
+
+/**
+ * What this locale does to a number, asked of Intl rather than asserted from
+ * memory. Returning the separators and the symbol position - the three things
+ * that differed on the screenshot - lets the tests below state the rule
+ * ("English groups on commas") without hardcoding any rendered amount.
+ */
+function shapeOf(locale: string, currency: string, amount: number): Shape {
+  const parts = new Intl.NumberFormat(locale, {
+    style: 'currency',
+    currency,
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).formatToParts(amount);
+  const symbolAt = parts.findIndex((p) => p.type === 'currency');
+  const digitsAt = parts.findIndex((p) => p.type === 'integer');
+  return {
+    group: parts.find((p) => p.type === 'group')?.value,
+    decimal: parts.find((p) => p.type === 'decimal')?.value,
+    symbolLeads: symbolAt >= 0 && symbolAt < digitsAt,
+  };
+}
+
+/** The money string a reader of `locale` is owed, computed, never quoted. */
+function expectedMoney(locale: string, currency: string, amount: number): string {
+  return new Intl.NumberFormat(locale, {
+    style: 'currency',
+    currency,
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(amount);
+}
+
+/* ── Half one: the surfaces agree, in the reader's language ───────────────── */
+
+describe('a money surface is written in the language the reader is reading', () => {
+  // Guards the guard. Every assertion below compares a rendered string against
+  // an Intl-derived one, which would be satisfied by anything at all if the
+  // test host shipped no locale data and Intl collapsed every locale onto one
+  // output. Stating the differences explicitly means a hollow environment
+  // fails here, loudly, instead of turning the rest of the file green.
+  it('the locales under test genuinely disagree about how to write a number', () => {
+    const en = shapeOf('en-US', 'USD', 180174.28);
+    const de = shapeOf('de-DE', 'USD', 180174.28);
+
+    expect(en.group).toBe(',');
+    expect(en.decimal).toBe('.');
+    expect(en.symbolLeads).toBe(true);
+
+    expect(de.group).toBe('.');
+    expect(de.decimal).toBe(',');
+    expect(de.symbolLeads).toBe(false);
+  });
+
+  it.each(LANGUAGES)('MoneyDisplay writes %s money as %s prescribes', (language, tag) => {
+    speak(language);
+    for (const amount of AMOUNTS) {
+      const { container } = render(<MoneyDisplay amount={amount} currency="USD" />);
+      expect(container.textContent).toBe(expectedMoney(tag, 'USD', amount));
+      cleanup();
+    }
+  });
+
+  // The defect itself: `/boq` renders through `formatCurrency` and `/finance`
+  // through `<MoneyDisplay>`. Whatever else changes, those two have to produce
+  // one string for one amount.
+  it.each(LANGUAGES)('the bill and the register agree in %s', (language, _tag) => {
+    speak(language);
+    for (const amount of AMOUNTS) {
+      const { container } = render(<MoneyDisplay amount={amount} currency="USD" />);
+      expect(container.textContent).toBe(formatCurrency(amount, 'USD'));
+      cleanup();
+    }
+  });
+
+  it('a quantity is written with the same separators as the money beside it', () => {
+    speak('de');
+    const { container } = render(<QuantityDisplay value={1234.5} unit="m³" precision={2} />);
+    const expected = new Intl.NumberFormat('de-DE', {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 2,
+    }).format(1234.5);
+    expect(container.textContent).toContain(expected);
+  });
+
+  it('switching the language moves the numbers with it', () => {
+    speak('en');
+    const first = render(<MoneyDisplay amount={180174.28} currency="USD" />).container.textContent;
+    cleanup();
+    speak('de');
+    const second = render(<MoneyDisplay amount={180174.28} currency="USD" />).container.textContent;
+
+    expect(first).toBe(expectedMoney('en-US', 'USD', 180174.28));
+    expect(second).toBe(expectedMoney('de-DE', 'USD', 180174.28));
+    expect(first).not.toBe(second);
+  });
+});
+
+/* ── Half one, continued: an explicit choice still wins ───────────────────── */
+
+describe('the number-format preference', () => {
+  it('overrides the UI language when the reader has actually chosen one', () => {
+    speak('en');
+    usePreferencesStore.getState().setPreference('numberLocale', 'de-DE');
+    const { container } = render(<MoneyDisplay amount={180174.28} currency="USD" />);
+    expect(container.textContent).toBe(expectedMoney('de-DE', 'USD', 180174.28));
+  });
+
+  /**
+   * The half of the contract that reads backwards, which nothing asserted.
+   *
+   * Everything else in this file checks that a number follows the reader.
+   * "Follows the reader" has two clauses and only one of them was written
+   * down: with no preference the number moves with the language, and with a
+   * preference it stops moving with the language. The test above cannot see
+   * the second clause, because it renders in exactly one language - a build
+   * where the preference were ignored entirely and `de-DE` happened to be the
+   * fallback would satisfy it. Reading the same amount in four languages is
+   * what tells "the preference won" apart from "the preference agreed".
+   */
+  const readAcrossLanguages = (render1: () => string | null) =>
+    LANGUAGES.map(([language]) => {
+      speak(language);
+      const text = render1();
+      cleanup();
+      return text;
+    });
+
+  const money = () => render(<MoneyDisplay amount={180174.28} currency="USD" />).container.textContent;
+
+  it('holds a chosen format still while the language moves under it', () => {
+    usePreferencesStore.getState().setPreference('numberLocale', 'de-DE');
+    const readings = readAcrossLanguages(money);
+
+    expect(new Set(readings).size).toBe(1);
+    expect(readings[0]).toBe(expectedMoney('de-DE', 'USD', 180174.28));
+  });
+
+  it('and lets the same four languages move it when nothing was chosen', () => {
+    // The negative control, without which the test above passes on a surface
+    // that renders one frozen string for every reader.
+    //
+    // More than one rather than four: `en-US` and `ja-JP` write this amount
+    // the same way, both grouping on commas with a leading symbol, so four
+    // languages are only three readings and asserting four would be asserting
+    // a fact about Japanese that is not true.
+    expect(usePreferencesStore.getState().numberLocale).toBe('auto');
+    const readings = readAcrossLanguages(money);
+
+    expect(new Set(readings).size).toBeGreaterThan(1);
+    expect(readings[0]).toBe(expectedMoney('en-US', 'USD', 180174.28));
+    expect(readings[1]).toBe(expectedMoney('de-DE', 'USD', 180174.28));
+  });
+
+  it('holds a chosen format still for a quantity too, not only for money', () => {
+    // The wave moved quantities as well as amounts, and a quantity reaches the
+    // locale through a different component, so the contract is asserted on
+    // both rather than assumed to carry across.
+    usePreferencesStore.getState().setPreference('numberLocale', 'de-DE');
+    const readings = readAcrossLanguages(
+      () => render(<QuantityDisplay value={1234.5} unit="m³" precision={2} />).container.textContent,
+    );
+
+    expect(new Set(readings).size).toBe(1);
+    const expected = new Intl.NumberFormat('de-DE', {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 2,
+    }).format(1234.5);
+    expect(readings[0]).toContain(expected);
+  });
+
+  // The half of the fix that is invisible from a fresh profile. `persist`
+  // writes the whole preferences object on any change, so every browser that
+  // ever set a currency has the old hardcoded `'de-DE'` written down. Changing
+  // the default without reading that value back would have fixed the bug for
+  // nobody who had ever used the app.
+  // `setPreference` rebuilds the stored blob from `readPreferences()`, so what
+  // lands back in localStorage is the migration's own output. Asserting there
+  // exercises the real boot path rather than a helper exported for the test.
+  const persisted = () => JSON.parse(localStorage.getItem('oe_preferences') as string);
+
+  it('reads the pre-auto default out of an existing browser', () => {
+    localStorage.setItem('oe_preferences', JSON.stringify({ currency: 'USD', numberLocale: 'de-DE' }));
+    usePreferencesStore.getState().setPreference('vatRate', 19);
+    expect(persisted().numberLocale).toBe('auto');
+  });
+
+  it('migrates once, so a de-DE chosen afterwards survives', () => {
+    localStorage.setItem(
+      'oe_preferences',
+      JSON.stringify({ currency: 'USD', numberLocale: 'de-DE', _v: 2 }),
+    );
+    usePreferencesStore.getState().setPreference('vatRate', 19);
+    expect(persisted().numberLocale).toBe('de-DE');
+  });
+
+  it('leaves a locale nobody could have got by default alone', () => {
+    localStorage.setItem('oe_preferences', JSON.stringify({ numberLocale: 'ja-JP' }));
+    usePreferencesStore.getState().setPreference('vatRate', 19);
+    expect(persisted().numberLocale).toBe('ja-JP');
+  });
+});
+
+/* ── Half two: only one place may answer the question ─────────────────────── */
+
+function sourceFiles(dir: string, found: string[] = []): string[] {
+  for (const name of readdirSync(dir)) {
+    // Locale files hold translated data, not formatting calls.
+    if (name === 'node_modules' || name === 'locales' || name === '__tests__') continue;
+    const full = join(dir, name);
+    if (statSync(full).isDirectory()) {
+      sourceFiles(full, found);
+    } else if (/\.tsx?$/.test(name) && !/\.test\.tsx?$/.test(name)) {
+      found.push(full);
+    }
+  }
+  return found;
+}
+
+const PRODUCT_FILES = sourceFiles(SRC).map((f) => relative(SRC, f).replace(/\\/g, '/'));
+const read = (rel: string) => readFileSync(join(SRC, rel), 'utf8');
+
+/**
+ * The locale argument of a formatter call: from `from` to the first comma or
+ * closing bracket. Neither character occurs inside a BCP-47 tag or inside a
+ * call to one of the resolvers, so this is the whole argument in every shape
+ * the tree uses today.
+ */
+function localeArgument(source: string, from: number): string {
+  const rest = source.slice(from);
+  return rest.slice(0, Math.min(...[rest.indexOf(','), rest.indexOf(')')].filter((i) => i >= 0)));
+}
+
+/**
+ * Every name a `const`, `let` or `var` in this file binds to something the
+ * pattern matches.
+ *
+ * A gate that judges the argument text alone reads `new Intl.NumberFormat(
+ * locale, ...)` as clean whatever `locale` holds, so `const locale =
+ * getIntlLocale()` two lines above defeats it. That is not hypothetical: three
+ * of the four sites this file caught on the day the resolution was added were
+ * written that way, and the gate had already been reported green over them.
+ *
+ * Matching by name across the whole file is deliberate over-approximation. A
+ * file that keeps a language `locale` and a number `locale` under one name gets
+ * flagged, and being asked to give one of them a different name is the right
+ * answer rather than a false alarm.
+ */
+function boundTo(source: string, pattern: RegExp): Set<string> {
+  const names = new Set<string>();
+  for (const match of source.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*([^;\n]+)/g)) {
+    const [, name, bound] = match;
+    if (name && bound && pattern.test(bound)) names.add(name);
+  }
+  return names;
+}
+
+/** Whether an argument reaches a resolver, directly or through a local name. */
+function reaches(argument: string, pattern: RegExp, aliases: Set<string>): boolean {
+  if (pattern.test(argument)) return true;
+  const bare = argument.trim();
+  return /^[A-Za-z_$][\w$]*$/.test(bare) && aliases.has(bare);
+}
+
+/**
+ * The two resolvers, in every spelling that reaches them. `i18n.language` is
+ * the third way to ask for the interface language and it belongs here for the
+ * same reason the other two do: a formatter cannot be excused by which door it
+ * used.
+ */
+const LANGUAGE = /\b(?:get|use)IntlLocale\b|\bi18n\.language\b/;
+/**
+ * `resolveNumberLocale` is in here because it is the resolver the other two are
+ * written in terms of, not a fourth spelling of the same idea: the hook and the
+ * snapshot both return `resolveNumberLocale(...)`. Leaving it out made the two
+ * formatters the store builds for itself read as slots nobody could resolve.
+ *
+ * Widened after measuring every rule that reads this pattern, because one of
+ * them is the backward rule and it sees seven times the sites the forward one
+ * does. `resolveNumberLocale` appears in two files outside its own definition:
+ * the store builds two `Intl.NumberFormat` on it, and `RegionalSettings` binds
+ * it to a name used only as a `value` prop. Neither file contains a single
+ * `toLocaleString` or `DateTimeFormat`, so the widening moves two slots out of
+ * the unresolved column and changes no verdict anywhere else.
+ */
+const NUMBER_PREFERENCE = /\b(?:get|use)NumberLocale\b|\bresolveNumberLocale\b/;
+
+/**
+ * The expression a method was called on, as the eighty characters in front of
+ * it. Enough to recognise a receiver and never enough to reach back into the
+ * previous statement, which is what the rules below need, being anchored to
+ * the end of it.
+ */
+function receiverOf(source: string, dot: number): string {
+  return source.slice(Math.max(0, dot - 80), dot);
+}
+
+/**
+ * Receivers nobody can argue about, in the two directions that matter.
+ *
+ * Deliberately narrow. `toLocaleString` on an ordinary variable stays unjudged
+ * here, because the alternative is a gate holding opinions about whether
+ * `period` is a number, which is wrong about somebody's field sooner or later,
+ * and a gate that cries wolf gets weakened by the next person to meet it.
+ */
+/**
+ * The eight files that build a document rather than a screen, and the number
+ * of `toLocaleString` calls each one still hands the interface language.
+ *
+ * They are held deliberately. A screen is read by the person looking at it, so
+ * its figures follow that person's number format. A printed report, a PDF and
+ * an Excel or e-invoice export are read by whoever receives them, and the
+ * locale their figures should follow is the recipient's, which the record
+ * already carries as a country code. That rule does not exist yet, so these
+ * files keep the language they had rather than being moved somewhere they
+ * would have to move again. Of the thirty six counted here, six are dates,
+ * which keep the language whatever the document rule turns out to be, twenty
+ * seven are numbers waiting on it, and three the gate declines to call either
+ * way and counts as unjudged.
+ *
+ * The list is closed against growth: a ninth file that formats a number on the
+ * language fails the screen test below, because the exemption is these names
+ * and nothing else. Shrinking it is the direction still on trust, and the
+ * counts are written down so that trust has a number attached rather than
+ * being a silence. A silence is what let this file claim once that the tree
+ * was clean when it held 64 offenders.
+ */
+const DOCUMENT_BUILDERS: readonly (readonly [string, number])[] = [
+  ['features/bim/BIMFilterReportModal.tsx', 2],
+  ['features/bim/printReport.ts', 1],
+  ['features/boq/exportExcel.ts', 1],
+  ['features/contracts/ProgressClaimLineTable.tsx', 1],
+  ['features/reporting/ReportingPage.tsx', 2],
+  ['features/reports/ReportsPage.tsx', 26],
+  ['modules/_shared/pdfBOQExport.ts', 1],
+  ['modules/pdf-takeoff/TakeoffViewerModule.tsx', 2],
+];
+
+const DOCUMENT_FILES = new Set(DOCUMENT_BUILDERS.map(([file]) => file));
+
+/**
+ * What this test says when it fails, because the number on its own invites the
+ * wrong repair. The counts describe the branch and this file reads the working
+ * tree, so the likeliest cause of a red run is a drifted working copy, and the
+ * cheapest thing a reader can do about that is edit the number until it goes
+ * green. That is the one move which quietly grows the exemption, which is the
+ * exact thing the list exists to stop, so the message names the cure instead of
+ * leaving it to be worked out.
+ */
+const DRIFTED = [
+  'A held document formats a different number of figures on the interface language',
+  'than this list says it does. Two things cause that and they want opposite fixes.',
+  '',
+  '1. Your working copy has drifted from the branch. This test reads the working',
+  '   tree while the counts describe the branch, so a converted or half converted',
+  '   copy of one of these files fails here while CI stays green. Look before you',
+  '   touch anything:',
+  '',
+  '     git diff HEAD -- frontend/src/<the file named in the diff below>',
+  '',
+  '   If that shows work you did not mean to keep, put the branch bytes back and',
+  '   leave the number alone. Read the diff first: restoring throws away whatever',
+  '   is on disk, and somebody else may be holding that file.',
+  '',
+  '2. You moved a figure to the recipient locale on purpose. Then this number is',
+  '   what records it, and changing it here is the point rather than a chore.',
+  '',
+  'Editing the count to match a drifted disk is the one wrong answer of the two.',
+].join('\n');
+
+const CERTAINLY_A_DATE =
+  /(?:new Date\([^()]*\)|Date\.now\(\)|parseISO\([^()]*\))$|\b\w*(?:_at|_date|At|Date)$/;
+const CERTAINLY_A_NUMBER =
+  /\.length$|\b(?:Number|parseFloat|parseInt)\([^()]*\)$|\b\w*(?:_count|_total|_sum|Count|Total|Sum)$/;
+
+/**
+ * Options that exist on one of the two formatters and not on the other.
+ *
+ * These decide the question outright where the receiver could not, and they do
+ * it without anyone holding an opinion about what a field is called.
+ * `maximumFractionDigits` is not a thing a date has.
+ */
+const NUMBER_OPTION =
+  /\b(?:minimum|maximum)(?:Fraction|Integer|Significant)Digits\s*:|\b(?:useGrouping|notation|compactDisplay|currency|currencyDisplay|currencySign|unitDisplay|signDisplay|roundingMode|roundingIncrement)\s*:|\bstyle\s*:\s*['"](?:currency|decimal|percent|unit)['"]/;
+const DATE_OPTION =
+  /\b(?:year|month|day|weekday|hour|minute|second|timeZone|timeZoneName|dateStyle|timeStyle|era|hour12|hourCycle|dayPeriod|calendar|fractionalSecondDigits)\s*:/;
+
+/** The second argument of a call, read by balancing brackets from the comma. */
+function optionsArgument(source: string, from: number): string {
+  const rest = source.slice(from);
+  const comma = rest.indexOf(',');
+  const close = rest.indexOf(')');
+  if (comma < 0 || (close >= 0 && close < comma)) return '';
+  let depth = 0;
+  let i = comma + 1;
+  for (; i < rest.length; i += 1) {
+    const ch = rest[i] as string;
+    if ('{[('.includes(ch)) depth += 1;
+    else if ('}])'.includes(ch)) {
+      if (depth === 0) break;
+      depth -= 1;
+    }
+  }
+  return rest.slice(comma + 1, i);
+}
+
+/**
+ * The initialiser bound to a bare name, only when the file binds it once.
+ *
+ * Twice means two things share a name and this reading cannot say which one
+ * reached the call, so it declines rather than picking. That refusal is load
+ * bearing: `AuditLogPage` binds `d` twice and stays unjudged here, which is the
+ * correct answer, not a gap to be closed.
+ */
+function declaredOnce(source: string, name: string): string | null {
+  const bound = [...source.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*([^;\n]+)/g)]
+    .filter((match) => match[1] === name)
+    .map((match) => (match[2] as string).trim());
+  return bound.length === 1 ? (bound[0] as string) : null;
+}
+
+/**
+ * The type annotation on a bare name, only when the file writes it once.
+ *
+ * Once, not "all of them agree", because this is a text scan with no notion of
+ * scope: an unrelated `value: number` in an interface at the top of the file
+ * would otherwise answer for a `value` that came in as a prop. Requiring the
+ * name to be annotated exactly once in the whole file is what makes the answer
+ * about the receiver rather than about a coincidence of naming.
+ */
+function annotatedOnce(source: string, name: string): string | null {
+  const written = [...source.matchAll(new RegExp(`\\b${name}\\s*\\??\\s*:\\s*([A-Za-z_$][\\w$]*)`, 'g'))].map(
+    (match) => match[1] as string,
+  );
+  return written.length === 1 ? (written[0] as string) : null;
+}
+
+type Verdict = 'number' | 'date' | 'unjudged';
+
+/**
+ * What a `toLocaleString` call is formatting, decided once for both directions.
+ *
+ * Both rules below need the same answer to the same question, and asking it
+ * twice is how the two halves drift apart: a list of number-ish names and a
+ * list of date-ish names maintained separately agree on the day they are
+ * written and never again. So this is the only place either direction reads a
+ * receiver, and the directions differ only in which verdict they call a fault.
+ *
+ * Four readings, tried in order of how little they assume:
+ *
+ *   1. the receiver itself, where it settles the matter (`rows.length`)
+ *   2. the options argument, which names one formatter or the other outright
+ *   3. the single initialiser of a bare receiver name in the same file
+ *   4. the single type annotation of a bare receiver name in the same file
+ *
+ * Anything left over is `unjudged` and is counted, not guessed at. That is the
+ * whole discipline: a gate holding opinions about whether `period` is a number
+ * is wrong about somebody's field eventually, and a gate that cries wolf gets
+ * weakened by the next person who meets it.
+ *
+ * The receiver must be a BARE name before readings 3 and 4 apply. `a.value`
+ * ends in `value` too, and resolving that against an unrelated `const value`
+ * elsewhere in the file is how a census turns into a wrong red.
+ */
+function verdictAt(source: string, dot: number, options: string): Verdict {
+  const receiver = receiverOf(source, dot);
+  if (CERTAINLY_A_NUMBER.test(receiver)) return 'number';
+  if (CERTAINLY_A_DATE.test(receiver)) return 'date';
+
+  const numberOption = NUMBER_OPTION.test(options);
+  const dateOption = DATE_OPTION.test(options);
+  if (numberOption !== dateOption) return numberOption ? 'number' : 'date';
+
+  const bare = receiver.match(/(?:^|[^\w$.])([A-Za-z_$][\w$]*)\s*$/);
+  if (!bare) return 'unjudged';
+  const name = bare[1] as string;
+
+  const initialiser = declaredOnce(source, name);
+  if (initialiser !== null) {
+    if (CERTAINLY_A_NUMBER.test(initialiser)) return 'number';
+    if (CERTAINLY_A_DATE.test(initialiser)) return 'date';
+    return 'unjudged';
+  }
+  const annotation = annotatedOnce(source, name);
+  if (annotation === 'number') return 'number';
+  if (annotation === 'Date') return 'date';
+  return 'unjudged';
+}
+
+/** Every `toLocaleString` in a file whose locale reaches `pattern`, judged. */
+function judgedCalls(source: string, pattern: RegExp): { line: number; verdict: Verdict }[] {
+  const aliases = boundTo(source, pattern);
+  const calls: { line: number; verdict: Verdict }[] = [];
+  for (const match of source.matchAll(/\.toLocaleString\(/g)) {
+    const after = match.index + match[0].length;
+    if (!reaches(localeArgument(source, after), pattern, aliases)) continue;
+    calls.push({
+      line: source.slice(0, match.index).split('\n').length,
+      verdict: verdictAt(source, match.index, optionsArgument(source, after)),
+    });
+  }
+  return calls;
+}
+
+/**
+ * A census line, so a run says what it did not judge as well as what it did.
+ *
+ * Written straight to stdout rather than through `console.log`, which is the
+ * obvious way to do this and does not work here: vitest intercepts console and
+ * hands it to the reporter, and on a green run the default reporter prints
+ * nothing, so the census was invisible in exactly the case it exists for. It
+ * only reappeared under `--disableConsoleIntercept`, which nobody passes. A
+ * report that reaches no reader is the same thing as no report, and this file
+ * already carries one lesson about a gate that printed a confident answer
+ * having looked at nothing.
+ */
+function census(label: string, counted: Verdict[]): void {
+  const of = (v: Verdict) => counted.filter((c) => c === v).length;
+  const line = `${label}: ${counted.length} seen, ${of('number')} numbers, ${of('date')} dates, ${of('unjudged')} unjudged`;
+  process.stdout.write(`${line}\n`);
+}
+
+/**
+ * What the gate can see in the locale slot of a formatter, which is a different
+ * question from what the formatter is formatting.
+ *
+ * The rules below judge a slot by reading it, and every reading they do assumes
+ * the resolver is in the slot as visible text, either called there or bound to a
+ * name this same file declares. A slot holding a function parameter defeats all
+ * of it, because the answer was decided in another file by whoever called in.
+ * That is not a corner: `measurement-format.ts` fell in it. Its formatters read
+ * `new Intl.NumberFormat(locale, opts)` where `locale` is the parameter of a
+ * caching helper, so for as long as those functions defaulted to the interface
+ * language the gate looked straight at them and saw nothing to say.
+ *
+ * So the slot gets a class of its own for "could not resolve", and the census
+ * prints it. An offender list is only an answer if you also know how much of
+ * the population it was drawn from, and until this existed an empty list read
+ * as "clean everywhere" when part of what it meant was "unread".
+ *
+ * Measured when written, on the whole tree: 108 `Intl.NumberFormat`, of which 93
+ * reach the preference, 1 is a literal, 1 takes the browser default and 13 are
+ * unresolved; and 19 `Intl.DateTimeFormat`, of which 8 reach the language, 1
+ * takes the default and 10 are unresolved. The date side is mostly unresolved
+ * because `formatters.ts` and the Gantt helpers take their locale as a
+ * parameter, which is the correct shape for them and unreadable from here all
+ * the same. Unreadable is not the same as wrong, and the census says unresolved
+ * rather than anything stronger for that reason.
+ */
+type Slot = 'language' | 'preference' | 'literal' | 'none' | 'unresolved';
+
+function slotClass(argument: string, langAliases: Set<string>, prefAliases: Set<string>): Slot {
+  const argued = argument.trim();
+  if (argued === '' || argued === 'undefined') return 'none';
+  if (LANGUAGE.test(argued)) return 'language';
+  if (NUMBER_PREFERENCE.test(argued)) return 'preference';
+  if (/^['"]/.test(argued)) return 'literal';
+  if (/^[A-Za-z_$][\w$]*$/.test(argued)) {
+    if (langAliases.has(argued)) return 'language';
+    if (prefAliases.has(argued)) return 'preference';
+  }
+  return 'unresolved';
+}
+
+function slotCensus(label: string, counted: Slot[]): void {
+  const of = (s: Slot) => counted.filter((c) => c === s).length;
+  const line =
+    `${label}: ${counted.length} slots, ${of('language')} language, ${of('preference')} preference, ` +
+    `${of('literal')} literal, ${of('none')} browser default, ${of('unresolved')} unresolved`;
+  process.stdout.write(`${line}\n`);
+}
+
+/**
+ * The two files allowed to read the raw preference: the store, which owns it
+ * and turns it into an answer, and the settings screen, which has to show the
+ * reader what they picked. Everywhere else asks `useNumberLocale`.
+ */
+const MAY_READ_THE_PREFERENCE = [
+  'stores/usePreferencesStore.ts',
+  'features/settings/RegionalSettings.tsx',
+];
+
+/**
+ * A locale tag written into a formatter, argued one line at a time.
+ *
+ * The snippet is matched against the file, so an exemption covers the line it
+ * was argued for and expires the moment that line changes - the same discipline
+ * the `toFixed` allowlist uses next door.
+ */
+const HARDCODED_LOCALE_ALLOWED: readonly { file: string; snippet: string; why: string }[] = [
+  {
+    file: 'shared/lib/money.ts',
+    snippet: "const resolved = new Intl.NumberFormat('en-US', {",
+    why:
+      'A probe, not a rendering. It asks Intl how many decimal places a currency ' +
+      'has and reads `resolvedOptions()`; nothing it produces reaches a screen. ' +
+      'CLDR currency digits do not vary by locale, so the tag is a constant here ' +
+      'in the same way `2` is.',
+  },
+];
+
+describe('there is one place the number locale comes from', () => {
+  it('no surface reads the raw preference behind the resolver', () => {
+    const offenders = PRODUCT_FILES.filter(
+      (f) => !MAY_READ_THE_PREFERENCE.includes(f) && /\bs\.numberLocale\b/.test(read(f)),
+    );
+    expect(offenders).toEqual([]);
+  });
+
+  it('no formatter is handed a locale tag written into the source', () => {
+    // `new Intl.NumberFormat('de-DE'` and `(1234).toLocaleString('en-US'` alike:
+    // a quoted BCP-47 tag in the locale position of anything that formats.
+    const pattern =
+      /(?:new Intl\.(?:NumberFormat|DateTimeFormat)|\.toLocaleString|\.toLocaleDateString|\.toLocaleTimeString)\(\s*(['"`])([a-z]{2}(?:-[A-Za-z0-9]+)*)\1/g;
+
+    const offenders: string[] = [];
+    for (const file of PRODUCT_FILES) {
+      const source = read(file);
+      for (const match of source.matchAll(pattern)) {
+        const line = source.slice(0, match.index).split('\n').length;
+        const argued = HARDCODED_LOCALE_ALLOWED.some(
+          (a) => a.file === file && source.includes(a.snippet),
+        );
+        if (!argued) offenders.push(`${file}:${line} ${match[0]}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  }, 60_000);
+
+  // The lesson of the defect above, applied to this file's own instrument.
+  //
+  // The test before this one anchors the tag to the opening bracket, so it sees
+  // `new Intl.NumberFormat('de-DE'` and is blind to
+  // `new Intl.NumberFormat(ctx.locale ?? 'de-DE'`, which is the same literal
+  // doing the same thing one operator later. That is exactly how the bill grid
+  // came to name two languages in its fallbacks while every gate stayed green:
+  // a scope defined by the shape of an argument cannot see a wrong argument of
+  // another shape. So this reads the whole locale position instead.
+  it('no formatter has a locale tag hidden in its fallback either', () => {
+    const opener =
+      /(?:new Intl\.(?:NumberFormat|DateTimeFormat)|\.toLocaleString|\.toLocaleDateString|\.toLocaleTimeString)\(/g;
+    const tag = /(['"`])[a-z]{2}(?:-[A-Za-z0-9]+)*\1/;
+
+    const offenders: string[] = [];
+    for (const file of PRODUCT_FILES) {
+      const source = read(file);
+      for (const match of source.matchAll(opener)) {
+        // The locale argument runs to the first comma or the closing bracket,
+        // whichever comes first. Neither appears inside a BCP-47 tag.
+        const rest = source.slice(match.index + match[0].length);
+        const end = Math.min(...[rest.indexOf(','), rest.indexOf(')')].filter((i) => i >= 0));
+        const arg = rest.slice(0, end);
+        const found = tag.exec(arg);
+        if (!found) continue;
+        const argued = HARDCODED_LOCALE_ALLOWED.some(
+          (a) => a.file === file && source.includes(a.snippet),
+        );
+        if (!argued) {
+          offenders.push(`${file}:${source.slice(0, match.index).split('\n').length} ${match[0]}${arg.trim()}`);
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
+  }, 60_000);
+
+  // An allowlist that outlives the line it was written for is a blank cheque.
+  it('every argued exemption still matches its line', () => {
+    const stale = HARDCODED_LOCALE_ALLOWED.filter((a) => !read(a.file).includes(a.snippet));
+    expect(stale).toEqual([]);
+  });
+
+  // Single source of truth, counted over the tree rather than shown by example.
+  //
+  // Naming the formatters that were wrong on the day this was written would
+  // gate the ninth one and let the tenth in, which is the mistake the sibling
+  // gate above already made once: it looked for a call with no locale argument
+  // at all and was therefore blind to a call with the wrong one. So this counts
+  // a property of every number formatter instead - which resolver it binds -
+  // and it is a property a new formatter cannot avoid having.
+  //
+  // `new Intl.NumberFormat(` here, and `x.toLocaleString(` in the pair after
+  // it. That method is one name on `Number` and on `Date`, so its shape alone
+  // cannot say which rule a call is under: of the 347 in the tree, 304 are
+  // numbers and 43 are dates, and separating them took reading every one. So
+  // the two tests below judge only receivers nobody can argue about, a `new
+  // Date(...)` on one side and a `.length` on the other, and leave the middle
+  // unjudged on purpose.
+  it('no number formatter is built on the interface language', () => {
+    // 2119 product files and 108 number formatters among them when this was
+    // written. The file count is asserted because a walker that silently stops
+    // finding files would otherwise pass on an empty set, which is the one way
+    // a census can be green for the wrong reason.
+    expect(PRODUCT_FILES.length).toBeGreaterThan(1800);
+
+    const offenders: string[] = [];
+    const slots: Slot[] = [];
+    for (const file of PRODUCT_FILES) {
+      const source = read(file);
+      const aliases = boundTo(source, LANGUAGE);
+      const prefAliases = boundTo(source, NUMBER_PREFERENCE);
+      for (const match of source.matchAll(/new Intl\.NumberFormat\(/g)) {
+        const argument = localeArgument(source, match.index + match[0].length);
+        slots.push(slotClass(argument, aliases, prefAliases));
+        if (reaches(argument, LANGUAGE, aliases)) {
+          offenders.push(`${file}:${source.slice(0, match.index).split('\n').length}`);
+        }
+      }
+    }
+    slotCensus('number formatters, by the locale slot the gate can read', slots);
+
+    // Floors, not exact counts, for the same reason the walks below use them:
+    // this reads the working tree while the numbers describe the branch. What
+    // they defend is the one way an empty offender list lies, which is a walk
+    // that found nothing to look at. A resolver that had quietly stopped
+    // resolving would report every slot unresolved and an empty offender list
+    // with it, so the second floor is the one that matters.
+    expect(slots.length, 'the walk found no number formatters at all').toBeGreaterThan(80);
+    expect(
+      slots.filter((s) => s !== 'unresolved').length,
+      'the slot reader resolved almost nothing, so an empty offender list means nothing',
+    ).toBeGreaterThan(slots.length / 2);
+    expect(offenders).toEqual([]);
+  }, 60_000);
+
+  it('and no date formatter is built on the number preference', () => {
+    // The same rule read backwards, because "every number in the reader's
+    // language" is easy to over-apply. A month name is not a number, the date
+    // preference is a separate setting, and pointing the number locale at
+    // `Intl.DateTimeFormat` answers a question nobody asked.
+    const offenders: string[] = [];
+    const slots: Slot[] = [];
+    for (const file of PRODUCT_FILES) {
+      const source = read(file);
+      const aliases = boundTo(source, NUMBER_PREFERENCE);
+      const langAliases = boundTo(source, LANGUAGE);
+      for (const match of source.matchAll(/new Intl\.DateTimeFormat\(/g)) {
+        const argument = localeArgument(source, match.index + match[0].length);
+        slots.push(slotClass(argument, langAliases, aliases));
+        if (reaches(argument, NUMBER_PREFERENCE, aliases)) {
+          offenders.push(`${file}:${source.slice(0, match.index).split('\n').length}`);
+        }
+      }
+    }
+    slotCensus('date formatters, by the locale slot the gate can read', slots);
+
+    // No floor on the resolved share here, and that is deliberate rather than
+    // an omission. Most of these slots are parameters by design: `formatters.ts`
+    // and the Gantt helpers are given a locale by their callers, which is the
+    // right shape for a shared helper and unreadable from this distance. A floor
+    // would be asserting that the tree is written in a style it is not written
+    // in. The count still has to be non-empty, because that failure mode is the
+    // walker, not the style.
+    expect(slots.length, 'the walk found no date formatters at all').toBeGreaterThan(10);
+    expect(offenders).toEqual([]);
+  }, 60_000);
+
+  it('reads the locale slot in every shape it claims to, and admits the rest', () => {
+    const language = new Set(['uiLocale']);
+    const preference = new Set(['chosen']);
+    const at = (argument: string) => slotClass(argument, language, preference);
+
+    expect(at('getIntlLocale()')).toBe('language');
+    expect(at('useNumberLocale()')).toBe('preference');
+    expect(at('resolveNumberLocale(numberLocale')).toBe('preference');
+    expect(at('uiLocale')).toBe('language');
+    expect(at('chosen')).toBe('preference');
+    expect(at("'de-DE'")).toBe('literal');
+    expect(at('')).toBe('none');
+    expect(at('undefined')).toBe('none');
+    // The reading this class was added for. A parameter is a slot whose answer
+    // was decided in another file, and the honest report is that the gate does
+    // not know, which is what kept `measurement-format.ts` invisible while it
+    // formatted every takeoff quantity in the interface language.
+    expect(at('locale')).toBe('unresolved');
+
+    // `i18n.language` is a defect in a number formatter's slot, and it is
+    // asserted here rather than only described above the rule. It is the third
+    // door to the interface language and the one with no resolver in its name,
+    // so a reader looking for `getIntlLocale` alone would walk past it. The
+    // rule is written as a prohibition on number formatters, which is why this
+    // asks the classifier and not a list of date formatters that are allowed.
+    expect(at('i18n.language')).toBe('language');
+    expect(reaches('i18n.language', LANGUAGE, new Set())).toBe(true);
+  });
+
+  it('the classifier answers the shapes it claims to, and refuses the rest', () => {
+    // The rule has teeth and knows where they stop. Every reading `verdictAt`
+    // performs is exercised here, in both answers and in its refusal, because
+    // the census below reports a number either way and a classifier that had
+    // quietly stopped resolving anything would report a tidy one.
+    const at = (source: string, options = '') =>
+      verdictAt(source + '.toLocaleString(', source.length, options);
+
+    // 1. the receiver itself
+    expect(at('rows.length')).toBe('number');
+    expect(at('summary.item_count')).toBe('number');
+    expect(at('row.updated_at')).toBe('date');
+    // 2. the options argument, where the receiver said nothing
+    expect(at('{value', '{ maximumFractionDigits: 2 }')).toBe('number');
+    expect(at('{when', "{ dateStyle: 'medium' }")).toBe('date');
+    // 3. the single initialiser of a bare name
+    expect(at('const d = new Date(iso);\n  return d')).toBe('date');
+    expect(at('const n = Number(raw);\n  return n')).toBe('number');
+    // 4. the single annotation of a bare name
+    expect(at('const fmt = (n: number) => n')).toBe('number');
+    // Including the shape that decided how reading 4 is written. `QtyTile`
+    // annotates its receiver inside a destructured props object type, not in a
+    // parameter list, so the tempting restriction to `(` or `,` before the name
+    // would refuse it. Occurrence-uniqueness is what makes the answer safe
+    // instead, and this fixture is here so that a future tightening to a
+    // parameter-list rule fails rather than silently dropping the site.
+    expect(at('}: {\n  label: string;\n  value: number;\n  unit: string;\n}) {\n  return value')).toBe('number');
+    // And the counterpart it depends on: annotated twice, so no longer an
+    // answer about this receiver but a coincidence of naming.
+    expect(at('interface Row { value: number }\n  const f = (value: string) => value')).toBe('unjudged');
+    // and the refusals, which are the point of counting rather than guessing
+    expect(at('const total = pick(a, b);\n  return total')).toBe('unjudged');
+    expect(at('let d = a;\n  let d = b;\n  return d')).toBe('unjudged');
+    // a dotted receiver is never resolved against a same-named local
+    expect(at('const value = Number(raw);\n  return item.value')).toBe('unjudged');
+  });
+
+  it('no number a screen writes by hand is written in the interface language', () => {
+    const offenders: string[] = [];
+    const counted: Verdict[] = [];
+    for (const file of PRODUCT_FILES) {
+      if (DOCUMENT_FILES.has(file)) continue;
+      const source = read(file);
+      if (!source.includes('.toLocaleString(')) continue;
+      for (const { line, verdict } of judgedCalls(source, LANGUAGE)) {
+        counted.push(verdict);
+        if (verdict === 'number') offenders.push(`${file}:${line}`);
+      }
+    }
+    // What the run judged and what it declined to judge, printed rather than
+    // implied. An empty offender list means one of two very different things -
+    // every number is in the right place, or nothing was recognised as a
+    // number - and only the census tells them apart. On the branch this was
+    // written against it reads 37 seen, 0 numbers, 35 dates, 2 unjudged.
+    census('screens, on the interface language', counted);
+    // Floors, not literals. The counts describe the branch while this walk
+    // reads the working tree, so an exact number turns red on a teammate's
+    // half converted copy with no way to tell that from a real regression,
+    // and the cheap repair is to edit the number until it goes green. A floor
+    // says the only two things worth failing on: the walk found sites at all,
+    // and the classifier still resolves most of them rather than having
+    // quietly decayed into answering `unjudged` to everything, which is the
+    // state in which the offender list below is empty for the wrong reason.
+    expect(counted.length).toBeGreaterThan(20);
+    expect(counted.filter((v) => v !== 'unjudged').length).toBeGreaterThan(counted.length / 2);
+    expect(offenders).toEqual([]);
+  }, 60_000);
+
+  it('and every document held back is held at the count it was held at', () => {
+    // An exemption keyed to a path outlives the path. A file that is renamed
+    // or split stops being exempt and nobody is told, so the names are checked
+    // against the same walk the rule above uses.
+    //
+    // The count beside each name is what makes the exemption shrinkable. A
+    // name on its own says this file is allowed, in any amount and for good. A
+    // name and a number say this file is allowed twenty six times, so a twenty
+    // seventh fails, and so does a twenty fifth: moving one of these to the
+    // recipient's locale is a change somebody has to write down here, which is
+    // the whole point of holding them by name instead of by rule.
+    const held: string[] = [];
+    const counted: Verdict[] = [];
+    for (const [file] of DOCUMENT_BUILDERS) {
+      expect(PRODUCT_FILES).toContain(file);
+      const source = read(file);
+      const calls = judgedCalls(source, LANGUAGE);
+      for (const { verdict } of calls) counted.push(verdict);
+      held.push(`${file} ${calls.length}`);
+    }
+    expect(held, DRIFTED).toEqual(DOCUMENT_BUILDERS.map(([file, count]) => `${file} ${count}`));
+    expect(DOCUMENT_FILES.size).toBe(DOCUMENT_BUILDERS.length);
+
+    census('documents, held on the interface language', counted);
+
+    // What is actually waiting on the document rule, counted instead of
+    // subtracted. This file used to say six of the thirty six were dates and
+    // "the other thirty are numbers", which was arithmetic rather than a
+    // reading: the walk could recognise the six and had no way to look at the
+    // rest. Reading the options argument and the local declarations answers
+    // twenty seven of them outright and still cannot answer three, so the
+    // claim is now twenty seven numbers and three the gate declines to call.
+    //
+    // These are exact rather than floors, and that is safe here for a reason
+    // that does not hold in the two rules above: `held` has already pinned the
+    // per-file totals, so once it passes the composition of those totals is
+    // fixed too. A drifted working copy fails on `held` first, with the
+    // message that tells the reader not to edit the number.
+    //
+    // That safety rests on one condition, so here it is by name: `held` and
+    // these three counts come out of the same walk in the same test, both from
+    // `judgedCalls`. Split them into two tests, or count them from two walks,
+    // and the exact numbers below stop being pinned by anything and start
+    // failing on drift with the wrong message. Keep them together or make them
+    // floors.
+    const of = (v: Verdict) => counted.filter((c) => c === v).length;
+    expect(of('date'), 'a date keeps the interface language whichever way the document rule goes').toBe(6);
+    expect(of('number'), 'these are the figures the recipient rule will have to move').toBe(27);
+    expect(of('unjudged'), 'the gate declines to call these, and says so rather than guessing').toBe(3);
+  }, 60_000);
+
+  it('and no date it writes by hand is written in the number format', () => {
+    // The direction the wave that moved 283 numbers could have broken. A date
+    // handed the number preference goes on printing, in the wrong month name,
+    // and nothing else in this file would have noticed. The date and time
+    // methods need no receiver rule at all: what they format is in the name.
+    expect(CERTAINLY_A_DATE.test('new Date(row.created)')).toBe(true);
+    expect(CERTAINLY_A_DATE.test('row.updated_at')).toBe(true);
+    expect(CERTAINLY_A_DATE.test('rows.length')).toBe(false);
+
+    const offenders: string[] = [];
+    const counted: Verdict[] = [];
+    for (const file of PRODUCT_FILES) {
+      const source = read(file);
+      if (!source.includes('.toLocale')) continue;
+      const aliases = boundTo(source, NUMBER_PREFERENCE);
+      for (const match of source.matchAll(/\.toLocale(?:Date|Time|)String\(/g)) {
+        const after = match.index + match[0].length;
+        if (!reaches(localeArgument(source, after), NUMBER_PREFERENCE, aliases)) continue;
+        const line = source.slice(0, match.index).split('\n').length;
+        // The date and time methods need no receiver rule at all: what they
+        // format is in the name, so they are a fault here whatever they hold.
+        if (match[0] !== '.toLocaleString(') {
+          offenders.push(`${file}:${line}`);
+          continue;
+        }
+        const verdict = verdictAt(source, match.index, optionsArgument(source, after));
+        counted.push(verdict);
+        if (verdict === 'date') offenders.push(`${file}:${line}`);
+      }
+    }
+    // The same census, and it reads very differently from the one above. This
+    // direction sees the whole tree rather than the screens alone, and the
+    // preference is where the wave put almost everything, so most of what it
+    // walks it cannot judge: on the branch this was written against, 269 seen,
+    // 83 numbers, 0 dates, 186 unjudged. That share is the honest state of the
+    // rule and it is printed rather than rounded up to a clean claim.
+    census('everywhere, on the number preference', counted);
+    expect(counted.length).toBeGreaterThan(100);
+    // Deliberately a low floor: unlike the screens rule, this direction judges
+    // a minority of what it sees, and pretending otherwise is what a tidy
+    // number would do.
+    expect(counted.filter((v) => v === 'number').length).toBeGreaterThan(40);
+    expect(offenders).toEqual([]);
+  }, 60_000);
+
+  it('the store never hands the raw preference straight to a formatter', () => {
+    const store = read('stores/usePreferencesStore.ts');
+    expect(store).not.toMatch(/new Intl\.NumberFormat\(\s*numberLocale\b/);
+    expect(store).toMatch(/new Intl\.NumberFormat\(resolveNumberLocale\(/);
+  });
+});
+
+/* ── Half three: the bill is a surface like any other ─────────────────────── */
+
+/**
+ * Why this half exists when the two halves above already passed.
+ *
+ * They compared `<MoneyDisplay>` against `formatCurrency`, and both were right.
+ * The bill of quantities called neither. It called `fmtWithCurrency`, a second
+ * implementation of the same idea, and handed it a locale derived from the
+ * project's region rather than from the reader. So the pair under test agreed
+ * while the pair on the screen did not, and the gate stayed green through a
+ * defect it was written for. A test of two things that already agree cannot
+ * find the third thing that does not.
+ *
+ * The fix is structural rather than a matching pair of edits: `fmtWithCurrency`
+ * now delegates, and the bill reads the same locale as everything else. These
+ * assertions hold the shape of that, so the second implementation cannot grow
+ * back.
+ */
+
+/** Amount and currency of readings caught on the registers, as data. */
+const REGISTER_FIXTURES: readonly (readonly [number, string])[] = [
+  [1543500, 'GBP'],
+  [3091300, 'USD'],
+  [906890, 'BRL'],
+];
+
+/**
+ * The last codes on which the two surfaces disagreed, kept as data.
+ *
+ * They resolved the decimal count from different sources: the register read a
+ * static ISO 4217 list, the bill read what the
+ * engine holds, and CLDR gives these five zero decimals where ISO gives two.
+ * That was never a contest between two tables, it was a contest between a table
+ * and a reader - a Hungarian does not write forints with fillér - and on a
+ * screen the reader wins, so the register asks the engine now as well. The
+ * opposite rule holds for a document, which is read by a bank rather than by
+ * our user, and is written down with the code that writes one, in
+ * `money_decimals` in the backend einvoice rules.
+ *
+ * Eleven other codes used to sit beside these - BHD CLP ISK JOD JPY KRW KWD OMR
+ * TND UGX VND - because the bill asked for two decimals on everything, showing
+ * cents on yen and hiding a digit on dinars.
+ */
+const ONCE_DISAGREED = ['COP', 'HUF', 'IDR', 'LBP', 'PKR'];
+
+/** Every currency the project form offers, read from the form itself. */
+function offeredCurrencies(): string[] {
+  const source = read('features/projects/CreateProjectPage.tsx');
+  const codes: string[] = [];
+  for (const m of source.matchAll(/value: '([A-Z]{3})'/g)) {
+    // The group is always present when the pattern matched, but the index
+    // signature does not know that and the build is the only gate that cares.
+    if (m[1]) codes.push(m[1]);
+  }
+  return [...new Set(codes)];
+}
+
+/** What `<MoneyDisplay>` puts on the screen for this amount. */
+function registerReading(amount: number, currency: string): string {
+  const { container } = render(<MoneyDisplay amount={amount} currency={currency} />);
+  const text = container.textContent ?? '';
+  cleanup();
+  return text;
+}
+
+describe('the bill and the finance register cannot be told different things', () => {
+  it.each(LANGUAGES)('%s writes one amount one way on both surfaces', (language, tag) => {
+    speak(language);
+    for (const [amount, currency] of REGISTER_FIXTURES) {
+      expect(fmtWithCurrency(amount, tag, currency)).toBe(registerReading(amount, currency));
+    }
+  });
+
+  it('the reader who picked a format is obeyed on both, not just on one', () => {
+    // The screenshot pair in one line: an English UI with German numbers. The
+    // bill used to answer the project's region here and the register the
+    // preference, which is how one record read two ways inside one session.
+    speak('en');
+    usePreferencesStore.getState().setPreference('numberLocale', 'de-DE');
+    for (const [amount, currency] of REGISTER_FIXTURES) {
+      const bill = fmtWithCurrency(amount, 'de-DE', currency);
+      expect(bill).toBe(registerReading(amount, currency));
+      expect(bill).not.toBe(expectedMoney('en-US', currency, amount));
+    }
+  });
+
+  it('no currency the product offers reads differently on the two surfaces', () => {
+    speak('en');
+    const disagree = offeredCurrencies().filter(
+      (code) => fmtWithCurrency(1234.5, 'en-US', code) !== registerReading(1234.5, code),
+    );
+    expect(disagree).toEqual([]);
+  });
+
+  it('gives the codes that used to disagree the digit count the engine gives', () => {
+    speak('en');
+    for (const code of ONCE_DISAGREED) {
+      // Asked of Intl rather than written out. "The forint has no fillér" is
+      // an opinion, and the whole point of the ruling is that the opinion
+      // belongs to CLDR: a test that spells the digits out would go on
+      // passing while the product argued with the reader.
+      const digits = new Intl.NumberFormat('en-US', { style: 'currency', currency: code })
+        .resolvedOptions().maximumFractionDigits;
+      expect(registerReading(1234.5, code), code).toBe(
+        new Intl.NumberFormat('en-US', {
+          style: 'currency',
+          currency: code,
+          minimumFractionDigits: digits,
+          maximumFractionDigits: digits,
+        }).format(1234.5),
+      );
+    }
+  });
+
+  it('the bill does not resolve its locale from the project region', () => {
+    // The screen follows its reader. The document half of the rule - a GAEB
+    // file, a PDF offer, an invoice, all read by somebody who is not our user -
+    // is real and unbuilt, and when it is built it will key off the country
+    // code the project stores. What it may not do is come back here.
+    const page = read('features/boq/BOQEditorPage.tsx');
+    expect(page).toMatch(/const locale = useNumberLocale\(\)/);
+    const regionResolvers = PRODUCT_FILES.filter((f) => /getLocaleForRegion/.test(read(f)));
+    expect(regionResolvers).toEqual([]);
+  });
+
+  it('there is one money formatter, and the bill helper is a name for it', () => {
+    // The adapter may keep the argument order eleven bill surfaces already use.
+    // It may not grow a formatter of its own again.
+    const helpers = read('features/boq/boqHelpers.ts');
+    const body = helpers.slice(helpers.indexOf('export function fmtWithCurrency'));
+    expect(body.slice(0, body.indexOf('\n}'))).not.toMatch(/new Intl\.NumberFormat/);
+  });
+});

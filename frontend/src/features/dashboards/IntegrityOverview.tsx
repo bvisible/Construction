@@ -30,6 +30,7 @@ import {
   type IntegrityIssueCode,
   type IntegrityReport,
 } from './api';
+import { fmtPercent, fmtFixed } from '@/shared/lib/formatters';
 
 export interface IntegrityOverviewProps {
   snapshotId: string;
@@ -273,7 +274,7 @@ interface IntegrityRowProps {
 function IntegrityRow({ column, rowCount, isExpanded, onToggle }: IntegrityRowProps) {
   const { t } = useTranslation();
   const completenessPct = Math.round(column.completeness * 100);
-  const nullPctLabel = `${(column.null_pct * 100).toFixed(1)}%`;
+  const nullPctLabel = fmtPercent(column.null_pct * 100);
 
   return (
     <div data-testid={`integrity-row-${column.name}`}>
@@ -407,7 +408,7 @@ function RowDetail({ column, rowCount }: RowDetailProps) {
                     {s.value}
                   </span>
                   <span className="text-content-tertiary tabular-nums">
-                    {s.count} ({pct.toFixed(1)}%)
+                    {s.count} ({fmtPercent(pct)})
                   </span>
                 </li>
               );
@@ -444,7 +445,7 @@ function RowDetail({ column, rowCount }: RowDetailProps) {
               <dd className="tabular-nums text-content-primary">
                 {column.zero_pct === null
                   ? '—'
-                  : `${(column.zero_pct * 100).toFixed(1)}%`}
+                  : fmtPercent(column.zero_pct * 100)}
               </dd>
               <dt>
                 {t('dashboards.integrity_outliers', { defaultValue: 'outliers' })}
@@ -462,7 +463,7 @@ function RowDetail({ column, rowCount }: RowDetailProps) {
 
 function formatStat(value: number | null): string {
   if (value === null) return '—';
-  if (Math.abs(value) >= 1000) return value.toFixed(1);
-  if (Math.abs(value) >= 1) return value.toFixed(3);
-  return value.toFixed(4);
+  if (Math.abs(value) >= 1000) return fmtFixed(value, 1);
+  if (Math.abs(value) >= 1) return fmtFixed(value, 3);
+  return fmtFixed(value, 4);
 }

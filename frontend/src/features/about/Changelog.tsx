@@ -38,6 +38,27 @@ interface ChangelogEntry {
 // date, title and meaning intact; trim the prose, not the facts.
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '15.2.0',
+    date: '2026-08-20',
+    tag: 'NEW',
+    summary:
+      'The Windows installer carries the web view runtime instead of fetching it during setup, so an install no longer depends on reaching Microsoft from a site network, and Windows now offers one installer rather than two that each recorded the same application separately. The update notice names the file that fits the machine it is running on and asks this installation\'s own server rather than GitHub from every browser tab, a purchase order commits against the cost line the estimate priced so committed against remaining stops reading zero on every project, and a bill position can be asked in one row what the estimate allowed, what is committed, what was installed and what left the store. Post-calculation covers material as well as labour and refuses to read an earned total against an actual that does not cover the same lines. A backend that has started and reports that it cannot do its job is no longer indistinguishable from one still coming up, so the window stops opening on top of a server whose every action will fail.',
+  },
+  {
+    version: '15.1.0',
+    date: '2026-08-20',
+    tag: 'FIX',
+    summary:
+      'The Windows desktop application starts. 15.0.0 stopped on a missing locales directory before it drew a window, because the catalogue the server reads while starting sits beside the application package rather than inside it, and a test now refuses any release whose frozen build ships less than the wheel declares. Everything else that could block a first run went with it: the server starts where it is allowed to write, ignores a pidfile whose number now belongs to something else, waits for the database to answer before announcing it, asks the cluster on the address family it listens on, and refuses a data directory a new PostgreSQL major cannot open with the routes that keep your data named first. The BCF issue register also stops showing healthy issues as broken pictures, telling a snapshot that failed to load apart from a viewpoint that never carried one.',
+  },
+  {
+    version: '15.0.0',
+    date: '2026-08-18',
+    tag: 'MILESTONE',
+    summary:
+      'The product ships for two markets it could previously only describe: nine American playbooks with Texas and California state rules and a weekly certified payroll, and twelve German ones with the statutory VOB/B and BGB payment clocks and the working time record MiLoG section 17 requires. GAEB became a format the product both reads and writes, where a plain X84 export is a Hauptangebot, imported sections keep their hierarchy, and a bill stops claiming prices it does not carry. Markups are now something an estimator can reason about, with a rate per section, bonds priced off a rate card, escalation off an index, and a stack that reports its own contradictions rather than refusing the work. A register that cannot fit on one screen now says so, with a guard that stops a new one shipping silently truncated, measurement from drawings speaks the reader\'s units and digits throughout, and the semantic encoder downloads in the background while telling you which of five states it is in.',
+  },
+  {
     version: '14.8.1',
     date: '2026-08-12',
     tag: 'NEW',

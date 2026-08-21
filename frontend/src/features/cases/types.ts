@@ -52,6 +52,23 @@ export interface StepFlowItem {
  * Files in English and as the word for Documents in the other 27 languages,
  * and no locale gate can see it, because nothing is untranslated.
  *
+ * That paragraph holds only while the key is ABSENT from en.ts, which is the
+ * case for a playbook's own content keys and is not the case for the `nav.*`
+ * and `<module>.title` keys these chips reuse. The chip renders
+ * `t(moduleLabelKey, { defaultValue: moduleLabel })`, and a defaultValue is
+ * consulted only for a key that resolves to nothing, so when the key lives in
+ * en.ts it decides for the English reader too and the label never reaches the
+ * screen at all. This misread cost a real bug: `takeoff-from-dwg` carried
+ * `moduleLabel: "Take-off"` beside `moduleLabelKey: "nav.takeoff_overview"`,
+ * whose en.ts value is "Overview", and the chip read Overview in every
+ * language including English while review kept reading the label and seeing
+ * Take-off.
+ *
+ * The label is still not dead weight when the key wins, which is the other
+ * half of the same trap. `playbookModules` hands the raw `moduleLabel` to the
+ * marketing case pages, so a stale label goes on saying Take-off in public
+ * while the app says Overview, with nothing comparing the two.
+ *
  * Correcting one side alone is worse than leaving both wrong. The marketing
  * case pages copy this chip into the module honeycomb by matching the label
  * text, so a fixed label next to a stale key starts matching and carries the
@@ -177,6 +194,9 @@ export type ProfessionalRole =
   | 'design-lead'
   | 'document-controller'
   | 'commercial-manager'
+  | 'accountant'
+  | 'contract-administrator'
+  | 'finance-manager'
   | 'foreman';
 
 /**
@@ -213,6 +233,11 @@ export interface Playbook {
   /** Company types this case is built for (one or more). Drives the primary
    *  "I work as..." selector on the Cases hub; see `companyTypes.ts`. */
   companyTypes: CompanyType[];
+  /** Optional ISO 3166-1 alpha-2 country code when the case is authored for one
+   *  market's standards and law (e.g. "DE" for a VOB/B, GAEB or XRechnung
+   *  workflow). Renders a flag chip on the case card and feeds the region
+   *  filter on the Cases hub. Omit for the universal cases. */
+  region?: string;
   /** Optional explicit professional roles this case is built for. When omitted
    *  the roles are derived from `category` + `companyTypes` (see
    *  `rolesForPlaybook` in `roles.ts`), so most cases never set this. Set it

@@ -290,7 +290,6 @@ export interface TakeoffDocumentResponse {
   pages: number;
   size_bytes: number;
   status: string;
-  project_id?: string | null;
   uploaded_at: string | null;
   /** How many pages came back with no text layer (likely scanned drawings
    *  that need OCR). 0 / absent for a fully text-based PDF (8.2.0). */
@@ -301,6 +300,9 @@ export interface TakeoffDocumentResponse {
    *  source the viewer restores on load; ``null`` when the document was never
    *  calibrated at the document level (fall back to per-measurement stamps). */
   page_scales?: PageScalesDTO | null;
+  /** Owning project id. Fallback identity for measurement persistence when no
+   *  project is active in the header (the document knows its own project). */
+  project_id?: string | null;
 }
 
 /* ── Revision compare (Item 17) ────────────────────────────────────────── */

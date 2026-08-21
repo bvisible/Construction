@@ -8,7 +8,7 @@ quantity surveyor will ask about a computed date is which provision produced
 it. Nothing here is a house rule.
 
 Two modelling decisions run through the whole table and are worth stating once
-rather than eight times.
+rather than once per regime.
 
 **The due date and the final date for payment are different dates, and only the
 UK Act genuinely splits them.** The UK Act makes a sum fall due, then gives a
@@ -21,9 +21,9 @@ imposes - a last day to pay - and which keeps the final date after the due date
 in every regime shipped.
 
 **A null deadline means the statute is silent, which is not the same as zero.**
-Malaysia leaves the payment period to the contract and the EU Late Payment
-Directive has no notice sequence at all. The rules skip what the regime does
-not set rather than treating it as an instant deadline.
+Malaysia leaves the payment period to the contract, and the EU Late Payment
+Directive and the German regimes have no notice sequence at all. The rules skip
+what the regime does not set rather than treating it as an instant deadline.
 
 Seed data lives here and not in a migration on purpose: a migration is a
 schema change that runs once per deployment, and this table is content that
@@ -301,6 +301,302 @@ PAYMENT_REGIMES: tuple[dict[str, Any], ...] = (
             "that only where the term is not grossly unfair to the creditor. Use this regime where a "
             "member state has no construction-specific payment statute, and the national regime where it "
             "has one."
+        ),
+    },
+    # The three German regimes below carry the statutory deadlines of § 16
+    # VOB/B (2016) and §§ 632a, 641, 650g BGB. The German contract-type and
+    # invoice-template vocabulary (VOB_B_EINHEITSPREIS, ABSCHLAGSRECHNUNG,
+    # SCHLUSSRECHNUNG, "per § 632a BGB / § 16 VOB/B") lives in
+    # ``app.modules.dach_pack.config``; that module carries no deadline
+    # arithmetic, so the numbers are written down here, sourced from the
+    # provisions each entry names, and the wording follows dach_pack's. VOB/B
+    # gives an Abschlagsrechnung and a Schlussrechnung two different clocks (21
+    # and 30 days), and a regime in this table is one clock, so they are two
+    # entries rather than one entry with a footnote a calculation cannot read.
+    {
+        "code": "de_vob_b_abschlag",
+        "jurisdiction": "Germany",
+        "country_code": "DE",
+        "statute": "VOB/B § 16 Abs. 1 (Abschlagszahlungen)",
+        "statute_reference": (
+            "§ 16 Abs. 1 Nr. 3 VOB/B (2016); Nachfrist and default interest under § 16 Abs. 5 Nr. 3 "
+            "VOB/B with § 288 Abs. 2 BGB"
+        ),
+        "due_date_basis": "application_date",
+        "due_date_days": 0,
+        "due_date_day_basis": "calendar",
+        "payment_notice_basis": "due_date",
+        "payment_notice_days": None,
+        "payment_notice_day_basis": "calendar",
+        "final_date_basis": "application_date",
+        "final_date_days": 21,
+        "final_date_day_basis": "calendar",
+        "pay_less_days": None,
+        "pay_less_day_basis": "calendar",
+        "no_notice_effect": "none",
+        "interest_basis": "reference_rate_plus_margin",
+        "interest_reference_rate": "Deutsche Bundesbank base rate (Basiszinssatz, § 247 BGB)",
+        "interest_margin_percent": Decimal("9.000"),
+        "interest_fixed_percent": None,
+        "interest_statute": "§ 288 Abs. 2 BGB, applied by § 16 Abs. 5 Nr. 3 VOB/B",
+        "notes": (
+            "The clock for an interim payment invoice (Abschlagsrechnung) under a VOB/B contract. The claim "
+            "falls due within 21 calendar days of the client receiving the verifiable statement of work "
+            "(Zugang der Aufstellung), so enter that date of receipt as the application date; following the "
+            "convention used for the other single-date regimes, the application date is taken as the due "
+            "date and the 21-day limit as the final date for payment. VOB/B has no statutory payment or "
+            "pay-less notice: an objection to the statement is informal and silence has no preclusive "
+            "effect. If the client has not paid when the claim is due, § 16 Abs. 5 Nr. 3 VOB/B lets the "
+            "contractor set a reasonable grace period (angemessene Nachfrist - two weeks is the customary "
+            "yardstick), from whose expiry default interest under § 288 Abs. 2 BGB runs and the "
+            "contractor may suspend the works until payment; at the latest, the client is in default 30 "
+            "days after receipt of the invoice or statement. This module has no grace-period step, so the "
+            "interest warning runs from the final date for payment and the Nachfrist has to be minded by "
+            "hand."
+        ),
+    },
+    {
+        "code": "de_vob_b_schluss",
+        "jurisdiction": "Germany",
+        "country_code": "DE",
+        "statute": "VOB/B § 16 Abs. 3 (Schlusszahlung)",
+        "statute_reference": (
+            "§ 16 Abs. 3 Nr. 1 VOB/B (2016); reservation of claims under § 16 Abs. 3 Nr. 2 and Nr. 5 "
+            "VOB/B; Nachfrist and default interest under § 16 Abs. 5 Nr. 3 VOB/B with § 288 Abs. 2 BGB"
+        ),
+        "due_date_basis": "application_date",
+        "due_date_days": 0,
+        "due_date_day_basis": "calendar",
+        "payment_notice_basis": "due_date",
+        "payment_notice_days": None,
+        "payment_notice_day_basis": "calendar",
+        "final_date_basis": "application_date",
+        "final_date_days": 30,
+        "final_date_day_basis": "calendar",
+        "pay_less_days": None,
+        "pay_less_day_basis": "calendar",
+        "no_notice_effect": "none",
+        "interest_basis": "reference_rate_plus_margin",
+        "interest_reference_rate": "Deutsche Bundesbank base rate (Basiszinssatz, § 247 BGB)",
+        "interest_margin_percent": Decimal("9.000"),
+        "interest_fixed_percent": None,
+        "interest_statute": "§ 288 Abs. 2 BGB, applied by § 16 Abs. 5 Nr. 3 VOB/B",
+        "notes": (
+            "The clock for the final invoice (Schlussrechnung) under a VOB/B contract. The final payment "
+            "falls due promptly after examination and determination of the invoice, and at the latest "
+            "within 30 calendar days of the client receiving it, so enter the date of receipt (Zugang der "
+            "Schlussrechnung) as the application date. The period extends to at most 60 days only where "
+            "that is objectively justified by the particular nature or features of the agreement and was "
+            "expressly agreed (§ 16 Abs. 3 Nr. 1 sentence 2 VOB/B); record such a contract by stating "
+            "the agreed final date on the application, which marks the dates as overridden. Accepting the "
+            "final payment without reservation excludes further claims where the client gave written "
+            "notice of the payment and of that preclusive effect; the contractor's reservation (Vorbehalt) "
+            "must be declared within 28 calendar days of that notice and substantiated within a further 28 "
+            "(§ 16 Abs. 3 Nr. 2 and Nr. 5 VOB/B) - a payee-side sequence this clock does not compute. "
+            "Late payment carries the same Nachfrist and interest mechanics as the interim regime."
+        ),
+    },
+    {
+        "code": "de_bgb_632a",
+        "jurisdiction": "Germany",
+        "country_code": "DE",
+        "statute": "BGB § 632a (Abschlagszahlungen)",
+        "statute_reference": (
+            "§ 632a Abs. 1 BGB; default without a reminder under § 286 Abs. 3 BGB; interest under "
+            "§ 288 Abs. 2 BGB; final payment due on acceptance with a verifiable final invoice under "
+            "§ 641 Abs. 1 and § 650g Abs. 4 BGB"
+        ),
+        "due_date_basis": "application_date",
+        "due_date_days": 0,
+        "due_date_day_basis": "calendar",
+        "payment_notice_basis": "due_date",
+        "payment_notice_days": None,
+        "payment_notice_day_basis": "calendar",
+        "final_date_basis": "application_date",
+        "final_date_days": 30,
+        "final_date_day_basis": "calendar",
+        "pay_less_days": None,
+        "pay_less_day_basis": "calendar",
+        "no_notice_effect": "none",
+        "interest_basis": "reference_rate_plus_margin",
+        "interest_reference_rate": "Deutsche Bundesbank base rate (Basiszinssatz, § 247 BGB)",
+        "interest_margin_percent": Decimal("9.000"),
+        "interest_fixed_percent": None,
+        "interest_statute": "§ 288 Abs. 2 BGB",
+        "notes": (
+            "The clock for interim payments under a plain BGB construction contract, where the parties did "
+            "not agree the VOB/B. § 632a Abs. 1 BGB entitles the contractor to interim payments in the "
+            "amount of the value of the work performed and owed. The BGB sets no payment period - the "
+            "claim is due on demand with a verifiable statement (§ 271 BGB) - so the 30 days written "
+            "here are § 286 Abs. 3 BGB: the client is in default at the latest 30 days after receiving "
+            "the invoice, without any reminder, and that outer limit is taken as the final date for "
+            "payment. Between businesses it applies of itself; against a consumer only where the invoice "
+            "said so. Interest runs at nine percentage points over the base rate for commercial debts "
+            "(§ 288 Abs. 2 BGB). The final payment is a different clock: it falls due on acceptance of "
+            "the works plus a verifiable final invoice (§ 641 Abs. 1, § 650g Abs. 4 BGB), which is a "
+            "condition this module cannot compute from a date alone."
+        ),
+    },
+    # The four United States regimes below are split public/private per state,
+    # because that is where American prompt payment law actually divides: the
+    # public duty is owed by a governmental entity under one statute and the
+    # private duty is owed by an owner under another, with different periods and
+    # different interest. The state pack configs
+    # (``app.modules.us_tx_pack.config`` and ``app.modules.us_ca_pack.config``)
+    # name these codes under ``payment_clock_regimes`` and carry the same
+    # provisions as reference data; the deadline arithmetic is written down here
+    # and nowhere else. None of the four has a notice sequence, so every one of
+    # them takes the application date as the due date and the statutory period as
+    # the final date for payment, the convention set out at the top of this file.
+    {
+        "code": "us_tx_public_2251",
+        "jurisdiction": "Texas, United States (public)",
+        "country_code": "US",
+        "statute": "Texas Prompt Payment Act, Government Code Chapter 2251",
+        "statute_reference": "sections 2251.021, 2251.022 and 2251.025",
+        "due_date_basis": "application_date",
+        "due_date_days": 0,
+        "due_date_day_basis": "calendar",
+        "payment_notice_basis": "due_date",
+        "payment_notice_days": None,
+        "payment_notice_day_basis": "calendar",
+        "final_date_basis": "application_date",
+        "final_date_days": 30,
+        "final_date_day_basis": "calendar",
+        "pay_less_days": None,
+        "pay_less_day_basis": "calendar",
+        "no_notice_effect": "none",
+        "interest_basis": "reference_rate_plus_margin",
+        "interest_reference_rate": "Wall Street Journal prime rate",
+        "interest_margin_percent": Decimal("1.000"),
+        "interest_fixed_percent": None,
+        "interest_statute": "Texas Government Code § 2251.025",
+        "notes": (
+            "The clock for a payment owed by a governmental entity on public work. The payment becomes "
+            "overdue on the 31st day after the later of the date the entity received the goods or the "
+            "services were completed and the date it received the invoice, which is the 30 days written "
+            "here; enter the later of those two dates as the application date. A political subdivision "
+            "whose governing body meets only once a month or less often has until the 46th day instead, so "
+            "state the final date for payment on the application for those bodies rather than using the "
+            "computed one. The statute has no payment notice and no pay-less notice, so silence has no "
+            "preclusive effect. Interest is one percent above the Wall Street Journal prime rate; the rate "
+            "is fixed on 1 September for the whole fiscal year from the prime rate published on the first "
+            "business day of the preceding July, is simple rather than compounded, and stops on the date "
+            "the payment is sent. A prime contractor paid under this chapter must pass the appropriate "
+            "share to each subcontractor by the 10th day after it receives the payment (§ 2251.022), which "
+            "is a second clock this regime does not compute."
+        ),
+    },
+    {
+        "code": "us_tx_private_ch28",
+        "jurisdiction": "Texas, United States (private)",
+        "country_code": "US",
+        "statute": "Texas Prompt Payment to Contractors and Subcontractors Act, Property Code Chapter 28",
+        "statute_reference": "sections 28.002, 28.004 and 28.006",
+        "due_date_basis": "application_date",
+        "due_date_days": 0,
+        "due_date_day_basis": "calendar",
+        "payment_notice_basis": "due_date",
+        "payment_notice_days": None,
+        "payment_notice_day_basis": "calendar",
+        "final_date_basis": "application_date",
+        "final_date_days": 35,
+        "final_date_day_basis": "calendar",
+        "pay_less_days": None,
+        "pay_less_day_basis": "calendar",
+        "no_notice_effect": "none",
+        "interest_basis": "fixed_rate",
+        "interest_reference_rate": "",
+        "interest_margin_percent": None,
+        "interest_fixed_percent": Decimal("18.000"),
+        "interest_statute": "Texas Property Code § 28.004(b)",
+        "notes": (
+            "The clock for private work in Texas. The owner must pay by the 35th day after it receives the "
+            "contractor's written request for payment, so enter the date the owner received the request as "
+            "the application date. The contractor must then pay its subcontractor by the seventh day after "
+            "it receives the owner's payment (§ 28.002(b)), a downstream clock this regime does not "
+            "compute. The statute states the interest monthly, at one and a half percent each month, which "
+            "is the 18 percent a year written here. There is no notice sequence. An attempted waiver of the "
+            "chapter is void under § 28.006, with a limited exception for certain single-family residential "
+            "contracts, so a subcontract clause purporting to lengthen these periods generally does not."
+        ),
+    },
+    {
+        "code": "us_ca_public_20104",
+        "jurisdiction": "California, United States (public)",
+        "country_code": "US",
+        "statute": "California Public Contract Code § 20104.50 (Local Agency Public Construction Act)",
+        "statute_reference": "section 20104.50; legal rate under Code of Civil Procedure § 685.010(a)",
+        "due_date_basis": "application_date",
+        "due_date_days": 0,
+        "due_date_day_basis": "calendar",
+        "payment_notice_basis": "application_date",
+        "payment_notice_days": 7,
+        "payment_notice_day_basis": "calendar",
+        "final_date_basis": "application_date",
+        "final_date_days": 30,
+        "final_date_day_basis": "calendar",
+        "pay_less_days": None,
+        "pay_less_day_basis": "calendar",
+        "no_notice_effect": "none",
+        "interest_basis": "fixed_rate",
+        "interest_reference_rate": "",
+        "interest_margin_percent": None,
+        "interest_fixed_percent": Decimal("10.000"),
+        "interest_statute": "Public Contract Code § 20104.50, applying Code of Civil Procedure § 685.010(a)",
+        "notes": (
+            "The clock for a progress payment owed by a Californian local agency, which includes a city, a "
+            "charter city, a county, and a city and county. The agency owes interest if it fails to pay "
+            "within 30 days of receiving an undisputed and properly submitted payment request. A progress "
+            "payment here means everything due except the portion of the final payment the contract "
+            "designates as retention, so retention release runs on its own clock under Public Contract Code "
+            "§ 7107 (60 days after completion, then 7 days to pass a subcontractor's share on) and is not "
+            "computed by this regime. The seven days recorded as the payment notice deadline are the "
+            "agency's own: it must return an improper payment request as soon as practicable and no later "
+            "than the seventh day after receipt. Missing that does not make the applied sum payable, which "
+            "is why the no-notice effect is none; instead the 30 day window shrinks by however many days "
+            "the agency ran over the seven, an adjustment this module does not apply, so reduce the final "
+            "date by hand where a request came back late. Interest runs at the legal rate on judgments, "
+            "10 percent a year for these claims."
+        ),
+    },
+    {
+        "code": "us_ca_private_8800",
+        "jurisdiction": "California, United States (private)",
+        "country_code": "US",
+        "statute": "California prompt payment on private works, Civil Code § 8800",
+        "statute_reference": "Civil Code §§ 8800 and 8812; Business and Professions Code § 7108.5",
+        "due_date_basis": "application_date",
+        "due_date_days": 0,
+        "due_date_day_basis": "calendar",
+        "payment_notice_basis": "due_date",
+        "payment_notice_days": None,
+        "payment_notice_day_basis": "calendar",
+        "final_date_basis": "application_date",
+        "final_date_days": 30,
+        "final_date_day_basis": "calendar",
+        "pay_less_days": None,
+        "pay_less_day_basis": "calendar",
+        "no_notice_effect": "none",
+        "interest_basis": "fixed_rate",
+        "interest_reference_rate": "",
+        "interest_margin_percent": None,
+        "interest_fixed_percent": Decimal("24.000"),
+        "interest_statute": "California Civil Code § 8800",
+        "notes": (
+            "The clock for private work in California. The owner must pay a progress payment within 30 days "
+            "after notice demanding payment is given under the contract, so enter the date that notice was "
+            "given as the application date. This period is a default rather than a floor: § 8800 opens with "
+            "an exception for what the owner and the direct contractor agree in writing, so a contract may "
+            "lengthen it, and where it does the agreed final date should be stated on the application. Where "
+            "there is a good faith dispute the owner may withhold up to 150 percent of the disputed amount "
+            "and the rest still has to be paid. What § 8800 imposes is a penalty rather than interest, two "
+            "percent a month on the amount wrongfully withheld in place of any interest otherwise due, "
+            "written here as the 24 percent a year it comes to; the prevailing party in an action to collect "
+            "it recovers costs and a reasonable attorney's fee. Downstream, a prime must pay a subcontractor "
+            "within seven days of receiving a progress payment under Business and Professions Code § 7108.5 "
+            "at the same two percent a month, and retention on private work is released within 45 days of "
+            "completion under § 8812; neither is computed by this regime."
         ),
     },
 )

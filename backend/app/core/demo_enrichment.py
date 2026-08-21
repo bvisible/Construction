@@ -71,15 +71,20 @@ async def enrich_projects(project_ids: list[uuid.UUID]) -> None:
         from app.modules.closeout.seed import seed_closeout_demo
         from app.modules.commissioning.seed import seed_commissioning_demo
         from app.modules.construction_control.seed import seed_construction_control_demo
+        from app.modules.contracts.seed import seed_contracts_demo
         from app.modules.costmodel.seed import seed_costmodel
         from app.modules.crm.seed import seed_crm_demo
-        from app.modules.daily_diary.seed import seed_daily_diary_demo
+        from app.modules.cvr.seed import seed_cvr_demo
+        from app.modules.daily_diary.seed import seed_daily_diary_demo, seed_daily_diary_showcase_de
         from app.modules.documents.documents_seed import seed_documents_demo
         from app.modules.documents.photos_seed import seed_photos
         from app.modules.dwg_takeoff.seed import seed_dwg_takeoff_demo
+        from app.modules.einvoice_clearance.seed import seed_einvoice_clearance_demo
         from app.modules.estimate_basis.seed import seed_estimate_basis_demo
         from app.modules.field_time.seed import seed_field_time_demo
+        from app.modules.finance.einvoice_settings_seed import seed_einvoice_settings_demo
         from app.modules.forms.submissions_seed import seed_forms_submissions_demo
+        from app.modules.full_evm.seed import seed_full_evm_demo
         from app.modules.hse_advanced.seed import seed_hse_advanced_demo
         from app.modules.interface_management.seed import seed_interface_management_demo
         from app.modules.markups.seed import seed_markups
@@ -94,6 +99,8 @@ async def enrich_projects(project_ids: list[uuid.UUID]) -> None:
         from app.modules.schedule_advanced.models import MasterSchedule
         from app.modules.schedule_advanced.seed import seed_schedule_advanced_demo
         from app.modules.service.seed import seed_service_demo
+        from app.modules.site_inventory.seed import seed_site_inventory_demo
+        from app.modules.site_logistics.demo import seed_site_logistics_demo
         from app.modules.site_prep.seed import seed_site_prep_demo
         from app.modules.supplier_catalogs.seed import seed_supplier_catalogs
         from app.modules.takeoff.seed import seed_takeoff_demo
@@ -102,7 +109,7 @@ async def enrich_projects(project_ids: list[uuid.UUID]) -> None:
         from app.modules.validation.seed import seed_validation_demo
         from app.modules.value.seed import seed_value_demo
         from app.modules.variations.models import Notice
-        from app.modules.variations.seed import seed_variations_demo
+        from app.modules.variations.seed import seed_variations_demo, seed_variations_showcase_de
 
         # Keep the flagship reference project first so seeders that cap at a
         # few projects (advanced scheduling, QMS, supplier catalog) always
@@ -214,6 +221,59 @@ async def enrich_projects(project_ids: list[uuid.UUID]) -> None:
             # The basis of estimate quotes the allowances register line by line,
             # so it cannot run before the register exists.
             ("estimate_basis", None, lambda s: seed_estimate_basis_demo(s, _demo_pids)),
+            # Progress-claim backfill for the authored demo contracts (the
+            # installer writes contracts but no payment history), plus the
+            # generic contract catalog for any demo project that has no
+            # contracts at all. A claim run is money a real project has earned,
+            # so it stays on the demo estate. Self-guards per contract on an
+            # existing claim. Also gives each contract the schedule of values
+            # it was agreed against and breaks every claim down against it,
+            # without which the continuation sheet has nothing to continue.
+            # The projects whose contracts are worded in German get a German
+            # schedule, of DIN 276 cost groups or Leistungsverzeichnis
+            # positions, picked by the trade each contract's title names.
+            ("contracts", None, lambda s: seed_contracts_demo(s, _demo_pids)),
+            # The cost-value reconciliation register: closed months, the month
+            # running, the cashflow curve and the interim applications raised
+            # against them. Scales itself from the project's priced bill, so it
+            # runs after the installer has written one; a project without a
+            # priced bill is skipped rather than given an invented contract
+            # value. Demo estate only, for the same reason as the contracts
+            # above - a reconciliation states what a job earned and what it
+            # cost, and inventing one inside a live project is a data incident.
+            # Self-guards per project on an existing report.
+            ("cvr", None, lambda s: seed_cvr_demo(s, _demo_pids)),
+            # The frozen budget the same job is measured against, and the
+            # monthly measurements taken since. Reads the same commercial
+            # profile as the reconciliation above, so the margin one screen
+            # reports and the outturn the other forecasts describe one job
+            # rather than two. Self-guards per project on an existing baseline.
+            ("full_evm", None, lambda s: seed_full_evm_demo(s, _demo_pids)),
+            # Seller identity and bank account for the E-Rechnung screen, copied
+            # out of the showcase invoice that already carries them, so the
+            # settings form is not empty on an install whose invoice exports
+            # green. Instance-wide configuration, hence the demo estate only,
+            # and it fills empty fields only - a value a user typed wins.
+            ("einvoice_settings", None, lambda s: seed_einvoice_settings_demo(s, _demo_pids)),
+            # The country registration and one submitted document behind it, so
+            # the clearance screen opens on a real trail rather than on an empty
+            # state. Runs after the settings above, so the XRechnung it renders
+            # and stores carries the seller a visitor then finds on /settings.
+            ("einvoice_clearance", None, lambda s: seed_einvoice_clearance_demo(s, _demo_pids)),
+            # German showcase Nachtrag chains: notices, requests and orders in
+            # German with contract-clause anchors, custody hand-offs and dated
+            # trails, so the claims-evidence panel can grade at least one chain
+            # per German project as provable. Runs after the generic variations
+            # sprinkle above (which skips these projects) and before the
+            # reconciliation correlator at the end of this list. Self-guards
+            # per project on its own seeded notice codes.
+            ("variations_showcase_de", None, lambda s: seed_variations_showcase_de(s, _demo_pids)),
+            # German Bautagebuch for the same four projects: thirty consecutive
+            # German working days ending today, entries and site photos, and a
+            # signed and archived chain closed by the named site supervisor.
+            # Must run after "photos" above, which commits the image files this
+            # register points at. Self-guards per project on its own diaries.
+            ("daily_diary_showcase_de", None, lambda s: seed_daily_diary_showcase_de(s, _demo_pids)),
             ("temporary_works", None, lambda s: seed_temporary_works_demo(s, _demo_pids)),
             # Mobilisation plan and readiness register. Demo-only: it records
             # signed consents, issued certificates and closed commencement gates,
@@ -223,6 +283,25 @@ async def enrich_projects(project_ids: list[uuid.UUID]) -> None:
             # one already closed out. Self-guards per project on an existing plan
             # or item.
             ("site_prep", None, lambda s: seed_site_prep_demo(s, _demo_pids)),
+            # Gates, laydown zones and a working week of deliveries, each one
+            # booked against a real position of the project's own bill - which is
+            # what gives the delivery board its estimate coverage table something
+            # to cover. Runs after the installer has priced a bill; a project
+            # without a deliverable position is skipped rather than given
+            # deliveries of nothing. Self-guards per project on an existing gate
+            # or delivery, so a board in use is never added to.
+            ("site_logistics", None, lambda s: seed_site_logistics_demo(s, _demo_pids)),
+            # The yard and the material ledger: deliveries into stock, material
+            # installed against the position that priced it, off-cuts and a
+            # relocation. Demo estate only - a consumption booked against a bill
+            # states what a job really used, which is an earned record. Reads the
+            # priced bill and the progress readings the installer wrote, so it
+            # runs after both; a project with no priced material line is skipped
+            # rather than given stock of nothing. Self-guards per project on an
+            # existing item or movement. Post-calculation reads this ledger for
+            # its material actuals, so an unseeded yard leaves that report
+            # honestly saying it does not know what the material cost.
+            ("site_inventory", None, lambda s: seed_site_inventory_demo(s, _demo_pids)),
             ("forms", None, lambda s: seed_forms_submissions_demo(s, _demo_pids)),
             ("construction_control", None, lambda s: seed_construction_control_demo(s, _demo_pids)),
             ("commissioning", None, lambda s: seed_commissioning_demo(s, _demo_pids)),
@@ -275,6 +354,20 @@ async def enrich_projects(project_ids: list[uuid.UUID]) -> None:
                         logger.info("%s demo seed: %s", _name, _counts)
             except Exception:
                 logger.warning("%s demo seed skipped (non-fatal)", _name, exc_info=True)
+
+        # The project roster seeds one project at a time and guards itself on
+        # the project already having roster lines, so a re-run is a no-op.
+        for _pid in _all_pids:
+            try:
+                from app.modules.teams.seed import seed_teams_roster
+
+                async with async_session_factory() as _rs:
+                    _written = await seed_teams_roster(_rs, project_id=_pid)
+                    await _rs.commit()
+                    if _written:
+                        logger.info("teams roster demo seed: %s", _written)
+            except Exception:
+                logger.warning("teams roster demo seed skipped for %s (non-fatal)", _pid, exc_info=True)
 
         # QMS seeds one project at a time and is not internally idempotent; loop
         # the projects, skipping any that already carry an ITP plan so a re-run

@@ -28,7 +28,24 @@ import {
   History,
 } from 'lucide-react';
 import { Button, Card, Badge } from '@/shared/ui';
-import { getIntlLocale } from '@/shared/lib/formatters';
+import { fmtDate, fmtPercent } from '@/shared/lib/formatters';
+import { getNumberLocale } from '@/stores/usePreferencesStore';
+
+/** Locale-aware "12. Aug. 2026, 21:16" datetime, matching DateDisplay's
+ *  datetime format so the forecast stamp and the register tables agree. */
+function fmtDateTime(iso: string): string {
+  try {
+    return fmtDate(iso, {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  } catch {
+    return iso;
+  }
+}
 import { useToastStore } from '@/stores/useToastStore';
 import {
   simulateImpact,
@@ -42,7 +59,7 @@ function fmtMoney(value: string, currency: string): string {
   const code = (currency || '').trim().toUpperCase();
   try {
     if (code && /^[A-Z]{3}$/.test(code)) {
-      return new Intl.NumberFormat(getIntlLocale(), {
+      return new Intl.NumberFormat(getNumberLocale(), {
         style: 'currency',
         currency: code,
         maximumFractionDigits: 0,
@@ -51,7 +68,7 @@ function fmtMoney(value: string, currency: string): string {
   } catch {
     /* fall through to plain formatting */
   }
-  return new Intl.NumberFormat(getIntlLocale(), {
+  return new Intl.NumberFormat(getNumberLocale(), {
     maximumFractionDigits: 0,
   }).format(n);
 }
@@ -239,7 +256,7 @@ export function ImpactSimulator({
                   </span>
                   {data.cost.pct_of_budget > 0 && (
                     <Badge variant="neutral" size="sm">
-                      {data.cost.pct_of_budget.toFixed(1)}%{' '}
+                      {fmtPercent(data.cost.pct_of_budget)}{' '}
                       {t('changeorders.impact_of_budget', { defaultValue: 'of budget' })}
                     </Badge>
                   )}
@@ -376,7 +393,7 @@ export function ImpactSimulator({
                           >
                             <span className="text-content-tertiary">
                               {s.at
-                                ? new Date(s.at).toLocaleString(getIntlLocale())
+                                ? fmtDateTime(s.at)
                                 : t('changeorders.impact_saved_unknown_date', { defaultValue: 'Saved scenario' })}
                             </span>
                             <span className="flex items-center gap-3 tabular-nums">
@@ -448,7 +465,7 @@ export function ImpactSimulator({
                 <div className="mt-3 flex items-center justify-between">
                   <span className="text-2xs text-content-tertiary">
                     {t('changeorders.impact_as_of', { defaultValue: 'Forecast as of' })}{' '}
-                    {new Date(data.as_of).toLocaleString(getIntlLocale())}
+                    {fmtDateTime(data.as_of)}
                   </span>
                   {canPublish && (
                     <Button

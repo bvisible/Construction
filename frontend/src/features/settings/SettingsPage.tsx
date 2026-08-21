@@ -3,7 +3,7 @@
 import { useState, useCallback, useEffect, useMemo, lazy, Suspense } from 'react';
 import { Link, useSearchParams, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { getIntlLocale } from '@/shared/lib/formatters';
+import { getIntlLocale, fmtFixed } from '@/shared/lib/formatters';
 import { TranslationManager } from './TranslationManager';
 import { BackupRestore } from './BackupRestore';
 import { RegionalSettings } from './RegionalSettings';
@@ -2074,8 +2074,8 @@ const DDC_REPO_URL =
 function formatBytes(n: number | null): string {
   if (n === null || n === undefined) return '—';
   if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  if (n < 1024 * 1024) return `${fmtFixed(n / 1024, 1)} KB`;
+  return `${fmtFixed(n / (1024 * 1024), 1)} MB`;
 }
 
 function ConverterStatusPanel() {
@@ -2126,7 +2126,7 @@ function ConverterStatusPanel() {
             <p className="text-2xs text-content-tertiary">
               {t('settings.converters_source_desc', {
                 defaultValue:
-                  'Open-source converters for Revit (RVT), IFC, DWG and DGN, maintained by DataDrivenConstruction.',
+                  'Open-source converters for Revit® (RVT), IFC, DWG and DGN, maintained by DataDrivenConstruction.',
               })}
             </p>
           </div>

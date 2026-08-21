@@ -68,6 +68,7 @@ import { useViewModeStore } from '@/stores/useViewModeStore';
 import { useBrandingStore } from '@/stores/useBrandingStore';
 import { BrandingEditorModal } from '@/app/layout/CustomBranding';
 import { aiApi, type AIProvider } from '@/features/ai/api';
+import { companyThumbFor } from '@/features/cases/caseFaces';
 import { apiGet, apiPost, extractErrorMessageFromBody } from '@/shared/lib/api';
 import { useBaseCatalog } from '@/features/costs/baseCatalog';
 import { BaseCatalogBrowser } from '@/features/costs/BaseCatalogBrowser';
@@ -100,6 +101,9 @@ import {
   fetchOnboardingStatus,
   type OnboardingJobState,
 } from './onboardingApi';
+import { getNumberLocale } from '@/stores/usePreferencesStore';
+import { SemanticModelCard } from './SemanticModelCard';
+import { aiEstimatorApi } from '@/features/ai-estimator/api';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -570,11 +574,11 @@ function bgStepDetail(step: string, detail: Record<string, unknown>): string | u
   };
   if (step === 'cost_db') {
     const items = num('items');
-    if (items && items > 0) return items.toLocaleString();
+    if (items && items > 0) return items.toLocaleString(getNumberLocale());
   }
   if (step === 'resources') {
     const resources = num('resources');
-    if (resources && resources > 0) return resources.toLocaleString();
+    if (resources && resources > 0) return resources.toLocaleString(getNumberLocale());
   }
   if (step === 'demos') {
     const installed = detail['installed'];
@@ -2091,6 +2095,52 @@ function StepCompanySize({
   );
 }
 
+/**
+ * The mark on a company-profile card: a photograph of the kind of site this
+ * profile works on when one exists for the preset key (the same picture the
+ * Cases hub puts on its "My company" tiles, so a user meets the same image
+ * twice), and the preset's glyph when it does not. Decorative either way -
+ * the profile is named in words directly beside it - so the image is alt=""
+ * and adds no string to translate.
+ */
+function ProfileMark({
+  presetKey,
+  icon: Icon,
+  selected,
+}: {
+  presetKey: string;
+  icon: LucideIcon;
+  selected: boolean;
+}) {
+  const thumb = companyThumbFor(presetKey);
+  return (
+    <div
+      className={clsx(
+        'flex h-10 w-10 shrink-0 items-center justify-center rounded-xl transition-all duration-300',
+        thumb && 'overflow-hidden',
+        selected
+          ? 'bg-oe-blue text-white shadow-lg shadow-oe-blue/20'
+          : 'bg-surface-secondary text-content-secondary group-hover:bg-surface-tertiary',
+      )}
+    >
+      {thumb ? (
+        <img
+          src={thumb}
+          alt=""
+          loading="lazy"
+          decoding="async"
+          width={128}
+          height={128}
+          draggable={false}
+          className="h-full w-full object-cover"
+        />
+      ) : (
+        <Icon size={20} />
+      )}
+    </div>
+  );
+}
+
 function StepCompanyProfile({
   onNext,
   onBack,
@@ -2150,16 +2200,7 @@ function StepCompanyProfile({
               )}
             >
               <div className="flex items-center gap-2 mb-3">
-                <div
-                  className={clsx(
-                    'flex h-10 w-10 shrink-0 items-center justify-center rounded-xl transition-all duration-300',
-                    isSelected
-                      ? 'bg-oe-blue text-white shadow-lg shadow-oe-blue/20'
-                      : 'bg-surface-secondary text-content-secondary group-hover:bg-surface-tertiary',
-                  )}
-                >
-                  <Icon size={20} />
-                </div>
+                <ProfileMark presetKey={preset.key} icon={Icon} selected={isSelected} />
                 {preset.key === 'general_contractor' && (
                   <Badge variant="blue" size="sm">
                     {t('onboarding.popular', { defaultValue: 'Popular' })}
@@ -2221,16 +2262,7 @@ function StepCompanyProfile({
                 : 'bg-surface-elevated shadow-sm shadow-black/[0.04] hover:bg-oe-blue-subtle/15 hover:shadow-md hover:-translate-y-0.5 active:scale-[0.99]',
             )}
           >
-            <div
-              className={clsx(
-                'flex h-10 w-10 shrink-0 items-center justify-center rounded-xl transition-all duration-300',
-                isSelected
-                  ? 'bg-oe-blue text-white shadow-lg shadow-oe-blue/20'
-                  : 'bg-surface-secondary text-content-secondary group-hover:bg-surface-tertiary',
-              )}
-            >
-              <Icon size={20} />
-            </div>
+            <ProfileMark presetKey="full_enterprise" icon={Icon} selected={isSelected} />
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
                 <h3
@@ -3231,7 +3263,11 @@ function CountryPackCard({
 
 // ── Step 5: Data Setup (combined) ───────────────────────────────────────────
 
-function StepDataSetup({
+// Exported for its test. The step decides on its own whether to ask the server
+// for the encoder, and that decision is not reachable from the wizard's other
+// steps, so the test renders this one directly rather than driving the whole
+// wizard to reach it.
+export function StepDataSetup({
   onNext,
   onBack,
   selectedLang,
@@ -3263,6 +3299,21 @@ function StepDataSetup({
   const [selectedProvider, setSelectedProvider] = useState<AIProvider>('anthropic');
   const [apiKey, setApiKey] = useState('');
   const [showKey, setShowKey] = useState(false);
+
+  // ── Semantic search model state ──
+  // Pre-ticked, then corrected to whatever this deployment does by default:
+  // a local install fetches the encoder, a server deploy does not need it.
+  // Seeding the tick from the server rather than hardcoding `true` is what
+  // keeps a click-through of the wizard on a server from starting a download
+  // nobody asked for. Shares its query key with the card below, so the two
+  // read one cache entry and not two requests.
+  const { data: semanticStatus } = useQuery({
+    queryKey: ['embedding-model-status'],
+    queryFn: aiEstimatorApi.embeddingModelStatus,
+    retry: false,
+  });
+  const [semanticChoice, setSemanticChoice] = useState<boolean | null>(null);
+  const installSemanticModel = semanticChoice ?? semanticStatus?.enabled ?? true;
 
   // ── Country Pack state ──
   // Default-select the pack whose region matches the language-suggested
@@ -3364,7 +3415,7 @@ function StepDataSetup({
           updateQueueTask(taskId, {
             status: 'completed',
             progress: 100,
-            message: `${imported.toLocaleString()} items imported`,
+            message: `${imported.toLocaleString(getNumberLocale())} items imported`,
           });
 
           try {
@@ -3384,7 +3435,7 @@ function StepDataSetup({
           addToast({
             type: 'success',
             title: `${dbName} loaded`,
-            message: `${imported.toLocaleString()} cost items imported`,
+            message: `${imported.toLocaleString(getNumberLocale())} cost items imported`,
           });
           return true;
         }
@@ -3600,12 +3651,22 @@ function StepDataSetup({
       // Advanced manual path: install the toggled built-in demo project.
       handleInstallDemo();
     }
+    // Ask for the semantic search model if the user left it ticked and nothing
+    // has fetched it yet. Deliberately not awaited and deliberately not
+    // reported: the server answers as soon as the transfer is scheduled, a
+    // failure here costs the user nothing, and this must never be the reason
+    // the wizard does not finish.
+    if (installSemanticModel && semanticStatus?.state === 'not_requested') {
+      void aiEstimatorApi.installEmbeddingModel().catch(() => undefined);
+    }
     // Save AI key if provided
     if (apiKey.trim()) {
       saveMutation.mutate();
     }
     onNext();
   }, [
+    installSemanticModel,
+    semanticStatus,
     backgroundLoad,
     selectedRegion,
     loadedDb,
@@ -3694,7 +3755,7 @@ function StepDataSetup({
               <div className="flex items-center gap-2 text-sm text-semantic-success">
                 <CheckCircle2 size={16} />
                 <span className="font-medium">
-                  {loadedDb.count.toLocaleString()}{' '}
+                  {loadedDb.count.toLocaleString(getNumberLocale())}{' '}
                   {t('onboarding.items_loaded', { defaultValue: 'items loaded' })}
                 </span>
               </div>
@@ -3792,6 +3853,14 @@ function StepDataSetup({
             </div>
           </div>
         </div>
+
+        {/* Card 2b: Semantic search model - an optional background download.
+            It never gates Continue: the request below is fired and forgotten,
+            and the card renders whatever state the server reports. */}
+        <SemanticModelCard
+          enabled={installSemanticModel}
+          onToggle={setSemanticChoice}
+        />
 
         {/* Card 3: AI Provider — collapsible */}
         <div className="rounded-2xl bg-surface-elevated shadow-sm shadow-black/[0.04]">

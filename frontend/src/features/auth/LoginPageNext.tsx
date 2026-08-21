@@ -45,14 +45,18 @@ interface ModuleTile {
 }
 
 const TONE_STYLES: Record<ModuleTile['tone'], { bg: string; fg: string; ring: string }> = {
+  //// NEOFFICE — white-label : #d68a59 est la couleur de marque Neoffice, elle
+  //// remplace le bleu Apple d'upstream. Les autres teintes reprennent leur
+  //// opacité /10 (ils l'ont ajustée), seul le bleu reste à /12 pour tenir face
+  //// à un ton chaud.
   blue:    { bg: 'bg-[#d68a59]/12',  fg: 'text-[#d68a59]',  ring: 'ring-[#d68a59]/15' },
-  violet:  { bg: 'bg-violet-500/12', fg: 'text-violet-600', ring: 'ring-violet-500/15' },
-  emerald: { bg: 'bg-emerald-500/12',fg: 'text-emerald-600',ring: 'ring-emerald-500/15' },
-  amber:   { bg: 'bg-amber-500/12',  fg: 'text-amber-600',  ring: 'ring-amber-500/15' },
-  rose:    { bg: 'bg-rose-500/12',   fg: 'text-rose-600',   ring: 'ring-rose-500/15' },
-  cyan:    { bg: 'bg-cyan-500/12',   fg: 'text-cyan-600',   ring: 'ring-cyan-500/15' },
-  indigo:  { bg: 'bg-indigo-500/12', fg: 'text-indigo-600', ring: 'ring-indigo-500/15' },
-  teal:    { bg: 'bg-teal-500/12',   fg: 'text-teal-600',   ring: 'ring-teal-500/15' },
+  violet:  { bg: 'bg-violet-500/10', fg: 'text-violet-600', ring: 'ring-violet-500/15' },
+  emerald: { bg: 'bg-emerald-500/10',fg: 'text-emerald-600',ring: 'ring-emerald-500/15' },
+  amber:   { bg: 'bg-amber-500/10',  fg: 'text-amber-600',  ring: 'ring-amber-500/15' },
+  rose:    { bg: 'bg-rose-500/10',   fg: 'text-rose-600',   ring: 'ring-rose-500/15' },
+  cyan:    { bg: 'bg-cyan-500/10',   fg: 'text-cyan-600',   ring: 'ring-cyan-500/15' },
+  indigo:  { bg: 'bg-indigo-500/10', fg: 'text-indigo-600', ring: 'ring-indigo-500/15' },
+  teal:    { bg: 'bg-teal-500/10',   fg: 'text-teal-600',   ring: 'ring-teal-500/15' },
 };
 
 export function LoginPageNext() {
@@ -458,7 +462,7 @@ export function LoginPageNext() {
                 <button
                   key={lang.code}
                   onClick={() => { i18n.changeLanguage(lang.code); setLangOpen(false); }}
-                  className={`flex w-full items-center gap-2.5 px-3 py-2 text-sm transition-colors ${isActive ? 'bg-oe-blue/8 text-oe-blue font-medium' : 'text-content-primary hover:bg-surface-secondary'}`}
+                  className={`flex w-full items-center gap-2.5 px-3 py-2 text-sm transition-colors ${isActive ? 'bg-oe-blue/10 text-oe-blue font-medium' : 'text-content-primary hover:bg-surface-secondary'}`}
                 >
                   <CountryFlag code={lang.country} size={16} />
                   <span className="truncate">{lang.name}</span>

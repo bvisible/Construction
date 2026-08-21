@@ -28,8 +28,16 @@ logger = logging.getLogger(__name__)
 FLAGSHIP_PROJECT_ID = uuid.UUID("f1a95000-0001-4a00-8b00-000000000001")
 
 # (suffix, trade name, status, deadline ISO string, base budget)
+#
+# The status has to be one the module itself offers. PackageCreate and
+# PackageUpdate both pin it to draft|issued|collecting|evaluating|awarded|
+# closed, so a package seeded "open" was a row the edit form could not
+# re-select, the status filter could not find, and the register printed as the
+# bare word "open" because there is no label for a value the product does not
+# have. "collecting" is the member that means what "open" was reaching for: the
+# tender is out and bids are arriving.
 _PACKAGE_SPECS: list[tuple[str, str, str, str, str]] = [
-    ("ELEC", "Electrical works", "open", "2026-07-15", "120000"),
+    ("ELEC", "Electrical works", "collecting", "2026-07-15", "120000"),
     ("HVAC", "HVAC supply and install", "closed", "2026-05-30", "240000"),
     ("FACD", "Facade cladding", "draft", "2026-08-10", "510000"),
 ]
@@ -81,10 +89,11 @@ async def _seed_one_project(
 
         # Each package gets 2-4 bids from different vendors with a price spread.
         # The flagship-style pattern is avoided here; draft packages get fewer
-        # bids, closed/open packages get the full set.
+        # bids, a package still collecting gets most of them, and a closed one
+        # gets the full set.
         if status == "draft":
             bid_specs = _BID_SPECS[:2]
-        elif status == "open":
+        elif status == "collecting":
             bid_specs = _BID_SPECS[:3]
         else:
             bid_specs = _BID_SPECS
@@ -92,7 +101,7 @@ async def _seed_one_project(
         budget_dec = Decimal(budget)
         for bid_idx, (company, email, multiplier, bid_status) in enumerate(bid_specs):
             total = (budget_dec * Decimal(multiplier)).quantize(Decimal("0.01"))
-            unit_price = (total / Decimal("100")).quantize(Decimal("0.01"))
+            provisional = (total / Decimal("100")).quantize(Decimal("0.01"))
             bid = TenderBid(
                 package_id=package.id,
                 company_name=company,
@@ -104,22 +113,27 @@ async def _seed_one_project(
                 ),
                 status=bid_status,
                 notes=f"Bid from {company} for {trade.lower()}.",
+                # ``unit_rate`` / ``total``, because that is what BidLineItem
+                # declares and what every reader indexes on. The rows here used
+                # to say ``unit_price`` / ``total_price`` / ``code``, which no
+                # code in the tree reads: the API returned them, the page typed
+                # them as LineItem, and the columns rendered blank.
                 line_items=[
                     {
-                        "code": "01",
+                        "position_id": None,
                         "description": f"{trade} - main scope",
                         "unit": "lsum",
-                        "quantity": "1",
-                        "unit_price": str(total),
-                        "total_price": str(total),
+                        "quantity": 1.0,
+                        "unit_rate": str(total),
+                        "total": float(total),
                     },
                     {
-                        "code": "02",
+                        "position_id": None,
                         "description": f"{trade} - provisional sum",
                         "unit": "lsum",
-                        "quantity": "1",
-                        "unit_price": str(unit_price),
-                        "total_price": str(unit_price),
+                        "quantity": 1.0,
+                        "unit_rate": str(provisional),
+                        "total": float(provisional),
                     },
                 ],
                 metadata_={"seed": True, "rank": bid_idx + 1},

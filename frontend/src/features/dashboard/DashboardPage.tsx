@@ -4,11 +4,12 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type
 import { useTranslation } from 'react-i18next';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { apiGet, apiPost } from '@/shared/lib/api';
+import { apiGet, apiPost, type Page } from '@/shared/lib/api';
 import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { useAuthStore } from '@/stores/useAuthStore';
-import { getIntlLocale } from '@/shared/lib/formatters';
+import { fmtFixed } from '@/shared/lib/formatters';
+import { getNumberLocale } from '@/stores/usePreferencesStore';
 import { SUPPORTED_LANGUAGES } from '@/app/i18n';
 import { uploadDocument, fetchDocuments, type DocumentItem } from '@/features/documents/api';
 import {
@@ -897,7 +898,7 @@ function KpiRibbon({
     if (!Number.isFinite(value)) return `0 ${code}`;
     try {
       const compact = value >= 1_000;
-      return new Intl.NumberFormat(getIntlLocale(), {
+      return new Intl.NumberFormat(getNumberLocale(), {
         style: 'currency',
         currency: code,
         notation: compact ? 'compact' : 'standard',
@@ -1810,9 +1811,12 @@ function QuickUploadCard({ projects }: { projects?: ProjectSummary[] }) {
     (uploadProjectId === activeProjectId ? activeProjectName : '') ||
     '';
 
-  const { data: documents } = useQuery({
+  const { data: documentPage } = useQuery({
     queryKey: ['documents', uploadProjectId],
-    queryFn: () => fetchDocuments(uploadProjectId ?? ''),
+    // Spelled out because this query holds a page, not a list: three surfaces
+    // cache under ['documents', <project>] and React Query will hand any of
+    // them what another put there.
+    queryFn: (): Promise<Page<DocumentItem>> => fetchDocuments(uploadProjectId ?? ''),
     enabled: !!uploadProjectId,
     staleTime: 30_000,
   });
@@ -1899,7 +1903,9 @@ function QuickUploadCard({ projects }: { projects?: ProjectSummary[] }) {
     setDragOver(false);
   }, []);
 
-  const documentCount = (documents as DocumentItem[] | undefined)?.length ?? 0;
+  // The project's document count, not the page's. The link says "N documents"
+  // and used to say how many the first page held.
+  const documentCount = documentPage?.total ?? 0;
   const hasProject = !!uploadProjectId;
   const hasProjects = selectableProjects.length > 0;
 
@@ -2279,18 +2285,28 @@ function DashboardPageInner() {
     }
     const byCurrency: CurrencyTotal[] = Array.from(sums.entries())
       .sort(([a], [b]) => a.localeCompare(b))
-      .map(([currency, total]) => ({ currency, total_value: total.toFixed(2) }));
+      .map(([currency, total]) => ({ currency, total_value: fmtFixed(total, 2) }));
     return { byCurrency, multiCurrency: byCurrency.length > 1 };
   }, [scopedBoqSummary]);
 
-  // Fetch contacts count for NextSteps suggestions
-  const { data: contactsList } = useQuery({
+  // Fetch contacts count for NextSteps suggestions.
+  //
+  // This asked for a bare array, got the `{items, total, offset, limit}`
+  // envelope the endpoint has been returning, and read `.length` off the
+  // object - `undefined`, so the count was zero for every user with any
+  // number of contacts, and NextSteps kept suggesting the first one. Reads
+  // `total` now, and asks for one row rather than fifty, since the count is
+  // the only thing wanted here.
+  const { data: contactsPage } = useQuery({
     queryKey: ['dashboard-contacts-count'],
-    queryFn: () => apiGet<{ id: string }[]>('/v1/contacts/').catch(() => []),
+    queryFn: () =>
+      apiGet<Page<{ id: string }>>('/v1/contacts/?limit=1').catch(
+        () => ({ items: [], total: 0, offset: 0, limit: 1 }) as Page<{ id: string }>,
+      ),
     retry: false,
     staleTime: 60_000,
   });
-  const contactsCount = contactsList?.length ?? 0;
+  const contactsCount = contactsPage?.total ?? 0;
 
   // Most-recently updated BOQ for "Continue your work" - sourced from the
   // rollup's pre-computed ``boq_summary.last_boq`` so we don't need to
@@ -2375,7 +2391,7 @@ function DashboardPageInner() {
           )}
           {lastBoq.grandTotal > 0 && (
             <span className="text-xs font-semibold text-content-primary tabular-nums">
-              {lastBoq.currency} {lastBoq.grandTotal.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+              {lastBoq.currency} {lastBoq.grandTotal.toLocaleString(getNumberLocale(), { maximumFractionDigits: 0 })}
             </span>
           )}
           <ArrowRight size={16} className="text-content-tertiary group-hover:text-oe-blue group-hover:translate-x-0.5 transition-all" />
@@ -2921,7 +2937,7 @@ function AnalyticsSection({ projects }: { projects: ProjectSummary[] }) {
       }
       byCurrency = Array.from(sums.entries())
         .sort(([a], [b]) => a.localeCompare(b))
-        .map(([currency, total]) => ({ currency, total_value: total.toFixed(2) }));
+        .map(([currency, total]) => ({ currency, total_value: fmtFixed(total, 2) }));
     }
     const multiCurrency = extra.multi_currency ?? byCurrency.length > 1;
 
@@ -2980,10 +2996,10 @@ function AnalyticsSection({ projects }: { projects: ProjectSummary[] }) {
   const fmtCompact = (value: number, code: string): string => {
     const num =
       value >= 1_000_000
-        ? `${(value / 1_000_000).toFixed(1)}M`
+        ? `${fmtFixed(value / 1_000_000, 1)}M`
         : value >= 1_000
-          ? `${(value / 1_000).toFixed(0)}K`
-          : value.toLocaleString(getIntlLocale(), {
+          ? `${fmtFixed(value / 1_000, 0)}K`
+          : value.toLocaleString(getNumberLocale(), {
               minimumFractionDigits: 0,
               maximumFractionDigits: 0,
             });
@@ -3179,7 +3195,7 @@ function SystemStatus() {
         vectorVectors > 0
           ? t('dashboard.status_vectors_count', {
               defaultValue: '{{n}} vectors',
-              n: vectorVectors.toLocaleString(),
+              n: vectorVectors.toLocaleString(getNumberLocale()),
             })
           : '',
       ]

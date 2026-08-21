@@ -152,7 +152,7 @@ const playbook: Playbook = {
       whyKey: "cases.coordinate_and_resolve_model_clashes.step.triage.why",
       whyDefault:
         "A raw clash count of thousands helps nobody. The value is in a short, owned list where every item is a real conflict with a name against it, so the coordination meeting is about decisions, not sorting.",
-      moduleLabel: "3D model",
+      moduleLabel: "BIM",
       moduleLabelKey: "nav.bim",
       to: "/projects/:projectId/bim",
     },
@@ -191,8 +191,8 @@ const playbook: Playbook = {
       whyKey: "cases.coordinate_and_resolve_model_clashes.step.raise.why",
       whyDefault:
         "Some clashes cannot be closed by a coordinator alone, they need a real design call. Raising them formally means the decision is on record and the model change that follows can be traced to the reason for it.",
-      moduleLabel: "RFI",
-      moduleLabelKey: "nav.rfi",
+      moduleLabel: "RFIs",
+      moduleLabelKey: "rfi.title",
       to: "/projects/:projectId/rfi",
     },
     {

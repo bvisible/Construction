@@ -45,7 +45,7 @@ const playbook: Playbook = {
       whyDefault:
         "The item forgotten at mobilisation stops work later - no water for the concrete, no power for the tools. A checklist with owners and dates is what turns a chaotic start into a controlled one.",
       moduleLabel: "Site Mobilisation",
-      moduleLabelKey: "nav.site_prep",
+      moduleLabelKey: "site_prep.title",
       to: "/projects/:projectId/site-prep",
     },
     {
@@ -66,7 +66,7 @@ const playbook: Playbook = {
       whyDefault:
         "A utility connection can take weeks of notice. Tracking the set-up as a live list is what surfaces the item that will hold up the start while there is still time to expedite it.",
       moduleLabel: "Site Mobilisation",
-      moduleLabelKey: "nav.site_prep",
+      moduleLabelKey: "site_prep.title",
       to: "/projects/:projectId/site-prep",
     },
     {

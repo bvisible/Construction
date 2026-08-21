@@ -36,9 +36,11 @@ import { PageHeader } from '@/shared/ui/PageHeader';
 import { MoneyDisplay } from '@/shared/ui/MoneyDisplay';
 import { DateDisplay } from '@/shared/ui/DateDisplay';
 import { ContactSearchInput } from '@/shared/ui/ContactSearchInput';
-import { apiGet, apiPost, apiPatch } from '@/shared/lib/api';
+import { apiGet, apiPost, apiPatch, type Page } from '@/shared/lib/api';
+import { TruncationNotice } from '@/shared/ui/TruncationNotice';
 import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
+import { useActiveProjectId } from '@/shared/hooks/useActiveProjectId';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { getPOMatchStatus, type POLineMatchTag } from './api';
 import { procurementGuide } from './procurementGuide';
@@ -50,6 +52,7 @@ import { RetainagePanel, RetainageBadge } from './RetainagePanel';
 import { POStatusPipeline } from './POStatusPipeline';
 import { DeliveryCountdownBadge } from './DeliveryCountdownBadge';
 import { RecordDeliveryModal } from './RecordDeliveryModal';
+import { fmtFixed } from '@/shared/lib/formatters';
 
 /* ── Types ─────────────────────────────────────────────────────────────── */
 
@@ -80,6 +83,30 @@ interface PurchaseOrder {
   retainage_held?: string;
   created_at: string;
   updated_at: string;
+}
+
+/**
+ * One page of a project's purchase orders, envelope intact.
+ *
+ * Two useQuery calls in this file cache under `['procurement-po', projectId]`:
+ * the Insights panel at page level and the Purchase Orders tab. React Query
+ * keys are strings, so whichever runs first hands its value to the other -
+ * they cannot hold different shapes. Both went through their own inline
+ * `apiGet(...).then((res) => res.items.map(...))`, which agreed only because
+ * someone kept them in step by hand. One function now, so the shape is not a
+ * thing two call sites can disagree about, and the total survives.
+ */
+type POPage = Page<PurchaseOrder & { vendor_contact_id?: string | null }>;
+
+async function fetchPOPage(projectId: string): Promise<POPage> {
+  const page = await apiGet<POPage>(`/v1/procurement/?project_id=${projectId}`);
+  return {
+    ...page,
+    items: page.items.map((po) => ({
+      ...po,
+      vendor_name: po.vendor_name ?? po.vendor_contact_id ?? '',
+    })),
+  };
 }
 
 interface POItemResponse {
@@ -293,7 +320,7 @@ export function ProcurementPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const location = useLocation();
-  const projectId = useProjectContextStore((s) => s.activeProjectId);
+  const projectId = useActiveProjectId();
   const projectName = useProjectContextStore((s) => s.activeProjectName);
 
   const [activeTab, setActiveTab] = useState<ProcurementTab>('purchase-orders');
@@ -312,27 +339,27 @@ export function ProcurementPage() {
     navigate(location.pathname, { replace: true, state: null });
   }, [navigate, location.pathname]);
 
-  // Module Insights panel. Charts the project's purchase orders - the register
-  // that carries each order's committed value, supplier and delivery status -
-  // so a chart slice reads like the status badge on the row it came from. The
-  // list reuses the ['procurement-po', projectId] query the Purchase Orders
-  // tab already loads (same key and queryFn, so it is a cache hit and the
-  // tab's own invalidations keep it fresh). Currency rides the finance
+  // Module Insights panel. Charts the purchase orders THIS PAGE LOADED - the
+  // register that carries each order's committed value, supplier and delivery
+  // status - so a chart slice reads like the status badge on the row it came
+  // from. The list reuses the ['procurement-po', projectId] query the Purchase
+  // Orders tab already loads (same key and queryFn, so it is a cache hit and
+  // the tab's own invalidations keep it fresh). Currency rides the finance
   // dashboard query. These hooks sit with the other top-level hooks, above any
   // conditional render, so the hook order stays stable.
-  const { data: insightOrders = [] } = useQuery({
+  //
+  // Known limit, stated rather than papered over: the list endpoint returns 50
+  // orders by default and caps at 100, so on a project past that the totals
+  // this panel reduces out of `insightOrders` describe a page, not a project.
+  // A TruncationNotice next to a wrong number would read as coverage. The real
+  // fix is server-side aggregates, and /v1/procurement/stats/ already computes
+  // some of them for the reporting page - backend scope, not this wave.
+  const { data: insightPage } = useQuery({
     queryKey: ['procurement-po', projectId],
-    queryFn: () =>
-      apiGet<{ items: Array<PurchaseOrder & { vendor_contact_id?: string | null }>; total: number }>(
-        `/v1/procurement/?project_id=${projectId}`,
-      ).then((res) =>
-        res.items.map((po) => ({
-          ...po,
-          vendor_name: po.vendor_name ?? po.vendor_contact_id ?? '',
-        })),
-      ),
+    queryFn: () => fetchPOPage(projectId!),
     enabled: !!projectId,
   });
+  const insightOrders = useMemo(() => insightPage?.items ?? [], [insightPage]);
   const { data: insightDashboard } = useQuery({
     queryKey: ['finance', 'dashboard', projectId],
     queryFn: () =>
@@ -877,18 +904,11 @@ function PurchaseOrdersTab({
       }),
   });
 
-  const { data: orders, isLoading, isError, error, refetch } = useQuery({
+  const { data: ordersPage, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['procurement-po', projectId],
-    queryFn: () =>
-      apiGet<{ items: Array<PurchaseOrder & { vendor_contact_id?: string | null }>; total: number }>(
-        `/v1/procurement/?project_id=${projectId}`,
-      ).then((res) =>
-        res.items.map((po) => ({
-          ...po,
-          vendor_name: po.vendor_name ?? po.vendor_contact_id ?? '',
-        })),
-      ),
+    queryFn: () => fetchPOPage(projectId),
   });
+  const orders = ordersPage?.items;
 
   const filtered = useMemo(() => {
     if (!orders) return [];
@@ -1131,7 +1151,7 @@ function PurchaseOrdersTab({
               <div className="mt-4 space-y-2">
                 <div className="flex items-center justify-between text-sm">
                   <span className="text-content-secondary">{t('procurement.subtotal', { defaultValue: 'Subtotal' })}</span>
-                  <span className="tabular-nums font-medium text-content-primary">{displayCurrency} {poSubtotal.toFixed(2)}</span>
+                  <span className="tabular-nums font-medium text-content-primary">{displayCurrency} {fmtFixed(poSubtotal, 2)}</span>
                 </div>
                 <div className="flex items-center justify-between text-sm">
                   <span className="text-content-secondary">{t('procurement.tax', { defaultValue: 'Tax' })}</span>
@@ -1151,7 +1171,7 @@ function PurchaseOrdersTab({
                 </div>
                 <div className="flex items-center justify-between rounded-lg bg-surface-secondary/60 px-3 py-2.5">
                   <span className="text-sm font-semibold text-content-primary">{t('procurement.total', { defaultValue: 'Total' })}</span>
-                  <span className="text-base font-bold tabular-nums text-content-primary">{displayCurrency} {poTotal.toFixed(2)}</span>
+                  <span className="text-base font-bold tabular-nums text-content-primary">{displayCurrency} {fmtFixed(poTotal, 2)}</span>
                 </div>
               </div>
             </div>
@@ -1521,6 +1541,10 @@ function PurchaseOrdersTab({
           </tbody>
         </table>
       </div>
+      {/* The search box above filters the rows already loaded, so a register
+          cut at 50 answers "no matching purchase orders" for a PO that exists
+          on page 2. Reads the server page, not `filtered`. */}
+      {ordersPage && <TruncationNotice page={ordersPage} className="mt-3" />}
     </Card>
 
     {/* PO Create Modal */}
@@ -1624,13 +1648,14 @@ function GoodsReceiptsTab({
   const [search, setSearch] = useState('');
   const [showRecord, setShowRecord] = useState(false);
 
-  const { data: receipts, isLoading, isError, error, refetch } = useQuery({
+  const { data: receiptsPage, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['procurement-gr', projectId],
     queryFn: () =>
-      apiGet<{ items: GoodsReceipt[]; total: number }>(
+      apiGet<Page<GoodsReceipt>>(
         `/v1/procurement/goods-receipts/?project_id=${projectId}`,
-      ).then((res) => res.items),
+      ),
   });
+  const receipts = receiptsPage?.items;
 
   /* ── Confirm a draft goods receipt ──
      Confirmation is the load-bearing step: only it runs the over-receipt
@@ -1868,6 +1893,9 @@ function GoodsReceiptsTab({
           </tbody>
         </table>
       </div>
+      {/* Same shape as the PO tab: the search box filters loaded rows only,
+          so the register has to admit when the server sent a slice. */}
+      {receiptsPage && <TruncationNotice page={receiptsPage} className="mt-3" />}
     </Card>
 
     {/* Record-delivery modal (create a draft goods receipt) */}

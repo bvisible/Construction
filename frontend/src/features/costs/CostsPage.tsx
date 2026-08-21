@@ -34,12 +34,14 @@ import {
   Trash2,
   Pencil,
   AlertTriangle,
+  Info,
 } from 'lucide-react';
 import { Button, Card, Badge, EmptyState, SkeletonTable, CountryFlag, CountryFlagBackdrop, Breadcrumb, ConfirmDialog, DismissibleInfo, IntroRichText, ModuleGuideButton, RecoveryCard } from '@/shared/ui';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { useConfirm } from '@/shared/hooks/useConfirm';
-import { apiGet, apiPost, apiPatch, apiDelete, triggerDownload, extractErrorMessageFromBody } from '@/shared/lib/api';
-import { getIntlLocale } from '@/shared/lib/formatters';
+import { ApiError, apiGet, apiPost, apiPatch, apiDelete, triggerDownload, extractErrorMessageFromBody } from '@/shared/lib/api';
+import { fmtPercent, fmtFixed } from '@/shared/lib/formatters';
+import { getNumberLocale } from '@/stores/usePreferencesStore';
 import { copyToClipboard } from '@/shared/lib/browser';
 import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
@@ -123,6 +125,12 @@ interface CostSearchResponse {
   total: number;
   limit: number;
   offset: number;
+  /**
+   * Set when the semantic toggle was on but the deployment has no embedding
+   * model, so these rows came from the text search instead. Without it the
+   * fallback is invisible and the reader believes the AI search answered.
+   */
+  semanticUnavailable?: boolean;
 }
 
 interface RegionStat {
@@ -403,7 +411,7 @@ function RegionTabBar({
             {t('costs.all_regions', { defaultValue: 'All' })}
           </span>
           <span className={`text-2xs tabular-nums ${activeRegion === '' ? 'text-oe-blue' : 'text-content-quaternary'}`}>
-            {totalItems > 0 ? totalItems.toLocaleString() : ''}
+            {totalItems > 0 ? totalItems.toLocaleString(getNumberLocale()) : ''}
           </span>
         </button>
 
@@ -432,9 +440,15 @@ function RegionTabBar({
               `}
             >
               <MiniFlag code={info.flag} size={13} />
-              <span className="text-sm font-medium whitespace-nowrap">{info.name}</span>
+              <span className="text-sm font-medium whitespace-nowrap">
+                {/* REGION_MAP names are English; the DACH tab is the one region
+                    whose label must localise (Deutschland / DACH under de). */}
+                {regionId === 'DE_BERLIN'
+                  ? t('costdb.region_de_berlin', { defaultValue: info.name })
+                  : info.name}
+              </span>
               <span className={`text-2xs tabular-nums ${isActive ? 'text-oe-blue' : 'text-content-quaternary'}`}>
-                {count > 0 ? count.toLocaleString() : ''}
+                {count > 0 ? count.toLocaleString(getNumberLocale()) : ''}
               </span>
             </button>
           );
@@ -839,7 +853,14 @@ export function CostsPage() {
           } as CostSearchResponse;
         } catch (err) {
           if (import.meta.env.DEV) console.error('Semantic search failed, falling back to regular search:', err);
-          // Fall back to regular search
+          // A 503 is the server saying it has no embedding model, which is a
+          // different thing from a search that ran and found nothing. Fall back
+          // to the text search either way, but carry the reason so the page can
+          // say which search these rows came from.
+          if (err instanceof ApiError && err.status === 503) {
+            const fallback = await apiGet<CostSearchResponse>(searchUrl);
+            return { ...fallback, semanticUnavailable: true };
+          }
         }
       }
       return apiGet<CostSearchResponse>(searchUrl);
@@ -1103,7 +1124,7 @@ export function CostsPage() {
   const selectedItems = items.filter((i) => selectedIds.has(i.id));
 
   const fmt = (n: number) =>
-    new Intl.NumberFormat(getIntlLocale(), {
+    new Intl.NumberFormat(getNumberLocale(), {
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
     }).format(n);
@@ -1116,7 +1137,7 @@ export function CostsPage() {
     const code = (currency || regionCurrency || '').trim().toUpperCase();
     if (!code) return fmt(n);
     try {
-      return new Intl.NumberFormat(getIntlLocale(), {
+      return new Intl.NumberFormat(getNumberLocale(), {
         style: 'currency',
         currency: code,
         minimumFractionDigits: 2,
@@ -1168,10 +1189,10 @@ export function CostsPage() {
                     : isFetching && tabCount != null
                       ? tabCount
                       : 0;
-                return `${regionInfo.name}, ${display.toLocaleString()} ${t('costs.items', 'items')}`;
+                return `${regionInfo.name}, ${display.toLocaleString(getNumberLocale())} ${t('costs.items', 'items')}`;
               })()
             : total > 0
-              ? `${total.toLocaleString()} ${t('costs.results_found', 'results found')}`
+              ? `${total.toLocaleString(getNumberLocale())} ${t('costs.results_found', 'results found')}`
               : t('costs.search_hint', 'Search cost items by description or code')
         }
         actions={
@@ -1456,6 +1477,24 @@ export function CostsPage() {
             </button>
           </div>
 
+          {/* The semantic toggle is on but this deployment has no embedding
+              model, so these rows came from the text search. Saying so is the
+              difference between a fallback and a wrong answer. */}
+          {semanticSearch && data?.semanticUnavailable && (
+            <div
+              role="status"
+              className="flex items-start gap-2 rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-600 dark:text-amber-400"
+            >
+              <Info size={14} className="mt-0.5 shrink-0" />
+              <span>
+                {t('costs.semantic_unavailable', {
+                  defaultValue:
+                    'AI search is not installed on this deployment, so these are text search results.',
+                })}
+              </span>
+            </div>
+          )}
+
           {/* Unit filter */}
           <div className="relative">
             <select
@@ -1690,7 +1729,7 @@ export function CostsPage() {
                     defaultValue: '{{from}}-{{to}} of {{total}}',
                     from: offset + 1,
                     to: Math.min(offset + PAGE_SIZE, total),
-                    total: total.toLocaleString(),
+                    total: total.toLocaleString(getNumberLocale()),
                   })}
                 </p>
                 {totalPages > 1 && (
@@ -2049,7 +2088,7 @@ function AddToBOQModal({
   }, [boqId, sectionId, items, addToast, onSuccess]);
 
   const fmt = (n: number) =>
-    new Intl.NumberFormat(getIntlLocale(), { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n);
+    new Intl.NumberFormat(getNumberLocale(), { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n);
 
   // Currency-aware money formatter for the preview — selected items can
   // span EUR / AED / SAR / USD, so always render the ISO code.
@@ -2057,7 +2096,7 @@ function AddToBOQModal({
     const code = (currency || '').trim().toUpperCase();
     if (!code) return fmt(n);
     try {
-      return new Intl.NumberFormat(getIntlLocale(), {
+      return new Intl.NumberFormat(getNumberLocale(), {
         style: 'currency',
         currency: code,
         minimumFractionDigits: 2,
@@ -2341,7 +2380,7 @@ function CreateAssemblyFromCostsModal({
   }, [onClose]);
 
   const fmt = (n: number) =>
-    new Intl.NumberFormat(getIntlLocale(), { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n);
+    new Intl.NumberFormat(getNumberLocale(), { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n);
 
   // MONEY BUG FIX: the old `items.reduce((s,i)=>s+(i.rate||0),0)` blended rates
   // across distinct ISO currencies (e.g. AED + EUR) into one figure and stored
@@ -2590,7 +2629,7 @@ function MassPricingFields({
   const previewFmt = (n: number) => {
     const code = (currency || '').trim().toUpperCase();
     try {
-      return new Intl.NumberFormat(getIntlLocale(), {
+      return new Intl.NumberFormat(getNumberLocale(), {
         ...(code ? { style: 'currency' as const, currency: code } : {}),
         minimumFractionDigits: 2,
         maximumFractionDigits: 4,
@@ -3272,7 +3311,7 @@ function CostVariantDetail({
           <>
             <span className="text-content-tertiary">·</span>
             <span className="rounded bg-surface-primary/70 px-1.5 py-0.5">
-              <span className="font-semibold text-content-primary">{stats.position_count.toLocaleString()}</span>
+              <span className="font-semibold text-content-primary">{stats.position_count.toLocaleString(getNumberLocale())}</span>
               <span className="ml-1 text-content-tertiary">
                 {t('costs.variant_position_count_label', { defaultValue: 'Estimates' })}
               </span>
@@ -3670,7 +3709,7 @@ function CostItemRow({
                   </div>
                   {laborHours > 0 && (
                     <div className="text-2xs text-content-tertiary mt-0.5">
-                      {t('costs.labor_hours_short', { defaultValue: '{{hours}} hrs', hours: laborHours.toFixed(1) })}
+                      {t('costs.labor_hours_short', { defaultValue: '{{hours}} hrs', hours: fmtFixed(laborHours, 1) })}
                     </div>
                   )}
                   {workers > 0 && (
@@ -3754,19 +3793,19 @@ function CostItemRow({
                     {laborCost > 0 && (
                       <span className="flex items-center gap-1">
                         <span className="h-2 w-2 rounded-full bg-amber-400" />
-                        {t('costs.component_labor', { defaultValue: 'Labor' })} {pct(laborCost).toFixed(0)}%
+                        {t('costs.component_labor', { defaultValue: 'Labor' })} {fmtPercent(pct(laborCost), 0)}
                       </span>
                     )}
                     {equipmentCost > 0 && (
                       <span className="flex items-center gap-1">
                         <span className="h-2 w-2 rounded-full bg-blue-400" />
-                        {t('costs.component_equipment', { defaultValue: 'Equipment' })} {pct(equipmentCost).toFixed(0)}%
+                        {t('costs.component_equipment', { defaultValue: 'Equipment' })} {fmtPercent(pct(equipmentCost), 0)}
                       </span>
                     )}
                     {materialCost > 0 && (
                       <span className="flex items-center gap-1">
                         <span className="h-2 w-2 rounded-full bg-green-400" />
-                        {t('costs.component_material', { defaultValue: 'Materials' })} {pct(materialCost).toFixed(0)}%
+                        {t('costs.component_material', { defaultValue: 'Materials' })} {fmtPercent(pct(materialCost), 0)}
                       </span>
                     )}
                   </div>
@@ -3828,7 +3867,7 @@ function CostItemRow({
                             {comp.unit_localized || comp.unit || '—'}
                           </td>
                           <td className="px-3 py-2 text-right tabular-nums text-content-secondary">
-                            {qty > 0 ? qty.toFixed(2) : '—'}
+                            {qty > 0 ? fmtFixed(qty, 2) : '—'}
                           </td>
                           <td className="px-3 py-2 text-right tabular-nums text-content-secondary">
                             {unitRate > 0 ? money(unitRate) : '—'}

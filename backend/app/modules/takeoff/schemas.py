@@ -55,6 +55,11 @@ class TakeoffDocumentResponse(BaseModel):
     project_id: str | None = None
     content_type: str
     uploaded_at: datetime | None = Field(None, alias="created_at")
+    # The owning project. The viewer scopes measurement loading to this when no
+    # project is active in the app header; without it a server document opened
+    # from /markups or the documents tab on a clean profile never fetches its
+    # measurements. Nullable because legacy direct uploads may carry no project.
+    project_id: UUID | None = None
     # Per-page text-layer audit (8.2.0). ``pages_without_text`` is how many
     # pages came back with no text layer (usually scanned drawings that need
     # OCR); ``pages_without_text_list`` is their 1-based page numbers. Both

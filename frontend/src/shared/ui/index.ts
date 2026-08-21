@@ -17,6 +17,7 @@ export { Input } from './Input';
 export type { InputProps } from './Input';
 
 export { Badge } from './Badge';
+export type { BadgeVariant } from './Badge';
 
 export { Card, CardHeader, CardContent, CardFooter } from './Card';
 
@@ -252,7 +253,7 @@ export { Markdown, renderDocMarkdown } from './Markdown';
 export type { MarkdownProps } from './Markdown';
 
 export { ProjectFilePicker, projectDocumentToFile } from './ProjectFilePicker';
-export type { ProjectFilePickerProps } from './ProjectFilePicker';
+export type { PickedProjectFile, ProjectFilePickerProps } from './ProjectFilePicker';
 
 export { SearchableSelect } from './SearchableSelect';
 export type { SearchableSelectOption, SearchableSelectProps } from './SearchableSelect';

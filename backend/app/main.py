@@ -65,6 +65,7 @@ from app.core.self_upgrade import (
     claim_upgrade,
     current_upgrade,
     is_frozen_build,
+    repair_hint,
     run_upgrade,
 )
 from app.dependencies import RequireRole, get_current_user_id, rls_request_context
@@ -812,10 +813,10 @@ async def _seed_demo_account() -> None:
         #     project(s) so the workspace reflects the partner's region,
         #     currency and classification - nothing else.
         #
-        #   GENERIC MODE (no pack): seed the rich nine-project showcase - the
-        #     eight country projects in SHOWCASE_DEMO_IDS plus the flagship
-        #     reference project installed further below - so a fresh, vanilla
-        #     install lands a fully worked-out, globe-spanning portfolio.
+        #   GENERIC MODE (no pack): seed the rich showcase - the country
+        #     projects in SHOWCASE_DEMO_IDS plus the flagship reference
+        #     project installed further below - so a fresh, vanilla install
+        #     lands a fully worked-out, globe-spanning portfolio.
         #
         # Both paths install each project in its own try/except so one failure
         # never aborts the rest of the seed.
@@ -874,8 +875,8 @@ async def _seed_demo_account() -> None:
             else:
                 # GENERIC MODE - seed the rich showcase by default. Tests ask for
                 # a fast startup (OE_TEST_FAST_STARTUP), and operators can opt out
-                # with OE_SKIP_SHOWCASE=1; both skip the eight-project loop. The
-                # flagship below still installs and provides the ninth project.
+                # with OE_SKIP_SHOWCASE=1; both skip the showcase loop. The
+                # flagship below still installs alongside it.
                 _fast_startup = os.environ.get("OE_TEST_FAST_STARTUP", "").lower() in (
                     "1",
                     "true",
@@ -1316,6 +1317,18 @@ def create_app() -> FastAPI:
 
     app.add_middleware(AcceptLanguageMiddleware)
 
+    # ── Response compression ──────────────────────────────────────────────
+    # Every screen pulls a 2.44 MB application bundle and a 2.21 MB locale
+    # chunk before it draws, and both went over the wire uncompressed although
+    # the browser asked for gzip each time. That is the whole of the four
+    # seconds the case audits measured on the snag register and the bill
+    # editor; the endpoints behind those screens answer in under a tenth of a
+    # second. Text only, and only when the length is known, so exports and
+    # photo bytes are passed through rather than re-compressed.
+    from app.middleware.compression import CompressionMiddleware
+
+    app.add_middleware(CompressionMiddleware)
+
     # ── Request-body-size backstop (added last -> outermost -> runs first) ─
     # Coarse global ceiling above every per-endpoint upload cap. Rejects an
     # absurdly large body before any other middleware or endpoint reads it, so
@@ -1549,20 +1562,25 @@ def create_app() -> FastAPI:
             logger.warning("Alembic head check failed: %s", _exc)
             result["alembic_head_matches"] = None
 
-        # Frontend dist presence - the wheel ships ``app/_frontend_dist/``,
-        # a repo checkout serves ``frontend/dist``; a missing ``index.html``
-        # in BOTH locations means the SPA shell will 404 and users see a
-        # blank page even though /api endpoints work. Mirror the lookup
-        # order of ``cli_static.get_frontend_dir`` so dev mode is not
-        # falsely reported as degraded.
+        # Frontend dist presence. The flag must describe what THIS process
+        # serves, not what the disk holds right now: a process that started
+        # while dist was mid-rebuild mounted nothing and 404s every UI route
+        # even after the rebuild lands, and a mounted tree can lose its
+        # index.html to a later rebuild while a live directory probe still
+        # looks green. Fall back to the on-disk probe only in API-only mode,
+        # where "present" can only mean "a servable build exists for the
+        # next start".
         try:
-            from app.cli_static import get_frontend_dir
+            from app.cli_static import get_frontend_dir, mounted_frontend_intact
 
-            try:
-                get_frontend_dir()
-                result["frontend_dist_present"] = True
-            except FileNotFoundError:
-                result["frontend_dist_present"] = False
+            _intact = mounted_frontend_intact()
+            if _intact is None:
+                try:
+                    get_frontend_dir()
+                    _intact = True
+                except FileNotFoundError:
+                    _intact = False
+            result["frontend_dist_present"] = _intact
             if not result["frontend_dist_present"]:
                 result["status"] = "degraded"
         except Exception:
@@ -1843,6 +1861,17 @@ def create_app() -> FastAPI:
             out.append(int(num) if num else 0)
         return tuple(out)
 
+    def _same_version(a: str, b: str) -> bool:
+        """Whether two version strings name the same release.
+
+        The shorter side is zero-padded, so ``15.1`` and ``15.1.0`` compare
+        equal. They have to: one of these numbers is written by a git tag and
+        the other by a packaging tool, and neither owes the other its shape.
+        """
+        left, right = _semver_tuple(a), _semver_tuple(b)
+        width = max(len(left), len(right))
+        return left + (0,) * (width - len(left)) == right + (0,) * (width - len(right))
+
     @app.get("/api/system/version-check", tags=["System"])
     async def check_version() -> dict:
         """Return current vs latest published version.
@@ -1853,6 +1882,17 @@ def create_app() -> FastAPI:
         releases if PyPI is unreachable. Both lookups are cached on
         ``app.state`` for 4 hours so the settings panel can poll cheaply
         without burning the unauthenticated GitHub rate limit.
+
+        ``release_notes``, ``release_url``, ``published_at`` and ``assets``
+        are answered only when the GitHub release they were read from names
+        the same version as ``latest_version``. Two sources that can
+        legitimately be a release apart must not be spliced into one sentence.
+
+        ``assets`` lists the published installers as ``{name, url, size}`` so
+        a client can offer the one that fits the machine it is running on.
+        Matching is the caller's job, not this endpoint's: the desktop build
+        answers this route to any browser that reaches it, so the platform
+        this process runs on is not reliably the reader's.
         """
         import httpx
 
@@ -1865,9 +1905,13 @@ def create_app() -> FastAPI:
             return cached["data"]
 
         latest: str | None = None
-        release_url = f"https://github.com/{repo}/releases/latest"
-        release_notes = ""
-        published_at = ""
+        # Held apart from what we will publish until we know the release this
+        # metadata came from is the release we are going to name.
+        gh_tag = ""
+        gh_url = ""
+        gh_notes = ""
+        gh_published = ""
+        gh_assets: list[dict] = []
 
         try:
             async with httpx.AsyncClient(timeout=10) as client:
@@ -1888,16 +1932,55 @@ def create_app() -> FastAPI:
                 if gh.status_code == 200:
                     release = gh.json()
                     gh_tag = release.get("tag_name", "").lstrip("v")
+                    gh_url = release.get("html_url", "")
+                    gh_notes = (release.get("body") or "")[:500]
+                    gh_published = release.get("published_at", "")
+                    # The installers themselves. A reader on a desktop build
+                    # cannot pip-upgrade and has to fetch one by hand, and the
+                    # release page lists every platform at once, so naming the
+                    # file that fits the machine in front of them is the
+                    # difference between an action and a hunt. Only the three
+                    # fields that decide "which file, how big, from where" are
+                    # carried: the rest of a GitHub asset object is download
+                    # counters and uploader identity, which no caller reads.
+                    for asset in release.get("assets") or []:
+                        name = asset.get("name") or ""
+                        url = asset.get("browser_download_url") or ""
+                        if not name or not url:
+                            continue
+                        gh_assets.append({"name": name, "url": url, "size": int(asset.get("size") or 0)})
                     if not latest:
                         latest = gh_tag
-                    release_url = release.get("html_url", release_url)
-                    release_notes = (release.get("body") or "")[:500]
-                    published_at = release.get("published_at", "")
         except Exception:  # noqa: BLE001
             pass
 
         if not latest:
             latest = current
+
+        # The number and the notes have to describe the same release. PyPI is
+        # the source of truth for the number, and the reason it is - a hotfix
+        # publishes a wheel without a GitHub release object being created - is
+        # exactly the case where the newest release here describes an OLDER
+        # version than the one we are about to name. Pairing them files 15.0.0's
+        # notes under the heading "15.1.0 is available", and on a desktop build
+        # it sends the reader to a page that does not carry the build they were
+        # just told to install. So when they disagree we keep the number, drop
+        # what we cannot stand behind, and point at the release list, which is
+        # somewhere to go rather than somewhere wrong.
+        # The installers are gated here for the same reason and more sharply.
+        # Notes filed under the wrong heading mislead; an installer offered
+        # under the wrong heading is downloaded and run, and the reader ends up
+        # with the version they were just told to move off.
+        if gh_tag and _same_version(gh_tag, latest):
+            release_url = gh_url or f"https://github.com/{repo}/releases/latest"
+            release_notes = gh_notes
+            published_at = gh_published
+            assets = gh_assets
+        else:
+            release_url = f"https://github.com/{repo}/releases"
+            release_notes = ""
+            published_at = ""
+            assets = []
 
         update_available = _semver_tuple(latest) > _semver_tuple(current)
         # A frozen build has no pip to upgrade itself with, so advertising the
@@ -1910,9 +1993,19 @@ def create_app() -> FastAPI:
             "release_url": release_url,
             "release_notes": release_notes,
             "published_at": published_at,
+            # Every installer on the release, unfiltered. Which one fits is a
+            # question about the reader's machine, and this process is not
+            # standing on it: the desktop build serves this API to any browser
+            # that can reach the port, so a server-side match would answer for
+            # the wrong computer. The client picks.
+            "assets": assets,
             "self_upgrade_supported": not frozen,
-            "upgrade_command": (
-                "Download and run the latest installer" if frozen else "pip install --upgrade openconstructionerp"
+            # Both spellings kept exactly as they were; only the decision moves.
+            # This was the second hand-written copy of "which advice does this
+            # install understand", and a copy is how the wording drifts.
+            "upgrade_command": repair_hint(
+                "pip install --upgrade openconstructionerp",
+                "Download and run the latest installer",
             ),
         }
         setattr(app.state, cache_key, {"data": result, "checked_at": time.time()})
@@ -2584,7 +2677,7 @@ def create_app() -> FastAPI:
             if "localhost" in settings.database_url:
                 logger.warning("DATABASE_URL points to localhost in production")
 
-        # Load translations (24 languages)
+        # Load translations (28 languages)
         _section("i18n")
         from app.core.i18n import load_translations
 
@@ -2695,6 +2788,25 @@ def create_app() -> FastAPI:
                     logger.info("PostgreSQL auto-migration: %d schema objects (columns + indexes) added", migrated)
             except Exception:
                 logger.warning("PostgreSQL auto-migration skipped (non-fatal)", exc_info=True)
+
+            # The heal above adds oe_progress_entry.seq to a pre-v3258 table as
+            # ADD COLUMN ... DEFAULT nextval(...), and PostgreSQL numbers the
+            # existing rows while rewriting the table, so they come out in heap
+            # order - while the Alembic migration numbers them by recorded_at.
+            # "Latest wins" in the progress module leads with seq, so the same
+            # rows answered differently depending on which path built the
+            # schema. Put them back in observation order. Runs AFTER the heal
+            # (takeoff's merge above runs before it) because the column it
+            # repairs is one the heal itself creates - going first would leave
+            # a boot-long window of wrong readings. Idempotent: a single scan
+            # that finds nothing out of order and stops, on every later boot.
+            try:
+                from app.modules.progress.seq_repair import repair_progress_entry_seq
+
+                async with engine.begin() as conn:
+                    await repair_progress_entry_seq(conn)
+            except Exception:
+                logger.warning("Progress seq order repair skipped (non-fatal)", exc_info=True)
 
             async with engine.begin() as conn:
                 await conn.run_sync(Base.metadata.create_all)
@@ -2984,11 +3096,40 @@ def create_app() -> FastAPI:
             # load itself is CPU/IO-blocking, so the task hands it to a
             # worker thread via ``asyncio.to_thread`` - same detached pattern
             # as ``_auto_backfill_vector_collections`` below.
+            # Fetch the encoder weights, if this deployment wants them. Runs on
+            # its own daemon thread, is a no-op on a server deploy, and cannot
+            # raise here - see app/core/embedding_installer.py. Started before
+            # the prime below so a desktop first boot has the download already
+            # moving while the prime decides there is nothing to load yet.
+            try:
+                from app.core.embedding_installer import start_background_download
+
+                if start_background_download():
+                    logger.info("Encoder weights are downloading in the background - startup does not wait for them")
+            except Exception:  # noqa: BLE001 - an optional extra can never break startup
+                logger.debug("Could not start the encoder download", exc_info=True)
+
             async def _prime_embedder_background() -> None:
                 import asyncio as _asyncio_emb
 
                 try:
+                    # Priming a model that is not on disk is itself a download,
+                    # and on a server deploy that is the download the platform
+                    # was told not to do. So the prime runs when the weights are
+                    # already installed (warm start, unchanged behaviour) or
+                    # when this deployment asked for them; otherwise it stands
+                    # down and the first caller that genuinely needs a vector
+                    # loads the model lazily, exactly as it does today.
+                    from app.core.embedding_installer import download_enabled, find_installed_model
                     from app.core.vector import get_embedder as _ge
+
+                    if find_installed_model() is None and not download_enabled():
+                        logger.info(
+                            "Embedder prime skipped: no encoder installed and the background "
+                            "download is off for this deployment (set OE_DOWNLOAD_EMBEDDING_MODEL=1 "
+                            "to fetch it). Semantic search reports its state honestly meanwhile."
+                        )
+                        return
 
                     embedder = await _asyncio_emb.to_thread(_ge)
                     if embedder is not None:

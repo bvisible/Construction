@@ -176,8 +176,8 @@ def _is_provisional_position(pos: dict[str, Any]) -> bool:
 
 # GAEB exchange phases that carry NO bidder prices. In these the unit rate is
 # legitimately 0 / absent for every position, so a zero Einheitspreis must not
-# be flagged (FA-STD-045). X81 (Kostenanschlag) and X83 (Angebotsaufforderung)
-# are the unpriced request phases.
+# be flagged (FA-STD-045). X81 (Leistungsverzeichnis), X82 (Kostenanschlag)
+# and X83 (Angebotsaufforderung) are the unpriced request phases.
 _UNPRICED_DA_KINDS: frozenset[str] = frozenset({"x80", "x81", "x82", "x83"})
 
 
@@ -1629,6 +1629,7 @@ _IMPERIAL_BOQ_UNITS: frozenset[str] = frozenset(
         "lbs",
         "oz",
         "ton",  # short ton
+        "ton_us",  # short ton, the canonical boq/units.py emits for "ton"
         "gal",
         "gallon",
     },
@@ -2681,13 +2682,15 @@ class MasterFormatCompleteness(ValidationRule):
     standard = "masterformat"
     severity = Severity.WARNING
     category = RuleCategory.COMPLETENESS
-    description = "Core divisions (03 Concrete, 05 Metals, 26 Electrical) should be present"
+    description = "Core divisions (03, 05, 26) should be present"
 
     REQUIRED_DIVISIONS = {"03", "05", "26"}
+    # Our own scope wording, not the proprietary division titles
+    # (licensing denylist) - these feed user-facing rule messages.
     DIV_NAMES = {
-        "03": "Concrete",
-        "05": "Metals",
-        "26": "Electrical",
+        "03": "concrete work",
+        "05": "metal work",
+        "26": "electrical systems",
     }
 
     async def validate(self, context: ValidationContext) -> list[RuleResult]:
@@ -4177,7 +4180,23 @@ class MeasurementConsistency(ValidationRule):
     category = RuleCategory.CONSISTENCY
     description = "Flags mixing of metric and imperial units in the same BOQ"
 
-    IMPERIAL_UNITS = {"ft", "ft2", "ft3", "yd", "yd2", "yd3", "in", "lb", "ton", "gal", "sf", "sy", "cy", "lf"}
+    IMPERIAL_UNITS = {
+        "ft",
+        "ft2",
+        "ft3",
+        "yd",
+        "yd2",
+        "yd3",
+        "in",
+        "lb",
+        "ton",
+        "ton_us",
+        "gal",
+        "sf",
+        "sy",
+        "cy",
+        "lf",
+    }
     METRIC_UNITS = {"m", "m2", "m3", "mm", "cm", "km", "kg", "t", "l", "kl", "ml"}
 
     async def validate(self, context: ValidationContext) -> list[RuleResult]:
@@ -6604,6 +6623,7 @@ _UNIT_DIMENSIONS: dict[str, str] = {
     "tonne": "mass",
     "tonnes": "mass",
     "ton": "mass",
+    "ton_us": "mass",
     "lb": "mass",
     "lbs": "mass",
     "g": "mass",

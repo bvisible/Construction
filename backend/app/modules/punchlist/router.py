@@ -16,6 +16,7 @@ Endpoints:
 
 import logging
 import uuid
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
@@ -36,6 +37,7 @@ from app.modules.punchlist.schemas import (
     PunchBulkCloseRequest,
     PunchBulkCloseResponse,
     PunchItemCreate,
+    PunchItemListResponse,
     PunchItemResponse,
     PunchItemUpdate,
     PunchListSummary,
@@ -54,8 +56,16 @@ def _get_service(session: SessionDep) -> PunchListService:
     return PunchListService(session)
 
 
-def _item_to_response(item: object) -> PunchItemResponse:
-    """Build a PunchItemResponse from a PunchItem ORM object."""
+def _item_to_response(item: object, names: Mapping[str, str] | None = None) -> PunchItemResponse:
+    """Build a PunchItemResponse from a PunchItem ORM object.
+
+    Args:
+        item: The ORM row.
+        names: Contact ids resolved to names, as ``resolve_party_names``
+            returns them. Anything absent leaves the ``*_name`` field null,
+            which is what the screen reads as "print the raw value".
+    """
+    resolved = names or {}
     return PunchItemResponse(
         id=item.id,  # type: ignore[attr-defined]
         project_id=item.project_id,  # type: ignore[attr-defined]
@@ -68,6 +78,7 @@ def _item_to_response(item: object) -> PunchItemResponse:
         priority=item.priority,  # type: ignore[attr-defined]
         status=item.status,  # type: ignore[attr-defined]
         assigned_to=item.assigned_to,  # type: ignore[attr-defined]
+        assigned_to_name=resolved.get(item.assigned_to or ""),  # type: ignore[attr-defined]
         due_date=item.due_date,  # type: ignore[attr-defined]
         category=item.category,  # type: ignore[attr-defined]
         trade=item.trade,  # type: ignore[attr-defined]
@@ -80,12 +91,27 @@ def _item_to_response(item: object) -> PunchItemResponse:
         resolved_at=item.resolved_at,  # type: ignore[attr-defined]
         verified_at=item.verified_at,  # type: ignore[attr-defined]
         verified_by=item.verified_by,  # type: ignore[attr-defined]
+        verified_by_name=resolved.get(item.verified_by or ""),  # type: ignore[attr-defined]
         created_by=item.created_by,  # type: ignore[attr-defined]
         metadata=getattr(item, "metadata_", {}),  # type: ignore[attr-defined]
         reopen_history=getattr(item, "reopen_history", None) or [],  # type: ignore[attr-defined]
         created_at=item.created_at,  # type: ignore[attr-defined]
         updated_at=item.updated_at,  # type: ignore[attr-defined]
     )
+
+
+async def _item_response(service: PunchListService, item: object) -> PunchItemResponse:
+    """One item, with its assignee resolved."""
+    names = await service.resolve_party_names([getattr(item, "assigned_to", None), getattr(item, "verified_by", None)])
+    return _item_to_response(item, names)
+
+
+async def _item_responses(service: PunchListService, items: Sequence[object]) -> list[PunchItemResponse]:
+    """A page of items, with every assignee on it resolved in one query."""
+    names = await service.resolve_party_names(
+        [value for item in items for value in (getattr(item, "assigned_to", None), getattr(item, "verified_by", None))]
+    )
+    return [_item_to_response(item, names) for item in items]
 
 
 # ── Summary ──────────────────────────────────────────────────────────────────
@@ -120,7 +146,7 @@ async def create_item(
     await verify_project_access(data.project_id, user_id, session)
     try:
         item = await service.create_item(data, user_id=user_id)
-        return _item_to_response(item)
+        return await _item_response(service, item)
     except HTTPException:
         raise
     except Exception:
@@ -134,7 +160,7 @@ async def create_item(
 # ── List ─────────────────────────────────────────────────────────────────────
 
 
-@router.get("/items/", response_model=list[PunchItemResponse])
+@router.get("/items/", response_model=PunchItemListResponse)
 async def list_items(
     session: SessionDep,
     project_id: uuid.UUID = Query(...),
@@ -148,10 +174,17 @@ async def list_items(
     trade: str | None = Query(default=None),
     _perm: None = Depends(RequirePermission("punchlist.read")),
     service: PunchListService = Depends(_get_service),
-) -> list[PunchItemResponse]:
-    """List punch items for a project with optional filters."""
+) -> PunchItemListResponse:
+    """List punch items for a project with optional filters.
+
+    Returns the ``{items, total, offset, limit}`` envelope. ``total`` counts
+    every row matching the filters, not the ones on this page, so a caller
+    can tell that it is holding a slice. The repository has always computed
+    it; this handler used to discard it, which left the register with no way
+    to know it was cut off at the default limit.
+    """
     await verify_project_access(project_id, user_id, session)
-    items, _ = await service.list_items(
+    items, total = await service.list_items(
         project_id,
         offset=offset,
         limit=limit,
@@ -161,7 +194,12 @@ async def list_items(
         category_filter=category,
         trade_filter=trade,
     )
-    return [_item_to_response(i) for i in items]
+    return PunchItemListResponse(
+        items=await _item_responses(service, items),
+        total=total,
+        offset=offset,
+        limit=limit,
+    )
 
 
 # ── Root aliases ─────────────────────────────────────────────────────────────
@@ -173,7 +211,7 @@ async def list_items(
 # follows the same shape as everything else.
 
 
-@router.get("/", response_model=list[PunchItemResponse])
+@router.get("/", response_model=PunchItemListResponse)
 async def list_items_root_alias(
     session: SessionDep,
     project_id: uuid.UUID = Query(...),
@@ -187,7 +225,7 @@ async def list_items_root_alias(
     trade: str | None = Query(default=None),
     _perm: None = Depends(RequirePermission("punchlist.read")),
     service: PunchListService = Depends(_get_service),
-) -> list[PunchItemResponse]:
+) -> PunchItemListResponse:
     """Alias for ``GET /items/`` - see that handler for full semantics."""
     return await list_items(
         session=session,
@@ -216,7 +254,7 @@ async def create_item_root_alias(
     await verify_project_access(data.project_id, user_id, session)
     try:
         item = await service.create_item(data, user_id=user_id)
-        return _item_to_response(item)
+        return await _item_response(service, item)
     except HTTPException:
         raise
     except Exception:
@@ -241,7 +279,7 @@ async def get_item(
     """Get a single punch item."""
     item = await service.get_item(item_id)
     await verify_project_access(item.project_id, str(user_id), session)
-    return _item_to_response(item)
+    return await _item_response(service, item)
 
 
 # ── Update ───────────────────────────────────────────────────────────────────
@@ -260,7 +298,7 @@ async def update_item(
     existing = await service.get_item(item_id)
     await verify_project_access(existing.project_id, str(user_id), session)
     item = await service.update_item(item_id, data)
-    return _item_to_response(item)
+    return await _item_response(service, item)
 
 
 # ── Delete ───────────────────────────────────────────────────────────────────
@@ -307,7 +345,7 @@ async def transition_status(
         await RequirePermission("punchlist.verify")(payload)
 
     item = await service.transition_status(item_id, data, user_id)
-    return _item_to_response(item)
+    return await _item_response(service, item)
 
 
 # ── Pin to sheet ─────────────────────────────────────────────────────────────
@@ -343,7 +381,7 @@ async def pin_to_sheet(
         location_x=data.location_x,
         location_y=data.location_y,
     )
-    return _item_to_response(item)
+    return await _item_response(service, item)
 
 
 # ── Photos ───────────────────────────────────────────────────────────────────
@@ -440,7 +478,7 @@ async def upload_photo(
     except Exception:
         logger.exception("Failed to cross-link punch photo to Documents hub")
 
-    return _item_to_response(item)
+    return await _item_response(service, item)
 
 
 @router.delete("/items/{item_id}/photos/{index}", status_code=204)

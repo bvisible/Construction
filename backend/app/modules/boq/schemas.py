@@ -355,7 +355,7 @@ class PositionCreate(BaseModel):
     # spellings (Romanian "Bucat", Bulgarian "бр", Russian "шт", German
     # "Stück", CWICR multi-prefix forms like "100 EA") all round-trip
     # through ``normalise_unit`` lowercased and stripped.  Common synonyms
-    # ("ton" → "t", "metre" → "m") still bucket into canonical forms so
+    # ("tonne" → "t", "metre" → "m") still bucket into canonical forms so
     # aggregations stay coherent.  Only genuinely unsafe shapes (empty,
     # > 30 chars, control chars, HTML / SQL / quote characters) are
     # rejected.
@@ -866,16 +866,33 @@ class MarkupCreate(_MarkupBase):
       markup (cumulative, subtotal or direct_cost) in the same BOQ. This
       compounds profit-on-overhead-on-cost, the GAEB / DIN 276 default.
       Reorder markups by changing ``sort_order``; ties are stable by ``id``.
+
+    ``scope_position_id`` and ``overrides_id`` express inheritance with
+    override. Leaving both unset creates a bill-wide line, the company
+    standard, which is what every markup was before these existed. Naming a
+    position confines the line to that position and everything under it, and
+    naming ``overrides_id`` as well makes it stand in for that bill-wide line
+    inside its own subtree. An override keeps the place of the line it
+    replaces in the compounding order, so an exception changes the rate and
+    never the order.
     """
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
     name: str = Field(..., min_length=1, max_length=255)
-    # Only "percentage" and "fixed" are computed by the totals engine. A
+    # The set here MUST equal the set the totals engine computes. A
     # "per_unit" markup has no well-defined basis across a mixed-unit BOQ
     # (you cannot sum m + m2 + m3) and previously computed to a silent zero,
-    # so it is rejected at the schema rather than accepted and dropped.
-    markup_type: str = Field(default="percentage", pattern=r"^(percentage|fixed)$")
+    # so it is rejected at the schema rather than accepted and dropped, and a
+    # type accepted here that the engine does not know would fail the same way
+    # round the other side. ``test_boq_markup_types.py`` asserts the two sets
+    # are the same set rather than trusting this comment.
+    #
+    # ``banded`` charges each tranche of its base at its own rate, the way a
+    # surety quotes a bond. ``escalation`` indexes its base from one month to
+    # another through the stored cost-index series instead of a percentage the
+    # estimator types. Both read their configuration from ``metadata``.
+    markup_type: str = Field(default="percentage", pattern=r"^(percentage|fixed|banded|escalation)$")
     category: str = Field(
         default="overhead",
         pattern=r"^(overhead|profit|tax|contingency|insurance|bond|other)$",
@@ -885,6 +902,8 @@ class MarkupCreate(_MarkupBase):
     apply_to: str = Field(default="direct_cost", pattern=r"^(direct_cost|subtotal|cumulative)$")
     sort_order: int = Field(default=0, ge=0)
     is_active: bool = True
+    scope_position_id: UUID | None = None
+    overrides_id: UUID | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -894,7 +913,7 @@ class MarkupUpdate(_MarkupBase):
     model_config = ConfigDict(str_strip_whitespace=True)
 
     name: str | None = Field(default=None, min_length=1, max_length=255)
-    markup_type: str | None = Field(default=None, pattern=r"^(percentage|fixed)$")
+    markup_type: str | None = Field(default=None, pattern=r"^(percentage|fixed|banded|escalation)$")
     category: str | None = Field(
         default=None,
         pattern=r"^(overhead|profit|tax|contingency|insurance|bond|other)$",
@@ -904,6 +923,11 @@ class MarkupUpdate(_MarkupBase):
     apply_to: str | None = Field(default=None, pattern=r"^(direct_cost|subtotal|cumulative)$")
     sort_order: int | None = Field(default=None, ge=0)
     is_active: bool | None = None
+    # Sent explicitly as null these clear the scope, which is how a section
+    # exception is promoted back to a bill-wide line. Omitted, they are left
+    # alone like every other field on this partial update.
+    scope_position_id: UUID | None = None
+    overrides_id: UUID | None = None
     metadata: dict[str, Any] | None = None
 
 
@@ -922,6 +946,25 @@ class MarkupResponse(_MarkupBase):
     apply_to: str
     sort_order: int
     is_active: bool
+    # Null on both means bill-wide. The client needs them to tell an inherited
+    # line from an exception, which is the whole point of showing an override
+    # differently instead of as one more row of the same kind.
+    scope_position_id: UUID | None = None
+    overrides_id: UUID | None = None
+    # Set only on an ``escalation`` line, and only by the list endpoint, which
+    # resolves it against the stored index series. The markup panel mirrors the
+    # cascade client-side so a toggle reacts before the round-trip lands, and it
+    # cannot resolve a factor of its own: the browser holds no index series.
+    # Handing it the resolved ratio lets it multiply, which keeps the date
+    # arithmetic in exactly one place instead of growing a second copy in
+    # TypeScript. Null on every other type, and on an escalation line whose
+    # series or periods could not be resolved.
+    escalation_factor: Decimal | None = None
+
+    @field_serializer("escalation_factor", when_used="json")
+    def _ser_escalation_factor(self, v: Decimal | None) -> str | None:
+        return None if v is None else str(v)
+
     metadata: dict[str, Any] = Field(default_factory=dict, validation_alias="metadata_")
     created_at: datetime
     updated_at: datetime

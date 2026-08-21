@@ -47,7 +47,8 @@ import { PageHeader } from '@/shared/ui/PageHeader';
 import { UserSearchInput } from '@/shared/ui/UserSearchInput';
 import { useConfirm } from '@/shared/hooks/useConfirm';
 import { useCreateShortcut } from '@/shared/hooks/useCreateShortcut';
-import { apiGet, triggerDownload, extractErrorMessageFromBody } from '@/shared/lib/api';
+import { apiGet, triggerDownload, extractErrorMessageFromBody, type Page } from '@/shared/lib/api';
+import { TruncationNotice } from '@/shared/ui/TruncationNotice';
 import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { useAuthStore } from '@/stores/useAuthStore';
@@ -72,6 +73,7 @@ import { ApprovalTargetBadge } from '@/features/approval-routes';
 import { CreateTaskFromSourceDialog } from '@/features/tasks';
 import { InsightsPanel, InsightsToggleButton, useModuleInsights } from '@/features/insights';
 import { buildRFIInsights } from './rfiInsights';
+import { fmtDate, getIntlLocale } from '@/shared/lib/formatters';
 
 /* ── Constants ─────────────────────────────────────────────────────────── */
 
@@ -427,12 +429,16 @@ function normalizeDocRow(raw: DocumentsApiRow): DocumentPickerRow {
 
 function DocumentPickerModal({
   documents,
+  documentsTotal,
   isLoading,
   selected,
   onClose,
   onApply,
 }: {
   documents: DocumentPickerRow[];
+  /** How many documents the project holds, which is not `documents.length`:
+   *  the route caps the catalogue at 200 and the picker cannot page. */
+  documentsTotal: number;
   isLoading: boolean;
   selected: string[];
   onClose: () => void;
@@ -568,6 +574,12 @@ function DocumentPickerModal({
               })}
             </ul>
           )}
+          {/* Gated on the server page, not on the search-filtered rows: past
+              the cap a drawing simply cannot be attached to this RFI. */}
+          <TruncationNotice
+            page={{ items: documents, total: documentsTotal }}
+            className="px-3 pt-2"
+          />
         </div>
 
         <div className="flex items-center justify-between gap-3 px-5 py-3 border-t border-border-light">
@@ -629,16 +641,18 @@ export function CreateRFIModal({
    * attached. Fetched lazily so the create modal does not pay the cost
    * unless the user opens the dialog.
    */
-  const { data: documents = [], isLoading: docsLoading } = useQuery({
+  const { data: documentPage, isLoading: docsLoading } = useQuery({
     queryKey: ['rfi-doc-picker', projectId],
     queryFn: async () => {
       const params = new URLSearchParams({ project_id: projectId, limit: '200' });
-      const rows = await apiGet<DocumentsApiRow[]>(`/v1/documents/?${params.toString()}`);
-      return rows.map(normalizeDocRow);
+      const page = await apiGet<Page<DocumentsApiRow>>(`/v1/documents/?${params.toString()}`);
+      return { ...page, items: page.items.map(normalizeDocRow) };
     },
     enabled: Boolean(projectId),
     staleTime: 60_000,
   });
+
+  const documents = useMemo(() => documentPage?.items ?? [], [documentPage]);
 
   const docById = useMemo(() => {
     const map = new Map<string, DocumentPickerRow>();
@@ -808,6 +822,7 @@ export function CreateRFIModal({
       {showDocPicker && (
         <DocumentPickerModal
           documents={documents}
+          documentsTotal={documentPage?.total ?? documents.length}
           isLoading={docsLoading}
           selected={form.linked_drawing_ids}
           onClose={() => setShowDocPicker(false)}
@@ -1473,10 +1488,7 @@ const RFIRow = React.memo(function RFIRow({
           )}
         >
           {rfi.response_due_date
-            ? new Date(rfi.response_due_date).toLocaleDateString(undefined, {
-                month: 'short',
-                day: 'numeric',
-              })
+            ? fmtDate(rfi.response_due_date)
             : '-'}
         </span>
 
@@ -1515,7 +1527,7 @@ const RFIRow = React.memo(function RFIRow({
               <p className="text-sm text-content-primary whitespace-pre-wrap">{rfi.official_response}</p>
               {rfi.responded_at && (
                 <p className="text-xs text-content-tertiary mt-2">
-                  {new Date(rfi.responded_at).toLocaleDateString(undefined, {
+                  {new Date(rfi.responded_at).toLocaleDateString(getIntlLocale(), {
                     year: 'numeric',
                     month: 'short',
                     day: 'numeric',
@@ -1828,7 +1840,7 @@ export function RFIPage() {
     projects.find((p) => p.id === selectedProjectId)?.name || '';
 
   const {
-    data: rfis = [],
+    data: rfiPage,
     isLoading,
     isError,
     error,
@@ -1844,6 +1856,18 @@ export function RFIPage() {
       }),
     enabled: !!projectId,
   });
+  /* The endpoint caps `limit` at 100, so a busy project's register arrives
+     one page at a time and `total` is the only thing that says so. */
+  const rfis = rfiPage?.items ?? [];
+  const rfiTotal = rfiPage?.total ?? rfis.length;
+  /* `total` counts the rows the query matched, and the endpoint narrows by
+     ?status= and ?search= before it counts, so this number speaks for the
+     whole register only when neither was sent. With either one set the
+     unfiltered question was never asked, and an answer nobody asked for
+     cannot be used to call the register empty. Priority and discipline are
+     absent on purpose: they are applied here rather than by the endpoint,
+     so they leave `total` alone. */
+  const registerMayHold = rfiTotal > 0 || Boolean(statusFilter) || Boolean(debouncedSearch);
 
   /* Server already filters by ?status= / ?search= but priority + discipline
      are filtered client-side for now — the column list endpoint does not
@@ -2446,6 +2470,14 @@ export function RFIPage() {
 
       {/* Table */}
       <div>
+        {/* Gated on the server page, not on the client-filtered rows, and
+            deliberately outside the empty-state branch: a quick filter that
+            matches nothing on this page still has to say the page is a
+            slice, or the reader concludes the project has no such RFI. */}
+        <TruncationNotice
+          page={{ items: rfis, total: rfiTotal }}
+          className="mb-3"
+        />
         {isLoading ? (
           <SkeletonTable rows={5} columns={6} />
         ) : isError ? (
@@ -2463,7 +2495,16 @@ export function RFIPage() {
                           ? 'You have not raised any RFIs yet'
                           : 'No overdue RFIs',
                   })
-                : searchQuery || statusFilter
+                : /* Naming the filters that were set answers the wrong
+                     question and goes stale: this tested search and status
+                     while `filtered` also narrows by priority and discipline,
+                     so narrowing by either of those alone reached "No RFIs
+                     yet" on a project holding hundreds. The count on its own
+                     is no better, because the endpoint applies status and
+                     search before it counts, so it too can read zero on a
+                     full register. Only the disjunction above can deny the
+                     register, and only when nothing was filtered. */
+                  registerMayHold
                   ? t('rfi.no_results', { defaultValue: 'No matching RFIs' })
                   : t('rfi.no_rfis', { defaultValue: 'No RFIs yet' })
             }
@@ -2472,7 +2513,7 @@ export function RFIPage() {
                 ? t('rfi.no_quick_hint', {
                     defaultValue: 'Clear the quick filter to see all RFIs for this project.',
                   })
-                : searchQuery || statusFilter
+                : registerMayHold
                   ? t('rfi.no_results_hint', {
                       defaultValue: 'Try adjusting your search or filters to find what you are looking for.',
                     })
@@ -2486,7 +2527,7 @@ export function RFIPage() {
                     label: t('rfi.quick_clear', { defaultValue: 'Show all RFIs' }),
                     onClick: () => setQuickView('all'),
                   }
-                : !searchQuery && !statusFilter
+                : !registerMayHold
                   ? {
                       label: t('rfi.new_rfi', { defaultValue: 'New RFI' }),
                       onClick: () => setShowCreateModal(true),
@@ -2591,7 +2632,7 @@ export function RFIPage() {
                         <span className={isOverdue ? 'text-semantic-error font-semibold' : ''}>{days}d {t('rfi.days_open_short', { defaultValue: 'open' })}</span>
                         {rfi.response_due_date && (
                           <span className={isOverdue ? 'text-semantic-error font-semibold' : ''}>
-                            {t('rfi.col_due', { defaultValue: 'Due' })}: {new Date(rfi.response_due_date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                            {t('rfi.col_due', { defaultValue: 'Due' })}: {fmtDate(rfi.response_due_date)}
                           </span>
                         )}
                       </div>

@@ -54,10 +54,12 @@ import {
   addRecipient,
   removeRecipient,
   distributePackage,
+  getPackageScope,
   type Recipient,
   type DistributeResponse,
 } from './api';
-import { getIntlLocale } from '@/shared/lib/formatters';
+import { fmtPercent, getIntlLocale } from '@/shared/lib/formatters';
+import { getNumberLocale } from '@/stores/usePreferencesStore';
 import {
   listSubcontractors,
   type Subcontractor,
@@ -181,13 +183,13 @@ function formatCurrency(amount: number | string, currency?: string): string {
   // must not render its tender amounts with a Euro sign. When the currency
   // is unknown, show a plain decimal number with no symbol.
   if (!/^[A-Z]{3}$/.test(code)) {
-    return new Intl.NumberFormat(getIntlLocale(), {
+    return new Intl.NumberFormat(getNumberLocale(), {
       minimumFractionDigits: 0,
       maximumFractionDigits: 0,
     }).format(num);
   }
   try {
-    return new Intl.NumberFormat(getIntlLocale(), {
+    return new Intl.NumberFormat(getNumberLocale(), {
       style: 'currency',
       currency: code,
       minimumFractionDigits: 0,
@@ -199,7 +201,7 @@ function formatCurrency(amount: number | string, currency?: string): string {
 }
 
 function formatNumber(n: number, decimals: number = 2): string {
-  return new Intl.NumberFormat(getIntlLocale(), {
+  return new Intl.NumberFormat(getNumberLocale(), {
     minimumFractionDigits: decimals,
     maximumFractionDigits: decimals,
   }).format(n);
@@ -216,13 +218,13 @@ function DeviationBadge({ pct }: { pct: number }) {
   if (pct < 0) {
     return (
       <span className="inline-flex items-center gap-0.5 text-xs font-medium text-semantic-success">
-        <ArrowDownRight size={12} /> {pct.toFixed(1)}%
+        <ArrowDownRight size={12} /> {fmtPercent(pct)}
       </span>
     );
   }
   return (
     <span className="inline-flex items-center gap-0.5 text-xs font-medium text-semantic-error">
-      <ArrowUpRight size={12} /> +{pct.toFixed(1)}%
+      <ArrowUpRight size={12} /> +{fmtPercent(pct)}
     </span>
   );
 }
@@ -1324,6 +1326,14 @@ function PackageDetail({
     queryFn: () => apiGet<PackageWithBids>(`/v1/tendering/packages/${packageId}`),
   });
 
+  // Which part of the bill this package was raised over. Levelling already
+  // narrows to it, so a reader comparing bids is comparing them over this
+  // scope whether or not anyone told them what it is.
+  const { data: scope } = useQuery({
+    queryKey: ['tendering-package-scope', packageId],
+    queryFn: () => getPackageScope(packageId),
+  });
+
   // Fetch comparison
   const {
     data: comparison,
@@ -1558,6 +1568,32 @@ function PackageDetail({
               )}
               <span>{t('tendering.bid_count', { defaultValue: '{{count}} bids', count: pkg.bids.length })}</span>
             </div>
+            {/* A package over one trade is compared against that trade, not
+                against the whole bill. That was already true of the numbers
+                and invisible on the screen. */}
+            {scope && !scope.covers_whole_bill && scope.sections.length > 0 && (
+              <p
+                className="mt-2 text-xs text-content-tertiary"
+                title={
+                  scope.sections_recorded
+                    ? undefined
+                    : t('tendering.scope_derived_hint', {
+                        defaultValue:
+                          'This package records the lines it covers rather than the sections, so the sections are read from those lines.',
+                      })
+                }
+              >
+                {t('tendering.scope_partial', {
+                  defaultValue:
+                    'Covers part of the bill: {{sections}} ({{included}} of {{total}} positions)',
+                  sections: scope.sections
+                    .map((s) => [s.ordinal, s.description].filter(Boolean).join(' '))
+                    .join(', '),
+                  included: scope.included_position_count,
+                  total: scope.boq_position_count,
+                })}
+              </p>
+            )}
           </div>
           <div className="flex items-center gap-2">
             <Button

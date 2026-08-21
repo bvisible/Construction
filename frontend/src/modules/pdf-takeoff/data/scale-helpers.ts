@@ -2,6 +2,8 @@
 // Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
 /** Pixel-to-real-world scale conversion helpers */
 
+import { formatFixedDigits, formatSignificantDigits } from '@/features/takeoff/lib/measurement-format';
+
 export interface ScaleConfig {
   /** Pixels per real-world unit (e.g. pixels per meter).
    *  ``0`` denotes an *un-derivable* calibration (bad / missing
@@ -124,6 +126,19 @@ export function polygonPerimeterPixels(
   return perimeter;
 }
 
+/** Locale-aware number rendering for viewer readouts (audit case-2
+ *  K-12): `toFixed` always prints "248.5" while a German viewer expects
+ *  "248,5". Precision tiers are unchanged from the historic `toFixed`
+ *  rules; the digit rendering goes through the shared cached formatters
+ *  in `measurement-format.ts` so every takeoff surface renders numbers
+ *  the same way. */
+function measurementNumber(value: number, locale?: string): string {
+  if (value < 0.001) return formatSignificantDigits(value, 2, locale);
+  if (value < 1) return formatFixedDigits(value, 4, locale);
+  if (value < 100) return formatFixedDigits(value, 2, locale);
+  return formatFixedDigits(value, 1, locale);
+}
+
 /** Format a measurement value with appropriate precision.
  *
  *  Only genuinely degenerate values (non-finite, zero, negative) render
@@ -132,13 +147,17 @@ export function polygonPerimeterPixels(
  *  misleading "0 m²".  Real but *small* quantities (a 9 mm joint, an
  *  80 cm² patch) must stay visible with enough significant digits
  *  rather than being collapsed to zero or hidden (D-TKC-007): an
- *  estimator measuring small details still needs to read the number. */
-export function formatMeasurement(value: number, unit: string): string {
+ *  estimator measuring small details still needs to read the number.
+ *
+ *  Numbers render in the reader's number format (decimal comma for de, dot
+ *  for en); pass `locale` explicitly only where that must not apply (tests,
+ *  fixed-format exports). An omitted `locale` is passed on as omitted rather
+ *  than resolved here: working the answer out at this level is what made the
+ *  shared default in `measurement-format` unreachable from this module, so
+ *  the two disagreed while looking like one rule. */
+export function formatMeasurement(value: number, unit: string, locale?: string): string {
   if (!Number.isFinite(value) || value <= 0) return '';
-  if (value < 0.001) return `${value.toPrecision(2)} ${unit}`;
-  if (value < 1) return `${value.toFixed(4)} ${unit}`;
-  if (value < 100) return `${value.toFixed(2)} ${unit}`;
-  return `${value.toFixed(1)} ${unit}`;
+  return `${measurementNumber(value, locale)} ${unit}`;
 }
 
 /** Derive scale from a known reference measurement.

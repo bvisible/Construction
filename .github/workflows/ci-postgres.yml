@@ -80,6 +80,14 @@ jobs:
       # than three incidents. It also covers the other half of a demo register
       # being useful: that it is not seeded entirely closed, and that two
       # projects do not render the same rows.
+      # Contact domains join for the same reason as the firm names two entries
+      # up, and from the other side of the same data: the German packs name
+      # their firms properly, umlauts and all, and the addresses were written
+      # to match. A domain label cannot carry an umlaut on the wire, so twenty
+      # of them across four files were unreachable as written and read on
+      # screen as typos. The name keeps its umlauts and the domain does not,
+      # which is a distinction only a check that reads the two spans separately
+      # can make, and nothing in the tree was making it.
       # The file after it stops naming modules one at a time. It reads the
       # vocabulary out of every module's schemas and checks every seeded record
       # against the module that owns it, which is how the fourth instance was
@@ -98,8 +106,12 @@ jobs:
           tests/unit/test_demo_seed_text_has_no_scaffolding_words.py
           tests/unit/test_demo_insight_dimensions.py
           tests/unit/test_demo_seed_has_no_real_firm_names.py
+          tests/unit/test_demo_contact_domains.py
+          tests/unit/test_demo_bid_line_items.py
+          tests/unit/test_tender_package_scope.py
           tests/unit/test_demo_safety_vocabulary.py
           tests/unit/test_demo_seed_speaks_module_vocabularies.py
+          tests/unit/test_demo_progress_periods.py
           -q -p no:cacheprovider
       # The region to currency table. Attached for the same reason as the suites
       # around it, which is that tests/unit runs in no lane that blocks a merge.
@@ -451,8 +463,37 @@ jobs:
       # still attached, which is the right way to ask and also the reason it
       # went red on its own when FastAPI changed how a mounted router is
       # recorded. It was in no lane, so nothing said so.
+      # The isolation file beside it is GHSA-wfpw-cv5v-64j5: the Ollama / vLLM
+      # endpoint a user saved was written into a module-global table, so it
+      # became the endpoint of every user sharing the worker process and their
+      # prompts went to whatever host was saved last. It is bound per
+      # resolution now, and the shape of that bug - shared mutable state that
+      # reads as configuration - returns the moment a second writer appears.
       - name: Run AI endpoint security tests
-        run: pytest tests/modules/test_ai_security.py -q -p no:cacheprovider
+        run: >-
+          pytest tests/modules/test_ai_security.py
+          tests/unit/test_ai_self_hosted_endpoint_isolation.py
+          -q -p no:cacheprovider
+      # A punch list row printed the assigned_to column as it stood, and that
+      # column holds a contact id as often as a name, so a German demo read
+      # "ZUGEWIESEN AN 3f2b8c1e-9a44-..." on every row of the list, on every
+      # kanban card, in the drawer and along the axis of the insights chart.
+      # The names are resolved in two queries per page now, one against the
+      # contacts register and one against the user list, because the seeder
+      # writes a contact id where the assignment control writes a user id.
+      # Three things here are worth a gate rather than a review: that the cost
+      # is fixed per page rather than per row, on the slowest screen the module
+      # has; that free text is
+      # never sent to the database, because a typed-in name is already the
+      # answer; and that an id which resolves to nothing does not come back as
+      # "Unassigned", which would tell a site manager to hand out work that
+      # already has an owner.
+      - name: Run punch list assignee resolution tests
+        run: >-
+          pytest tests/unit/test_punch_assignee_names.py
+          tests/unit/test_punchlist.py
+          tests/unit/test_punchlist_polish.py
+          -q -p no:cacheprovider
       # The literal string bim did not appear anywhere in this file, so 30 unit
       # files and 528 tests, including the ones covering all 28 BIM validation
       # rules, were enforced by nothing. Those rules are reachable in production:
@@ -647,6 +688,82 @@ jobs:
       # exists at all.
       - name: Run tenant isolation
         run: pytest tests/integration/test_tenant_isolation.py -q -p no:cacheprovider
+      # Registers that answer with a page envelope, checked end to end. The
+      # pagination waves moved these endpoints from a bare array to {items,
+      # total, offset, limit} and moved every caller with them, and nothing
+      # that blocks a merge collected any of it. These are integration tests,
+      # and tests/integration is reached by exactly one filtered step, in the
+      # CI workflow, which is red often enough that a failure there stops
+      # nobody. The lane coverage guard still records that tree as
+      # PUSH_FILTERED, because it ranks by continue-on-error rather than by
+      # whether anyone acts on the result, so the classification is true on
+      # paper and buys nothing. Worth knowing before reading this step as
+      # redundant with it, and worth knowing that adding these names cannot
+      # improve that recorded class either: naming files ranks below filtering
+      # a tree, so the guard keeps reporting the number the red lane supplies.
+      #
+      # Here rather than on backend-postgres, which is where it was written
+      # first and where it does not fit. Summing the costs those step comments
+      # state gives about 21 minutes against a 30 minute ceiling, and two of
+      # its steps state no cost at all, so the true figure is higher than that
+      # and unknown. This job was measured at 10.3 minutes against the same
+      # ceiling. That makes the job name narrower than its contents, which is
+      # the price of the move and is cheaper than the alternatives: crowding a
+      # lane already near its ceiling, or paying a fresh install and cluster
+      # boot for three files. One of the three is test_folder_permissions.py,
+      # so the fit is not as poor as the heading suggests.
+      #
+      # The 21 minutes is worth someone's attention on its own. That job's
+      # ceiling comment still reasons from "the suite finishes in about ten",
+      # which was true of tests/pg alone and has not been true of the job for
+      # a while. Nothing tracks that, and the failure mode when it arrives is
+      # an anonymous kill at the wall clock rather than a named test.
+      #
+      # Cost, measured rather than guessed, and measured badly. 29 tests, 0
+      # failed and 0 skipped in 636 seconds under OE_TEST_DB=pg on a Windows
+      # box that had two other sessions running pytest at the same time. Nearly
+      # all of that is fixture setup rather than test bodies: 137 seconds for
+      # the first cluster boot and about 18 for each per-test database clone
+      # after it, which is a property of the conftest every file in this job
+      # shares. So the number describes this box, not these files, and the
+      # runner cost is unmeasured. For shape, this job was observed doing 502
+      # tests in 10.3 minutes, near 1.2 seconds a test against the 18 here.
+      # That ratio belongs to contention and to Windows filesystem behaviour,
+      # so do not divide the local figure by it and record the result as a
+      # measurement.
+      #
+      # test_critical_flows.py was a candidate and was dropped rather than
+      # deferred. It asserts on envelope keys in seven places, which is what put
+      # it on the list, but it is a platform smoke suite rather than a register
+      # test, and it carries 50 of the 79 tests the four would have cost. Worst
+      # fit for the rule and most of the bill is enough to drop it; the rule is
+      # that a file belongs here when it exercises a register this programme
+      # moved to the envelope.
+      #
+      # This is a patch and not the fix. Counted with a glob on 2026-08-17,
+      # tests/integration holds 203 files directly and 221 including its six
+      # subdirectories; 23 were named by a blocking step before this and these
+      # three make 26. Everything else there still runs nowhere that stops a
+      # merge. The fix is a nightly run of the whole tree that is allowed to
+      # finish, together with a status check that fails closed when no result
+      # arrives, and neither exists yet. Naming files one at a time is how this
+      # file already works and it plainly does not scale to the remainder; it
+      # is chosen here because the alternative is waiting for the nightly while
+      # the registers ship uncovered.
+      #
+      # The failing-closed half is the part that is easy to leave for later and
+      # is the reason a nightly on its own would not be enough. A cancelled
+      # shard reports exactly what a shard that ran and had nothing to say
+      # reports: no annotations, no failures, a green summary. So a nightly
+      # cancelled every night of a quiet week reads identically to a week with
+      # no regressions, and which one it was gets settled by the regression
+      # shipping.
+      - name: Run paged register integration tests
+        run: >-
+          pytest tests/integration/test_documents_remediation_backlog.py
+          tests/integration/test_documents_search_and_activity.py
+          tests/integration/test_folder_permissions.py
+          -q -p no:cacheprovider --timeout=300 --timeout-method=thread
 
   frontend-tests:
     name: Frontend tests that block a merge
@@ -665,20 +782,46 @@ jobs:
     # token check and the IDOR job. The conclusion is unchanged, the cause is
     # not, and a wrong cause invites somebody to "fix the OOM" and expect this
     # job to become redundant.
-    # Counted 2026-08-07: the include in vite.config.ts is
-    # src/**/*.test.{ts,tsx} plus tests/**/*.test.{ts,tsx}, which collects 534
-    # files under src and 2 under frontend/tests/pwa, so 536 in all. 21 are
-    # named below, so 515 of them gate nothing. Recount rather than trust that
+    # Recounted 2026-08-17 out of the commit: the include in vite.config.ts is
+    # src/**/*.test.{ts,tsx} plus tests/**/*.test.{ts,tsx}, which collects 587
+    # files under src and 2 under frontend/tests/pwa, so 589 in all. 34 are
+    # named below, so 555 of them gate nothing. Recount rather than trust that
     # sentence, and recount against that include rather than against the vitest
     # default: the default would also sweep up the Playwright specs, which this
     # job does not run and which were never part of this number.
     #
+    # Count it out of the commit rather than out of a checkout. The 592 written
+    # here earlier the same day was measured on a working tree carrying nine
+    # test files that no commit held, and this job checks out a ref: it can run
+    # only what was committed. A number taken off a dirty tree reads as growth
+    # in the suite when it is really uncommitted work sitting on a disk, and it
+    # cannot be reproduced by the next person unless their tree is dirty in the
+    # same way.
+    #
+    # The previous recount said 536 files and 21 named, on 2026-08-07. Both
+    # halves had drifted: the suite grew by 56 files and the list below had
+    # quietly reached 28 without the sentence being touched. A count written
+    # into prose stops being true the moment somebody adds a line and does not
+    # scroll up, which is the argument for recounting rather than for writing a
+    # better sentence.
+    #
+    # That is not a hypothetical. Between writing "30" and writing "31" here,
+    # two parallel sessions each added an entry, and the true figure was 32.
+    # Parse the list and count it, do not add one to the number above. Parse it
+    # as YAML and split the value, rather than matching indented lines with a
+    # regex: the block scalar ends at "steps:", which is itself an indented
+    # non-empty line, so a line-shaped pattern reads it as a thirty-fifth test
+    # file and overstates the list by one. That is how the figure above was
+    # briefly written as 35.
+    #
     # Named files rather than the whole suite, and that is a measurement rather
     # than a preference. The whole suite came to somewhere between 55 and 95
     # minutes when it was last timed, depending on how the workers saturate,
-    # and that does not belong in front of every merge. The twenty-one named
-    # here run 322 tests in 29 seconds against 12 logical cores with a warm
-    # cache, measured 2026-08-07. An earlier note in this file recorded 118 seconds
+    # and that does not belong in front of every merge. Twenty-one of the names
+    # below ran 322 tests in 29 seconds against 12 logical cores with a warm
+    # cache, measured 2026-08-07; the list has grown to 32 since and that figure
+    # was not re-timed, so read it as the shape and not as the current cost. An
+    # earlier note in this file recorded 118 seconds
     # for eleven files and that could not be reproduced, so take neither figure
     # as the cost on the runner: it has four cores and installs cold. What the
     # numbers do support is the shape, a named list rather than the suite. This
@@ -718,9 +861,12 @@ jobs:
       run:
         working-directory: frontend
     env:
-      # Nine of the twenty-one files below are jsdom component tests, which are
-      # the expensive kind, and this runner has four cores rather than the
-      # twelve the local measurement was taken on. The whole-program type check
+      # Eleven of the thirty-five files below are jsdom component tests, which
+      # are the expensive kind, and this runner has four cores rather than the
+      # twelve the local measurement was taken on. Both figures are counted by
+      # parsing this list, never by adding one to what the comment said: it read
+      # "nine of twenty-one" while the list held thirty-four, because parallel
+      # sessions each appended an entry without recounting. The whole-program type check
       # and the build in the other workflow already need this ceiling and are
       # skipped on macOS because a 9 GB heap does not fit that runner at all.
       # Running the tests under the default heap would be betting the gate on
@@ -730,9 +876,16 @@ jobs:
       # the run disagree about what is covered, which is the failure this guard
       # exists to prevent in the first place.
       FRONTEND_TEST_FILES: >-
+        src/app/__tests__/clashTriageVocabulary.test.ts
+        src/app/layout/Header.titleKeys.test.ts
+        src/app/layout/navCatalog.test.ts
         src/features/assemblies/__tests__/preview-totals-no-blended-scalar.test.tsx
         src/features/bim/BIMConverterVerifyGate.test.tsx
+        src/features/cases/caseVocabulary.test.ts
+        src/features/cases/cases.test.ts
         src/features/cases/casesProjectContext.test.tsx
+        src/features/cases/chipConsistency.test.ts
+        src/features/cases/roles.test.ts
         src/features/contracts/ContractAnalyticsPanels.test.tsx
         src/features/contracts/ContractDetailDrawerDelete.test.tsx
         src/features/contracts/ContractSecuritiesPanel.test.tsx
@@ -744,12 +897,19 @@ jobs:
         src/features/dwg-takeoff/lib/__tests__/issue-426-render.test.ts
         src/features/dwg-takeoff/lib/__tests__/text-display-store.test.ts
         src/features/dwg-takeoff/lib/__tests__/viewport.test.ts
+        src/features/field-time/workingTime.test.ts
         src/features/file-manager/SheetsIndexPage.test.tsx
         src/features/file-manager/sheetsInsights.test.ts
         src/features/integrations/calendarFeed.test.ts
         src/features/module-builder/api.test.ts
         src/features/module-builder/draft.test.ts
         src/features/module-builder/fields.test.ts
+        src/features/punchlist/assignee.test.tsx
+        src/features/punchlist/punchlistInsights.test.ts
+        src/features/schedule/ScheduleResourcePanel.test.tsx
+        src/shared/lib/__tests__/formatCompactCurrency.test.ts
+        src/shared/lib/__tests__/formattersReadTheLocalePerCall.test.ts
+        src/shared/lib/apiHelpers.fetchAllPages.test.ts
         src/shared/lib/i18nInterpolatedKeys.test.ts
     steps:
       - uses: actions/checkout@v7

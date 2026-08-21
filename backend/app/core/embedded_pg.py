@@ -29,11 +29,26 @@ from __future__ import annotations
 
 import logging
 import os
+import subprocess
 import time
 from pathlib import Path
 from types import ModuleType
+from typing import NamedTuple
 
 logger = logging.getLogger(__name__)
+
+# How far the recorded postmaster start time may sit from the actual creation
+# time of the process holding that PID before we call the PID recycled. The
+# two are written within the same second on a healthy cluster, so this is
+# generous rather than tight; it only has to separate the same process from a
+# different one.
+_PID_START_TOLERANCE_SECONDS = 10.0
+
+# How long a cluster that has just been handed back as ready gets to answer a
+# connection before we treat it as absent. A healthy one answers on the first
+# try, and a genuinely recovering one never reaches here because get_server()
+# raises and the recovery path waits it out on the patient budget instead.
+_READY_PROBE_SECONDS = 20.0
 
 #: Module-level handle to the running server, kept so :func:`shutdown` can stop it.
 _server = None
@@ -41,6 +56,13 @@ _server = None
 #: Set by :func:`retain` when something outside the application owns the cluster's
 #: lifetime, so an application shutdown inside that owner's run leaves it running.
 _retained = False
+
+#: Set by :func:`boot` when it can name the reason it refused to start. The CLI
+#: prints this in place of its generic "reinstall and try again" advice, which is
+#: wrong for the failures we can diagnose precisely - see
+#: :func:`data_dir_version_conflict`, where reinstalling makes the mismatch worse
+#: rather than better. ``None`` means "no specific diagnosis", not "no failure".
+_fatal_detail: str | None = None
 
 _TRUTHY = {"1", "true", "yes", "on"}
 _FALSY = {"0", "false", "no", "off"}
@@ -112,6 +134,18 @@ def is_running() -> bool:
     return _server is not None
 
 
+def last_fatal_detail() -> str | None:
+    """Return the specific reason the last :func:`boot` refused, when it had one.
+
+    :func:`boot` never raises and reports failure as ``False``, which tells the
+    caller that something went wrong and nothing about what. For the failures it
+    can actually name it also records the explanation here, so the CLI can print
+    that instead of the generic advice it would otherwise give. ``None`` means
+    boot had no specific diagnosis to offer, not that it succeeded.
+    """
+    return _fatal_detail
+
+
 def boot(data_dir: Path | str) -> bool:
     """Boot embedded PostgreSQL and point DATABASE_URL/DATABASE_SYNC_URL at it.
 
@@ -120,9 +154,10 @@ def boot(data_dir: Path | str) -> bool:
     ``False`` here is fatal at the CLI layer (``_setup_env`` exits with an
     actionable message). Returns ``True`` on success.
     """
-    global _server
+    global _server, _fatal_detail
     if _server is not None:
         return True
+    _fatal_detail = None
 
     try:
         import pixeltable_pgserver as pgserver
@@ -141,6 +176,34 @@ def boot(data_dir: Path | str) -> bool:
         pgdata.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         logger.error("embedded PostgreSQL data dir unavailable at %s: %r", pgdata, exc)
+        return False
+
+    # Settle major-version compatibility before anything touches the cluster.
+    # The postmaster would refuse this directory anyway, but it refuses from
+    # inside the retry loop below, where the reason is buried under three
+    # attempts and reported as "the local database could not be started" - and
+    # the generic advice attached to that failure is to reinstall, which on a
+    # version bump is what caused it. Answering here means the user is told
+    # which two versions disagree while every byte of their data is still on
+    # disk, and is offered the recoveries that keep it before the one that does
+    # not. A directory we cannot read a version from is not a conflict, so a
+    # fresh install (no PG_VERSION yet) walks straight past this.
+    conflict = data_dir_version_conflict(pgdata)
+    if conflict is not None:
+        _fatal_detail = conflict.message
+        # The stage detail names both versions, not just the fact that they
+        # differ. This is the desktop app's failure - a bundled-PG bump is what
+        # strands an existing cluster - and on the desktop the only surface the
+        # user sees is the launcher checklist, which renders this string. The
+        # paragraph below it goes to the log file, which somebody stuck on a
+        # window that will not open is not reading.
+        emit_stage(
+            "pg",
+            "fail",
+            f"The local database was created by PostgreSQL {conflict.found}; "
+            f"this build ships PostgreSQL {conflict.expected}",
+        )
+        logger.error("%s", conflict.message)
         return False
 
     # pixeltable-pgserver hard-codes a 10s ``pg_ctl start -w`` timeout
@@ -328,7 +391,7 @@ def _boot_once(
     while time.monotonic() < deadline:
         probe += 1
         try:
-            return pgserver.get_server(str(pgdata)), None
+            server = pgserver.get_server(str(pgdata))
         except Exception as exc:  # noqa: BLE001
             last_exc = exc
             # The first get_server() launches the postmaster, which keeps
@@ -371,6 +434,38 @@ def _boot_once(
             # open but get_server() still raised (a brief pidfile race), this
             # keeps the loop from spinning hot while the pidfile finishes.
             time.sleep(1.0)
+        else:
+            # get_server() returning means we were handed a server object. It
+            # does not mean a server is there. Attaching reads the cluster's own
+            # files, so a data directory left describing a postmaster that no
+            # longer exists hands back a perfectly well formed handle onto a
+            # port where nothing is listening, and the caller then announces the
+            # database ready and fails to connect to it in the same breath. That
+            # pair of statements is what a user actually saw, twice, on two
+            # different data directories.
+            #
+            # So the happy path proves it the same way the recovery path already
+            # does, by opening a socket. On a healthy boot the first connect
+            # succeeds and this costs nothing measurable; when it does not, the
+            # cluster is not there whatever the files say, and saying so here
+            # lets the caller's retry clear the leftovers and start one.
+            probe_window = min(_READY_PROBE_SECONDS, max(deadline - time.monotonic(), 0.0))
+            if _cluster_answers(resolved_pgdata, probe_window):
+                return server, None
+            port = _port_from_pidfile(resolved_pgdata)
+            last_exc = ConnectionError(
+                f"the cluster at {resolved_pgdata} was handed back as ready but nothing answered "
+                f"on port {port} within {probe_window:.0f}s"
+            )
+            logger.warning("embedded PostgreSQL attached but did not answer: %s", last_exc)
+            # Drop the handle pixeltable cached for this data directory, or the
+            # next attempt is given the same unusable one straight back.
+            if ps_cls is not None:
+                try:
+                    ps_cls._instances.pop(resolved_pgdata, None)
+                except Exception:  # noqa: BLE001
+                    pass
+            return None, last_exc
     return None, last_exc
 
 
@@ -408,13 +503,74 @@ def _pid_alive(pid: int) -> bool:
         return True
 
 
-def _clear_stale_pidfile(pgdata: Path) -> None:
-    """Delete ``postmaster.pid`` when it points at a process that is gone.
+def _read_pidfile_start_time(pgdata: Path) -> float | None:
+    """Return the postmaster start time recorded in ``postmaster.pid``.
 
-    A force-kill or crash leaves the pidfile behind. PostgreSQL itself refuses
-    to start while a pidfile names a live process, but a pidfile for a dead PID
-    only slows pixeltable's start path; removing it lets the clean-start path
-    run. Never removes a pidfile whose process is still alive.
+    Line three of the file is the epoch second at which the postmaster started,
+    written by PostgreSQL itself. It is what lets us tell the process that wrote
+    this file apart from whatever holds that PID now.
+    """
+    pidfile = pgdata / "postmaster.pid"
+    try:
+        lines = pidfile.read_text(encoding="utf-8", errors="ignore").splitlines()
+        return float(lines[2].strip())
+    except (OSError, IndexError, ValueError):
+        return None
+
+
+def _pid_was_recycled(pid: int, recorded_start: float | None) -> bool:
+    """True when ``pid`` is alive but is demonstrably not the process that wrote the pidfile.
+
+    Operating systems reuse process identifiers, and Windows reuses them quickly.
+    Asking only whether the number is alive therefore answers a different
+    question than the one that matters: a pidfile left behind by a force-killed
+    postmaster keeps naming a number, and once the system hands that number to
+    an unrelated service the file starts describing a process that has nothing
+    to do with this cluster. Measured on a real machine: a pidfile written in
+    July named a PID held by a licensing service, the check saw a live process,
+    kept the file, and the cluster reported itself ready on a port where nothing
+    was listening. The backend then refused to start with a connection error,
+    and the user was told the database was ready and the server was not.
+
+    Only positive evidence of recycling counts, because the opposite mistake is
+    far worse: deleting the pidfile of a genuinely live postmaster invites a
+    second one onto the same data directory. Anything unreadable or uncertain
+    therefore answers no and the file is kept.
+    """
+    try:
+        import psutil
+    except Exception:  # noqa: BLE001
+        return False
+    try:
+        proc = psutil.Process(pid)
+        created = proc.create_time()
+        name = (proc.name() or "").lower()
+    except Exception:  # noqa: BLE001
+        # Gone, or we are not allowed to look. Either way this is not evidence.
+        return False
+    if recorded_start is not None:
+        # The recorded time is the stronger signal and answers on its own, so a
+        # process whose creation matches it is the one that wrote the file even
+        # if we could not make sense of its name.
+        return abs(created - recorded_start) > _PID_START_TOLERANCE_SECONDS
+    # With no time to compare against, a name we can read that is not a
+    # postmaster settles it instead.
+    return bool(name) and "postgres" not in name and "postmaster" not in name
+
+
+def _clear_stale_pidfile(pgdata: Path) -> None:
+    """Delete ``postmaster.pid`` when the process it names is gone or is no longer it.
+
+    A force-kill or crash leaves the pidfile behind, and the installer's own
+    hooks force-kill the sidecar and its children on every install and every
+    uninstall, so this is the ordinary aftermath of upgrading rather than a rare
+    accident. PostgreSQL itself refuses to start while a pidfile names a live
+    process, and pixeltable takes a slower path for one that names a dead PID,
+    so clearing it keeps boot on the clean-start path.
+
+    Never removes a pidfile whose postmaster is still alive. A PID that is alive
+    but belongs to something else is treated as gone, because that is what it
+    is.
     """
     pidfile = pgdata / "postmaster.pid"
     if not pidfile.exists():
@@ -422,11 +578,13 @@ def _clear_stale_pidfile(pgdata: Path) -> None:
     pid = _read_pidfile_pid(pgdata)
     if pid is None:
         return
-    if _pid_alive(pid):
+    recycled = _pid_was_recycled(pid, _read_pidfile_start_time(pgdata))
+    if _pid_alive(pid) and not recycled:
         return
+    reason = f"pid {pid} belongs to another process" if recycled else f"dead pid {pid}"
     try:
         pidfile.unlink()
-        logger.info("removed stale postmaster.pid (dead pid %d) in %s", pid, pgdata)
+        logger.info("removed stale postmaster.pid (%s) in %s", reason, pgdata)
     except OSError as exc:
         logger.warning("could not remove stale postmaster.pid in %s: %r", pgdata, exc)
 
@@ -493,6 +651,161 @@ def _initdb_args(pgdata: Path) -> tuple[str, ...]:
         "-D",
         str(pgdata),
     )
+
+
+def _postgres_major(version: str) -> str | None:
+    """Reduce a PostgreSQL version string to the major that decides file format.
+
+    PostgreSQL changed how it numbers releases at 10. From then on the first
+    component alone is the major, so ``16.11``, ``16.2`` and ``16`` are all
+    major 16 and share one on-disk format. Before 10 the second component was
+    part of the major: ``9.5`` and ``9.6`` are as incompatible with each other
+    as 15 is with 16, so both components have to survive here or a 9.5 cluster
+    would be reported as a 9.6 one.
+
+    Returns ``None`` when the string carries no leading number, which is what an
+    empty, truncated or corrupted ``PG_VERSION`` looks like. That is deliberately
+    not treated as a mismatch: we cannot say what wrote the directory, and a
+    guard that guesses would block a boot on no evidence.
+    """
+    parts = version.strip().split(".")
+    if not parts or not parts[0].isdigit():
+        return None
+    if parts[0] == "9" and len(parts) > 1 and parts[1].isdigit():
+        return f"9.{parts[1]}"
+    return parts[0]
+
+
+def _major_sort_key(major: str) -> tuple[int, ...]:
+    """Order two majors so the message can say which side is the newer one."""
+    return tuple(int(part) for part in major.split(".") if part.isdigit())
+
+
+def _data_dir_major(pgdata: Path) -> str | None:
+    """Return the PostgreSQL major that created ``pgdata``, or ``None``.
+
+    Every cluster carries its major in ``PG_VERSION``, written by initdb and
+    never updated in place - a major upgrade is a new directory plus pg_upgrade
+    or a dump/restore, never an edit of this file. ``None`` covers both "the
+    directory is not a cluster yet" (no file, the fresh-install path) and "the
+    file is there but says nothing usable".
+    """
+    try:
+        raw = (pgdata / "PG_VERSION").read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return None
+    return _postgres_major(raw)
+
+
+def _bundled_major() -> str | None:
+    """Return the PostgreSQL major the bundled binaries provide, or ``None``.
+
+    ``pg_config --version`` prints one line, ``PostgreSQL 16.11``, and it ships
+    in the same ``pginstall/bin`` directory as initdb and the postmaster, so it
+    is present wherever they are - including the frozen desktop bundle, whose
+    hook collects that whole tree (``desktop/hooks/hook-pixeltable_pgserver.py``).
+
+    Fails open on everything: a missing package, a missing binary, a non-zero
+    exit, a timeout, output in a shape we do not recognise. The caller uses this
+    only to refuse a boot, and refusing because we could not interrogate our own
+    installation would break working machines to guard against a broken one.
+    """
+    try:
+        from pixeltable_pgserver.utils import POSTGRES_BIN_PATH
+    except Exception:  # noqa: BLE001
+        return None
+    exe = Path(POSTGRES_BIN_PATH) / ("pg_config.exe" if os.name == "nt" else "pg_config")
+    if not exe.is_file():
+        return None
+    try:
+        completed = subprocess.run(  # noqa: S603
+            [str(exe), "--version"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=True,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("could not read the bundled PostgreSQL version from %s: %r", exe, exc)
+        return None
+    tokens = completed.stdout.strip().split()
+    if not tokens:
+        return None
+    return _postgres_major(tokens[-1])
+
+
+class VersionConflict(NamedTuple):
+    """A data directory and the bundled binaries disagreeing, with both numbers.
+
+    The prose message is the useful thing for a log or a terminal, but the two
+    majors have to survive as values as well: the launcher checklist gets one
+    short line per stage, and building that line by re-parsing the paragraph -
+    or by re-running ``pg_config`` - would be two ways of asking a question
+    already answered here.
+    """
+
+    found: str
+    expected: str
+    message: str
+
+
+def data_dir_version_conflict(pgdata: Path | str) -> VersionConflict | None:
+    """Explain why the cluster on disk cannot be opened by the bundled binaries.
+
+    A PostgreSQL data directory is readable only by the major version that wrote
+    it. The postmaster refuses in both directions and it refuses immediately, so
+    an application that bumps its bundled PostgreSQL leaves every existing
+    installation unable to start - and the raw refusal surfaces here after
+    several layers of retry, as "the local database could not be started".
+
+    Only the *presence* of ``PG_VERSION`` was ever read before this function
+    existed. That is enough to decide whether initdb still has to run and tells
+    nobody anything about compatibility, so the one recovery anybody could name
+    was ``init-db --reset``, which deletes the cluster. This says what the two
+    versions are while the data is still on disk, and names the recoveries that
+    keep it before the one that does not.
+
+    Returns a :class:`VersionConflict` on a mismatch and ``None`` otherwise -
+    including when either version cannot be read, which is not evidence of a
+    conflict.
+    """
+    pgdata = Path(pgdata)
+    found = _data_dir_major(pgdata)
+    if found is None:
+        return None
+    expected = _bundled_major()
+    if expected is None or found == expected:
+        return None
+
+    if _major_sort_key(found) > _major_sort_key(expected):
+        cause = (
+            "Nothing ever downgrades a data directory, so this normally means the application "
+            "was downgraded: an older release is running against a directory a newer one has "
+            "already opened. Installing that newer release again is the shortest way back."
+        )
+    else:
+        cause = (
+            "This normally means the application was upgraded across a PostgreSQL version bump: "
+            f"the directory was written by the PostgreSQL {found} the previous release carried, "
+            "and nothing migrates it on its own."
+        )
+
+    message = (
+        f"The local database at {pgdata} was created by PostgreSQL {found}, and this build ships "
+        f"PostgreSQL {expected}. PostgreSQL cannot open a data directory written by a different "
+        f"major version, so the cluster stays exactly as it is until one of the two sides moves. "
+        f"{cause} "
+        f"To keep the data: install PostgreSQL {found}, start it on {pgdata}, and point the "
+        f"application at it by setting DATABASE_URL - or use that PostgreSQL {found} to run "
+        f"pg_dump, then restore the dump into a fresh directory here. Setting DATABASE_URL is "
+        f"enough on its own, with one exception: '--embedded-pg' and a truthy OE_USE_EMBEDDED_PG "
+        f"both override it and send the application back to this directory, so drop them if you "
+        f"are using them. "
+        f"'openconstructionerp init-db --reset' also clears the conflict, and it clears it by "
+        f"DELETING the cluster at {pgdata}: every project, price, document and user in it is gone "
+        f"permanently. Run it only after a dump, or if this installation holds nothing you need."
+    )
+    return VersionConflict(found=found, expected=expected, message=message)
 
 
 def _clear_incomplete_cluster(pgdata: Path) -> None:
@@ -639,17 +952,16 @@ def _pre_initialize_cluster(pgdata: Path) -> bool:
 
 
 def _port_from_pidfile(pgdata: Path) -> int | None:
-    """Return the TCP port the recovering postmaster is listening on, if known.
+    """Return the port the recovering postmaster is listening on, if known.
 
     During crash recovery PostgreSQL writes the port line (line 4) early, so we
     can learn the port even before the pidfile is "complete" enough for
     pixeltable's parser. Returns ``None`` if not yet present.
+
+    The port names the TCP port and the unix socket alike: the socket file is
+    ``<socket dir>/.s.PGSQL.<port>``, so one number serves both families.
     """
-    pidfile = pgdata / "postmaster.pid"
-    try:
-        lines = pidfile.read_text(encoding="utf-8", errors="ignore").splitlines()
-    except OSError:
-        return None
+    lines = _pidfile_lines(pgdata)
     if len(lines) < 4:
         return None
     try:
@@ -659,28 +971,119 @@ def _port_from_pidfile(pgdata: Path) -> int | None:
     return port if port > 0 else None
 
 
-def _wait_until_connectable(pgdata: Path, deadline: float) -> bool:
-    """Block until the embedded postmaster accepts TCP connections, or deadline.
+def _pidfile_lines(pgdata: Path) -> list[str]:
+    """Return the postmaster pidfile as lines, or an empty list if unreadable."""
+    try:
+        return (pgdata / "postmaster.pid").read_text(encoding="utf-8", errors="ignore").splitlines()
+    except OSError:
+        return []
 
-    Probes ``127.0.0.1:<port>`` (port read from the recovering postmaster's
-    pidfile) with a raw socket connect, which succeeds as soon as recovery
-    finishes and the postmaster opens its listen socket. This is far more robust
-    than parsing the pidfile, which is incomplete while recovery runs. Returns
-    ``True`` if it became connectable before ``deadline``, else ``False``.
+
+def _unix_socket_path(pgdata: Path) -> Path | None:
+    """Return the unix socket this cluster listens on, when it listens on one.
+
+    Line 5 of the pidfile is the first entry of ``unix_socket_directories``. It
+    is empty on Windows, where PostgreSQL has no unix sockets, and holds a
+    directory on Linux and macOS. The socket inside it is named after the port.
+    """
+    lines = _pidfile_lines(pgdata)
+    if len(lines) < 5:
+        return None
+    socket_dir = lines[4].strip()
+    port = _port_from_pidfile(pgdata)
+    if not socket_dir or port is None:
+        return None
+    return Path(socket_dir) / f".s.PGSQL.{port}"
+
+
+def _listens_on_tcp(pgdata: Path) -> bool:
+    """Whether the pidfile says this cluster accepts TCP at all.
+
+    Line 6 is the first ``listen_addresses`` entry, empty when the postmaster
+    was started with none. Absent information is answered ``True``: a probe that
+    skips a family it cannot rule out reports a healthy cluster dead, which is
+    the failure this whole helper exists to prevent.
+    """
+    lines = _pidfile_lines(pgdata)
+    if len(lines) < 6:
+        return True
+    return bool(lines[5].strip())
+
+
+def _accepts_a_connection(pgdata: Path) -> bool:
+    """One attempt to reach this cluster, on whichever family it listens on.
+
+    The unix socket is tried first where the cluster has one. That order is not
+    a preference, it is the only reading that cannot be answered by a stranger:
+    a system PostgreSQL on 5432 would accept a TCP connect and satisfy a probe
+    asking about a cluster in a temporary directory it has never heard of. The
+    socket path comes out of this cluster's own pidfile and belongs to it alone.
+
+    TCP is tried when the pidfile reports a listen address, or when it is too
+    short to say. Windows clusters answer here; on Linux and macOS the
+    postmaster pixeltable-pgserver starts has no TCP listener at all, and asking
+    it for one is how a healthy cluster gets reported dead.
     """
     import socket
 
-    while time.monotonic() < deadline:
+    sock_path = _unix_socket_path(pgdata)
+    if sock_path is not None and hasattr(socket, "AF_UNIX"):
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+                s.settimeout(2)
+                s.connect(str(sock_path))
+                return True
+        except OSError:
+            pass
+
+    if _listens_on_tcp(pgdata):
         port = _port_from_pidfile(pgdata)
         if port is not None:
             try:
                 with socket.create_connection(("127.0.0.1", port), timeout=2):
-                    # Give PostgreSQL a breath after the socket opens so the
-                    # very next get_server() attach finds status == 'ready'.
-                    time.sleep(1.0)
                     return True
             except OSError:
                 pass
+    return False
+
+
+def _cluster_answers(pgdata: Path, timeout_seconds: float) -> bool:
+    """True when this cluster accepts a connection, on any family it offers.
+
+    Separate from :func:`_wait_until_connectable`, which exists to sit out a
+    multi minute crash recovery and deliberately pauses after it succeeds so the
+    following attach finds a finished pidfile. This one asks a much smaller
+    question, whether a cluster we have just been told is ready is actually
+    there, so it answers the moment the socket opens and costs a healthy boot
+    nothing. Always tries at least once, however small the window.
+    """
+    deadline = time.monotonic() + max(timeout_seconds, 0.0)
+    while True:
+        if _accepts_a_connection(pgdata):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.5)
+
+
+def _wait_until_connectable(pgdata: Path, deadline: float) -> bool:
+    """Block until the embedded postmaster accepts connections, or deadline.
+
+    Connects with a raw socket, which succeeds as soon as recovery finishes and
+    the postmaster opens its listen socket. This is far more robust than parsing
+    the pidfile, which is incomplete while recovery runs. Returns ``True`` if it
+    became connectable before ``deadline``, else ``False``.
+
+    Shares :func:`_accepts_a_connection` with the ready-stage probe rather than
+    repeating the connect, because the address family a cluster listens on is a
+    property of the cluster and not of the reason we are asking.
+    """
+    while time.monotonic() < deadline:
+        if _accepts_a_connection(pgdata):
+            # Give PostgreSQL a breath after the socket opens so the very next
+            # get_server() attach finds status == 'ready'.
+            time.sleep(1.0)
+            return True
         time.sleep(2.0)
     return False
 

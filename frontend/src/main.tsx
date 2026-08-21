@@ -8,7 +8,7 @@ import { useAuthStore } from '@/stores/useAuthStore';
 // //// END NEOFFICE PATCH
 import { useToastStore } from '@/stores/useToastStore';
 import { notifyQueryError } from '@/shared/lib/queryErrorToast';
-import './app/i18n';
+import { initialLocaleReady } from './app/i18n';
 import './index.css';
 // //// NEOFFICE PATCH — Brand overrides (must load after index.css so cascade wins)
 import './styles/neoffice-theme-overrides.css';
@@ -176,19 +176,43 @@ const routerBasename =
     ? '/demo'
     : undefined;
 
-ReactDOM.createRoot(__rootEl).render(
-  <React.StrictMode>
-    <QueryClientProvider client={queryClient}>
-      {/* //// NEOFFICE PATCH — when Frappe serves the SPA it injects the
-          basename ("/neoconstruction"); that wins. Falling back to upstream's
-          own /demo detection keeps the standalone build working unchanged.
-          The v7_* future flags upstream dropped here were v6→v7 migration
-          switches; on react-router 7 they are the default and passing them
-          only earns a warning. //// END NEOFFICE PATCH */}
-      <BrowserRouter basename={__routerBasename ?? routerBasename}>
-        <App />
-      </BrowserRouter>
-      {/* //// END NEOFFICE PATCH */}
-    </QueryClientProvider>
-  </React.StrictMode>,
-);
+const renderApp = () => {
+  ReactDOM.createRoot(__rootEl).render(
+    <React.StrictMode>
+      <QueryClientProvider client={queryClient}>
+        {/* //// NEOFFICE PATCH — when Frappe serves the SPA it injects the
+            basename ("/neoconstruction"); that wins. Falling back to upstream's
+            own /demo detection keeps the standalone build working unchanged.
+            Reappliqué sur le renderApp d'upstream (correctif du « flash
+            anglais » au premier rendu). //// END NEOFFICE PATCH */}
+        <BrowserRouter basename={__routerBasename ?? routerBasename}>
+          <App />
+        </BrowserRouter>
+      </QueryClientProvider>
+    </React.StrictMode>,
+  );
+};
+
+// A saved non-English language must be IN the i18next store before the first
+// paint, or that first frame renders through the English fallback — the
+// "English flash" every non-English session used to open with. Waiting here
+// costs one same-origin chunk fetch (~50 KB gzip, usually cached) during a
+// window where the user already sees the plain index.html shell, so nothing
+// visibly changes except the language of the first frame. The cap bounds the
+// wait: if the chunk stalls, mount anyway in English and let the existing
+// re-render-on-arrival path recover. English boots keep today's fully
+// synchronous mount (`initialLocaleReady` is null — no promise, no timer).
+const LOCALE_MOUNT_CAP_MS = 2000;
+if (initialLocaleReady) {
+  let mounted = false;
+  const mountOnce = () => {
+    if (!mounted) {
+      mounted = true;
+      renderApp();
+    }
+  };
+  void initialLocaleReady.then(mountOnce);
+  window.setTimeout(mountOnce, LOCALE_MOUNT_CAP_MS);
+} else {
+  renderApp();
+}

@@ -132,6 +132,17 @@ _DRAWINGS_PDF = {
     "mime": "application/pdf",
     "tags": ["drawings", "plan-set"],
 }
+# German demo projects get the purpose-built vector Grundriss (M 1:100, German
+# room labels, dimension chains in metres) instead of the scanned US book
+# plate, so a German file name never sits on top of English content. The file
+# is generated deterministically by app/scripts/generate_grundriss_pdf.py.
+_GRUNDRISS_PDF = {
+    "kind": "asset",
+    "src": "grundriss_erdgeschoss.pdf",
+    "category": "drawing",
+    "mime": "application/pdf",
+    "tags": ["drawings", "plan-set"],
+}
 _SPEC_PDF = {
     "kind": "asset",
     "src": "housing_standards.pdf",
@@ -245,7 +256,7 @@ BUNDLES: dict[str, dict[str, Any]] = {
         "link_groups": ["rvt_walls", "rvt_floors", "rvt_columns", "rvt_foundation"],
         "documents": [
             {
-                **_DRAWINGS_PDF,
+                **_GRUNDRISS_PDF,
                 "name": "Coordinated drawing set.pdf",
                 "description": "Reference coordinated drawing set",
             },
@@ -270,7 +281,7 @@ BUNDLES: dict[str, dict[str, Any]] = {
         ],
         "documents": [
             {
-                **_DRAWINGS_PDF,
+                **_GRUNDRISS_PDF,
                 "name": "Lageplan und Grundriss.pdf",
                 "description": "Reference site plan and floor plan",
             },
@@ -523,9 +534,13 @@ async def _attach_dwg_drawing(
 
     Idempotent on a deterministic id. Returns True when a drawing exists
     afterwards.
+
+    The spec model is read for its presence only - it says the bundle carries a
+    2D drawing at all. Nothing is copied off it: the seeded DXF is authored
+    here, so the spec model's element count belongs to the converted CAD file
+    behind the spec and not to the drawing this attaches.
     """
-    src = _source_model(spec, _DWG_MODEL["source_format"])
-    if src is None:
+    if _source_model(spec, _DWG_MODEL["source_format"]) is None:
         return False
 
     did = _u(str(pid), "dwg", _DWG_MODEL["model_format"])
@@ -540,7 +555,6 @@ async def _attach_dwg_drawing(
         name=_DWG_MODEL["model_name"],
         discipline=_DWG_MODEL.get("discipline"),
         source="demo_asset_seed",
-        element_count=src.get("element_count", 0),
     )
 
 

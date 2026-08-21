@@ -29,6 +29,7 @@ import {
 import { Button, Card, Badge, EmptyState, Breadcrumb, InfoHint, DismissibleInfo, IntroRichText, ConfirmDialog, RecoveryCard, SkeletonTable, SkeletonCard, ModuleGuideButton } from '@/shared/ui';
 import { useNavigate } from 'react-router-dom';
 import { PageHeader } from '@/shared/ui/PageHeader';
+import { TruncationNotice } from '@/shared/ui/TruncationNotice';
 import { RequiresProject } from '@/shared/auth/RequiresProject';
 import {
   WideModal,
@@ -37,7 +38,8 @@ import {
 } from '@/shared/ui/WideModal';
 import { useConfirm } from '@/shared/hooks/useConfirm';
 import { apiGet, apiPost, apiDelete } from '@/shared/lib/api';
-import { getIntlLocale } from '@/shared/lib/formatters';
+import { fmtDate } from '@/shared/lib/formatters';
+import { getNumberLocale } from '@/stores/usePreferencesStore';
 import { formatCurrency as fmtMoney } from '@/shared/lib/money';
 import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
@@ -208,6 +210,30 @@ function formatCurrency(amount: string | number, currency?: string): string {
 }
 
 /**
+ * A cost impact with its sign, written as one number rather than as a sign and
+ * a number.
+ *
+ * The register used to write `{impact >= 0 ? '+' : ''}{formatCurrency(...)}`,
+ * which puts the mark in front of every reader's figure whatever their own
+ * language does with it. Asking the formatter for the sign fixes that, and
+ * leaves the hand-rolled fallback path something to keep when `Intl` is
+ * unusable.
+ *
+ * It is not what stopped the wrap on the published frame. `+` and the currency
+ * symbol are both prefix-numeric characters, and the line-breaking algorithm
+ * allows only one of those to open an unbreakable numeric run, so the browser
+ * may break between them whether the cell holds one string or two - and in a
+ * squeezed column it did, leaving a bare `+` on the line above the figure it
+ * belonged to. The `whitespace-nowrap` on the enclosing element is what
+ * forbids it.
+ *
+ * Zero keeps its plus, which is what the hand-written `>= 0` test did.
+ */
+function formatSignedCurrency(amount: string | number, currency?: string): string {
+  return fmtMoney(amount, currency, undefined, { signDisplay: 'always' });
+}
+
+/**
  * Format a numeric quantity stored as a NUMERIC(18,6) decimal string.
  *
  * The backend serializes quantities verbatim ('5.000000'), so rendering
@@ -218,17 +244,15 @@ function formatCurrency(amount: string | number, currency?: string): string {
 function formatQuantity(value: string | number): string {
   const n = Number(value);
   if (!Number.isFinite(n)) return String(value);
-  return n.toLocaleString(getIntlLocale(), { maximumFractionDigits: 6 });
+  return n.toLocaleString(getNumberLocale(), { maximumFractionDigits: 6 });
 }
 
 function formatDate(iso: string | null): string {
   if (!iso) return '-';
   try {
-    return new Date(iso).toLocaleDateString(getIntlLocale(), {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-    });
+    // The app-wide date formatter, so this register renders dates exactly like
+    // the variations and claims-evidence screens next to it.
+    return fmtDate(iso);
   } catch {
     return iso;
   }
@@ -258,11 +282,12 @@ function CreateDialog({
   const [contractId, setContractId] = useState('');
   const addToast = useToastStore((s) => s.addToast);
 
-  const { data: contracts = [] } = useQuery({
+  const contractsQ = useQuery({
     queryKey: ['changeorders', 'contract-options', projectId],
     queryFn: () => listContracts({ project_id: projectId, limit: 200 }),
     enabled: Boolean(projectId),
   });
+  const contracts = contractsQ.data?.items ?? [];
   // Change orders are only valid on commercially-live contracts (same
   // amendability rule as the contracts module: active / suspended).
   const linkableContracts = useMemo(
@@ -403,6 +428,15 @@ function CreateDialog({
                 </option>
               ))}
             </select>
+            {/* Driven by the server page rather than by `linkableContracts`.
+                The active/suspended rule is applied here after the fetch, so
+                it shortens the list without the server knowing, and only the
+                envelope can say whether a contract the user is looking for was
+                never sent. A picker that quietly lacks the row someone wants
+                reads as the contract not existing. */}
+            {contractsQ.data && (
+              <TruncationNotice page={contractsQ.data} className="mt-1.5" />
+            )}
           </WideModalField>
         )}
       </WideModalSection>
@@ -665,8 +699,8 @@ function AddItemDialog({
         </WideModalField>
         <div className="sm:col-span-2 rounded-lg bg-surface-secondary p-3 text-sm">
           <span className="text-content-secondary">{t('changeorders.cost_delta', { defaultValue: 'Cost Delta' })}:</span>{' '}
-          <span className={costDelta >= 0 ? 'font-semibold text-semantic-error' : 'font-semibold text-semantic-success'}>
-            {costDelta >= 0 ? '+' : ''}{formatCurrency(costDelta, currency)}
+          <span className={`whitespace-nowrap ${costDelta >= 0 ? 'font-semibold text-semantic-error' : 'font-semibold text-semantic-success'}`}>
+            {formatSignedCurrency(costDelta, currency)}
           </span>
         </div>
       </WideModalSection>
@@ -1571,8 +1605,8 @@ function DetailView({
           {(() => {
             const impact = Number(order.cost_impact);
             return (
-              <p className={`mt-1 text-sm font-semibold ${impact >= 0 ? 'text-semantic-error' : 'text-semantic-success'}`}>
-                {impact >= 0 ? '+' : ''}{formatCurrency(impact, order.currency)}
+              <p className={`mt-1 text-sm font-semibold whitespace-nowrap ${impact >= 0 ? 'text-semantic-error' : 'text-semantic-success'}`}>
+                {formatSignedCurrency(impact, order.currency)}
               </p>
             );
           })()}
@@ -1889,8 +1923,8 @@ function DetailView({
                     <td className="px-4 py-3 text-right text-content-secondary tabular-nums">
                       {formatQuantity(item.new_quantity)} {item.unit}
                     </td>
-                    <td className={`px-4 py-3 text-right font-medium tabular-nums ${costDelta >= 0 ? 'text-semantic-error' : 'text-semantic-success'}`}>
-                      {costDelta >= 0 ? '+' : ''}{formatCurrency(costDelta, order.currency)}
+                    <td className={`px-4 py-3 text-right font-medium tabular-nums whitespace-nowrap ${costDelta >= 0 ? 'text-semantic-error' : 'text-semantic-success'}`}>
+                      {formatSignedCurrency(costDelta, order.currency)}
                     </td>
                     {canEdit && (
                       <td className="px-4 py-3 text-center">
@@ -2182,8 +2216,8 @@ export function ChangeOrdersPage() {
                   const unconverted = Object.entries(summary.unconverted_by_currency ?? {});
                   return (
                     <>
-                      <p className={`text-lg font-semibold ${totalImpact >= 0 ? 'text-semantic-error' : 'text-semantic-success'}`}>
-                        {totalImpact >= 0 ? '+' : ''}{formatCurrency(totalImpact, summary.currency || currency)}
+                      <p className={`text-lg font-semibold whitespace-nowrap ${totalImpact >= 0 ? 'text-semantic-error' : 'text-semantic-success'}`}>
+                        {formatSignedCurrency(totalImpact, summary.currency || currency)}
                       </p>
                       {unconverted.length > 0 && (
                         <p
@@ -2340,8 +2374,8 @@ export function ChangeOrdersPage() {
                           defaultValue: getReasonLabels(t)[order.reason_category] || order.reason_category,
                         })}
                       </td>
-                      <td className={`px-4 py-3 text-right font-medium tabular-nums ${impact >= 0 ? 'text-semantic-error' : 'text-semantic-success'}`}>
-                        {impact >= 0 ? '+' : ''}{formatCurrency(impact, order.currency)}
+                      <td className={`px-4 py-3 text-right font-medium tabular-nums whitespace-nowrap ${impact >= 0 ? 'text-semantic-error' : 'text-semantic-success'}`}>
+                        {formatSignedCurrency(impact, order.currency)}
                       </td>
                       <td className="px-4 py-3 text-right text-content-secondary tabular-nums">
                         {order.schedule_impact_days > 0
@@ -2350,7 +2384,7 @@ export function ChangeOrdersPage() {
                             ? '-'
                             : `${order.schedule_impact_days}d`}
                       </td>
-                      <td className="px-4 py-3 text-content-tertiary text-xs">{formatDate(order.created_at)}</td>
+                      <td className="px-4 py-3 text-content-tertiary text-xs whitespace-nowrap">{formatDate(order.created_at)}</td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-1">
                           {order.status === 'draft' && (

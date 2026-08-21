@@ -106,7 +106,7 @@ const playbook: Playbook = {
         "cases.draft_an_estimate_with_ai_element_matching.step.ai-price.why",
       whyDefault:
         "A first-pass priced draft in minutes saves hours, but a number only goes in the bid once a person has signed it off.",
-      moduleLabel: "AI Estimator",
+      moduleLabel: "Estimate Builder (AI)",
       moduleLabelKey: "nav.ai_estimator",
       to: "/ai-estimator",
     },
@@ -148,8 +148,8 @@ const playbook: Playbook = {
         "cases.draft_an_estimate_with_ai_element_matching.step.accept-boq.why",
       whyDefault:
         "The bill is what you actually price and submit. Getting the quantities right here is where the money is won or lost.",
-      moduleLabel: "BOQ",
-      moduleLabelKey: "nav.boq",
+      moduleLabel: "Bill of Quantities",
+      moduleLabelKey: "boq.title",
       to: "/boq",
     },
     {
