@@ -482,6 +482,16 @@ export function BOQEditorPage() {
     const v = Number(localStorage.getItem('neoffice.boq.zoom'));
     return Number.isFinite(v) && v >= 0.7 && v <= 1.4 ? v : 1;
   });
+  //// NEOFFICE — un seul chemin d'écriture pour le zoom. « Taille normale »
+  //// appelait setBoqZoom(1) directement et ne touchait pas le stockage : à
+  //// l'écran 100 %, en mémoire l'ancienne valeur, et le zoom revenait au
+  //// rechargement. Une remise à zéro qui ne survit pas au rechargement n'est
+  //// pas une remise à zéro.
+  const applyZoom = useCallback((next: number) => {
+    const clamped = Math.min(1.4, Math.max(0.7, Math.round(next * 20) / 20));
+    try { localStorage.setItem('neoffice.boq.zoom', String(clamped)); } catch { /* private mode */ }
+    setBoqZoom(clamped);
+  }, []);
   const changeZoom = useCallback((delta: number) => {
     setBoqZoom((z) => {
       const next = Math.min(1.4, Math.max(0.7, Math.round((z + delta) * 20) / 20));
@@ -5249,7 +5259,7 @@ export function BOQEditorPage() {
           <button type="button" onClick={() => changeZoom(-0.1)}
             className="flex h-6 w-6 items-center justify-center rounded border border-border-light text-content-tertiary hover:text-oe-blue"
             title={t('boq.zoom_out', { defaultValue: 'Réduire' })} aria-label={t('boq.zoom_out', { defaultValue: 'Réduire' })}>−</button>
-          <button type="button" onClick={() => setBoqZoom(1)}
+          <button type="button" onClick={() => applyZoom(1)}
             className="min-w-[3rem] rounded border border-border-light px-1 text-2xs tabular-nums text-content-tertiary hover:text-oe-blue"
             title={t('boq.zoom_reset', { defaultValue: 'Taille normale' })}>{Math.round(boqZoom * 100)}%</button>
           <button type="button" onClick={() => changeZoom(0.1)}
