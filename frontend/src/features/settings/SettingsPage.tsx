@@ -9,6 +9,7 @@ import { BackupRestore } from './BackupRestore';
 import { RegionalSettings } from './RegionalSettings';
 import { LaborTariffSettings } from './LaborTariffSettings';
 import { EInvoiceSettings } from './EInvoiceSettings';
+import { ModulesSettings } from './ModulesSettings';
 import { SettingsTeamPanel } from './SettingsTeamPanel';
 import { WebhookLeads } from './WebhookLeads';
 import VectorStatusCard from './VectorStatusCard';
@@ -1244,7 +1245,7 @@ function DemoLoginAdminRow() {
 
 // ── Tab definitions ──────────────────────────────────────────────────────────
 
-type SettingsTab = 'general' | 'dashboard' | 'team' | 'account' | 'regional' | 'einvoice' | 'converters' | 'ai' | 'security' | 'integrations' | 'audit' | 'advanced';
+type SettingsTab = 'general' | 'dashboard' | 'team' | 'account' | 'regional' | 'einvoice' | 'converters' | 'ai' | 'security' | 'integrations' | 'modules' | 'audit' | 'advanced';
 
 interface TabDef {
   id: SettingsTab;
@@ -1275,6 +1276,10 @@ const TABS: readonly TabDef[] = [
   { id: 'ai',           labelKey: 'settings.tab_ai',           defaultLabel: 'AI',           icon: Sparkles, descKey: 'settings.tab_ai_desc',           descDefault: 'AI provider and semantic search' },
   { id: 'security',     labelKey: 'settings.tab_security',     defaultLabel: 'Data & Security', icon: ShieldCheck, descKey: 'settings.tab_security_desc', descDefault: 'Where your data lives and what leaves this instance' },
   { id: 'integrations', labelKey: 'settings.tab_integrations', defaultLabel: 'Integrations', icon: Plug,     descKey: 'settings.tab_integrations_desc', descDefault: 'Slack, Teams, Telegram, webhooks' },
+  // Modules — installing and removing backend modules. Visible to everyone
+  // (seeing what this instance runs is not privileged), but the toggles are
+  // admin-only inside the panel because `system.modules.enable/disable` is.
+  { id: 'modules',      labelKey: 'settings.tab_modules',      defaultLabel: 'Modules',      icon: Package,  descKey: 'settings.tab_modules_desc',      descDefault: 'Install or remove modules and see what depends on what' },
   // Audit log — moved here from the sidebar admin grid. Manager+ only; the
   // page component enforces `audit.view` on the backend, and we role-gate the
   // tab itself in the component so it never shows for viewers/editors.
@@ -1924,6 +1929,13 @@ export function SettingsPage() {
           {activeTab === 'einvoice' && canEditEInvoice && (
             <div className="lg:col-span-2">
               <EInvoiceSettings />
+            </div>
+          )}
+
+          {/* ── MODULES ──────────────────────────────────────────── */}
+          {activeTab === 'modules' && (
+            <div className="lg:col-span-2">
+              <ModulesSettings />
             </div>
           )}
 

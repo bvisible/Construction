@@ -29,6 +29,8 @@ from __future__ import annotations
 
 import logging
 import os
+import socket
+import struct
 import subprocess
 import time
 from pathlib import Path
@@ -69,6 +71,13 @@ _FALSY = {"0", "false", "no", "off"}
 
 #: Support contact surfaced (in the log) when embedded PostgreSQL cannot start.
 _CONTACT_EMAIL = "info@datadrivenconstruction.io"
+
+#: How often a slow crash recovery repeats that it is still recovering.
+#:
+#: Short enough that the desktop launcher's "no progress for a while" timeout
+#: can be far shorter than the boot budget without ever abandoning a cluster
+#: that is genuinely working, and long enough that the log stays readable.
+_RECOVERY_HEARTBEAT_SECONDS = 15.0
 
 
 def emit_stage(stage: str, status: str, detail: str = "") -> None:
@@ -172,8 +181,22 @@ def boot(data_dir: Path | str) -> bool:
         return False
 
     pgdata = Path(data_dir).expanduser() / "pgdata"
+    # Create the directory that HOLDS the cluster, and stop there: initdb makes
+    # ``pgdata`` itself. It used to be created here too, and on Windows that is
+    # what broke it. initdb re-executes itself under a restricted token (it drops
+    # the Administrators SID so a cluster is never created by an administrator),
+    # and that child then cannot always write a directory the parent process
+    # made. Handed an existing directory it takes its "fixing permissions on
+    # existing directory" path and dies on the chmod - observed on every Windows
+    # shard of the backend matrix, where the run account is an elevated
+    # administrator: ``could not change permissions of directory "...": Permission
+    # denied``. Handed a path that is not there yet it creates it, owns what it
+    # created, and never chmods anything of ours.
+    #
+    # Everything downstream already tolerates an absent cluster dir, because it
+    # had to: on a fresh machine none of this exists until initdb has run.
     try:
-        pgdata.mkdir(parents=True, exist_ok=True)
+        pgdata.parent.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         logger.error("embedded PostgreSQL data dir unavailable at %s: %r", pgdata, exc)
         return False
@@ -359,6 +382,12 @@ def boot(data_dir: Path | str) -> bool:
         return False
 
     _server = srv
+    # Also prune on the way in, not only on the way out. A machine whose
+    # graceful stop keeps failing falls back to ending the process tree and
+    # never reaches the shutdown path, so shutdown-only pruning would leave it
+    # accumulating holders forever. Starting is the one moment every install
+    # reaches.
+    _prune_dead_holders(srv)
     logger.info("embedded PostgreSQL ready (data dir: %s)", pgdata)
     return True
 
@@ -458,6 +487,14 @@ def _boot_once(
                 f"on port {port} within {probe_window:.0f}s"
             )
             logger.warning("embedded PostgreSQL attached but did not answer: %s", last_exc)
+            # A cluster that accepts and never speaks is a postmaster left alive
+            # by a run that died after starting it. Nothing else in this module
+            # can clear it: the pidfile names a live process, so the stale-pidfile
+            # sweep correctly leaves it alone, and every retry attaches straight
+            # back onto it. Stopping it here is what turns this from a clearer
+            # error into a machine that starts, which is the difference the user
+            # actually experiences.
+            _stop_mute_postmaster(resolved_pgdata)
             # Drop the handle pixeltable cached for this data directory, or the
             # next attempt is given the same unusable one straight back.
             if ps_cls is not None:
@@ -491,15 +528,87 @@ def _read_pidfile_pid(pgdata: Path) -> int | None:
         return None
 
 
+def _pid_alive_windows(pid: int) -> bool | None:
+    """Ask Windows whether ``pid`` names a process. ``None`` when it will not say.
+
+    Opening the process answers directly. A refusal that names an invalid
+    parameter is Windows saying no such process; a refusal that names access
+    denied is Windows saying the process exists and belongs to someone else,
+    which for our purposes is alive. When the handle opens, the exit code
+    distinguishes a running process from one that has ended but is still held
+    open by its parent, which is a case a name-based check gets wrong.
+    """
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        process_query_limited_information = 0x1000
+        still_active = 259
+        error_invalid_parameter = 87
+        error_access_denied = 5
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+        handle = kernel32.OpenProcess(process_query_limited_information, False, pid)
+        if not handle:
+            err = ctypes.get_last_error()
+            if err == error_invalid_parameter:
+                return False
+            if err == error_access_denied:
+                return True
+            return None
+        try:
+            code = wintypes.DWORD()
+            if kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                # A process that genuinely exited with 259 reads as alive here.
+                # That is the harmless direction: the entry is kept.
+                return code.value == still_active
+            return None
+        finally:
+            kernel32.CloseHandle(handle)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _pid_alive(pid: int) -> bool:
-    """Best-effort check whether a process with ``pid`` currently exists."""
+    """Best-effort check whether a process with ``pid`` currently exists.
+
+    ``psutil`` answers this well and is not a declared dependency of this
+    project. Measured on this tree, nothing in the runtime requirement set
+    pulls it in, so an install that has it is carrying it by accident and an
+    install that does not lost the check without saying so. Both callers of
+    this function guard something around a live postmaster, and a check that
+    quietly stops checking is worse than one that is merely approximate, so ask
+    the standard library first and treat psutil as a refinement rather than the
+    answer.
+
+    Uncertainty answers yes. Both callers do something destructive when told
+    no, deleting a pidfile and forgetting a recorded holder, and doing either
+    to a live postmaster is far worse than doing neither.
+    """
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        answer = _pid_alive_windows(pid)
+        if answer is not None:
+            return answer
+    else:
+        try:
+            os.kill(pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            # It exists and belongs to another user.
+            return True
+        except OSError:
+            pass
     try:
         import psutil
 
         return psutil.pid_exists(pid)
     except Exception:  # noqa: BLE001
-        # Without psutil, assume the process may be alive so we never delete a
-        # pidfile for a live postmaster.
         return True
 
 
@@ -587,6 +696,268 @@ def _clear_stale_pidfile(pgdata: Path) -> None:
         logger.info("removed stale postmaster.pid (%s) in %s", reason, pgdata)
     except OSError as exc:
         logger.warning("could not remove stale postmaster.pid in %s: %r", pgdata, exc)
+
+
+def _pg_ctl_path() -> Path | None:
+    """The bundled ``pg_ctl``, or ``None`` when it cannot be located.
+
+    Lives in the same ``pginstall/bin`` directory as initdb and the postmaster,
+    so it is present wherever they are, including the frozen desktop bundle.
+    """
+    try:
+        from pixeltable_pgserver.utils import POSTGRES_BIN_PATH
+    except Exception:  # noqa: BLE001
+        return None
+    exe = Path(POSTGRES_BIN_PATH) / ("pg_ctl.exe" if os.name == "nt" else "pg_ctl")
+    return exe if exe.is_file() else None
+
+
+def _same_socket_file(reported: str, expected: Path) -> bool:
+    """Whether a path a process reports and a path the pidfile names are one file.
+
+    Compared as written first, because that is what both sides normally hold:
+    PostgreSQL binds the directory it was configured with and writes that same
+    string into its pidfile. The resolved comparison is the second reading, for
+    the platform where a temporary directory is reached through a symlink -
+    macOS hands out ``/var/folders/...`` paths whose real location is under
+    ``/private`` - so a process bound to one spelling and a pidfile written with
+    the other still name the same socket.
+    """
+    if not reported:
+        return False
+    expected_str = str(expected)
+    if reported == expected_str:
+        return True
+    try:
+        return os.path.realpath(reported) == os.path.realpath(expected_str)
+    except (OSError, ValueError):
+        return False
+
+
+def _pid_holds_the_endpoint(psutil: ModuleType, pid: int, port: int, socket_path: Path | None) -> bool:
+    """Whether the process itself reports holding this cluster's socket or port.
+
+    Positive identification only. ``False`` here means "this did not answer
+    yes", never "this process holds nothing": every platform has cases where a
+    socket table cannot be read at all, and an unreadable table must not be
+    mistaken for a denial. The caller therefore keeps looking when this says no.
+
+    Asks the process rather than the machine because that is the reading the
+    operating system is most willing to give. psutil's machine-wide
+    ``net_connections`` on macOS IS this call in a loop over every pid on the
+    box (``psutil/_psosx.py``), and that loop catches only ``NoSuchProcess``, so
+    the first process owned by root takes the whole enumeration down with
+    ``AccessDenied`` - which is why psutil documents the machine-wide reading as
+    requiring root there. The per-process reading survives that for a process
+    owned by the same user, and the embedded cluster is always started by the
+    user asking about it.
+
+    The unix socket is matched before the TCP port, for the reason
+    :func:`_probe_cluster` already gives about probing order: a port number is
+    something any process on the machine can bind, while the socket path comes
+    out of this cluster's own pidfile and belongs to it alone. It is also the
+    only endpoint a real cluster has on Linux and macOS, where the postmaster
+    pixeltable-pgserver starts has no TCP listener at all. A unix socket carries
+    no connection status - psutil reports ``CONN_NONE`` for every family that is
+    not TCP - so the path is the whole identification, and filtering these on
+    ``LISTEN`` would throw the answer away.
+    """
+    try:
+        proc = psutil.Process(pid)
+    except Exception:  # noqa: BLE001
+        return False
+    # psutil 6 renamed ``Process.connections`` to ``Process.net_connections``
+    # and kept the old name as a deprecated alias. pixeltable-pgserver, which is
+    # what brings psutil in, asks only for >=5.9, so both spellings are
+    # installable and we use whichever this installation has.
+    reader = getattr(proc, "net_connections", None) or getattr(proc, "connections", None)
+    if reader is None:
+        return False
+    try:
+        connections = reader(kind="all")
+    except Exception:  # noqa: BLE001
+        # Not allowed to look (a process owned by somebody else), or a platform
+        # with no per-process socket table. Neither is evidence.
+        return False
+    for conn in connections:
+        laddr = getattr(conn, "laddr", None)
+        if socket_path is not None and isinstance(laddr, str) and _same_socket_file(laddr, socket_path):
+            return True
+        if getattr(conn, "status", None) == psutil.CONN_LISTEN and getattr(laddr, "port", None) == port:
+            return True
+    return False
+
+
+def _owns_the_blocked_port(pid: int, pgdata: Path) -> bool:
+    """Whether ``pid`` actually holds the endpoint this cluster's pidfile names.
+
+    The identity question asked causally rather than by reputation. "Is this
+    process called postgres" is a guess about a name; "is this the process
+    holding the socket we cannot use" is the thing that matters, and it is the
+    reason we would end it at all.
+
+    Three readings, strongest first, and every one of them fails CLOSED - unlike
+    :func:`_pid_alive`, which fails open. The asymmetry is deliberate: failing
+    open there means keeping a pidfile, failing open here means killing a
+    process we could not identify.
+
+    1. Ask the process itself which endpoints it holds. This is the only reading
+       that answers on all three platforms, and the only one that can see the
+       unix socket a real cluster listens on under Linux and macOS.
+    2. Ask the machine-wide socket table who holds the TCP port. It is kept for
+       what it alone can do: name the holder as somebody ELSE, which is the only
+       reading that produces a definite no.
+    3. Fall back to the process name. It is a guess about a name rather than an
+       answer about an endpoint, and on macOS it is not the rare last resort it
+       looks like: reading 2 raises there for an ordinary user, so every pid
+       reading 1 did not positively identify arrives here. That is what is left
+       of the hole this function exists to close - on that platform alone, a
+       PostgreSQL belonging to somebody else on the machine can still be
+       green-lit by its name. Closing it means letting reading 1 answer no as
+       well as yes, which is safe only once the unix half of it is known to work
+       on macOS, and nothing has measured that yet.
+    """
+    port = _port_from_pidfile(pgdata)
+    if port is None:
+        return False
+    try:
+        import psutil
+    except Exception:  # noqa: BLE001
+        return False
+
+    if _pid_holds_the_endpoint(psutil, pid, port, _unix_socket_path(pgdata)):
+        return True
+
+    # The machine-wide table used to be asked FIRST, and alone, under a comment
+    # claiming that the per-process view "returns an EMPTY LIST for a process
+    # whose handle we do not hold". Re-measured on Windows 11 with psutil 7.2.2:
+    # it does not. A foreign listener's own socket table named its port
+    # correctly, and even SYSTEM-owned processes came back with a non-empty
+    # list. What produced the empty list was asking the wrong pid - a virtualenv
+    # launcher re-executes, so the process that was spawned held no sockets at
+    # all while its grandchild held the port. That reading was right about what
+    # it saw and wrong about why, and building on it cost macOS the check
+    # entirely: the machine-wide call needs root there, raises for an ordinary
+    # user, and handed the whole decision to the name guess below.
+    try:
+        for conn in psutil.net_connections(kind="inet"):
+            if getattr(conn, "status", None) != psutil.CONN_LISTEN:
+                continue
+            if getattr(getattr(conn, "laddr", None), "port", None) != port:
+                continue
+            # Somebody owns this port. If it is our pid the identification is
+            # positive; if it is another process then the pidfile is not
+            # describing the thing blocking us, and stopping it would be wrong.
+            return conn.pid == pid
+    except Exception:  # noqa: BLE001
+        pass
+
+    # Neither table could answer. What is left is a cluster whose endpoint we
+    # cannot see at all, so fall back to asking what the process is. Still fails
+    # closed when even that cannot be answered.
+    try:
+        return "postgres" in psutil.Process(pid).name().lower()
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _stop_mute_postmaster(pgdata: Path) -> bool:
+    """Stop a postmaster that holds the port and no longer answers on it.
+
+    This is the recovery half of the mute case, and without it the detection is
+    only a better error message. A previous run that died after starting the
+    cluster leaves the postmaster alive; the pidfile keeps naming a live process
+    so :func:`_clear_stale_pidfile` correctly refuses to touch it, pixeltable
+    attaches to it instantly, and every retry attaches to the same unusable
+    server. The user is stuck until they reboot, and reinstalling does not help
+    because nothing about the installation is wrong. That is the shape of a real
+    report: a release crashed after bringing the cluster up, the next release
+    fixed the crash, and the machines the first one had already poisoned still
+    could not start.
+
+    Only ever called once :func:`_probe_cluster` has answered ``mute``, and it
+    re-asks here rather than trusting the caller, because this is the one place
+    in the module that ends a process. The three states it must not act on all
+    fail that check:
+
+    * A cluster replaying WAL has not opened its listen socket, so it probes
+      ``closed`` and is waited out patiently exactly as before.
+    * A cluster too busy to take another client answers "sorry, too many clients
+      already", which is an answer, so it probes ``answering``.
+    * A cluster that is merely slow answers late, and the reply budget is set
+      for that.
+
+    Ending a postmaster is the same event as the crash PostgreSQL is designed to
+    survive: the next start replays WAL and comes up consistent. A fast shutdown
+    is tried first anyway, because it checkpoints and spares the user a recovery
+    they would otherwise sit through.
+    """
+    pid = _read_pidfile_pid(pgdata)
+    if pid is None or not _pid_alive(pid):
+        return False
+    if _probe_cluster(pgdata) != _MUTE:
+        return False
+    # Operating systems reuse process identifiers, and Windows reuses them
+    # quickly. A pidfile left behind by a force-killed postmaster keeps naming a
+    # number, and once the system hands that number to an unrelated service the
+    # file describes a process that has nothing to do with this cluster. Every
+    # other reader in this module already refuses on that evidence; the one that
+    # ends a process must refuse on it hardest, because being wrong here does
+    # not mean a failed boot, it means killing a stranger.
+    if _pid_was_recycled(pid, _read_pidfile_start_time(pgdata)):
+        logger.warning("refusing to stop pid %s for %s: it no longer belongs to this cluster", pid, pgdata)
+        return False
+    if not _owns_the_blocked_port(pid, pgdata):
+        logger.warning("refusing to stop pid %s for %s: it does not hold the port this cluster names", pid, pgdata)
+        return False
+
+    logger.warning(
+        "the postmaster at %s (pid %s) holds its port and does not answer on it; stopping it so a "
+        "working cluster can be started in its place",
+        pgdata,
+        pid,
+    )
+    emit_stage("pg", "progress", "Clearing a database left behind by an earlier run")
+
+    pg_ctl = _pg_ctl_path()
+    if pg_ctl is not None:
+        for mode, wait in (("fast", 20), ("immediate", 15)):
+            try:
+                subprocess.run(  # noqa: S603
+                    [str(pg_ctl), "-D", str(pgdata), "-m", mode, "-w", "-t", str(wait), "stop"],
+                    capture_output=True,
+                    text=True,
+                    timeout=wait + 10,
+                    check=False,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("pg_ctl stop -m %s failed at %s: %r", mode, pgdata, exc)
+            if not _pid_alive(pid):
+                logger.info("stopped the unresponsive postmaster (pid %s) with pg_ctl -m %s", pid, mode)
+                _clear_stale_pidfile(pgdata)
+                return True
+
+    # pg_ctl is the right tool and it is bundled, but a postmaster wedged badly
+    # enough to stop answering can also be wedged badly enough to ignore it.
+    try:
+        import psutil
+
+        proc = psutil.Process(pid)
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+        except psutil.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=10)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("could not stop the unresponsive postmaster (pid %s) at %s: %r", pid, pgdata, exc)
+        return False
+
+    if _pid_alive(pid):
+        return False
+    logger.info("stopped the unresponsive postmaster (pid %s)", pid)
+    _clear_stale_pidfile(pgdata)
+    return True
 
 
 def _postmaster_recovering(pgdata: Path) -> bool:
@@ -1010,8 +1381,80 @@ def _listens_on_tcp(pgdata: Path) -> bool:
     return bool(lines[5].strip())
 
 
-def _accepts_a_connection(pgdata: Path) -> bool:
-    """One attempt to reach this cluster, on whichever family it listens on.
+#: What a liveness probe found. The middle answer is the whole reason these
+#: three exist rather than a bool.
+#:
+#: ``closed``    nothing accepted a connection: no postmaster at all, or one
+#:               still replaying WAL that has not opened its listen socket yet.
+#: ``mute``      the listen socket accepted a connection and then said nothing.
+#: ``answering`` the cluster spoke the PostgreSQL protocol back to us.
+_CLOSED = "closed"
+_MUTE = "mute"
+_ANSWERING = "answering"
+
+#: Seconds allowed for the connect itself, and for the server's first protocol
+#: byte. The reply gets the longer budget on purpose: a healthy cluster answers
+#: a startup packet in milliseconds, but a machine in the middle of an antivirus
+#: scan can be slow enough that a tight timeout would convict a working server.
+_PROBE_CONNECT_SECONDS = 2
+_PROBE_REPLY_SECONDS = 5
+
+#: Protocol version 3.0 as PostgreSQL encodes it in a StartupMessage.
+_PG_PROTOCOL_3 = 196608
+
+
+def _startup_packet() -> bytes:
+    """A minimal PostgreSQL v3 StartupMessage.
+
+    The credentials in it do not have to be usable. The probe reads whatever
+    comes back and counts a refusal as proof of life, so this only has to be a
+    packet a server is willing to answer.
+    """
+    body = struct.pack("!i", _PG_PROTOCOL_3) + b"user\x00postgres\x00database\x00postgres\x00\x00"
+    return struct.pack("!i", len(body) + 4) + body
+
+
+def _speaks_postgres(sock: socket.socket) -> bool:
+    """Whether an already-open socket has a PostgreSQL server still talking on it.
+
+    Sends a StartupMessage and waits for the first response byte. Which byte it
+    is does not matter: ``R`` (an authentication request), ``E`` (an error, such
+    as "the database system is starting up" or "sorry, too many clients
+    already") and anything else all prove a server is there to say so. Only
+    silence, EOF or a reset mean the thing behind the socket cannot serve.
+
+    Counting an error as healthy is the deliberate half. This asks whether a
+    server is alive, not whether we may log in, and the two failures are not
+    equally bad: refusing to boot because a probe could not authenticate would
+    break working machines, while trusting a socket that never speaks is what
+    shipped.
+
+    A postmaster keeps its listen socket open for as long as the process lives,
+    so a bare ``connect`` succeeds against one that can no longer start a
+    backend and reports it healthy. That is how a launcher announces the
+    database ready and fails to connect to it in the same breath, which is what
+    a user saw on a released build: the ready stage passed and every asyncpg
+    connect after it died with a reset mid-handshake.
+    """
+    try:
+        sock.settimeout(_PROBE_REPLY_SECONDS)
+        sock.sendall(_startup_packet())
+        first = sock.recv(1)
+    except OSError:
+        return False
+    if not first:
+        return False
+    try:
+        # Leave the way a client should, so a probe does not litter the server
+        # log with an incomplete-startup-packet warning on every attempt.
+        sock.sendall(b"X\x00\x00\x00\x04")
+    except OSError:
+        pass
+    return True
+
+
+def _probe_cluster(pgdata: Path) -> str:
+    """How this cluster answers right now: ``closed``, ``mute`` or ``answering``.
 
     The unix socket is tried first where the cluster has one. That order is not
     a preference, it is the only reading that cannot be answered by a stranger:
@@ -1023,16 +1466,22 @@ def _accepts_a_connection(pgdata: Path) -> bool:
     short to say. Windows clusters answer here; on Linux and macOS the
     postmaster pixeltable-pgserver starts has no TCP listener at all, and asking
     it for one is how a healthy cluster gets reported dead.
+
+    ``mute`` is reported only when something did accept a connection, so the
+    distinction survives a cluster that offers two families and answers on
+    neither: an open socket anywhere outranks a closed one everywhere.
     """
-    import socket
+    saw_open_socket = False
 
     sock_path = _unix_socket_path(pgdata)
     if sock_path is not None and hasattr(socket, "AF_UNIX"):
         try:
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
-                s.settimeout(2)
+                s.settimeout(_PROBE_CONNECT_SECONDS)
                 s.connect(str(sock_path))
-                return True
+                saw_open_socket = True
+                if _speaks_postgres(s):
+                    return _ANSWERING
         except OSError:
             pass
 
@@ -1040,11 +1489,24 @@ def _accepts_a_connection(pgdata: Path) -> bool:
         port = _port_from_pidfile(pgdata)
         if port is not None:
             try:
-                with socket.create_connection(("127.0.0.1", port), timeout=2):
-                    return True
+                with socket.create_connection(("127.0.0.1", port), timeout=_PROBE_CONNECT_SECONDS) as s:
+                    saw_open_socket = True
+                    if _speaks_postgres(s):
+                        return _ANSWERING
             except OSError:
                 pass
-    return False
+
+    return _MUTE if saw_open_socket else _CLOSED
+
+
+def _accepts_a_connection(pgdata: Path) -> bool:
+    """One attempt to reach this cluster, answered only by the cluster itself.
+
+    Kept as the yes/no reading the waiting loops want. It is true only for
+    ``answering``: an open socket with nothing behind it is not a database, and
+    treating it as one is the defect this module carried into a release.
+    """
+    return _probe_cluster(pgdata) == _ANSWERING
 
 
 def _cluster_answers(pgdata: Path, timeout_seconds: float) -> bool:
@@ -1077,13 +1539,31 @@ def _wait_until_connectable(pgdata: Path, deadline: float) -> bool:
     Shares :func:`_accepts_a_connection` with the ready-stage probe rather than
     repeating the connect, because the address family a cluster listens on is a
     property of the cluster and not of the reason we are asking.
+
+    Says so periodically while it waits. The caller emits one ``pg:progress``
+    marker before calling this and then nothing at all until it returns, which
+    on a slow recovery is up to the whole boot budget of silence - ten minutes
+    by default. Both readers of that silence get it wrong: the user watches a
+    line that stopped counting down, and the launcher, which decides a backend
+    is stuck when it has said nothing for a while, cannot tell a cluster that is
+    working from one that is wedged. A heartbeat is what makes the difference
+    visible, so it is progress reporting and not decoration.
     """
+    next_heartbeat = time.monotonic() + _RECOVERY_HEARTBEAT_SECONDS
     while time.monotonic() < deadline:
         if _accepts_a_connection(pgdata):
             # Give PostgreSQL a breath after the socket opens so the very next
             # get_server() attach finds status == 'ready'.
             time.sleep(1.0)
             return True
+        now = time.monotonic()
+        if now >= next_heartbeat:
+            next_heartbeat = now + _RECOVERY_HEARTBEAT_SECONDS
+            emit_stage(
+                "pg",
+                "progress",
+                f"Recovering the local database, this can take a few minutes ({max(int(deadline - now), 0)}s left)",
+            )
         time.sleep(2.0)
     return False
 
@@ -1215,6 +1695,66 @@ def retain() -> None:
     _retained = True
 
 
+def _prune_dead_holders(server: object) -> int:
+    """Forget recorded holders of the cluster whose processes no longer exist.
+
+    ``pixeltable-pgserver`` keeps one process identifier per process that opened
+    the cluster, in ``.handle_pids.json`` beside the data directory, and stops
+    the postmaster on the way out only when the list it reads back names this
+    process and nothing else. The list is appended to on the way in and edited
+    on the way out, so a holder that was killed rather than allowed to exit
+    never removes itself and every later process reads a list that still names
+    it. Nothing in the library prunes the leftovers.
+
+    That turns a clean stop into a one-time event. Until this release the only
+    way this application stopped on Windows was by ending its process tree, so
+    every machine that has run it already carries identifiers that will never be
+    removed: measured on an upgraded install, nine recorded holders of which
+    eight belonged to processes that no longer existed. Without this prune the
+    graceful stop below would be skipped on exactly the machines it was written
+    for, and skipped silently, because a skipped stop and a completed one look
+    identical from outside.
+
+    Only identifiers whose process demonstrably does not exist are dropped, and
+    never this process's own. The opposite mistake is the dangerous one: drop a
+    holder that is alive and the cluster is stopped underneath a process still
+    using it, so anything uncertain, including :mod:`psutil` being unavailable,
+    counts as alive and is kept. Removal goes through the library's own list
+    object rather than rewriting the file, so the two cannot disagree about the
+    format, and the whole thing is advisory: a failure here leaves the previous
+    behaviour rather than preventing the stop from being attempted.
+
+    Returns the number of identifiers dropped.
+    """
+    try:
+        pid_list = getattr(server, "global_process_id_list", None)
+        if pid_list is None:
+            return 0
+        recorded = list(pid_list.get())
+        mine = os.getpid()
+        dead = [pid for pid in recorded if pid != mine and not _pid_alive(pid)]
+        for pid in dead:
+            pid_list.get_and_remove(pid)
+        if dead:
+            logger.debug("dropped %d recorded holder(s) of the embedded cluster that no longer exist", len(dead))
+        else:
+            others = [pid for pid in recorded if pid != mine]
+            if others:
+                # Say this out loud. A stop that is skipped and a stop that
+                # completed look identical from outside, which is how the
+                # skipped case went unnoticed in the first place, and the two
+                # reasons to skip need telling apart: another process really is
+                # using the cluster, or this machine cannot tell.
+                logger.info(
+                    "the embedded cluster is recorded as held by %d other live process(es), leaving it running",
+                    len(others),
+                )
+        return len(dead)
+    except Exception:  # noqa: BLE001
+        logger.debug("could not prune the embedded PostgreSQL holder list", exc_info=True)
+        return 0
+
+
 def shutdown(*, force: bool = False) -> None:
     """Stop the embedded cluster if this process booted one (safe to always call).
 
@@ -1229,6 +1769,10 @@ def shutdown(*, force: bool = False) -> None:
         return
     _retained = False
     try:
+        # The library stops the postmaster only when the holders it reads back
+        # are this process alone, and it never drops one a killed holder left
+        # behind. Prune those first or the stop below is quietly skipped.
+        _prune_dead_holders(_server)
         _server.cleanup()
         # Routine stop: keep it at debug so a shutdown that happens BECAUSE
         # startup failed cannot add log noise on top of the real cause. Genuine

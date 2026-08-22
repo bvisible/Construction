@@ -42,7 +42,6 @@ import { useConfirm } from '@/shared/hooks/useConfirm';
 //// d'imports qu'upstream a élargie de son côté (formatage localisé).
 import { apiGet, apiPost, apiPatch, apiPut, apiDelete } from '@/shared/lib/api';
 import { fmtPercent, getIntlLocale, fmtFixed } from '@/shared/lib/formatters';
-import { getNumberLocale } from '@/stores/usePreferencesStore';
 import { useToastStore } from '@/stores/useToastStore';
 import { usePreferencesStore } from '@/stores/usePreferencesStore';
 import { REGION_MAP } from '@/stores/useCostDatabaseStore';
@@ -55,6 +54,17 @@ import {
 import { getResourceTypeLabel } from '@/features/boq/boqResourceTypes';
 import { getUnitsForLocale } from '@/features/boq/boqHelpers';
 import { copyToClipboard } from '@/shared/lib/browser';
+import { getNumberLocale } from '@/stores/usePreferencesStore';
+
+// English fallbacks for the computed `catalog.assembly_cat_*` keys. The default used to be
+// the raw value, so until the key lands in a locale the screen shows the bare
+// enum token to every reader, English included. Unknown values still fall
+// through to the previous default.
+const ASSEMBLY_CAT_LABELS: Record<string, string> = {
+  general: 'General', concrete: 'Concrete', masonry: 'Masonry', steel: 'Steel', mep: 'MEP',
+  earthwork: 'Earthwork', custom: 'Custom'
+};
+
 
 /* ── Types ─────────────────────────────────────────────────────────────── */
 
@@ -1282,7 +1292,7 @@ function BuildAssemblyModal({
               {['general', 'concrete', 'masonry', 'steel', 'mep', 'earthwork', 'custom'].map(
                 (c) => (
                   <option key={c} value={c}>
-                    {t(`catalog.assembly_cat_${c}`, { defaultValue: c.charAt(0).toUpperCase() + c.slice(1) })}
+                    {t(`catalog.assembly_cat_${c}`, { defaultValue: ASSEMBLY_CAT_LABELS[c] ?? c.charAt(0).toUpperCase() + c.slice(1) })}
                   </option>
                 ),
               )}

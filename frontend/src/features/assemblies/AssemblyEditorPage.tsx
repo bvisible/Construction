@@ -32,7 +32,6 @@ import { Button, Badge, Card, Input, Breadcrumb, ConfirmDialog, DismissibleInfo 
 import { useConfirm } from '@/shared/hooks/useConfirm';
 import { apiGet, triggerDownload } from '@/shared/lib/api';
 import { fmtPercent } from '@/shared/lib/formatters';
-import { getNumberLocale } from '@/stores/usePreferencesStore';
 import { currencyFractionDigits } from '@/shared/lib/money';
 import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
@@ -52,6 +51,9 @@ import { ParametersPanel } from './ParametersPanel';
 import { ExpandPreviewModal } from './ExpandPreviewModal';
 //// NEOFFICE PATCH — reverse link to the description catalogue. //// END
 import { textCatalogApi } from '@/features/text-catalog/api';
+//// NEOFFICE — import ajouté par upstream (formatage localisé des nombres),
+//// simple adjacence avec le nôtre.
+import { getNumberLocale } from '@/stores/usePreferencesStore';
 
 /* -- Constants ------------------------------------------------------------ */
 // //// NEOFFICE PATCH — the yield/productivity units that used to live in a

@@ -358,9 +358,37 @@ async def log_activity(
     # left intact so the business write continues. Production deploys
     # that rely on the audit row landing should run with the dedicated
     # ``test_log_activity_*`` suite to catch genuine breakage.
+    #
+    # The savepoint is what makes the paragraph above true rather than
+    # merely intended. A failed ``flush`` leaves the session unusable until
+    # somebody rolls it back, so catching the error here is not enough: the
+    # caller's next ``commit`` raises PendingRollbackError and the audit
+    # write breaks the business write it was supposed to stay clear of.
+    # Observed on a first run of the shipped desktop build, where a long
+    # blocking model download starved the connection pool, the flush timed
+    # out, and the caller then failed on a session this function had
+    # already poisoned. ``begin_nested`` confines the loss to this row.
+    # A session that cannot open a savepoint is a test stub, not a database.
+    # The fallback matters: the stub records the row in its own list and the
+    # audit tests of several modules read it from exactly that list, so opening
+    # the savepoint first and giving up when it is missing drops the write
+    # those tests exist to assert. The savepoint guards a real session; it is
+    # never a reason to skip a fake one.
+    savepoint = None
+    if hasattr(session, "begin_nested"):
+        try:
+            savepoint = session.begin_nested()
+        except (AttributeError, TypeError):
+            savepoint = None
+
     try:
-        session.add(entry)
-        await session.flush()
+        if savepoint is None:
+            session.add(entry)
+            await session.flush()
+        else:
+            async with savepoint:
+                session.add(entry)
+                await session.flush()
     except (AttributeError, TypeError):
         # Stub sessions in tests - ``_StubSession`` has no ``add``.
         logger.debug(
@@ -371,8 +399,12 @@ async def log_activity(
         )
         return entry
     except Exception:
+        # Say what was lost and what survived. "flush failed" alone leaves a
+        # reader unable to tell whether their own write landed, and the whole
+        # point of the savepoint is that it did.
         logger.exception(
-            "activity_log: flush failed for %s:%s %s",
+            "activity_log: dropped the audit row for %s:%s %s - the savepoint "
+            "rolled back on its own and the caller's transaction is still usable",
             entity_type,
             entity_id,
             action,

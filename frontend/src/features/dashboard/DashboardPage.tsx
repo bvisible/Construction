@@ -9,7 +9,6 @@ import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { fmtFixed } from '@/shared/lib/formatters';
-import { getNumberLocale } from '@/stores/usePreferencesStore';
 import { SUPPORTED_LANGUAGES } from '@/app/i18n';
 import { uploadDocument, fetchDocuments, type DocumentItem } from '@/features/documents/api';
 import {
@@ -66,6 +65,7 @@ import {
   useDashboardRollupContext,
 } from './context/DashboardRollupContext';
 import { useDashboardRollup } from './hooks/useDashboardRollup';
+import { getNumberLocale } from '@/stores/usePreferencesStore';
 
 // Static Tailwind class strings (dynamic `lg:col-span-${n}` would be purged).
 const DASH_SPAN_CLASS: Record<number, string> = {
@@ -3170,6 +3170,20 @@ function SystemStatus() {
   const dbStatus = status?.database?.status ?? 'offline';
   const vectorStatus = status?.vector_db?.status ?? 'offline';
   const vectorVectors = status?.vector_db?.vectors ?? 0;
+  // The vector row carries two facts that arrive independently: which engine is
+  // answering, and how much it is holding. A configured engine reports a name
+  // before it has indexed anything, and a count can arrive with no name behind
+  // it, so each half is written on its own and the separator only appears when
+  // there are in fact two things to separate.
+  const vectorEngine = status?.vector_db?.engine ?? '';
+  const vectorHeld =
+    vectorVectors > 0
+      ? t('dashboard.status_vectors_count', {
+          defaultValue: '{{n}} vectors',
+          n: vectorVectors.toLocaleString(getNumberLocale()),
+        })
+      : '';
+  const vectorDetail = vectorEngine && vectorHeld ? `${vectorEngine} · ${vectorHeld}` : vectorEngine || vectorHeld;
   const aiConfigured = status?.ai?.configured || hasUserAiKey;
 
   const services = [
@@ -3190,17 +3204,7 @@ function SystemStatus() {
     {
       name: t('dashboard.vector_db', { defaultValue: 'Vector DB' }),
       status: vectorStatus,
-      detail: [
-        status?.vector_db?.engine,
-        vectorVectors > 0
-          ? t('dashboard.status_vectors_count', {
-              defaultValue: '{{n}} vectors',
-              n: vectorVectors.toLocaleString(getNumberLocale()),
-            })
-          : '',
-      ]
-        .filter(Boolean)
-        .join(' · '),
+      detail: vectorDetail,
       icon: <Globe size={13} />,
       delay: 520,
     },

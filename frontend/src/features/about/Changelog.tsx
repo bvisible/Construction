@@ -38,6 +38,27 @@ interface ChangelogEntry {
 // date, title and meaning intact; trim the prose, not the facts.
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '15.4.0',
+    date: '2026-08-22',
+    tag: 'NEW',
+    summary:
+      'Closing the desktop application no longer stops the local database in the middle of what it was doing, so the next start is an ordinary one rather than a long log replay that looks like an application that will not open, and starting up now measures silence instead of elapsed time, with database recovery reporting progress every fifteen seconds, so a backend that is still working is no longer abandoned. Installing and uninstalling stop only the copy in the directory being installed to, rather than every process on the machine sharing our executable name. Modules can now be installed and removed from Settings and chosen during onboarding, a geographic information system can read the project directly over OGC API - Features with no export step, and a non-conformity can carry the coordinates it was raised at. Two authorisation defects are closed: the endpoints that write exchange rates, work calendars and tax configurations now check what the signed in account is allowed to do rather than only that it is signed in, and four endpoints that answered anyone who asked no longer do. An invoice in a currency written without decimals now adds up the way its receiver adds it up, and events other parts of the system react to are published after the work is saved rather than while it is still being saved.',
+  },
+  {
+    version: '15.3.1',
+    date: '2026-08-21',
+    tag: 'FIX',
+    summary:
+      'The screen shown while the application starts now names the version it is running. Someone whose application will not open has no other way to find that out, since the About screen lives inside the application they cannot reach and the installer is usually long gone by then. It matters because the message shown when starting fails is deliberately general: the same sentence is produced by a fault corrected several releases ago and by one still open, so a report could arrive complete and carefully written and still not be answerable. The version now appears on the screen itself and as the second line of the details the copy button produces, directly under the heading and above the path to the log file, and it is written from the moment the screen first appears rather than only once something has gone wrong. An application that was starting normally is also no longer given up on while it is still working: the window allowed for the whole of startup was the same length as the budget the backend allows for bringing the local database up by itself, so a database that spent that budget recovering left nothing for the migrations, the modules, the tables and the first-run data that follow it. The first start after an upgrade is exactly that case, because the installer ends the running process tree and the database does not get to close cleanly. The window is now twice the budget it waits on, and it costs nothing when a start has genuinely failed, since that is reported the moment it happens.',
+  },
+  {
+    version: '15.3.0',
+    date: '2026-08-21',
+    tag: 'FIX',
+    summary:
+      'A desktop application that had stopped starting begins working again without anyone doing anything. A run that fails after starting the local database leaves it running, and the next start proved the database was there by opening a connection to it, which shows that something holds the address rather than that a database is behind it. The two come apart when the process is still there and can no longer answer, so the application called the database ready and then failed every request to it, on that start and on every one after, and reinstalling could not help because nothing about the installation was wrong. Readiness now means the database answered, a refusal counts as an answer, and one that has stopped answering is cleared so a working one can replace it. A database replaying its log after an unclean shutdown is untouched and still waited for. An entry that cannot be written to the activity record also stops discarding the work it was describing, and an installation told not to fetch the search model no longer goes looking for it, and a database carried across an upgrade keeps the classification times it already recorded rather than reinterpreting them in whatever time zone the server happens to run in, and starting the local database on Windows no longer fails on a directory the application had just made for it, because the database\'s own setup program is now handed a path that does not exist yet and makes it itself, rather than being asked to correct the permissions on one it did not create and is not allowed to change.',
+  },
+  {
     version: '15.2.0',
     date: '2026-08-20',
     tag: 'NEW',

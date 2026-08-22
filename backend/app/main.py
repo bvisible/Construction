@@ -1174,10 +1174,11 @@ def create_app() -> FastAPI:
         allow_methods=["GET", "HEAD", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
         allow_headers=["Content-Type", "Authorization", "Accept", "Accept-Language"],
         # A list route that pages returns the number of matches behind the page
-        # in X-Total-Count. A browser hides every response header a server does
-        # not name here, so without this the count reaches a frontend served
-        # from another origin and cannot be read there.
-        expose_headers=["X-Total-Count"],
+        # in X-Total-Count, and a BCF export returns how many topics went into
+        # the archive in X-BCF-Topic-Count. A browser hides every response
+        # header a server does not name here, so without this the count reaches
+        # a frontend served from another origin and cannot be read there.
+        expose_headers=["X-Total-Count", "X-BCF-Topic-Count"],
     )
 
     # ── API Version header ──────────────────────────────────────────────
@@ -1442,6 +1443,14 @@ def create_app() -> FastAPI:
 
     app.include_router(desktop_auth_router, prefix="/api/v1/auth")
 
+    # The desktop launcher's clean-stop request. Mounted at its full path (no
+    # prefix) because the launcher has to be able to call it without knowing
+    # anything about API versions, and refused for everyone else by the guards
+    # in the module itself - desktop mode, loopback, and the launcher's token.
+    from app.core.desktop_shutdown import router as desktop_shutdown_router
+
+    app.include_router(desktop_shutdown_router)
+
     # Workspace white-label branding. GET is public (the login page reads it
     # before sign-in so invited users see the workspace brand); PUT/DELETE are
     # admin-only. Persisted to a JSON file in the data dir, so no migration.
@@ -1587,25 +1596,53 @@ def create_app() -> FastAPI:
             result["frontend_dist_present"] = False
             result["status"] = "degraded"
 
-        # Process memory (RSS) in MB - available on all platforms
+        # Process memory in MB, best-effort. Two different numbers live here and
+        # they are not interchangeable. getrusage reports ru_maxrss, the PEAK
+        # resident set since the process started, which never falls again: a demo
+        # seed pushes it into the gigabytes and it stays there for the life of the
+        # process, so on its own it reads as a gauge that can only climb. Current
+        # RSS is what this field is named after, so it is preferred wherever the
+        # platform will give it, and the peak is reported beside it under its own
+        # name rather than in its place.
+        current_mb = None
+        peak_mb = None
+
         try:
             import resource
 
             rss_bytes = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
             # macOS returns bytes, Linux returns KB
             if _os.uname().sysname == "Darwin":
-                result["memory_mb"] = round(rss_bytes / (1024 * 1024), 1)
+                peak_mb = round(rss_bytes / (1024 * 1024), 1)
             else:
-                result["memory_mb"] = round(rss_bytes / 1024, 1)
+                peak_mb = round(rss_bytes / 1024, 1)
+        except Exception:
+            pass  # No getrusage here, so no peak to report
+
+        try:
+            # Linux carries current RSS in /proc/self/statm, second field, in pages.
+            with open("/proc/self/statm") as statm:
+                resident_pages = int(statm.read().split()[1])
+            current_mb = round(resident_pages * _os.sysconf("SC_PAGE_SIZE") / (1024 * 1024), 1)
         except Exception:
             try:
-                # Windows / fallback via psutil if available
+                # Windows, and anywhere without /proc, if psutil happens to be
+                # installed. It is not a declared dependency, hence best-effort.
                 import psutil
 
                 proc = psutil.Process(_os.getpid())
-                result["memory_mb"] = round(proc.memory_info().rss / (1024 * 1024), 1)
+                current_mb = round(proc.memory_info().rss / (1024 * 1024), 1)
             except Exception:
                 pass  # Memory reporting is best-effort
+
+        # Fall back to the peak only when nothing can report the current figure,
+        # so the field keeps its old value rather than disappearing.
+        if current_mb is not None:
+            result["memory_mb"] = current_mb
+        elif peak_mb is not None:
+            result["memory_mb"] = peak_mb
+        if peak_mb is not None:
+            result["memory_peak_mb"] = peak_mb
 
         # Active thread count - best-effort
         try:
@@ -2807,6 +2844,19 @@ def create_app() -> FastAPI:
                     await repair_progress_entry_seq(conn)
             except Exception:
                 logger.warning("Progress seq order repair skipped (non-fatal)", exc_info=True)
+
+            # Same shape, different column. classified_at was declared naive
+            # while the service stamped it aware, so every database built before
+            # this version carries a column asyncpg will not write to. The heal
+            # cannot fix it: it adds columns and never retypes them. Idempotent,
+            # and a no-op the moment the reflected type comes back aware.
+            try:
+                from app.modules.project_route.tz_repair import widen_classified_at
+
+                async with engine.begin() as conn:
+                    await widen_classified_at(conn)
+            except Exception:
+                logger.warning("classified_at widening skipped (non-fatal)", exc_info=True)
 
             async with engine.begin() as conn:
                 await conn.run_sync(Base.metadata.create_all)
