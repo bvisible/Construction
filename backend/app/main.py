@@ -58,6 +58,11 @@ from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import Settings, build_provenance_tag, desktop_mode, get_settings
+from app.core.demo_read_only import (
+    DemoReadOnlyError,
+    demo_read_only_guard,
+    read_only_refusal,
+)
 from app.core.deployment_posture import build_data_security_posture
 from app.core.module_loader import module_loader
 from app.core.self_upgrade import (
@@ -71,6 +76,74 @@ from app.core.self_upgrade import (
 from app.dependencies import RequireRole, get_current_user_id, rls_request_context
 
 logger = logging.getLogger(__name__)
+
+# (alembic.ini path, head revision) for this process, filled on first use by
+# ``_expected_alembic_head``. The path is part of the key so a test pointed at a
+# different tree is never answered from the previous one.
+_ALEMBIC_HEAD_CACHE: tuple[str, str | None] | None = None
+
+
+def alembic_head_state(expected: str | None, actual: str | None) -> bool | None:
+    """Is the database at the migration head? ``None`` when that cannot be told.
+
+    ``expected`` is the head the installed migration tree declares and ``actual``
+    is the revision recorded in the database. Either can be absent, and absence
+    is not disagreement:
+
+    * ``expected`` is ``None`` where no migration tree shipped. The desktop
+      bundle is the live case: it carries neither ``alembic.ini`` nor the
+      script directory, on purpose (see
+      ``tests/unit/test_desktop_spec_ships_wheel_data.py``).
+    * ``actual`` is ``None`` on a database with no ``alembic_version`` row. That
+      is every install built by ``create_all`` before the boot-time stamp
+      existed, and every install where the stamp could not be written. The
+      columns are physically present and the schema is current; nobody wrote
+      down that it is.
+
+    Comparing the two raw values with ``==`` answers ``False`` for both of those,
+    which is the bug this replaces. A permanent ``False`` on a healthy install is
+    worse than no signal at all, because it is a signal that says the opposite of
+    the truth and consumers act on it. ``None`` says "I could not tell", which is
+    what the caller has to be able to distinguish before it decides anything.
+    """
+    if expected is None or actual is None:
+        return None
+    return expected == actual
+
+
+def _expected_alembic_head(ini_path: os.PathLike[str] | str) -> str | None:
+    """The head revision the installed migration tree declares, parsed once.
+
+    The tree cannot change under a running process: it is installed inside the
+    package next to this file, and a new one only arrives with a new process.
+    Repeating the parse is not cheap either, since
+    ``ScriptDirectory.from_config`` opens and compiles every revision file and
+    there are over three hundred of them.
+
+    That mattered because of who calls it. Health is polled on a timer by the
+    desktop shell, by container healthchecks and by whatever watches the
+    deployment, so this ran on a loop rather than on a rare diagnostic path.
+
+    The database revision it gets compared against is deliberately not cached.
+    That one does change while the process runs, and caching it would turn "has
+    the schema fallen behind" into "was it behind when this process started",
+    which is a different and much less useful question.
+    """
+    global _ALEMBIC_HEAD_CACHE
+
+    key = str(ini_path)
+    cached = _ALEMBIC_HEAD_CACHE
+    if cached is not None and cached[0] == key:
+        return cached[1]
+
+    from alembic.config import Config as _AlembicConfig
+    from alembic.script import ScriptDirectory as _ScriptDir
+
+    head = _ScriptDir.from_config(_AlembicConfig(key)).get_current_head()
+    # Only reached when the parse succeeded. A failure is left uncached so the
+    # next call tries again instead of reporting a permanent unknown.
+    _ALEMBIC_HEAD_CACHE = (key, head)
+    return head
 
 
 def _database_target() -> str:
@@ -212,10 +285,13 @@ def _init_vector_db() -> None:
                 error,
             )
         else:
+            # lancedb is in requirements-desktop.lock, so a bundle whose store
+            # will not start is damaged rather than lean: the default repair
+            # wording, not DESKTOP_NO_EXTRA.
             logger.warning(
-                "LanceDB init failed (%s). Semantic search is disabled. "
-                "Install the embedded vector backend with: pip install openconstructionerp[vector]",
+                "LanceDB init failed (%s). Semantic search is disabled. %s",
                 error,
+                repair_hint("Install the embedded vector backend with: pip install openconstructionerp[vector]"),
             )
     except Exception as exc:  # noqa: BLE001 - intentional: never fatal
         # Includes ImportError (missing optional extras), native crashes
@@ -866,6 +942,7 @@ async def _seed_demo_account() -> None:
                             logger.warning(
                                 "Failed to install partner-pack demo %s (skipping)",
                                 demo_id,
+                                exc_info=True,
                             )
                 if not pack_ids:
                     logger.info(
@@ -915,9 +992,15 @@ async def _seed_demo_account() -> None:
                                 )
                             except Exception:
                                 await sc_session.rollback()
+                                # ``exc_info`` because this failure is intermittent: a run
+                                # where seven of the twelve skipped left twelve identical
+                                # causeless lines, and the cause had to be reconstructed
+                                # from a second boot. Every other non-fatal skip below
+                                # already logs its traceback.
                                 logger.warning(
                                     "Failed to install showcase demo %s (skipping)",
                                     demo_id,
+                                    exc_info=True,
                                 )
 
         # Flagship "Residential House" reference project - an ORM installer
@@ -1113,7 +1196,11 @@ def create_app() -> FastAPI:
         # tenant-owned tables in PostgreSQL. Anonymous callers bind no tenant.
         # Inert until OE_RLS_ENFORCE is enabled and requests connect through the
         # non-superuser role.
-        dependencies=[Depends(rls_request_context)],
+        # Read-only demo guard first, and deliberately ahead of the RLS context:
+        # a refused request must not pay for token decoding or a tenant lookup,
+        # and an anonymous caller must get the 403 rather than a 401. Inert
+        # unless OE_DEMO_READ_ONLY is on - see app.core.demo_read_only.
+        dependencies=[Depends(demo_read_only_guard), Depends(rls_request_context)],
         # NOTE: do NOT set default_response_class=ORJSONResponse here.
         # FastAPI's own deprecation warning explains why: "FastAPI now
         # serializes data directly to JSON bytes via Pydantic when a
@@ -1125,6 +1212,41 @@ def create_app() -> FastAPI:
         # FastAPI's default Pydantic-direct path; orjson is still used
         # by handlers that explicitly opt in.
     )
+
+    # ── Boot-time schema heal verdict, scoped to this application ────────
+    # Three states, and they are three: ``False`` healed, ``True`` failed,
+    # ``None`` never ran. The last one is not a corner case. The heal lives
+    # inside ``if "postgresql" in settings.database_url`` in the startup below,
+    # so a deployment whose ``DATABASE_URL`` is not PostgreSQL never reaches it
+    # and stays at this value for its whole life. Reporting that as ``False``
+    # says "healed fine" about a heal that never happened, which is exactly the
+    # mistake ``alembic_head_state`` exists to stop making one field away in the
+    # same health payload.
+    #
+    # It is also the value between building the application and startup writing
+    # a verdict. That window is not visible to an HTTP caller - the server does
+    # not accept requests until the lifespan startup returns, and a startup that
+    # raises takes the process down rather than serving - but it is visible to
+    # anything holding the application object directly, an in-process ASGI test
+    # client included.
+    #
+    # The signal exists because the heal is deliberately non-fatal, and a
+    # non-fatal failure that only reaches the log is invisible on the deployment
+    # it actually ruins: an external PostgreSQL whose role has no DDL rights.
+    # There the heal cannot add a single column, the application starts and
+    # looks fine, and the first read of any table that gained a column since
+    # that database was created answers 500 with an undefined-column error.
+    #
+    # ``schema_heal_error`` holds the cause for the boot log and for an operator
+    # with access to this process. It is deliberately NOT published by
+    # ``/api/health``; see that endpoint's docstring for why.
+    #
+    # Both live on ``app.state`` rather than in a module global because a module
+    # global outlives the application it describes: in one process that builds a
+    # second application - which the test suite does routinely - that second one
+    # would inherit the first one's verdict about a database it never opened.
+    app.state.schema_heal_failed = None
+    app.state.schema_heal_error = None
 
     # ── OpenAPI origin extension ─────────────────────────────────────────
     # Stamp an x- vendor extension into info{} so any fork that exposes
@@ -1346,8 +1468,50 @@ def create_app() -> FastAPI:
 
     from app.middleware.request_id import get_request_id
 
+    # ── Read-only demo: translate a refused write into the 403 contract ──
+    # Layer 1 raises the HTTPException itself; this is for layer 2, which fires
+    # from inside SQLAlchemy's cursor execution. Two handlers, because the
+    # driver may re-raise the error wrapped in a StatementError: the direct one
+    # below catches the plain case, and the global handler further down walks
+    # the __cause__ / __context__ chain for the wrapped one. Both answer with
+    # exactly the same body, so a client cannot tell which layer refused.
+    def _demo_read_only_in_chain(exc: BaseException) -> DemoReadOnlyError | None:
+        seen: set[int] = set()
+        cursor: BaseException | None = exc
+        while cursor is not None and id(cursor) not in seen:
+            if isinstance(cursor, DemoReadOnlyError):
+                return cursor
+            seen.add(id(cursor))
+            cursor = cursor.__cause__ or cursor.__context__
+        return None
+
+    def _demo_read_only_response() -> JSONResponse:
+        refusal = read_only_refusal()
+        return JSONResponse(status_code=refusal.status_code, content={"detail": refusal.detail})
+
+    @app.exception_handler(DemoReadOnlyError)
+    async def demo_read_only_handler(request: Request, exc: DemoReadOnlyError) -> JSONResponse:
+        logger.info(
+            "demo read-only: %s %s refused at the database (%s on %s)",
+            request.method,
+            request.url.path,
+            exc.kind,
+            exc.table or "an unnamed target",
+        )
+        return _demo_read_only_response()
+
     @app.exception_handler(Exception)
     async def global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+        demo_refusal = _demo_read_only_in_chain(exc)
+        if demo_refusal is not None:
+            logger.info(
+                "demo read-only: %s %s refused at the database (%s on %s)",
+                request.method,
+                request.url.path,
+                demo_refusal.kind,
+                demo_refusal.table or "an unnamed target",
+            )
+            return _demo_read_only_response()
         # Surface the SAME correlation id the RequestIDMiddleware already
         # assigned (and echoed on the X-Request-ID response header) - do NOT
         # mint a new one. A client / support engineer can quote this id and we
@@ -1511,6 +1675,26 @@ def create_app() -> FastAPI:
 
     @app.get("/api/health", tags=["System"])
     async def health_check() -> dict[str, Any]:
+        """Whether this process is running and fit to be used.
+
+        This endpoint is UNAUTHENTICATED on purpose. The desktop shell polls it
+        with no Authorization header to decide whether it may attach to a
+        backend that is already running rather than start a second one against
+        the same data directory, and container healthchecks want the same answer
+        on the same terms. So everything here is public, and nothing here may
+        carry text describing the internals of the deployment.
+
+        That is why the schema-heal signal below is a boolean and only a
+        boolean. What it reports is a database exception, and SQLAlchemy DBAPI
+        errors stringify with the statement appended - ``[SQL: ALTER TABLE
+        ...]``, frequently ``[parameters: ...]`` too - so putting the message in
+        this payload would hand an anonymous caller the schema and the statement
+        text of the deployment it can reach. The cause is written in full to the
+        boot log, where the operator of that machine is, and is kept on
+        ``app.state.schema_heal_error``. Should it ever be wanted over HTTP it
+        belongs behind ``RequireRole("admin")``, beside
+        ``/api/system/upgrade/status``, and not here.
+        """
         import os as _os
         from pathlib import Path as _Path
 
@@ -1544,32 +1728,57 @@ def create_app() -> FastAPI:
         # will start raising OperationalError as soon as a request hits a
         # new column. ``None`` if the check itself blew up (no alembic.ini
         # nearby, broken script tree, etc.) - visible but non-fatal.
+        #
+        # Three answers, and they are three: ``true`` at head, ``false``
+        # behind it, ``null`` when this deployment cannot tell. Only a
+        # determinable ``false`` degrades the status. See
+        # :func:`alembic_head_state` for why an unstamped database is not a
+        # mismatch and must never be reported as one.
         try:
-            from alembic.config import Config as _AlembicConfig
             from alembic.runtime.migration import MigrationContext as _MigCtx
-            from alembic.script import ScriptDirectory as _ScriptDir
             from sqlalchemy import text as _text  # noqa: F401
 
             from app.database import engine as _engine
 
             _ini = _Path(__file__).resolve().parent.parent / "alembic.ini"
             if _ini.is_file():
-                _cfg = _AlembicConfig(str(_ini))
-                _script = _ScriptDir.from_config(_cfg)
-                _expected = _script.get_current_head()
+                _expected = _expected_alembic_head(_ini)
 
                 async with _engine.connect() as _conn:
                     _actual = await _conn.run_sync(
                         lambda sync_conn: _MigCtx.configure(sync_conn).get_current_revision()
                     )
-                result["alembic_head_matches"] = _expected == _actual
-                if _expected != _actual:
+                _matches = alembic_head_state(_expected, _actual)
+                result["alembic_head_matches"] = _matches
+                if _matches is False:
                     result["status"] = "degraded"
             else:
                 result["alembic_head_matches"] = None
         except Exception as _exc:  # noqa: BLE001
             logger.warning("Alembic head check failed: %s", _exc)
             result["alembic_head_matches"] = None
+
+        # Did the boot-time schema heal finish? This is the one signal an
+        # external-PostgreSQL operator has that their role cannot issue DDL.
+        # Without it that install runs with a schema frozen at whichever release
+        # created the database, and reports itself healthy while every list
+        # endpoint touching a newer column answers 500. The heal is non-fatal on
+        # purpose and stays that way; what changes here is that its failure is
+        # now sayable rather than only loggable.
+        #
+        # Three answers, for the same reason the head check above has three:
+        # ``true`` failed, ``false`` healed, ``null`` never ran - which over
+        # HTTP means a deployment whose database is not PostgreSQL. The key is
+        # always present so a monitor can tell a backend that says "I cannot
+        # tell" from one built before the field existed. Only a determinable
+        # failure degrades the status; ``null`` is not a fault. The polarity is
+        # the inverse of ``alembic_head_matches`` - here ``true`` is the bad
+        # news - which is why this is read with ``is True`` and not as a truth
+        # value. The cause is not published; see this endpoint's docstring.
+        _heal_failed = getattr(app.state, "schema_heal_failed", None)
+        result["schema_heal_failed"] = _heal_failed
+        if _heal_failed is True:
+            result["status"] = "degraded"
 
         # Frontend dist presence. The flag must describe what THIS process
         # serves, not what the disk holds right now: a process that started
@@ -2127,6 +2336,28 @@ def create_app() -> FastAPI:
 
         cmd = [sys.executable, "-m", "pip", "install", "--upgrade", target]
         if force:
+            # ``--force-reinstall`` does not stop at our own package. It
+            # reinstalls the whole dependency set, and that set contains
+            # pixeltable-pgserver, whose ``pginstall/bin/postgres`` binary is
+            # the process serving this very request. Replacing it under a live
+            # postmaster is a torn install on Windows, where the running image
+            # is locked and pip fails halfway, and a mixed one everywhere else.
+            #
+            # The plain upgrade above is left alone: it only moves what changed,
+            # and the ordinary case moves pure Python.
+            from app.core import embedded_pg as _embedded_pg
+
+            if _embedded_pg.is_running():
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=(
+                        "A forced reinstall would replace the PostgreSQL binaries this "
+                        "application is currently running from. Stop the application "
+                        "first and run `pip install --force-reinstall --upgrade "
+                        "openconstructionerp` from your shell, or upgrade without the "
+                        "force option, which does not touch them."
+                    ),
+                )
             cmd.insert(-1, "--force-reinstall")
 
         job, started = claim_upgrade(cmd, settings.app_version)
@@ -2819,12 +3050,56 @@ def create_app() -> FastAPI:
 
             from app.core.postgres_migrator import postgres_auto_migrate
 
+            # Nothing in this codebase ever runs ``alembic upgrade``, here or
+            # anywhere else, and that is a decision rather than an oversight.
+            # The schema is moved by the heal below (ADD COLUMN / CREATE INDEX
+            # IF NOT EXISTS) plus create_all (whole missing tables), which
+            # covers additive revisions and covers nothing else: a NOT NULL, a
+            # rename, a type change and a backfill all pass straight through it.
+            #
+            # Running the real upgrade at startup would not fix that, because of
+            # what stamp_head_if_unstamped does further down. Every install this
+            # boot path has ever built is recorded at head the moment create_all
+            # finishes, without the revisions in between having executed - and
+            # several of them say in their own docstrings that they MUST be run
+            # rather than merely stamped (v3237, v3245, v3246, v3247). So
+            # ``alembic upgrade head`` on those databases is a no-op that
+            # replays nothing, which is exactly the population that needs it,
+            # while on the databases it would touch it is an unattended schema
+            # rewrite during startup with no operator watching. It is enabled by
+            # neither default. What is fixed instead is the visibility: the
+            # failure below is now recorded where a human reads it.
+            #
+            # Both exits of this try/except record a verdict, and only these two
+            # do. A run that never gets here because its database is not
+            # PostgreSQL keeps the ``None`` this application was built with,
+            # which is what lets /api/health say "never ran" instead of "healed
+            # fine".
             try:
                 migrated = await postgres_auto_migrate(engine, Base)
                 if migrated:
                     logger.info("PostgreSQL auto-migration: %d schema objects (columns + indexes) added", migrated)
-            except Exception:
-                logger.warning("PostgreSQL auto-migration skipped (non-fatal)", exc_info=True)
+                app.state.schema_heal_failed = False
+                app.state.schema_heal_error = None
+            except Exception as exc:
+                _heal_error = f"{type(exc).__name__}: {exc}"
+                app.state.schema_heal_failed = True
+                app.state.schema_heal_error = _heal_error
+                # Deliberately louder than the warning this replaces, and it
+                # names the cause inline rather than leaving it in a traceback.
+                # An external database whose role cannot issue DDL fails here
+                # every single boot and nowhere else, and the operator meets the
+                # consequence as an undefined-column 500 in an unrelated module.
+                logger.error(
+                    "PostgreSQL schema heal FAILED (%s). The database is missing columns this "
+                    "release expects and requests touching them will fail. If this role cannot "
+                    "issue DDL, run the schema change as one that can; the application will keep "
+                    "starting either way. /api/health reports schema_heal_failed=true, and this "
+                    "line is where the cause is: that endpoint is unauthenticated and the message "
+                    "carries the failing statement, so it is not published there.",
+                    _heal_error,
+                    exc_info=True,
+                )
 
             # The heal above adds oe_progress_entry.seq to a pre-v3258 table as
             # ADD COLUMN ... DEFAULT nextval(...), and PostgreSQL numbers the
@@ -2884,8 +3159,16 @@ def create_app() -> FastAPI:
                     stamped = await conn.run_sync(stamp_head_if_unstamped)
                 if stamped:
                     logger.info("Alembic version stamped to head %s on fresh DB", stamped)
-            except Exception:
-                logger.debug("Alembic head stamp skipped (non-fatal)", exc_info=True)
+            except Exception as exc:
+                # Was logger.debug, which is off in every default configuration.
+                # A stamp that cannot be written is the difference between
+                # /api/health answering "at head" and answering "cannot tell"
+                # for the life of the install, and on an external database it
+                # has the same root cause as the heal failure above: no DDL
+                # rights. An absent alembic.ini does not reach here at all -
+                # stamp_head_if_unstamped returns None for that - so anything
+                # that does is worth a line.
+                logger.warning("Alembic head stamp skipped (non-fatal): %s", exc, exc_info=True)
 
             # Provision multi-tenant row-level security (opt-in). Runs after
             # create_all so every tenant table exists on both fresh and upgraded

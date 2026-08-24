@@ -52,7 +52,34 @@ def _stdout_supports_unicode() -> bool:
     return "utf" in enc
 
 
-DEFAULT_DATA_DIR = Path.home() / ".openestimate"
+def _default_data_dir() -> Path:
+    """Where the CLI keeps its data when nothing on the command line says otherwise.
+
+    Everything else in the platform that resolves a data directory honours the
+    same three overrides in the same order: ``OE_DATA_DIR``, then ``DATA_DIR``,
+    then ``OE_CLI_DATA_DIR``. The uploads root does, the JWT secret does, the
+    demo seed does, the partner pack state does. This one did not, and the
+    result was a split: an operator who set ``OE_DATA_DIR`` to a mounted volume
+    got their uploads and their signing secret on the volume and their database,
+    their cluster and their config file left behind in the home directory, which
+    on a container is the layer that disappears on redeploy. The override was
+    documented and half honoured, which is worse than not honouring it, because
+    nothing reports the half that was ignored.
+
+    An explicit ``--data-dir`` still wins: this only supplies the default.
+    """
+    override = os.environ.get("OE_DATA_DIR") or os.environ.get("DATA_DIR") or os.environ.get("OE_CLI_DATA_DIR")
+    if override and override.strip():
+        return Path(override.strip())
+    try:
+        return Path.home() / ".openestimate"
+    except RuntimeError:
+        # No home directory can be resolved (a minimal container with HOME
+        # unset and no passwd entry). A relative path beats aborting the CLI.
+        return Path(".openestimate")
+
+
+DEFAULT_DATA_DIR = _default_data_dir()
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8080
 MIN_PYTHON = (3, 12)
@@ -64,6 +91,54 @@ COMMUNITY_URL = "https://t.me/datadrivenconstruction"
 GITHUB_URL = "https://github.com/datadrivenconstruction/OpenConstructionERP"
 
 logger = logging.getLogger("openestimate.cli")
+
+
+# ── Data directory: declared once, resolved once ──────────────────────────
+# Every command that works in the data directory goes through these two
+# functions. Spelling the flag out per command, and resolving it per command,
+# is how a path ends up anchored on the working directory: the command that
+# forgets is invisible next to the four that remembered, and on a development
+# box or in CI the working directory is writable, so nothing reports it. It
+# only surfaces on an install under a directory the process may not write to.
+# One declaration and one resolution mean a command added later either uses
+# them or has no data directory at all, and the unit test named after this
+# section fails the build if a second spelling of either one appears.
+def _add_data_dir_arg(p: argparse.ArgumentParser) -> None:
+    """Declare ``--data-dir`` on a subcommand parser.
+
+    Args:
+        p: The subcommand parser that should accept a data directory.
+    """
+    p.add_argument(
+        "--data-dir",
+        default=str(DEFAULT_DATA_DIR),
+        help=f"Data directory (default: {DEFAULT_DATA_DIR})",
+    )
+
+
+def _data_dir_from_args(args: argparse.Namespace) -> Path:
+    """Resolve the data directory this invocation works in.
+
+    Absolute either way: an explicit ``--data-dir`` is expanded and resolved,
+    and a command that declares no such flag falls back to
+    :data:`DEFAULT_DATA_DIR`, which already honours ``OE_DATA_DIR`` /
+    ``DATA_DIR`` / ``OE_CLI_DATA_DIR``. Nothing here is left relative to the
+    working directory.
+
+    A blank value is how a compose file and a launcher script spell "not set",
+    and ``Path("")`` is the working directory, so blanks fall back to the
+    default exactly as they do in :func:`_default_data_dir`.
+
+    Args:
+        args: The parsed command line.
+
+    Returns:
+        An absolute path to the data directory.
+    """
+    raw = getattr(args, "data_dir", None)
+    value = str(raw).strip() if raw is not None else ""
+    base = Path(value) if value else DEFAULT_DATA_DIR
+    return base.expanduser().resolve()
 
 
 # ── ANSI colors (amber accent #f0883e, disabled if no TTY or NO_COLOR) ────
@@ -606,16 +681,24 @@ def check_core_tabular_deps() -> list[Check]:
     return out
 
 
-def check_ai_provider_keys() -> Check:
+def check_ai_provider_keys(data_dir: Path | None = None) -> Check:
     """Check whether at least one LLM provider API key is configured.
 
     We call LLM providers via REST (httpx), not vendor SDKs, so there is
     no Python package to probe. Instead, look at the two places keys can
     live:
       1. Settings / environment variables (OPENAI_API_KEY, ANTHROPIC_API_KEY, ...)
-      2. ``~/.openestimate/config.json`` (CLI-managed overrides)
+      2. ``<data-dir>/config.json`` (CLI-managed overrides)
 
     This only reports INFO-level WARN when none are set - AI is optional.
+
+    Args:
+        data_dir: The data directory this invocation works in. This check read
+            :data:`DEFAULT_DATA_DIR` instead, so ``doctor --data-dir`` reported
+            on a config file belonging to a different installation while its
+            sibling check on the same run reported on the directory it was
+            given. Omitting it keeps the old default for a caller with no data
+            directory in hand.
     """
     # 1. Settings-level keys (env vars, .env file, pydantic-settings).
     env_key_names = (
@@ -630,7 +713,7 @@ def check_ai_provider_keys() -> Check:
     configured = [name for name in env_key_names if os.environ.get(name)]
 
     # 2. CLI config file overrides.
-    config_path = DEFAULT_DATA_DIR / "config.json"
+    config_path = (data_dir or DEFAULT_DATA_DIR) / "config.json"
     if config_path.exists():
         try:
             import json
@@ -673,8 +756,13 @@ def _pdf_reader_imports_in_process() -> bool:
     return os.environ.get("OE_DESKTOP", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-def check_optional_extras() -> list[Check]:
-    """Report which optional extras are installed (mostly non-fatal)."""
+def check_optional_extras(data_dir: Path | None = None) -> list[Check]:
+    """Report which optional extras are installed (mostly non-fatal).
+
+    Args:
+        data_dir: The data directory this invocation works in, forwarded to the
+            checks that read a file out of it.
+    """
     from importlib.util import find_spec
 
     def _present(mod: str) -> bool:
@@ -955,7 +1043,7 @@ def check_optional_extras() -> list[Check]:
         out.append(Check(cv_label, "ok", "paddleocr imports cleanly and a paddlepaddle engine is installed"))
 
     # AI provider key configuration (not a package check).
-    out.append(check_ai_provider_keys())
+    out.append(check_ai_provider_keys(data_dir))
 
     return out
 
@@ -982,14 +1070,14 @@ def run_preflight(
     # `serve` also catches a broken install before uvicorn spins up.
     checks.extend(check_core_tabular_deps())
     if verbose:
-        checks.extend(check_optional_extras())
+        checks.extend(check_optional_extras(data_dir))
     return checks
 
 
 # ── Commands ──────────────────────────────────────────────────────────────
 def cmd_serve(args: argparse.Namespace) -> None:
     """Start the OpenConstructionERP server."""
-    data_dir = Path(args.data_dir).expanduser().resolve()
+    data_dir = _data_dir_from_args(args)
 
     # ``serve --no-demo``: skip demo accounts / showcase projects for this
     # start AND remember the choice in the data dir so subsequent bare
@@ -1212,7 +1300,7 @@ def _register_all_module_models() -> tuple[int, int, list[tuple[str, str]]]:
 
 def cmd_init_db(args: argparse.Namespace) -> None:
     """Initialise the data directory and create the database schema."""
-    data_dir = Path(args.data_dir).expanduser().resolve()
+    data_dir = _data_dir_from_args(args)
     reset = bool(getattr(args, "reset", False))
 
     from app.core import embedded_pg
@@ -1347,7 +1435,7 @@ def cmd_init_db(args: argparse.Namespace) -> None:
 
 def cmd_doctor(args: argparse.Namespace) -> None:
     """Run pre-flight checks and report OK / WARN / ERROR per item."""
-    data_dir = Path(args.data_dir).expanduser().resolve()
+    data_dir = _data_dir_from_args(args)
 
     print()
     print(_bold(_u("OpenConstructionERP \u2014 doctor", "OpenConstructionERP - doctor")))
@@ -1397,7 +1485,16 @@ def cmd_version(_args: argparse.Namespace) -> None:
 
     print(f"OpenConstructionERP v{version}")
     print(f"Python {sys.version.split()[0]} ({sys.platform})")
-    print(f"Site-packages: {Path(sys.executable).parent}")
+    # This is the line people paste when something is wrong with an install, so
+    # each label has to name what it actually shows. "Site-packages" used to be
+    # printed against the interpreter's own directory, which is Scripts on
+    # Windows and bin elsewhere, so anyone who followed it went looking for the
+    # package where the package is not. The data directory is here for the same
+    # reason: it is the other thing support asks for, and printing it is also
+    # how an operator confirms their data-dir override was taken.
+    print(f"Installed at: {Path(__file__).resolve().parent.parent}")
+    print(f"Interpreter: {sys.executable}")
+    print(f"Data directory: {DEFAULT_DATA_DIR}")
     print(f"Docs: {DOCS_URL}")
 
 
@@ -1433,6 +1530,34 @@ def cmd_upgrade(args: argparse.Namespace) -> None:
         print(_dim("Download the latest installer and run it over this install:"))
         print(_dim(f"  {RELEASES_URL}"))
         print(_dim("Your projects and settings stay where they are."))
+        sys.exit(1)
+
+    # pip is about to replace files in site-packages, and on this install some
+    # of those files are executing right now: the embedded PostgreSQL binaries
+    # live under pixeltable_pgserver, and compiled extensions are loaded into
+    # any running server. On Windows the running image is locked, so pip fails
+    # partway and leaves an install that is neither the old version nor the new
+    # one. Elsewhere it succeeds and the running process quietly becomes a
+    # mixture of both, because this codebase imports inside functions in many
+    # places and every later import reads the new file.
+    #
+    # Asking first costs nothing and turns a torn install into one clear line.
+    data_dir = _data_dir_from_args(args)
+    try:
+        from app.core.embedded_pg import cluster_postmaster_pid
+
+        live_pid = cluster_postmaster_pid(data_dir)
+    except Exception:  # noqa: BLE001
+        live_pid = None
+
+    if live_pid is not None:
+        print()
+        print(_red(_bold("  The application is still running.")))
+        print(_dim(f"The local database is being served by process {live_pid} from:"))
+        print(_dim(f"  {data_dir / 'pgdata'}"))
+        print()
+        print(_dim("Upgrading now would replace files that process is executing from."))
+        print(_dim("Close the app (or stop `openconstructionerp serve`), then run this again."))
         sys.exit(1)
 
     target = "openconstructionerp"
@@ -1585,7 +1710,7 @@ def _prompt_seed_demo() -> bool | None:
 
 def cmd_seed(args: argparse.Namespace) -> None:
     """Load demo data into the database."""
-    data_dir = Path(args.data_dir).expanduser().resolve()
+    data_dir = _data_dir_from_args(args)
     _setup_env(data_dir, DEFAULT_HOST, DEFAULT_PORT)
 
     import asyncio
@@ -2106,11 +2231,7 @@ def cmd_pack(args: argparse.Namespace) -> None:
 def _add_common_server_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--host", default=DEFAULT_HOST, help=f"Bind host (default: {DEFAULT_HOST})")
     p.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"Bind port (default: {DEFAULT_PORT})")
-    p.add_argument(
-        "--data-dir",
-        default=str(DEFAULT_DATA_DIR),
-        help=f"Data directory (default: {DEFAULT_DATA_DIR})",
-    )
+    _add_data_dir_arg(p)
     p.add_argument(
         "--embedded-pg",
         action="store_true",
@@ -2118,8 +2239,17 @@ def _add_common_server_args(p: argparse.ArgumentParser) -> None:
     )
 
 
-def main() -> None:
-    """CLI entry point."""
+def _build_parser() -> argparse.ArgumentParser:
+    """Build the full command line, every subcommand included.
+
+    Split out of :func:`main` so the parser can be inspected without running a
+    command: ``test_cli_data_dir_is_declared_and_resolved_in_one_place`` walks
+    every declaration here and fails if one of them names a path that is not
+    absolute.
+
+    Returns:
+        The top-level parser, with all subparsers attached.
+    """
     parser = argparse.ArgumentParser(
         prog="openconstructionerp",
         description=(
@@ -2164,11 +2294,7 @@ def main() -> None:
         "init-db",
         help="Create the database schema and data directories",
     )
-    init_db_p.add_argument(
-        "--data-dir",
-        default=str(DEFAULT_DATA_DIR),
-        help=f"Data directory (default: {DEFAULT_DATA_DIR})",
-    )
+    _add_data_dir_arg(init_db_p)
     init_db_p.add_argument(
         "--reset",
         action="store_true",
@@ -2176,11 +2302,7 @@ def main() -> None:
     )
     # Legacy alias - same args, same handler.
     init_p = subparsers.add_parser("init", help="Alias for init-db")
-    init_p.add_argument(
-        "--data-dir",
-        default=str(DEFAULT_DATA_DIR),
-        help=f"Data directory (default: {DEFAULT_DATA_DIR})",
-    )
+    _add_data_dir_arg(init_p)
     init_p.add_argument(
         "--reset",
         action="store_true",
@@ -2204,6 +2326,11 @@ def main() -> None:
         default=None,
         help="Pin to a specific version (e.g. --version 2.6.10). Defaults to latest.",
     )
+    # cmd_upgrade refuses to replace files a running cluster is executing from,
+    # and it looks for that cluster in the data directory. Without this flag the
+    # only data directory it could look in was the default one, so an operator
+    # who keeps their data elsewhere was told nothing was running.
+    _add_data_dir_arg(upgrade_p)
 
     # welcome (zero-network greeting + quick-start + support links)
     subparsers.add_parser(
@@ -2218,11 +2345,7 @@ def main() -> None:
     # seed
     seed_p = subparsers.add_parser("seed", help="Load seed/demo data")
     seed_p.add_argument("--demo", action="store_true", help="Install demo project with sample data")
-    seed_p.add_argument(
-        "--data-dir",
-        default=str(DEFAULT_DATA_DIR),
-        help=f"Data directory (default: {DEFAULT_DATA_DIR})",
-    )
+    _add_data_dir_arg(seed_p)
 
     # module - install / list / uninstall business modules
     module_p = subparsers.add_parser(
@@ -2285,14 +2408,18 @@ def main() -> None:
         help="Overwrite an existing folder of the same slug",
     )
 
-    args = parser.parse_args()
-
-    # Make the module group's parser reachable from cmd_module so it can print
+    # Make each group's own parser reachable from its command so it can print
     # help when invoked with no sub-action (``openconstructionerp module``).
-    if args.command == "module":
-        args._module_parser = module_p
-    if args.command == "pack":
-        args._pack_parser = pack_p
+    module_p.set_defaults(_module_parser=module_p)
+    pack_p.set_defaults(_pack_parser=pack_p)
+
+    return parser
+
+
+def main() -> None:
+    """CLI entry point."""
+    parser = _build_parser()
+    args = parser.parse_args()
 
     # Embedded PostgreSQL is the default (see embedded_pg.is_requested). The
     # flag is an explicit override mapped to the same env var _setup_env reads
@@ -2326,7 +2453,12 @@ def main() -> None:
         #   demo login and community links BEFORE uvicorn eats the
         #   terminal for the startup wait.
         # * Subsequent runs - jump straight to serve (they already know).
-        data_dir = Path(DEFAULT_DATA_DIR)
+        args.host = DEFAULT_HOST
+        args.port = DEFAULT_PORT
+        args.quiet = False
+        # The bare command declares no flags, so this reads the same default
+        # every subcommand reads, through the same resolver.
+        data_dir = _data_dir_from_args(args)
         # A first run is a data directory with no database behind it. This asked
         # only whether the legacy SQLite file was missing, and embedded
         # PostgreSQL replaced that file as the default in v6.0.0, so it is
@@ -2340,10 +2472,6 @@ def main() -> None:
         first_run = not data_dir.exists() or (
             not (data_dir / "pgdata" / "PG_VERSION").exists() and not (data_dir / "openestimate.db").exists()
         )
-        args.host = DEFAULT_HOST
-        args.port = DEFAULT_PORT
-        args.data_dir = str(DEFAULT_DATA_DIR)
-        args.quiet = False
 
         if first_run:
             print_welcome(next_command_hint=False)

@@ -284,8 +284,6 @@ interface PreferencesState extends Preferences {
    */
   hydrateFromServer: () => Promise<void>;
 
-  /** Format a number as currency using current settings */
-  formatCurrency: (amount: number) => string;
   /** Format a number using current locale */
   formatNumber: (value: number, decimals?: number) => string;
 }
@@ -339,21 +337,12 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
     }
   },
 
-  formatCurrency: (amount: number) => {
-    const { currency, numberLocale } = get();
-    const safe = /^[A-Z]{3}$/.test(currency) ? currency : 'CHF'; // //// NEOFFICE PATCH — CHF fallback
-    try {
-      return new Intl.NumberFormat(resolveNumberLocale(numberLocale), {
-        style: 'currency',
-        currency: safe,
-        minimumFractionDigits: 0,
-        maximumFractionDigits: 2,
-      }).format(amount);
-    } catch {
-      return `${amount.toFixed(2)} ${safe}`;
-    }
-  },
-
+  //// NEOFFICE — notre formatCurrency local (avec repli CHF) est SUPPRIMÉ au
+  //// profit de la suppression d'upstream. C'est leur correctif « deux montants
+  //// pouvaient vider l'écran » : ils centralisent tout sur shared/lib/money.ts,
+  //// dont le formatCurrency ne lève jamais et gère déjà la devise vide
+  //// (`(currency || '').trim().toUpperCase()` puis repli sans style monétaire).
+  //// Vérifié avant de retirer : plus aucun appelant de cette fonction-ci.
   formatNumber: (value: number, decimals = 2) => {
     const { numberLocale } = get();
     try {
