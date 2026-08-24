@@ -286,11 +286,15 @@ export function TextCatalogPickerModal({
         </div>
 
         <div className="flex items-center gap-2 border-b border-border-light px-4 py-2">
-          <span className="text-xs text-content-secondary">
+          <span className="shrink-0 text-xs text-content-secondary">
             {t('text_catalog.catalog', { defaultValue: 'Catalogue' })}
           </span>
+          {/* //// NEOFFICE PATCH — min-w-0/max-w/truncate: a <select> sizes itself
+              on its longest option, and a catalog named with a whole sentence
+              (real Protti data) widened this one past the modal and pushed the
+              "Insérer dans" select off-screen. */}
           <select
-            className="rounded border border-border-light bg-surface-primary px-2 py-1 text-sm"
+            className="min-w-0 max-w-[18rem] flex-1 truncate rounded border border-border-light bg-surface-primary px-2 py-1 text-sm"
             value={activeId ?? ''}
             onChange={(e) => {
               setCatalogId(e.target.value);
@@ -310,7 +314,7 @@ export function TextCatalogPickerModal({
               lines appear above the whole estimate. */}
           {sections.length > 0 && (
             <>
-              <span className="ml-3 text-xs text-content-secondary">
+              <span className="ml-3 shrink-0 text-xs text-content-secondary">
                 {t('text_catalog.insert_into', { defaultValue: 'Insérer dans' })}
               </span>
               <select
